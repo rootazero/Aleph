@@ -9,12 +9,12 @@
 //! - Concurrent job execution with configurable limits
 //! - Job history and run logs
 //! - Failure alerting and delivery pipeline
-//! - Job chaining (on_success / on_failure triggers)
+//! - Job chaining (`on_success` / `on_failure` triggers)
 //! - Template rendering with variable substitution
 //!
 //! # Architecture
 //!
-//! - `config` — Type definitions (CronJob, ScheduleKind, JobStateV2, etc.)
+//! - `config` — Type definitions (`CronJob`, `ScheduleKind`, `JobStateV2`, etc.)
 //! - `store` — JSON atomic persistence
 //! - `clock` — Time abstraction for testability
 //! - `schedule` — Pure scheduling computation
@@ -57,10 +57,10 @@ use clock::{Clock, SystemClock};
 use service::ServiceState;
 use store::CronStore;
 
-/// Shared handle to CronService for use in gateway handlers
+/// Shared handle to `CronService` for use in gateway handlers
 pub type SharedCronService = Arc<tokio::sync::Mutex<CronService>>;
 
-/// High-level cron service wrapping the internal ServiceState.
+/// High-level cron service wrapping the internal `ServiceState`.
 ///
 /// Provides a simple async API for gateway handlers and CLI.
 pub struct CronService {
@@ -73,9 +73,9 @@ pub struct CronService {
 }
 
 impl CronService {
-    /// Create a new CronService from configuration.
+    /// Create a new `CronService` from configuration.
     ///
-    /// Opens (or creates) the SQLite store and initializes the service state.
+    /// Opens (or creates) the `SQLite` store and initializes the service state.
     pub fn new(config: CronConfig) -> Result<Self, String> {
         config
             .validate()
@@ -229,7 +229,7 @@ impl CronService {
         Ok(result)
     }
 
-    /// Trigger a job to run immediately by setting its next_run_at_ms to now.
+    /// Trigger a job to run immediately by setting its `next_run_at_ms` to now.
     /// The timer loop will pick it up on the next tick.
     pub async fn run_job(&self, id: &str) -> Result<(), String> {
         {

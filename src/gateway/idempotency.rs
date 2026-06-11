@@ -1,6 +1,6 @@
 //! RPC idempotency guard for preventing duplicate request execution.
 //!
-//! Uses DashMap for lock-free concurrent access. Tracks both completed
+//! Uses `DashMap` for lock-free concurrent access. Tracks both completed
 //! results (with TTL) and in-flight requests (via watch channels).
 
 use dashmap::mapref::entry::Entry;
@@ -39,9 +39,9 @@ pub struct IdempotencySlot {
 impl IdempotencySlot {
     /// Mark this slot as completed with a result. Consumes the guard.
     ///
-    /// Uses entry().and_modify() for atomic InFlight→Complete transition,
+    /// Uses `entry().and_modify()` for atomic InFlight→Complete transition,
     /// preventing a TOCTOU race where a concurrent request could see
-    /// a vacant key between remove() and insert().
+    /// a vacant key between `remove()` and `insert()`.
     pub fn complete(mut self, result: Value) {
         if let Some(cache) = self.guard.take() {
             let key = self.key.clone();

@@ -1,4 +1,4 @@
-//! RuntimeContextLayer — micro-environmental awareness (priority 1710)
+//! `RuntimeContextLayer` — micro-environmental awareness (priority 1710)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

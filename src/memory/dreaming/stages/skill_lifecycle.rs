@@ -1,4 +1,4 @@
-//! SkillLifecycle stage — mechanical aging of skill state.
+//! `SkillLifecycle` stage — mechanical aging of skill state.
 //!
 //! Ports the deterministic half of hermes-agent's `curator.py` lifecycle
 //! rules (`DEFAULT_STALE_AFTER_DAYS = 30`) into a dream pipeline stage.

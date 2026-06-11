@@ -1,4 +1,4 @@
-//! Skill, command, and agent query/execution operations for ExtensionManager
+//! Skill, command, and agent query/execution operations for `ExtensionManager`
 
 use std::collections::HashMap;
 

@@ -23,7 +23,7 @@ struct EnrollParams {
     node_name: String,
 }
 
-/// operator-gated：铸一个 DeviceRole::Node 设备 + token，返回给操作员转交节点机。
+/// operator-gated：铸一个 `DeviceRole::Node` 设备 + token，返回给操作员转交节点机。
 pub async fn handle_cluster_enroll(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
@@ -80,12 +80,12 @@ pub async fn handle_cluster_enroll(
 
 #[derive(Deserialize)]
 struct DeregisterParams {
-    /// 目标节点：name 或 id（多级匹配，同 node_invoke 寻址）。
+    /// 目标节点：name 或 id（多级匹配，同 `node_invoke` 寻址）。
     node: String,
 }
 
-/// 离线回退寻址：在 security_store 的已登记节点设备（role=node、未吊销）里按
-/// ① 精确 device_id ② 唯一精确 device_name 解析。模糊/歧义一律 `None`
+/// 离线回退寻址：在 `security_store` 的已登记节点设备（role=node、未吊销）里按
+/// ① 精确 `device_id` ② 唯一精确 `device_name` 解析。模糊/歧义一律 `None`
 /// （保守——operator 可改用 id；在线路径的多级匹配语义不在此复制）。
 fn resolve_enrolled_node(ctx: &AuthContext, q: &str) -> Option<String> {
     let devices = ctx.security_store.list_devices().ok()?;
@@ -104,14 +104,14 @@ fn resolve_enrolled_node(ctx: &AuthContext, q: &str) -> Option<String> {
 /// ① `forget` 即时驱逐在线会话（立刻从 `environments.list` 消失，且不再
 ///    被 `node_invoke`/`node_file` 寻址到）；
 /// ② `revoke_device_tokens` 撤销其 token，阻止重连；
-/// ③ `revoke_device` 抹除设备记录（enroll 写入 security_store，此处对称撤除）。
+/// ③ `revoke_device` 抹除设备记录（enroll 写入 `security_store，此处对称撤除`）。
 ///
 /// 注意：本调用不强制 close 节点当前 WS socket——它会在下一次 ping/idle-watchdog
 /// 到期时由传输层断开。但驱逐 + 撤 token 已保证节点既无法再被下发命令、也无法
 /// 凭旧 token 重新登记。修复了"`devices.revoke` 撤 token 却把在线会话留在
 /// NodeRegistry"的旧缺口。
 ///
-/// 寻址先走在线 NodeRegistry 多级匹配；不在线则回退 security_store 的已登记
+/// 寻址先走在线 `NodeRegistry` 多级匹配；不在线则回退 `security_store` 的已登记
 /// 节点设备（精确 id / 唯一精确 name）——environments.list 里可见的离线节点
 /// 必须同样可注销（此时 `evicted:false`，仅撤 token + 设备记录）。
 pub async fn handle_cluster_deregister(
@@ -171,8 +171,8 @@ pub async fn handle_cluster_deregister(
     )
 }
 
-/// read：枚举集群节点（薄渲染契约，不含凭证）。在线会话来自 NodeRegistry；
-/// 再合并 security_store 里已登记（role=node、未吊销）但当前不在线的设备，
+/// read：枚举集群节点（薄渲染契约，不含凭证）。在线会话来自 `NodeRegistry`；
+/// 再合并 `security_store` 里已登记（role=node、未吊销）但当前不在线的设备，
 /// `status:"offline"` + `last_seen_at`（Unix 秒；`null` = 登记后从未连入）。
 /// 镜像 openclaw `nodes status` 的"配对态 + 连接态合并"视图——离线节点不再
 /// 凭空消失。store 读失败时优雅降级为在线视图（P7）。

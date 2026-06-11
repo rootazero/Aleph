@@ -64,7 +64,7 @@ pub fn notification_for(frame: &GatewayEventFrame) -> Option<SurfaceNotification
 }
 
 /// Pure policy: map an `ApprovalRequested` frame to the approval banner the
-/// operator should be interrupted with. The raw frame is sparse (approval_id
+/// operator should be interrupted with. The raw frame is sparse (`approval_id`
 /// only) — detail lives in the Panel card; the banner carries static text.
 ///
 /// Returns `None` for everything else, INCLUDING `SurfaceApproval` itself.

@@ -76,7 +76,7 @@ pub struct TelegramChannel {
     callback_rx: Option<mpsc::Receiver<CallbackQuery>>,
     /// Active bot instances (one per account)
     bot_instances: Vec<bot_instance::BotInstance>,
-    /// ToolCatalog for building slash commands at startup
+    /// `ToolCatalog` for building slash commands at startup
     tool_registry: Option<Arc<crate::tool_metadata::ToolCatalog>>,
     /// Centralized access controller (pairing, allowlists, policies).
     access: Arc<AccessController>,
@@ -161,7 +161,7 @@ impl TelegramChannel {
         }
     }
 
-    /// Set the ToolCatalog so this channel can query builtin tools at startup
+    /// Set the `ToolCatalog` so this channel can query builtin tools at startup
     /// and register them as Telegram slash commands.
     pub fn set_tool_registry(&mut self, registry: Arc<crate::tool_metadata::ToolCatalog>) {
         self.tool_registry = Some(registry);

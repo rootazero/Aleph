@@ -1,7 +1,7 @@
-//! Synchronous API wrapper for ExtensionManager
+//! Synchronous API wrapper for `ExtensionManager`
 //!
 //! This module provides synchronous (blocking) wrappers around the async
-//! ExtensionManager API, suitable for use with FFI bindings that don't
+//! `ExtensionManager` API, suitable for use with FFI bindings that don't
 //! support async/await.
 //!
 //! # Usage
@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::RwLock;
 
-/// Synchronous wrapper for ExtensionManager
+/// Synchronous wrapper for `ExtensionManager`
 ///
 /// Provides blocking API for use with FFI bindings. Internally uses a tokio
 /// runtime to execute async operations.

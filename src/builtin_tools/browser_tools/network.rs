@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_network tool.
+/// Arguments for the `browser_network` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserNetworkArgs {
     /// Browser profile name (default: "default").
@@ -17,7 +17,7 @@ pub struct BrowserNetworkArgs {
     pub profile: String,
 }
 
-/// Output from the browser_network tool.
+/// Output from the `browser_network` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserNetworkOutput {
     pub success: bool,

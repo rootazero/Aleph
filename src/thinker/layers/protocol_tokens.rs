@@ -1,4 +1,4 @@
-//! ProtocolTokensLayer — structured LLM-to-system protocol tokens (priority 700)
+//! `ProtocolTokensLayer` — structured LLM-to-system protocol tokens (priority 700)
 
 use crate::thinker::interaction::Capability;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};

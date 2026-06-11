@@ -1,4 +1,4 @@
-//! LinkManager — central orchestrator for builtin messaging channels.
+//! `LinkManager` — central orchestrator for builtin messaging channels.
 //!
 //! The `LinkManager` manages builtin channel factories and link instance
 //! configurations. On startup it scans `~/.aleph/links/` and creates each

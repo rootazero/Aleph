@@ -96,7 +96,7 @@ pub fn get_cache_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("cache"))
 }
 
-/// Get the path for the memory database directory (SQLite)
+/// Get the path for the memory database directory (`SQLite`)
 ///
 /// Returns: `<config_dir>/memory/`
 ///
@@ -115,7 +115,7 @@ pub fn get_skills_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("skills"))
 }
 
-/// Get skills directory path as String (for UniFFI export)
+/// Get skills directory path as String (for `UniFFI` export)
 pub fn get_skills_dir_string() -> Result<String> {
     Ok(get_skills_dir()?.to_string_lossy().to_string())
 }
@@ -239,7 +239,7 @@ pub fn find_git_root(start: &std::path::Path) -> Option<PathBuf> {
 
 /// Get all skills directories in priority order
 ///
-/// Implements multi-location skill discovery following OpenCode's pattern:
+/// Implements multi-location skill discovery following `OpenCode`'s pattern:
 ///
 /// 1. **Project level** (traverse up from current directory to git root):
 ///    - `.aleph/skills/` - Aleph native

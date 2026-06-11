@@ -1,4 +1,4 @@
-//! UserProfileLoader — reads `personal/profile.md` for an agent. If the file
+//! `UserProfileLoader` — reads `personal/profile.md` for an agent. If the file
 //! is missing or unreadable, returns `None` (never an error).
 
 use crate::sync_primitives::Arc;

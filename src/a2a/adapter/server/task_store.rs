@@ -6,15 +6,15 @@ use crate::a2a::domain::*;
 use crate::a2a::port::{A2AResult, A2ATaskManager};
 use crate::sync_primitives::AsyncRwLock;
 
-/// Upper bound on retained tasks. The A2ATaskManager trait exposes no
+/// Upper bound on retained tasks. The `A2ATaskManager` trait exposes no
 /// remove/prune operation, so without a cap a long-running daemon
 /// accumulates one `A2ATask` (full history + artifacts) per request
-/// forever — a memory leak and a DoS amplifier (distinct `taskId`s pin
+/// forever — a memory leak and a `DoS` amplifier (distinct `taskId`s pin
 /// arbitrary memory). When the cap is reached we evict the oldest
 /// *terminal* tasks (active tasks are never evicted).
 const MAX_TASKS: usize = 10_000;
 
-/// In-memory implementation of the A2ATaskManager port.
+/// In-memory implementation of the `A2ATaskManager` port.
 ///
 /// Uses `AsyncRwLock` for concurrent access. Suitable for
 /// single-process deployments and testing; production may swap in

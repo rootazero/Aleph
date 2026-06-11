@@ -1,6 +1,6 @@
-//! Automation tool — scripting (AppleScript, JXA, Shell) and Shortcuts.
+//! Automation tool — scripting (`AppleScript`, JXA, Shell) and Shortcuts.
 //!
-//! Delegates to `DesktopPlatform::automation()` (AutomationCapability).
+//! Delegates to `DesktopPlatform::automation()` (`AutomationCapability`).
 //! When the capability is absent, all operations return a friendly message.
 
 use crate::sync_primitives::Arc;
@@ -29,18 +29,18 @@ impl AutomationTool {
 /// Arguments for the automation tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AutomationArgs {
-    /// Action to perform: "run_script", "list_shortcuts", "run_shortcut"
+    /// Action to perform: "`run_script`", "`list_shortcuts`", "`run_shortcut`"
     pub action: String,
-    /// Script source code (required for run_script).
+    /// Script source code (required for `run_script`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
-    /// Script language: "applescript", "javascript"/"jxa", "shell"/"bash" (for run_script).
+    /// Script language: "applescript", "javascript"/"jxa", "shell"/"bash" (for `run_script`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
-    /// Shortcut name (required for run_shortcut).
+    /// Shortcut name (required for `run_shortcut`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Optional input text for run_shortcut.
+    /// Optional input text for `run_shortcut`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
 }
@@ -55,7 +55,7 @@ pub struct AutomationOutput {
     pub message: Option<String>,
 }
 
-/// Parse a language string into ScriptLanguage.
+/// Parse a language string into `ScriptLanguage`.
 fn parse_script_language(lang: &str) -> Option<ScriptLanguage> {
     match lang.to_lowercase().as_str() {
         "applescript" => Some(ScriptLanguage::AppleScript),

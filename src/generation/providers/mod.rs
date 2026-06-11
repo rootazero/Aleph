@@ -6,14 +6,14 @@
 //! # Available Providers
 //!
 //! - `OpenAiImageProvider` - DALL-E 3 image generation
-//! - `OpenAiTtsProvider` - OpenAI Text-to-Speech
+//! - `OpenAiTtsProvider` - `OpenAI` Text-to-Speech
 //! - `OpenAiCompatProvider` - Generic OpenAI-compatible API for third-party proxies
 //! - `StabilityImageProvider` - Stability AI (Stable Diffusion XL) image generation
 //! - `GoogleImagenProvider` - Google Imagen 3 image generation
 //! - `GoogleVeoProvider` - Google Veo 2/3 video generation
-//! - `ReplicateProvider` - Replicate API for Flux, SDXL, MusicGen, and more
-//! - `ElevenLabsProvider` - ElevenLabs high-quality Text-to-Speech
-//! - `MidjourneyProvider` - T8Star Midjourney API proxy for high-quality image generation
+//! - `ReplicateProvider` - Replicate API for Flux, SDXL, `MusicGen`, and more
+//! - `ElevenLabsProvider` - `ElevenLabs` high-quality Text-to-Speech
+//! - `MidjourneyProvider` - `T8Star` Midjourney API proxy for high-quality image generation
 //!
 //! # Factory Function
 //!

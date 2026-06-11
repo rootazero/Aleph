@@ -29,7 +29,7 @@ use tokio::sync::RwLock;
 /// Wire shape the panel sends/receives for the route mode itself.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RouteModePayload {
-    /// "auto" | "always_local" | "always_cloud".
+    /// "auto" | "`always_local`" | "`always_cloud`".
     mode: String,
     #[serde(default)]
     allow_cloud_escalation: bool,
@@ -41,7 +41,7 @@ struct RouteModePayload {
     #[serde(default)]
     cloud_provider: Option<String>,
     /// Load-balancing strategy for the same-tier fallback pool:
-    /// "ordered" | "round_robin" | "least_busy" | "latency_aware" | "usage_based".
+    /// "ordered" | "`round_robin`" | "`least_busy`" | "`latency_aware`" | "`usage_based`".
     /// Absent → unchanged default ("ordered"), backward-compatible with the
     /// pre-balance payload.
     #[serde(default)]

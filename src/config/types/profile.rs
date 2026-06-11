@@ -90,9 +90,9 @@ pub struct ProfileConfig {
 /// Context caching strategy for the profile
 ///
 /// Different providers have different caching mechanisms:
-/// - Anthropic: Ephemeral (cache_control blocks, stateless)
+/// - Anthropic: Ephemeral (`cache_control` blocks, stateless)
 /// - Gemini: Persistent (explicit cache creation, stateful)
-/// - OpenAI: Transparent (automatic caching)
+/// - `OpenAI`: Transparent (automatic caching)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CacheStrategy {
@@ -175,8 +175,8 @@ impl ProfileConfig {
     /// Check if a tool name matches the whitelist
     ///
     /// Uses glob-style matching:
-    /// - "git_*" matches "git_commit", "git_push", etc.
-    /// - "fs_*" matches "fs_read", "fs_write", etc.
+    /// - "git_*" matches "`git_commit`", "`git_push`", etc.
+    /// - "fs_*" matches "`fs_read`", "`fs_write`", etc.
     /// - Exact matches like "terminal" only match "terminal"
     ///
     /// Returns true if:

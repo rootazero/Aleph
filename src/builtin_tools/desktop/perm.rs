@@ -35,7 +35,7 @@ const DEFAULT_KINDS: &[PermissionKind] = &[
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DesktopCheckPermissionsArgs {
     /// Which permission kinds to check.  Omit to check the five kinds Aleph
-    /// most commonly needs: Accessibility, InputMonitoring, ScreenRecording,
+    /// most commonly needs: Accessibility, `InputMonitoring`, `ScreenRecording`,
     /// Camera, Microphone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kinds: Option<Vec<PermissionKind>>,

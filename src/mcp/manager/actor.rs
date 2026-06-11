@@ -436,7 +436,7 @@ impl McpManagerActor {
 
     /// Add a server configuration
     ///
-    /// Upserts the config, saves to disk, and optionally starts if auto_start is true.
+    /// Upserts the config, saves to disk, and optionally starts if `auto_start` is true.
     async fn add_server(&mut self, config: McpManagerConfig) -> Result<(), String> {
         let server_id = config.id.clone();
         let server_name = config.name.clone();
@@ -623,7 +623,7 @@ impl McpManagerActor {
 
     /// Internal method to start a server
     ///
-    /// Creates an McpClient and connects using the appropriate transport.
+    /// Creates an `McpClient` and connects using the appropriate transport.
     async fn start_server_internal(&mut self, config: &McpManagerConfig) -> Result<(), String> {
         // Install the per-server tool filter before the client is shared, so
         // `list_tools` (and thus registration, aggregation, and counts) only
@@ -746,7 +746,7 @@ impl McpManagerActor {
 
     /// Internal method to stop a server
     ///
-    /// Calls client.stop_all() and removes from tracking maps.
+    /// Calls `client.stop_all()` and removes from tracking maps.
     async fn stop_server_internal(&mut self, server_id: &str) {
         if let Some(client) = self.clients.remove(server_id) {
             if let Err(e) = client.stop_all().await {
@@ -926,7 +926,7 @@ impl McpManagerActor {
     ///
     /// Reconciles running state with new configuration:
     /// - Stops servers that were removed
-    /// - Starts new servers with auto_start=true
+    /// - Starts new servers with `auto_start=true`
     /// - Updates configs for existing servers
     async fn reload_config(&mut self) -> Result<(), String> {
         // Load new config
@@ -984,7 +984,7 @@ impl McpManagerActor {
 
 /// Map an MCP notification method to the capability list it changed, if any.
 ///
-/// Both the spec's snake_case form (`list_changed`) and the camelCase form
+/// Both the spec's `snake_case` form (`list_changed`) and the camelCase form
 /// some servers emit (`listChanged`) are accepted.
 fn classify_list_change(method: &str) -> Option<ListChangeKind> {
     match method {

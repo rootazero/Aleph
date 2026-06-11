@@ -3,19 +3,19 @@
 //! This module contains all struct definitions used in the configuration system.
 //! Types are organized by domain:
 //!
-//! - `general`: Core settings (GeneralConfig, BehaviorConfig)
-//! - `provider`: AI provider settings (ProviderConfig, ProviderConfigEntry)
-//! - `routing`: Routing rules (RoutingRuleConfig)
-//! - `memory`: Memory/RAG settings (MemoryConfig)
-//! - `search`: Search capability settings (SearchConfigInternal, SearchConfig, PIIConfig)
-//! - `media`: Media pipeline settings (MediaConfig)
-//! - `smart_flow`: Intent detection and matching (SmartFlowConfig, SmartMatchingConfig)
-//! - `tools`: Native and MCP tools (ToolsConfig, UnifiedToolsConfig)
-//! - `skills`: Claude Agent Skills settings (SkillsConfig)
-//! - `dispatcher`: Dispatcher Layer settings (DispatcherConfigToml)
-//! - `agent`: Agent task orchestration settings (AgentConfigToml)
-//! - `orchestrator`: Three-Layer Control orchestrator settings (OrchestratorConfig, OrchestratorGuards)
-//! - `evolution`: Skill compiler settings (EvolutionConfig, SolidificationThresholds)
+//! - `general`: Core settings (`GeneralConfig`, `BehaviorConfig`)
+//! - `provider`: AI provider settings (`ProviderConfig`, `ProviderConfigEntry`)
+//! - `routing`: Routing rules (`RoutingRuleConfig`)
+//! - `memory`: Memory/RAG settings (`MemoryConfig`)
+//! - `search`: Search capability settings (`SearchConfigInternal`, `SearchConfig`, `PIIConfig`)
+//! - `media`: Media pipeline settings (`MediaConfig`)
+//! - `smart_flow`: Intent detection and matching (`SmartFlowConfig`, `SmartMatchingConfig`)
+//! - `tools`: Native and MCP tools (`ToolsConfig`, `UnifiedToolsConfig`)
+//! - `skills`: Claude Agent Skills settings (`SkillsConfig`)
+//! - `dispatcher`: Dispatcher Layer settings (`DispatcherConfigToml`)
+//! - `agent`: Agent task orchestration settings (`AgentConfigToml`)
+//! - `orchestrator`: Three-Layer Control orchestrator settings (`OrchestratorConfig`, `OrchestratorGuards`)
+//! - `evolution`: Skill compiler settings (`EvolutionConfig`, `SolidificationThresholds`)
 
 pub mod acp;
 pub mod agent;

@@ -7,7 +7,7 @@
 //! Adapter notes vs hermes:
 //! - hermes exposes `model`, `context_pct`, `cwd`. Aleph's `RunSummary`
 //!   does not carry `context_length` so this port renders `tokens` (an
-//!   absolute count) in its place — providers report total_tokens via
+//!   absolute count) in its place — providers report `total_tokens` via
 //!   the `RunComplete` enriched summary, which is always available.
 //! - hermes per-platform overrides live under `display.platforms.*`.
 //!   Aleph keeps a flat config knob (`gateway.runtime_footer`) for now;

@@ -1,4 +1,4 @@
-//! reload_impact — when does a `config.toml` change actually take effect?
+//! `reload_impact` — when does a `config.toml` change actually take effect?
 //!
 //! Self-management SSOT. The agent edits `config.toml` through `self_config`'s
 //! `update_config`, but [`crate::config::patcher::ConfigPatcher::apply`] only
@@ -6,7 +6,7 @@
 //! runtime structures that captured their configuration at startup. As
 //! [`crate::providers::route_handle`] states plainly: *"a config edit alone
 //! never reaches the already-built chain — nothing rebuilds it."* Only `route`
-//! carries explicit hot-swap wiring (the `RouteHandle` ArcSwap).
+//! carries explicit hot-swap wiring (the `RouteHandle` `ArcSwap`).
 //!
 //! Until now the reload rules lived as prose scattered through the `/self`
 //! SKILL.md ("generation providers need restart", "route hot-applies", the
@@ -49,8 +49,8 @@ pub enum ReloadImpact {
 /// - `route` — `self_config::update_config` and the gateway `route_config`
 ///   handler both call `route_handle.store(..)` after patching it.
 /// - `behavior` — `output_mode` is re-read fresh from the shared config on
-///   every run by all channel paths (server_init, session_scheduler,
-///   inbound_router executor), so the typewriter/instant switch takes effect
+///   every run by all channel paths (`server_init`, `session_scheduler`,
+///   `inbound_router` executor), so the typewriter/instant switch takes effect
 ///   on the next turn. No restart is needed despite no explicit hot-swap call.
 const LIVE_SECTIONS: &[&str] = &["route", "behavior"];
 

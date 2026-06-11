@@ -1,7 +1,7 @@
 //! Skills configuration types
 //!
 //! Contains Claude Agent Skills configuration:
-//! - SkillsConfig: Skills directory and auto-matching settings
+//! - `SkillsConfig`: Skills directory and auto-matching settings
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -42,7 +42,7 @@ impl Default for SkillsConfig {
 impl SkillsConfig {
     /// Get the full path to the skills directory (cross-platform)
     ///
-    /// If skills_dir is relative, it's relative to the unified config directory:
+    /// If `skills_dir` is relative, it's relative to the unified config directory:
     /// - All platforms: ~/.aleph/
     ///
     /// If absolute, use as-is

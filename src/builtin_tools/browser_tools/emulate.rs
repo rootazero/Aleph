@@ -11,7 +11,7 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_emulate tool.
+/// Arguments for the `browser_emulate` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserEmulateArgs {
     /// Browser profile name (default: "default").
@@ -22,7 +22,7 @@ pub struct BrowserEmulateArgs {
     pub options: EmulateOptions,
 }
 
-/// Output from the browser_emulate tool.
+/// Output from the `browser_emulate` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserEmulateOutput {
     pub success: bool,

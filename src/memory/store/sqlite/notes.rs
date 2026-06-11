@@ -1,4 +1,4 @@
-//! NoteStore implementation for SqliteMemoryBackend.
+//! `NoteStore` implementation for `SqliteMemoryBackend`.
 //!
 //! Stores note index entries, wikilink edges, and FTS content
 //! in the `notes_index`, `notes_links`, and `notes_fts` tables.
@@ -1164,7 +1164,7 @@ impl NoteStore for SqliteMemoryBackend {
     /// Phase C2.7 — return the most recent `created_at` recall signal for
     /// `note_path`, or `None` when no signals exist. The `recall_signals`
     /// table has no `agent_id` column; recall data is already scoped to the
-    /// active agent's SQLite database, so `agent_id` is accepted but unused.
+    /// active agent's `SQLite` database, so `agent_id` is accepted but unused.
     async fn recall_signals_last_hit(
         &self,
         agent_id: &str,
@@ -1224,7 +1224,7 @@ impl NoteStore for SqliteMemoryBackend {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/// Load note markdown content from disk given index metadata and agent_id.
+/// Load note markdown content from disk given index metadata and `agent_id`.
 async fn load_note_content_from_disk(entry: &NoteIndexEntry, agent_id: &str) -> Option<String> {
     let memory_dir = crate::utils::paths::get_note_memory_dir().ok()?;
     let file_path = memory_dir.join(agent_id).join(&entry.category).join(
@@ -1233,7 +1233,7 @@ async fn load_note_content_from_disk(entry: &NoteIndexEntry, agent_id: &str) -> 
     tokio::fs::read_to_string(&file_path).await.ok()
 }
 
-/// Collect all edges where both endpoints are in `visible`, scoped by agent_id.
+/// Collect all edges where both endpoints are in `visible`, scoped by `agent_id`.
 fn collect_edges_between(
     conn: &rusqlite::Connection,
     visible: &HashSet<String>,

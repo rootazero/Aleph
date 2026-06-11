@@ -1,4 +1,4 @@
-//! AgentCreateTool — create a new agent with its own workspace and memory.
+//! `AgentCreateTool` — create a new agent with its own workspace and memory.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

@@ -36,7 +36,7 @@ pub struct HarnessDeps {
 
     /// Stage 6a seam (#10). Per-turn verifier chain consulted between Think
     /// and Act every iteration. `StopHookVerifier` (in the chain) preserves
-    /// pre-6a "veto before Done" semantics; `ToolLoopVerifier` adds tool_use
+    /// pre-6a "veto before Done" semantics; `ToolLoopVerifier` adds `tool_use`
     /// death-loop detection. A `Veto` forces a `[verifier veto]` user-message
     /// injection and an extra `Continue` turn so the model can react.
     /// `None` is equivalent to "no verifiers wired" — zero-cost noop path.
@@ -49,7 +49,7 @@ pub struct HarnessDeps {
     /// `CompactAndContinue`. Falls back to deterministic truncation on
     /// provider failure (see `ContextCompactor::compact`).
     pub context_compactor: Option<Arc<ContextCompactor>>,
-    /// Cheap-pass preflight pipeline (tool_result pruning + historical
+    /// Cheap-pass preflight pipeline (`tool_result` pruning + historical
     /// image stripping) that runs BEFORE the budget check + compactor so
     /// token savings happen even when the compactor's LLM call fails.
     /// `None` when `[context_budget]` is disabled — same gating as
@@ -58,16 +58,16 @@ pub struct HarnessDeps {
     /// Gateway-side observability sink. `None` falls back to no-op tracing.
     /// Production path: Gateway wraps its persistence callback in `GatewayTraceSink`.
     pub trace_sink: Option<Arc<dyn TraceSink>>,
-    /// System prompt injected into every RequestPayload. Subagent path builds
-    /// this via PromptBuilder at spawn time; Gateway passes None for now.
+    /// System prompt injected into every `RequestPayload`. Subagent path builds
+    /// this via `PromptBuilder` at spawn time; Gateway passes None for now.
     pub system_prompt: Option<String>,
     /// Stable/dynamic split of the system prompt for cache-first providers.
     ///
     /// When present, the harness threads these through to
     /// `RequestPayload::system_blocks`; the Anthropic adapter uses the split
     /// to place the prompt-cache breakpoint at the stable/dynamic boundary,
-    /// so per-turn dynamic content (RuntimeContext.current_time,
-    /// tool_runtime_state, etc.) no longer busts the prefix hash. `None`
+    /// so per-turn dynamic content (`RuntimeContext.current_time`,
+    /// `tool_runtime_state`, etc.) no longer busts the prefix hash. `None`
     /// keeps the legacy "single-string system" path. Setting this WITHOUT
     /// setting `system_prompt` is supported; the harness will concatenate
     /// the parts into a string for the legacy field too (so adapters that
@@ -84,8 +84,8 @@ pub struct HarnessDeps {
     /// `None` is equivalent to "no guardrails registered" — zero-cost
     /// noop path with no allocations on the steady-state hot loop.
     pub guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
-    /// Hard iteration cap. When set, AgentHarness::run forces TurnState::Done
-    /// after that many Continue turns and sets hit_limit=true. None → unbounded
+    /// Hard iteration cap. When set, `AgentHarness::run` forces `TurnState::Done`
+    /// after that many Continue turns and sets `hit_limit=true`. None → unbounded
     /// (current Gateway default).
     pub max_iterations: Option<usize>,
     /// Optional power-management capability. When present, the harness inhibits
@@ -128,7 +128,7 @@ pub struct HarnessDeps {
     /// when no `RawMemoryStore` is wired (tests, simple-engine fixtures).
     pub tool_signal_sink: Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,
     /// Gap B follow-up — in-flight tool-call registry. When wired, the Act
-    /// phase registers each call's per-call CancellationToken under its
+    /// phase registers each call's per-call `CancellationToken` under its
     /// `tool_call_id` so the gateway's `tools.cancel_call` RPC can fire a
     /// single call's cooperative cancel without aborting the whole run.
     /// `None` disables the wiring; everything still works because the harness

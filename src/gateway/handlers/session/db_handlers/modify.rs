@@ -1,4 +1,4 @@
-//! Session modification handlers (reset, delete, patch, compact, set_topic).
+//! Session modification handlers (reset, delete, patch, compact, `set_topic`).
 
 use crate::sync_primitives::Arc;
 use serde_json::{json, Value};
@@ -73,7 +73,7 @@ pub async fn handle_reset_db(
 /// Handle sessions.delete RPC request with database backend.
 ///
 /// Before dropping the transcript we capture its tail into `raw_memories`
-/// as a `SessionEnd` raw so the CompressionService / ProfileSynthesizer
+/// as a `SessionEnd` raw so the `CompressionService` / `ProfileSynthesizer`
 /// can mine durable knowledge from the dying session. Without this hook
 /// `USER.md` never updates and per-session digests are silently lost.
 pub async fn handle_delete_db(
@@ -83,7 +83,7 @@ pub async fn handle_delete_db(
     handle_delete_db_inner(request, manager, None).await
 }
 
-/// Variant accepting an explicit raw-memory writer for the SessionEnd capture.
+/// Variant accepting an explicit raw-memory writer for the `SessionEnd` capture.
 /// The default `handle_delete_db` keeps the writer optional for backwards
 /// compatibility with the macro-generated registration shape.
 pub async fn handle_delete_db_with_capture(
@@ -343,10 +343,10 @@ pub async fn handle_truncate_db(
     }
 }
 
-/// Handle sessions.set_topic RPC request with database backend
+/// Handle `sessions.set_topic` RPC request with database backend
 ///
 /// Params:
-///   - session_key (required): session key string
+///   - `session_key` (required): session key string
 ///   - topic (required): new topic string (max 100 chars)
 pub async fn handle_set_topic_db(
     request: JsonRpcRequest,

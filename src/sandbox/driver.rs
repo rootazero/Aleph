@@ -1,4 +1,4 @@
-//! OsSandboxDriverTrait — the seam between WorkspaceSandbox and OS-level seatbelt.
+//! `OsSandboxDriverTrait` — the seam between `WorkspaceSandbox` and OS-level seatbelt.
 
 use std::collections::HashMap;
 use std::path::Path;

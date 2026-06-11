@@ -9,13 +9,13 @@ use super::prompt_mode::PromptMode;
 #[derive(Debug, Clone)]
 pub struct TokenBudget {
     /// Maximum total characters for assembled system prompt.
-    /// Default: 80_000 (~20K tokens).
+    /// Default: `80_000` (~20K tokens).
     pub max_total_chars: usize,
     /// Bootstrap section total budget.
-    /// Default: 100_000.
+    /// Default: `100_000`.
     pub max_bootstrap_chars: usize,
     /// Per-bootstrap-file character limit.
-    /// Default: 20_000.
+    /// Default: `20_000`.
     pub max_per_file_chars: usize,
     /// Warning mode for truncation events.
     pub truncation_warning: TruncationWarning,

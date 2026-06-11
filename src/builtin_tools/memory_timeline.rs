@@ -1,4 +1,4 @@
-//! memory_timeline tool — view the complete lifecycle of a memory fact.
+//! `memory_timeline` tool — view the complete lifecycle of a memory fact.
 //!
 //! Wraps [`MemoryTimeTraveler::explain_fact`] to provide a human-readable
 //! timeline of creation, modification, decay, and invalidation events.
@@ -16,14 +16,14 @@ use crate::tools::AlephTool;
 
 // ── Args / Output ───────────────────────────────────────────────────────────
 
-/// Arguments for the memory_timeline tool
+/// Arguments for the `memory_timeline` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct MemoryTimelineArgs {
     /// The fact ID to inspect
     pub fact_id: String,
 }
 
-/// Output from the memory_timeline tool
+/// Output from the `memory_timeline` tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MemoryTimelineOutput {
     /// The full lifecycle explanation of the fact

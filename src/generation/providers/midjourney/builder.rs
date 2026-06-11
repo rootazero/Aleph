@@ -1,4 +1,4 @@
-//! Builder for MidjourneyProvider
+//! Builder for `MidjourneyProvider`
 //!
 //! Provides a fluent interface for constructing a Midjourney provider
 //! with flexible configuration options.
@@ -12,7 +12,7 @@ use super::types::{
 };
 use crate::generation::{GenerationError, GenerationResult};
 
-/// Builder for MidjourneyProvider
+/// Builder for `MidjourneyProvider`
 ///
 /// Provides a fluent interface for constructing a Midjourney provider
 /// with flexible configuration options.
@@ -47,7 +47,7 @@ impl MidjourneyProviderBuilder {
     ///
     /// # Arguments
     ///
-    /// * `api_key` - T8Star API key for authentication
+    /// * `api_key` - `T8Star` API key for authentication
     pub fn new<S: Into<String>>(api_key: S) -> Self {
         Self {
             api_key: api_key.into(),
@@ -100,7 +100,7 @@ impl MidjourneyProviderBuilder {
         self
     }
 
-    /// Build the MidjourneyProvider
+    /// Build the `MidjourneyProvider`
     pub fn build(self) -> GenerationResult<MidjourneyProvider> {
         let client = Client::builder()
             .timeout(Duration::from_secs(self.timeout_secs))

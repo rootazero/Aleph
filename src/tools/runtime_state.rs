@@ -2,7 +2,7 @@
 //!
 //! Hermes lets tools mutate their JSON schema at emit time (depth limits,
 //! sandbox availability, rate-limit clocks). Aleph instead emits a
-//! `<tool_runtime_state>` block from a dedicated PromptLayer at priority
+//! `<tool_runtime_state>` block from a dedicated `PromptLayer` at priority
 //! 502 — intelligence lives in the prompt (R9), not in wire-format JSON
 //! schema.
 //!

@@ -17,7 +17,7 @@ use crate::routing::session_key::SessionKey as RoutingSessionKey;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the session_new tool
+/// Arguments for the `session_new` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct SessionNewArgs {
     /// Optional topic summary for the closing session.
@@ -31,7 +31,7 @@ pub struct SessionNewArgs {
     pub __session_key: String,
 }
 
-/// Output from session_new tool
+/// Output from `session_new` tool
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionNewOutput {
     /// The old session key that was closed

@@ -1,7 +1,7 @@
 /// Search result data structure
 ///
 /// This module defines the unified `SearchResult` struct that represents
-/// search results from all providers (Tavily, Google, Bing, SearXNG, etc.)
+/// search results from all providers (Tavily, Google, Bing, `SearXNG`, etc.)
 use serde::{Deserialize, Serialize};
 
 /// Search result entry returned by all providers
@@ -51,7 +51,7 @@ impl SearchResult {
         }
     }
 
-    /// Calculate content length in bytes (snippet + full_content)
+    /// Calculate content length in bytes (snippet + `full_content`)
     #[must_use]
     pub fn content_length(&self) -> usize {
         self.snippet.len() + self.full_content.as_ref().map_or(0, |c| c.len())

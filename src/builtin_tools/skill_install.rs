@@ -1,4 +1,4 @@
-//! skill_install — LLM Tool for installing skill dependencies.
+//! `skill_install` — LLM Tool for installing skill dependencies.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

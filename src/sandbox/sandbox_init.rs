@@ -55,7 +55,7 @@ pub struct LinuxInitPolicy {
 }
 
 /// Type-safe model of the seccomp socket-family gate, mapping codex's
-/// `NetworkSeccompMode` (Restricted / ProxyRouted) plus a third "no
+/// `NetworkSeccompMode` (Restricted / `ProxyRouted`) plus a third "no
 /// filtering" state into a single enum so illegal combinations are
 /// unrepresentable. The driver picks the variant from
 /// [`SandboxCapabilities::network`]; `apply_seccomp` lowers it to concrete
@@ -402,7 +402,7 @@ pub fn run_init(_args: Vec<String>) -> ! {
 
 /// Output of `parse_init_args`. `target_args` is the slice after `--`.
 /// `dead_code` allow: on macOS / Windows no caller exists at build time
-/// (run_init is Linux-only), but unit tests reference it cross-platform.
+/// (`run_init` is Linux-only), but unit tests reference it cross-platform.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Debug)]
 struct ParsedInitArgs {

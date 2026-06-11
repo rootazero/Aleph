@@ -2,7 +2,7 @@
 //!
 //! Given a category + query embedding, returns the top-N most-similar existing
 //! notes (path + cosine score). Powers the LLM candidate-injection flow in
-//! SkillDistill / FeedbackDistill (see Phase 2 Decision 2 in
+//! `SkillDistill` / `FeedbackDistill` (see Phase 2 Decision 2 in
 //! `docs/superpowers/plans/2026-04-29-aleph-self-evolution.md`).
 //!
 //! Returns empty when `query_embedding` is empty or `top_n == 0`, so callers

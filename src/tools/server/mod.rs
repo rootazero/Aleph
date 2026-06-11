@@ -3,7 +3,7 @@
 //! Provides a thread-safe tool registry that supports runtime
 //! addition and removal of tools, including automatic tool name repair.
 //!
-//! Inspired by OpenCode's experimental_repairToolCall pattern.
+//! Inspired by `OpenCode`'s `experimental_repairToolCall` pattern.
 
 mod handle;
 mod ops;
@@ -217,11 +217,11 @@ impl AlephToolServer {
     /// 2. Try case-insensitive matching if exact match fails
     /// 3. Route to "invalid" tool if no match found
     ///
-    /// Inspired by OpenCode's experimental_repairToolCall pattern.
+    /// Inspired by `OpenCode`'s `experimental_repairToolCall` pattern.
     ///
     /// # Returns
     ///
-    /// A tuple of (result, repair_info) where repair_info is Some if a repair was made.
+    /// A tuple of (result, `repair_info`) where `repair_info` is Some if a repair was made.
     pub async fn call_with_repair(
         &self,
         name: &str,

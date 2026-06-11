@@ -1,4 +1,4 @@
-//! Gated MetaSkill proposals — the **draft tier** above the active workflow
+//! Gated `MetaSkill` proposals — the **draft tier** above the active workflow
 //! store.
 //!
 //! The dream pipeline mines recurring skill co-occurrence
@@ -28,7 +28,7 @@ use crate::workflow::def::{WorkflowDef, WorkflowStepDef};
 use crate::workflow::interop::manifest::WorkflowManifest;
 use crate::workflow::store::{self, WorkflowMeta};
 
-/// Name prefix for every auto-drafted MetaSkill proposal. Lets a human (and
+/// Name prefix for every auto-drafted `MetaSkill` proposal. Lets a human (and
 /// the dedup check) tell auto-generated drafts from user-authored workflows.
 pub const PROPOSAL_PREFIX: &str = "metaskill-";
 
@@ -73,7 +73,7 @@ pub fn canonical_name(skills: &[String]) -> String {
 /// observed habit into a template shell. The intelligence — what the steps
 /// should really say, which agents own them — is added by the LLM/user when
 /// the proposal is reviewed, not invented here. Returns `None` for a chain of
-/// fewer than two skills (a single skill is not a MetaSkill).
+/// fewer than two skills (a single skill is not a `MetaSkill`).
 #[must_use]
 pub fn skeleton_from_chain(chain: &[String], observations: u32) -> Option<WorkflowDef> {
     if chain.len() < 2 {
@@ -158,7 +158,7 @@ pub fn accept(name: &str) -> Result<PathBuf> {
 
 /// True when an active workflow OR a pending proposal already carries this
 /// chain's canonical name. Used by the miner to avoid re-drafting the same
-/// MetaSkill every dream cycle. Name-based dedup is deliberate: the canonical
+/// `MetaSkill` every dream cycle. Name-based dedup is deliberate: the canonical
 /// name is the chain's identity, so it needs no step-by-step comparison.
 #[must_use]
 pub fn already_covered(chain: &[String]) -> bool {
@@ -175,7 +175,7 @@ pub fn already_covered(chain: &[String]) -> bool {
 /// True when the active store already contains a user-authored workflow whose
 /// step set equals this chain's skill set — even under a different name. This
 /// catches the case where the user already built (and renamed) the same
-/// MetaSkill by hand, so the miner does not shadow it with a draft.
+/// `MetaSkill` by hand, so the miner does not shadow it with a draft.
 pub fn covered_by_step_set(chain: &[String]) -> bool {
     let want: HashSet<&str> = chain.iter().map(String::as_str).collect();
     let Ok(metas) = store::list() else {

@@ -9,8 +9,8 @@ impl ReplyEmitter {
     /// Returns true when voice output should be attempted.
     /// Dynamically check if voice output should be used.
     ///
-    /// Re-reads VoiceState from ChannelRegistry on every call so that
-    /// mid-request voice_mode_set tool calls take effect immediately
+    /// Re-reads `VoiceState` from `ChannelRegistry` on every call so that
+    /// mid-request `voice_mode_set` tool calls take effect immediately
     /// (e.g. the confirmation message itself is voiced).
     pub(crate) async fn should_voice(&self) -> bool {
         // Static hint: user sent an audio message
@@ -152,7 +152,7 @@ impl ReplyEmitter {
         }
     }
 
-    /// Drain pending media, download in parallel via MediaCache, return Attachments.
+    /// Drain pending media, download in parallel via `MediaCache`, return Attachments.
     pub(crate) async fn drain_and_send_media(&self) -> Vec<crate::gateway::channel::Attachment> {
         let pending_count = self.pending_media.lock().await.len();
         debug!(run_id = %self.run_id, pending_count = pending_count, "drain_and_send_media called");

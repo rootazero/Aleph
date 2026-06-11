@@ -46,7 +46,7 @@ impl SignalMonitor {
     /// # Arguments
     ///
     /// * `client` - HTTP client for the SSE connection
-    /// * `config` - Signal configuration (api_url, phone_number, etc.)
+    /// * `config` - Signal configuration (`api_url`, `phone_number`, etc.)
     /// * `channel_id` - Channel ID for inbound messages
     /// * `inbound_tx` - Sender for inbound messages
     /// * `shutdown_rx` - Shutdown signal receiver
@@ -195,7 +195,7 @@ impl SignalMonitor {
         Ok(())
     }
 
-    /// Parse SSE message data and convert to an InboundMessage.
+    /// Parse SSE message data and convert to an `InboundMessage`.
     fn parse_and_convert(
         data: &str,
         channel_id: &ChannelId,

@@ -159,7 +159,7 @@ fn default_entry_for_kind(kind: PluginKind) -> String {
 // Parser
 // =============================================================================
 
-/// Parse .claude-plugin/plugin.toml content into a PluginManifest
+/// Parse .claude-plugin/plugin.toml content into a `PluginManifest`
 ///
 /// # Arguments
 /// * `content` - TOML content string
@@ -292,7 +292,7 @@ use super::parsers;
 use crate::extension::capability::{CapabilitySource, SourceFormat};
 use crate::extension::types::PluginOrigin;
 
-/// ManifestAdapter for `.claude-plugin/plugin.toml` format.
+/// `ManifestAdapter` for `.claude-plugin/plugin.toml` format.
 ///
 /// Priority 100 (highest among CC adapters) — TOML is preferred over JSON.
 pub struct ClaudeCodeTomlAdapter;

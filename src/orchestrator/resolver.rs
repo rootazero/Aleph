@@ -1,5 +1,5 @@
 //! Pure routing + depth guard + session resolution helpers.
-//! See design §6 (dispatch step 1, 2, 4), §7 (MAX_FLOW_DEPTH).
+//! See design §6 (dispatch step 1, 2, 4), §7 (`MAX_FLOW_DEPTH`).
 
 use std::collections::HashMap;
 
@@ -33,7 +33,7 @@ pub struct RoutingOverrides {
 /// Map `(agent_id, channel)` → `flow_id`. Precedence:
 /// 1. exact `(agent, channel)` override
 /// 2. wildcard `agent` override
-/// 3. default table (agent_id == flow_id fallback from builtin table)
+/// 3. default table (`agent_id` == `flow_id` fallback from builtin table)
 pub fn resolve_flow_id(
     agent_id: &str,
     channel: Option<&str>,

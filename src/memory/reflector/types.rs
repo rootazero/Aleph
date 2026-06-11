@@ -1,4 +1,4 @@
-//! Public types for the MemoryReflector synthesis layer.
+//! Public types for the `MemoryReflector` synthesis layer.
 
 use crate::memory::namespace::NamespaceScope;
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ pub struct NoteRef {
     pub path: String,
     /// Human-readable title, resolved from the note store (never from LLM).
     pub title: String,
-    /// Rerank score carried over from the HybridAssembler packet, 0.0–1.0.
+    /// Rerank score carried over from the `HybridAssembler` packet, 0.0–1.0.
     pub relevance: f32,
 }
 
@@ -33,7 +33,7 @@ pub struct ReflectOpts {
     pub max_tokens: Option<usize>,
     /// Optional time filter (unix seconds, inclusive) — reserved for internal callers.
     pub time_range: Option<(i64, i64)>,
-    /// Optional session id — threaded into recall_signals.
+    /// Optional session id — threaded into `recall_signals`.
     pub session_id: Option<String>,
 }
 

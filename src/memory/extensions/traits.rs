@@ -1,4 +1,4 @@
-//! MemoryExtension trait + default no-op implementations.
+//! `MemoryExtension` trait + default no-op implementations.
 
 use crate::error::AlephError;
 use crate::memory::assembler::envelope::MemoryEnvelope;
@@ -16,7 +16,7 @@ pub trait MemoryExtension: Send + Sync {
     /// Stable identifier — shows up in logs and manifest entries.
     fn name(&self) -> &str;
 
-    /// Modify the envelope after HybridAssembler::assemble.
+    /// Modify the envelope after `HybridAssembler::assemble`.
     async fn on_retrieve(
         &self,
         _ctx: &RetrieveCtx,

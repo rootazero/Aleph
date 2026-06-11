@@ -1,4 +1,4 @@
-//! PromptMode — controls which layers participate in prompt assembly.
+//! `PromptMode` — controls which layers participate in prompt assembly.
 //!
 //! Used by [`PromptLayer::supports_mode`] to filter layers at assembly time,
 //! enabling lightweight prompts for token-constrained scenarios.

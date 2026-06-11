@@ -50,7 +50,7 @@ pub struct GoogleVeoProvider {
     client: Client,
     /// Google API key
     api_key: String,
-    /// API endpoint (e.g., "https://generativelanguage.googleapis.com")
+    /// API endpoint (e.g., "<https://generativelanguage.googleapis.com>")
     endpoint: String,
     /// Model to use (e.g., "veo-2.0-generate-001")
     model: String,
@@ -119,7 +119,7 @@ impl GoogleVeoProvider {
 
     /// Get the URL for polling operation status
     ///
-    /// Validates operation_name to prevent path traversal attacks from tampered API responses.
+    /// Validates `operation_name` to prevent path traversal attacks from tampered API responses.
     pub(crate) fn operation_url(&self, operation_name: &str) -> String {
         let sanitized = operation_name
             .trim_start_matches('/')
@@ -134,7 +134,7 @@ impl GoogleVeoProvider {
         self.model.contains("veo-3")
     }
 
-    /// Build the API request body from a GenerationRequest
+    /// Build the API request body from a `GenerationRequest`
     pub(crate) fn build_request_body(&self, request: &GenerationRequest) -> VeoRequest {
         // Build instance with prompt
         let instance = VeoInstance {

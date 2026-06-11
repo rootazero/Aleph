@@ -57,8 +57,8 @@ pub async fn handle_reload(
 /// Handle config.reload with subsystem refresh.
 ///
 /// Reloads both:
-/// - Gateway config (aleph.toml) via ConfigWatcher
-/// - App config (config.toml) via Config::load(), then updates shared state
+/// - Gateway config (aleph.toml) via `ConfigWatcher`
+/// - App config (config.toml) via `Config::load()`, then updates shared state
 ///
 /// Reports what subsystems were refreshed (profiles, providers, etc.).
 pub async fn handle_reload_with_subsystems(
@@ -285,7 +285,7 @@ pub async fn handle_path(request: JsonRpcRequest, watcher: Arc<ConfigWatcher>) -
 // Schema Handler
 // ============================================================================
 
-/// Default value for include_plugins (true)
+/// Default value for `include_plugins` (true)
 const fn default_true() -> bool {
     true
 }
@@ -463,7 +463,7 @@ pub async fn handle_get_full_config(
 
 /// Handle config.patch RPC method
 ///
-/// Delegates to ConfigPatcher for the full pipeline: schema validation,
+/// Delegates to `ConfigPatcher` for the full pipeline: schema validation,
 /// conflict detection, backup, secret routing, and atomic save.
 ///
 /// # Request
@@ -590,7 +590,7 @@ pub async fn handle_patch_config(
 // Tool Permissions Handlers
 // ============================================================================
 
-/// Handle config.get_tool_permissions RPC request
+/// Handle `config.get_tool_permissions` RPC request
 ///
 /// Returns the global tool permissions from `config.policies.tool_permissions`.
 pub async fn handle_get_tool_permissions(
@@ -612,7 +612,7 @@ pub async fn handle_get_tool_permissions(
     }
 }
 
-/// Parameters for config.update_tool_permissions
+/// Parameters for `config.update_tool_permissions`
 #[derive(Debug, Clone, Deserialize)]
 struct UpdateToolPermissionsParams {
     /// Default permission level (optional partial update)
@@ -624,7 +624,7 @@ struct UpdateToolPermissionsParams {
     pub overrides: Option<std::collections::HashMap<String, crate::extension::PermissionAction>>,
 }
 
-/// Handle config.update_tool_permissions RPC request
+/// Handle `config.update_tool_permissions` RPC request
 ///
 /// Partial update of `config.policies.tool_permissions`.
 /// Only provided fields are updated; omitted fields remain unchanged.

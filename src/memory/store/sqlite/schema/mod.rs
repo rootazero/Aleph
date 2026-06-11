@@ -116,7 +116,7 @@ pub fn init_vec_tables(conn: &Connection) -> Result<(), AlephError> {
     Ok(())
 }
 
-/// Initialize notes_vec virtual tables for 768, 1024, and 1536 dimensions,
+/// Initialize `notes_vec` virtual tables for 768, 1024, and 1536 dimensions,
 /// plus the mapping table that links `(path, agent_id)` to numeric rowids.
 pub fn init_notes_vec_tables(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(ddl::NOTES_VEC_MAP_DDL)

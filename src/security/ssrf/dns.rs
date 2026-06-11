@@ -1,7 +1,7 @@
 //! DNS resolution with SSRF validation and address pinning.
 //!
 //! Resolves hostnames via tokio DNS and validates every returned IP address
-//! against the SSRF blocklist. Returns a single pinned SocketAddr for use
+//! against the SSRF blocklist. Returns a single pinned `SocketAddr` for use
 //! with reqwest's `.resolve()` to prevent DNS rebinding attacks.
 
 use std::net::{IpAddr, SocketAddr};
@@ -14,7 +14,7 @@ use super::SsrfError;
 ///
 /// If the host is already an IP literal, validates it directly without DNS lookup.
 /// Otherwise performs async DNS resolution and checks every returned address.
-/// Returns the first valid SocketAddr for connection pinning.
+/// Returns the first valid `SocketAddr` for connection pinning.
 pub(crate) async fn resolve_and_validate(
     host: &str,
     port: u16,

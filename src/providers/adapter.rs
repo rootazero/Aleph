@@ -53,19 +53,19 @@ pub struct RequestPayload<'a> {
     /// dynamic tail. Currently consumed by the Anthropic adapter; other
     /// adapters concatenate transparently.
     pub system_blocks: Option<&'a [SystemPromptPart]>,
-    /// Tool definitions for native tool_use
+    /// Tool definitions for native `tool_use`
     pub tools: Option<&'a [ToolDefinition]>,
     /// Thinking/reasoning level
     pub think_level: Option<ThinkLevel>,
     /// Per-request temperature override
     pub temperature: Option<f32>,
-    /// Per-request max_tokens override
+    /// Per-request `max_tokens` override
     pub max_tokens: Option<u32>,
     /// Tool selection control (auto/required/specific/none)
     pub tool_choice: Option<ToolChoice>,
     /// Per-request model override (takes precedence over provider config)
     pub model: Option<String>,
-    /// Metadata for provider-specific features (e.g. user_id for Anthropic)
+    /// Metadata for provider-specific features (e.g. `user_id` for Anthropic)
     pub metadata: Option<std::collections::HashMap<String, String>>,
 }
 
@@ -132,7 +132,7 @@ impl<'a> RequestPayload<'a> {
         self
     }
 
-    /// Set max_tokens
+    /// Set `max_tokens`
     #[must_use]
     pub const fn with_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
         self.max_tokens = max_tokens;
@@ -166,7 +166,7 @@ impl<'a> RequestPayload<'a> {
 
 /// Protocol adapter trait for building requests and streaming responses
 ///
-/// Each protocol (OpenAI, Anthropic, Gemini, etc.) implements this trait
+/// Each protocol (`OpenAI`, Anthropic, Gemini, etc.) implements this trait
 /// to handle protocol-specific serialization and deserialization.
 ///
 /// All adapters are stream-first: `stream_deltas()` is the only required
@@ -184,16 +184,16 @@ pub trait ProtocolAdapter: Send + Sync {
     /// * `config` - Provider configuration (API key, model, etc.)
     ///
     /// # Returns
-    /// A configured reqwest::RequestBuilder ready to send
+    /// A configured `reqwest::RequestBuilder` ready to send
     fn build_request(
         &self,
         payload: &RequestPayload,
         config: &ProviderConfig,
     ) -> Result<reqwest::RequestBuilder>;
 
-    /// Whether this protocol supports native tool_use
+    /// Whether this protocol supports native `tool_use`
     ///
-    /// Protocols that support native tool calling (e.g., Anthropic, OpenAI)
+    /// Protocols that support native tool calling (e.g., Anthropic, `OpenAI`)
     /// return `true` to enable tool extraction from delta streams.
     fn supports_native_tools(&self) -> bool {
         false
@@ -235,7 +235,7 @@ pub trait ProtocolAdapter: Send + Sync {
 /// Structured response from an LLM provider
 ///
 /// Replaces raw String return from `ProtocolAdapter::parse_response()`.
-/// Supports text-only responses (fallback) and native tool_use responses.
+/// Supports text-only responses (fallback) and native `tool_use` responses.
 #[derive(Debug, Clone, Default)]
 pub struct ProviderResponse {
     /// LLM text output (for non-tool responses, or thinking content)
@@ -246,7 +246,7 @@ pub struct ProviderResponse {
     pub thinking: Option<String>,
     /// Opaque signature accompanying the thinking content. Anthropic returns
     /// this and requires it to be replayed verbatim on subsequent turns when
-    /// the same assistant message also contains tool_use blocks. `None` for
+    /// the same assistant message also contains `tool_use` blocks. `None` for
     /// providers that do not sign thinking output.
     pub thinking_signature: Option<String>,
     /// Why the LLM stopped generating
@@ -307,7 +307,7 @@ impl ProviderResponse {
 /// A native tool call from the LLM
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NativeToolCall {
-    /// Provider-assigned ID (used for tool_result passback)
+    /// Provider-assigned ID (used for `tool_result` passback)
     pub id: String,
     /// Tool name
     pub name: String,
@@ -316,7 +316,7 @@ pub struct NativeToolCall {
     /// Gemini 3 `thoughtSignature` — an opaque token the model attaches to a
     /// `functionCall` and requires replayed verbatim on later turns to keep its
     /// reasoning chain intact. `None` for providers that do not sign tool calls
-    /// (Anthropic, OpenAI, older Gemini). `#[serde(default)]` keeps sessions
+    /// (Anthropic, `OpenAI`, older Gemini). `#[serde(default)]` keeps sessions
     /// persisted before this field deserializable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thought_signature: Option<String>,
@@ -330,7 +330,7 @@ pub enum StopReason {
     EndTurn,
     /// LLM wants to call a tool
     ToolUse,
-    /// Hit max_tokens limit
+    /// Hit `max_tokens` limit
     MaxTokens,
     /// Entire context window exhausted mid-generation (Anthropic
     /// `model_context_window_exceeded`). Distinct from [`Self::MaxTokens`]:
@@ -392,7 +392,7 @@ impl TokenUsage {
     /// observed cold miss, distinct from "provider didn't report cache stats".
     ///
     /// Cross-protocol semantics:
-    /// - **OpenAI / DeepSeek / Volcengine** report `prompt_tokens` as the *total*,
+    /// - **`OpenAI` / `DeepSeek` / Volcengine** report `prompt_tokens` as the *total*,
     ///   with the cached subset surfaced separately. Here `input_tokens` already
     ///   includes `cache_read_tokens`, so the denominator is `input_tokens`.
     /// - **Anthropic** reports `input_tokens` as the *non-cached* portion only,
@@ -441,7 +441,7 @@ impl TokenUsage {
     /// [`TokenUsage::cache_hit_ratio`]:
     /// - **Anthropic** reports `input_tokens` as the non-cached, non-creation
     ///   portion, with `cache_read`/`cache_creation` disjoint → sum all three.
-    /// - **OpenAI / DeepSeek / Volcengine** report `input_tokens` (prompt
+    /// - **`OpenAI` / `DeepSeek` / Volcengine** report `input_tokens` (prompt
     ///   tokens) as the total already, with `cache_read` a subset → `input_tokens`.
     ///
     /// Returns 0 when the provider reported no usage (all counters zero).

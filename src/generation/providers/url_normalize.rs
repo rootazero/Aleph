@@ -52,7 +52,7 @@ impl ResolvedUrl {
     }
 }
 
-/// Resolve a user-configured URL into a ResolvedUrl.
+/// Resolve a user-configured URL into a `ResolvedUrl`.
 ///
 /// Rules:
 /// - Domain-only (no path after scheme) → Standard (auto-complete)

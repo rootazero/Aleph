@@ -1,10 +1,10 @@
-/// OpenAI API types
+/// `OpenAI` API types
 ///
-/// Data structures for OpenAI chat completion requests and responses.
+/// Data structures for `OpenAI` chat completion requests and responses.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Request body for OpenAI chat completion API
+/// Request body for `OpenAI` chat completion API
 #[derive(Debug, Serialize)]
 pub struct ChatCompletionRequest {
     pub model: String,
@@ -26,7 +26,7 @@ pub struct ChatCompletionRequest {
 pub struct Message {
     pub role: String,
     /// Required for tool result messages (role="tool").
-    /// OpenAI API rejects tool messages without this field.
+    /// `OpenAI` API rejects tool messages without this field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     /// Tool calls made by the assistant (role="assistant").
@@ -131,7 +131,7 @@ pub struct ImageUrl {
 // Tool Types (for function calling)
 // =============================================================================
 
-/// Tool definition for OpenAI API function calling
+/// Tool definition for `OpenAI` API function calling
 #[derive(Debug, Clone, Serialize)]
 pub struct OpenAiTool {
     #[serde(rename = "type")]
@@ -139,7 +139,7 @@ pub struct OpenAiTool {
     pub function: OpenAiFunction,
 }
 
-/// Function definition within an OpenAI tool
+/// Function definition within an `OpenAI` tool
 #[derive(Debug, Clone, Serialize)]
 pub struct OpenAiFunction {
     pub name: String,
@@ -152,7 +152,7 @@ pub struct OpenAiFunction {
     pub strict: Option<bool>,
 }
 
-/// Tool call in OpenAI API response
+/// Tool call in `OpenAI` API response
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenAiToolCall {
     pub id: String,
@@ -166,7 +166,7 @@ pub struct OpenAiToolCall {
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenAiFunctionCall {
     pub name: String,
-    /// JSON string — needs parsing via serde_json::from_str()
+    /// JSON string — needs parsing via `serde_json::from_str()`
     pub arguments: String,
 }
 
@@ -174,22 +174,22 @@ pub struct OpenAiFunctionCall {
 // Response Types
 // =============================================================================
 
-/// Response from OpenAI chat completion API
+/// Response from `OpenAI` chat completion API
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionResponse {
     pub choices: Vec<Choice>,
     pub usage: Option<OpenAiUsage>,
 }
 
-/// Token usage statistics from OpenAI API
+/// Token usage statistics from `OpenAI` API
 #[derive(Debug, Deserialize)]
 pub struct OpenAiUsage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     #[allow(dead_code)] // Deserialized from API response
     pub total_tokens: Option<u32>,
-    /// Breakdown of prompt tokens (cache_read).
-    /// OpenAI returns this on `gpt-4o*` and later when prompt caching applies.
+    /// Breakdown of prompt tokens (`cache_read`).
+    /// `OpenAI` returns this on `gpt-4o*` and later when prompt caching applies.
     #[serde(default)]
     pub prompt_tokens_details: Option<OpenAiPromptTokensDetails>,
     /// Breakdown of completion tokens (reasoning for o1/o3).
@@ -217,7 +217,7 @@ pub struct Choice {
 
 #[derive(Debug, Deserialize)]
 pub struct ResponseMessage {
-    /// Nullable — can be null when tool_calls are present
+    /// Nullable — can be null when `tool_calls` are present
     pub content: Option<String>,
     /// Tool calls from the model (present when model invokes functions)
     pub tool_calls: Option<Vec<OpenAiToolCall>>,

@@ -26,7 +26,7 @@ pub enum AnthropicEndpointClass {
 // The flags layer on top of the conservative `Custom` defaults — they only
 // flip bits known to be safe for the specific family.
 
-/// MiniMax's Anthropic-compatible endpoints (`api.minimax.io/anthropic`,
+/// `MiniMax`'s Anthropic-compatible endpoints (`api.minimax.io/anthropic`,
 /// `api.minimaxi.com/anthropic`) — Bearer-auth proxy that 400s on
 /// `fine-grained-tool-streaming-2025-05-14` and `context-1m-2025-08-07`.
 fn is_minimax_anthropic_endpoint(host: &str, path: &str) -> bool {
@@ -92,7 +92,7 @@ pub struct AnthropicCapabilities {
     /// `cache_control` breakpoints in `system` / `messages`.
     /// Gates `effective_cache_retention` injection in `build_request`.
     pub supports_cache_control: bool,
-    /// `service_tier` field ("auto" / "standard_only").
+    /// `service_tier` field ("auto" / "`standard_only`").
     pub supports_service_tier: bool,
     /// `metadata.user_id` field.
     pub supports_metadata_user_id: bool,
@@ -105,7 +105,7 @@ pub struct AnthropicCapabilities {
     /// `stop_sequences` field.
     pub supports_stop_sequences: bool,
     /// `anthropic-beta: fine-grained-tool-streaming-2025-05-14`.
-    /// MiniMax rejects this with a connection error on tool-use messages.
+    /// `MiniMax` rejects this with a connection error on tool-use messages.
     pub supports_fine_grained_tool_streaming: bool,
     /// `anthropic-beta: interleaved-thinking-2025-05-14`. Currently safe
     /// everywhere we route Anthropic-protocol traffic; broken out as a bit so
@@ -125,7 +125,7 @@ pub struct AnthropicCapabilities {
 /// Resolve capabilities for a given Anthropic endpoint class.
 ///
 /// `base_url` is consulted only for `Custom`-class endpoints, to apply per-family
-/// beta-header overrides (MiniMax drops fine-grained-tool-streaming + context-1m;
+/// beta-header overrides (`MiniMax` drops fine-grained-tool-streaming + context-1m;
 /// Azure/Bedrock enable context-1m). `Official` always returns the same bits.
 pub fn resolve_anthropic_capabilities(
     class: AnthropicEndpointClass,

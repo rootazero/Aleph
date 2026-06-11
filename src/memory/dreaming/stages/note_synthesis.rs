@@ -1,4 +1,4 @@
-//! NoteSynthesis stage — generates cross-note insight summaries.
+//! `NoteSynthesis` stage — generates cross-note insight summaries.
 //!
 //! Runs only in the weekly pipeline and requires at least 5 notes.
 //! Groups notes by category and calls an LLM to synthesize cross-cutting

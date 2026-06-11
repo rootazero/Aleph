@@ -1,4 +1,4 @@
-//! AcpAdapterManager — lifecycle management for ACP harness sessions.
+//! `AcpAdapterManager` — lifecycle management for ACP harness sessions.
 //!
 //! Supports runtime dynamic harness registration and unregistration.
 //!
@@ -65,7 +65,7 @@ impl SessionEntry {
 /// Manages ACP harness registrations and active sessions.
 ///
 /// Supports two execution modes:
-/// - **NativeAcp**: Persistent subprocess with ACP protocol (Gemini).
+/// - **`NativeAcp`**: Persistent subprocess with ACP protocol (Gemini).
 ///   Uses lazy-start sessions that are automatically respawned if dead.
 /// - **Oneshot**: Fresh process per prompt (Claude Code, Codex).
 ///   No persistent session needed.
@@ -74,7 +74,7 @@ impl SessionEntry {
 pub struct AcpAdapterManager {
     pub(super) adapters: RwLock<HashMap<String, Arc<dyn AcpAdapter>>>,
     pub(super) configs: RwLock<HashMap<String, AcpAdapterEntry>>,
-    /// Active sessions for NativeAcp harnesses, keyed by (harness_id, cwd).
+    /// Active sessions for `NativeAcp` harnesses, keyed by (`harness_id`, cwd).
     ///
     /// Outer `RwLock` guards the map shape (insert/remove). Each entry's
     /// inner `AsyncMutex` serializes operations on that specific session.

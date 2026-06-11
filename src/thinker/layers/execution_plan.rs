@@ -1,10 +1,10 @@
-//! ExecutionPlanLayer — emits `<execution_plan>` at priority 1755 (Dynamic).
+//! `ExecutionPlanLayer` — emits `<execution_plan>` at priority 1755 (Dynamic).
 //!
 //! Re-surfaces the session's active scratchpad execution list (objective +
 //! checklist + current step) into the system prompt **every turn** while
 //! work remains. This closes the one gap Aleph's scratchpad had vs the
 //! reference agents: codex `update_plan` keeps the plan persistently visible
-//! in its UI, opencode `todowrite` and Claude Code's TodoWrite re-inject the
+//! in its UI, opencode `todowrite` and Claude Code's `TodoWrite` re-inject the
 //! list as a per-turn reminder, and hermes-agent's `/goal` loop re-states the
 //! goal in every continuation. Aleph previously only echoed progress inside
 //! the `scratchpad` tool's own result (i.e. only on turns the model called

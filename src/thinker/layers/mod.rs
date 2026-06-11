@@ -1,4 +1,4 @@
-//! Prompt layers — each file implements one PromptLayer.
+//! Prompt layers — each file implements one `PromptLayer`.
 
 // --- Always-on layers ---
 mod citation_standards;

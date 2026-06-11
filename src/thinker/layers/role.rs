@@ -1,4 +1,4 @@
-//! RoleLayer — core role definition (priority 100)
+//! `RoleLayer` — core role definition (priority 100)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

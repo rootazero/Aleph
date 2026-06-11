@@ -1,7 +1,7 @@
 //! Aleph Skill Specification
 //!
 //! Data structures for parsing and representing Markdown-based CLI skills.
-//! Compatible with OpenClaw SKILL.md format while adding Aleph-specific extensions.
+//! Compatible with `OpenClaw` SKILL.md format while adding Aleph-specific extensions.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -25,7 +25,7 @@ pub struct AlephSkillSpec {
     /// Short description for LLM
     pub description: String,
 
-    /// OpenClaw + Aleph metadata
+    /// `OpenClaw` + Aleph metadata
     #[serde(default)]
     pub metadata: SkillMetadata,
 
@@ -34,10 +34,10 @@ pub struct AlephSkillSpec {
     pub markdown_content: String,
 }
 
-/// Skill metadata (OpenClaw compatible + Aleph extensions)
+/// Skill metadata (`OpenClaw` compatible + Aleph extensions)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillMetadata {
-    /// OpenClaw compatibility: required binaries
+    /// `OpenClaw` compatibility: required binaries
     #[serde(default)]
     pub requires: RequiresSpec,
 
@@ -45,7 +45,7 @@ pub struct SkillMetadata {
     #[serde(default)]
     pub aleph: Option<AlephExtensions>,
 
-    /// OpenClaw metadata namespace (ClawHub compatibility)
+    /// `OpenClaw` metadata namespace (`ClawHub` compatibility)
     #[serde(default)]
     pub openclaw: Option<OpenClawMetadata>,
 }
@@ -65,7 +65,7 @@ pub struct AlephExtensions {
     #[serde(default)]
     pub security: SecuritySpec,
 
-    /// Type hints for input validation (BTreeMap for deterministic CLI arg ordering)
+    /// Type hints for input validation (`BTreeMap` for deterministic CLI arg ordering)
     #[serde(default)]
     pub input_hints: BTreeMap<String, InputHint>,
 
@@ -82,9 +82,9 @@ pub struct AlephExtensions {
     pub docker: Option<DockerConfig>,
 }
 
-/// OpenClaw metadata namespace — compatible with ClawHub skill format.
+/// `OpenClaw` metadata namespace — compatible with `ClawHub` skill format.
 ///
-/// Allows SKILL.md files from ClawHub to work natively in Aleph.
+/// Allows SKILL.md files from `ClawHub` to work natively in Aleph.
 /// Both `aleph` and `openclaw` namespaces can coexist.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OpenClawMetadata {
@@ -102,7 +102,7 @@ pub struct OpenClawMetadata {
     pub install: Option<Vec<OpenClawInstallSpec>>,
 }
 
-/// OpenClaw install specification
+/// `OpenClaw` install specification
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenClawInstallSpec {
     pub id: String,
@@ -141,7 +141,7 @@ pub struct SecuritySpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SandboxMode {
-    /// Run on host with SafetyGate
+    /// Run on host with `SafetyGate`
     Host,
     /// Run in Docker container
     Docker,

@@ -47,7 +47,7 @@ pub enum ErrorKind {
 pub struct MessageContent {
     /// Free-form text body (UI-displayable).
     pub text: String,
-    /// Optional rich blocks (images, tool_use). Uses JSON to avoid pulling in
+    /// Optional rich blocks (images, `tool_use`). Uses JSON to avoid pulling in
     /// provider-specific types at this layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<serde_json::Value>,
@@ -56,7 +56,7 @@ pub struct MessageContent {
     pub thinking: Option<String>,
     /// Opaque signature accompanying the thinking content. Anthropic requires
     /// a signed thinking block to be replayed verbatim on subsequent turns
-    /// whenever the same assistant message also contains tool_use blocks.
+    /// whenever the same assistant message also contains `tool_use` blocks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_signature: Option<String>,
 }
@@ -149,7 +149,7 @@ pub enum SessionEvent {
         at: Timestamp,
         /// `true` when this entry was injected by the harness itself rather
         /// than coming from the real end-user (e.g. verifier-veto nudge,
-        /// grace-turn MAX_STEPS hint). Defaults to `false` for backward
+        /// grace-turn `MAX_STEPS` hint). Defaults to `false` for backward
         /// compatibility with on-disk session logs that pre-date this field.
         ///
         /// The prompt builder (G2) wraps every *real* mid-loop user message

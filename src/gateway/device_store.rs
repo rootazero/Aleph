@@ -1,6 +1,6 @@
 //! Device Storage
 //!
-//! Persistent storage for approved devices using SQLite.
+//! Persistent storage for approved devices using `SQLite`.
 
 use crate::sync_primitives::Mutex;
 use rusqlite::{params, Connection, Result as SqliteResult};
@@ -189,7 +189,7 @@ impl DeviceStore {
         devices
     }
 
-    /// Update the last_seen_at timestamp for a device
+    /// Update the `last_seen_at` timestamp for a device
     pub fn update_last_seen(&self, device_id: &str) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = chrono::Utc::now().to_rfc3339();

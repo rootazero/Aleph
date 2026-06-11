@@ -1,4 +1,4 @@
-//! InboxReadTool — read inbox messages or a full thread.
+//! `InboxReadTool` — read inbox messages or a full thread.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -38,7 +38,7 @@ pub struct InboxReadArgs {
     /// Mark returned messages as read (default: true)
     #[serde(default = "default_true")]
     pub mark_read: bool,
-    /// If true, peek without marking as read (overrides mark_read).
+    /// If true, peek without marking as read (overrides `mark_read`).
     #[serde(default)]
     pub peek: bool,
     /// If true, only return unread count (no message content).
@@ -46,7 +46,7 @@ pub struct InboxReadArgs {
     pub count_only: bool,
 }
 
-/// Output from inbox_read.
+/// Output from `inbox_read`.
 #[derive(Debug, Clone, Serialize)]
 pub struct InboxReadOutput {
     pub messages: Vec<TeamMessage>,

@@ -1,4 +1,4 @@
-//! Request/response shapes for the OpenAI `/v1/audio/transcriptions` endpoint.
+//! Request/response shapes for the `OpenAI` `/v1/audio/transcriptions` endpoint.
 //!
 //! The request is `multipart/form-data` (the audio bytes plus optional text
 //! fields), so there is no JSON request body to serialize. The response is a
@@ -7,7 +7,7 @@
 
 use serde::Deserialize;
 
-/// Whisper API JSON response (response_format=json or verbose_json).
+/// Whisper API JSON response (`response_format=json` or `verbose_json`).
 ///
 /// `text` is always present; `language` and `duration` only appear when
 /// `verbose_json` is requested. Both are tolerated as optional so the same
@@ -21,7 +21,7 @@ pub struct WhisperResponse {
     pub duration: Option<f32>,
 }
 
-/// Standard OpenAI error envelope reused by Whisper.
+/// Standard `OpenAI` error envelope reused by Whisper.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenAiErrorResponse {
     pub error: OpenAiError,

@@ -1,8 +1,8 @@
-//! Shared logic for the OpenAI Responses API wire format
+//! Shared logic for the `OpenAI` Responses API wire format
 //!
-//! Standalone functions used by both the standard OpenAI Responses protocol
+//! Standalone functions used by both the standard `OpenAI` Responses protocol
 //! and the Codex protocol. These functions handle message conversion,
-//! request building, and SSE event parsing for stream_deltas() implementations.
+//! request building, and SSE event parsing for `stream_deltas()` implementations.
 
 use tracing::debug;
 
@@ -16,7 +16,7 @@ use crate::providers::protocols::openai_common::tools::{
 use crate::providers::responses::types::*;
 use crate::tool_metadata::ToolDefinition;
 
-/// Convert UnifiedMessages to Responses API InputItems
+/// Convert `UnifiedMessages` to Responses API `InputItems`
 pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
     let mut items = Vec::new();
     for msg in messages {
@@ -174,7 +174,7 @@ fn parse_reasoning_signature(sig: &str) -> Vec<InputItem> {
         .collect()
 }
 
-/// Map ThinkLevel to Responses API reasoning config, clamped per model.
+/// Map `ThinkLevel` to Responses API reasoning config, clamped per model.
 ///
 /// Mirrors the Chat protocol: every non-`Off` level maps to its faithful effort
 /// value (`minimal`/`xhigh` are real gpt-5-family efforts), then
@@ -202,7 +202,7 @@ pub(crate) fn build_reasoning(
     })
 }
 
-/// Convert ToolDefinitions to Responses API FunctionToolDef format
+/// Convert `ToolDefinitions` to Responses API `FunctionToolDef` format
 ///
 /// Cleans schemars metadata ($schema, title) and ensures object schemas
 /// have a "properties" field for API compatibility.
@@ -292,7 +292,7 @@ pub(crate) fn map_tool_choice(choice: Option<&ToolChoice>) -> Option<serde_json:
     })
 }
 
-/// Extract text content from a completed ResponseResource
+/// Extract text content from a completed `ResponseResource`
 #[must_use]
 pub fn extract_text(response: &ResponseResource) -> Option<String> {
     let mut texts = Vec::new();
@@ -312,7 +312,7 @@ pub fn extract_text(response: &ResponseResource) -> Option<String> {
     }
 }
 
-/// Extract native tool calls from a completed ResponseResource
+/// Extract native tool calls from a completed `ResponseResource`
 pub fn extract_tool_calls(response: &ResponseResource) -> Vec<NativeToolCall> {
     let mut calls = Vec::new();
     for item in &response.output {
@@ -340,7 +340,7 @@ pub fn extract_tool_calls(response: &ResponseResource) -> Vec<NativeToolCall> {
     calls
 }
 
-/// Parse a single SSE data line into a StreamEvent
+/// Parse a single SSE data line into a `StreamEvent`
 ///
 /// Returns `None` for the `[DONE]` sentinel or unparseable data.
 pub(crate) fn parse_sse_data(data: &str) -> Option<StreamEvent> {

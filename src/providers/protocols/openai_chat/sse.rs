@@ -1,4 +1,4 @@
-//! SSE event parsing for OpenAI Chat Completions protocol.
+//! SSE event parsing for `OpenAI` Chat Completions protocol.
 
 use crate::error::Result;
 use crate::providers::adapter::{StopReason, TokenUsage};
@@ -9,7 +9,7 @@ use tracing::warn;
 /// Parse one SSE data line from the Chat Completions stream and push
 /// zero or more [`ProviderDelta`] events into `out`.
 ///
-/// OpenAI Chat Completions SSE delta format (simplified):
+/// `OpenAI` Chat Completions SSE delta format (simplified):
 /// ```json
 /// {"choices":[{"delta":{"content":"Hello"},"index":0}]}
 /// {"choices":[{"delta":{"reasoning_content":"Let me think"},"index":0}]}
@@ -191,7 +191,7 @@ pub(crate) fn parse_chat_sse_event(
 
 /// Hold the terminal `Done` delta back until the trailing usage chunk lands.
 ///
-/// OpenAI emits `finish_reason` and the `stream_options.include_usage` usage
+/// `OpenAI` emits `finish_reason` and the `stream_options.include_usage` usage
 /// payload as *separate* SSE chunks, in that order. Emitting `Done`
 /// immediately would terminate the stream before the usage chunk is read,
 /// permanently losing the token count.

@@ -1,7 +1,7 @@
 //! Virtual-key alias decorator for `AsyncSecretResolver`.
 //!
 //! Maps operator-defined aliases (`[secrets_config].virtual_keys`, an
-//! alias -> secret_name map) to their real secret names before delegating to
+//! alias -> `secret_name` map) to their real secret names before delegating to
 //! the inner resolver. A `{{secret:ALIAS}}` placeholder therefore resolves to
 //! the secret stored under the mapped name. Names without a matching alias
 //! pass through unchanged, so this is a transparent, opt-in layer.

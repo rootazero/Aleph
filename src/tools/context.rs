@@ -12,7 +12,7 @@ use crate::sync_primitives::Arc;
 /// Tools that need output paths read from the handle; others ignore it.
 #[derive(Debug, Clone)]
 pub struct ToolContext {
-    /// Workspace output directory (e.g. ~/.aleph/workspaces/{agent_id}/output/)
+    /// Workspace output directory (e.g. ~/.`aleph/workspaces/{agent_id}/output`/)
     pub output_dir: PathBuf,
 }
 
@@ -36,7 +36,7 @@ impl ToolContext {
 /// Type alias for the shared handle, matching existing handle patterns.
 pub type ToolContextHandle = Arc<tokio::sync::RwLock<ToolContext>>;
 
-/// Create a new ToolContext handle with default paths (main workspace).
+/// Create a new `ToolContext` handle with default paths (main workspace).
 #[must_use]
 pub fn new_tool_context_handle() -> ToolContextHandle {
     let default_workspace = dirs::home_dir()

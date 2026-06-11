@@ -51,7 +51,7 @@ pub enum MemberDispatchTarget {
 }
 
 impl MemberDispatchTarget {
-    /// The canonical agent_id string used for run records, locks, and
+    /// The canonical `agent_id` string used for run records, locks, and
     /// `coord_tasks.owner` regardless of dispatch backend.
     #[must_use]
     pub fn agent_id(&self) -> &str {
@@ -109,7 +109,7 @@ pub struct MemberRunOutcome {
 ///
 /// - **Agent target**: runs the full Orchestrator → Harness path via the
 ///   execution adapter. On timeout the spawned execution is aborted.
-/// - **AcpSession target**: routes through `AcpAdapterManager::prompt_named`
+/// - **`AcpSession` target**: routes through `AcpAdapterManager::prompt_named`
 ///   so an external coding CLI (Claude Code, Codex, ...) handles the work.
 ///   The `cwd` from the target is authoritative — workspace isolation does
 ///   not apply.

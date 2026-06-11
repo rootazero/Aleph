@@ -86,7 +86,7 @@ pub enum SchemaProposal {
     DomainUpdate { text: String },
 }
 
-/// Summary of what an apply pass produced. Returned to CompressionService.
+/// Summary of what an apply pass produced. Returned to `CompressionService`.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ApplyReport {
     pub created: u32,

@@ -237,7 +237,7 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
 
 /// Idempotently add a column to an existing table.
 ///
-/// SQLite raises on duplicate columns, so we inspect `PRAGMA table_info`
+/// `SQLite` raises on duplicate columns, so we inspect `PRAGMA table_info`
 /// first instead of relying on error-string matching. Used by Phase C
 /// (step-review fields) and any future additive migration.
 fn add_column_if_missing(

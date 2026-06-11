@@ -1,9 +1,9 @@
-//! Spec B — fetch the canonical /end-summary RawMemory for a session, if it exists.
+//! Spec B — fetch the canonical /end-summary `RawMemory` for a session, if it exists.
 //!
-//! Used by `session_search` and the SessionEndSummarizer to decide whether
+//! Used by `session_search` and the `SessionEndSummarizer` to decide whether
 //! the lazy synthesizer must run.
 //!
-//! Naming note: the plan calls this "retrieve_summary_fact" / "MemoryFact"
+//! Naming note: the plan calls this "`retrieve_summary_fact`" / "`MemoryFact`"
 //! but actual storage is `RawMemory` in the `raw_memories` table.
 
 use crate::sync_primitives::Arc;

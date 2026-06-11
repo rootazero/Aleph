@@ -1,4 +1,4 @@
-//! MemoryReflector — orchestrates HybridAssembler + LLM synthesis.
+//! `MemoryReflector` — orchestrates `HybridAssembler` + LLM synthesis.
 
 use crate::error::AlephError;
 use crate::memory::assembler::{AssemblyBudget, WorkingMemoryAssembler};

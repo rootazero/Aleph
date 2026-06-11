@@ -1,7 +1,7 @@
-//! FileEditTool — string replacement editing tool
+//! `FileEditTool` — string replacement editing tool
 //!
 //! Performs string replacements in files, aligned with claude-code's
-//! FileEditTool. Matching is exact first; on a miss it falls back to folding
+//! `FileEditTool`. Matching is exact first; on a miss it falls back to folding
 //! typographic punctuation (see [`super::edit_match`]) and, failing that,
 //! produces a diagnostic that tells the model exactly how to fix its input.
 //! Binary and non-UTF-8 files are refused outright — editing them would corrupt
@@ -109,7 +109,7 @@ fn render_edit_snippet(new_content: &str, first_start: usize, replacement: &str)
 // Args & Output
 // =============================================================================
 
-/// Arguments for the file_edit tool
+/// Arguments for the `file_edit` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct FileEditArgs {
     /// Absolute or relative path to the file to edit
@@ -123,7 +123,7 @@ pub struct FileEditArgs {
     pub replace_all: bool,
 }
 
-/// Output from the file_edit tool
+/// Output from the `file_edit` tool
 #[derive(Debug, Clone, Serialize)]
 pub struct FileEditOutput {
     /// Whether the edit succeeded
@@ -136,7 +136,7 @@ pub struct FileEditOutput {
     pub message: String,
     /// Line-numbered excerpt of the file around the first replacement, as it
     /// reads *after* the edit. Lets the model verify the result in place
-    /// instead of spending a follow-up file_read on it.
+    /// instead of spending a follow-up `file_read` on it.
     pub snippet: String,
 }
 
@@ -148,12 +148,12 @@ pub struct FileEditOutput {
 pub struct FileEditTool {
     /// Denied path patterns (security)
     denied_paths: Vec<String>,
-    /// Optional ToolContext handle for workspace-scoped output path resolution
+    /// Optional `ToolContext` handle for workspace-scoped output path resolution
     tool_context_handle: Option<crate::tools::ToolContextHandle>,
 }
 
 impl FileEditTool {
-    /// Create a new FileEditTool with default denied paths
+    /// Create a new `FileEditTool` with default denied paths
     pub fn new() -> Self {
         let denied_paths = get_denied_paths();
         info!(
@@ -166,13 +166,13 @@ impl FileEditTool {
         }
     }
 
-    /// Configure the tool to use a ToolContext handle for workspace-scoped output paths
+    /// Configure the tool to use a `ToolContext` handle for workspace-scoped output paths
     pub fn with_tool_context(mut self, handle: crate::tools::ToolContextHandle) -> Self {
         self.tool_context_handle = Some(handle);
         self
     }
 
-    /// Resolve the output directory from the ToolContext handle (if available).
+    /// Resolve the output directory from the `ToolContext` handle (if available).
     async fn resolve_output_dir(&self) -> Option<std::path::PathBuf> {
         if let Some(ref handle) = self.tool_context_handle {
             let ctx = handle.read().await;

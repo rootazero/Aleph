@@ -1,4 +1,4 @@
-//! SecurityKernel - Deterministic command risk assessment.
+//! `SecurityKernel` - Deterministic command risk assessment.
 //!
 //! Uses regex pattern matching for zero-latency security decisions.
 //! Does NOT rely on LLM for security judgments.
@@ -79,10 +79,10 @@ impl SecurityKernel {
     /// Assess the risk level of a command.
     ///
     /// Evaluation order (first match wins):
-    /// 1. Blocked patterns → RiskLevel::Blocked
-    /// 2. Danger patterns → RiskLevel::Danger
-    /// 3. Safe patterns → RiskLevel::Safe
-    /// 4. Default → RiskLevel::Caution
+    /// 1. Blocked patterns → `RiskLevel::Blocked`
+    /// 2. Danger patterns → `RiskLevel::Danger`
+    /// 3. Safe patterns → `RiskLevel::Safe`
+    /// 4. Default → `RiskLevel::Caution`
     pub fn assess(&self, command: &str) -> RiskLevel {
         let cmd = command.trim();
 

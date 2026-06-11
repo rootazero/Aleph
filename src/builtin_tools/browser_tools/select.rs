@@ -10,7 +10,7 @@ use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_select tool.
+/// Arguments for the `browser_select` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserSelectArgs {
     /// Browser profile name (default: "default").
@@ -18,13 +18,13 @@ pub struct BrowserSelectArgs {
     pub profile: String,
     /// CSS selector of the dropdown/select element.
     pub selector: Option<String>,
-    /// Accessibility ref_id from a previous snapshot.
+    /// Accessibility `ref_id` from a previous snapshot.
     pub ref_id: Option<String>,
     /// Value to select from the dropdown.
     pub value: String,
 }
 
-/// Output from the browser_select tool.
+/// Output from the `browser_select` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserSelectOutput {
     pub success: bool,

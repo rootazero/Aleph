@@ -1,4 +1,4 @@
-//! TeamStatusTool — query team state and task history.
+//! `TeamStatusTool` — query team state and task history.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -29,7 +29,7 @@ pub struct MemberInfo {
     pub role: String,
 }
 
-/// Summary of a team task (backed by CoordTask).
+/// Summary of a team task (backed by `CoordTask`).
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskInfo {
     pub id: String,
@@ -39,7 +39,7 @@ pub struct TaskInfo {
     pub result: Option<String>,
 }
 
-/// Output from team_status.
+/// Output from `team_status`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TeamStatusOutput {
     pub team_id: String,

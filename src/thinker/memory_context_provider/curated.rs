@@ -27,7 +27,7 @@ impl MemoryContextProvider {
 
     /// Get or lazily load the per-agent `CuratedMemoryStore`. Public so the
     /// builtin `remember` tool can resolve the same store instance the
-    /// CuratedMemoryLayer renders into the system prompt.
+    /// `CuratedMemoryLayer` renders into the system prompt.
     pub async fn get_or_load_curated_store(
         &self,
         agent_id: &str,
@@ -43,7 +43,7 @@ impl MemoryContextProvider {
         Ok(s)
     }
 
-    /// Load (or reuse) the per-agent CuratedMemoryStore, render the
+    /// Load (or reuse) the per-agent `CuratedMemoryStore`, render the
     /// `CuratedMemory` and `UserProfile` blocks, and return them as a
     /// frozen `CuratedSnapshot`.
     async fn capture_curated(
@@ -144,7 +144,7 @@ impl MemoryContextProvider {
     }
 
     /// Evict every snapshot whose `session_key` matches. Called on
-    /// compression-complete and SessionEnd so the next prompt build picks
+    /// compression-complete and `SessionEnd` so the next prompt build picks
     /// up disk mutations.
     pub async fn invalidate_curated(&self, session_key: &str) {
         self.curated_snapshots
@@ -154,7 +154,7 @@ impl MemoryContextProvider {
     }
 
     /// Drop every cached curated snapshot for `agent_id` across every
-    /// session_key. Spec A Task 18: fired after compression-run completes
+    /// `session_key`. Spec A Task 18: fired after compression-run completes
     /// for the agent, since compression mutates `MEMORY.md` / `USER.md` on
     /// disk and any per-session cache must rebuild on the next prompt.
     pub async fn invalidate_curated_for_agent(&self, agent_id: &str) {

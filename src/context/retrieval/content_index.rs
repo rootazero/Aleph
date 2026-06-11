@@ -10,7 +10,7 @@
 //! log would cost 315 KB to re-read, defeating the offload.
 //!
 //! `ContentIndex` closes that gap: the offloaded text is chunked and indexed
-//! into a per-session SQLite FTS5 table. The model retrieves only the
+//! into a per-session `SQLite` FTS5 table. The model retrieves only the
 //! relevant slices via BM25 search (`ctx_search`), so a 315 KB log costs a
 //! few KB to query instead of 315 KB to re-read.
 //!
@@ -40,7 +40,7 @@
 //!
 //! # Zero new dependencies
 //!
-//! `rusqlite`'s `bundled` feature compiles SQLite with `SQLITE_ENABLE_FTS5`,
+//! `rusqlite`'s `bundled` feature compiles `SQLite` with `SQLITE_ENABLE_FTS5`,
 //! so the `bm25()` ranking function, `snippet()` helper, and the `porter` and
 //! `trigram` tokenizers are all available out of the box — no extension
 //! loading required.
@@ -280,7 +280,7 @@ impl ContentIndex {
     }
 
     /// Drop every indexed chunk from both FTS tables, leaving the schema (and
-    /// the live SQLite connection) intact so the index stays usable afterwards.
+    /// the live `SQLite` connection) intact so the index stays usable afterwards.
     ///
     /// Used by the sandbox reference-bypass defense: when a session trips the
     /// denial circuit-breaker, the offloaded-output index is wiped so the agent
@@ -336,7 +336,7 @@ const PROXIMITY_WEIGHT: f64 = 0.5;
 const MAX_PROX_TERMS: usize = 64;
 
 /// One ranked row from a single FTS5 index, before fusion. Carries the display
-/// fields so the fused [`SearchHit`] is built without a second SQLite round-trip,
+/// fields so the fused [`SearchHit`] is built without a second `SQLite` round-trip,
 /// plus the full chunk `body` used by the proximity reranker (never surfaced to
 /// callers — it is dropped when the fused list is finalized into `SearchHit`s).
 struct RankedRow {
@@ -469,7 +469,7 @@ fn sort_by_score_desc(hits: &mut [FusedHit]) {
 /// terms (the snippet matched via a stem/trigram the raw body lacks verbatim)
 /// keep `relevance == 0` and are left exactly where RRF put them.
 ///
-/// Caller guarantees `terms.len() >= 2`. Pure; no SQLite, unit-testable.
+/// Caller guarantees `terms.len() >= 2`. Pure; no `SQLite`, unit-testable.
 fn proximity_rerank(hits: &mut [FusedHit], terms: &[String]) {
     for hit in hits.iter_mut() {
         let relevance = proximity_relevance(&hit.body, terms);

@@ -1,4 +1,4 @@
-//! Job chain logic for on_success/on_failure triggers.
+//! Job chain logic for `on_success/on_failure` triggers.
 //!
 //! Supports lightweight dependency chains between cron jobs
 //! with cycle detection to prevent infinite trigger loops.
@@ -9,7 +9,7 @@ use crate::tasks::cron::store::CronStore;
 
 /// Detect if adding a chain link would create a cycle.
 ///
-/// Follows the chain from `new_target` through next_job_id_on_success/failure links.
+/// Follows the chain from `new_target` through `next_job_id_on_success/failure` links.
 /// Returns true if the chain leads back to `start_id`.
 pub fn detect_cycle(store: &CronStore, start_id: &str, new_target: &str) -> Result<bool, String> {
     let mut visited = HashSet::new();
@@ -36,7 +36,7 @@ pub fn detect_cycle(store: &CronStore, start_id: &str, new_target: &str) -> Resu
     Ok(false)
 }
 
-/// Trigger a chained job by setting its next_run_at_ms to now.
+/// Trigger a chained job by setting its `next_run_at_ms` to now.
 ///
 /// Only triggers enabled jobs. Returns true if the job was found and triggered.
 pub fn trigger_chain_job(

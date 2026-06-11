@@ -117,9 +117,9 @@ pub struct StabilityImageProvider {
     client: Client,
     /// Stability AI API key
     api_key: String,
-    /// API endpoint (e.g., "https://api.stability.ai")
+    /// API endpoint (e.g., "<https://api.stability.ai>")
     endpoint: String,
-    /// Model (engine_id) to use (e.g., "stable-diffusion-xl-1024-v1-0")
+    /// Model (`engine_id`) to use (e.g., "stable-diffusion-xl-1024-v1-0")
     model: String,
 }
 
@@ -140,7 +140,7 @@ impl StabilityImageProvider {
     /// # Arguments
     ///
     /// * `api_key` - Stability AI API key
-    /// * `base_url` - Optional custom API endpoint (defaults to "https://api.stability.ai")
+    /// * `base_url` - Optional custom API endpoint (defaults to "<https://api.stability.ai>")
     /// * `model` - Optional model/engine name (defaults to "stable-diffusion-xl-1024-v1-0")
     ///
     /// # Example
@@ -184,7 +184,7 @@ impl StabilityImageProvider {
         )
     }
 
-    /// Build the API request body from a GenerationRequest
+    /// Build the API request body from a `GenerationRequest`
     fn build_request_body(&self, request: &GenerationRequest) -> StabilityRequest {
         // Build text prompts
         let mut text_prompts = vec![TextPrompt {
@@ -242,7 +242,7 @@ impl StabilityImageProvider {
         }
     }
 
-    /// Parse API error response and convert to GenerationError
+    /// Parse API error response and convert to `GenerationError`
     fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError {
         // Try to parse as Stability AI error format
         if let Ok(error_response) = serde_json::from_str::<StabilityErrorResponse>(body) {
@@ -340,7 +340,7 @@ pub struct Artifact {
     pub base64: String,
     /// Seed used for this generation
     pub seed: i64,
-    /// Finish reason (e.g., "SUCCESS", "CONTENT_FILTERED")
+    /// Finish reason (e.g., "SUCCESS", "`CONTENT_FILTERED`")
     #[serde(rename = "finishReason")]
     pub finish_reason: String,
 }

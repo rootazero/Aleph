@@ -33,7 +33,7 @@ pub(super) fn strip_bot_mention(input: &str) -> String {
     }
 }
 
-/// Truncate a string to max_chars at a char boundary
+/// Truncate a string to `max_chars` at a char boundary
 pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
         Some((idx, _)) => &s[..idx],
@@ -170,7 +170,7 @@ impl InboundMessageRouter {
 
     /// Handle /btw command: ephemeral sidebar conversation that doesn't affect context.
     ///
-    /// Creates a SessionKey::Ephemeral so the question/answer is not persisted
+    /// Creates a `SessionKey::Ephemeral` so the question/answer is not persisted
     /// to the current session history.
     pub(super) async fn handle_btw(
         &self,
@@ -254,7 +254,7 @@ impl InboundMessageRouter {
     /// Handle /stop (alias /abort): cancel the run currently executing on this
     /// session and confirm to the user.
     ///
-    /// OpenClaw `/stop` / codex `Op::Interrupt` parity — the cancel machinery
+    /// `OpenClaw` `/stop` / codex `Op::Interrupt` parity — the cancel machinery
     /// (`ExecutionEngine::cancel`, Panel `chat.abort`) predates this but was
     /// unreachable from channels, so a Telegram user could steer a long
     /// autonomous loop but never stop it. The command is intercepted here and

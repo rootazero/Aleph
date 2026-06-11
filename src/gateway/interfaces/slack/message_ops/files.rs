@@ -31,7 +31,7 @@ pub(crate) struct SlackFile {
 
 /// Parse the `files[]` array from a Slack message event object.
 ///
-/// Handles both top-level message/app_mention events and `message_changed`
+/// Handles both top-level `message/app_mention` events and `message_changed`
 /// events (which nest the real message under `message`). Pure and testable.
 pub(crate) fn parse_files(event: &serde_json::Value) -> Vec<SlackFile> {
     // `message_changed` nests the actual message (and its files) under "message".

@@ -49,7 +49,7 @@ fn truncate_utf8(s: &str, max: usize) -> String {
 /// read: the per-attempt run log (`coord_task_runs`) and the structured exit
 /// journal (`coord_task_journals`, written by the `task_exit_journal` tool).
 ///
-/// This closes the write→read loop on ClawTeam's context-recovery pattern: the
+/// This closes the write→read loop on `ClawTeam`'s context-recovery pattern: the
 /// resuming agent reads what its previous self learned instead of cold-starting.
 /// Pure context assembly — the dumb loop performs no recovery *decision* (that
 /// stays the leader's, per R7/R10); it only hands the member what already exists.

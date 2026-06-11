@@ -1,4 +1,4 @@
-//! google_meet — LLM-invoked tool for joining / creating / controlling a
+//! `google_meet` — LLM-invoked tool for joining / creating / controlling a
 //! Google Meet call through an **external transport bridge**.
 //!
 //! # Why this lives in core as a *thin contract* only
@@ -9,7 +9,7 @@
 //! Per the architectural redlines that work **must not** live in the Rust
 //! core:
 //!
-//! - **R1 (Brain–Limb separation):** no platform system API (Chrome, CoreAudio)
+//! - **R1 (Brain–Limb separation):** no platform system API (Chrome, `CoreAudio`)
 //!   may be called from `src`; physical capability is provided by a native /
 //!   external bridge over IPC.
 //! - **R3 (Core minimalism):** a single non-core feature must not drag heavy
@@ -182,7 +182,7 @@ pub struct GoogleMeetOutput {
     pub ok: bool,
     /// The action that was requested.
     pub action: GoogleMeetAction,
-    /// Short machine-readable status (e.g. "joined", "bridge_not_configured").
+    /// Short machine-readable status (e.g. "joined", "`bridge_not_configured`").
     pub status: String,
     /// Human/agent-readable detail.
     pub detail: String,

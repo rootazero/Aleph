@@ -24,10 +24,10 @@
 //! {"ok": true, "cancelled": false}    // call_id not in flight (already done)
 //! ```
 //!
-//! ## Request — in_flight
+//! ## Request — `in_flight`
 //! No params.
 //!
-//! ## Response — in_flight
+//! ## Response — `in_flight`
 //! ```json
 //! {"calls": [{"call_id": "...", "tool_name": "bash", "started_at_ms": 123}]}
 //! ```

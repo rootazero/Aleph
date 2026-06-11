@@ -40,7 +40,7 @@ pub enum TabAction {
     },
 }
 
-/// Arguments for the browser_tabs tool.
+/// Arguments for the `browser_tabs` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserTabsArgs {
     /// Browser profile name (default: "default").
@@ -50,7 +50,7 @@ pub struct BrowserTabsArgs {
     pub action: TabAction,
 }
 
-/// Output from the browser_tabs tool.
+/// Output from the `browser_tabs` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserTabsOutput {
     pub success: bool,

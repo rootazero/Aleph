@@ -1,6 +1,6 @@
 //! Webhook Receiver — Shared HTTP Server for Channel Webhook Ingestion
 //!
-//! Provides a reusable HTTP server that social bot channels (WhatsApp, Generic Webhook, etc.)
+//! Provides a reusable HTTP server that social bot channels (`WhatsApp`, Generic Webhook, etc.)
 //! can register webhook handlers on. Each handler gets its own URL path and performs
 //! platform-specific signature verification and payload parsing.
 //!
@@ -55,7 +55,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// Trait for platform-specific webhook handling.
 ///
-/// Each channel (WhatsApp, Generic Webhook, etc.) implements this trait to:
+/// Each channel (`WhatsApp`, Generic Webhook, etc.) implements this trait to:
 /// 1. Verify the incoming request signature
 /// 2. Parse the platform-specific payload into `InboundMessage`(s)
 /// 3. Declare its URL path
@@ -67,7 +67,7 @@ pub trait WebhookHandler: Send + Sync {
     /// and verify it against the request body using their secret.
     fn verify(&self, headers: &HeaderMap, body: &[u8]) -> bool;
 
-    /// Parse webhook payload into InboundMessages.
+    /// Parse webhook payload into `InboundMessages`.
     ///
     /// A single webhook request may produce multiple messages (e.g., batch delivery).
     async fn handle(&self, headers: &HeaderMap, body: Bytes) -> ChannelResult<Vec<InboundMessage>>;
@@ -88,7 +88,7 @@ pub struct WebhookReceiver {
 }
 
 impl WebhookReceiver {
-    /// Create a new WebhookReceiver bound to the given port.
+    /// Create a new `WebhookReceiver` bound to the given port.
     #[must_use]
     pub const fn new(port: u16) -> Self {
         Self {
@@ -204,7 +204,7 @@ struct HandlerState {
     inbound_tx: mpsc::Sender<InboundMessage>,
 }
 
-/// Axum endpoint handler that dispatches to the appropriate WebhookHandler.
+/// Axum endpoint handler that dispatches to the appropriate `WebhookHandler`.
 async fn webhook_endpoint(
     State(state): State<Arc<HandlerState>>,
     headers: HeaderMap,

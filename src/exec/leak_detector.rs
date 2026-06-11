@@ -1,8 +1,8 @@
-//! LeakDetector - Bidirectional leak detection for sensitive data.
+//! `LeakDetector` - Bidirectional leak detection for sensitive data.
 //!
 //! Uses Aho-Corasick for fast prefix scanning + regex for full pattern matching.
 //! Scans both outbound (to LLM) and inbound (from LLM) content for:
-//! - API keys (OpenAI, Anthropic, Google, AWS, GitHub, Slack)
+//! - API keys (`OpenAI`, Anthropic, Google, AWS, GitHub, Slack)
 //! - Private keys (PEM format)
 //! - Bearer tokens
 
@@ -90,7 +90,7 @@ pub struct LeakDetector {
 }
 
 impl LeakDetector {
-    /// Create a new LeakDetector with the given prefixes and patterns.
+    /// Create a new `LeakDetector` with the given prefixes and patterns.
     #[must_use]
     pub fn new(prefixes: Vec<&'static str>, patterns: Vec<LeakPattern>) -> Self {
         // ASCII case-insensitive so the fast-path prefix gate matches the
@@ -104,7 +104,7 @@ impl LeakDetector {
         Self { ac, patterns }
     }
 
-    /// Create a LeakDetector with default patterns for common secret types.
+    /// Create a `LeakDetector` with default patterns for common secret types.
     #[must_use]
     pub fn default_patterns() -> Self {
         let assets = crate::exec::secret_patterns::leak_detector_assets();

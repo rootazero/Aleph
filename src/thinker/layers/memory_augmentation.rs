@@ -1,6 +1,6 @@
-//! MemoryAugmentationLayer — inject pre-rendered memory XML into the system prompt (priority 1740)
+//! `MemoryAugmentationLayer` — inject pre-rendered memory XML into the system prompt (priority 1740)
 //!
-//! Sits between IdentityFilesLayer (1550) and LanguageLayer (1600).
+//! Sits between `IdentityFilesLayer` (1550) and `LanguageLayer` (1600).
 //!
 //! Reads `LayerInput::memory_user_message` (a pre-rendered XML string produced by
 //! `MemoryContextProvider::build_memory_user_message`) and injects it verbatim

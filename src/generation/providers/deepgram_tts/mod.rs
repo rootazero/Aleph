@@ -11,7 +11,7 @@
 //! In Deepgram parlance the "voice" is the model name (e.g. `aura-asteria-en`),
 //! so we route both `params.model` and `params.voice` to the `model` query
 //! parameter. When both are set, `params.model` wins — this matches the
-//! ElevenLabs convention.
+//! `ElevenLabs` convention.
 
 use crate::generation::{
     GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationProvider,

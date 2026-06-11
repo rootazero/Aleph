@@ -1,6 +1,6 @@
 //! Soul - Identity and personality system for AI embodiment
 //!
-//! This module defines the SoulManifest and related types that describe
+//! This module defines the `SoulManifest` and related types that describe
 //! the AI's personality, voice, and behavioral characteristics. It upgrades
 //! the simple `persona: String` to a comprehensive identity system.
 //!
@@ -131,7 +131,7 @@ pub struct SoulVoice {
 
 /// Complete soul definition for AI personality
 ///
-/// SoulManifest encapsulates the full identity of an AI persona, including:
+/// `SoulManifest` encapsulates the full identity of an AI persona, including:
 /// - Core identity declaration (first-person)
 /// - Voice and communication style
 /// - Behavioral directives (what to do)

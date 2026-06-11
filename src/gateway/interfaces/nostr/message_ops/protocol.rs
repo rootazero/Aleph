@@ -274,7 +274,7 @@ pub fn sign_event(event: &mut NostrEvent, private_key_hex: &str) -> Result<(), S
     Ok(())
 }
 
-/// Convert a Nostr event to an InboundMessage.
+/// Convert a Nostr event to an `InboundMessage`.
 ///
 /// Maps Nostr event fields to the channel abstraction:
 /// - `event.pubkey` -> `sender_id`

@@ -1,4 +1,4 @@
-//! ToolHandlerRegistry — ArcSwap-backed name → handler map.
+//! `ToolHandlerRegistry` — ArcSwap-backed name → handler map.
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
@@ -72,7 +72,7 @@ impl ToolHandlerRegistry {
     /// blocking publishers — this is the intended behavior for diagnostic
     /// taps and tool-catalog refresh hooks.
     ///
-    /// First production consumer: the boot-time RegistryChange logger in
+    /// First production consumer: the boot-time `RegistryChange` logger in
     /// `aleph-server commands::start` records every MCP server connect /
     /// disconnect for ops visibility. Treat additional consumers as additive
     /// — never block on this channel.

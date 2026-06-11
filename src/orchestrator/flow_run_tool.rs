@@ -1,6 +1,6 @@
 //! `flow_run` LLM tool — opt-in recursive dispatch. See design §7.
 //!
-//! Registration wiring with the global ToolService is a Phase 6 follow-up
+//! Registration wiring with the global `ToolService` is a Phase 6 follow-up
 //! (requires an `AlephTool` adapter). Phase 5 defines the tool's shape and
 //! dispatch logic so downstream wiring lands on a stable API.
 

@@ -1,4 +1,4 @@
-//! NoteRetrieval — vector-search over knowledge notes.
+//! `NoteRetrieval` — vector-search over knowledge notes.
 //!
 //! Given a query string the service embeds it, performs a vector search in the
 //! notes index, reads the matching markdown files from disk, and returns them

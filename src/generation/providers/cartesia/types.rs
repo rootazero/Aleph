@@ -1,10 +1,10 @@
 //! Request/response shapes for Cartesia's `/tts/bytes` endpoint.
 //!
-//! Cartesia's wire format diverges from OpenAI TTS in two material ways:
+//! Cartesia's wire format diverges from `OpenAI` TTS in two material ways:
 //!
 //! * Voice selection is a nested `{mode, id}` object (not a string), which
 //!   carries an `embedding`/`id`/`voice_design_id` discriminator we'd lose
-//!   if shoved through openai_compat.
+//!   if shoved through `openai_compat`.
 //! * `output_format` is a 3-tuple (`container`, `encoding`, `sample_rate`)
 //!   rather than a free-form string.
 //!

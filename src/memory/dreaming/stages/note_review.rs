@@ -1,4 +1,4 @@
-//! NoteReviewStage — consumes notes_review_queue and routes via LLM verdict.
+//! `NoteReviewStage` — consumes `notes_review_queue` and routes via LLM verdict.
 //!
 //! Skeleton scope (C2.5 first commit): the LLM call is stubbed to always
 //! return Approve. Real verdict parsing + retry semantics ship in a

@@ -9,7 +9,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-/// Error type to simulate in MockProvider
+/// Error type to simulate in `MockProvider`
 #[derive(Clone, Debug)]
 pub enum MockError {
     Network(String),

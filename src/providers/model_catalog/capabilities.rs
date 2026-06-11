@@ -1,7 +1,7 @@
 //! Per-model capability metadata.
 //!
 //! Aleph previously carried capability bits only at the *protocol/endpoint*
-//! layer (`AnthropicCapabilities`, OpenAI provider policy) — i.e. "what does
+//! layer (`AnthropicCapabilities`, `OpenAI` provider policy) — i.e. "what does
 //! this wire protocol accept", not "what can this *model* do". Both openclaw
 //! (`Model { input[], reasoning, contextWindow, maxTokens }`) and hermes
 //! (`ModelInfo { reasoning, tool_call, attachment, context_window,

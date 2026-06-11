@@ -1,4 +1,4 @@
-//! AgentCatalogLayer — sub-agent catalog index for primary agent awareness (priority 1704)
+//! `AgentCatalogLayer` — sub-agent catalog index for primary agent awareness (priority 1704)
 
 use crate::thinker::prompt_layer::{
     AgentCatalogEntry, AssemblyPath, LayerInput, LayerStability, PromptLayer,

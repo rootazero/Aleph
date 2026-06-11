@@ -26,7 +26,7 @@ use super::template::{generate_scratchpad, DEFAULT_TEMPLATE};
 pub struct ScratchpadConfig {
     /// Scratchpad filename (default: "scratchpad.md")
     pub filename: String,
-    /// History log filename (default: "session_history.log")
+    /// History log filename (default: "`session_history.log`")
     pub history_filename: String,
     /// Create backup before overwrite
     pub backup_on_write: bool,
@@ -203,7 +203,7 @@ pub struct ScratchpadManager {
 }
 
 impl ScratchpadManager {
-    /// Create a new ScratchpadManager for an agent workspace
+    /// Create a new `ScratchpadManager` for an agent workspace
     ///
     /// Files are stored under `~/.aleph/workspaces/<agent_id>/`.
     /// Falls back to a temp-style path for testing.
@@ -418,7 +418,7 @@ impl ScratchpadManager {
 
     /// Mark a plan item as the in-progress current step (`[~]`).
     ///
-    /// Mirrors Claude Code's `TodoWrite` "exactly one in_progress" discipline
+    /// Mirrors Claude Code's `TodoWrite` "exactly one `in_progress`" discipline
     /// at the action level: the model marks which step it is actively working.
     pub async fn start_item(&self, item_index: usize) -> Result<(), AlephError> {
         self.set_item_status(item_index, PlanItemStatus::InProgress)

@@ -191,7 +191,7 @@ pub enum RunEvent {
 }
 
 impl RunEvent {
-    /// Get the run_id from any event variant
+    /// Get the `run_id` from any event variant
     #[must_use]
     pub fn run_id(&self) -> &str {
         match self {
@@ -224,7 +224,7 @@ impl RunEvent {
 // Run End Result
 // ============================================================================
 
-/// Result type for wait_for_run_end
+/// Result type for `wait_for_run_end`
 #[derive(Debug, Clone)]
 pub enum RunEndResult {
     /// Run completed successfully
@@ -437,7 +437,7 @@ impl Clone for ActiveRunHandle {
     /// Clone the handle
     ///
     /// Note: The cloned handle shares the same event broadcaster and input sender,
-    /// but the cancel_tx is shared via Arc<Mutex<Option<...>>> so it can only
+    /// but the `cancel_tx` is shared via Arc<Mutex<Option<...>>> so it can only
     /// be consumed once across all clones.
     fn clone(&self) -> Self {
         Self {
@@ -461,7 +461,7 @@ impl Clone for ActiveRunHandle {
 /// Wait for a run to complete, fail, or be cancelled
 ///
 /// This function consumes events from the receiver until a terminal event
-/// (RunCompleted, RunFailed, or RunCancelled) is received, or timeout occurs.
+/// (`RunCompleted`, `RunFailed`, or `RunCancelled`) is received, or timeout occurs.
 ///
 /// # Arguments
 ///

@@ -144,7 +144,7 @@ impl CoordTaskStatus {
     }
 
     /// Whether this status satisfies a downstream dependency — i.e. a
-    /// task whose blocked_by set contains a task with this status no
+    /// task whose `blocked_by` set contains a task with this status no
     /// longer waits on it. Completed and Skipped both satisfy; all
     /// other statuses (including Failed) leave the dependent blocked.
     #[must_use]
@@ -275,7 +275,7 @@ pub enum ReviewerKind {
     User,
     /// Approved/rejected by the team's leader agent (programmatic review).
     LeadAgent,
-    /// Auto-approved by policy (e.g. lead_review_required = false).
+    /// Auto-approved by policy (e.g. `lead_review_required` = false).
     Auto,
 }
 
@@ -369,7 +369,7 @@ pub struct CoordTaskComment {
 
 /// Structured "end-of-task" summary written by the executing agent.
 ///
-/// ClawTeam parity: when an agent finishes work it is expected to write a
+/// `ClawTeam` parity: when an agent finishes work it is expected to write a
 /// terse, machine-readable record of what it did, what it decided, what
 /// artifacts it produced, and what next steps remain. The journal is
 /// surfaced in the unified trace API so the panel's replay view can
@@ -381,7 +381,7 @@ pub struct CoordTaskComment {
 /// runs are preserved via `coord_task_runs`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskExitJournal {
-    /// FK back to coord_tasks.id. Unique — one journal per task.
+    /// FK back to `coord_tasks.id`. Unique — one journal per task.
     pub task_id: CoordTaskId,
     /// Agent that authored this journal (typically the task owner).
     pub agent_id: String,

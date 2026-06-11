@@ -212,7 +212,7 @@ pub struct AgentDefinition {
     pub profile: Option<String>,
 
     /// AI model override for this agent.
-    /// `None` = 继承系统默认 model(= defaults.model > profile.model > DEFAULT_MODEL)。
+    /// `None` = 继承系统默认 model(= defaults.model > profile.model > `DEFAULT_MODEL`)。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<AgentModelRef>,
 

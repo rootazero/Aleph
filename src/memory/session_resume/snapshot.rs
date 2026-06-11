@@ -1,4 +1,4 @@
-//! SessionSnapshot — the serializable unit of cross-session context.
+//! `SessionSnapshot` — the serializable unit of cross-session context.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

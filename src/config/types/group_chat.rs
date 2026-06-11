@@ -32,7 +32,7 @@ pub struct GroupChatConfig {
     pub max_rounds: usize,
 
     /// Whether the coordinator's plan messages are visible to the user.
-    /// When true, the coordinator's JSON plan is included as a Speaker::Coordinator
+    /// When true, the coordinator's JSON plan is included as a `Speaker::Coordinator`
     /// message at the beginning of each round's output.
     /// Default: false
     #[serde(default)]
@@ -58,7 +58,7 @@ impl Default for GroupChatConfig {
 }
 
 impl GroupChatConfig {
-    /// Create a new GroupChatConfig with default values
+    /// Create a new `GroupChatConfig` with default values
     pub fn new() -> Self {
         Self::default()
     }

@@ -11,7 +11,7 @@ use crate::generation::GenerationResult;
 
 /// Generic OpenAI-Compatible Image Generation Provider
 ///
-/// This provider integrates with any API that follows OpenAI's image generation
+/// This provider integrates with any API that follows `OpenAI`'s image generation
 /// format, making it suitable for third-party proxies, custom endpoints, and
 /// alternative providers.
 ///
@@ -19,7 +19,7 @@ use crate::generation::GenerationResult;
 ///
 /// - Configurable provider name and branding
 /// - Flexible supported generation types
-/// - Compatible with OpenAI image generation API format
+/// - Compatible with `OpenAI` image generation API format
 /// - Support for both URL and base64 response formats
 ///
 /// # Example
@@ -43,7 +43,7 @@ pub struct OpenAiCompatProvider {
     pub(crate) client: Client,
     /// API key for authentication
     pub(crate) api_key: String,
-    /// API endpoint (e.g., "https://api.proxy.com")
+    /// API endpoint (e.g., "<https://api.proxy.com>")
     pub(crate) endpoint: String,
     /// Model to use (e.g., "dall-e-3")
     pub(crate) model: String,
@@ -113,7 +113,7 @@ impl OpenAiCompatProvider {
             .build()
     }
 
-    /// Create a builder for OpenAiCompatProvider
+    /// Create a builder for `OpenAiCompatProvider`
     ///
     /// # Arguments
     ///

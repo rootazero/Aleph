@@ -1,4 +1,4 @@
-//! NoteDrift stage — detects contradictions and stale information between related notes.
+//! `NoteDrift` stage — detects contradictions and stale information between related notes.
 //!
 //! Algorithm:
 //!   1. Filter notes updated in the last 7 days.

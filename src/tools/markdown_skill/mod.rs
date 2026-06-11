@@ -1,7 +1,7 @@
 //! Markdown Skill System
 //!
 //! Runtime-loadable CLI tools defined in Markdown (SKILL.md format).
-//! Compatible with OpenClaw ecosystem while adding Aleph-specific extensions.
+//! Compatible with `OpenClaw` ecosystem while adding Aleph-specific extensions.
 //!
 //! Phase 1 of skill data model unification deprecates `AlephSkillSpec` in
 //! favor of `crate::domain::skill::SkillManifest`; the module itself remains

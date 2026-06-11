@@ -1,6 +1,6 @@
 //! Gemini JSON Schema sanitization
 //!
-//! Transforms standard JSON Schema into the OpenAPI Schema subset that
+//! Transforms standard JSON Schema into the `OpenAPI` Schema subset that
 //! Google Gemini accepts. Gemini rejects ~22 keywords that are valid in
 //! JSON Schema draft-07 / 2020-12.
 
@@ -381,7 +381,7 @@ fn merge_all_of(parent: &mut serde_json::Map<String, Value>, members: &[Value]) 
 }
 
 /// Try to merge all variants into a single enum.
-/// Returns (type_string, enum_values) if successful.
+/// Returns (`type_string`, `enum_values`) if successful.
 fn try_merge_enum(variants: &[Value]) -> Option<(String, Vec<Value>)> {
     let mut common_type: Option<&str> = None;
     let mut values = Vec::new();

@@ -83,7 +83,7 @@ pub trait HeartbeatExecutionAdapter: Send + Sync {
 // ── DefaultHeartbeatAdapter ──────────────────────────────────────────
 
 /// Production heartbeat execution adapter that bridges to the gateway's
-/// ExecutionAdapter and AgentRegistry.
+/// `ExecutionAdapter` and `AgentRegistry`.
 pub struct DefaultHeartbeatAdapter {
     adapter: Arc<dyn ExecutionAdapter>,
     agent_registry: Arc<AgentRegistry>,

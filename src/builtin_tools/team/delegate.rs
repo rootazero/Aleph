@@ -1,4 +1,4 @@
-//! TeamDelegateTool — delegate a task to a team member agent.
+//! `TeamDelegateTool` — delegate a task to a team member agent.
 //!
 //! Synchronous, leader-driven delegation: creates a tracked task, launches an
 //! independent agent session for the target member, waits for completion with
@@ -49,7 +49,7 @@ const fn default_timeout() -> u64 {
     300
 }
 
-/// Output from team_delegate.
+/// Output from `team_delegate`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TeamDelegateOutput {
     /// The task ID created in the team store

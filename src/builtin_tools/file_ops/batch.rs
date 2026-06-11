@@ -1,4 +1,4 @@
-//! Batch file operations: batch_move, organize
+//! Batch file operations: `batch_move`, organize
 
 use std::collections::HashMap;
 use std::fs;

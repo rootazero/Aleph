@@ -1,13 +1,13 @@
 //! `PiiSecretsGuardrail` — thin trait adapter delegating to `RuntimeSecurityGuard`.
 //!
-//! Maps the three guardrail surfaces (input / output / tool_call) onto the
+//! Maps the three guardrail surfaces (input / output / `tool_call`) onto the
 //! orchestrator's two methods:
 //! - `evaluate_input`  → `process_outbound(None resolver)` — user → LLM
 //! - `evaluate_output` → `process_inbound`                 — LLM → user
 //! - `evaluate_tool_call` → `process_outbound(Some(resolver))` — LLM → tool
 //!
 //! Placeholder substitution (`{{secret:NAME}}`) happens **only** at the
-//! tool_call surface — the unique location where the next consumer is a
+//! `tool_call` surface — the unique location where the next consumer is a
 //! tool runtime (not the user) and plaintext is appropriate.
 
 use crate::sync_primitives::Arc;
@@ -32,7 +32,7 @@ pub struct PiiSecretsGuardrail {
 
 impl PiiSecretsGuardrail {
     /// Construct over an existing orchestrator with no resolver. Placeholder
-    /// substitution at the tool_call surface will be inert.
+    /// substitution at the `tool_call` surface will be inert.
     #[must_use]
     pub fn new(guard: Arc<RuntimeSecurityGuard>) -> Self {
         Self {
@@ -110,7 +110,7 @@ impl PiiSecretsGuardrail {
         }
     }
 
-    /// For tool_call we always want a fresh, rendered args payload back to
+    /// For `tool_call` we always want a fresh, rendered args payload back to
     /// the caller, even if the orchestrator returned `Clean { text }` where
     /// the only change was placeholder substitution. So we wrap `Clean`'s
     /// text as `Sanitize` iff the text differs from the original.

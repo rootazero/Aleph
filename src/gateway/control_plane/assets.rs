@@ -1,6 +1,6 @@
 //! Asset Embedding
 //!
-//! Embeds ControlPlane static assets (HTML/CSS/JS/WASM) into the binary.
+//! Embeds `ControlPlane` static assets (HTML/CSS/JS/WASM) into the binary.
 
 use rust_embed::RustEmbed;
 

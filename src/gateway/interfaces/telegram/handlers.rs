@@ -8,7 +8,7 @@
 //!
 //! `TelegramInboundContext` is constructed in `mod.rs` (where we have access to
 //! the original `teloxide::types::Message`) using `TelegramInboundContext::from_inbound()`.
-//! Key Telegram-specific metadata (thread_id, sender_id) is also passed via
+//! Key Telegram-specific metadata (`thread_id`, `sender_id`) is also passed via
 //! `InboundMessage.metadata` so the router can access it if needed.
 
 use super::sticker::StickerPipeline;

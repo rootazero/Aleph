@@ -1,6 +1,6 @@
 //! Permission tool — TCC permission detection and request.
 //!
-//! Delegates to `DesktopPlatform::permission()` (PermissionCapability).
+//! Delegates to `DesktopPlatform::permission()` (`PermissionCapability`).
 //! When the capability is absent, all operations return a friendly message.
 
 use crate::sync_primitives::Arc;
@@ -28,10 +28,10 @@ impl PermissionTool {
 /// Arguments for the permission tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PermissionArgs {
-    /// Action to perform: "check", "check_all", "request"
+    /// Action to perform: "check", "`check_all`", "request"
     pub action: String,
     /// Permission to check or request (required for check, request).
-    /// Values: "screen_recording", "camera", "microphone", "speech_recognition",
+    /// Values: "`screen_recording`", "camera", "microphone", "`speech_recognition`",
     /// "accessibility", "notifications"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission: Option<String>,
@@ -47,7 +47,7 @@ pub struct PermissionOutput {
     pub message: Option<String>,
 }
 
-/// Parse a permission string into a PermissionKind enum value.
+/// Parse a permission string into a `PermissionKind` enum value.
 fn parse_permission(s: &str) -> Option<aleph_desktop::permission_types::PermissionKind> {
     // serde rename_all = "snake_case", so we can deserialize from the snake_case string
     serde_json::from_value(serde_json::Value::String(s.to_string())).ok()

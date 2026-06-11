@@ -1,9 +1,9 @@
 //! Generation configuration types
 //!
 //! Contains configuration for media generation providers:
-//! - GenerationConfig: Global generation settings
-//! - GenerationProviderConfig: Single provider configuration
-//! - GenerationDefaults: Default parameters for generation
+//! - `GenerationConfig`: Global generation settings
+//! - `GenerationProviderConfig`: Single provider configuration
+//! - `GenerationDefaults`: Default parameters for generation
 //!
 //! These types configure the media generation module which supports
 //! image, video, audio, and speech generation through various providers.

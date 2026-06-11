@@ -1,4 +1,4 @@
-//! SessionService trait — public facade over the session event log.
+//! `SessionService` trait — public facade over the session event log.
 
 use std::result::Result;
 

@@ -63,7 +63,7 @@ impl StreamOrchestrator {
         LaneHandle::new(lane_id, self.tracker.clone(), self.delivery.clone())
     }
 
-    /// Main event loop. Receives StreamEvents and routes them to lanes.
+    /// Main event loop. Receives `StreamEvents` and routes them to lanes.
     pub async fn run(mut self, initial_inbound: InboundMessage) -> ChannelResult<()> {
         let answer_lane = self.get_lane(LaneId::Answer);
         let inbound_message_id: Option<i64> = initial_inbound.id.as_str().parse().ok();

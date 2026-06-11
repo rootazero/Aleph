@@ -1,6 +1,6 @@
-//! ProfileLayer — workspace persona overlay (priority 75)
+//! `ProfileLayer` — workspace persona overlay (priority 75)
 //!
-//! Injects the active workspace profile's system_prompt into the prompt
+//! Injects the active workspace profile's `system_prompt` into the prompt
 //! pipeline, between Soul (50) and Role (100).  This allows workspaces
 //! to add role-specific context without overriding the base identity.
 

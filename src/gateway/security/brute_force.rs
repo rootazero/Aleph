@@ -19,7 +19,7 @@ struct AttemptRecord {
 
 /// Brute-force detector for pairing attempts.
 pub struct BruteForceDetector {
-    /// Key: "channel:sender_id"
+    /// Key: "`channel:sender_id`"
     records: DashMap<String, AttemptRecord>,
 }
 

@@ -1,4 +1,4 @@
-//! ConfigAuditTool — read-only security-posture audit of the live runtime Config.
+//! `ConfigAuditTool` — read-only security-posture audit of the live runtime Config.
 //!
 //! Inspects the in-memory `Config` and reports the security posture as structured
 //! findings (severity + area + finding + recommendation), so the LLM can answer
@@ -48,7 +48,7 @@ pub struct ConfigAuditArgs {}
 pub struct Finding {
     /// "critical" | "warn" | "info"
     pub severity: String,
-    /// Configuration area, e.g. "ssrf", "sandbox", "shell_security".
+    /// Configuration area, e.g. "ssrf", "sandbox", "`shell_security`".
     pub area: String,
     /// What was observed.
     pub finding: String,

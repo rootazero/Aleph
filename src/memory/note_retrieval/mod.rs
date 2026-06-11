@@ -1,6 +1,6 @@
 //! Note-based retrieval engine.
 //!
-//! Drop-in replacement for `FactRetrieval` that queries notes (markdown + SQLite index)
+//! Drop-in replacement for `FactRetrieval` that queries notes (markdown + `SQLite` index)
 //! instead of the legacy facts table. Returns `Vec<ScoredFact>` so downstream
 //! consumers don't require changes.
 
@@ -33,7 +33,7 @@ const RERANK_MAX_CANDIDATES: usize = 50;
 /// (`UNIQUE(note_path, query_hash, day_bucket, channel)`).
 const AUTO_RECALL_CHANNEL: &str = "auto-recall";
 
-/// Notes-based retrieval engine. Drop-in replacement for FactRetrieval.
+/// Notes-based retrieval engine. Drop-in replacement for `FactRetrieval`.
 pub struct NoteFactRetrieval<S: NoteStore + Send + Sync + 'static> {
     indexer: Arc<NoteIndexer<S>>,
     embedder: Arc<dyn EmbeddingProvider>,
@@ -245,7 +245,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
     }
 
     /// Hybrid vector + FTS search with RRF fusion.
-    /// Returns ScoredFact for downstream compatibility.
+    /// Returns `ScoredFact` for downstream compatibility.
     pub async fn retrieve(
         &self,
         query: &str,
@@ -406,7 +406,7 @@ fn now_unix() -> i64 {
         .as_secs() as i64
 }
 
-/// Discover agent IDs by reading directory names under memory_dir.
+/// Discover agent IDs by reading directory names under `memory_dir`.
 async fn discover_agent_ids(memory_dir: &std::path::Path) -> Vec<String> {
     let mut agents = Vec::new();
     let mut dir = match tokio::fs::read_dir(memory_dir).await {

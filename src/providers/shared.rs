@@ -65,7 +65,7 @@ pub(crate) fn combine_with_document_context(doc_context: &str, input: &str) -> S
 ///
 /// # Arguments
 ///
-/// * `config` - Provider configuration containing system_prompt_mode setting
+/// * `config` - Provider configuration containing `system_prompt_mode` setting
 ///
 /// # Returns
 ///

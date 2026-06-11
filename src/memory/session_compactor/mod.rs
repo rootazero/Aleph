@@ -64,7 +64,7 @@ pub struct CompactorMetrics {
 // SessionCompactorConfig
 // ---------------------------------------------------------------------------
 
-/// Configuration for the SessionCompactor subsystem.
+/// Configuration for the `SessionCompactor` subsystem.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SessionCompactorConfig {
     pub enabled: bool,

@@ -132,7 +132,7 @@ impl ConnectionState {
     }
 }
 
-/// Shared state for the unified axum server (WebSocket + ControlPlane)
+/// Shared state for the unified axum server (WebSocket + `ControlPlane`)
 #[derive(Clone)]
 pub struct GatewaySharedState {
     pub handlers: Arc<HandlerRegistry>,
@@ -152,7 +152,7 @@ pub struct GatewaySharedState {
     pub idempotency_guard: Arc<crate::gateway::idempotency::IdempotencyGuard>,
     pub event_scope_guard: Arc<EventScopeGuard>,
     pub audit_log: Option<crate::security::audit::SecurityAuditLog>,
-    /// Readiness flag — flipped to true after agent_init.rs completes
+    /// Readiness flag — flipped to true after `agent_init.rs` completes
     /// phase-2 wiring. Read by `/ready` HTTP probe.
     pub ready: Arc<crate::sync_primitives::AtomicBool>,
     /// Per-process instance identifier (UUID v4). Stable for the lifetime
@@ -208,10 +208,10 @@ pub struct GatewaySharedState {
     /// guard. Native clients (no `Origin` header) are unaffected.
     pub origin_policy: Arc<crate::gateway::origin_policy::OriginPolicy>,
     /// 每条连接的反向 RPC 通道（`conn_id → channel`）。连接建立时由入站
-    /// 循环登记，断开时注销。0b 的 NodeRegistry 经此对 node 连接发起
+    /// 循环登记，断开时注销。0b 的 `NodeRegistry` 经此对 node 连接发起
     /// `node.invoke`；本表本身不区分 node/非 node —— 仅是传输层注册表。
     pub reverse_rpc: Arc<RwLock<HashMap<String, crate::cluster::ReverseRpcChannel>>>,
-    /// Cluster node registry (shared Arc with GatewayServer). Center-side view
+    /// Cluster node registry (shared Arc with `GatewayServer`). Center-side view
     /// of connected `role:node` peers; populated by the connect handler.
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
     pub exec_approval_manager: Option<Arc<crate::exec::manager::ExecApprovalManager>>,
@@ -279,7 +279,7 @@ impl Default for GatewayConfig {
 
 /// Unified Gateway Server
 ///
-/// Serves WebSocket connections at `/ws` and the ControlPlane UI as fallback,
+/// Serves WebSocket connections at `/ws` and the `ControlPlane` UI as fallback,
 /// dispatching JSON-RPC 2.0 requests to registered handlers.
 ///
 /// # Example
@@ -338,7 +338,7 @@ pub struct GatewayServer {
     pub execution_adapter: Option<Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>>,
     /// Agent registry for OpenAI-compatible agent completions
     pub openai_agent_registry: Option<Arc<crate::gateway::agent_instance::AgentRegistry>>,
-    /// Model → HttpProvider map for passthrough completions
+    /// Model → `HttpProvider` map for passthrough completions
     pub openai_provider_map:
         Arc<HashMap<String, Arc<crate::providers::http_provider::HttpProvider>>>,
     /// Provider configs for /v1/models listing
@@ -347,7 +347,7 @@ pub struct GatewayServer {
     pub embedding_provider: Option<Arc<dyn crate::memory::EmbeddingProvider>>,
     /// Phase 5 Orchestrator (flow composition). Populated at boot after
     /// agent registry + session + tool + provider + sandbox are assembled.
-    /// Task 10 (Gateway run_agent_loop replacement) consumes this.
+    /// Task 10 (Gateway `run_agent_loop` replacement) consumes this.
     pub orchestrator: Option<Arc<crate::orchestrator::Orchestrator>>,
     /// Bearer token snapshot for OpenAI-compatible `/v1/*` routes.
     /// Sourced from `SharedTokenManager` at boot. Some → handler rejects
@@ -527,7 +527,7 @@ impl GatewayServer {
         self.guest_session_manager = Some(manager);
     }
 
-    /// Set the A2A server state (enables A2A routes in build_router)
+    /// Set the A2A server state (enables A2A routes in `build_router`)
     pub fn set_a2a_state(&mut self, state: Arc<crate::a2a::adapter::server::A2AServerState>) {
         self.a2a_state = Some(state);
     }
@@ -576,7 +576,7 @@ impl GatewayServer {
         self.connections.read().await.len()
     }
 
-    /// Build a unified axum Router with WebSocket + ControlPlane UI routes.
+    /// Build a unified axum Router with WebSocket + `ControlPlane` UI routes.
     /// WebSocket connections are handled at `/ws`, everything else serves the Panel UI.
     pub fn build_router(&self) -> Router {
         // Build the middleware chain ONCE here (cloned per connection) rather

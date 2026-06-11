@@ -21,13 +21,13 @@ pub struct MediaItem {
     pub filename: Option<String>,
 }
 
-/// Shared media buffer between StreamCallback and ReplyEmitter.
+/// Shared media buffer between `StreamCallback` and `ReplyEmitter`.
 pub type PendingMedia = Arc<tokio::sync::Mutex<Vec<MediaItem>>>;
 
 /// Maximum number of media items allowed per run.
 pub const MAX_MEDIA_PER_RUN: usize = 10;
 
-/// Detect MIME type from URL extension, with a fallback default based on media_type.
+/// Detect MIME type from URL extension, with a fallback default based on `media_type`.
 #[must_use]
 pub fn detect_mime(url: &str, media_type: &str) -> String {
     // Strip query string and fragment before checking extension

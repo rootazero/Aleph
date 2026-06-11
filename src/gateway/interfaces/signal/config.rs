@@ -52,7 +52,7 @@ impl Default for EventSourceConfig {
 /// Signal channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignalConfig {
-    /// URL of signal-cli REST API (e.g., "http://localhost:8080")
+    /// URL of signal-cli REST API (e.g., "<http://localhost:8080>")
     #[serde(default = "default_api_url")]
     pub api_url: String,
 

@@ -12,13 +12,13 @@ use crate::orchestrator::errors::FlowError;
 /// fallback loop used to treat as "try another provider".
 ///
 /// Intentionally message-based — `HarnessError` wraps `AlephError` but the
-/// specific AlephError variant isn't propagated structurally through
+/// specific `AlephError` variant isn't propagated structurally through
 /// `HarnessError::Llm(AlephError)` in a way that survives the async trait
 /// boundary without widening the public API. Message matching here mirrors
-/// the exact classification the retiring run_loop did (see §5 behaviour
+/// the exact classification the retiring `run_loop` did (see §5 behaviour
 /// parity in the resolution design).
 ///
-/// TODO(phase6c): replace with structural matching once HarnessError
+/// TODO(phase6c): replace with structural matching once `HarnessError`
 /// surfaces a `Transient(AlephError)` variant directly.
 pub(super) fn classify_harness_error(err: HarnessError, provider: &str) -> FlowError {
     let msg = err.to_string();

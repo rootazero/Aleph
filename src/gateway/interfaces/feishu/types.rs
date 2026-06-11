@@ -13,9 +13,9 @@ pub enum ChatType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct Mention {
-    /// Placeholder key in message text (e.g., "@_user_1")
+    /// Placeholder key in message text (e.g., "@_`user_1`")
     pub key: String,
-    /// User's open_id
+    /// User's `open_id`
     pub id: String,
     /// Display name
     pub name: String,

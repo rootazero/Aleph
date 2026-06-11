@@ -1,7 +1,7 @@
 //! Microsoft Teams Authentication
 //!
 //! Two components:
-//! - `TokenCache`: outbound OAuth2 token cache for Bot Framework REST API calls
+//! - `TokenCache`: outbound `OAuth2` token cache for Bot Framework REST API calls
 //! - `JwtValidator`: inbound JWT validation for Bot Framework webhook requests
 
 use crate::sync_primitives::{Arc, RwLock};
@@ -30,7 +30,7 @@ impl CachedToken {
     }
 }
 
-/// Outbound OAuth2 token cache for Bot Framework REST API calls.
+/// Outbound `OAuth2` token cache for Bot Framework REST API calls.
 ///
 /// Caches `client_credentials` tokens and refreshes them proactively at 80% of
 /// their lifetime so callers always receive a valid token.
@@ -146,7 +146,7 @@ impl TokenCache {
 struct BotClaims {
     /// Issuer
     iss: String,
-    /// Audience — should equal the bot's app_id
+    /// Audience — should equal the bot's `app_id`
     aud: String,
     /// Expiry (Unix timestamp)
     exp: u64,
@@ -155,7 +155,7 @@ struct BotClaims {
     iat: u64,
 }
 
-/// OpenID Connect configuration returned by Microsoft's well-known endpoint.
+/// `OpenID` Connect configuration returned by Microsoft's well-known endpoint.
 #[derive(Deserialize)]
 struct OidcConfig {
     jwks_uri: String,
@@ -184,7 +184,7 @@ struct JwkKey {
 /// called synchronously from webhook handler code.
 pub struct JwtValidator {
     app_id: String,
-    /// Cached RSA decoding keys (sync RwLock — validate() is sync)
+    /// Cached RSA decoding keys (sync `RwLock` — `validate()` is sync)
     keys: Arc<RwLock<Vec<DecodingKey>>>,
     /// Signal that keys should be refreshed (set when no key matches)
     refresh_needed: Arc<crate::sync_primitives::AtomicBool>,
@@ -284,7 +284,7 @@ impl JwtValidator {
         false
     }
 
-    /// Fetch JWKS public keys from Microsoft's OpenID metadata endpoint.
+    /// Fetch JWKS public keys from Microsoft's `OpenID` metadata endpoint.
     pub async fn refresh_keys(&self) -> Result<(), ChannelError> {
         let oidc_url = "https://login.botframework.com/v1/.well-known/openidconfiguration";
 

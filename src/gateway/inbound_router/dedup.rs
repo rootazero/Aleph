@@ -12,7 +12,7 @@ const DEDUP_MAX_ENTRIES: usize = 10_000;
 
 /// Tracks recently processed inbound message IDs to prevent duplicate execution
 pub(super) struct InboundDedupTracker {
-    /// Set of "channel_id:message_id" keys
+    /// Set of "`channel_id:message_id`" keys
     seen: HashSet<String>,
     /// Ordered list of (key, timestamp) for expiry
     entries: Vec<(String, Instant)>,
@@ -41,7 +41,7 @@ impl InboundDedupTracker {
         true
     }
 
-    /// Remove entries older than DEDUP_WINDOW
+    /// Remove entries older than `DEDUP_WINDOW`
     fn expire(&mut self) {
         let cutoff = Instant::now() - DEDUP_WINDOW;
         let before = self.entries.len();

@@ -1,7 +1,7 @@
 //! HTTP Server with Static File Serving
 //!
 //! Provides an HTTP server that serves both WebSocket connections and static files
-//! for the WebChat UI.
+//! for the `WebChat` UI.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};

@@ -155,7 +155,7 @@ pub trait ChannelPolicy: Send + Sync {
     fn evaluate_group(&self, sender: &UserId, group_id: &str) -> PolicyDecision;
 }
 
-/// Standard WhatsApp policy implementation
+/// Standard `WhatsApp` policy implementation
 #[derive(Debug, Clone)]
 pub struct WhatsAppPolicy {
     config: ChannelAccessConfig,

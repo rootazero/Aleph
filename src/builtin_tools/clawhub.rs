@@ -1,7 +1,7 @@
-//! ClawHub tool — search, browse, install, and update skills from ClawHub registry.
+//! `ClawHub` tool — search, browse, install, and update skills from `ClawHub` registry.
 //!
 //! Wraps the `ClawHubClient` HTTP client as an LLM-callable builtin tool,
-//! letting users manage ClawHub skills through natural language.
+//! letting users manage `ClawHub` skills through natural language.
 
 use std::io::Read as IoRead;
 use std::path::PathBuf;
@@ -33,7 +33,7 @@ fn sanitize_skill_name(slug: &str) -> Result<&str> {
 // Args
 // =============================================================================
 
-/// Action to perform on the ClawHub registry
+/// Action to perform on the `ClawHub` registry
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ClawHubAction {
@@ -47,7 +47,7 @@ pub enum ClawHubAction {
     Update,
 }
 
-/// Sort order for browsing (mirrors ClawHub API)
+/// Sort order for browsing (mirrors `ClawHub` API)
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ClawHubSortOrder {
@@ -128,7 +128,7 @@ pub struct ClawHubOutput {
 // Tool
 // =============================================================================
 
-/// Tool for searching, browsing, installing, and updating skills from ClawHub.
+/// Tool for searching, browsing, installing, and updating skills from `ClawHub`.
 #[derive(Clone)]
 pub struct ClawHubTool {
     client: ClawHubClient,

@@ -20,15 +20,15 @@ use crate::sync_primitives::Arc;
 ///
 /// # Supported Provider Types
 ///
-/// - `"openai"` or `"openai_image"` or `"dalle"` - OpenAI DALL-E image generation
-/// - `"openai_tts"` or `"tts"` - OpenAI Text-to-Speech
+/// - `"openai"` or `"openai_image"` or `"dalle"` - `OpenAI` DALL-E image generation
+/// - `"openai_tts"` or `"tts"` - `OpenAI` Text-to-Speech
 /// - `"openai_compat"` - Generic OpenAI-compatible API
 /// - `"stability"` or `"stability_image"` or `"sdxl"` - Stability AI image generation
 /// - `"google"` or `"google_imagen"` or `"imagen"` - Google Imagen image generation
 /// - `"google_veo"` or `"veo"` - Google Veo video generation
 /// - `"replicate"` - Replicate API for various models
-/// - `"elevenlabs"` - ElevenLabs Text-to-Speech
-/// - `"midjourney"` or `"mj"` - T8Star Midjourney API proxy
+/// - `"elevenlabs"` - `ElevenLabs` Text-to-Speech
+/// - `"midjourney"` or `"mj"` - `T8Star` Midjourney API proxy
 ///
 /// # Example
 ///

@@ -10,7 +10,7 @@ use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_upload tool.
+/// Arguments for the `browser_upload` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserUploadArgs {
     /// Browser profile name (default: "default").
@@ -18,13 +18,13 @@ pub struct BrowserUploadArgs {
     pub profile: String,
     /// Absolute paths of the local files to upload.
     pub paths: Vec<String>,
-    /// Accessibility ref_id of the `<input type=file>` element. Required for the
+    /// Accessibility `ref_id` of the `<input type=file>` element. Required for the
     /// existing-session profile; optional for the managed profile, which targets
     /// the page's file chooser directly.
     pub ref_id: Option<String>,
 }
 
-/// Output from the browser_upload tool.
+/// Output from the `browser_upload` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserUploadOutput {
     pub success: bool,

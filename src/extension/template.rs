@@ -31,7 +31,7 @@ impl SkillTemplate {
     ///
     /// # Arguments
     /// * `content` - Raw skill content with template syntax
-    /// * `source_path` - Path to the skill file (used to derive base_dir)
+    /// * `source_path` - Path to the skill file (used to derive `base_dir`)
     #[must_use]
     pub fn new(content: &str, source_path: &Path) -> Self {
         let base_dir = source_path

@@ -16,7 +16,7 @@ use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
 use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, RunSummary, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 
-/// Simple execution engine without full AgentLoop integration
+/// Simple execution engine without full `AgentLoop` integration
 /// Used when providers/tools are not available
 pub struct SimpleExecutionEngine {
     config: ExecutionEngineConfig,
@@ -389,9 +389,9 @@ impl Default for SimpleExecutionEngine {
 // ExecutionAdapter trait implementation
 // ============================================================================
 
-/// Implement ExecutionAdapter for SimpleExecutionEngine.
+/// Implement `ExecutionAdapter` for `SimpleExecutionEngine`.
 ///
-/// This allows InboundMessageRouter to use SimpleExecutionEngine via a trait object,
+/// This allows `InboundMessageRouter` to use `SimpleExecutionEngine` via a trait object,
 /// which is useful when providers/tools are not configured.
 #[async_trait]
 impl ExecutionAdapter for SimpleExecutionEngine {

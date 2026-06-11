@@ -1,4 +1,4 @@
-//! OpenAI Whisper transcription backend.
+//! `OpenAI` Whisper transcription backend.
 
 use std::time::Duration;
 
@@ -10,7 +10,7 @@ use tracing::debug;
 use super::cache::CachedMedia;
 use super::transcription::{TranscriptionResult, TranscriptionService};
 
-/// Default OpenAI API base URL.
+/// Default `OpenAI` API base URL.
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
 /// Default Whisper model.
@@ -19,7 +19,7 @@ const DEFAULT_MODEL: &str = "whisper-1";
 /// Transcription API timeout (audio files can be large).
 const TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// OpenAI Whisper API transcription backend.
+/// `OpenAI` Whisper API transcription backend.
 pub struct WhisperTranscription {
     api_key: String,
     base_url: String,
@@ -38,7 +38,7 @@ struct WhisperResponse {
 impl WhisperTranscription {
     /// Create a new Whisper transcription service.
     ///
-    /// - `api_key` — OpenAI (or compatible) API key.
+    /// - `api_key` — `OpenAI` (or compatible) API key.
     /// - `base_url` — Override the API base URL (e.g. for local whisper-compatible servers).
     /// - `model` — Override the model name (default: `whisper-1`).
     #[must_use]

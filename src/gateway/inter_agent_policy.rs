@@ -1,7 +1,7 @@
 //! Agent-to-Agent Communication Policy
 //!
 //! Controls which agents can communicate with which other agents.
-//! Used by the sessions_send tool to authorize inter-agent messaging.
+//! Used by the `sessions_send` tool to authorize inter-agent messaging.
 
 use serde::{Deserialize, Serialize};
 
@@ -66,7 +66,7 @@ impl AgentToAgentPolicy {
     /// Rules:
     /// 1. Same-agent communication is always allowed (even if disabled)
     /// 2. If disabled, only same-agent is allowed
-    /// 3. If enabled, check allow_patterns for a match
+    /// 3. If enabled, check `allow_patterns` for a match
     ///
     /// Pattern matching:
     /// - `"*"` matches any agent

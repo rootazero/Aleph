@@ -1,4 +1,4 @@
-//! InboundContextLayer — per-request dynamic context injection (priority 1700)
+//! `InboundContextLayer` — per-request dynamic context injection (priority 1700)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

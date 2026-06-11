@@ -46,7 +46,7 @@ pub struct BotInstance {
     pub channel_state: ChannelState,
     pub offset_tracker: Option<Arc<OffsetTracker>>,
     pub shutdown_tx: Option<oneshot::Sender<()>>,
-    /// Connection health flag — set to false if get_me() fails
+    /// Connection health flag — set to false if `get_me()` fails
     pub is_healthy: Arc<AtomicBool>,
 }
 
@@ -74,7 +74,7 @@ impl BotInstance {
         self.offset_tracker = Some(tracker);
     }
 
-    /// Check bot connectivity by calling get_me().
+    /// Check bot connectivity by calling `get_me()`.
     ///
     /// Updates `is_healthy` flag and returns the result.
     pub async fn health_check(&self) -> bool {

@@ -204,7 +204,7 @@ pub fn termination_signal(status: &std::process::ExitStatus) -> Option<i32> {
 }
 
 /// Cross-platform variant of [`termination_signal`] — always `None` on
-/// Windows where ExitStatus has no signal concept. Used inside helpers
+/// Windows where `ExitStatus` has no signal concept. Used inside helpers
 /// that need to compile on all platforms.
 #[cfg(unix)]
 fn termination_signal_xplat(status: &std::process::ExitStatus) -> Option<i32> {

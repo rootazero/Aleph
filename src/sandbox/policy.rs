@@ -1,4 +1,4 @@
-//! SandboxPolicy — internal unified policy representation derived from
+//! `SandboxPolicy` — internal unified policy representation derived from
 //! user-facing `SandboxCapabilities`. Used by platform-specific sandbox drivers.
 
 use std::path::PathBuf;

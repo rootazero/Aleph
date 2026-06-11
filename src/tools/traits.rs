@@ -62,13 +62,13 @@ use crate::tool_metadata::{ToolCategory, ToolDefinition};
 /// ```
 #[async_trait]
 pub trait AlephTool: Clone + Send + Sync + 'static {
-    /// Tool name used in function calls (e.g., "search", "file_read")
+    /// Tool name used in function calls (e.g., "search", "`file_read`")
     const NAME: &'static str;
 
     /// Human-readable description for LLM tool selection
     const DESCRIPTION: &'static str;
 
-    /// Input argument type (must derive JsonSchema for auto-schema generation)
+    /// Input argument type (must derive `JsonSchema` for auto-schema generation)
     type Args: Serialize + DeserializeOwned + JsonSchema + Send;
 
     /// Output type (serialized to JSON for LLM)
@@ -114,7 +114,7 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
     ///
     /// When true, the tool's JSON Schema will be transformed for strict mode
     /// (additionalProperties: false, all properties required) and the strict
-    /// flag will be sent to providers that support it (e.g., OpenAI).
+    /// flag will be sent to providers that support it (e.g., `OpenAI`).
     ///
     /// Default is true. Override to false for tools with dynamic schemas
     /// that cannot satisfy strict mode constraints.

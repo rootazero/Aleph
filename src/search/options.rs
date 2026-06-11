@@ -11,12 +11,12 @@
 ///
 /// Mapping table (kept in sync with the helpers below):
 ///
-/// | field        | Brave         | Bing         | Google CSE   | SearXNG      | Tavily   | DuckDuckGo |
+/// | field        | Brave         | Bing         | Google CSE   | `SearXNG`      | Tavily   | `DuckDuckGo` |
 /// |--------------|---------------|--------------|--------------|--------------|----------|------------|
-/// | language     | search_lang   | setLang      | lr=lang_XX   | language     | —        | —          |
+/// | language     | `search_lang`   | setLang      | `lr=lang_XX`   | language     | —        | —          |
 /// | region       | country       | cc           | gl           | —            | —        | kl         |
-/// | date_range   | freshness     | freshness    | dateRestrict | time_range   | days     | df         |
-/// | safe_search  | safesearch    | safeSearch   | safe         | safesearch   | —        | kp         |
+/// | `date_range`   | freshness     | freshness    | dateRestrict | `time_range`   | days     | df         |
+/// | `safe_search`  | safesearch    | safeSearch   | safe         | safesearch   | —        | kp         |
 ///
 /// Providers that have no native concept for a field omit it entirely
 /// (the helper returns `None` or the call site simply doesn't push it).
@@ -105,7 +105,7 @@ impl SearchOptions {
         self.timeout_seconds.max(1)
     }
 
-    /// Returns validated max_results, capped at 50 and at least 1
+    /// Returns validated `max_results`, capped at 50 and at least 1
     #[must_use]
     pub fn validated_max_results(&self) -> usize {
         self.max_results.clamp(1, 50)
@@ -190,7 +190,7 @@ impl SearchOptions {
         Some(format!("lang_{lang}"))
     }
 
-    /// SearXNG `time_range` (`day`/`week`/`month`/`year`). Bare token.
+    /// `SearXNG` `time_range` (`day`/`week`/`month`/`year`). Bare token.
     #[must_use]
     pub fn searxng_time_range(&self) -> Option<&'static str> {
         Some(match self.date_range.as_deref()? {
@@ -202,9 +202,9 @@ impl SearchOptions {
         })
     }
 
-    /// SearXNG `safesearch` (`0`/`1`/`2` for off/moderate/strict).
+    /// `SearXNG` `safesearch` (`0`/`1`/`2` for off/moderate/strict).
     /// We expose only Off vs Moderate today; bumping to Strict requires
-    /// a new SearchOptions field.
+    /// a new `SearchOptions` field.
     #[must_use]
     pub const fn searxng_safesearch(&self) -> u8 {
         if self.safe_search {
@@ -227,7 +227,7 @@ impl SearchOptions {
         })
     }
 
-    /// DuckDuckGo `kp` (`1`=moderate, `-2`=off; strict is `-1`).
+    /// `DuckDuckGo` `kp` (`1`=moderate, `-2`=off; strict is `-1`).
     #[must_use]
     pub const fn ddg_kp(&self) -> &'static str {
         if self.safe_search {
@@ -237,7 +237,7 @@ impl SearchOptions {
         }
     }
 
-    /// DuckDuckGo `df` (`d`/`w`/`m`/`y`).
+    /// `DuckDuckGo` `df` (`d`/`w`/`m`/`y`).
     #[must_use]
     pub fn ddg_df(&self) -> Option<&'static str> {
         Some(match self.date_range.as_deref()? {

@@ -1,7 +1,7 @@
-//! OpenAI protocol adapter
+//! `OpenAI` protocol adapter
 //!
 //! Handles OpenAI-compatible chat completion API format.
-//! Used by: OpenAI, DeepSeek, Moonshot, Doubao, vLLM, etc.
+//! Used by: `OpenAI`, `DeepSeek`, Moonshot, Doubao, vLLM, etc.
 
 use crate::sync_primitives::Arc;
 use reqwest::Client;
@@ -14,7 +14,7 @@ use reqwest::Client;
 
 use super::openai_common::tools::sanitize_tool_name;
 
-/// OpenAI protocol adapter
+/// `OpenAI` protocol adapter
 pub struct OpenAiProtocol {
     client: Client,
     /// Idle timeout (seconds) for the SSE byte stream, resolved from

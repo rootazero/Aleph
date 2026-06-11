@@ -1,6 +1,6 @@
-//! A2ASubAgent — SubAgent trait implementation for A2A remote delegation
+//! `A2ASubAgent` — `SubAgent` trait implementation for A2A remote delegation
 //!
-//! Integrates SmartRouter (routing) + A2AClientPool (communication) to delegate
+//! Integrates `SmartRouter` (routing) + `A2AClientPool` (communication) to delegate
 //! tasks to remote agents via the A2A protocol.
 
 use async_trait::async_trait;
@@ -16,9 +16,9 @@ use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::sync_primitives::Arc;
 
-/// SubAgent implementation that delegates tasks to remote A2A agents.
+/// `SubAgent` implementation that delegates tasks to remote A2A agents.
 ///
-/// Uses SmartRouter for intent-based agent discovery and A2AClientPool
+/// Uses `SmartRouter` for intent-based agent discovery and `A2AClientPool`
 /// for managing HTTP connections to remote agents.
 ///
 /// The `cached_names` field holds a lowercased list of agent names, skill names,
@@ -29,7 +29,7 @@ use crate::sync_primitives::Arc;
 pub struct A2ASubAgent {
     smart_router: Arc<SmartRouter>,
     client_pool: Arc<A2AClientPool>,
-    /// Cached lowercased agent/skill names for sync can_handle matching
+    /// Cached lowercased agent/skill names for sync `can_handle` matching
     cached_names: crate::sync_primitives::AsyncRwLock<Vec<String>>,
     /// Optional writer for raw memory delegation hooks (Spec 1 G2).
     /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`
@@ -69,7 +69,7 @@ impl A2ASubAgent {
     ///
     /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`
     /// row carrying the delegation prompt + sub-agent summary before returning,
-    /// allowing CompressionService to distil durable lessons for the parent agent.
+    /// allowing `CompressionService` to distil durable lessons for the parent agent.
     pub fn with_raw_memory_writer(mut self, writer: Arc<dyn RawMemoryStore>) -> Self {
         self.raw_memory_writer = Some(writer);
         self
@@ -86,7 +86,7 @@ impl A2ASubAgent {
 
     /// Refresh the cached agent names from the resolver.
     ///
-    /// Call this after registering or unregistering agents in the CardRegistry
+    /// Call this after registering or unregistering agents in the `CardRegistry`
     /// so that `can_handle` can match natural language prompts against current
     /// agent names, skill names, and aliases.
     pub async fn refresh_agent_names(&self) {
@@ -311,9 +311,9 @@ impl A2ASubAgent {
 
 /// Emit a `RawMemory(Delegation{child_agent_id})` row in a fire-and-forget spawn.
 ///
-/// Carries the delegation prompt and sub-agent summary so CompressionService
+/// Carries the delegation prompt and sub-agent summary so `CompressionService`
 /// can distil durable lessons for the parent agent's long-term memory.
-/// The parent agent_id is taken from `execution_context.metadata["parent_agent_id"]`
+/// The parent `agent_id` is taken from `execution_context.metadata["parent_agent_id"]`
 /// (falls back to `"default"` when absent — Task 10 will wire the real value at startup).
 #[allow(dead_code)] // test-only helper
 pub(crate) fn emit_delegation_raw(
@@ -327,7 +327,7 @@ pub(crate) fn emit_delegation_raw(
 
 /// SubAgentRequest/Result shaped wrapper around `emit_delegation_primitives`.
 /// Kept as the entry point for the A2A path which still has those types in
-/// scope; the new harness-based subagent_spawner calls the primitive helper
+/// scope; the new harness-based `subagent_spawner` calls the primitive helper
 /// directly to avoid coupling on a2a request/result shapes.
 pub(crate) fn emit_delegation_raw_with_registry(
     writer: Arc<dyn RawMemoryStore>,

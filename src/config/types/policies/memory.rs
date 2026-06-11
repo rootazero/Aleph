@@ -120,13 +120,13 @@ const fn default_content_truncate_length() -> u64 {
 }
 
 impl CompressionPolicy {
-    /// Get idle timeout as std::time::Duration
+    /// Get idle timeout as `std::time::Duration`
     #[must_use]
     pub const fn idle_timeout_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.idle_timeout_seconds as u64)
     }
 
-    /// Get background interval as std::time::Duration
+    /// Get background interval as `std::time::Duration`
     #[must_use]
     pub const fn background_interval_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.background_interval_seconds as u64)
@@ -134,7 +134,7 @@ impl CompressionPolicy {
 }
 
 impl AiRetrievalPolicy {
-    /// Get timeout as std::time::Duration
+    /// Get timeout as `std::time::Duration`
     pub const fn timeout_duration(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.timeout_ms)
     }

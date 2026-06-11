@@ -70,7 +70,7 @@ pub(crate) fn provider_exists(config: &GenerationConfig, name: &str) -> bool {
         || config.providers.contains_key(name)
 }
 
-/// Parse a generation type string into a GenerationType enum.
+/// Parse a generation type string into a `GenerationType` enum.
 pub(crate) fn parse_generation_type(s: &str) -> GenerationType {
     match s {
         "video" => GenerationType::Video,

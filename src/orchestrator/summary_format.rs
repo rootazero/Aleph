@@ -9,7 +9,7 @@
 //! |-------------|---------------------|-------|
 //! | `Plain`     | logs, headless CI   | one-line marker, no formatting |
 //! | `Compact`   | CLI footer          | 2–3 lines, light glyphs |
-//! | `Markdown`  | WebChat / Panel     | sectioned bullet list + tool table |
+//! | `Markdown`  | `WebChat` / Panel     | sectioned bullet list + tool table |
 //! | `Telegram`  | messaging channels  | Markdown shape capped at 4000 chars |
 //! | `Json`      | machine consumers   | pretty-printed JSON of the outcome |
 //!
@@ -28,7 +28,7 @@ pub enum SummaryStyle {
     Plain,
     /// 2–3 line CLI footer with light glyphs. Mirrors `_print_exit_summary`.
     Compact,
-    /// Sectioned Markdown with per-tool table. Suitable for WebChat / Panel.
+    /// Sectioned Markdown with per-tool table. Suitable for `WebChat` / Panel.
     Markdown,
     /// Same shape as Markdown but truncated to the cross-platform limit
     /// matched against hermes-agent's `MAX_PLATFORM_OUTPUT = 4000`.
@@ -314,7 +314,7 @@ fn format_tool_glyph(inv: &ToolInvocation) -> String {
     )
 }
 
-/// Same emoji table the event_drain mapper uses. Duplicated rather than
+/// Same emoji table the `event_drain` mapper uses. Duplicated rather than
 /// shared so the renderer stays free of gateway dependencies — adding a
 /// new tool here doesn't touch the gateway layer.
 fn emoji_for(name: &str) -> &'static str {

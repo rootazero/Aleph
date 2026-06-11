@@ -230,7 +230,7 @@ impl WizardOption {
     }
 }
 
-/// Result of calling wizard.next()
+/// Result of calling `wizard.next()`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WizardNextResult {
     /// Whether the wizard is done
@@ -244,7 +244,7 @@ pub struct WizardNextResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// Final payload produced by the flow (only set when done with success).
-    /// Carries flow-specific output — e.g. PairingFlow returns
+    /// Carries flow-specific output — e.g. `PairingFlow` returns
     /// `{ "token": "<device-token>" }`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,

@@ -1,4 +1,4 @@
-//! TeamMemberAddTool — add a member to an existing team.
+//! `TeamMemberAddTool` — add a member to an existing team.
 //!
 //! Symmetric counterpart to [`TeamMemberRemoveTool`](super::TeamMemberRemoveTool).
 //! Critically, this is the R8 entry point for bringing external CLI agents
@@ -40,7 +40,7 @@ pub struct TeamMemberAddArgs {
     pub role: String,
 }
 
-/// Output from team_member_add.
+/// Output from `team_member_add`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TeamMemberAddOutput {
     pub message: String,
@@ -64,7 +64,7 @@ pub struct TeamMemberAddOutput {
 pub struct TeamMemberAddTool {
     store: Arc<dyn TeamStore>,
     registry: Arc<AgentRegistry>,
-    /// Injected by ExecutionEngine: the ID of the agent calling this tool.
+    /// Injected by `ExecutionEngine`: the ID of the agent calling this tool.
     pub current_agent_id: String,
 }
 
@@ -81,7 +81,7 @@ impl TeamMemberAddTool {
         }
     }
 
-    /// Set the current agent ID (called by ExecutionEngine before each run).
+    /// Set the current agent ID (called by `ExecutionEngine` before each run).
     pub fn set_current_agent_id(&mut self, agent_id: impl Into<String>) {
         self.current_agent_id = agent_id.into();
     }

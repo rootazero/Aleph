@@ -2,7 +2,7 @@
 //! moves them to the encrypted vault.
 //!
 //! This acts as a safety net: even if a user manually edits config or an LLM
-//! writes an api_key directly into the TOML file, the next server start will
+//! writes an `api_key` directly into the TOML file, the next server start will
 //! automatically migrate it to the vault and strip it from config.
 //!
 //! Covers all secret-bearing config sections:

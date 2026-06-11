@@ -1,6 +1,6 @@
-//! WhatsApp Account Registry
+//! `WhatsApp` Account Registry
 //!
-//! Multi-account support for WhatsApp channels.
+//! Multi-account support for `WhatsApp` channels.
 
 use crate::gateway::interfaces::whatsapp::account::{AccountId, WhatsAppAccount};
 use crate::sync_primitives::Arc;

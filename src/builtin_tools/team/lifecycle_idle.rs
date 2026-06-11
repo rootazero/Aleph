@@ -1,7 +1,7 @@
-//! LifecycleIdleTool — worker reports it is idle and awaiting work.
+//! `LifecycleIdleTool` — worker reports it is idle and awaiting work.
 //!
 //! Wraps a `message_send` of `MessageType::Idle` with auto-resolved
-//! leader recipient. Mirrors the ClawTeam `clawteam lifecycle idle`
+//! leader recipient. Mirrors the `ClawTeam` `clawteam lifecycle idle`
 //! command but stays a pure tool — convention-over-config: the leader
 //! decides whether to act on the signal, not the harness.
 
@@ -29,7 +29,7 @@ pub struct LifecycleIdleArgs {
     pub last_task_id: Option<String>,
 }
 
-/// Output from a lifecycle_idle call.
+/// Output from a `lifecycle_idle` call.
 #[derive(Debug, Clone, Serialize)]
 pub struct LifecycleIdleOutput {
     /// `Some(id)` when an idle notification was actually sent to the leader.

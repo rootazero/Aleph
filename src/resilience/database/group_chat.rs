@@ -1,4 +1,4 @@
-//! CRUD operations for group_chat tables.
+//! CRUD operations for `group_chat` tables.
 //!
 //! Provides database operations for group chat session persistence
 //! and conversation turn tracking.

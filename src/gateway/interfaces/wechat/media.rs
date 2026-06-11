@@ -1,6 +1,6 @@
 //! Media Download & AES Decryption
 //!
-//! Handles downloading media from WeChat CDN and decrypting with AES-128-ECB.
+//! Handles downloading media from `WeChat` CDN and decrypting with AES-128-ECB.
 
 use aes::cipher::{array::Array, consts::U16, BlockCipherDecrypt, KeyInit};
 use aes::Aes128;

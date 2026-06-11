@@ -1,7 +1,7 @@
 //! CLI Commands for Memory Management
 //!
 //! Provides command implementations for listing, showing, adding, and managing
-//! knowledge notes.  Migrated from MemoryFact (MemoryStore) to NoteStore CRUD.
+//! knowledge notes.  Migrated from `MemoryFact` (`MemoryStore`) to `NoteStore` CRUD.
 
 use crate::error::AlephError;
 use crate::memory::notes::store::note_md_filename;
@@ -90,7 +90,7 @@ pub struct NoteSummary {
 }
 
 impl NoteSummary {
-    /// Create from a NoteIndexEntry
+    /// Create from a `NoteIndexEntry`
     #[must_use]
     pub fn from_entry(entry: &NoteIndexEntry) -> Self {
         Self {
@@ -136,7 +136,7 @@ impl NoteSummary {
     }
 }
 
-/// Memory CLI commands — operates on NoteStore (notes index).
+/// Memory CLI commands — operates on `NoteStore` (notes index).
 pub struct MemoryCommands {
     db: MemoryBackend,
     /// Agent scope for all operations

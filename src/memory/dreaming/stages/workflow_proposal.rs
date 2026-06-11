@@ -1,11 +1,11 @@
-//! WorkflowProposalStage — drafts MetaSkill (workflow) candidates from
+//! `WorkflowProposalStage` — drafts `MetaSkill` (workflow) candidates from
 //! recurring skill co-occurrence.
 //!
 //! This is the dream pipeline's "回放与梦境模式" closing the loop: it reads the
 //! [`CoOccurrenceLog`](crate::skill::cooccurrence) rings captured at skill-use
 //! time, clusters them into chains by temporal proximity, and for any chain
 //! that recurs above a frequency floor drafts a gated
-//! [`WorkflowProposal`](crate::workflow::proposal) — a MetaSkill candidate the
+//! [`WorkflowProposal`](crate::workflow::proposal) — a `MetaSkill` candidate the
 //! user can review and accept. Capabilities thus grow quietly in the
 //! background.
 //!
@@ -16,7 +16,7 @@
 //! the frequency floor is a count, and the drafted workflow is a literal
 //! transcription of the observed skill sequence. No reasoning runs in this
 //! stage and **no LLM call is incurred**. The intelligence — refining the
-//! steps, assigning real agents, deciding whether the MetaSkill is worth
+//! steps, assigning real agents, deciding whether the `MetaSkill` is worth
 //! keeping — is the user's/LLM's at accept time, behind the proposal gate.
 //! The stage never activates a workflow; it only writes drafts to the gated
 //! `proposals/` directory.
@@ -45,7 +45,7 @@ const DEFAULT_MIN_OBSERVATIONS: u32 = 3;
 /// gated dir in one pass. The highest-frequency chains win.
 const DEFAULT_MAX_PER_CYCLE: usize = 3;
 
-/// Drafts MetaSkill proposals from recurring skill co-occurrence chains.
+/// Drafts `MetaSkill` proposals from recurring skill co-occurrence chains.
 pub struct WorkflowProposalStage {
     pub window_secs: u64,
     pub min_observations: u32,

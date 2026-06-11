@@ -6,7 +6,7 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::sync_primitives::Arc;
 use serde_json::json;
 
-/// Handle "auth.show_token" — display current shared token
+/// Handle "`auth.show_token`" — display current shared token
 pub async fn handle_auth_show_token(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
@@ -29,7 +29,7 @@ pub async fn handle_auth_show_token(
     }
 }
 
-/// Handle "auth.reset_token" — regenerate shared token
+/// Handle "`auth.reset_token`" — regenerate shared token
 pub async fn handle_auth_reset_token(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
@@ -48,7 +48,7 @@ pub async fn handle_auth_reset_token(
     }
 }
 
-/// Handle "auth.list_sessions" — list active HTTP sessions
+/// Handle "`auth.list_sessions`" — list active HTTP sessions
 pub async fn handle_auth_list_sessions(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
@@ -83,7 +83,7 @@ pub async fn handle_auth_list_sessions(
     }
 }
 
-/// Handle "auth.revoke_session" — revoke a specific HTTP session
+/// Handle "`auth.revoke_session`" — revoke a specific HTTP session
 pub async fn handle_auth_revoke_session(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,

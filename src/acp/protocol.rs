@@ -299,7 +299,7 @@ impl AcpResponse {
     }
 
     /// Extract tool call info from a `tool_call` or `tool_call_update` notification.
-    /// Returns (tool_name, status) if this is a tool-related notification.
+    /// Returns (`tool_name`, status) if this is a tool-related notification.
     #[must_use]
     pub fn tool_call_info(&self) -> Option<(String, String)> {
         if self.method.as_deref() != Some("session/update") {

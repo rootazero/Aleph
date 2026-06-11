@@ -62,7 +62,7 @@ pub struct PromptConfig {
     /// Maximum tokens for tool descriptions
     pub max_tool_description_tokens: usize,
     /// Runtime capabilities (pre-formatted prompt text)
-    /// Describes available runtimes (Python, Node.js, FFmpeg, etc.)
+    /// Describes available runtimes (Python, Node.js, `FFmpeg`, etc.)
     pub runtime_capabilities: Option<String>,
     /// Generation models (pre-formatted prompt text)
     /// Describes available image/video/audio generation models and aliases
@@ -81,21 +81,21 @@ pub struct PromptConfig {
     /// When true, adds guidance for structured reasoning output
     /// (Observation -> Analysis -> Planning -> Decision)
     pub thinking_transparency: bool,
-    /// Skill instructions injected from SkillSystem snapshot (XML format)
+    /// Skill instructions injected from `SkillSystem` snapshot (XML format)
     /// When set, these are appended to the system prompt to inform the LLM
-    /// about available skills from the SkillSystem v2
+    /// about available skills from the `SkillSystem` v2
     pub skill_instructions: Option<String>,
     /// Token budget for system prompt assembly.
     pub token_budget: TokenBudget,
-    /// Whether native tool_use is enabled (skip ToolsLayer and ResponseFormatLayer)
+    /// Whether native `tool_use` is enabled (skip `ToolsLayer` and `ResponseFormatLayer`)
     ///
-    /// When true, tool definitions are passed via the API's native tool_use mechanism
+    /// When true, tool definitions are passed via the API's native `tool_use` mechanism
     /// rather than injected into the system prompt. This also means the LLM will
     /// respond with structured tool calls rather than JSON-in-text.
     pub native_tools_enabled: bool,
-    /// Eligible skills from SkillSystem v2 snapshot for scope-aware filtering.
+    /// Eligible skills from `SkillSystem` v2 snapshot for scope-aware filtering.
     pub eligible_skills: Option<Vec<crate::domain::skill::SkillManifest>>,
-    /// Available agent catalog entries for AgentCatalogLayer.
+    /// Available agent catalog entries for `AgentCatalogLayer`.
     pub available_agents: Option<Vec<crate::thinker::prompt_layer::AgentCatalogEntry>>,
     /// MCP server instructions for prompt injection.
     /// Collected from connected MCP servers via `McpClient::collect_instructions()`.
@@ -306,7 +306,7 @@ impl PromptBuilder {
     /// Pass the protocol exactly as `AiProvider::protocol()` returns it
     /// — typically `"anthropic"`, `"openai"`, `"gemini"`, or `"ollama"`.
     /// Providers may override via `model_behavior_override()` (e.g.
-    /// OpenRouter routing GPT-4 over OpenAI protocol); the harness
+    /// `OpenRouter` routing GPT-4 over `OpenAI` protocol); the harness
     /// bridge prefers the override.
     pub fn with_provider_protocol(mut self, protocol: impl Into<String>) -> Self {
         self.provider_protocol = Some(protocol.into());
@@ -356,8 +356,8 @@ impl PromptBuilder {
 
     /// Build system prompt with hydrated tools from semantic retrieval
     ///
-    /// This method builds a complete system prompt using HydrationResult
-    /// instead of the traditional ToolInfo array, enabling semantic tool
+    /// This method builds a complete system prompt using `HydrationResult`
+    /// instead of the traditional `ToolInfo` array, enabling semantic tool
     /// selection based on query relevance.
     pub fn build_system_prompt_with_hydration(&self, hydration: &HydrationResult) -> String {
         let input = LayerInput::hydration(&self.config, hydration)
@@ -374,7 +374,7 @@ impl PromptBuilder {
     ///
     /// This is the primary entry point when using the Embodiment Engine.
     /// Soul content appears at the very top of the prompt for highest priority.
-    /// When a workspace profile is provided, its system_prompt is injected
+    /// When a workspace profile is provided, its `system_prompt` is injected
     /// between Soul (priority 50) and Role (priority 100).
     pub fn build_system_prompt_with_soul(
         &self,
@@ -426,7 +426,7 @@ impl PromptBuilder {
 
     /// Build system prompt for a sub-agent (basic path, no soul).
     ///
-    /// Lighter variant for sub-agents that don't have a SoulManifest.
+    /// Lighter variant for sub-agents that don't have a `SoulManifest`.
     pub fn build_for_agent_basic(
         &self,
         agent_def: &crate::agents::AgentDef,
@@ -578,7 +578,7 @@ impl PromptBuilder {
     /// Build system prompt with full context (soul + profile + identity files + inbound).
     ///
     /// This is the comprehensive entry point that passes all available context
-    /// through to the prompt pipeline via LayerInput.
+    /// through to the prompt pipeline via `LayerInput`.
     pub fn build_system_prompt_with_full_context(
         &self,
         tools: &[ToolInfo],
@@ -607,10 +607,10 @@ impl PromptBuilder {
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
-    /// Build system prompt using ResolvedContext
+    /// Build system prompt using `ResolvedContext`
     ///
     /// This is the new entry point that uses the two-phase filtered context
-    /// from the ContextAggregator. The pipeline layers handle all sections
+    /// from the `ContextAggregator`. The pipeline layers handle all sections
     /// (runtime context, environment, security, protocol tokens, etc.)
     /// in priority order.
     pub fn build_system_prompt_with_context(

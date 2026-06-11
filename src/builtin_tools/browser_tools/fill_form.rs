@@ -17,14 +17,14 @@ pub struct FormField {
     /// CSS selector of the form field (used in managed mode).
     #[serde(default)]
     pub selector: Option<String>,
-    /// ARIA snapshot ref_id of the form field (used in existing-session mode).
+    /// ARIA snapshot `ref_id` of the form field (used in existing-session mode).
     #[serde(default)]
     pub ref_id: Option<String>,
     /// Value to fill into the field.
     pub value: String,
 }
 
-/// Arguments for the browser_fill_form tool.
+/// Arguments for the `browser_fill_form` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserFillFormArgs {
     /// Browser profile name (default: "default").
@@ -34,7 +34,7 @@ pub struct BrowserFillFormArgs {
     pub fields: Vec<FormField>,
 }
 
-/// Output from the browser_fill_form tool.
+/// Output from the `browser_fill_form` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserFillFormOutput {
     pub success: bool,

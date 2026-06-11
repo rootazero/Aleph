@@ -1,4 +1,4 @@
-//! TaskListTool — list and filter coordination tasks.
+//! `TaskListTool` — list and filter coordination tasks.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -19,7 +19,7 @@ pub struct TaskListArgs {
     /// Filter by team ID
     #[serde(default)]
     pub team_id: Option<String>,
-    /// Filter by status: pending, blocked, in_progress, completed, failed, cancelled
+    /// Filter by status: pending, blocked, `in_progress`, completed, failed, cancelled
     #[serde(default)]
     pub status: Option<String>,
     /// Filter by owner agent ID

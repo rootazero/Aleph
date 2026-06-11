@@ -30,10 +30,10 @@ pub use aleph_protocol::jsonrpc::{
 // Additional error codes specific to Gateway (not in aleph-protocol)
 /// Authentication failed
 pub const AUTH_FAILED: i32 = -32001;
-/// Operation timeout (alias for TIMEOUT_ERROR)
+/// Operation timeout (alias for `TIMEOUT_ERROR`)
 pub const TIMEOUT: i32 = TIMEOUT_ERROR;
 /// Feature is registered but not yet wired by the boot path. Replaces
-/// fake-success stubs and ambiguous INTERNAL_ERROR placeholders so callers
+/// fake-success stubs and ambiguous `INTERNAL_ERROR` placeholders so callers
 /// can distinguish "configured + empty" from "not wired in this build/mode".
 /// JSON-RPC reserves -32000..-32099 for implementation-defined server errors;
 /// -32099 sits at the bottom to avoid collision with future aleph-protocol codes.
@@ -206,7 +206,7 @@ pub type JsonRpcBatchResponse = Vec<JsonRpcResponse>;
 // Gateway-specific extensions to protocol types
 // ============================================================================
 
-/// Extension trait for JsonRpcError with Gateway-specific methods
+/// Extension trait for `JsonRpcError` with Gateway-specific methods
 pub trait JsonRpcErrorExt {
     /// Create an authentication required error
     fn auth_required() -> JsonRpcError;

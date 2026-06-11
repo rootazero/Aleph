@@ -1,6 +1,6 @@
-//! CuratedMemoryLayer — inject the frozen curated memory envelope (priority 60).
+//! `CuratedMemoryLayer` — inject the frozen curated memory envelope (priority 60).
 //!
-//! Sits between AgentRoleLayer (55) and ProfileLayer (75) in the Stable zone.
+//! Sits between `AgentRoleLayer` (55) and `ProfileLayer` (75) in the Stable zone.
 //!
 //! Reads `LayerInput::curated_memory_envelope` (a pre-rendered XML string
 //! produced by `MemoryContextProvider::build_curated_message`) and injects

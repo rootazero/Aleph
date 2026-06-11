@@ -2,7 +2,7 @@
 //!
 //! 收到中心发来的 `tool.call` 请求 → 查命令表（allowlist = 表的 keys，节点侧
 //! 权威闸门）→ 命中则跑该命令 → 回 `Result<Value, String>`（节点 loop 据此
-//! 构造带 id 的 JsonRpcResponse）。
+//! 构造带 id 的 `JsonRpcResponse`）。
 //!
 //! 红线：确定性查表，无 LLM 推理（R7）；不进 `src/harness/`（R10）。
 

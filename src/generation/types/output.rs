@@ -34,7 +34,7 @@ impl GenerationData {
         Self::Url(url.into())
     }
 
-    /// Create a LocalPath variant
+    /// Create a `LocalPath` variant
     pub fn local_path<S: Into<String>>(path: S) -> Self {
         Self::LocalPath(path.into())
     }
@@ -75,7 +75,7 @@ impl GenerationData {
         }
     }
 
-    /// Get the local path if this is a LocalPath variant
+    /// Get the local path if this is a `LocalPath` variant
     #[must_use]
     pub fn as_local_path(&self) -> Option<&str> {
         match self {

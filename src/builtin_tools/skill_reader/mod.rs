@@ -2,8 +2,8 @@
 //!
 //! Implements Claude's Progressive Disclosure pattern for skills:
 //! - Level 1 (metadata) is always available in system prompt
-//! - Level 2 (instructions) loaded via read_skill tool call
-//! - Level 3 (resources) loaded on-demand via file_name parameter
+//! - Level 2 (instructions) loaded via `read_skill` tool call
+//! - Level 3 (resources) loaded on-demand via `file_name` parameter
 //!
 //! This enables the agent to actively request skill instructions,
 //! treating them as task directives rather than passive context.

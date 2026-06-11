@@ -1,8 +1,8 @@
 //! Provider configuration types
 //!
 //! Contains AI provider configuration:
-//! - ProviderConfig: Individual provider settings (API key, model, etc.)
-//! - ProviderConfigEntry: Provider with name (for UniFFI)
+//! - `ProviderConfig`: Individual provider settings (API key, model, etc.)
+//! - `ProviderConfigEntry`: Provider with name (for `UniFFI`)
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 // ProviderConfigEntry
 // =============================================================================
 
-/// Provider config entry with name (for UniFFI)
+/// Provider config entry with name (for `UniFFI`)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderConfigEntry {
     pub name: String,
@@ -154,10 +154,10 @@ pub struct ProviderConfig {
     pub top_k: Option<u32>,
 
     // OpenAI-specific parameters
-    /// Frequency penalty (-2.0 to 2.0, OpenAI only)
+    /// Frequency penalty (-2.0 to 2.0, `OpenAI` only)
     #[serde(default)]
     pub frequency_penalty: Option<f32>,
-    /// Presence penalty (-2.0 to 2.0, OpenAI only)
+    /// Presence penalty (-2.0 to 2.0, `OpenAI` only)
     #[serde(default)]
     pub presence_penalty: Option<f32>,
 
@@ -188,7 +188,7 @@ pub struct ProviderConfig {
 
     /// Model behavior override: use a specific behavior file instead of protocol default.
     /// Maps to a file in `~/.aleph/model_behaviors/{name}.md` or a built-in behavior.
-    /// Example: Set to "anthropic" on an OpenRouter provider that routes to Claude.
+    /// Example: Set to "anthropic" on an `OpenRouter` provider that routes to Claude.
     #[serde(default)]
     pub model_behavior: Option<String>,
 
@@ -197,7 +197,7 @@ pub struct ProviderConfig {
     pub verified: bool,
 
     /// Latency/cost service tier. Capability-gated per endpoint and shared
-    /// across protocols: Anthropic accepts "auto"/"standard_only"; OpenAI
+    /// across protocols: Anthropic accepts "`auto"/"standard_only`"; `OpenAI`
     /// (chat + responses) accepts "auto"/"default"/"flex"/"priority".
     #[serde(default)]
     pub service_tier: Option<String>,
@@ -288,7 +288,7 @@ impl ProviderConfig {
     /// Create a minimal test configuration with only required fields
     ///
     /// This is a helper for tests to avoid specifying all optional fields.
-    /// All optional advanced parameters (like frequency_penalty, media_resolution, etc.) are set to None.
+    /// All optional advanced parameters (like `frequency_penalty`, `media_resolution`, etc.) are set to None.
     pub fn test_config(model: impl Into<String>) -> Self {
         Self {
             protocol: None,

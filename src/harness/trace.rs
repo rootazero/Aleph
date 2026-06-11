@@ -93,7 +93,7 @@ pub enum LoopTraceEvent {
     /// Drop safety-net rather than explicit `shutdown()` (P3 Stage I).
     McpScopeCleaned { agent_id: String, leaked: bool },
     /// Per-call provider usage (Stage J-pre cache observability).
-    /// `agent_id` is "root" for the top-level harness or the subagent_id
+    /// `agent_id` is "root" for the top-level harness or the `subagent_id`
     /// when emitted from within a spawned subagent.
     ProviderUsage {
         agent_id: String,

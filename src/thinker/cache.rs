@@ -5,7 +5,7 @@
 //!
 //! - **Anthropic**: Ephemeral caching via `cache_control` blocks (stateless)
 //! - **Gemini**: Persistent caching via explicit cache API (stateful)
-//! - **OpenAI**: Transparent automatic caching (no state needed)
+//! - **`OpenAI`**: Transparent automatic caching (no state needed)
 //!
 //! # Architecture
 //!
@@ -179,11 +179,11 @@ impl CacheContext {
 /// Provider type for cache strategy selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProviderType {
-    /// Anthropic (Claude) - uses ephemeral cache_control
+    /// Anthropic (Claude) - uses ephemeral `cache_control`
     Anthropic,
     /// Google Gemini - uses persistent cachedContent
     Gemini,
-    /// OpenAI - transparent caching, no action needed
+    /// `OpenAI` - transparent caching, no action needed
     OpenAi,
     /// Other/unknown provider
     #[default]
@@ -487,7 +487,7 @@ impl GeminiCacheStrategy {
 // TransparentCacheStrategy
 // =============================================================================
 
-/// OpenAI transparent caching strategy (no-op)
+/// `OpenAI` transparent caching strategy (no-op)
 #[derive(Debug, Clone, Default)]
 pub struct TransparentCacheStrategy;
 

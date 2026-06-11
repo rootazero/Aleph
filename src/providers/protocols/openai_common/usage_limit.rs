@@ -9,7 +9,7 @@
 /// Several providers report exhausted credits with a non-429 status and a
 /// descriptive body instead of a clean 429 — e.g. xAI (Grok) returns HTTP 403
 /// "used all available credits or reached its monthly spending limit", and
-/// OpenAI uses `insufficient_quota`. Matching these lets the caller surface a
+/// `OpenAI` uses `insufficient_quota`. Matching these lets the caller surface a
 /// typed, non-retryable usage-limit error rather than a generic provider fault.
 pub(crate) fn is_usage_limit_body(body: &str) -> bool {
     let b = body.to_ascii_lowercase();

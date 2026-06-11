@@ -1,4 +1,4 @@
-//! Image processor — bridges existing VisionPipeline into the media pipeline.
+//! Image processor — bridges existing `VisionPipeline` into the media pipeline.
 
 use async_trait::async_trait;
 
@@ -11,7 +11,7 @@ use crate::vision::{VisionError, VisionPipeline};
 
 /// Bridges the existing [`VisionPipeline`] into the unified [`MediaProvider`] interface.
 ///
-/// Converts MediaInput → ImageInput, delegates to VisionPipeline, converts results back.
+/// Converts `MediaInput` → `ImageInput`, delegates to `VisionPipeline`, converts results back.
 pub struct ImageMediaProvider {
     pipeline: Arc<VisionPipeline>,
     priority: u8,

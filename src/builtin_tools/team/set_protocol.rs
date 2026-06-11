@@ -1,4 +1,4 @@
-//! TeamSetProtocolTool — set or clear a team's operating protocol.
+//! `TeamSetProtocolTool` — set or clear a team's operating protocol.
 //!
 //! The protocol is a free-form operating agreement (role definitions, hand-off
 //! rules, quality gates) authored by the leader. Once set, the dispatcher's
@@ -32,7 +32,7 @@ pub struct TeamSetProtocolArgs {
     pub protocol: Option<String>,
 }
 
-/// Output from team_set_protocol.
+/// Output from `team_set_protocol`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TeamSetProtocolOutput {
     pub team_id: String,

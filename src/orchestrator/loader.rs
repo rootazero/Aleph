@@ -1,6 +1,6 @@
-//! TOML loader for preset and user-defined FlowSpec files.
+//! TOML loader for preset and user-defined `FlowSpec` files.
 //!
-//! See design §5 (TOML shape) and §3.8 (hot reload via FlowRegistry::replace).
+//! See design §5 (TOML shape) and §3.8 (hot reload via `FlowRegistry::replace`).
 
 use crate::sync_primitives::Arc;
 use std::path::Path;
@@ -29,7 +29,7 @@ pub fn load_user_flows_from_str(src: &str) -> Result<FlowSet, FlowError> {
     parse_flow_file(src).map_err(|e| FlowError::InvalidConfig(format!("user flow: {e}")))
 }
 
-/// Load every `*.toml` under `dir`, merging into a single FlowSet.
+/// Load every `*.toml` under `dir`, merging into a single `FlowSet`.
 /// Later files do NOT override earlier ones — duplicates return an error.
 pub async fn load_user_flows_from_dir(dir: &Path) -> Result<FlowSet, FlowError> {
     let mut merged = FlowSet::new();

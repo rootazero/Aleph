@@ -1,5 +1,5 @@
 //! Frozen renderings of MEMORY.md and USER.md, captured at session start
-//! and reused for every prompt build until evicted by compression / SessionEnd.
+//! and reused for every prompt build until evicted by compression / `SessionEnd`.
 
 use std::time::SystemTime;
 

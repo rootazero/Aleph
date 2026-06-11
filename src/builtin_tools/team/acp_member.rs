@@ -1,4 +1,4 @@
-//! TeamAcpMemberTool — manage external coding CLI sessions (Claude Code,
+//! `TeamAcpMemberTool` — manage external coding CLI sessions (Claude Code,
 //! Codex, ...) as team members.
 //!
 //! Implements R8 (Everything is a Tool) for ACP-backed members: the leader

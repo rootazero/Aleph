@@ -12,7 +12,7 @@ use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 use crate::vision::types::ImageFormat;
 
-/// Arguments for the browser_screenshot tool.
+/// Arguments for the `browser_screenshot` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserScreenshotArgs {
     /// Browser profile name (default: "default").
@@ -28,7 +28,7 @@ pub struct BrowserScreenshotArgs {
     pub describe: Option<bool>,
 }
 
-/// Output from the browser_screenshot tool.
+/// Output from the `browser_screenshot` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserScreenshotOutput {
     pub success: bool,

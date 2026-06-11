@@ -105,7 +105,7 @@ struct SlidingWindow {
     timestamps: VecDeque<Instant>,
 }
 
-/// Rate limit key: (session_id, tool_category).
+/// Rate limit key: (`session_id`, `tool_category`).
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 struct RateLimitKey {
     session_id: SessionId,

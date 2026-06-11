@@ -2,7 +2,7 @@
 //!
 //! This is a deliberately small, dependency-free implementation of the
 //! [W3C `traceparent`](https://www.w3.org/TR/trace-context/) format — *not*
-//! an OpenTelemetry integration. The full OTel SDK (opentelemetry +
+//! an OpenTelemetry integration. The full `OTel` SDK (opentelemetry +
 //! opentelemetry-otlp + tonic/gRPC) is one of the heaviest dependency trees in
 //! the ecosystem and would violate redline R3 (core minimalism) for what is,
 //! for Aleph, a correlation feature: the daemon already persists its own

@@ -34,7 +34,7 @@ pub enum SkillOrigin {
 pub struct SkillEntry {
     /// Where this skill came from.
     pub source: SkillOrigin,
-    /// Version when installed (for official skills, matches bundled_version).
+    /// Version when installed (for official skills, matches `bundled_version`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Source URL (for github-installed skills).

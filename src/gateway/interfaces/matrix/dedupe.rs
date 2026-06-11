@@ -3,7 +3,7 @@ use crate::sync_primitives::Mutex;
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashSet;
 
-/// Inbound event deduplicator backed by SQLite with an in-memory LRU cache.
+/// Inbound event deduplicator backed by `SQLite` with an in-memory LRU cache.
 pub struct EventDeduper {
     conn: Mutex<Connection>,
     cache: Mutex<HashSet<(String, String)>>,

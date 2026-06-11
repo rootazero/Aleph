@@ -1,4 +1,4 @@
-//! SandboxCapabilities — what a command is allowed to do inside the sandbox.
+//! `SandboxCapabilities` — what a command is allowed to do inside the sandbox.
 //!
 //! # Platform-specific network policy support (as of Cycle 1 hardening)
 //!
@@ -81,7 +81,7 @@ impl SandboxCapabilities {
         copy
     }
 
-    /// Is `self` ⊆ `baseline` (fs subset; Network ordered None ⊆ AllowHosts ⊆ AllowAll;
+    /// Is `self` ⊆ `baseline` (fs subset; Network ordered None ⊆ `AllowHosts` ⊆ `AllowAll`;
     /// spawn monotonic; resource limits at least as tight as baseline)?
     ///
     /// For filesystem paths, both paths are normalized (resolving `.` and `..`)

@@ -370,7 +370,7 @@ pub struct WasmSecretsToml {
 // WASM Capability Conversion
 // =============================================================================
 
-/// Convert TOML capabilities section to runtime WasmCapabilities
+/// Convert TOML capabilities section to runtime `WasmCapabilities`
 #[must_use]
 pub fn convert_wasm_capabilities(caps: &CapabilitiesSection) -> Option<WasmCapabilities> {
     if caps.workspace.is_none()
@@ -445,7 +445,7 @@ fn convert_credential_inject(inject: &WasmCredentialInjectToml) -> CredentialInj
 // Permission Conversion
 // =============================================================================
 
-/// Convert TOML permissions section to PluginPermission list
+/// Convert TOML permissions section to `PluginPermission` list
 pub fn convert_permissions(perms: &PermissionsSection) -> Vec<PluginPermission> {
     let mut permissions = Vec::new();
     if perms.network {
@@ -481,21 +481,21 @@ pub fn convert_permissions(perms: &PermissionsSection) -> Vec<PluginPermission> 
 // Parsing Functions
 // =============================================================================
 
-/// Parse an aleph.plugin.toml file into a PluginManifest (async)
+/// Parse an aleph.plugin.toml file into a `PluginManifest` (async)
 pub async fn parse_aleph_plugin_toml(dir: &Path) -> ExtensionResult<PluginManifest> {
     let toml_path = dir.join(ALEPH_PLUGIN_TOML);
     let content = tokio::fs::read_to_string(&toml_path).await?;
     parse_aleph_plugin_toml_content(&content, dir)
 }
 
-/// Parse an aleph.plugin.toml file into a PluginManifest (sync)
+/// Parse an aleph.plugin.toml file into a `PluginManifest` (sync)
 pub fn parse_aleph_plugin_toml_sync(dir: &Path) -> ExtensionResult<PluginManifest> {
     let toml_path = dir.join(ALEPH_PLUGIN_TOML);
     let content = std::fs::read_to_string(&toml_path)?;
     parse_aleph_plugin_toml_content(&content, dir)
 }
 
-/// Parse TOML content into a PluginManifest
+/// Parse TOML content into a `PluginManifest`
 pub fn parse_aleph_plugin_toml_content(
     content: &str,
     plugin_dir: &Path,

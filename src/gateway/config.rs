@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 /// Deserialize agents field accepting either:
-/// - Legacy format: `[agents.main]` → HashMap<String, AgentConfig>
-/// - New format: `[agents.defaults]` + `[[agents.list]]` → falls back to empty HashMap
+/// - Legacy format: `[agents.main]` → `HashMap`<String, `AgentConfig`>
+/// - New format: `[agents.defaults]` + `[[agents.list]]` → falls back to empty `HashMap`
 fn deserialize_agents_compat<'de, D>(
     deserializer: D,
 ) -> Result<HashMap<String, AgentConfig>, D::Error>
@@ -42,15 +42,15 @@ pub struct GatewayConfig {
     /// Gateway server settings
     pub gateway: GatewayServerConfig,
 
-    /// Agent configurations (keyed by agent_id)
+    /// Agent configurations (keyed by `agent_id`)
     ///
-    /// Accepts either the legacy `[agents.<id>]` table format (HashMap)
-    /// or silently ignores the newer AgentsConfig format (`[[agents.list]]`)
+    /// Accepts either the legacy `[agents.<id>]` table format (`HashMap`)
+    /// or silently ignores the newer `AgentsConfig` format (`[[agents.list]]`)
     /// which is handled by `Config.agents` instead.
     #[serde(default, deserialize_with = "deserialize_agents_compat")]
     pub agents: HashMap<String, AgentConfig>,
 
-    /// Channel bindings (pattern -> agent_id)
+    /// Channel bindings (pattern -> `agent_id`)
     #[serde(default)]
     pub bindings: HashMap<String, String>,
 
@@ -137,7 +137,7 @@ pub struct GatewayServerConfig {
     #[serde(default = "default_ping_interval_secs")]
     pub ping_interval_secs: u64,
     /// Close the connection if no inbound frame (including the auto-Pong
-    /// reply) arrives within this many seconds. Must be ≥ ping_interval_secs.
+    /// reply) arrives within this many seconds. Must be ≥ `ping_interval_secs`.
     /// Default 90s.
     #[serde(default = "default_idle_timeout_secs")]
     pub idle_timeout_secs: u64,
@@ -339,7 +339,7 @@ impl Default for AgentConfig {
 }
 
 impl AgentConfig {
-    /// Convert to AgentInstanceConfig
+    /// Convert to `AgentInstanceConfig`
     #[must_use]
     pub fn to_instance_config(&self, agent_id: &str) -> AgentInstanceConfig {
         AgentInstanceConfig {

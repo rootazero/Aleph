@@ -1,4 +1,4 @@
-//! Builder / constructor submodules for BuiltinToolRegistry
+//! Builder / constructor submodules for `BuiltinToolRegistry`
 //!
 //! Split from the monolithic builder.rs to keep file sizes manageable.
 

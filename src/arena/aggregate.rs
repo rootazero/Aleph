@@ -1,4 +1,4 @@
-//! SharedArena aggregate root — the central entity managing multi-agent collaboration.
+//! `SharedArena` aggregate root — the central entity managing multi-agent collaboration.
 
 use std::collections::HashMap;
 
@@ -179,7 +179,7 @@ impl SharedArena {
     /// Report progress for the specified agent.
     ///
     /// Updates the agent's current task description and completed count,
-    /// and increments the arena-wide completed_steps.
+    /// and increments the arena-wide `completed_steps`.
     ///
     /// # Errors
     /// Returns an error if the agent is not a participant in this arena.

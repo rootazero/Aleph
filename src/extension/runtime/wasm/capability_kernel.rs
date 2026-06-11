@@ -1,4 +1,4 @@
-//! WasmCapabilityKernel — per-execution security kernel.
+//! `WasmCapabilityKernel` — per-execution security kernel.
 //!
 //! Every host function call passes through this kernel for:
 //! - Capability checking (default-deny)

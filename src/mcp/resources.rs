@@ -116,7 +116,7 @@ impl McpResourceManager {
     /// # Arguments
     ///
     /// * `server` - The server name that owns the resource
-    /// * `uri` - The resource URI (e.g., "file:///path/to/file")
+    /// * `uri` - The resource URI (e.g., "<file:///path/to/file>")
     ///
     /// # Returns
     ///

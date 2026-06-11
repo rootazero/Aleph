@@ -3,7 +3,7 @@
 //! Header format:
 //!   `[N% — used/limit chars]`             when usage ≤ limit
 //!   `[OVER BUDGET — N% — used/limit chars]` when usage > limit
-//!   `[NEAR LIMIT — N% — used/limit chars]`  when ≥ legacy_warn_threshold but ≤ limit
+//!   `[NEAR LIMIT — N% — used/limit chars]`  when ≥ `legacy_warn_threshold` but ≤ limit
 
 use super::format::{serialize, ENTRY_DELIMITER};
 

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Events emitted by the SkillSystem when skills change.
+/// Events emitted by the `SkillSystem` when skills change.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SkillSystemEvent {

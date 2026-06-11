@@ -1,10 +1,10 @@
 //! Shared tool utilities for OpenAI-compatible protocols.
 //!
-//! These functions are used by both the standard OpenAI protocol and the Codex protocol.
+//! These functions are used by both the standard `OpenAI` protocol and the Codex protocol.
 
 /// Replace characters not in `[a-zA-Z0-9_-]` with underscores.
 ///
-/// OpenAI API requires tool names to match `^[a-zA-Z0-9_-]+$`.
+/// `OpenAI` API requires tool names to match `^[a-zA-Z0-9_-]+$`.
 /// Kept as a safety net for external/plugin tool names.
 pub(crate) fn sanitize_tool_name(name: &str) -> String {
     name.chars()
@@ -24,7 +24,7 @@ pub(crate) fn desanitize_tool_name(name: &str) -> String {
     name.to_string()
 }
 
-/// Extract codex account_id from a Codex OAuth JWT token.
+/// Extract codex `account_id` from a Codex OAuth JWT token.
 ///
 /// The token payload contains `{"https://api.openai.com/auth": {"chatgpt_account_id": "..."}}`
 pub(crate) fn extract_codex_account_id(token: &str) -> Option<String> {

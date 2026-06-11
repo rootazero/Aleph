@@ -1,6 +1,6 @@
 //! Generation defaults configuration
 //!
-//! Contains the GenerationDefaults struct for default generation parameters.
+//! Contains the `GenerationDefaults` struct for default generation parameters.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -210,7 +210,7 @@ impl GenerationDefaults {
         Ok(())
     }
 
-    /// Convert to GenerationParams from the generation module
+    /// Convert to `GenerationParams` from the generation module
     pub fn to_params(&self) -> crate::generation::GenerationParams {
         let mut builder = crate::generation::GenerationParams::builder();
 

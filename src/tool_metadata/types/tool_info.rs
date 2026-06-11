@@ -4,8 +4,8 @@
 //! These types use simple enums with separate ID fields for easy JSON encoding.
 //!
 //! Contains:
-//! - ToolSourceType: Simplified source enum for JSON serialization
-//! - UnifiedToolInfo: Flattened tool representation for API responses
+//! - `ToolSourceType`: Simplified source enum for JSON serialization
+//! - `UnifiedToolInfo`: Flattened tool representation for API responses
 
 use super::conflict::ToolSource;
 use super::unified::UnifiedTool;
@@ -16,10 +16,10 @@ use super::unified::UnifiedTool;
 
 /// Tool source type (simplified enum for JSON serialization)
 ///
-/// Uses a simple enum with a separate source_id field for easy JSON encoding.
+/// Uses a simple enum with a separate `source_id` field for easy JSON encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSourceType {
-    /// Built-in native capabilities (Search, WebFetch)
+    /// Built-in native capabilities (Search, `WebFetch`)
     Native,
     /// System builtin commands (/search, /webfetch)
     Builtin,
@@ -80,7 +80,7 @@ impl ToolSourceType {
 
 /// Unified tool representation for API responses
 ///
-/// This is a flattened version of UnifiedTool for Gateway JSON-RPC.
+/// This is a flattened version of `UnifiedTool` for Gateway JSON-RPC.
 #[derive(Debug, Clone)]
 pub struct UnifiedToolInfo {
     /// Unique identifier (e.g., "native:search")
@@ -101,7 +101,7 @@ pub struct UnifiedToolInfo {
     pub is_active: bool,
     /// Whether requires user confirmation
     pub requires_confirmation: bool,
-    /// Safety level label (ReadOnly, Reversible, Low Risk, High Risk)
+    /// Safety level label (`ReadOnly`, Reversible, Low Risk, High Risk)
     pub safety_level: String,
     /// Parent service name (for MCP sub-tools)
     pub service_name: Option<String>,

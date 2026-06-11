@@ -1,4 +1,4 @@
-//! Per-(from, to-set) message aggregation — ClawTeam RuntimeRouter parity.
+//! Per-(from, to-set) message aggregation — `ClawTeam` `RuntimeRouter` parity.
 //!
 //! Wraps a [`MessageRouter`] with a small in-memory state machine that
 //! coalesces same-key messages arriving within a time window into a single
@@ -36,7 +36,7 @@ use crate::sync_primitives::Arc;
 // Config + key types
 // =============================================================================
 
-/// Throttle knobs. Defaults come from ClawTeam's RuntimeRouter: 500 ms window,
+/// Throttle knobs. Defaults come from `ClawTeam`'s `RuntimeRouter`: 500 ms window,
 /// hard cap at 50 messages per batch.
 #[derive(Debug, Clone)]
 pub struct AggregatorConfig {
@@ -65,7 +65,7 @@ struct BatchKey {
     from_agent: String,
     to_sorted: Vec<String>,
     cc_sorted: Vec<String>,
-    /// Stringified MessageType — avoids hand-rolling Hash on the Custom(String) variant.
+    /// Stringified `MessageType` — avoids hand-rolling Hash on the Custom(String) variant.
     msg_type: String,
     subject: String,
 }
@@ -250,7 +250,7 @@ impl Aggregator {
 
 /// Combine N same-key requests into one. Content lines are joined with a
 /// blank-line separator so the receiver sees a clear delimiter between
-/// batched chunks. Attachments + reply_to are unioned across the batch
+/// batched chunks. Attachments + `reply_to` are unioned across the batch
 /// (dedup-aware so identical re-sends collapse cleanly).
 fn merge_requests(reqs: Vec<SendRequest>) -> Option<SendRequest> {
     let mut iter = reqs.into_iter();

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 /// Media Generation Provider abstraction for Aleph
 ///
 /// This module defines the `GenerationProvider` trait which provides a unified interface
-/// for different media generation backends (DALL-E, Stable Diffusion, Runway, ElevenLabs, etc.).
+/// for different media generation backends (DALL-E, Stable Diffusion, Runway, `ElevenLabs`, etc.).
 ///
 /// # Architecture
 ///
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 /// - `Image`: Static images (DALL-E, Stable Diffusion, Midjourney)
 /// - `Video`: Video clips (Runway, Pika, Sora)
 /// - `Audio`: Music and sound (Suno, Udio)
-/// - `Speech`: Text-to-speech (ElevenLabs, OpenAI TTS)
+/// - `Speech`: Text-to-speech (`ElevenLabs`, `OpenAI` TTS)
 use std::future::Future;
 use std::pin::Pin;
 
@@ -69,7 +69,7 @@ pub use types::{
 
 /// Unified interface for media generation providers
 ///
-/// All media generation backends (DALL-E, Stable Diffusion, Runway, ElevenLabs, etc.)
+/// All media generation backends (DALL-E, Stable Diffusion, Runway, `ElevenLabs`, etc.)
 /// implement this trait to provide a consistent API for generating media content.
 ///
 /// # Thread Safety
@@ -200,7 +200,7 @@ pub trait GenerationProvider: Send + Sync {
     ///
     /// # Returns
     ///
-    /// Hex color string (e.g., "#10a37f" for OpenAI green)
+    /// Hex color string (e.g., "#10a37f" for `OpenAI` green)
     ///
     /// # Default Implementation
     ///
@@ -295,7 +295,7 @@ pub trait GenerationProvider: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(GenerationOutput)` - The edited image
-    /// * `Err(GenerationError)` - Various errors including UnsupportedFeatureError
+    /// * `Err(GenerationError)` - Various errors including `UnsupportedFeatureError`
     ///
     /// # Default Implementation
     ///
@@ -530,8 +530,8 @@ impl GenerationProvider for MockGenerationProvider {
 
 /// Create a mock generation provider for testing
 ///
-/// Returns an `Arc<dyn GenerationProvider>` wrapping a MockGenerationProvider.
-/// This is useful for testing services that require a GenerationProvider.
+/// Returns an `Arc<dyn GenerationProvider>` wrapping a `MockGenerationProvider`.
+/// This is useful for testing services that require a `GenerationProvider`.
 ///
 /// # Example
 ///

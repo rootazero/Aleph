@@ -1,13 +1,13 @@
 //! Identity Resolver - Layered identity resolution for AI embodiment
 //!
-//! This module provides the IdentityResolver that resolves identity from
+//! This module provides the `IdentityResolver` that resolves identity from
 //! multiple sources with configurable priority.
 //!
 //! # Priority Order (highest to lowest)
 //!
 //! 1. Session override - Runtime identity set programmatically
 //! 2. Global soul - `~/.aleph/soul.md`
-//! 3. Default - Empty SoulManifest
+//! 3. Default - Empty `SoulManifest`
 //!
 //! # Architecture
 //!
@@ -38,7 +38,7 @@ use super::soul::SoulManifest;
 /// Priority (highest to lowest):
 /// 1. Session override
 /// 2. Global soul (~/.aleph/soul.md)
-/// 3. Default (empty SoulManifest)
+/// 3. Default (empty `SoulManifest`)
 pub struct IdentityResolver {
     /// Global soul path (~/.aleph/soul.md)
     global_path: PathBuf,
@@ -93,7 +93,7 @@ impl IdentityResolver {
         &self.global_path
     }
 
-    /// Resolve the effective SoulManifest for current context
+    /// Resolve the effective `SoulManifest` for current context
     #[must_use]
     pub fn resolve(&self) -> SoulManifest {
         // Priority: Session > Global > Default

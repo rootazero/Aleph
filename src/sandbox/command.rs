@@ -1,4 +1,4 @@
-//! SandboxCommand, SandboxOutput, SandboxError.
+//! `SandboxCommand`, `SandboxOutput`, `SandboxError`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

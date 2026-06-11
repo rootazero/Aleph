@@ -28,7 +28,7 @@ pub const fn is_valid_veo2_duration(duration: u32) -> bool {
     duration >= VEO2_DURATION_RANGE.0 && duration <= VEO2_DURATION_RANGE.1
 }
 
-/// Parse API error response and convert to GenerationError
+/// Parse API error response and convert to `GenerationError`
 pub fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError {
     // Try to parse as Google API error format
     if let Ok(error_response) = serde_json::from_str::<GoogleErrorResponse>(body) {

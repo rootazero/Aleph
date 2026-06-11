@@ -1,7 +1,7 @@
-//! Projects a session event stream into message-shaped views for agent_loop.
+//! Projects a session event stream into message-shaped views for `agent_loop`.
 //!
-//! Phase 1 bridge: agent_loop used to read UnifiedMessage arrays from
-//! SessionManager; during the migration it reads events from SessionService
+//! Phase 1 bridge: `agent_loop` used to read `UnifiedMessage` arrays from
+//! `SessionManager`; during the migration it reads events from `SessionService`
 //! and projects them into the same shape here.
 
 use crate::session::events::{SessionEvent, SessionEventRecord};
@@ -20,7 +20,7 @@ pub enum MessageRole {
     System,
 }
 
-/// Turn a raw event stream into the message-view agent_loop expects.
+/// Turn a raw event stream into the message-view `agent_loop` expects.
 #[must_use]
 pub fn project_messages(events: &[SessionEventRecord]) -> Vec<ProjectedMessage> {
     events

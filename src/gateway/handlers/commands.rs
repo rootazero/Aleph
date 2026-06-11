@@ -90,7 +90,7 @@ const TOOL_NAMESPACES: &[&str] = &[
 
 /// Build a hierarchical tree from a flat list of tools.
 ///
-/// Tools with a known namespace prefix (e.g., "session_new") are grouped under
+/// Tools with a known namespace prefix (e.g., "`session_new`") are grouped under
 /// their namespace. Other tools are standalone commands.
 fn build_command_tree(tools: Vec<UnifiedTool>) -> Vec<CommandTreeNode> {
     // Group: namespace -> Vec<UnifiedTool>
@@ -192,7 +192,7 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-/// List all registered commands from ToolCatalog (tree structure)
+/// List all registered commands from `ToolCatalog` (tree structure)
 ///
 /// Returns a hierarchical command tree where dotted tool names
 /// are grouped under their namespace prefix.
@@ -267,7 +267,7 @@ pub struct ExecuteParams {
 /// Resolved command info returned by command.execute
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedCommandInfo {
-    /// Namespace prefix (e.g., "session" for "session_new")
+    /// Namespace prefix (e.g., "session" for "`session_new`")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
     /// Action/subcommand (e.g., "new")
@@ -364,7 +364,7 @@ async fn build_namespace_children(
 ///
 /// Parses a slash command input and returns the resolved command info.
 ///
-/// When the input is a namespace (e.g., "/session"), returns needs_interaction
+/// When the input is a namespace (e.g., "/session"), returns `needs_interaction`
 /// with available children. When the subcommand is wrong, returns an error
 /// with available children for correction.
 ///

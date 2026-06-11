@@ -1,4 +1,4 @@
-//! GuidelinesLayer — general operational guidelines (priority 1300)
+//! `GuidelinesLayer` — general operational guidelines (priority 1300)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

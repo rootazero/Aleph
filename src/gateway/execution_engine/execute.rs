@@ -861,7 +861,7 @@ where
 }
 
 /// 入队一次自主续跑 run（同一 session、同一 agent，给定 prompt）。
-/// 被 should_continue 续跑分支与 gate-failure 续跑分支共用——消除重复的
+/// 被 `should_continue` 续跑分支与 gate-failure 续跑分支共用——消除重复的
 /// `RunRequest` 构造与 `tokio::spawn` 样板。
 fn spawn_continuation_run(
     registry: Arc<crate::gateway::agent_instance::AgentRegistry>,

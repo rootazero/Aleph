@@ -192,7 +192,7 @@ impl AgentDefinitionResolver {
 
     /// Resolve workspace path for an agent.
     ///
-    /// Workspace directory name is always equal to agent_id (1:1 binding).
+    /// Workspace directory name is always equal to `agent_id` (1:1 binding).
     /// The `AgentDefinition.workspace` field is deprecated and ignored.
     pub fn resolve_workspace_path(
         &self,

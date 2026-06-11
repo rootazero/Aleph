@@ -8,11 +8,11 @@ use std::fmt;
 /// Tool category for UI grouping and filtering
 ///
 /// Tools are classified into 5 categories based on their source:
-/// - **Builtin**: Built-in rig-core tools (search, web_fetch, file_ops)
+/// - **Builtin**: Built-in rig-core tools (search, `web_fetch`, `file_ops`)
 /// - **Skills**: User-configured skills (instruction injection)
 /// - **Mcp**: MCP server tools (dynamically loaded)
 /// - **Custom**: User-defined custom tools
-/// - **GeneratedSkill**: Auto-generated from skill evolution (Skill Compiler)
+/// - **`GeneratedSkill`**: Auto-generated from skill evolution (Skill Compiler)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolCategory {

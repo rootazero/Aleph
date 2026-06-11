@@ -1,13 +1,13 @@
-//! SubagentProgress — domain types for tracking background subagent activity.
+//! `SubagentProgress` — domain types for tracking background subagent activity.
 //!
 //! Per P2 Stage F design (§3.2): structured progress events live in the agent
-//! layer (not LoopTraceEvent). Translated from child harness LoopTraceEvent
-//! emissions by ForwardingTraceSink (forwarding_trace_sink.rs) and stored in
+//! layer (not `LoopTraceEvent`). Translated from child harness `LoopTraceEvent`
+//! emissions by `ForwardingTraceSink` (`forwarding_trace_sink.rs`) and stored in
 //! BackgroundAgentTracker.progress (capped FIFO 50).
 
 use std::time::SystemTime;
 
-/// One step in a background subagent's run, surfaced to parent via check_status.
+/// One step in a background subagent's run, surfaced to parent via `check_status`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SubagentProgress {
     /// Child harness iteration index (matches LoopTraceEvent.iteration).
@@ -18,9 +18,9 @@ pub struct SubagentProgress {
     pub kind: ProgressKind,
     /// Tool being called (Some for ToolCalled/Returned; None otherwise).
     pub tool_name: Option<String>,
-    /// Tool execution duration in milliseconds (Some for ToolReturned).
+    /// Tool execution duration in milliseconds (Some for `ToolReturned`).
     pub latency_ms: Option<u64>,
-    /// First 200 chars of the tool's output preview (Some for ToolReturned).
+    /// First 200 chars of the tool's output preview (Some for `ToolReturned`).
     pub preview: Option<String>,
 }
 

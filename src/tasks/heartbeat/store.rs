@@ -1,10 +1,10 @@
-//! SQLite Store for Heartbeat Tasks
+//! `SQLite` Store for Heartbeat Tasks
 //!
-//! Persistent storage using SQLite with in-memory cache.
-//! The HeartbeatStore maintains a `Vec<HeartbeatTask>` in memory for fast
-//! access, and writes changes to SQLite on `persist()`.
+//! Persistent storage using `SQLite` with in-memory cache.
+//! The `HeartbeatStore` maintains a `Vec<HeartbeatTask>` in memory for fast
+//! access, and writes changes to `SQLite` on `persist()`.
 //!
-//! The HeartbeatStore is designed to be wrapped in a `tokio::sync::Mutex`
+//! The `HeartbeatStore` is designed to be wrapped in a `tokio::sync::Mutex`
 //! by the service layer.
 
 use rusqlite::{params, Connection};
@@ -26,7 +26,7 @@ pub struct HeartbeatStore {
 }
 
 impl HeartbeatStore {
-    /// Open (or create) the SQLite store at the given path.
+    /// Open (or create) the `SQLite` store at the given path.
     ///
     /// Creates the schema if needed and loads all tasks into memory.
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, String> {
@@ -54,7 +54,7 @@ impl HeartbeatStore {
         })
     }
 
-    /// Open an in-memory SQLite store (used for testing).
+    /// Open an in-memory `SQLite` store (used for testing).
     pub fn open_in_memory() -> Result<Self, String> {
         let conn = Connection::open_in_memory()
             .map_err(|e| format!("failed to open in-memory heartbeat DB: {e}"))?;

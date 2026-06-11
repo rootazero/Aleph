@@ -38,7 +38,7 @@ impl PairingEntry {
 /// Telegram channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelegramConfig {
-    /// Bot token from @BotFather
+    /// Bot token from @`BotFather`
     pub bot_token: String,
 
     /// Bot username (without @)

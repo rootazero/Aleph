@@ -1,4 +1,4 @@
-//! WeChat Channel iLink API Types
+//! `WeChat` Channel iLink API Types
 //!
 //! Deserializable from iLink Bot API responses.
 
@@ -52,7 +52,7 @@ pub const QR_TIMEOUT_MS: u64 = 120_000;
 /// Config timeout in milliseconds
 pub const CONFIG_TIMEOUT_MS: u64 = 10_000;
 
-/// GetUpdates response from iLink API
+/// `GetUpdates` response from iLink API
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GetUpdatesResponse {
     pub ret: i32,
@@ -130,7 +130,7 @@ impl<'de> Deserialize<'de> for MessageItem {
     }
 }
 
-/// Helper for deserializing MessageItem from iLink API (integer type field)
+/// Helper for deserializing `MessageItem` from iLink API (integer type field)
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct MessageItemHelper {
     #[serde(rename = "type")]

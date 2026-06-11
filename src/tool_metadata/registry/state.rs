@@ -8,7 +8,7 @@ use tracing::{debug, info};
 use super::super::types::{ToolSourceType, UnifiedTool};
 use super::types::ToolStorage;
 
-/// State management functionality for ToolCatalog
+/// State management functionality for `ToolCatalog`
 pub struct ToolState {
     tools: ToolStorage,
 }
@@ -47,11 +47,11 @@ impl ToolState {
         debug!("Cleared all tools from registry");
     }
 
-    /// Atomic refresh - build new HashMap and replace in one operation
+    /// Atomic refresh - build new `HashMap` and replace in one operation
     ///
     /// This method prevents the race condition where `clear()` and `register()`
     /// have a brief window of empty tool list. Instead, we build a completely
-    /// new HashMap with all tools, then atomically replace the old one.
+    /// new `HashMap` with all tools, then atomically replace the old one.
     ///
     /// # Arguments
     ///

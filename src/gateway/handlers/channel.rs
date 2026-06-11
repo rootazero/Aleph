@@ -136,18 +136,18 @@ pub fn store_and_strip_channel_secrets(
     count
 }
 
-/// Cached ToolCatalog for Telegram channel recreation.
+/// Cached `ToolCatalog` for Telegram channel recreation.
 ///
 /// When `channel.start` RPC recreates a Telegram channel from config,
-/// it needs to re-attach the ToolCatalog so slash commands are registered.
+/// it needs to re-attach the `ToolCatalog` so slash commands are registered.
 static TELEGRAM_TOOL_REGISTRY: OnceLock<Arc<crate::tool_metadata::ToolCatalog>> = OnceLock::new();
 
-/// Store ToolCatalog for use when recreating Telegram channels.
+/// Store `ToolCatalog` for use when recreating Telegram channels.
 pub fn set_telegram_tool_registry(registry: Arc<crate::tool_metadata::ToolCatalog>) {
     let _ = TELEGRAM_TOOL_REGISTRY.set(registry);
 }
 
-/// Get cached ToolCatalog for Telegram channel recreation.
+/// Get cached `ToolCatalog` for Telegram channel recreation.
 fn get_telegram_tool_registry() -> Option<Arc<crate::tool_metadata::ToolCatalog>> {
     TELEGRAM_TOOL_REGISTRY.get().cloned()
 }
@@ -221,7 +221,7 @@ fn status_to_string(status: ChannelStatus) -> String {
 ///
 /// Returns a list of all channels — both registered (running/stopped) instances
 /// from the registry AND pending channels that exist in config but haven't been
-/// instantiated yet (e.g. missing required fields like bot_token).
+/// instantiated yet (e.g. missing required fields like `bot_token`).
 pub async fn handle_list(
     request: JsonRpcRequest,
     registry: Arc<ChannelRegistry>,
@@ -493,7 +493,7 @@ pub async fn handle_stop(
     }
 }
 
-/// Handle channel.pairing_data RPC request
+/// Handle `channel.pairing_data` RPC request
 ///
 /// Returns pairing information (QR code or code) for a channel.
 pub async fn handle_pairing_data(

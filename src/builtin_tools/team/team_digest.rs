@@ -1,4 +1,4 @@
-//! TeamDigestTool — generate a summary of recent team activity.
+//! `TeamDigestTool` — generate a summary of recent team activity.
 
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
@@ -30,7 +30,7 @@ pub struct TeamDigestArgs {
     pub hours: u64,
 }
 
-/// Output from team_digest.
+/// Output from `team_digest`.
 #[derive(Debug, Serialize)]
 pub struct TeamDigestOutput {
     pub team_id: String,

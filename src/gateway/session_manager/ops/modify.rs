@@ -285,7 +285,7 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Patch session metadata (label, status, model, model_provider, metadata JSON)
+    /// Patch session metadata (label, status, model, `model_provider`, metadata JSON)
     pub async fn patch_session(
         &self,
         key: &SessionKey,

@@ -24,7 +24,7 @@ use super::{BuiltinToolConfig, ToolRegistry};
 /// `session_key_str` follows the canonical form `agent:<id>:<rest>` (see
 /// [`crate::routing::session_key::SessionKey::to_key_string`]). A naive
 /// `.split(':').next()` would return the literal `"agent"` namespace
-/// prefix instead of the agent_id, silently misrouting per-agent state
+/// prefix instead of the `agent_id`, silently misrouting per-agent state
 /// (e.g. `RememberTool` writing to `~/.aleph/agents/agent/MEMORY.md`
 /// instead of `~/.aleph/agents/<id>/MEMORY.md`). Going through
 /// `SessionKey::from_key_string` keeps the parser in lock-step with the
@@ -80,7 +80,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) file_edit_tool: crate::builtin_tools::FileEditTool,
     /// V4A multi-file structured patch tool instance
     pub(crate) apply_patch_tool: crate::builtin_tools::ApplyPatchTool,
-    /// Bash execution tool instance (wraps CodeExecTool for shell commands)
+    /// Bash execution tool instance (wraps `CodeExecTool` for shell commands)
     pub(crate) bash_tool: crate::builtin_tools::BashExecTool,
     /// Code execution tool instance
     pub(crate) code_exec_tool: crate::builtin_tools::CodeExecTool,
@@ -110,7 +110,7 @@ pub struct BuiltinToolRegistry {
     /// Doctor tool instance (self-diagnosis; carries live config + vault
     /// handles so the engine can probe provider connectivity at runtime)
     pub(crate) doctor_tool: crate::builtin_tools::DoctorTool,
-    /// Vault store tool instance (optional - requires SharedTokenManager)
+    /// Vault store tool instance (optional - requires `SharedTokenManager`)
     pub(crate) vault_store_tool: Option<crate::builtin_tools::VaultStoreTool>,
     /// Desktop bridge tool instance
     pub(crate) desktop_tool: crate::builtin_tools::DesktopTool,
@@ -145,7 +145,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) scratchpad_tool: crate::builtin_tools::ScratchpadTool,
     /// Standing-goal tool instance (persistent objective, R8).
     pub(crate) goal_tool: crate::builtin_tools::GoalTool,
-    /// Memory search tool instance (optional - requires memory_db + embedder)
+    /// Memory search tool instance (optional - requires `memory_db` + embedder)
     pub(crate) memory_search_tool: Option<crate::builtin_tools::MemorySearchTool>,
     /// Memory context provider — used by the `remember` tool to resolve the
     /// per-agent `CuratedMemoryStore`. Uses `OnceCell` for deferred injection:
@@ -154,33 +154,33 @@ pub struct BuiltinToolRegistry {
         Arc<tokio::sync::OnceCell<Arc<crate::thinker::MemoryContextProvider>>>,
     /// 集群节点登记表，启动后经 `set_node_registry` 注入；`node_invoke` 用它寻址。
     pub(crate) node_registry: Arc<tokio::sync::OnceCell<Arc<crate::cluster::NodeRegistry>>>,
-    /// Memory browse tool instance (optional - requires memory_db)
+    /// Memory browse tool instance (optional - requires `memory_db`)
     pub(crate) memory_browse_tool: Option<crate::builtin_tools::MemoryBrowseTool>,
-    /// Memory explore tool instance (optional - requires memory_db + embedder)
+    /// Memory explore tool instance (optional - requires `memory_db` + embedder)
     pub(crate) memory_explore_tool: Option<crate::builtin_tools::MemoryExploreTool>,
-    /// Memory timeline tool instance (optional - requires StateDatabase)
+    /// Memory timeline tool instance (optional - requires `StateDatabase`)
     pub(crate) memory_timeline_tool: Option<crate::builtin_tools::MemoryTimelineTool>,
     /// Phase 3 self-evolution path α — records user-correction signals into
-    /// raw_memory under aleph://correction/{id}. Optional because it requires
+    /// `raw_memory` under <aleph://correction/{id>}. Optional because it requires
     /// a memory backend (Arc<dyn RawMemoryStore>).
     pub(crate) flag_user_correction_tool: Option<crate::builtin_tools::FlagUserCorrectionTool>,
-    /// Shared workspace handle for memory tools — written by ExecutionEngine after workspace resolution
+    /// Shared workspace handle for memory tools — written by `ExecutionEngine` after workspace resolution
     pub(super) memory_workspace_handle: Option<Arc<RwLock<String>>>,
     /// Tool catalog for meta tools (smart tool discovery)
     pub(crate) tool_catalog: Option<Arc<RwLock<ToolCatalog>>>,
     /// Gateway context for sessions tools (session.list, session.send).
-    /// Uses OnceCell for deferred injection: BuiltinToolRegistry is created before
-    /// ExecutionAdapter exists, but GatewayContext needs ExecutionAdapter.
+    /// Uses `OnceCell` for deferred injection: `BuiltinToolRegistry` is created before
+    /// `ExecutionAdapter` exists, but `GatewayContext` needs `ExecutionAdapter`.
     pub(crate) gateway_context: Arc<tokio::sync::OnceCell<Arc<GatewayContext>>>,
-    /// Session new tool (optional - requires SessionManager)
+    /// Session new tool (optional - requires `SessionManager`)
     pub(crate) session_new_tool: Option<crate::builtin_tools::sessions::SessionNewTool>,
-    /// Session set-topic tool (optional - requires SessionManager)
+    /// Session set-topic tool (optional - requires `SessionManager`)
     pub(crate) session_set_topic_tool: Option<crate::builtin_tools::sessions::SessionSetTopicTool>,
     // session_search is constructed on-the-fly from gateway_context (like session_list/session_send)
     // to enforce A2A policy filtering — no stored instance needed.
-    /// Cron management tool (optional - requires SharedCronService)
+    /// Cron management tool (optional - requires `SharedCronService`)
     pub(crate) cron_manage_tool: Option<crate::builtin_tools::cron_manage::CronManageTool>,
-    /// Heartbeat management tools (optional - require SharedHeartbeatService)
+    /// Heartbeat management tools (optional - require `SharedHeartbeatService`)
     pub(crate) heartbeat_list_tool:
         Option<crate::builtin_tools::heartbeat_manage::HeartbeatListTool>,
     pub(crate) heartbeat_create_tool:
@@ -193,7 +193,7 @@ pub struct BuiltinToolRegistry {
         Option<crate::builtin_tools::heartbeat_manage::HeartbeatToggleTool>,
     /// Heartbeat report tool — always available (used during L2 heartbeat execution)
     pub(crate) heartbeat_report_tool: crate::builtin_tools::heartbeat_manage::HeartbeatReportTool,
-    /// Agent management tools (optional - requires AgentRegistry + AgentEnvStore)
+    /// Agent management tools (optional - requires `AgentRegistry` + `AgentEnvStore`)
     pub(crate) agent_create_tool: Option<crate::builtin_tools::agent_manage::AgentCreateTool>,
 
     pub(crate) agent_list_tool: Option<crate::builtin_tools::agent_manage::AgentListTool>,
@@ -201,10 +201,10 @@ pub struct BuiltinToolRegistry {
     pub(crate) arena_create_tool: Option<crate::builtin_tools::arena::ArenaCreateTool>,
     pub(crate) arena_query_tool: Option<crate::builtin_tools::arena::ArenaQueryTool>,
     pub(crate) arena_settle_tool: Option<crate::builtin_tools::arena::ArenaSettleTool>,
-    /// agent_info — always available (read-only, depends only on the agent
+    /// `agent_info` — always available (read-only, depends only on the agent
     /// definition catalog, which is built unconditionally).
     pub(crate) agent_info_tool: crate::builtin_tools::agent_manage::AgentInfoTool,
-    /// Browser tools (always available, share a single ProfileManager)
+    /// Browser tools (always available, share a single `ProfileManager`)
     pub(crate) browser_open_tool: crate::builtin_tools::browser_tools::BrowserOpenTool,
     pub(crate) browser_click_tool: crate::builtin_tools::browser_tools::BrowserClickTool,
     pub(crate) browser_type_tool: crate::builtin_tools::browser_tools::BrowserTypeTool,
@@ -230,7 +230,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) browser_cookies_tool: crate::builtin_tools::browser_tools::BrowserCookiesTool,
     pub(crate) browser_session_tool: crate::builtin_tools::browser_tools::BrowserSessionTool,
     pub(crate) browser_profile_tool: crate::builtin_tools::browser_tools::BrowserProfileTool,
-    /// Shared session key handle for memory_search scope=current_session
+    /// Shared session key handle for `memory_search` `scope=current_session`
     pub(super) memory_session_key_handle: Option<Arc<RwLock<String>>>,
     /// Session context handle for agent management tools
     pub(super) session_context_handle:
@@ -244,7 +244,7 @@ pub struct BuiltinToolRegistry {
     pub(super) event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Extension manager for plugin tool execution
     pub(super) extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
-    /// ACP delegate tool (optional - requires AcpAdapterManager)
+    /// ACP delegate tool (optional - requires `AcpAdapterManager`)
     pub(crate) acp_delegate_tool: Option<crate::builtin_tools::acp_tools::AcpDelegateTool>,
     pub(crate) acp_switch_tool: Option<crate::builtin_tools::acp_tools::AcpSwitchTool>,
     pub(crate) acp_session_control_tool:
@@ -252,20 +252,20 @@ pub struct BuiltinToolRegistry {
     /// A2A outbound tools (optional - require the A2A subsystem enabled)
     pub(crate) a2a_delegate_tool: Option<crate::builtin_tools::a2a_tools::A2ADelegateTool>,
     pub(crate) a2a_agents_tool: Option<crate::builtin_tools::a2a_tools::A2AAgentsTool>,
-    /// ClawHub tool instance
+    /// `ClawHub` tool instance
     pub(crate) clawhub_tool: Option<crate::builtin_tools::clawhub::ClawHubTool>,
     pub(crate) gateway_route_tool: crate::builtin_tools::gateway_route::GatewayRouteTool,
-    /// Task coordination tools (optional — require CoordTaskStore)
+    /// Task coordination tools (optional — require `CoordTaskStore`)
     pub(crate) task_create_tool: Option<crate::builtin_tools::task_manage::TaskCreateTool>,
     pub(crate) task_update_tool: Option<crate::builtin_tools::task_manage::TaskUpdateTool>,
     pub(crate) task_list_tool: Option<crate::builtin_tools::task_manage::TaskListTool>,
     pub(crate) task_wait_tool: Option<crate::builtin_tools::task_manage::TaskWaitTool>,
-    /// Per-task handoff comments (optional — requires CoordTaskStore).
+    /// Per-task handoff comments (optional — requires `CoordTaskStore`).
     pub(crate) task_comment_tool: Option<crate::builtin_tools::team::TaskCommentTool>,
-    /// Task artifact tools (optional — require ArtifactStore)
+    /// Task artifact tools (optional — require `ArtifactStore`)
     pub(crate) task_submit_tool: Option<crate::builtin_tools::team::TaskSubmitTool>,
     pub(crate) task_read_artifact_tool: Option<crate::builtin_tools::team::TaskReadArtifactTool>,
-    /// Team management tools (optional — require TeamStore)
+    /// Team management tools (optional — require `TeamStore`)
     pub(crate) team_create_tool: Option<crate::builtin_tools::team::TeamCreateTool>,
     pub(crate) team_delegate_tool: Option<crate::builtin_tools::team::TeamDelegateTool>,
     pub(crate) team_status_tool: Option<crate::builtin_tools::team::TeamStatusTool>,
@@ -275,86 +275,86 @@ pub struct BuiltinToolRegistry {
     pub(crate) team_member_remove_tool: Option<crate::builtin_tools::team::TeamMemberRemoveTool>,
     pub(crate) team_digest_tool: Option<crate::builtin_tools::team::TeamDigestTool>,
     /// One-shot team instantiation from a TOML blueprint (optional — requires
-    /// TeamStore + CoordTaskStore + AgentRegistry + SessionStore).
+    /// `TeamStore` + `CoordTaskStore` + `AgentRegistry` + `SessionStore`).
     pub(crate) team_from_template_tool: Option<crate::builtin_tools::team::TeamFromTemplateTool>,
-    /// Unified team-snapshot tool (optional — requires TeamStore +
-    /// CoordTaskStore + SqliteSnapshotStore; the snapshot store is constructed
-    /// alongside coord_task_store in the boot path so they share a connection).
+    /// Unified team-snapshot tool (optional — requires `TeamStore` +
+    /// `CoordTaskStore` + `SqliteSnapshotStore`; the snapshot store is constructed
+    /// alongside `coord_task_store` in the boot path so they share a connection).
     pub(crate) team_snapshot_tool: Option<crate::builtin_tools::team::TeamSnapshotTool>,
-    /// Per-team token usage aggregation (optional — requires TeamStore +
-    /// StateDatabase; both are populated alongside the other team-coord
+    /// Per-team token usage aggregation (optional — requires `TeamStore` +
+    /// `StateDatabase`; both are populated alongside the other team-coord
     /// stores in the boot path).
     pub(crate) team_usage_tool: Option<crate::builtin_tools::team::TeamUsageTool>,
-    /// ACP-backed team member management (optional — requires TeamStore).
+    /// ACP-backed team member management (optional — requires `TeamStore`).
     /// Lets agents attach external coding CLIs (Claude Code, Codex, ...) as
     /// first-class team members via `team_acp_member`.
     pub(crate) team_acp_member_tool: Option<crate::builtin_tools::team::TeamAcpMemberTool>,
-    /// Workflow ↔ JSON Canvas bridge (optional — requires CoordTaskStore).
+    /// Workflow ↔ JSON Canvas bridge (optional — requires `CoordTaskStore`).
     pub(crate) team_workflow_canvas_tool:
         Option<crate::builtin_tools::team::TeamWorkflowCanvasTool>,
     /// Step-level workflow review (Phase C — openteams parity). Optional
-    /// because it requires a CoordTaskStore.
+    /// because it requires a `CoordTaskStore`.
     pub(crate) workflow_step_review_tool:
         Option<crate::builtin_tools::team::WorkflowStepReviewTool>,
     /// Workflow-template tool (save/list/describe/delete/run). Optional —
-    /// `run` requires a CoordTaskStore to materialise steps into the DAG.
+    /// `run` requires a `CoordTaskStore` to materialise steps into the DAG.
     pub(crate) workflow_tool: Option<crate::builtin_tools::workflow_tool::WorkflowTool>,
-    /// Admin-context task control (R3 — ClawTeam parity). Pause/resume/
+    /// Admin-context task control (R3 — `ClawTeam` parity). Pause/resume/
     /// retry/skip without going through reviewer flow. Optional —
-    /// requires a CoordTaskStore.
+    /// requires a `CoordTaskStore`.
     pub(crate) team_task_control_tool: Option<crate::builtin_tools::team::TeamTaskControlTool>,
-    /// Exit-journal tool (R3 — ClawTeam parity). The executing agent
+    /// Exit-journal tool (R3 — `ClawTeam` parity). The executing agent
     /// calls this on task wrap-up to leave a structured summary that
     /// feeds the unified trace + replay UI. Optional — requires a
-    /// CoordTaskStore.
+    /// `CoordTaskStore`.
     pub(crate) task_exit_journal_tool: Option<crate::builtin_tools::team::TaskExitJournalTool>,
-    /// Team messaging tools (optional — require MessageRouter / Inbox)
+    /// Team messaging tools (optional — require `MessageRouter` / Inbox)
     pub(crate) message_send_tool: Option<crate::builtin_tools::team::MessageSendTool>,
     pub(crate) inbox_read_tool: Option<crate::builtin_tools::team::InboxReadTool>,
-    /// Plan approval tools (optional — require MessageRouter + ArtifactStore + EventLogStore)
+    /// Plan approval tools (optional — require `MessageRouter` + `ArtifactStore` + `EventLogStore`)
     pub(crate) plan_submit_tool: Option<crate::builtin_tools::team::PlanSubmitTool>,
     pub(crate) plan_resolve_tool: Option<crate::builtin_tools::team::PlanResolveTool>,
-    /// Worker lifecycle tools (optional — require MessageRouter + TeamStore).
+    /// Worker lifecycle tools (optional — require `MessageRouter` + `TeamStore`).
     /// Three-tool triad: worker reports idle, worker requests shutdown,
     /// leader resolves the request. Pairs `MessageType::Idle` /
     /// `ShutdownRequest` / `ShutdownApproved` / `ShutdownRejected` with
-    /// auto-resolved leader recipient, mirroring ClawTeam's
+    /// auto-resolved leader recipient, mirroring `ClawTeam`'s
     /// `lifecycle idle / request-shutdown / approve-shutdown` commands.
     pub(crate) lifecycle_idle_tool: Option<crate::builtin_tools::team::LifecycleIdleTool>,
     pub(crate) lifecycle_request_shutdown_tool:
         Option<crate::builtin_tools::team::LifecycleRequestShutdownTool>,
     pub(crate) lifecycle_resolve_shutdown_tool:
         Option<crate::builtin_tools::team::LifecycleResolveShutdownTool>,
-    /// Collaborative session tools (optional — require SessionCoordinator / SessionStore)
+    /// Collaborative session tools (optional — require `SessionCoordinator` / `SessionStore`)
     pub(crate) session_collaborate_tool: Option<crate::builtin_tools::team::SessionCollaborateTool>,
     pub(crate) session_turn_tool: Option<crate::builtin_tools::team::SessionTurnTool>,
     pub(crate) session_read_tool: Option<crate::builtin_tools::team::SessionReadTool>,
     /// Google Meet tool — always available; holds an optional out-of-core
     /// transport bridge and reports "not configured" when absent.
     pub(crate) google_meet_tool: crate::builtin_tools::google_meet::GoogleMeetTool,
-    /// Skill management tools — always available (SkillSystem is always initialized)
+    /// Skill management tools — always available (`SkillSystem` is always initialized)
     pub(crate) skill_status_tool: crate::builtin_tools::skill_status::SkillStatusTool,
     pub(crate) skill_install_tool: crate::builtin_tools::skill_install::SkillInstallTool,
     pub(crate) skill_manage_tool: crate::builtin_tools::skill_manage::SkillManageTool,
-    /// Unified note management tool (optional - requires memory_db)
+    /// Unified note management tool (optional - requires `memory_db`)
     pub(crate) note_manage_tool: Option<crate::builtin_tools::note_manage::NoteManageTool>,
-    /// Session-complete tool (optional - requires memory_db)
+    /// Session-complete tool (optional - requires `memory_db`)
     pub(crate) session_complete_tool:
         Option<crate::builtin_tools::session_complete::SessionCompleteTool>,
-    /// Memory-reflect tool (optional - requires MemoryReflector, injected by Task 8)
+    /// Memory-reflect tool (optional - requires `MemoryReflector`, injected by Task 8)
     pub(crate) memory_reflect_tool: Option<crate::builtin_tools::memory_reflect::MemoryReflectTool>,
-    /// Channel registry for deferred injection (same pattern as gateway_context).
-    /// Used by channel_pairing tool.
+    /// Channel registry for deferred injection (same pattern as `gateway_context`).
+    /// Used by `channel_pairing` tool.
     pub(crate) channel_registry_cell: Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>,
     /// Clarification manager for deferred injection (same pattern as
-    /// channel_registry_cell). Used by the `ask_user` tool.
+    /// `channel_registry_cell`). Used by the `ask_user` tool.
     pub(crate) clarification_manager_cell:
         Arc<tokio::sync::OnceCell<Arc<crate::clarification::ClarificationManager>>>,
     /// Wiki orient tool (Spec 5 Task 12) — optional, requires wiki handle.
     pub(crate) note_orient_tool: Option<crate::builtin_tools::note_orient::NoteOrientTool>,
-    /// Note schema tool (Spec 5 Task 12) — always Some when note_memory_dir is set.
+    /// Note schema tool (Spec 5 Task 12) — always Some when `note_memory_dir` is set.
     pub(crate) note_schema_tool: Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
-    /// User profile tool (Spec 7 Task 9) — optional, requires ProfileSynthesizer.
+    /// User profile tool (Spec 7 Task 9) — optional, requires `ProfileSynthesizer`.
     pub(crate) user_profile_tool: Option<crate::builtin_tools::user_profile::UserProfileTool>,
     /// Live Config handle for the `config_audit` tool (security-posture audit).
     /// Built per-call from this handle, mirroring `create_tool_boxed`.
@@ -380,7 +380,7 @@ impl BuiltinToolRegistry {
         self.tools.insert(tool.name.clone(), tool);
     }
 
-    /// Extract caller's agent_id from the injected session context handle,
+    /// Extract caller's `agent_id` from the injected session context handle,
     /// falling back to `fallback` if the handle is missing, the lock cannot
     /// be acquired non-blockingly, or the key fails to parse.
     fn caller_agent_id(&self, fallback: &str) -> String {
@@ -389,10 +389,10 @@ impl BuiltinToolRegistry {
             .and_then(|h| h.try_read().ok()).map_or_else(|| fallback.to_string(), |ctx| parse_caller_agent_id(&ctx.session_key_str, fallback))
     }
 
-    /// Inject GatewayContext after construction (breaks circular dependency).
+    /// Inject `GatewayContext` after construction (breaks circular dependency).
     ///
-    /// BuiltinToolRegistry is created before ExecutionAdapter exists, but
-    /// GatewayContext needs ExecutionAdapter. This method allows deferred
+    /// `BuiltinToolRegistry` is created before `ExecutionAdapter` exists, but
+    /// `GatewayContext` needs `ExecutionAdapter`. This method allows deferred
     /// injection once all components are ready, enabling session.list and
     /// session.send tools.
     ///
@@ -403,15 +403,15 @@ impl BuiltinToolRegistry {
         }
     }
 
-    /// Get a handle to the GatewayContext OnceCell for deferred injection.
+    /// Get a handle to the `GatewayContext` `OnceCell` for deferred injection.
     ///
-    /// Used by agent_init to inject GatewayContext after ExecutionEngine creation.
+    /// Used by `agent_init` to inject `GatewayContext` after `ExecutionEngine` creation.
     #[must_use]
     pub fn gateway_context_cell(&self) -> Arc<tokio::sync::OnceCell<Arc<GatewayContext>>> {
         Arc::clone(&self.gateway_context)
     }
 
-    /// Inject ChannelRegistry after construction (deferred — channels are created after tools).
+    /// Inject `ChannelRegistry` after construction (deferred — channels are created after tools).
     ///
     /// Enables the `channel_pairing` tool for pairing code management.
     /// Takes `&self` (not `&mut self`) so it works through `Arc`.
@@ -421,7 +421,7 @@ impl BuiltinToolRegistry {
         }
     }
 
-    /// Get a handle to the ChannelRegistry OnceCell for deferred injection.
+    /// Get a handle to the `ChannelRegistry` `OnceCell` for deferred injection.
     #[must_use]
     pub fn channel_registry_cell(&self) -> Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>> {
         Arc::clone(&self.channel_registry_cell)
@@ -439,7 +439,7 @@ impl BuiltinToolRegistry {
         }
     }
 
-    /// Get a handle to the ClarificationManager OnceCell for deferred injection.
+    /// Get a handle to the `ClarificationManager` `OnceCell` for deferred injection.
     #[must_use]
     pub fn clarification_manager_cell(
         &self,

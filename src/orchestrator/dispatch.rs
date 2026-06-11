@@ -63,9 +63,9 @@ pub enum FlowStreamEvent {
 pub struct FlowOutcome {
     /// Final assistant-visible text for this flow run.
     pub final_text: String,
-    /// Number of assistant turns (AssistantMessage events) produced.
+    /// Number of assistant turns (`AssistantMessage` events) produced.
     pub iterations: u32,
-    /// Number of tool dispatches (ToolCallRequested events).
+    /// Number of tool dispatches (`ToolCallRequested` events).
     pub tool_calls_made: u32,
     /// Sum of provider-reported token usage across the flow run, populated
     /// from the harness cumulative counter (`AgentHarness::total_tokens`)
@@ -129,7 +129,7 @@ pub enum TerminateReason {
     ConsecutiveFailureCap { consecutive: u32 },
     /// Verifier veto count reached `MAX_VERIFIER_VETOS`.
     VerifierVeto { vetos: u32 },
-    /// The provider returned a response with no text, no tool_calls and no
+    /// The provider returned a response with no text, no `tool_calls` and no
     /// thinking on every attempt, including bounded retries. The user
     /// received no answer — distinct from a clean `Completed`.
     EmptyResponseExhausted,
@@ -269,7 +269,7 @@ pub fn escalate_partial_result(reason: TerminateReason, partial: Option<&str>) -
 /// Component semantics follow [`crate::providers::adapter::TokenUsage`]:
 /// `input` + `output` form the raw call cost; `cache_read` +
 /// `cache_creation` indicate Anthropic prompt cache behaviour; `reasoning`
-/// is the Gemini `thoughtsTokenCount` / OpenAI o-series reasoning count
+/// is the Gemini `thoughtsTokenCount` / `OpenAI` o-series reasoning count
 /// (Anthropic folds it into `output`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TokenBreakdown {
@@ -317,7 +317,7 @@ impl TokenBreakdown {
 /// field; the timeline is the missing aggregation seam.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ToolInvocation {
-    /// Provider-supplied tool_use id (correlates with the matching
+    /// Provider-supplied `tool_use` id (correlates with the matching
     /// `FlowStreamEvent::ToolCallStart`).
     pub id: String,
     /// Resolved tool name (`bash`, `web_search`, …).

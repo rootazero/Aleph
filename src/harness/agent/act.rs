@@ -82,7 +82,7 @@ fn resolve_effective_budget(
 }
 
 impl AgentHarness {
-    /// Act phase: execute each tool_call sequentially, emitting a
+    /// Act phase: execute each `tool_call` sequentially, emitting a
     /// `ToolCallRequested` event before every call and either a `ToolResult`
     /// or `ToolError` event after.
     ///

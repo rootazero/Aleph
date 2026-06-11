@@ -1,6 +1,6 @@
-//! Builder for ReplicateProvider
+//! Builder for `ReplicateProvider`
 //!
-//! Provides a fluent interface for constructing a ReplicateProvider with
+//! Provides a fluent interface for constructing a `ReplicateProvider` with
 //! custom configuration.
 
 use super::constants::DEFAULT_ENDPOINT;
@@ -12,9 +12,9 @@ use std::time::Duration;
 
 use super::constants::DEFAULT_TIMEOUT_SECS;
 
-/// Builder for ReplicateProvider
+/// Builder for `ReplicateProvider`
 ///
-/// Provides a fluent interface for constructing a ReplicateProvider with
+/// Provides a fluent interface for constructing a `ReplicateProvider` with
 /// custom configuration.
 ///
 /// # Example
@@ -74,7 +74,7 @@ impl ReplicateProviderBuilder {
         self
     }
 
-    /// Build the ReplicateProvider
+    /// Build the `ReplicateProvider`
     #[must_use]
     pub fn build(self) -> ReplicateProvider {
         let client = Client::builder()

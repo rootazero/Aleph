@@ -1,6 +1,6 @@
-//! TeamUsageTool — per-team provider token aggregation.
+//! `TeamUsageTool` — per-team provider token aggregation.
 //!
-//! Sister to the `teams.usage` RPC handler: both walk the same SQLite
+//! Sister to the `teams.usage` RPC handler: both walk the same `SQLite`
 //! `task_traces` table for `ProviderUsage` events filtered to the agents
 //! belonging to a given team. The tool surface (R8) lets the LLM ask
 //! "how much have we spent in this team this week?" via natural language;
@@ -74,7 +74,7 @@ pub struct TeamUsageOutput {
 pub struct TeamUsageTool {
     team_store: Arc<dyn TeamStore>,
     state_db: Arc<StateDatabase>,
-    /// Injected by ExecutionEngine before each call (for audit logging only).
+    /// Injected by `ExecutionEngine` before each call (for audit logging only).
     pub current_agent_id: String,
 }
 

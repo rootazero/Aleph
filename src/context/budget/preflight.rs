@@ -1,4 +1,4 @@
-//! PreflightPipeline — async stage execution before the main compaction pipeline.
+//! `PreflightPipeline` — async stage execution before the main compaction pipeline.
 //!
 //! Unlike the synchronous `CompactionStage` trait in `pipeline.rs`, preflight
 //! stages are async because later implementations (e.g. Autocompact) will call

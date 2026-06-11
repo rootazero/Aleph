@@ -3,7 +3,7 @@
 //! Guest Invitation Management
 //!
 //! Manages the creation and activation of guest invitations with a 15-minute expiry.
-//! Invitations are one-time use only and tracked in-memory using DashMap.
+//! Invitations are one-time use only and tracked in-memory using `DashMap`.
 
 use crate::sync_primitives::Arc;
 use dashmap::DashMap;

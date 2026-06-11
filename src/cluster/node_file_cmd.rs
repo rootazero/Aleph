@@ -29,7 +29,7 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 
 /// 把请求里的 `path` 解析进节点 workspace jail。相对路径 join workspace；
 /// 任何最终 canonical 路径必须仍在 workspace 之下（绝对路径越界 → 拒）。
-/// 复用 file_ops 的 canonicalize + deny-list，再补一道 containment 闸门
+/// 复用 `file_ops` 的 canonicalize + deny-list，再补一道 containment 闸门
 /// （`check_and_resolve_path` 本身不强制 containment，只用 base 解析相对路径）。
 fn resolve_in_jail(path: &str, workspace_dir: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(workspace_dir)

@@ -15,7 +15,7 @@
 //!   They encode patterns (exit code, repetition count) a stronger
 //!   model would never trigger and require zero LLM calls of their
 //!   own. This satisfies R10's Future-Proof Test.
-//! - **JudgeVerifier and ComputationalVerifier are permanently
+//! - **`JudgeVerifier` and `ComputationalVerifier` are permanently
 //!   prohibited.** The prompt-driven verification model
 //!   (`VERDICT: PASS|FAIL|PARTIAL` in `src/thinker/layers/agent_role.rs`)
 //!   is the sole source of truth for completion judgment, per R7

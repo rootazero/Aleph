@@ -6,10 +6,10 @@ use crate::gateway::router::SessionKey;
 use aleph_protocol::{GuestScope, IdentityContext, Role};
 
 impl SessionManager {
-    /// Get IdentityContext for a session
+    /// Get `IdentityContext` for a session
     ///
     /// Retrieves the session's identity metadata from the database and constructs
-    /// an IdentityContext. Falls back to Owner identity if metadata is missing or invalid.
+    /// an `IdentityContext`. Falls back to Owner identity if metadata is missing or invalid.
     pub async fn get_identity_context(
         &self,
         session_key: &str,

@@ -110,12 +110,12 @@ const fn default_jitter_factor() -> f64 {
 }
 
 impl RetryPolicy {
-    /// Get initial backoff as std::time::Duration
+    /// Get initial backoff as `std::time::Duration`
     pub const fn initial_backoff_duration(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.initial_backoff_ms)
     }
 
-    /// Get max backoff as std::time::Duration
+    /// Get max backoff as `std::time::Duration`
     pub const fn max_backoff_duration(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.max_backoff_ms)
     }

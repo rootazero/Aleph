@@ -44,7 +44,7 @@
 //!   `msg.author.id == bot_self_id` (cached from `ready()`) still
 //!   hard-filters. Foreign bots (`msg.author.bot && !is_self`) now flow
 //!   through with `BotAuthored`.
-//! - **Other adapters** (Matrix / Feishu / WhatsApp / IRC / etc.): not opted
+//! - **Other adapters** (Matrix / Feishu / `WhatsApp` / IRC / etc.): not opted
 //!   in yet. Each can be enabled by pushing `MessageMeta::BotAuthored` in
 //!   its converter when the upstream payload marks the sender as a bot.
 //!

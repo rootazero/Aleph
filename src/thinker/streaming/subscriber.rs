@@ -145,7 +145,7 @@ impl StreamSubscriber {
     }
 }
 
-/// Builder for StreamSubscriber
+/// Builder for `StreamSubscriber`
 pub struct StreamSubscriberBuilder {
     subscriber: StreamSubscriber,
 }

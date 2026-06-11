@@ -1,10 +1,10 @@
 //! Spec B — `on_session_end` hook handler. Produces (or skips) a
-//! `/end-summary` RawMemory when a session truly ends.
+//! `/end-summary` `RawMemory` when a session truly ends.
 //!
 //! Behaviour priority:
 //!   1. Short-circuit if /end-summary already exists.
-//!   2. Reuse highest-depth aleph://session/{sid}/d{depth}/{seq} fact (zero-LLM).
-//!   3. Fall back to SummarySynthesizer::lazy_for (one LLM call).
+//!   2. Reuse highest-depth <aleph://session/{sid}/d{depth}/{seq>} fact (zero-LLM).
+//!   3. Fall back to `SummarySynthesizer::lazy_for` (one LLM call).
 
 use crate::sync_primitives::Arc;
 
@@ -42,7 +42,7 @@ impl SessionEndSummarizer {
         Ok(())
     }
 
-    /// Returns a freshly-constructed RawMemory at /end-summary path, with
+    /// Returns a freshly-constructed `RawMemory` at /end-summary path, with
     /// content reused from the highest-depth d{depth}/{seq} row in this
     /// session. Returns Ok(None) if no d* rows exist.
     async fn reuse_highest_depth_fact(

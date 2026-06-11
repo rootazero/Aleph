@@ -14,7 +14,7 @@ use crate::tasks::shared::schedule::{
 
 // ── Schedule computation ─────────────────────────────────────────────
 
-/// Compute next_run_at_ms for a job based on its schedule kind and current time.
+/// Compute `next_run_at_ms` for a job based on its schedule kind and current time.
 ///
 /// Dispatches to the appropriate schedule function:
 /// - `Every` → anchor-aligned interval
@@ -65,7 +65,7 @@ pub fn compute_next_run_for_job(job: &CronJob, now_ms: i64) -> Option<i64> {
     }
 }
 
-/// Full recompute: always advance next_run_at_ms to a future value.
+/// Full recompute: always advance `next_run_at_ms` to a future value.
 ///
 /// Called by add/update/toggle operations that change the schedule.
 /// The result is `>= now` — a job whose anchor equals `now` fires immediately.
@@ -94,7 +94,7 @@ pub fn advance_next_run<C: Clock>(job: &mut CronJob, clock: &C) {
     job.state.next_run_at_ms = next;
 }
 
-/// Maintenance recompute: ONLY fill missing next_run_at_ms.
+/// Maintenance recompute: ONLY fill missing `next_run_at_ms`.
 ///
 /// Called by timer tick and phase 3 writeback. **CRITICAL**: never modifies
 /// an existing value — this prevents the timer loop from accidentally

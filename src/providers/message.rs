@@ -63,9 +63,9 @@ pub enum ContentBlock {
     ///
     /// `signature` is the opaque verifier returned by Anthropic-compatible APIs
     /// alongside the thinking content. It is `None` for providers that do not
-    /// emit a signature (Gemini, OpenAI). Anthropic requires a signed thinking
+    /// emit a signature (Gemini, `OpenAI`). Anthropic requires a signed thinking
     /// block to be replayed verbatim on subsequent turns whenever the same
-    /// assistant message also contains tool_use blocks.
+    /// assistant message also contains `tool_use` blocks.
     Thinking {
         thinking: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -78,7 +78,7 @@ pub enum ContentBlock {
         arguments: Value,
         /// Gemini 3 `thoughtSignature` for this call — an opaque token replayed
         /// verbatim to Gemini on later turns so the model's reasoning chain
-        /// stays intact. `None` for unsigned providers (Anthropic, OpenAI,
+        /// stays intact. `None` for unsigned providers (Anthropic, `OpenAI`,
         /// older Gemini). Mirrors the `signature` field on the `Thinking`
         /// variant.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -150,7 +150,7 @@ impl UnifiedMessage {
         }
     }
 
-    /// Build an Assistant message from a ProviderResponse
+    /// Build an Assistant message from a `ProviderResponse`
     #[must_use]
     pub fn from_provider_response(resp: &super::adapter::ProviderResponse) -> Self {
         let mut content = Vec::new();
@@ -247,15 +247,15 @@ impl UnifiedMessage {
         matches!(self, Self::User { .. })
     }
 
-    /// Returns true if this is a ToolResult message.
+    /// Returns true if this is a `ToolResult` message.
     #[must_use]
     pub const fn is_tool_result(&self) -> bool {
         matches!(self, Self::ToolResult { .. })
     }
 
-    /// Extract (tool_name, content_text) from a ToolResult message.
+    /// Extract (`tool_name`, `content_text`) from a `ToolResult` message.
     ///
-    /// Returns `None` if this is not a ToolResult.
+    /// Returns `None` if this is not a `ToolResult`.
     #[must_use]
     pub fn tool_result_info(&self) -> Option<(&str, String)> {
         match self {
@@ -277,9 +277,9 @@ impl UnifiedMessage {
         }
     }
 
-    /// Replace the content of a ToolResult message with a single text block.
+    /// Replace the content of a `ToolResult` message with a single text block.
     ///
-    /// No-op if this is not a ToolResult.
+    /// No-op if this is not a `ToolResult`.
     pub fn replace_tool_result_content(&mut self, new_content: String) {
         if let Self::ToolResult { content, .. } = self {
             *content = vec![ContentBlock::Text {
@@ -352,7 +352,7 @@ pub fn transform_messages(
 }
 
 /// Enforce the tool-call/tool-result pairing invariant that every provider
-/// (Anthropic, OpenAI, …) requires: an assistant `ToolCall` must be answered by
+/// (Anthropic, `OpenAI`, …) requires: an assistant `ToolCall` must be answered by
 /// a `ToolResult`, and a `ToolResult` must reference a `ToolCall` that exists in
 /// the history. Histories that violate either side are rejected by the provider
 /// API. Compaction, truncation, session-splits, and interrupted turns can all

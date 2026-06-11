@@ -1,6 +1,6 @@
-//! HTTP Server for ControlPlane
+//! HTTP Server for `ControlPlane`
 //!
-//! Provides HTTP routes for serving ControlPlane static assets.
+//! Provides HTTP routes for serving `ControlPlane` static assets.
 
 use axum::{
     extract::Path as AxumPath,
@@ -12,7 +12,7 @@ use axum::{
 
 use super::assets::ControlPlaneAssets;
 
-/// Create the ControlPlane router
+/// Create the `ControlPlane` router
 pub fn create_control_plane_router() -> Router {
     Router::new()
         .route("/", get(serve_index))

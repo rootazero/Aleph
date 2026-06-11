@@ -1,6 +1,6 @@
 //! Plugin Registry Implementation
 //!
-//! Central storage for all plugin registrations. The PluginRegistry maintains
+//! Central storage for all plugin registrations. The `PluginRegistry` maintains
 //! a comprehensive registry of all plugins and their registered components:
 //! tools, hooks, services, in-chat commands, skills, agents.
 
@@ -14,7 +14,7 @@ use crate::extension::types::{HookEvent, PluginRecord, PluginStatus};
 
 /// Central registry for all plugin registrations.
 ///
-/// The PluginRegistry provides:
+/// The `PluginRegistry` provides:
 /// - Plugin lifecycle management (register, enable, disable, unregister)
 /// - Component registration (tools, hooks, services, commands, skills, agents)
 /// - Query methods for accessing registered components

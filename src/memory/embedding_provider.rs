@@ -29,7 +29,7 @@ pub trait EmbeddingProvider: Send + Sync {
 /// Truncate embedding to target dimension and L2 normalize.
 ///
 /// Used when a remote model returns vectors larger than the configured
-/// storage dimension. Borrowed from OpenViking's design.
+/// storage dimension. Borrowed from `OpenViking`'s design.
 ///
 /// If `embedding.len() <= target_dim`, returns the embedding unchanged.
 #[must_use]
@@ -48,7 +48,7 @@ pub fn truncate_and_normalize(embedding: Vec<f32>, target_dim: usize) -> Vec<f32
 
 /// Remote embedding provider using OpenAI-compatible API
 ///
-/// Works with SiliconFlow, OpenAI, Ollama, and any service
+/// Works with `SiliconFlow`, `OpenAI`, Ollama, and any service
 /// that implements the `/v1/embeddings` endpoint.
 pub struct RemoteEmbeddingProvider {
     client: reqwest::Client,
@@ -65,7 +65,7 @@ pub struct RemoteEmbeddingProvider {
 }
 
 impl RemoteEmbeddingProvider {
-    /// Create from EmbeddingProviderConfig
+    /// Create from `EmbeddingProviderConfig`
     pub fn from_config(config: &EmbeddingProviderConfig) -> Result<Self, AlephError> {
         // API key is populated from vault at runtime
         let api_key = config.api_key.clone().unwrap_or_default();
@@ -264,7 +264,7 @@ impl EmbeddingProvider for RemoteEmbeddingProvider {
     }
 }
 
-/// Create an EmbeddingProvider from a provider config
+/// Create an `EmbeddingProvider` from a provider config
 pub fn create_provider(
     config: &EmbeddingProviderConfig,
 ) -> Result<Arc<dyn EmbeddingProvider>, AlephError> {

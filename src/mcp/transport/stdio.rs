@@ -490,9 +490,9 @@ async fn stderr_loop(stderr: ChildStderr, server_name: String) {
     }
 }
 
-/// Implementation of the McpTransport trait for StdioTransport
+/// Implementation of the `McpTransport` trait for `StdioTransport`
 ///
-/// This adapts the existing StdioTransport methods to the unified transport interface,
+/// This adapts the existing `StdioTransport` methods to the unified transport interface,
 /// enabling transport-agnostic connection management in the MCP client.
 #[async_trait]
 impl McpTransport for StdioTransport {

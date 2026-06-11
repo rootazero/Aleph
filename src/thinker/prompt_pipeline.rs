@@ -1,4 +1,4 @@
-//! PromptPipeline — composable prompt assembly engine
+//! `PromptPipeline` — composable prompt assembly engine
 //!
 //! The pipeline holds an ordered list of [`PromptLayer`] implementations
 //! and executes them in priority order for a given [`AssemblyPath`].
@@ -260,45 +260,45 @@ impl PromptPipeline {
     /// Layer order (by priority):
     ///
     /// **Stable zone** (cacheable):
-    ///   50  SoulLayer
-    ///   55  AgentRoleLayer
-    ///   60  CuratedMemoryLayer
-    ///   75  ProfileLayer
-    ///  100  RoleLayer
-    ///  300  EnvironmentLayer
-    ///  400  RuntimeCapabilitiesLayer
-    ///  500  ToolsLayer + HydratedToolsLayer
-    ///  550  ToolUsageGrammarLayer
-    ///  600  SecurityLayer
-    ///  700  ProtocolTokensLayer
-    ///  710  HeartbeatLayer
-    ///  800  OperationalGuidelinesLayer
-    ///  810  ProviderGuidanceLayer
-    ///  820  SessionBudgetLayer
-    ///  900  CitationStandardsLayer
-    /// 1000  GenerationModelsLayer
-    /// 1050  SkillInstructionsLayer
-    /// 1100  SpecialActionsLayer
-    /// 1300  GuidelinesLayer
-    /// 1350  ThinkingGuidanceLayer
-    /// 1400  SkillModeLayer
-    /// 1500  CustomInstructionsLayer
-    /// 1600  LanguageLayer
+    ///   50  `SoulLayer`
+    ///   55  `AgentRoleLayer`
+    ///   60  `CuratedMemoryLayer`
+    ///   75  `ProfileLayer`
+    ///  100  `RoleLayer`
+    ///  300  `EnvironmentLayer`
+    ///  400  `RuntimeCapabilitiesLayer`
+    ///  500  `ToolsLayer` + `HydratedToolsLayer`
+    ///  550  `ToolUsageGrammarLayer`
+    ///  600  `SecurityLayer`
+    ///  700  `ProtocolTokensLayer`
+    ///  710  `HeartbeatLayer`
+    ///  800  `OperationalGuidelinesLayer`
+    ///  810  `ProviderGuidanceLayer`
+    ///  820  `SessionBudgetLayer`
+    ///  900  `CitationStandardsLayer`
+    /// 1000  `GenerationModelsLayer`
+    /// 1050  `SkillInstructionsLayer`
+    /// 1100  `SpecialActionsLayer`
+    /// 1300  `GuidelinesLayer`
+    /// 1350  `ThinkingGuidanceLayer`
+    /// 1400  `SkillModeLayer`
+    /// 1500  `CustomInstructionsLayer`
+    /// 1600  `LanguageLayer`
     ///
     /// **Dynamic zone** (per-request, not cacheable):
-    /// 1700  InboundContextLayer
-    /// 1702  ChainContextLayer
-    /// 1704  AgentCatalogLayer
-    /// 1705  McpInstructionsLayer
-    /// 1710  VoiceModeLayer
-    /// 1720  RuntimeContextLayer
-    /// 1730  IdentityFilesLayer
-    /// 1735  ExtraFilesLayer
-    /// 1740  MemoryAugmentationLayer
-    /// 1745  MemoryProtocolLayer
-    /// 1750  SessionContextGuideLayer
-    /// 1755  ExecutionPlanLayer
-    /// 1760  SessionResumeLayer
+    /// 1700  `InboundContextLayer`
+    /// 1702  `ChainContextLayer`
+    /// 1704  `AgentCatalogLayer`
+    /// 1705  `McpInstructionsLayer`
+    /// 1710  `VoiceModeLayer`
+    /// 1720  `RuntimeContextLayer`
+    /// 1730  `IdentityFilesLayer`
+    /// 1735  `ExtraFilesLayer`
+    /// 1740  `MemoryAugmentationLayer`
+    /// 1745  `MemoryProtocolLayer`
+    /// 1750  `SessionContextGuideLayer`
+    /// 1755  `ExecutionPlanLayer`
+    /// 1760  `SessionResumeLayer`
     #[must_use]
     pub fn default_layers() -> Self {
         Self::new(vec![

@@ -36,7 +36,7 @@ pub enum PermanentError {
 
 /// Provider-level error classification.
 ///
-/// Note: 400 InvalidRequest is intentionally excluded — it's request-specific,
+/// Note: 400 `InvalidRequest` is intentionally excluded — it's request-specific,
 /// not a provider health issue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderError {
@@ -133,7 +133,7 @@ impl ProviderHealth {
 /// Calculate cooldown duration with exponential backoff.
 ///
 /// - Base: 30s, doubles each consecutive failure, capped at 5 minutes
-/// - RateLimited with retry_after: uses max(retry_after, base_cooldown) for first failure
+/// - `RateLimited` with `retry_after`: uses `max(retry_after`, `base_cooldown`) for first failure
 fn calculate_cooldown(consecutive_failures: u32, transient: &TransientError) -> Duration {
     // For first RateLimited with retry_after, use max(retry_after, 30s)
     let base = if consecutive_failures == 1 {
@@ -161,7 +161,7 @@ fn calculate_cooldown(consecutive_failures: u32, transient: &TransientError) -> 
 // --- AlephError → ProviderError conversion ---
 
 impl From<&AlephError> for Option<ProviderError> {
-    /// Convert an AlephError to a ProviderError for health tracking.
+    /// Convert an `AlephError` to a `ProviderError` for health tracking.
     ///
     /// Returns None for errors that are request-specific (not provider-level).
     fn from(error: &AlephError) -> Self {
@@ -186,7 +186,7 @@ impl From<&AlephError> for Option<ProviderError> {
     }
 }
 
-/// Classify a ProviderError message into a health-relevant error.
+/// Classify a `ProviderError` message into a health-relevant error.
 ///
 /// - Messages containing 5xx status codes → Transient(ServerError)
 /// - Messages containing 404 + "model" → Permanent(ModelNotFound)

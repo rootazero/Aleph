@@ -1,4 +1,4 @@
-//! DoctorTool — LLM-facing self-diagnosis (and optional self-repair).
+//! `DoctorTool` — LLM-facing self-diagnosis (and optional self-repair).
 //!
 //! Lets the model answer "is my runtime healthy?" and, when asked, apply the
 //! same deterministic mechanical repairs as `aleph doctor --fix` (recreate a

@@ -1,4 +1,4 @@
-//! WeChatRuntime Core Polling Loop
+//! `WeChatRuntime` Core Polling Loop
 //!
 //! Implements the long-polling getupdates loop for receiving messages.
 

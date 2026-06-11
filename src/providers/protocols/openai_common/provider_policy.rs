@@ -1,7 +1,7 @@
 //! Provider-specific payload policy for OpenAI-compatible protocols.
 //!
 //! Detects endpoint provider class from base URL, then applies per-provider
-//! field filtering/injection for OpenAI Chat and Responses APIs.
+//! field filtering/injection for `OpenAI` Chat and Responses APIs.
 
 use std::collections::HashSet;
 
@@ -12,15 +12,15 @@ use std::collections::HashSet;
 /// Detected provider endpoint class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EndpointClass {
-    /// Official OpenAI API (api.openai.com)
+    /// Official `OpenAI` API (api.openai.com)
     OpenAiPublic,
-    /// OpenAI Codex (chatgpt.com)
+    /// `OpenAI` Codex (chatgpt.com)
     OpenAiCodex,
-    /// Azure OpenAI Service (*.openai.azure.com)
+    /// Azure `OpenAI` Service (*.openai.azure.com)
     AzureOpenAi,
     /// Anthropic public API (api.anthropic.com)
     AnthropicPublic,
-    /// DeepSeek native API (api.deepseek.com)
+    /// `DeepSeek` native API (api.deepseek.com)
     DeepSeekNative,
     /// Groq native API (api.groq.com)
     GroqNative,
@@ -32,7 +32,7 @@ pub enum EndpointClass {
     CerebrasNative,
     /// X.AI / Grok native API (api.x.ai / api.grok.x.ai)
     XAiNative,
-    /// OpenRouter (openrouter.ai)
+    /// `OpenRouter` (openrouter.ai)
     OpenRouter,
     /// Local endpoint (localhost / 127.0.0.1 / *.local)
     Local,

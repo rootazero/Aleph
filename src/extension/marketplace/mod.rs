@@ -430,7 +430,7 @@ fn read_installed_plugin_version(installed_path: &Path) -> Option<String> {
 /// * `force` is handled by the caller (always updates).
 /// * Equal versions → no update.
 /// * When both parse as semver, never downgrade (only update if strictly newer).
-/// * Otherwise any difference (CalVer, git SHA, `local`, missing-installed) is
+/// * Otherwise any difference (`CalVer`, git SHA, `local`, missing-installed) is
 ///   treated as "changed" and triggers an update, matching codex's
 ///   `IfVersionChanged` semantics.
 fn should_update(installed: Option<&str>, candidate: Option<&str>) -> bool {

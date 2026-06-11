@@ -6,7 +6,7 @@
 //!
 //! [`attempt_summary`](crate::tools::attempt_summary) is the sibling of this
 //! module: it aggregates **failures** (`SessionEvent::ToolError`) so the model
-//! sees "you've burned 3 search calls on rate_limited — climb the ladder".
+//! sees "you've burned 3 search calls on `rate_limited` — climb the ladder".
 //! It is blind to the *opposite* pathology: a tool that keeps **succeeding**
 //! but returns the **identical** payload every time.
 //!

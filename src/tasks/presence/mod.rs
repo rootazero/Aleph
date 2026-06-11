@@ -1,4 +1,4 @@
-//! PresenceReporter — periodic broadcast of this host's presence snapshot.
+//! `PresenceReporter` — periodic broadcast of this host's presence snapshot.
 //!
 //! Background task that ticks at `PresenceConfig::interval_secs`, collects
 //! `(hostname, username, platform, idle_seconds)` via the `SystemCapability`
@@ -116,7 +116,7 @@ impl PresenceReporter {
 }
 
 /// Normalize a `DesktopPlatform::platform_name()` ("macOS", "Linux",
-/// "Windows") to the lowercase tag used in PresenceSnapshot.
+/// "Windows") to the lowercase tag used in `PresenceSnapshot`.
 fn platform_tag(name: &str) -> String {
     name.to_ascii_lowercase()
 }

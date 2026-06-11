@@ -161,7 +161,7 @@ impl PiiEngine {
         }
     }
 
-    /// Compute an effective PrivacyConfig by applying platform overrides.
+    /// Compute an effective `PrivacyConfig` by applying platform overrides.
     fn effective_config(&self, platform: Option<&str>) -> PrivacyConfig {
         let mut cfg = self.config.clone();
         if let Some(p) = platform {

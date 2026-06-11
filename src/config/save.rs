@@ -13,7 +13,7 @@ impl Config {
     ///
     /// This method uses atomic write operation to prevent corruption:
     /// 1. Write to temporary file (.tmp suffix)
-    /// 2. fsync() to ensure data is on disk
+    /// 2. `fsync()` to ensure data is on disk
     /// 3. Atomic rename to target path
     ///
     /// This ensures that the config file is never in a partially written state,
@@ -220,8 +220,8 @@ impl Config {
     /// * `sections` - List of section names to update (e.g., ["trigger", "search.pii"])
     ///
     /// # How it works
-    /// 1. Read existing TOML file as raw toml::Value
-    /// 2. Serialize current Config to toml::Value
+    /// 1. Read existing TOML file as raw `toml::Value`
+    /// 2. Serialize current Config to `toml::Value`
     /// 3. Only copy specified sections from current to existing
     /// 4. Write back with atomic operation
     pub fn save_incremental(&self, sections: &[&str]) -> Result<()> {
@@ -231,7 +231,7 @@ impl Config {
     /// Save only specific sections to a specific config file path (incremental update)
     ///
     /// Same as `save_incremental` but allows specifying a custom file path.
-    /// Used by ConfigPatcher which may operate on a non-default config path.
+    /// Used by `ConfigPatcher` which may operate on a non-default config path.
     pub fn save_incremental_to_file<P: AsRef<Path>>(
         &self,
         path: P,

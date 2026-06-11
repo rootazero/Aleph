@@ -423,8 +423,8 @@ pub async fn handle_hooks_events(request: JsonRpcRequest) -> JsonRpcResponse {
 }
 
 /// Cheap check: try to parse the event name via the same serde path that
-/// user_settings uses. Accepts both snake_case (`before_tool_call`) and
-/// PascalCase aliases (`PreToolUse`).
+/// `user_settings` uses. Accepts both `snake_case` (`before_tool_call`) and
+/// `PascalCase` aliases (`PreToolUse`).
 fn is_known_event(name: &str) -> bool {
     let attempts = [
         format!("\"{name}\""),

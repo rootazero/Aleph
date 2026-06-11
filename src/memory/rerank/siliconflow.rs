@@ -1,4 +1,4 @@
-//! SiliconFlow reranking provider
+//! `SiliconFlow` reranking provider
 //!
 //! Uses the same API format as Jina (Bearer auth).
 //! API format: `{model, query, documents, top_n}` → `results[].{index, relevance_score}`
@@ -13,14 +13,14 @@ use crate::error::AlephError;
 
 const DEFAULT_API_BASE: &str = "https://api.siliconflow.cn/v1/rerank";
 
-/// SiliconFlow cross-encoder reranking provider
+/// `SiliconFlow` cross-encoder reranking provider
 pub struct SiliconFlowRerankProvider {
     client: Client,
     config: RerankConfig,
 }
 
 impl SiliconFlowRerankProvider {
-    /// Create a new SiliconFlow rerank provider
+    /// Create a new `SiliconFlow` rerank provider
     #[must_use]
     pub fn new(config: RerankConfig) -> Self {
         let client = Client::builder()

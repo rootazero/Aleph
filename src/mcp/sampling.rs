@@ -20,7 +20,7 @@ use crate::mcp::jsonrpc::mcp::{
 
 /// Callback for handling sampling requests
 ///
-/// Takes a SamplingRequest and returns a Future that resolves to a SamplingResponse.
+/// Takes a `SamplingRequest` and returns a Future that resolves to a `SamplingResponse`.
 pub type SamplingCallback = Box<
     dyn Fn(
             SamplingRequest,
@@ -66,7 +66,7 @@ impl SamplingHandler {
 
     /// Set the callback for handling sampling requests
     ///
-    /// The callback receives a SamplingRequest and should return a SamplingResponse.
+    /// The callback receives a `SamplingRequest` and should return a `SamplingResponse`.
     /// This is typically wired to the Thinker for LLM calls.
     pub async fn set_callback<F, Fut>(&self, callback: F)
     where
@@ -174,7 +174,7 @@ impl SamplingHandler {
         }
     }
 
-    /// Create an error response (still valid SamplingResponse with error text)
+    /// Create an error response (still valid `SamplingResponse` with error text)
     pub fn error_response(error: impl Into<String>) -> SamplingResponse {
         SamplingResponse {
             role: PromptRole::Assistant,
@@ -193,7 +193,7 @@ impl Default for SamplingHandler {
     }
 }
 
-/// Convert SamplingMessage to a format suitable for Thinker
+/// Convert `SamplingMessage` to a format suitable for Thinker
 ///
 /// Returns a vector of (role, content) tuples.
 #[must_use]

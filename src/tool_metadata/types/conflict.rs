@@ -4,10 +4,10 @@
 //! have the same name from different sources.
 //!
 //! Contains:
-//! - ToolPriority: Priority ordering for conflict resolution
-//! - ConflictInfo: Information about existing conflicting tool
-//! - ConflictResolution: Resolution strategy enum
-//! - ToolSource: Tool origin source enum
+//! - `ToolPriority`: Priority ordering for conflict resolution
+//! - `ConflictInfo`: Information about existing conflicting tool
+//! - `ConflictResolution`: Resolution strategy enum
+//! - `ToolSource`: Tool origin source enum
 
 use serde::{Deserialize, Serialize};
 

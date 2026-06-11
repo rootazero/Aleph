@@ -4,7 +4,7 @@
 //! delete, toggle, wake, runs.
 //!
 //! Each method has two variants:
-//! - `handle_xxx_stub`: stateless stubs returning fake/empty data (used in HandlerRegistry::new())
+//! - `handle_xxx_stub`: stateless stubs returning fake/empty data (used in `HandlerRegistry::new()`)
 //! - `handle_xxx`: real handlers that delegate to `HeartbeatService` via `SharedHeartbeatService`
 
 use serde_json::{json, Value};
@@ -28,7 +28,7 @@ fn extract_str(request: &JsonRpcRequest, key: &str) -> Option<String> {
     }
 }
 
-/// Serialize a HeartbeatTaskView to JSON
+/// Serialize a `HeartbeatTaskView` to JSON
 fn task_view_to_json(view: &HeartbeatTaskView) -> Value {
     json!({
         "id": view.id,
@@ -404,7 +404,7 @@ pub async fn handle_toggle(
 
 /// Handle heartbeat.wake RPC request (real)
 ///
-/// Manually triggers a heartbeat task by enqueuing a WakeRequest with UserAction priority.
+/// Manually triggers a heartbeat task by enqueuing a `WakeRequest` with `UserAction` priority.
 pub async fn handle_wake(
     request: JsonRpcRequest,
     service: SharedHeartbeatService,
@@ -457,7 +457,7 @@ pub async fn handle_wake(
 
 /// Handle heartbeat.runs RPC request (real)
 ///
-/// Returns the execution history from SQLite.
+/// Returns the execution history from `SQLite`.
 pub async fn handle_runs(
     request: JsonRpcRequest,
     service: SharedHeartbeatService,

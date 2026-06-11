@@ -38,7 +38,7 @@ const SESSION_HEADER: &str = "Mcp-Session-Id";
 /// HTTP transport configuration
 #[derive(Debug, Clone)]
 pub struct HttpTransportConfig {
-    /// Server URL (e.g., "https://example.com/mcp")
+    /// Server URL (e.g., "<https://example.com/mcp>")
     pub url: String,
     /// Custom HTTP headers (for auth tokens, etc.)
     pub headers: HashMap<String, String>,

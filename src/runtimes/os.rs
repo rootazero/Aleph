@@ -10,7 +10,7 @@ pub enum TargetOs {
     MacOs,
     Linux,
     Windows,
-    /// Matches MacOs or Linux
+    /// Matches `MacOs` or Linux
     AnyUnix,
     /// Matches any concrete OS
     AnyOs,

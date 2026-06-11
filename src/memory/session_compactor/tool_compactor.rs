@@ -187,7 +187,7 @@ pub fn compress_tool_result(tool_name: &str, content: &str) -> String {
 /// # Behaviour
 /// 1. If estimated tokens < threshold × budget → return immediately (no work).
 /// 2. Identify the fresh-tail partition; messages before it are candidates.
-/// 3. Iterate candidates oldest-first; for each consumed ToolResult, compress it.
+/// 3. Iterate candidates oldest-first; for each consumed `ToolResult`, compress it.
 /// 4. Stop as soon as total tokens drop below threshold × budget.
 pub fn compact_if_needed(
     messages: &mut [UnifiedMessage],

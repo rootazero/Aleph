@@ -1,4 +1,4 @@
-//! NoteWeave stage — weave orphan notes into the wiki link graph.
+//! `NoteWeave` stage — weave orphan notes into the wiki link graph.
 //!
 //! An orphan (zero outgoing AND zero incoming links) is invisible to graph
 //! expansion in `gather_related`, earns no `link_weight` in `NoteDecay`
@@ -41,7 +41,7 @@ Rules:
 - Output valid JSON only, no prose: {"links": ["[C1]", "[C4]"]}
 "#;
 
-/// NoteWeave stage. `max_per_cycle` caps LLM spend per dream cycle.
+/// `NoteWeave` stage. `max_per_cycle` caps LLM spend per dream cycle.
 pub struct NoteWeaveStage {
     pub max_per_cycle: usize,
 }

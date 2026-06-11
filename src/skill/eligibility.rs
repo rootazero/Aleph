@@ -65,10 +65,10 @@ impl EligibilityService {
     /// 1. `enabled` override — if explicitly `false`, immediately ineligible
     /// 2. `always` flag — if true, skip all remaining checks
     /// 3. OS check
-    /// 4. required_bins
-    /// 5. any_bins
-    /// 6. required_env
-    /// 7. required_config
+    /// 4. `required_bins`
+    /// 5. `any_bins`
+    /// 6. `required_env`
+    /// 7. `required_config`
     #[must_use]
     pub fn evaluate(
         &self,

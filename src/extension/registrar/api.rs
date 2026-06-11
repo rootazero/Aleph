@@ -1,4 +1,4 @@
-//! CapabilityApi — unified registration surface for plugins
+//! `CapabilityApi` — unified registration surface for plugins
 //!
 //! Takes a mutable borrow of `PluginRegistry` and dispatches
 //! `CapabilityDeclaration` variants to the appropriate `register_*` method,

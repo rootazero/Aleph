@@ -14,7 +14,7 @@ pub struct BrowserPressKeyArgs {
     /// Browser profile name (default: "default").
     #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
     pub profile: String,
-    /// Key to press (e.g. "Enter", "Tab", "Escape", "ArrowDown", "Backspace").
+    /// Key to press (e.g. "Enter", "Tab", "Escape", "`ArrowDown`", "Backspace").
     pub key: String,
 }
 

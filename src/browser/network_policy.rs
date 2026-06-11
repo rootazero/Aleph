@@ -72,7 +72,7 @@ pub enum PolicyViolation {
     /// The URL could not be parsed.
     InvalidUrl(String),
     /// The URL embeds a credential (potential secret exfiltration). Carries the
-    /// matched secret-rule name (e.g. "api_key").
+    /// matched secret-rule name (e.g. "`api_key`").
     SecretInUrl(String),
 }
 

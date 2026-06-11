@@ -1,11 +1,11 @@
 /// Memory ingestion pipeline
 ///
 /// This module previously handled storage of raw memory entries (Layer 1)
-/// into SQLite via SessionStore. Raw memory storage has been removed —
+/// into `SQLite` via `SessionStore`. Raw memory storage has been removed —
 /// facts (Layer 2) are now the primary retrieval target, and raw
-/// conversations are stored in SessionManager's SQLite.
+/// conversations are stored in `SessionManager`'s `SQLite`.
 ///
-/// The MemoryIngestion struct is retained as a no-op stub so that
+/// The `MemoryIngestion` struct is retained as a no-op stub so that
 /// existing callers continue to compile without changes.
 use crate::config::MemoryConfig;
 use crate::error::AlephError;
@@ -16,7 +16,7 @@ use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
 use tracing::debug;
 
-/// Memory ingestion service (no-op after SessionStore removal)
+/// Memory ingestion service (no-op after `SessionStore` removal)
 #[derive(Clone)]
 pub struct MemoryIngestion {
     _database: MemoryBackend,
@@ -43,7 +43,7 @@ impl MemoryIngestion {
     ///
     /// Raw memory storage has been removed. This method records activity
     /// for the dream daemon but does not persist the memory entry.
-    /// Raw conversations are already stored in SessionManager's SQLite.
+    /// Raw conversations are already stored in `SessionManager`'s `SQLite`.
     pub async fn store_memory(
         &self,
         _context: ContextAnchor,

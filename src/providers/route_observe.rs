@@ -14,8 +14,8 @@
 //! windows, in-flight counts, EWMA latency, rolling RPM/TPM usage) so the
 //! *model* can reason about provider health when it picks models or diagnoses
 //! a stall. It decides nothing itself — pure read-only 赋能层. Mirrors the
-//! reference routers' status surfaces (LiteLLM's health-state cache, the
-//! semantic-router's `x-vsr-*` decision headers, RouteLLM's per-route model
+//! reference routers' status surfaces (`LiteLLM`'s health-state cache, the
+//! semantic-router's `x-vsr-*` decision headers, `RouteLLM`'s per-route model
 //! counts) without any of their classifier machinery.
 
 use std::sync::OnceLock;

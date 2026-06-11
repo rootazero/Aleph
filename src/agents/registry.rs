@@ -150,7 +150,7 @@ impl AgentRegistry {
     ///      trim + lowercase + alias table) and retry the lookup once.
     ///
     /// A genuinely unknown selector still returns `None`, so callers keep
-    /// surfacing their "Unknown agent_type. Available: …" error. This closes
+    /// surfacing their "Unknown `agent_type`. Available: …" error. This closes
     /// the brittleness where a model picking `general-purpose`, `Explore`, or
     /// `planner` (Claude Code conventions) hard-errored instead of resolving
     /// to `default` / `explore` / `plan`. Mirrors the canonicalization the

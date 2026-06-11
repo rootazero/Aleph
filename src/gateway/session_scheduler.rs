@@ -72,7 +72,7 @@ pub struct SessionScheduler {
     execution_adapter: Arc<dyn ExecutionAdapter>,
     agent_registry: Arc<AgentRegistry>,
     channel_registry: Arc<ChannelRegistry>,
-    /// App config for reading output_mode at runtime
+    /// App config for reading `output_mode` at runtime
     app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
 }
 
@@ -92,7 +92,7 @@ impl SessionScheduler {
         }
     }
 
-    /// Set the app config for reading output_mode at runtime
+    /// Set the app config for reading `output_mode` at runtime
     pub fn with_app_config(mut self, config: Arc<tokio::sync::RwLock<crate::Config>>) -> Self {
         self.app_config = Some(config);
         self

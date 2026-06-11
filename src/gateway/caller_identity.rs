@@ -6,7 +6,7 @@
 //! tool-dispatch config-tier gate.
 //!
 //! Scoped only around `process_request` in the authenticated dispatch path
-//! (`server::handler`). Never crosses the run's spawn boundary (start_run reads
+//! (`server::handler`). Never crosses the run's spawn boundary (`start_run` reads
 //! it while still in-task). Unset for non-gateway callers (cron, internal) and,
 //! by design, for the local no-auth daemon — the gate treats absent role as
 //! trusted.

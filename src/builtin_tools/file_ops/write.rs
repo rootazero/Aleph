@@ -1,6 +1,6 @@
-//! Independent FileWriteTool — write content to a file
+//! Independent `FileWriteTool` — write content to a file
 //!
-//! Unlike the combined FileOpsTool, this tool makes `content` a **required** field
+//! Unlike the combined `FileOpsTool`, this tool makes `content` a **required** field
 //! (plain `String`, not `Option<String>`), so the JSON Schema enforces its presence
 //! and the LLM cannot omit or null it.
 
@@ -89,7 +89,7 @@ impl FileWriteTool {
         self
     }
 
-    /// Resolve the output directory from the ToolContext handle (if available).
+    /// Resolve the output directory from the `ToolContext` handle (if available).
     async fn resolve_output_dir(&self) -> Option<std::path::PathBuf> {
         if let Some(ref handle) = self.tool_context_handle {
             let ctx = handle.read().await;

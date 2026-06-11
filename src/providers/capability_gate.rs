@@ -13,7 +13,7 @@
 //!
 //! Like [`route_policy`](super::route_policy), it shapes the candidate SET
 //! handed to the existing failover engine; the harness never learns of it. It
-//! is modelled on LiteLLM's `_pre_call_checks` and is **fail-open**:
+//! is modelled on `LiteLLM`'s `_pre_call_checks` and is **fail-open**:
 //!
 //! * a model with unknown capabilities ([`capabilities_for`] = `None`) is kept
 //!   — the static table is best-effort, not authoritative;

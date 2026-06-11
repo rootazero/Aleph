@@ -27,7 +27,7 @@ const BUILTIN_TEMPLATES: &[(&str, &str)] = &[
 // --------------------------------------------------------------------------
 
 /// Default user-templates directory under the conventional Aleph home.
-/// Honours `$ALEPH_HOME` for parity with the project_root + dotfiles code.
+/// Honours `$ALEPH_HOME` for parity with the `project_root` + dotfiles code.
 pub fn default_user_dir() -> PathBuf {
     let base = std::env::var_os("ALEPH_HOME")
         .map(PathBuf::from)

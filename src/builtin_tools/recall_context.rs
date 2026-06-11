@@ -1,6 +1,6 @@
 //! Semantic recovery tool for post-compression context retrieval.
 //!
-//! Allows the LLM to retrieve raw conversation details stored in SQLite
+//! Allows the LLM to retrieve raw conversation details stored in `SQLite`
 //! before context compression occurred. Searches by path prefix scoped to
 //! the current session's raw chunks.
 
@@ -14,7 +14,7 @@ const fn default_max_results() -> usize {
     3
 }
 
-/// Arguments for the recall_context tool.
+/// Arguments for the `recall_context` tool.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct RecallContextArgs {
     /// Description of what to recall from before compression.
@@ -35,7 +35,7 @@ pub struct RecalledFragment {
     pub source_path: String,
 }
 
-/// Output from the recall_context tool.
+/// Output from the `recall_context` tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct RecallContextResult {
     /// Retrieved fragments ordered by storage order.
@@ -44,7 +44,7 @@ pub struct RecallContextResult {
     pub query: String,
 }
 
-/// Tool that retrieves pre-compression conversation details from SQLite.
+/// Tool that retrieves pre-compression conversation details from `SQLite`.
 ///
 /// Raw conversation chunks are stored under `aleph://session/{session_id}/raw/`
 /// by the session compression pipeline (Task 14). This tool lets the LLM
@@ -64,7 +64,7 @@ impl RecallContextTool {
         "Retrieve pre-compression conversation details. Use when you need to recall \
          specific code, error messages, or decision details from earlier in the conversation.";
 
-    /// Create a new RecallContextTool for the given session.
+    /// Create a new `RecallContextTool` for the given session.
     pub fn new(database: MemoryBackend, session_id: impl Into<String>) -> Self {
         Self {
             database,
@@ -74,7 +74,7 @@ impl RecallContextTool {
 
     /// Execute the recall search against the session-scoped raw chunk store.
     ///
-    /// Searches the SQLite path prefix `aleph://session/{session_id}/raw/`
+    /// Searches the `SQLite` path prefix `aleph://session/{session_id}/raw/`
     /// and returns up to `args.max_results` fragments. The query string is
     /// preserved in the result for the LLM's reference.
     pub async fn call_impl(&self, args: RecallContextArgs) -> anyhow::Result<RecallContextResult> {

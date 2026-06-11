@@ -1,4 +1,4 @@
-//! DreamStrategy — signal-driven strategy selection for the dream pipeline.
+//! `DreamStrategy` — signal-driven strategy selection for the dream pipeline.
 //!
 //! Replaces the hardcoded daily/weekly pipeline with three adaptive strategies,
 //! each defining which stages to execute.

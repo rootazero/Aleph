@@ -1,6 +1,6 @@
-//! SessionResumeLayer — inject previous session context (priority 1760)
+//! `SessionResumeLayer` — inject previous session context (priority 1760)
 //!
-//! Sits just after SessionContextGuideLayer (1750).
+//! Sits just after `SessionContextGuideLayer` (1750).
 //! Only injects content when `input.session_snapshot` is set.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};

@@ -285,7 +285,7 @@ impl AcpSession {
 
     /// Try to restore an existing ACP session via `session/load`.
     ///
-    /// Returns Ok(session_id) on success, Err on failure (caller should fall back to session/new).
+    /// Returns `Ok(session_id)` on success, Err on failure (caller should fall back to session/new).
     pub async fn load_acp_session(
         &mut self,
         session_id: &str,
@@ -322,8 +322,8 @@ impl AcpSession {
     /// Send a prompt and collect the full response text from streaming chunks.
     ///
     /// Two execution paths:
-    /// - **Streaming** (on_chunk provided): Uses `request_streaming()` to forward chunks in real-time
-    /// - **Legacy** (no on_chunk): Uses `request()` to collect all notifications, extracts text after
+    /// - **Streaming** (`on_chunk` provided): Uses `request_streaming()` to forward chunks in real-time
+    /// - **Legacy** (no `on_chunk)`: Uses `request()` to collect all notifications, extracts text after
     pub async fn prompt(
         &mut self,
         text: &str,

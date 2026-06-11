@@ -1,4 +1,4 @@
-//! ListSkillsTool — List available skills (Level 1 metadata).
+//! `ListSkillsTool` — List available skills (Level 1 metadata).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use super::list_skill_files;
 use crate::error::Result;
 use crate::tools::AlephTool;
 
-/// Arguments for list_skills tool
+/// Arguments for `list_skills` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct ListSkillsArgs {
     /// Optional: filter by keyword in name or description
@@ -48,7 +48,7 @@ pub struct SkillSummary {
     pub source: Option<String>,
 }
 
-/// Output from list_skills tool
+/// Output from `list_skills` tool
 #[derive(Debug, Clone, Serialize)]
 pub struct ListSkillsOutput {
     /// Whether the operation succeeded
@@ -75,7 +75,7 @@ pub struct ListSkillsTool {
 }
 
 impl ListSkillsTool {
-    /// Create a new ListSkillsTool with a single directory (backwards compatible)
+    /// Create a new `ListSkillsTool` with a single directory (backwards compatible)
     #[must_use]
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
@@ -83,13 +83,13 @@ impl ListSkillsTool {
         }
     }
 
-    /// Create a ListSkillsTool with multiple directories
+    /// Create a `ListSkillsTool` with multiple directories
     #[must_use]
     pub const fn with_directories(skills_dirs: Vec<PathBuf>) -> Self {
         Self { skills_dirs }
     }
 
-    /// Create a ListSkillsTool with auto-discovery
+    /// Create a `ListSkillsTool` with auto-discovery
     #[must_use]
     pub fn with_auto_discover(project_dir: Option<&Path>) -> Self {
         let skills_dirs =
@@ -154,7 +154,7 @@ impl ListSkillsTool {
         })
     }
 
-    /// Execute the list_skills operation (internal implementation)
+    /// Execute the `list_skills` operation (internal implementation)
     async fn call_impl(
         &self,
         args: ListSkillsArgs,
@@ -269,7 +269,7 @@ impl Clone for ListSkillsTool {
     }
 }
 
-/// Implementation of AlephTool trait for ListSkillsTool
+/// Implementation of `AlephTool` trait for `ListSkillsTool`
 #[async_trait]
 impl AlephTool for ListSkillsTool {
     const NAME: &'static str = "skill_list";

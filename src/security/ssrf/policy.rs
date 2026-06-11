@@ -22,7 +22,7 @@ pub struct SsrfPolicy {
     /// (e.g., "api.example.com") and wildcard subdomain matches (e.g., "*.example.com").
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
-    /// Hosts that are always blocked. Same matching rules as allowed_hosts.
+    /// Hosts that are always blocked. Same matching rules as `allowed_hosts`.
     #[serde(default)]
     pub blocked_hosts: Vec<String>,
     /// Maximum number of HTTP redirects to follow.

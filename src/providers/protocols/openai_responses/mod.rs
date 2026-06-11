@@ -1,6 +1,6 @@
-//! OpenAI Responses API protocol adapter
+//! `OpenAI` Responses API protocol adapter
 //!
-//! Handles both the standard OpenAI Responses API at /v1/responses and the
+//! Handles both the standard `OpenAI` Responses API at /v1/responses and the
 //! Codex variant at /backend-api/codex/responses via `ResponsesVariant`.
 
 use std::collections::HashMap;
@@ -28,7 +28,7 @@ use tracing::{debug, warn};
 
 /// Variant-specific configuration for the Responses API adapter.
 ///
-/// Allows the same adapter to be used for standard OpenAI (`Default`) and
+/// Allows the same adapter to be used for standard `OpenAI` (`Default`) and
 /// Codex (`ResponsesVariant::codex()`), which share the same wire format but
 /// differ in endpoint path, request fields, and auth headers.
 #[derive(Debug, Clone, Default)]
@@ -49,7 +49,7 @@ impl ResponsesVariant {
     /// Create a Codex-specific variant configuration.
     ///
     /// Sets the Codex backend endpoint path and required Codex mode fields
-    /// (store=false, verbosity=medium, reasoning.encrypted_content include).
+    /// (store=false, verbosity=medium, `reasoning.encrypted_content` include).
     #[must_use]
     pub fn codex() -> Self {
         Self {
@@ -69,10 +69,10 @@ impl ResponsesVariant {
 // OpenAiResponsesProtocol
 // =============================================================================
 
-/// OpenAI Responses API protocol adapter
+/// `OpenAI` Responses API protocol adapter
 ///
-/// Translates between Aleph's unified request format and the OpenAI Responses
-/// API wire format. Supports both standard OpenAI and Codex endpoints via
+/// Translates between Aleph's unified request format and the `OpenAI` Responses
+/// API wire format. Supports both standard `OpenAI` and Codex endpoints via
 /// `ResponsesVariant`.
 pub struct OpenAiResponsesProtocol {
     client: Client,
@@ -100,8 +100,8 @@ impl OpenAiResponsesProtocol {
     /// Build the endpoint URL from provider configuration and variant
     ///
     /// For Codex variant: strips trailing `/v1` only when present, appends variant path.
-    /// For standard variant: normalizes base_url and appends `/v1/responses`.
-    /// Default when base_url is None: `https://api.openai.com/v1/responses`
+    /// For standard variant: normalizes `base_url` and appends `/v1/responses`.
+    /// Default when `base_url` is None: `https://api.openai.com/v1/responses`
     #[must_use]
     pub fn build_endpoint(config: &ProviderConfig, variant: &ResponsesVariant) -> String {
         let endpoint_path = variant.endpoint_path.as_deref().unwrap_or("/v1/responses");
@@ -129,7 +129,7 @@ impl OpenAiResponsesProtocol {
     /// Build a Responses API request from the unified payload
     ///
     /// Applies variant-specific fields (store, text, include) and auto-enables
-    /// server-side optimizations for official OpenAI endpoints.
+    /// server-side optimizations for official `OpenAI` endpoints.
     pub fn build_responses_request(
         payload: &RequestPayload,
         model: &str,
@@ -247,9 +247,9 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
     }
 
     /// Share the Chat protocol's canonicalization (no-dash typos, `openai/`
-    /// prefix). Endpoint-blind hook (assumes first-party OpenAI); `build_request`
+    /// prefix). Endpoint-blind hook (assumes first-party `OpenAI`); `build_request`
     /// calls [`normalize_openai_model_id`] directly with the configured
-    /// `base_url` so the `openai/` slug survives on aggregators (OpenRouter,
+    /// `base_url` so the `openai/` slug survives on aggregators (`OpenRouter`,
     /// which ships an `openai-responses` preset).
     fn normalize_model_id<'a>(&self, model_id: &'a str) -> std::borrow::Cow<'a, str> {
         super::openai_common::model_id::normalize_openai_model_id(model_id, None)
@@ -330,7 +330,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
         Ok(builder)
     }
 
-    /// Stream fine-grained delta events from the OpenAI Responses API SSE format.
+    /// Stream fine-grained delta events from the `OpenAI` Responses API SSE format.
     ///
     /// Uses a pending-queue unfold approach so that the `Completed` event (which
     /// produces both a `Usage` delta and a `Done` delta) can emit both without
@@ -401,7 +401,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
             /// Incomplete SSE byte buffer (bytes, not String — HTTP chunks may
             /// split multi-byte UTF-8 characters at arbitrary boundaries)
             line_buf: Vec<u8>,
-            /// item_id → call_id mapping for tool call correlation
+            /// `item_id` → `call_id` mapping for tool call correlation
             item_to_call: HashMap<String, String>,
             /// Pending deltas queued from multi-delta events (e.g. Completed)
             pending: VecDeque<Result<ProviderDelta>>,
@@ -522,11 +522,11 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
     }
 }
 
-/// Parse one SSE data string and push zero or more ProviderDeltas into `out`.
+/// Parse one SSE data string and push zero or more `ProviderDeltas` into `out`.
 ///
-/// Uses a VecDeque to handle the `Completed` event which produces two deltas
+/// Uses a `VecDeque` to handle the `Completed` event which produces two deltas
 /// (Usage + Done). The `item_to_call` map is updated in-place for tool call
-/// correlation (`OutputItemAdded` records item_id → call_id).
+/// correlation (`OutputItemAdded` records `item_id` → `call_id`).
 fn parse_sse_event_multi(
     data: &str,
     item_to_call: &mut HashMap<String, String>,

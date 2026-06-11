@@ -348,7 +348,7 @@ impl OAuthProvider {
 
     /// Refresh an expired access token
     ///
-    /// Uses the refresh_token grant to obtain a new access token.
+    /// Uses the `refresh_token` grant to obtain a new access token.
     /// Automatically saves the new tokens to storage.
     pub async fn refresh_token_with(
         &self,
@@ -430,7 +430,7 @@ impl OAuthProvider {
     /// Check if tokens need refresh and refresh if possible
     ///
     /// Returns new tokens if refreshed, or existing tokens if still valid.
-    /// Returns None if no tokens exist or refresh failed without refresh_token.
+    /// Returns None if no tokens exist or refresh failed without `refresh_token`.
     pub async fn ensure_valid_token(
         &self,
         metadata: &OAuthServerMetadata,

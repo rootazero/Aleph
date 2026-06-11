@@ -1,4 +1,4 @@
-//! Plugin execution operations for ExtensionManager
+//! Plugin execution operations for `ExtensionManager`
 
 use crate::extension::error::*;
 use crate::extension::manifest;
@@ -212,7 +212,7 @@ impl ExtensionManager {
         result
     }
 
-    /// Get all plugin info from PluginRegistry.
+    /// Get all plugin info from `PluginRegistry`.
     pub async fn get_plugin_info(&self) -> Vec<PluginInfo> {
         self.plugin_registry
             .read()

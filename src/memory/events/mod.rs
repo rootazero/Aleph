@@ -7,10 +7,10 @@
 //!
 //! Events follow the Skeleton/Pulse classification from the resilience layer:
 //! - **Skeleton** — structural mutations that must be persisted immediately
-//!   (NoteCreated, NoteContentUpdated, NoteMetadataUpdated,
-//!   NoteInvalidated, NoteRestored, NoteDeleted, NoteConsolidated, NoteMigrated)
+//!   (`NoteCreated`, `NoteContentUpdated`, `NoteMetadataUpdated`,
+//!   `NoteInvalidated`, `NoteRestored`, `NoteDeleted`, `NoteConsolidated`, `NoteMigrated`)
 //! - **Pulse** — high-frequency observations that may be buffered before persist
-//!   (NoteAccessed)
+//!   (`NoteAccessed`)
 //!
 //! ## Submodules
 //!
@@ -200,7 +200,7 @@ pub enum MemoryEvent {
 }
 
 impl MemoryEvent {
-    /// Extract the note_path (legacy: fact_id) from any event variant.
+    /// Extract the `note_path` (legacy: `fact_id`) from any event variant.
     #[must_use]
     pub fn fact_id(&self) -> &str {
         match self {
@@ -251,12 +251,12 @@ impl MemoryEvent {
 
 /// Immutable envelope wrapping a `MemoryEvent` with metadata.
 ///
-/// Stored as a single row in the event store (SQLite). The `id` field
-/// is the SQLite auto-increment primary key (0 before insert, assigned
+/// Stored as a single row in the event store (`SQLite`). The `id` field
+/// is the `SQLite` auto-increment primary key (0 before insert, assigned
 /// on write). The `seq` field provides per-fact monotonic ordering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryEventEnvelope {
-    /// Auto-increment global ID (assigned by SQLite on insert; 0 before insert).
+    /// Auto-increment global ID (assigned by `SQLite` on insert; 0 before insert).
     pub id: i64,
     /// The fact this event belongs to.
     pub fact_id: String,

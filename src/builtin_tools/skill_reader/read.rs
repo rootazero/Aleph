@@ -1,4 +1,4 @@
-//! ReadSkillTool — Read skill instructions (Level 2) or resources (Level 3).
+//! `ReadSkillTool` — Read skill instructions (Level 2) or resources (Level 3).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use super::list_skill_files;
 use crate::error::Result;
 use crate::tools::AlephTool;
 
-/// Arguments for read_skill tool
+/// Arguments for `read_skill` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct ReadSkillArgs {
     /// The skill identifier (directory name, e.g., "refine-text", "translate")
@@ -27,7 +27,7 @@ pub struct ReadSkillArgs {
     pub file_name: Option<String>,
 }
 
-/// Output from read_skill tool
+/// Output from `read_skill` tool
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadSkillOutput {
     /// Whether the operation succeeded
@@ -74,7 +74,7 @@ pub struct ReadSkillTool {
 }
 
 impl ReadSkillTool {
-    /// Create a new ReadSkillTool with a single directory (backwards compatible)
+    /// Create a new `ReadSkillTool` with a single directory (backwards compatible)
     #[must_use]
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
@@ -83,7 +83,7 @@ impl ReadSkillTool {
         }
     }
 
-    /// Create a ReadSkillTool with multiple directories
+    /// Create a `ReadSkillTool` with multiple directories
     #[must_use]
     pub const fn with_directories(skills_dirs: Vec<PathBuf>) -> Self {
         Self {
@@ -92,7 +92,7 @@ impl ReadSkillTool {
         }
     }
 
-    /// Create a ReadSkillTool with auto-discovery
+    /// Create a `ReadSkillTool` with auto-discovery
     #[must_use]
     pub fn with_auto_discover(project_dir: Option<&Path>) -> Self {
         let skills_dirs =
@@ -135,7 +135,7 @@ impl ReadSkillTool {
         hits
     }
 
-    /// Validate skill_id to prevent path traversal attacks
+    /// Validate `skill_id` to prevent path traversal attacks
     fn validate_skill_id(&self, skill_id: &str) -> std::result::Result<(), ToolError> {
         // Check for empty
         if skill_id.is_empty() {
@@ -204,7 +204,7 @@ impl ReadSkillTool {
         Ok(())
     }
 
-    /// Execute the read_skill operation (internal implementation)
+    /// Execute the `read_skill` operation (internal implementation)
     async fn call_impl(
         &self,
         args: ReadSkillArgs,
@@ -361,7 +361,7 @@ impl Clone for ReadSkillTool {
     }
 }
 
-/// Implementation of AlephTool trait for ReadSkillTool
+/// Implementation of `AlephTool` trait for `ReadSkillTool`
 #[async_trait]
 impl AlephTool for ReadSkillTool {
     const NAME: &'static str = "skill_read";

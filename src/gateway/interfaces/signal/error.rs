@@ -104,7 +104,7 @@ pub enum SignalError {
 // =============================================================================
 
 impl SignalError {
-    /// Convert a reqwest status error into a SignalError
+    /// Convert a reqwest status error into a `SignalError`
     #[must_use]
     pub fn from_status(status: reqwest::StatusCode, body: &str) -> Self {
         if status.as_u16() == 429 {

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use scraper::{Html, Selector};
 
-/// DuckDuckGo HTML-scrape provider (`html.duckduckgo.com`)
+/// `DuckDuckGo` HTML-scrape provider (`html.duckduckgo.com`)
 ///
 /// Zero-account, no API-key, but parses DDG's HTML output instead of a
 /// stable JSON API — when DDG redesigns the page this provider breaks.
@@ -128,7 +128,7 @@ impl SearchProvider for DuckDuckGoProvider {
 /// - Redirect (`//duckduckgo.com/l/?uddg=ENCODED&...`) — older DDG format
 ///   we still handle defensively by extracting the `uddg` query param.
 ///
-/// Exposed `pub(crate)` so the WebFetch SERP fallback layer
+/// Exposed `pub(crate)` so the `WebFetch` SERP fallback layer
 /// ([`crate::search::WebFetchSerpFallback`]) can reuse this exact parser
 /// instead of forking a sibling copy — keeps the DDG selector canon
 /// single-sourced.

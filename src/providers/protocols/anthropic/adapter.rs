@@ -1,4 +1,4 @@
-//! ProtocolAdapter trait implementation for AnthropicProtocol.
+//! `ProtocolAdapter` trait implementation for `AnthropicProtocol`.
 
 use std::collections::VecDeque;
 
@@ -625,7 +625,7 @@ impl ProtocolAdapter for AnthropicProtocol {
     ///
     /// Parses Anthropic SSE events and emits fine-grained [`ProviderDelta`] events.
     /// Uses the unfold+pending-queue pattern so that multi-delta events (e.g.
-    /// message_delta with stop_reason + usage) can emit all deltas without loss.
+    /// `message_delta` with `stop_reason` + usage) can emit all deltas without loss.
     async fn stream_deltas(
         &self,
         response: reqwest::Response,
@@ -664,7 +664,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             /// Incomplete SSE byte buffer (bytes, not String — HTTP chunks may
             /// split multi-byte UTF-8 characters at arbitrary boundaries)
             line_buf: Vec<u8>,
-            /// Maps content_block index (u32) → tool_use id
+            /// Maps `content_block` index (u32) → `tool_use` id
             block_ids: IndexIdTracker,
             /// Pending deltas queued from multi-delta events
             pending: VecDeque<Result<ProviderDelta>>,

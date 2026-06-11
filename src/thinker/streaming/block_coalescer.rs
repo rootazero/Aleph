@@ -120,7 +120,7 @@ impl BlockCoalescer {
 
     /// Add text to the coalescer, returns content if ready to emit
     ///
-    /// Returns `Some(text)` if the buffer exceeds max_chars or other emit conditions.
+    /// Returns `Some(text)` if the buffer exceeds `max_chars` or other emit conditions.
     /// Call `check_idle()` periodically to handle idle timeout.
     pub fn append(&mut self, text: &str) -> Option<String> {
         if self.buffer.is_empty() {
@@ -217,7 +217,7 @@ impl BlockCoalescer {
 
 /// Async coalescer that handles idle timeout automatically
 ///
-/// Wraps BlockCoalescer with a background timer task.
+/// Wraps `BlockCoalescer` with a background timer task.
 pub struct AsyncBlockCoalescer {
     coalescer: BlockCoalescer,
     output_tx: mpsc::Sender<String>,

@@ -47,7 +47,7 @@ impl LlmReranker for NoopReranker {
     }
 }
 
-/// Per-(agent_id, session_key) curated snapshot cache. Frozen until
+/// Per-(agent_id, `session_key`) curated snapshot cache. Frozen until
 /// invalidation; see [`MemoryContextProvider::build_curated_message`].
 type CuratedSnapshotCache = Arc<TokioRwLock<HashMap<(String, String), Arc<CuratedSnapshot>>>>;
 
@@ -67,10 +67,10 @@ pub struct MemoryContextProvider {
     pub(crate) orientation_budget: crate::memory::notes::orientation::types::TokenBudget,
     /// Optional user-profile synthesizer for injecting profile context.
     pub(crate) profile: Option<Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>>,
-    /// Per-(agent_id, session_key) frozen snapshot. Built on first prompt
-    /// build for the session; reused until evicted by compression / SessionEnd.
+    /// Per-(agent_id, `session_key`) frozen snapshot. Built on first prompt
+    /// build for the session; reused until evicted by compression / `SessionEnd`.
     pub(crate) curated_snapshots: CuratedSnapshotCache,
-    /// Per-agent CuratedMemoryStore. Loaded lazily on first capture.
+    /// Per-agent `CuratedMemoryStore`. Loaded lazily on first capture.
     pub(crate) curated_stores: Arc<DashMap<String, Arc<CuratedMemoryStore>>>,
     /// Char-budget config for both MEMORY.md and USER.md rendering.
     pub(crate) curated_config: CuratedConfig,

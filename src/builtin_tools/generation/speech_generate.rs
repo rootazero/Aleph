@@ -1,7 +1,7 @@
 //! Speech generation tool (Text-to-Speech)
 //!
 //! Generates speech audio from text using configured AI providers.
-//! Implements AlephTool trait for AI agent integration.
+//! Implements `AlephTool` trait for AI agent integration.
 
 use crate::sync_primitives::{Arc, RwLock};
 use async_trait::async_trait;
@@ -53,7 +53,7 @@ pub struct SpeechGenerateOutput {
     /// Location of the generated audio (URL, file path, or data URL)
     pub audio_location: String,
 
-    /// Type of location: "url", "file", or "data_url"
+    /// Type of location: "url", "file", or "`data_url`"
     pub location_type: String,
 
     /// Original text that was converted
@@ -75,7 +75,7 @@ pub struct SpeechGenerateOutput {
     pub duration_ms: u64,
 }
 
-/// Speech generation tool using GenerationProviderRegistry
+/// Speech generation tool using `GenerationProviderRegistry`
 pub struct SpeechGenerateTool {
     registry: Arc<RwLock<GenerationProviderRegistry>>,
 }
@@ -87,7 +87,7 @@ impl SpeechGenerateTool {
     /// Tool description for AI prompt
     pub const DESCRIPTION: &'static str = "Convert text to speech audio. Use this when you need to generate spoken audio from text content.";
 
-    /// Create a new SpeechGenerateTool with the given provider registry
+    /// Create a new `SpeechGenerateTool` with the given provider registry
     pub const fn new(registry: Arc<RwLock<GenerationProviderRegistry>>) -> Self {
         Self { registry }
     }
@@ -266,7 +266,7 @@ impl Clone for SpeechGenerateTool {
     }
 }
 
-/// Implementation of AlephTool trait for SpeechGenerateTool
+/// Implementation of `AlephTool` trait for `SpeechGenerateTool`
 #[async_trait]
 impl AlephTool for SpeechGenerateTool {
     const NAME: &'static str = "speech_generate";

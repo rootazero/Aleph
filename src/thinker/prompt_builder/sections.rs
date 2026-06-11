@@ -69,7 +69,7 @@ impl PromptBuilder {
     ///
     /// Formats tools by hydration level:
     /// - Full schema tools: name + description + JSON parameters
-    /// - Summary tools: name + description (use get_tool_schema for params)
+    /// - Summary tools: name + description (use `get_tool_schema` for params)
     /// - Indexed tools: names list only
     ///
     /// This enables progressive disclosure of tool information based on
@@ -345,7 +345,7 @@ impl PromptBuilder {
     /// Append environment contract section describing the current channel capabilities
     ///
     /// This section informs the AI about:
-    /// - The current interaction paradigm (CLI, WebRich, Messaging, etc.)
+    /// - The current interaction paradigm (CLI, `WebRich`, Messaging, etc.)
     /// - Active capabilities available in this environment
     /// - Interaction constraints (output limits, streaming support)
     pub fn append_environment_contract(&self, prompt: &mut String, contract: &EnvironmentContract) {
@@ -457,7 +457,7 @@ impl PromptBuilder {
 
     /// Append protocol tokens section.
     ///
-    /// When SilentReply capability is active, injects structured protocol tokens
+    /// When `SilentReply` capability is active, injects structured protocol tokens
     /// that the LLM can use as minimal-cost responses in background mode.
     pub fn append_protocol_tokens(&self, prompt: &mut String, contract: &EnvironmentContract) {
         if !contract

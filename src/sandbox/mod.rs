@@ -1,9 +1,9 @@
 //! Sandbox — "where to execute" abstraction, orthogonal to Tools.
 //!
 //! Exec-class tools hold Arc<dyn Sandbox> and call sandbox.execute(cmd)
-//! instead of Command::new(...). WorkspaceSandbox provisions
-//! ~/.aleph/workspaces/{session_id}/ lazily and drives macOS seatbelt
-//! through OsSandboxDriver.
+//! instead of `Command::new`(...). `WorkspaceSandbox` provisions
+//! ~/.`aleph/workspaces/{session_id`}/ lazily and drives macOS seatbelt
+//! through `OsSandboxDriver`.
 //!
 //! See: docs/superpowers/specs/2026-04-19-sandbox-workspace-design.md
 

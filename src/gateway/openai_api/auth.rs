@@ -66,7 +66,7 @@ impl ApiError {
         }
     }
 
-    /// Returns a JSON representation matching the OpenAI error format.
+    /// Returns a JSON representation matching the `OpenAI` error format.
     #[must_use]
     pub fn to_json(&self) -> serde_json::Value {
         let (message, error_type) = match self {

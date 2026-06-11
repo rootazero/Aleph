@@ -1,7 +1,7 @@
 //! EVM-compatible signing module.
 //!
 //! Signs messages and transactions using secp256k1 private keys
-//! stored in the encrypted vault (via SharedTokenManager). Private keys
+//! stored in the encrypted vault (via `SharedTokenManager`). Private keys
 //! are decrypted only during the signing operation and never returned
 //! to the caller.
 //!
@@ -16,7 +16,7 @@ use std::fmt;
 use super::types::{DecryptedSecret, SecretError};
 
 /// Trait for resolving decrypted secrets by name.
-/// Implemented by SharedTokenManager and test mocks.
+/// Implemented by `SharedTokenManager` and test mocks.
 pub trait SecretResolver {
     fn resolve_secret(&self, name: &str) -> Result<DecryptedSecret, SecretError>;
 }
@@ -24,7 +24,7 @@ pub trait SecretResolver {
 /// Intent for what should be signed.
 #[derive(Debug, Clone)]
 pub enum SignIntent {
-    /// EIP-191 personal_sign
+    /// EIP-191 `personal_sign`
     PersonalSign { message: Vec<u8> },
     /// EIP-712 typed data
     TypedData {
@@ -35,7 +35,7 @@ pub enum SignIntent {
     ///
     /// **WARNING**: Uses simplified byte concatenation instead of proper RLP encoding.
     /// Signatures produced with this variant are NOT valid for on-chain submission.
-    /// Use PersonalSign or TypedData for production signing. A future version will
+    /// Use `PersonalSign` or `TypedData` for production signing. A future version will
     /// add proper RLP encoding for on-chain transaction signing.
     Transaction {
         chain_id: u64,
@@ -87,7 +87,7 @@ impl fmt::Display for SignedResult {
     }
 }
 
-/// EVM signer that reads private keys from the vault via a SecretResolver.
+/// EVM signer that reads private keys from the vault via a `SecretResolver`.
 pub struct EvmSigner<'a, R: SecretResolver> {
     resolver: &'a R,
 }

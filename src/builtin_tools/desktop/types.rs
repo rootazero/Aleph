@@ -27,10 +27,10 @@ pub enum MouseButton {
 pub struct DesktopArgs {
     /// The desktop operation to perform.
     ///
-    /// Supported actions: "screenshot", "ocr", "click", "double_click", "drag",
-    /// "hover", "cursor_position", "mouse_button", "type_text", "key_combo",
-    /// "scroll", "launch_app", "quit_app", "window_list", "focus_window",
-    /// "clipboard_read", "clipboard_write", "screen_record".
+    /// Supported actions: "screenshot", "ocr", "click", "`double_click`", "drag",
+    /// "hover", "`cursor_position`", "`mouse_button`", "`type_text`", "`key_combo`",
+    /// "scroll", "`launch_app`", "`quit_app`", "`window_list`", "`focus_window`",
+    /// "`clipboard_read`", "`clipboard_write`", "`screen_record`".
     pub action: String,
 
     /// Screen region for screenshot {"x":0,"y":0,"width":1920,"height":1080}. Optional.
@@ -65,7 +65,7 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
 
-    /// Window ID to focus (from window_list results).
+    /// Window ID to focus (from `window_list` results).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_id: Option<u32>,
 
@@ -93,11 +93,11 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta_y: Option<f64>,
 
-    /// Target width in pixels for resize_window.
+    /// Target width in pixels for `resize_window`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
 
-    /// Target height in pixels for resize_window.
+    /// Target height in pixels for `resize_window`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
 
@@ -105,23 +105,23 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
 
-    /// Press action for mouse_button: "press", "release", "click".
+    /// Press action for `mouse_button`: "press", "release", "click".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub press_action: Option<String>,
 
-    /// Recording duration in seconds (for screen_record, default: 5.0).
+    /// Recording duration in seconds (for `screen_record`, default: 5.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
 
-    /// Frames per second (for screen_record, default: 30).
+    /// Frames per second (for `screen_record`, default: 30).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fps: Option<u32>,
 
-    /// Include system audio (for screen_record, default: false).
+    /// Include system audio (for `screen_record`, default: false).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub with_audio: Option<bool>,
 
-    /// Target display ID for screenshot (from display_list). If absent, uses primary.
+    /// Target display ID for screenshot (from `display_list`). If absent, uses primary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_id: Option<u32>,
 
@@ -141,7 +141,7 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_height: Option<u32>,
 
-    /// Timeout in milliseconds for wait_visual (default 5000, max 60000).
+    /// Timeout in milliseconds for `wait_visual` (default 5000, max 60000).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
 
@@ -193,15 +193,15 @@ pub struct DesktopArgs {
 /// This type exists so the JSON schema for `DesktopArgs.actions` is a clean
 /// `{"type": "array", "items": <object>}` instead of a multi-type
 /// `["array", "null"]` with a `serde_json::Value` (any-type) item — which
-/// OpenAI's tool schema validator rejects even in non-strict mode.
+/// `OpenAI`'s tool schema validator rejects even in non-strict mode.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct DesktopBatchAction {
     /// The desktop operation to perform.
     ///
-    /// Supported actions: "screenshot", "ocr", "click", "double_click", "drag",
-    /// "hover", "cursor_position", "mouse_button", "type_text", "key_combo",
-    /// "scroll", "launch_app", "quit_app", "window_list", "focus_window",
-    /// "clipboard_read", "clipboard_write", "screen_record".
+    /// Supported actions: "screenshot", "ocr", "click", "`double_click`", "drag",
+    /// "hover", "`cursor_position`", "`mouse_button`", "`type_text`", "`key_combo`",
+    /// "scroll", "`launch_app`", "`quit_app`", "`window_list`", "`focus_window`",
+    /// "`clipboard_read`", "`clipboard_write`", "`screen_record`".
     pub action: String,
 
     /// Screen region for screenshot {"x":0,"y":0,"width":1920,"height":1080}. Optional.
@@ -236,7 +236,7 @@ pub struct DesktopBatchAction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
 
-    /// Window ID to focus (from window_list results).
+    /// Window ID to focus (from `window_list` results).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_id: Option<u32>,
 
@@ -264,11 +264,11 @@ pub struct DesktopBatchAction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta_y: Option<f64>,
 
-    /// Target width in pixels for resize_window.
+    /// Target width in pixels for `resize_window`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
 
-    /// Target height in pixels for resize_window.
+    /// Target height in pixels for `resize_window`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
 
@@ -276,23 +276,23 @@ pub struct DesktopBatchAction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
 
-    /// Press action for mouse_button: "press", "release", "click".
+    /// Press action for `mouse_button`: "press", "release", "click".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub press_action: Option<String>,
 
-    /// Recording duration in seconds (for screen_record, default: 5.0).
+    /// Recording duration in seconds (for `screen_record`, default: 5.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
 
-    /// Frames per second (for screen_record, default: 30).
+    /// Frames per second (for `screen_record`, default: 30).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fps: Option<u32>,
 
-    /// Include system audio (for screen_record, default: false).
+    /// Include system audio (for `screen_record`, default: false).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub with_audio: Option<bool>,
 
-    /// Target display ID for screenshot (from display_list). If absent, uses primary.
+    /// Target display ID for screenshot (from `display_list`). If absent, uses primary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_id: Option<u32>,
 
@@ -312,7 +312,7 @@ pub struct DesktopBatchAction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_height: Option<u32>,
 
-    /// Timeout in milliseconds for wait_visual (default 5000, max 60000).
+    /// Timeout in milliseconds for `wait_visual` (default 5000, max 60000).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
 

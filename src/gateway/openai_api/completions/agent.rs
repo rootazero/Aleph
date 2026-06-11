@@ -1,6 +1,6 @@
-//! Agent completions path — routes `aleph/*` models through ExecutionAdapter.
+//! Agent completions path — routes `aleph/*` models through `ExecutionAdapter`.
 //!
-//! Translates between OpenAI Chat Completions format and the internal
+//! Translates between `OpenAI` Chat Completions format and the internal
 //! agent execution pipeline, using an `EventEmitter` that converts
 //! `StreamEvent`s into SSE frames.
 

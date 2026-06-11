@@ -1,4 +1,4 @@
-//! GoalLessonsPromoteStage — graduate goal "lessons" into long-term memory.
+//! `GoalLessonsPromoteStage` — graduate goal "lessons" into long-term memory.
 //!
 //! `Goal.lessons` is a ring buffer (cap `MAX_LESSONS`) injected into
 //! continuation prompts but otherwise ephemeral: dropped past the cap and gone
@@ -10,7 +10,7 @@
 //! existing note's facts and appends only genuinely-new ones. Stable when
 //! nothing is new; union-preserving across cycles (a promoted lesson stays even
 //! after the ring drops it). Goals are reached via the process-global
-//! `crate::goal::global()` (no DreamContext wiring); a store may be injected for
+//! `crate::goal::global()` (no `DreamContext` wiring); a store may be injected for
 //! tests. Global-only (goals are not project-namespaced).
 
 use async_trait::async_trait;

@@ -3,7 +3,7 @@
 //! Handlers for group chat operations: start, continue, mention, end, list, history.
 //!
 //! Each method has two variants:
-//! - `handle_xxx_placeholder`: stateless placeholders returning errors (used in HandlerRegistry::new())
+//! - `handle_xxx_placeholder`: stateless placeholders returning errors (used in `HandlerRegistry::new()`)
 //! - `handle_xxx`: real handlers that delegate to `GroupChatOrchestrator` + `GroupChatExecutor`
 //!
 //! All real handlers follow the per-session locking pattern:
@@ -22,7 +22,7 @@ use crate::group_chat::{
     GroupChatExecutor, GroupChatMessage, GroupChatOrchestrator, GroupChatStatus, PersonaSource,
 };
 
-/// Shared GroupChatOrchestrator handle for real handlers
+/// Shared `GroupChatOrchestrator` handle for real handlers
 pub type SharedOrchestrator = Arc<Mutex<GroupChatOrchestrator>>;
 
 // ============================================================================
@@ -53,7 +53,7 @@ fn extract_str_array(request: &JsonRpcRequest, key: &str) -> Vec<String> {
     }
 }
 
-/// Serialize a GroupChatMessage to JSON
+/// Serialize a `GroupChatMessage` to JSON
 fn message_to_json(msg: &GroupChatMessage) -> Value {
     json!({
         "session_id": msg.session_id,
@@ -69,7 +69,7 @@ fn message_to_json(msg: &GroupChatMessage) -> Value {
 // Real handlers (backed by GroupChatOrchestrator + GroupChatExecutor)
 // ============================================================================
 
-/// Handle group_chat.start RPC request (real)
+/// Handle `group_chat.start` RPC request (real)
 ///
 /// Creates a new group chat session. If `initial_message` is provided,
 /// executes the first round immediately and returns messages.
@@ -169,7 +169,7 @@ pub async fn handle_start(
     }
 }
 
-/// Handle group_chat.continue RPC request (real)
+/// Handle `group_chat.continue` RPC request (real)
 ///
 /// Continues an existing group chat session with a new message.
 pub async fn handle_continue(
@@ -260,7 +260,7 @@ async fn handle_continue_with_targets(
     }
 }
 
-/// Handle group_chat.mention RPC request (real)
+/// Handle `group_chat.mention` RPC request (real)
 ///
 /// Like continue, but extracts `targets` and passes them to the coordinator
 /// so it prioritizes the mentioned personas.
@@ -273,7 +273,7 @@ pub async fn handle_mention(
     handle_continue_with_targets(request, orch, executor, &targets).await
 }
 
-/// Handle group_chat.end RPC request (real)
+/// Handle `group_chat.end` RPC request (real)
 ///
 /// Ends a group chat session.
 pub async fn handle_end(request: JsonRpcRequest, orch: SharedOrchestrator) -> JsonRpcResponse {
@@ -306,7 +306,7 @@ pub async fn handle_end(request: JsonRpcRequest, orch: SharedOrchestrator) -> Js
     JsonRpcResponse::success(request.id, json!({ "ended": session_id }))
 }
 
-/// Handle group_chat.list RPC request (real)
+/// Handle `group_chat.list` RPC request (real)
 ///
 /// Returns a list of all active group chat sessions.
 pub async fn handle_list(request: JsonRpcRequest, orch: SharedOrchestrator) -> JsonRpcResponse {
@@ -348,7 +348,7 @@ pub async fn handle_list(request: JsonRpcRequest, orch: SharedOrchestrator) -> J
     JsonRpcResponse::success(request.id, json!({ "sessions": sessions_json }))
 }
 
-/// Handle group_chat.history RPC request (real)
+/// Handle `group_chat.history` RPC request (real)
 ///
 /// Returns the conversation history for a group chat session.
 pub async fn handle_history(request: JsonRpcRequest, orch: SharedOrchestrator) -> JsonRpcResponse {

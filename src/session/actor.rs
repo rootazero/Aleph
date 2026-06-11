@@ -1,4 +1,4 @@
-//! SessionActor — one tokio task per session.
+//! `SessionActor` — one tokio task per session.
 //!
 //! The actor replays the event log from storage on startup, then serves
 //! `ActorCommand`s until its inbox closes or the idle timeout fires. It owns

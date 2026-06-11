@@ -1,4 +1,4 @@
-//! TeamCreateTool — create a named team and enroll member agents.
+//! `TeamCreateTool` — create a named team and enroll member agents.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -78,7 +78,7 @@ pub struct TeamCreateArgs {
     pub description: String,
 
     /// Members to enroll in the team.
-    /// Each member either references an existing agent_id or provides a `create` spec.
+    /// Each member either references an existing `agent_id` or provides a `create` spec.
     #[serde(default)]
     pub members: Vec<MemberSpec>,
 
@@ -99,7 +99,7 @@ pub struct EnrolledMember {
     pub created: bool,
 }
 
-/// Output from team_create.
+/// Output from `team_create`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TeamCreateOutput {
     pub team_id: String,
@@ -116,14 +116,14 @@ pub struct TeamCreateOutput {
 /// Tool that creates a team of agents.
 ///
 /// The calling agent is automatically set as the team leader.
-/// Members can be existing agents (by agent_id) or new agents created inline.
+/// Members can be existing agents (by `agent_id`) or new agents created inline.
 #[derive(Clone)]
 pub struct TeamCreateTool {
     store: Arc<dyn TeamStore>,
     registry: Arc<AgentRegistry>,
     agent_manager: Option<Arc<AgentManager>>,
     session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
-    /// Injected by ExecutionEngine: the ID of the agent calling this tool.
+    /// Injected by `ExecutionEngine`: the ID of the agent calling this tool.
     pub current_agent_id: String,
 }
 
@@ -144,7 +144,7 @@ impl TeamCreateTool {
         }
     }
 
-    /// Set the current agent ID (called by ExecutionEngine before each run).
+    /// Set the current agent ID (called by `ExecutionEngine` before each run).
     pub fn set_current_agent_id(&mut self, agent_id: impl Into<String>) {
         self.current_agent_id = agent_id.into();
     }
@@ -161,7 +161,7 @@ impl TeamCreateTool {
         }
     }
 
-    /// Resolve a MemberSpec to an agent_id, creating the agent if needed.
+    /// Resolve a `MemberSpec` to an `agent_id`, creating the agent if needed.
     /// When `role` is set on the spec, the corresponding role prompt
     /// template is injected into the agent's system prompt.
     async fn resolve_member(&self, spec: &MemberSpec) -> Result<String> {
@@ -230,7 +230,7 @@ impl TeamCreateTool {
         }
     }
 
-    /// Create a new agent from an inline CreateAgentSpec and register it.
+    /// Create a new agent from an inline `CreateAgentSpec` and register it.
     /// If an agent with the same ID already exists, silently reuse it
     /// instead of creating a duplicate (prevents registry pollution).
     ///

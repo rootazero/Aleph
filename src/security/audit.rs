@@ -1,6 +1,6 @@
 //! Persistent security audit log.
 //!
-//! Records security events to SQLite for post-incident analysis.
+//! Records security events to `SQLite` for post-incident analysis.
 //! Uses async channel for non-blocking writes from hot paths.
 
 use std::fmt;

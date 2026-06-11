@@ -6,7 +6,7 @@ use crate::gateway::handlers::plugins::handlers::get_extension_manager;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 
 /// A plugin name is joined onto the plugins directory and used for
-/// destructive filesystem operations (remove_dir_all, marker writes), so it
+/// destructive filesystem operations (`remove_dir_all`, marker writes), so it
 /// must be a single normal path component — no separators, no `..`, not
 /// absolute. Anything else could escape the plugins directory.
 fn is_safe_plugin_name(name: &str) -> bool {

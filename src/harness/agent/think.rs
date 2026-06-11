@@ -49,7 +49,7 @@ impl crate::providers::DeltaSink for CallbackSink<'_> {
 /// Ephemeral nudge appended on the grace turn when the budget hits
 /// critical — the single tool-less LLM call given when
 /// `LoopDirective::FinalReply` fires and the prior assistant turn ended
-/// on an unresolved tool_use. Tools are also stripped at the request
+/// on an unresolved `tool_use`. Tools are also stripped at the request
 /// layer (no `.with_tools(...)`), so the model cannot loop further.
 const GRACE_NUDGE_BUDGET: &str = "You are out of context budget and cannot call any more tools. \
      Respond now with a final summary for the user based on what you have so far.";
@@ -64,7 +64,7 @@ const GRACE_NUDGE_DIMINISHING: &str = "You have not been making measurable progr
 /// Ephemeral nudge for the grace turn fired when the `max_iterations`
 /// cap trips — same shape as the other nudges but framed around the
 /// iteration limit. Without this turn a runaway that ends on an
-/// unresolved tool_use leaves the user with no terminal text.
+/// unresolved `tool_use` leaves the user with no terminal text.
 const GRACE_NUDGE_MAX_ITERATIONS: &str =
     "You have reached the maximum number of tool-calling iterations and \
      cannot call any more tools. Respond now with a final summary for the \
@@ -110,7 +110,7 @@ const GRACE_NUDGE_TOOL_LOOP_HALT: &str =
      let one missing item block the whole response.";
 
 /// Maximum re-issues of the LLM call when the provider returns a response
-/// with no text, no tool_calls and no thinking. A small bound — an empty
+/// with no text, no `tool_calls` and no thinking. A small bound — an empty
 /// response is usually transient; persistent emptiness is a broken
 /// endpoint that more retries will not fix.
 const EMPTY_RESPONSE_RETRIES: u32 = 2;
@@ -120,7 +120,7 @@ const EMPTY_RESPONSE_RETRIES: u32 = 2;
 /// iteration so the model uses *this* turn to emit a final summary instead
 /// of triggering the post-hoc C1 grace turn (which costs an extra LLM
 /// round-trip). C1 remains as a fail-safe for the rare case where the
-/// model ignores this hint and still emits tool_use.
+/// model ignores this hint and still emits `tool_use`.
 ///
 /// Text intentionally mirrors opencode's `max-steps.txt` shape so model
 /// behaviour transfers across harnesses.
@@ -186,7 +186,7 @@ impl GraceReason {
 }
 
 /// True when a provider response carries no usable content at all — no
-/// text, no tool_calls and no thinking. This is a provider failure mode
+/// text, no `tool_calls` and no thinking. This is a provider failure mode
 /// (degraded endpoint, context degradation), not a legitimate terminal
 /// turn, and must not be reported to the user as a clean completion.
 fn is_empty_response(response: &ProviderResponse) -> bool {
@@ -1599,7 +1599,7 @@ impl AgentHarness {
         });
     }
 
-    /// Fire a grace turn from the outer loop's cap sites (max_iterations,
+    /// Fire a grace turn from the outer loop's cap sites (`max_iterations`,
     /// verifier-veto, consecutive-failure), where the per-turn `events` /
     /// `messages` are no longer in scope. Re-fetches the session log and
     /// re-assembles the prompt, then delegates to
@@ -1638,13 +1638,13 @@ impl AgentHarness {
         .await;
     }
 
-    /// Close out tool_use blocks the model emitted on a turn the verifier then
+    /// Close out `tool_use` blocks the model emitted on a turn the verifier then
     /// vetoed/halted. Those calls are never executed (Act is skipped on a
     /// non-Continue verdict), so without a matching result the prompt builder
-    /// drops the orphaned tool_use block to avoid an Anthropic 400 — which
+    /// drops the orphaned `tool_use` block to avoid an Anthropic 400 — which
     /// silently erases the whole assistant turn (text + remaining context) from
     /// the next prompt. Emitting a synthetic `ToolError` per call preserves the
-    /// tool_use↔result invariant and lets the model see *why* the call did not
+    /// `tool_use↔result` invariant and lets the model see *why* the call did not
     /// run. Fail-soft: a failed emit logs at WARN and continues.
     async fn close_unexecuted_tool_uses(
         &self,

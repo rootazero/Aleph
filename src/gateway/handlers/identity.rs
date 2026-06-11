@@ -6,12 +6,12 @@
 //!
 //! | Method | Description |
 //! |--------|-------------|
-//! | identity.get | Returns the effective SoulManifest |
+//! | identity.get | Returns the effective `SoulManifest` |
 //! | identity.set | Sets session-level identity override |
 //! | identity.clear | Clears session identity override |
 //! | identity.list | Lists available identity sources |
 //!
-//! These handlers require an IdentityResolver to be wired at Gateway initialization.
+//! These handlers require an `IdentityResolver` to be wired at Gateway initialization.
 
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
@@ -56,7 +56,7 @@ pub struct IdentityListResponse {
 // Handler Functions
 // ============================================================================
 
-/// Handle identity.get - returns the effective SoulManifest
+/// Handle identity.get - returns the effective `SoulManifest`
 ///
 /// # Example Request
 ///

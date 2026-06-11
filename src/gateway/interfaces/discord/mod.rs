@@ -206,7 +206,7 @@ impl DiscordChannel {
         }
     }
 
-    /// Parse a conversation_id into a SerenityChannelId, handling dm:user_id format.
+    /// Parse a `conversation_id` into a `SerenityChannelId`, handling `dm:user_id` format.
     async fn resolve_channel_id(
         &self,
         conversation_id: &ConversationId,
@@ -238,7 +238,7 @@ impl DiscordChannel {
         }
     }
 
-    /// Parse a MessageId string into a SerenityMessageId.
+    /// Parse a `MessageId` string into a `SerenityMessageId`.
     fn parse_message_id(message_id: &MessageId) -> ChannelResult<SerenityMessageId> {
         message_id
             .as_str()

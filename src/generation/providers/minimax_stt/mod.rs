@@ -1,7 +1,7 @@
-//! MiniMax speech-to-text provider (`GenerationType::Transcription`).
+//! `MiniMax` speech-to-text provider (`GenerationType::Transcription`).
 //!
 //! Targets the native `/v1/audio_to_text` endpoint (synchronous multipart),
-//! which differs from MiniMax's OpenAI-shape proxy in two ways:
+//! which differs from `MiniMax`'s OpenAI-shape proxy in two ways:
 //!
 //! * Auth needs a `GroupId` query parameter alongside `Authorization: Bearer`.
 //! * Responses wrap their payload in a `base_resp` envelope whose
@@ -12,11 +12,11 @@
 //! plus optional `model` / `language` text fields. Input audio is sourced from
 //! either `params.reference_audio` (local path or `data:` URL) or
 //! `request.prompt` (treated as a local path) — mirroring the contract used
-//! by the openai_whisper and deepgram_stt providers.
+//! by the `openai_whisper` and `deepgram_stt` providers.
 //!
-//! GroupId is required and is sourced from `params.extra["group_id"]`. The
+//! `GroupId` is required and is sourced from `params.extra["group_id"]`. The
 //! provider rejects construction if `group_id` is missing at call time,
-//! matching MiniMax's hard requirement.
+//! matching `MiniMax`'s hard requirement.
 
 use crate::generation::{
     GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationProvider,

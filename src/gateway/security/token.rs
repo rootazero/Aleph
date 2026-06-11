@@ -2,7 +2,7 @@
 
 //! HMAC-Signed Token Management
 //!
-//! Tokens are signed with HMAC-SHA256 and stored in SQLite.
+//! Tokens are signed with HMAC-SHA256 and stored in `SQLite`.
 //! The original token value is never stored - only the hash.
 
 use crate::sync_primitives::Arc;

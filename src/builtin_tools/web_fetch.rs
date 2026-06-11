@@ -1,6 +1,6 @@
 //! Web fetch tool for retrieving and extracting content from web pages
 //!
-//! Implements AlephTool trait for AI agent integration.
+//! Implements `AlephTool` trait for AI agent integration.
 
 use super::error::ToolError;
 use crate::config::WebFetchPolicy;
@@ -293,7 +293,7 @@ impl WebFetchTool {
     /// Maximum response body size in bytes (10 MB)
     const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
-    /// Create a new WebFetchTool with default settings
+    /// Create a new `WebFetchTool` with default settings
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -313,7 +313,7 @@ impl WebFetchTool {
         self
     }
 
-    /// Create a new WebFetchTool with policy configuration
+    /// Create a new `WebFetchTool` with policy configuration
     #[must_use]
     pub fn with_policy(policy: &WebFetchPolicy) -> Self {
         Self {
@@ -527,7 +527,7 @@ impl WebFetchTool {
     // Part A: Pre-cleaning and safety gates
     // -----------------------------------------------------------------------
 
-    /// Reject HTML that exceeds 1,000,000 characters to prevent DoS.
+    /// Reject HTML that exceeds 1,000,000 characters to prevent `DoS`.
     pub(crate) fn validate_html_safety(html: &str) -> std::result::Result<(), ToolError> {
         // The 10 MB response-byte gate already bounds anything reaching here;
         // this is the matching upper bound on the decoded HTML string. The
@@ -667,7 +667,7 @@ impl Clone for WebFetchTool {
     }
 }
 
-/// Implementation of AlephTool trait for WebFetchTool
+/// Implementation of `AlephTool` trait for `WebFetchTool`
 #[async_trait]
 impl AlephTool for WebFetchTool {
     const NAME: &'static str = "web_fetch";

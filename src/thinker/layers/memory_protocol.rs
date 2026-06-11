@@ -1,4 +1,4 @@
-//! MemoryProtocolLayer — soft guidance for the three memory tools (priority 1745)
+//! `MemoryProtocolLayer` — soft guidance for the three memory tools (priority 1745)
 //!
 //! Sits between `MemoryAugmentationLayer` (1740, hybrid-retrieval injection) and
 //! `SessionContextGuideLayer` (1750, post-compaction guide). Always-on, stable

@@ -1,4 +1,4 @@
-//! SkillModeLayer — strict skill execution mode (priority 1400)
+//! `SkillModeLayer` — strict skill execution mode (priority 1400)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

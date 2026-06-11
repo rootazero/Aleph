@@ -1,6 +1,6 @@
 //! Cross-surface origin reply fan-out (goal #1, sub-gap (b)).
 //!
-//! When a run is initiated from one surface (e.g. the WebChat Panel) against a
+//! When a run is initiated from one surface (e.g. the `WebChat` Panel) against a
 //! session whose conversation *originated* on an external channel (Telegram,
 //! Slack, ...), the agent's final reply should also reach that origin channel so
 //! the two ends stay in sync ("AI comes to you" / one-core-many-channels, R5/R6).

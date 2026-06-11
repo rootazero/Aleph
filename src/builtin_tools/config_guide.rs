@@ -1,4 +1,4 @@
-//! ReadConfigGuideTool — progressive disclosure of configuration knowledge
+//! `ReadConfigGuideTool` — progressive disclosure of configuration knowledge
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

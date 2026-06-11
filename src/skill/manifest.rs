@@ -254,7 +254,7 @@ pub fn parse_skill_content(
     Ok(manifest)
 }
 
-/// Split content into (yaml_frontmatter, body).
+/// Split content into (`yaml_frontmatter`, body).
 ///
 /// Expects the content to start with `---\n` and contain a closing `---\n`
 /// (or `---` at end of string).

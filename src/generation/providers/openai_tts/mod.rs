@@ -1,6 +1,6 @@
-//! OpenAI Text-to-Speech Provider
+//! `OpenAI` Text-to-Speech Provider
 //!
-//! This module implements the `GenerationProvider` trait for OpenAI's Text-to-Speech API.
+//! This module implements the `GenerationProvider` trait for `OpenAI`'s Text-to-Speech API.
 //!
 //! # API Reference
 //!
@@ -46,7 +46,7 @@ pub mod types;
 
 pub use types::{OpenAiError, OpenAiErrorResponse, TtsRequest};
 
-/// Default API endpoint for OpenAI
+/// Default API endpoint for `OpenAI`
 const DEFAULT_ENDPOINT: &str = "https://api.openai.com";
 
 /// Default model for TTS
@@ -67,15 +67,15 @@ pub const AVAILABLE_MODELS: [&str; 2] = ["tts-1", "tts-1-hd"];
 /// Available output formats
 pub const AVAILABLE_FORMATS: [&str; 4] = ["mp3", "opus", "aac", "flac"];
 
-/// OpenAI Text-to-Speech Provider
+/// `OpenAI` Text-to-Speech Provider
 ///
-/// This provider integrates with OpenAI's TTS API to synthesize speech
+/// This provider integrates with `OpenAI`'s TTS API to synthesize speech
 /// from text input using various voices.
 #[derive(Clone)]
 pub struct OpenAiTtsProvider {
     /// HTTP client for making requests
     client: Client,
-    /// OpenAI API key
+    /// `OpenAI` API key
     pub api_key: String,
     /// API endpoint — fully resolved speech URL
     pub endpoint: String,
@@ -98,7 +98,7 @@ impl std::fmt::Debug for OpenAiTtsProvider {
 }
 
 impl OpenAiTtsProvider {
-    /// Create a new OpenAI TTS Provider
+    /// Create a new `OpenAI` TTS Provider
     pub fn new<S: Into<String>>(
         api_key: S,
         base_url: Option<String>,
@@ -205,7 +205,7 @@ impl OpenAiTtsProvider {
         self.endpoint.clone()
     }
 
-    /// Build the API request body from a GenerationRequest
+    /// Build the API request body from a `GenerationRequest`
     fn build_request_body(&self, request: &GenerationRequest) -> types::TtsRequest {
         types::TtsRequest {
             model: request
@@ -238,7 +238,7 @@ impl OpenAiTtsProvider {
         }
     }
 
-    /// Parse API error response and convert to GenerationError
+    /// Parse API error response and convert to `GenerationError`
     fn parse_error_response(&self, status: reqwest::StatusCode, body: &str) -> GenerationError {
         // Try to parse as OpenAI error format
         if let Ok(error_response) = serde_json::from_str::<types::OpenAiErrorResponse>(body) {

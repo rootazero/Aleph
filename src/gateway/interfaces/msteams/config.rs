@@ -90,10 +90,10 @@ pub struct TeamOverride {
 pub struct MsTeamsConfig {
     /// Azure Bot App ID
     pub app_id: String,
-    /// Azure Bot App Password (client secret) - deprecated, use federated_identity instead
+    /// Azure Bot App Password (client secret) - deprecated, use `federated_identity` instead
     #[deprecated(since = "0.3.0", note = "use federated_identity instead")]
     pub app_password: String,
-    /// Federated identity configuration (recommended alternative to app_password)
+    /// Federated identity configuration (recommended alternative to `app_password`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub federated_identity: Option<FederatedCredential>,
     /// Azure AD Tenant ID (default: "common")
@@ -117,7 +117,7 @@ pub struct MsTeamsConfig {
     /// Default reply style for group messages
     #[serde(default)]
     pub reply_style: ReplyStyle,
-    /// Per-team override settings (team_id -> config)
+    /// Per-team override settings (`team_id` -> config)
     #[serde(default)]
     pub teams: HashMap<String, TeamOverride>,
 }
@@ -184,7 +184,7 @@ impl MsTeamsConfig {
         }
     }
 
-    /// Get effective require_mention for a conversation.
+    /// Get effective `require_mention` for a conversation.
     ///
     /// Returns the per-team setting if available, otherwise the global setting.
     #[must_use]
@@ -199,7 +199,7 @@ impl MsTeamsConfig {
         self.require_mention
     }
 
-    /// Get effective reply_style for a conversation.
+    /// Get effective `reply_style` for a conversation.
     ///
     /// Returns the per-team setting if available, otherwise the global setting.
     #[must_use]

@@ -5,7 +5,7 @@
 //!
 //! # Design
 //!
-//! - **DashMap** for lock-free concurrent buffer access
+//! - **`DashMap`** for lock-free concurrent buffer access
 //! - **Debounce** window resets on each new message (configurable)
 //! - **Early flush** when text ends with sentence-ending punctuation
 //! - **Media group** aggregation keyed by Telegram `media_group_id`
@@ -103,7 +103,7 @@ impl MessageCoalescer {
     }
 
     /// Ingest a message. Returns any immediately-flushed results when a buffer
-    /// exceeds safety limits (max_fragments / max_bytes).
+    /// exceeds safety limits (`max_fragments` / `max_bytes`).
     pub fn push(&self, msg: InboundMessage) -> Vec<InboundMessage> {
         let now = Instant::now();
         let conversation_id = msg.conversation_id.as_str().to_owned();

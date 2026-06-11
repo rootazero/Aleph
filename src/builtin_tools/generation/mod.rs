@@ -16,7 +16,7 @@ pub use video_generate::{VideoGenerateArgs, VideoGenerateOutput, VideoGenerateTo
 use crate::builtin_tools::error::ToolError;
 use crate::generation::GenerationError;
 
-/// Convert GenerationError to ToolError for tool execution
+/// Convert `GenerationError` to `ToolError` for tool execution
 impl From<GenerationError> for ToolError {
     fn from(err: GenerationError) -> Self {
         match &err {

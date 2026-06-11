@@ -1,8 +1,8 @@
-//! `GoalStore` — SQLite persistence for standing goals, keyed by session.
+//! `GoalStore` — `SQLite` persistence for standing goals, keyed by session.
 //!
 //! One row per session (PK = `session_id`), goal serialized as a JSON blob.
 //! Opens via the process-safe helper (`open_sqlite_safe`, Spec C) so it
-//! never races the daemon's other SQLite writers. Survives `/resume`.
+//! never races the daemon's other `SQLite` writers. Survives `/resume`.
 
 use std::path::Path;
 

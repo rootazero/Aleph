@@ -561,7 +561,7 @@ pub async fn handle_schema_protocol(request: JsonRpcRequest) -> JsonRpcResponse 
 
 /// Handle schema.openapi RPC request
 ///
-/// Returns the full API specification as an OpenAPI 3.0 document.
+/// Returns the full API specification as an `OpenAPI` 3.0 document.
 /// The spec can be used with Swagger UI, Redoc, or openapi-generator.
 pub async fn handle_schema_openapi(request: JsonRpcRequest) -> JsonRpcResponse {
     let registry = SCHEMA_REGISTRY.get_or_init(TypedHandlerRegistry::new);

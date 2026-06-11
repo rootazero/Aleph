@@ -63,7 +63,7 @@ pub struct TokenUsage {
 }
 
 impl TokenUsage {
-    /// Create a new TokenUsage with input and output tokens
+    /// Create a new `TokenUsage` with input and output tokens
     #[must_use]
     pub fn new(input: u32, output: u32) -> Self {
         Self {

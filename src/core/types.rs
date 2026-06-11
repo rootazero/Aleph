@@ -1,10 +1,10 @@
 //! Shared type definitions for the core module
 //!
 //! This module contains all shared types used across the codebase:
-//! - MediaAttachment: Multimodal content support
-//! - CapturedContext: Context from active application
-//! - CompressionStats: Memory compression statistics
-//! - MemoryEntry: Memory entry for API responses
+//! - `MediaAttachment`: Multimodal content support
+//! - `CapturedContext`: Context from active application
+//! - `CompressionStats`: Memory compression statistics
+//! - `MemoryEntry`: Memory entry for API responses
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -113,7 +113,7 @@ pub struct CompressionStats {
     /// Number of valid (non-invalidated) facts
     pub valid_facts: u64,
     /// Breakdown by fact type (preference, plan, learning, etc.)
-    /// Uses BTreeMap for deterministic iteration order
+    /// Uses `BTreeMap` for deterministic iteration order
     pub facts_by_type: BTreeMap<String, u64>,
 }
 

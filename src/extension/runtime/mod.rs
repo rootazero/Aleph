@@ -3,7 +3,7 @@
 //! Provides execution environments for plugins:
 //! - WASM (Extism) - Sandboxed WebAssembly execution
 //! - Static - Markdown-based skills/commands/agents (no runtime needed)
-//! - MCP - External process via MCP protocol (managed by McpManager)
+//! - MCP - External process via MCP protocol (managed by `McpManager`)
 
 pub mod wasm;
 

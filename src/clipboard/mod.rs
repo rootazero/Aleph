@@ -1,7 +1,7 @@
 use crate::error::{AlephError, Result};
 /// Image types for AI provider integration
 ///
-/// NOTE: Clipboard operations are now handled by Swift ClipboardManager.
+/// NOTE: Clipboard operations are now handled by Swift `ClipboardManager`.
 /// These types are kept only for AI provider image encoding/decoding.
 ///
 /// See: refactor-native-api-separation proposal
@@ -9,7 +9,7 @@ use base64::{engine::general_purpose, Engine as _};
 
 /// Maximum allowed image size in bytes (20 MB)
 ///
-/// This limit prevents DoS from maliciously large base64-encoded images.
+/// This limit prevents `DoS` from maliciously large base64-encoded images.
 const MAX_IMAGE_SIZE_BYTES: usize = 20 * 1024 * 1024;
 
 /// Image format enumeration
@@ -35,7 +35,7 @@ pub struct ImageData {
 }
 
 impl ImageData {
-    /// Create a new ImageData instance
+    /// Create a new `ImageData` instance
     #[must_use]
     pub const fn new(data: Vec<u8>, format: ImageFormat) -> Self {
         Self { data, format }
@@ -55,7 +55,7 @@ impl ImageData {
 
     /// Convert image to Base64 data URI format for API requests
     ///
-    /// Returns a string in the format: "data:image/<format>;base64,<encoded_data>"
+    /// Returns a string in the format: "data:image/<format>;base64,<`encoded_data`>"
     #[must_use]
     pub fn to_base64(&self) -> String {
         let mime_type = match self.format {
@@ -71,7 +71,7 @@ impl ImageData {
 
     /// Parse image from Base64 data URI
     ///
-    /// Accepts strings in the format: "data:image/<format>;base64,<encoded_data>"
+    /// Accepts strings in the format: "data:image/<format>;base64,<`encoded_data`>"
     pub fn from_base64(data_uri: &str) -> Result<Self> {
         let input_byte_len = data_uri.len();
         if input_byte_len > MAX_IMAGE_SIZE_BYTES * 2 {

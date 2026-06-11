@@ -1,7 +1,7 @@
 //! Plain-text tool-call promotion (openclaw `tool-call-repair` parity).
 //!
 //! Some models — particularly open-weight families behind OpenAI-compatible
-//! proxies (Qwen, Llama-3.1, DeepSeek, Mistral, Hermes-format finetunes) — emit
+//! proxies (Qwen, Llama-3.1, `DeepSeek`, Mistral, Hermes-format finetunes) — emit
 //! a tool call as **plain assistant text** instead of a provider-native
 //! function-call block. The harness then sees `tool_calls == []`, treats the
 //! turn as a clean completion, and the agent loop stalls: the model "talked
@@ -16,7 +16,7 @@
 //!
 //! Supported encodings:
 //!
-//! 1. **`<tool_call>{json}</tool_call>`** — Qwen / Hermes-format / DeepSeek /
+//! 1. **`<tool_call>{json}</tool_call>`** — Qwen / Hermes-format / `DeepSeek` /
 //!    Mistral. The JSON body carries `name` plus `arguments` (aliases:
 //!    `parameters`, `args`). `arguments` may itself be a JSON-encoded string
 //!    (some finetunes double-encode); that is decoded transparently.

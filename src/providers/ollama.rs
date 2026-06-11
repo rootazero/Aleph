@@ -21,7 +21,7 @@
 /// - `model`: Model name (e.g., "llama3.2", "qwen2.5", "llava")
 ///
 /// Optional fields:
-/// - `base_url`: Ollama server URL (defaults to "http://localhost:11434")
+/// - `base_url`: Ollama server URL (defaults to "<http://localhost:11434>")
 /// - `timeout_seconds`: Request timeout (defaults to 60)
 ///
 /// # Prerequisites
@@ -110,7 +110,7 @@ struct ChatMessage {
 }
 
 /// A single tool call emitted by the model. Ollama assigns no id and returns
-/// `arguments` as a JSON object (not a stringified blob like OpenAI).
+/// `arguments` as a JSON object (not a stringified blob like `OpenAI`).
 #[derive(Debug, Deserialize)]
 struct ChatToolCall {
     function: ChatFunctionCall,

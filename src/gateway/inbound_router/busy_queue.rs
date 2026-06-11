@@ -14,13 +14,13 @@
 //! slot before an earlier one.
 //!
 //! All four reference harnesses keep a real FIFO lane instead (openclaw
-//! `followup` queue, hermes `queue` mode, Pi `followUpQueue`, OpenSquilla
+//! `followup` queue, hermes `queue` mode, Pi `followUpQueue`, `OpenSquilla`
 //! per-session pending queue with overflow policy). This module is Aleph's
 //! equivalent: every message joins its agent's FIFO lane up front (before its
 //! first delivery attempt, so a newcomer can never jump ahead of waiting
 //! siblings); only the front ticket attempts delivery while the rest poll
 //! cheaply behind it, so bursts deliver in arrival order. Overflow is
-//! `REJECT_NEWEST` (OpenSquilla
+//! `REJECT_NEWEST` (`OpenSquilla`
 //! parity): past [`MAX_QUEUED_PER_AGENT`] new messages are refused up front —
 //! the sender is told immediately instead of waiting half an hour to fail.
 //!
@@ -38,7 +38,7 @@ use std::sync::OnceLock;
 use crate::sync_primitives::Mutex;
 
 /// Upper bound on messages waiting in one agent's FIFO lane. Past this the
-/// newest message is rejected immediately (OpenSquilla `REJECT_NEWEST`) so a
+/// newest message is rejected immediately (`OpenSquilla` `REJECT_NEWEST`) so a
 /// flooding channel gets prompt feedback instead of a deep silent backlog.
 pub(super) const MAX_QUEUED_PER_AGENT: usize = 32;
 

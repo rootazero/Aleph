@@ -1,4 +1,4 @@
-//! SessionCollaborateTool — start a collaborative session between team members.
+//! `SessionCollaborateTool` — start a collaborative session between team members.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -35,7 +35,7 @@ pub struct SessionCollaborateArgs {
     pub thread_id: Option<String>,
 }
 
-/// Output from session_collaborate.
+/// Output from `session_collaborate`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionCollaborateOutput {
     pub session_id: String,

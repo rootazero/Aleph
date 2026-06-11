@@ -1,4 +1,4 @@
-//! TeamMemberRemoveTool — remove a member from a team.
+//! `TeamMemberRemoveTool` — remove a member from a team.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -23,7 +23,7 @@ pub struct TeamMemberRemoveArgs {
     pub agent_id: String,
 }
 
-/// Output from team_member_remove.
+/// Output from `team_member_remove`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TeamMemberRemoveOutput {
     pub message: String,

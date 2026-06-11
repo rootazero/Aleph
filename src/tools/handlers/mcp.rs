@@ -1,4 +1,4 @@
-//! McpHandler — forwards to MCP tools/call via `McpClient::call_tool`. Task 4.
+//! `McpHandler` — forwards to MCP tools/call via `McpClient::call_tool`. Task 4.
 //!
 //! Each handler instance wraps one discovered MCP tool. The handler:
 //! - Holds an `Arc<McpClient>` (shared across all tools from the same manager)
@@ -88,7 +88,7 @@ impl McpHandler {
 
 /// Map a candidate registry name onto the provider-safe alphabet
 /// `[A-Za-z0-9_-]`, truncating to 64 characters. Strict-schema providers
-/// (OpenAI function calling) reject names outside this set with a request-
+/// (`OpenAI` function calling) reject names outside this set with a request-
 /// level 400, which would poison the whole turn for every tool.
 pub(crate) fn sanitize_tool_name(raw: &str) -> String {
     raw.chars()

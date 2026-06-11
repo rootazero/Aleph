@@ -1,4 +1,4 @@
-//! StandingGoalLayer — emits `<standing_goal>` at priority 1754 (Dynamic).
+//! `StandingGoalLayer` — emits `<standing_goal>` at priority 1754 (Dynamic).
 //!
 //! Re-surfaces the session's active standing goal into the system prompt
 //! every turn while it is active — the cross-turn complement to

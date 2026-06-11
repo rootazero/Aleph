@@ -1,6 +1,6 @@
-//! AppleScript Message Sender
+//! `AppleScript` Message Sender
 //!
-//! Sends iMessage/SMS messages using AppleScript and the Messages.app.
+//! Sends iMessage/SMS messages using `AppleScript` and the Messages.app.
 //!
 //! # Requirements
 //!
@@ -206,7 +206,7 @@ impl MessageSender {
     ///
     /// # Note
     ///
-    /// iMessage tapbacks are complex to implement via AppleScript.
+    /// iMessage tapbacks are complex to implement via `AppleScript`.
     /// This is a best-effort implementation that may not work on all macOS versions.
     pub async fn send_tapback(
         chat_id: &str,
@@ -240,7 +240,7 @@ impl MessageSender {
     }
 }
 
-/// Execute an AppleScript and return the output
+/// Execute an `AppleScript` and return the output
 async fn execute_applescript(script: &str) -> Result<String, SendError> {
     trace!("Executing AppleScript:\n{}", script);
 
@@ -263,7 +263,7 @@ async fn execute_applescript(script: &str) -> Result<String, SendError> {
     }
 }
 
-/// Escape a string for use in AppleScript
+/// Escape a string for use in `AppleScript`
 fn escape_applescript_string(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")

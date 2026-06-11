@@ -59,7 +59,7 @@ impl SearchRegistry {
     /// Install (or replace) the WebFetch-based SERP scrape fallback.
     ///
     /// Once installed, [`Self::search`] will attempt the fallback after
-    /// the configured default + fallback_providers chain has fully
+    /// the configured default + `fallback_providers` chain has fully
     /// failed. Pass `None` to disable the last-resort branch — e.g. in
     /// hermetic tests that must not make outbound HTTP under any
     /// circumstance.
@@ -67,7 +67,7 @@ impl SearchRegistry {
         self.web_fetch_fallback = fallback;
     }
 
-    /// Returns true if a WebFetch SERP fallback is currently armed.
+    /// Returns true if a `WebFetch` SERP fallback is currently armed.
     /// Used by the panel / `aleph doctor` to surface the user-visible
     /// "fallback enabled" indicator without leaking the inner Arc.
     #[must_use]
@@ -75,7 +75,7 @@ impl SearchRegistry {
         self.web_fetch_fallback.is_some()
     }
 
-    /// Build a SearchRegistry from `[search]` TOML configuration.
+    /// Build a `SearchRegistry` from `[search]` TOML configuration.
     ///
     /// Walks `config.backends` and asks the default [`crate::search::ProviderFactoryRegistry`]
     /// to construct each backend; unknown `provider_type` values and
@@ -83,7 +83,7 @@ impl SearchRegistry {
     /// the load. Returns `None` when the config is `None`, search is
     /// disabled, or no usable backend was constructed — caller should
     /// then leave `BuiltinToolConfig.search_registry = None` and the
-    /// `search` tool falls back to its legacy TAVILY_API_KEY path.
+    /// `search` tool falls back to its legacy `TAVILY_API_KEY` path.
     #[must_use]
     pub fn from_config(
         config: Option<&crate::config::types::SearchConfigInternal>,

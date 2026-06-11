@@ -130,7 +130,7 @@ impl PluginStatus {
 // Load Summary
 // =============================================================================
 
-/// Summary of extension loading returned by ExtensionManager::load_all()
+/// Summary of extension loading returned by `ExtensionManager::load_all()`
 #[derive(Debug, Default)]
 pub struct LoadSummary {
     /// Number of skills loaded
@@ -268,7 +268,7 @@ impl PluginRecord {
         }
     }
 
-    /// Create a PluginRecord from an AdapterOutput.
+    /// Create a `PluginRecord` from an `AdapterOutput`.
     ///
     /// Populates metadata from the adapter output and derives tool/hook counts
     /// from the declared capabilities.

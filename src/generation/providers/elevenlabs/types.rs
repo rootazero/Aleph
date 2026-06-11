@@ -1,8 +1,8 @@
-//! Request/response types for ElevenLabs TTS API.
+//! Request/response types for `ElevenLabs` TTS API.
 
 use serde::{Deserialize, Serialize};
 
-/// Request body for ElevenLabs TTS API
+/// Request body for `ElevenLabs` TTS API
 #[derive(Debug, Clone, Serialize)]
 pub struct TtsRequest {
     /// The text to synthesize
@@ -13,7 +13,7 @@ pub struct TtsRequest {
     pub voice_settings: VoiceSettings,
 }
 
-/// Voice settings for ElevenLabs TTS API
+/// Voice settings for `ElevenLabs` TTS API
 #[derive(Debug, Clone, Serialize)]
 pub struct VoiceSettings {
     /// How stable the voice should be (0.0 to 1.0)
@@ -28,13 +28,13 @@ pub struct VoiceSettings {
     pub use_speaker_boost: Option<bool>,
 }
 
-/// ElevenLabs API error response format
+/// `ElevenLabs` API error response format
 #[derive(Debug, Clone, Deserialize)]
 pub struct ElevenLabsErrorResponse {
     pub detail: Option<ElevenLabsErrorDetail>,
 }
 
-/// ElevenLabs API error detail
+/// `ElevenLabs` API error detail
 #[derive(Debug, Clone, Deserialize)]
 pub struct ElevenLabsErrorDetail {
     pub message: String,

@@ -12,7 +12,7 @@ use crate::session::events::{now_ms, SessionEvent};
 use crate::session::service::SessionId;
 
 impl AgentHarness {
-    /// Stage 5a (#9): Apply the input guardrail to the latest UserMessage in
+    /// Stage 5a (#9): Apply the input guardrail to the latest `UserMessage` in
     /// the tail. Returns the (possibly rewritten) events vector or a `Block`
     /// reason. The original session log is never mutated — sanitisation
     /// happens only on the in-memory clone passed to the prompt builder, so

@@ -9,7 +9,7 @@
 //! Uses the `notify-debouncer-full` crate to watch `~/.aleph/protocols/` for changes:
 //! - **Debouncing**: 500ms delay to avoid rapid-fire reloads on single file writes
 //! - **Event filtering**: Only reacts to .yaml/.yml file changes
-//! - **Auto-reload**: Modified files are automatically re-loaded into ProtocolRegistry
+//! - **Auto-reload**: Modified files are automatically re-loaded into `ProtocolRegistry`
 //!
 //! # Integration
 //!

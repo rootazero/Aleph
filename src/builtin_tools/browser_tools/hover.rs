@@ -10,13 +10,13 @@ use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_hover tool.
+/// Arguments for the `browser_hover` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserHoverArgs {
     /// Browser profile name (default: "default").
     #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
     pub profile: String,
-    /// Accessibility ref_id from a previous snapshot.
+    /// Accessibility `ref_id` from a previous snapshot.
     pub ref_id: Option<String>,
     /// X coordinate for coordinate-based hovering.
     pub x: Option<f64>,
@@ -24,7 +24,7 @@ pub struct BrowserHoverArgs {
     pub y: Option<f64>,
 }
 
-/// Output from the browser_hover tool.
+/// Output from the `browser_hover` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserHoverOutput {
     pub success: bool,

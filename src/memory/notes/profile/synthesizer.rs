@@ -1,4 +1,4 @@
-//! ProfileSynthesizer trait and filesystem-backed implementation.
+//! `ProfileSynthesizer` trait and filesystem-backed implementation.
 //!
 //! The synthesizer is responsible for bootstrapping and incrementally updating
 //! `USER.md` via LLM calls.  It owns the merge algorithm: rate-limiting,
@@ -120,7 +120,7 @@ impl FsProfileSynthesizer {
     }
 
     /// Parse the six-section JSON returned by the LLM.  Returns sections map
-    /// and optional extra fields (confidence, stance_shift, outcome).
+    /// and optional extra fields (confidence, `stance_shift`, outcome).
     fn parse_sections_json(
         &self,
         raw: &str,

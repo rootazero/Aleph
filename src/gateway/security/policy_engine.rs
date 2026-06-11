@@ -1,8 +1,8 @@
 //! Stateless permission policy engine for Owner+Guest model
 //!
-//! This module provides pure-function permission checking based on IdentityContext.
+//! This module provides pure-function permission checking based on `IdentityContext`.
 //! No internal state is maintained - all permission information is carried in the
-//! IdentityContext parameter.
+//! `IdentityContext` parameter.
 
 use aleph_protocol::{GuestScope, IdentityContext, Role};
 
@@ -22,7 +22,7 @@ impl PermissionResult {
 
 /// Stateless policy engine for tool permission evaluation
 ///
-/// All permission checks are pure functions based on IdentityContext.
+/// All permission checks are pure functions based on `IdentityContext`.
 /// No internal state is maintained.
 ///
 /// # Philosophy
@@ -48,7 +48,7 @@ impl PolicyEngine {
     /// Check if identity can execute a tool (pure function)
     ///
     /// This is a stateless permission check - all information needed for the
-    /// decision is contained in the IdentityContext parameter.
+    /// decision is contained in the `IdentityContext` parameter.
     ///
     /// # Arguments
     ///

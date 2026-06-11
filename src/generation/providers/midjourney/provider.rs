@@ -1,7 +1,7 @@
-//! Core MidjourneyProvider struct and implementation
+//! Core `MidjourneyProvider` struct and implementation
 //!
 //! Contains the main provider struct, constructor, URL generation methods,
-//! and the GenerationProvider trait implementation.
+//! and the `GenerationProvider` trait implementation.
 
 use crate::generation::{
     GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationProvider,
@@ -17,9 +17,9 @@ use super::builder::MidjourneyProviderBuilder;
 use super::submit_polling::SubmitPolling;
 use super::types::{ImagineRequest, MidjourneyMode, PROVIDER_NAME};
 
-/// T8Star Midjourney Image Generation Provider
+/// `T8Star` Midjourney Image Generation Provider
 ///
-/// This provider integrates with T8Star's Midjourney API proxy to create
+/// This provider integrates with `T8Star`'s Midjourney API proxy to create
 /// high-quality images from text prompts.
 ///
 /// # Features
@@ -50,7 +50,7 @@ pub struct MidjourneyProvider {
     pub(crate) client: Client,
     /// API key for authentication
     pub(crate) api_key: String,
-    /// API endpoint (e.g., "https://ai.t8star.cn")
+    /// API endpoint (e.g., "<https://ai.t8star.cn>")
     pub(crate) endpoint: String,
     /// Generation mode (Fast or Relax)
     pub(crate) mode: MidjourneyMode,
@@ -72,11 +72,11 @@ impl std::fmt::Debug for MidjourneyProvider {
 }
 
 impl MidjourneyProvider {
-    /// Create a new MidjourneyProvider with default settings
+    /// Create a new `MidjourneyProvider` with default settings
     ///
     /// # Arguments
     ///
-    /// * `api_key` - T8Star API key for authentication
+    /// * `api_key` - `T8Star` API key for authentication
     ///
     /// # Example
     ///
@@ -91,11 +91,11 @@ impl MidjourneyProvider {
         MidjourneyProviderBuilder::new(api_key).build()
     }
 
-    /// Create a builder for MidjourneyProvider
+    /// Create a builder for `MidjourneyProvider`
     ///
     /// # Arguments
     ///
-    /// * `api_key` - T8Star API key for authentication
+    /// * `api_key` - `T8Star` API key for authentication
     ///
     /// # Example
     ///

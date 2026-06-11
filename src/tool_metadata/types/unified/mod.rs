@@ -1,6 +1,6 @@
 //! Unified Tool Representation
 //!
-//! The core UnifiedTool struct that normalizes all tools (Native, MCP, Skills,
+//! The core `UnifiedTool` struct that normalizes all tools (Native, MCP, Skills,
 //! Custom, Builtin) for consistent handling across routing, UI display, and
 //! prompt generation.
 
@@ -43,7 +43,7 @@ pub enum ChannelType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnifiedTool {
     /// Unique identifier
-    /// Format: "{source_type}:{name}" (e.g., "native:search", "mcp:github:git_status")
+    /// Format: "{`source_type}:{name`}" (e.g., "native:search", "`mcp:github:git_status`")
     pub id: String,
 
     /// Command/tool name for invocation
@@ -91,7 +91,7 @@ pub struct UnifiedTool {
     pub safety_level: ToolSafetyLevel,
 
     /// Parent service name (for MCP sub-tools)
-    /// e.g., "fs" for "fs:read_file"
+    /// e.g., "fs" for "`fs:read_file`"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_name: Option<String>,
 
@@ -158,7 +158,7 @@ pub struct UnifiedTool {
     pub routing_capabilities: Vec<String>,
 
     /// Intent type for classification
-    /// e.g., "builtin_search", "general_chat"
+    /// e.g., "`builtin_search`", "`general_chat`"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_intent_type: Option<String>,
 
@@ -190,7 +190,7 @@ pub struct UnifiedTool {
     // =========================================================================
     // Command Dispatch & Channel Visibility
     // =========================================================================
-    /// Dispatch mode: Direct (bypass LLM) or AgentLoop (inject into agent)
+    /// Dispatch mode: Direct (bypass LLM) or `AgentLoop` (inject into agent)
     #[serde(default)]
     pub dispatch_mode: DispatchMode,
 
@@ -210,7 +210,7 @@ pub struct UnifiedTool {
 }
 
 impl UnifiedTool {
-    /// Create a new UnifiedTool with required fields
+    /// Create a new `UnifiedTool` with required fields
     pub fn new(
         id: impl Into<String>,
         name: impl Into<String>,

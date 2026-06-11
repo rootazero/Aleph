@@ -1,11 +1,11 @@
-//! ProviderGuidanceLayer — family-specific operational directives (priority 810).
+//! `ProviderGuidanceLayer` — family-specific operational directives (priority 810).
 //!
-//! Ports Hermes-agent's TOOL_USE_ENFORCEMENT / OPENAI_EXECUTION /
-//! GOOGLE_MODEL_OPERATIONAL guidance blocks into a single
+//! Ports Hermes-agent's `TOOL_USE_ENFORCEMENT` / `OPENAI_EXECUTION` /
+//! `GOOGLE_MODEL_OPERATIONAL` guidance blocks into a single
 //! protocol-dispatched layer. The wire protocol reported by
 //! `AiProvider::protocol()` ("anthropic" / "openai" / "gemini" /
 //! "ollama" / custom) selects the appropriate block. Anthropic is
-//! left silent — Claude's native tool_use is well-behaved enough
+//! left silent — Claude's native `tool_use` is well-behaved enough
 //! that the extra steering does more harm than good.
 //!
 //! Stability: Stable (protocol is fixed per run; cacheable in the
@@ -151,10 +151,10 @@ a tool; time / date / timezone → query the system; file contents / sizes / lin
 read the files; system state (OS, CPU, processes, ports) → query live; current facts \
 (weather, news, versions) → search.";
 
-/// OpenAI / Codex / Grok — tail of the original execution-discipline block.
+/// `OpenAI` / Codex / Grok — tail of the original execution-discipline block.
 /// Holds the "act, don't ask" + "verify before finalizing" directives that
-/// remain OpenAI-family specific (Claude's native tool_use already enforces
-/// these by training). Emitted in addition to TOOL_PERSISTENCE_DOCTRINE for
+/// remain OpenAI-family specific (Claude's native `tool_use` already enforces
+/// these by training). Emitted in addition to `TOOL_PERSISTENCE_DOCTRINE` for
 /// OpenAI-protocol providers. Ported from `OPENAI_MODEL_EXECUTION_GUIDANCE`.
 const OPENAI_EXECUTION_DISCIPLINE_TAIL: &str = "## Execution Discipline — OpenAI Family\n\
 \n\

@@ -28,7 +28,7 @@ pub struct EmbeddingManager {
 }
 
 impl EmbeddingManager {
-    /// Create a new EmbeddingManager from settings
+    /// Create a new `EmbeddingManager` from settings
     #[must_use]
     pub fn new(settings: EmbeddingSettings) -> Self {
         Self {
@@ -98,7 +98,7 @@ impl EmbeddingManager {
 
     /// Switch the active provider.
     ///
-    /// Multi-dimension vector columns (vec_768, vec_1024, vec_1536) allow
+    /// Multi-dimension vector columns (`vec_768`, `vec_1024`, `vec_1536`) allow
     /// different providers to coexist — no need to clear the vector store.
     pub async fn switch_provider(&self, new_id: &str) -> Result<(), AlephError> {
         // Extract config, then drop the settings lock before creating the provider.

@@ -1,4 +1,4 @@
-//! LoopTool trait implementation for SubagentTool.
+//! `LoopTool` trait implementation for `SubagentTool`.
 
 use async_trait::async_trait;
 use futures::FutureExt;

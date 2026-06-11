@@ -1,14 +1,14 @@
 //! Session Manager — Phase 1 compatibility layer for Gateway `session.*` RPC.
 //!
-//! Agent execution (`agent_loop`) no longer reads or writes SessionManager
-//! directly; it uses `crate::session::SessionService`. Every SessionManager
-//! append is mirrored into SessionService via `src/session/shim.rs` so
+//! Agent execution (`agent_loop`) no longer reads or writes `SessionManager`
+//! directly; it uses `crate::session::SessionService`. Every `SessionManager`
+//! append is mirrored into `SessionService` via `src/session/shim.rs` so
 //! `session_events` remains the authoritative log.
 //!
-//! Phase 6 migrates Gateway RPC to SessionService directly and removes this
+//! Phase 6 migrates Gateway RPC to `SessionService` directly and removes this
 //! layer.
 //!
-//! Until then, this module continues to manage sessions with SQLite
+//! Until then, this module continues to manage sessions with `SQLite`
 //! persistence, automatic compaction, and lifecycle management.
 
 pub(crate) mod ops;
@@ -108,7 +108,7 @@ pub struct SessionIdentityMeta {
     /// Role of the session owner
     pub role: Role,
 
-    /// Identity ID ("owner" or guest_id)
+    /// Identity ID ("owner" or `guest_id`)
     pub identity_id: String,
 
     /// Guest scope (frozen at session creation)
@@ -174,7 +174,7 @@ impl SessionIdentityMeta {
         serde_json::to_string(self)
     }
 
-    /// Convert to IdentityContext for a specific request
+    /// Convert to `IdentityContext` for a specific request
     #[must_use]
     pub fn to_identity_context(&self, session_key: String) -> IdentityContext {
         match self.role {
@@ -225,7 +225,7 @@ impl Default for SessionManagerConfig {
     }
 }
 
-/// Session manager with SQLite persistence
+/// Session manager with `SQLite` persistence
 ///
 #[derive(Clone)]
 pub struct SessionManager {
@@ -450,7 +450,7 @@ pub enum SessionManagerError {
     NotFound(String),
 }
 
-/// Get session type string from SessionKey
+/// Get session type string from `SessionKey`
 pub(super) fn session_type_str(key: &SessionKey) -> String {
     match key {
         SessionKey::Main { .. } => "main".to_string(),

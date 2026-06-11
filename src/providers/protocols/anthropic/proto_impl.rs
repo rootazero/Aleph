@@ -1,4 +1,4 @@
-//! AnthropicProtocol implementation — construction and internal helpers.
+//! `AnthropicProtocol` implementation — construction and internal helpers.
 
 use std::collections::HashMap;
 
@@ -49,7 +49,7 @@ impl AnthropicProtocol {
         format!("{base_url}/v1/messages")
     }
 
-    /// Convert UnifiedMessages to Anthropic Messages
+    /// Convert `UnifiedMessages` to Anthropic Messages
     pub(super) fn convert_messages(messages: &[UnifiedMessage]) -> Vec<Message> {
         let mut result = Vec::new();
         let mut i = 0;
@@ -289,7 +289,7 @@ impl AnthropicProtocol {
     /// Build the comma-separated anthropic-beta header value for a given model.
     ///
     /// Each beta is gated on a capability bit so per-endpoint policy can opt
-    /// out (e.g. MiniMax drops `fine-grained-tool-streaming`; Azure/Bedrock
+    /// out (e.g. `MiniMax` drops `fine-grained-tool-streaming`; Azure/Bedrock
     /// enable `context-1m`). Adds:
     /// - `interleaved-thinking-2025-05-14` — `caps.supports_interleaved_thinking`
     /// - `fine-grained-tool-streaming-2025-05-14` — `caps.supports_fine_grained_tool_streaming`
@@ -358,7 +358,7 @@ impl AnthropicProtocol {
     /// - `eyJ` — JWTs from the OAuth flow
     /// - `cc-` — Claude Code opaque OAuth access tokens
     ///
-    /// Non-Anthropic keys (MiniMax, DashScope, Bedrock IAM, etc.) never match.
+    /// Non-Anthropic keys (`MiniMax`, `DashScope`, Bedrock IAM, etc.) never match.
     pub(super) fn is_oauth_token(key: &str) -> bool {
         if key.is_empty() {
             return false;
@@ -369,7 +369,7 @@ impl AnthropicProtocol {
         key.starts_with("sk-ant-") || key.starts_with("eyJ") || key.starts_with("cc-")
     }
 
-    /// Map ThinkLevel to budget_tokens
+    /// Map `ThinkLevel` to `budget_tokens`
     pub(super) const fn map_think_level(level: &ThinkLevel) -> Option<u32> {
         match level {
             ThinkLevel::Off => None,
@@ -424,7 +424,7 @@ impl AnthropicProtocol {
         Self::claude_version(model).is_some_and(|v| v >= (4, 6))
     }
 
-    /// True for models that 400 on non-default temperature/top_p/top_k even
+    /// True for models that 400 on non-default `temperature/top_p/top_k` even
     /// without `thinking` enabled. Claude 4.7 removed sampling parameters and
     /// every later release (4.8, fable-5) keeps that surface.
     pub(super) fn forbids_sampling_params(model: &str) -> bool {

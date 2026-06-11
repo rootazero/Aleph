@@ -20,7 +20,7 @@ impl NostrMessageOps {
     /// 1. Connects to the first relay via WebSocket (tokio-tungstenite)
     /// 2. Sends a REQ subscription for configured event kinds
     /// 3. Reads relay messages in a select! loop
-    /// 4. For EVENT messages: parses, filters by allowed_pubkeys, converts to InboundMessage
+    /// 4. For EVENT messages: parses, filters by `allowed_pubkeys`, converts to `InboundMessage`
     /// 5. Handles EOSE (end of stored events) and NOTICE messages
     /// 6. Sends CLOSE on shutdown
     /// 7. Reconnects with exponential backoff on disconnection

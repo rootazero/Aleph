@@ -85,7 +85,7 @@ struct ConnectionContext {
     /// is not prompted to approve a pairing code on a fresh app start.
     /// `None` ⇒ existing flow (Case 0/1/2/3 in `connect.rs`) runs
     /// untouched — non-loopback peers, dev wiring, and clients that
-    /// already carry their own token / shared_token / invitation_token
+    /// already carry their own token / `shared_token` / `invitation_token`
     /// land here.
     bootstrap_shared_token: Option<String>,
     /// Device-token manager for the per-dispatch revocation re-check. `None`
@@ -99,8 +99,8 @@ struct ConnectionContext {
     /// identity, and auth-failure lockout so those abuse protections key off
     /// the actual client rather than a shared proxy address.
     client_ip: IpAddr,
-    /// Per-connection reverse-RPC registry (shared Arc with GatewayServer).
-    /// The connection registers its ReverseRpcChannel here on connect and
+    /// Per-connection reverse-RPC registry (shared Arc with `GatewayServer`).
+    /// The connection registers its `ReverseRpcChannel` here on connect and
     /// removes it on cleanup, so reverse-RPC callers can reach this socket.
     reverse_rpc: Arc<RwLock<HashMap<String, crate::cluster::ReverseRpcChannel>>>,
     /// Cluster node registry (shared Arc). The connect handler registers a
@@ -146,7 +146,7 @@ fn extract_session_cookie(headers: &HeaderMap) -> Option<String> {
 ///      session store.
 ///
 /// Anything short of all three yields `None`, and the connection falls
-/// through to the existing token / shared_token / pairing flow. Refusing
+/// through to the existing token / `shared_token` / pairing flow. Refusing
 /// non-loopback peers is what keeps a LAN attacker who somehow obtains a
 /// session cookie from short-circuiting auth — `/auth/bootstrap` is
 /// already loopback-gated upstream, but defence-in-depth costs nothing.

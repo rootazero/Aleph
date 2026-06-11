@@ -1,7 +1,7 @@
 //! Rerank provider trait and configuration
 //!
 //! Defines the cross-encoder reranking abstraction used by HTTP-based
-//! reranking services (Jina, SiliconFlow, Voyage, Pinecone, vLLM).
+//! reranking services (Jina, `SiliconFlow`, Voyage, Pinecone, vLLM).
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -45,7 +45,7 @@ pub enum RerankProviderType {
     /// Jina AI reranking API
     #[default]
     Jina,
-    /// SiliconFlow reranking API
+    /// `SiliconFlow` reranking API
     SiliconFlow,
     /// Voyage AI reranking API
     Voyage,

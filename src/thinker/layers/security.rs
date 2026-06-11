@@ -1,4 +1,4 @@
-//! SecurityLayer — security constraints injection (priority 600)
+//! `SecurityLayer` — security constraints injection (priority 600)
 
 use crate::thinker::context::DisableReason;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};

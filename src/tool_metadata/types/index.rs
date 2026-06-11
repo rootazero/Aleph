@@ -4,9 +4,9 @@
 //! Provides minimal representations of tools to minimize token consumption.
 //!
 //! Contains:
-//! - ToolIndexEntry: Minimal tool representation
-//! - ToolIndexCategory: Simplified category for grouping
-//! - ToolIndex: Collection of tool entries by category
+//! - `ToolIndexEntry`: Minimal tool representation
+//! - `ToolIndexCategory`: Simplified category for grouping
+//! - `ToolIndex`: Collection of tool entries by category
 
 use super::conflict::ToolSource;
 use serde::{Deserialize, Serialize};
@@ -24,8 +24,8 @@ use std::fmt;
 ///
 /// # Token Efficiency
 ///
-/// Full UnifiedTool with schema: ~200-500 tokens
-/// ToolIndexEntry: ~20-30 tokens
+/// Full `UnifiedTool` with schema: ~200-500 tokens
+/// `ToolIndexEntry`: ~20-30 tokens
 ///
 /// # Usage
 ///
@@ -36,7 +36,7 @@ use std::fmt;
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolIndexEntry {
-    /// Tool command name (e.g., "github:pr_list")
+    /// Tool command name (e.g., "`github:pr_list`")
     pub name: String,
 
     /// Tool category for grouping
@@ -103,7 +103,7 @@ impl ToolIndexEntry {
 pub enum ToolIndexCategory {
     /// Core tools (always available with full schema)
     Core,
-    /// Built-in tools (search, file_ops, etc.)
+    /// Built-in tools (search, `file_ops`, etc.)
     Builtin,
     /// MCP server tools
     Mcp,

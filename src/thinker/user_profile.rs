@@ -1,7 +1,7 @@
 //! User Profile
 //!
 //! Structured representation of the user being helped, loaded from
-//! ~/.aleph/user_profile.md (Markdown with YAML frontmatter).
+//! ~/.`aleph/user_profile.md` (Markdown with YAML frontmatter).
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;

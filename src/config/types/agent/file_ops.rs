@@ -1,6 +1,6 @@
 //! File operations executor configuration
 //!
-//! Contains FileOpsConfigToml for configuring file system operations.
+//! Contains `FileOpsConfigToml` for configuring file system operations.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -41,7 +41,7 @@ pub struct FileOpsConfigToml {
     pub allowed_paths: Vec<String>,
 
     /// Paths that are denied for file operations (glob patterns)
-    /// Takes precedence over allowed_paths
+    /// Takes precedence over `allowed_paths`
     /// Default denied paths (~/.ssh, ~/.gnupg, etc.) are always applied
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub denied_paths: Vec<String>,

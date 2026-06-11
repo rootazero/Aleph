@@ -89,7 +89,7 @@ pub struct PartUpdateData {
     pub session_id: String,
     /// Unique part identifier
     pub part_id: String,
-    /// Part type name (e.g., "tool_call", "ai_response")
+    /// Part type name (e.g., "`tool_call`", "`ai_response`")
     pub part_type: String,
     /// Event type (Added, Updated, Removed)
     pub event_type: PartEventType,
@@ -102,7 +102,7 @@ pub struct PartUpdateData {
 }
 
 impl PartUpdateData {
-    /// Create a new PartUpdateData for an added part
+    /// Create a new `PartUpdateData` for an added part
     #[must_use]
     pub fn added(session_id: &str, part: &SessionPart) -> Self {
         Self {
@@ -116,7 +116,7 @@ impl PartUpdateData {
         }
     }
 
-    /// Create a new PartUpdateData for an updated part
+    /// Create a new `PartUpdateData` for an updated part
     #[must_use]
     pub fn updated(session_id: &str, part: &SessionPart, delta: Option<String>) -> Self {
         Self {
@@ -130,7 +130,7 @@ impl PartUpdateData {
         }
     }
 
-    /// Create a new PartUpdateData for a removed part
+    /// Create a new `PartUpdateData` for a removed part
     #[must_use]
     pub fn removed(session_id: &str, part_id: &str, part_type: &str) -> Self {
         Self {

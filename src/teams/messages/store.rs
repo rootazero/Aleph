@@ -99,7 +99,7 @@ pub trait MessageStore: Send + Sync {
         thread_id: &str,
     ) -> crate::error::Result<Vec<TeamMessage>>;
 
-    /// Get unread counts as (to_count, cc_count) for an agent in a team.
+    /// Get unread counts as (`to_count`, `cc_count`) for an agent in a team.
     async fn get_unread_counts(
         &self,
         agent_id: &str,
@@ -186,9 +186,9 @@ impl SqliteMessageStore {
         Ok(())
     }
 
-    /// Resolve the thread_id for a new message.
-    /// If `reply_to` is set, inherit the replied message's thread_id.
-    /// Otherwise the message starts a new thread (thread_id = its own id).
+    /// Resolve the `thread_id` for a new message.
+    /// If `reply_to` is set, inherit the replied message's `thread_id`.
+    /// Otherwise the message starts a new thread (`thread_id` = its own id).
     fn resolve_thread_id(
         conn: &Connection,
         message_id: &str,
@@ -299,7 +299,7 @@ impl SqliteMessageStore {
         })
     }
 
-    /// Read the flat fields from a team_messages row (no sub-queries).
+    /// Read the flat fields from a `team_messages` row (no sub-queries).
     fn read_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawMessage> {
         Ok(RawMessage {
             id: row.get(0)?,

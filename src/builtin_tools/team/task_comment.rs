@@ -1,4 +1,4 @@
-//! TaskCommentTool — leave a free-text handoff note on a coordination task.
+//! `TaskCommentTool` — leave a free-text handoff note on a coordination task.
 //!
 //! Mirrors the hermes-agent `kanban_comment` pattern: a worker mid-attempt
 //! (or a leader between handoffs) appends a thread comment that survives

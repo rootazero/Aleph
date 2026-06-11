@@ -31,7 +31,7 @@ pub struct RoutingBinding {
 /// 2. Peer/channel matching
 /// 3. Default agent fallback
 pub struct AgentRouter {
-    /// Routing bindings (pattern -> agent_id)
+    /// Routing bindings (pattern -> `agent_id`)
     bindings: Arc<RwLock<Vec<RoutingBinding>>>,
     /// Default agent ID
     default_agent: String,
@@ -69,8 +69,8 @@ impl AgentRouter {
         self.session_store = Some(sm);
     }
 
-    /// Create router from config-driven RouteBinding list.
-    /// Extracts unique agent IDs and converts to internal RoutingBinding format.
+    /// Create router from config-driven `RouteBinding` list.
+    /// Extracts unique agent IDs and converts to internal `RoutingBinding` format.
     pub fn from_bindings(bindings: Vec<RouteBinding>, default_agent: impl Into<String>) -> Self {
         let default = default_agent.into();
 

@@ -1,7 +1,7 @@
 //! Common types used by the storage traits.
 //!
 //! Provides filter, scoring, and query types shared across
-//! MemoryStore and SessionStore implementations.
+//! `MemoryStore` and `SessionStore` implementations.
 
 use crate::gateway::agent_env::AgentEnvFilter;
 use crate::memory::context::{MemoryCategory, MemoryFact, MemoryLayer, NoteType};
@@ -11,7 +11,7 @@ use crate::memory::namespace::NamespaceScope;
 // SQL String Escaping — prevent injection in LanceDB/DataFusion filter strings
 // ---------------------------------------------------------------------------
 
-/// Escape a string value for safe interpolation into a DataFusion SQL filter.
+/// Escape a string value for safe interpolation into a `DataFusion` SQL filter.
 ///
 /// Replaces single quotes with doubled single quotes (`'` → `''`), which is
 /// the standard SQL escaping mechanism. This prevents injection attacks when
@@ -73,7 +73,7 @@ pub struct SearchFilter {
     pub topic: Option<String>,
     /// Query facts valid at this point in time (Unix seconds).
     pub as_of: Option<i64>,
-    /// Include historically-valid facts (valid_to IS NOT NULL). Default: false.
+    /// Include historically-valid facts (`valid_to` IS NOT NULL). Default: false.
     pub include_historical: bool,
 }
 
@@ -192,7 +192,7 @@ impl SearchFilter {
         self
     }
 
-    /// Include historically-valid facts (those with a non-NULL valid_to).
+    /// Include historically-valid facts (those with a non-NULL `valid_to`).
     #[must_use]
     pub const fn with_include_historical(mut self) -> Self {
         self.include_historical = true;
@@ -201,10 +201,10 @@ impl SearchFilter {
 
     // -- filter expression -------------------------------------------------
 
-    /// Build a SQLite (DataFusion SQL) filter expression.
+    /// Build a `SQLite` (`DataFusion` SQL) filter expression.
     ///
     /// Returns `None` when no constraints are set, meaning "match everything".
-    /// String values use single quotes as required by DataFusion.
+    /// String values use single quotes as required by `DataFusion`.
     #[must_use]
     pub fn to_lance_filter(&self) -> Option<String> {
         let mut clauses: Vec<String> = Vec::new();
@@ -343,7 +343,7 @@ impl MemoryFilter {
         }
     }
 
-    /// Build a SQLite (DataFusion SQL) filter expression.
+    /// Build a `SQLite` (`DataFusion` SQL) filter expression.
     ///
     /// Returns `None` when no constraints are set.
     #[must_use]

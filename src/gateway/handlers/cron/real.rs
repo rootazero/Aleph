@@ -19,7 +19,7 @@ fn extract_str(request: &JsonRpcRequest, key: &str) -> Option<String> {
     }
 }
 
-/// Serialize a CronJobView to JSON (includes all new fields)
+/// Serialize a `CronJobView` to JSON (includes all new fields)
 fn job_view_to_json(view: &CronJobView) -> Value {
     json!({
         "id": view.id,
@@ -373,7 +373,7 @@ pub async fn handle_status(request: JsonRpcRequest, cron: SharedCronService) -> 
 
 /// Handle cron.run RPC request (real)
 ///
-/// Manually triggers a cron job by setting its next_run_at_ms to now.
+/// Manually triggers a cron job by setting its `next_run_at_ms` to now.
 pub async fn handle_run(request: JsonRpcRequest, cron: SharedCronService) -> JsonRpcResponse {
     let job_id = match extract_str(&request, "job_id") {
         Some(id) => id,
@@ -411,7 +411,7 @@ pub async fn handle_run(request: JsonRpcRequest, cron: SharedCronService) -> Jso
 
 /// Handle cron.runs RPC request (real)
 ///
-/// Returns the execution history from SQLite.
+/// Returns the execution history from `SQLite`.
 pub async fn handle_runs(request: JsonRpcRequest, cron: SharedCronService) -> JsonRpcResponse {
     let job_id = match extract_str(&request, "job_id") {
         Some(id) => id,

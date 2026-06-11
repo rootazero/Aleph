@@ -49,7 +49,7 @@ pub trait SessionStore: Send + Sync {
     /// Fetch a session by ID, fully materialised with participants and transcript.
     async fn get_session(&self, id: &str) -> crate::error::Result<Option<CollaborativeSession>>;
 
-    /// Add a turn to an existing session. Fails if turn_number > max_rounds.
+    /// Add a turn to an existing session. Fails if `turn_number` > `max_rounds`.
     /// On success returns the authoritative turn number assigned by the store.
     async fn add_turn(&self, session_id: &str, turn: SessionTurn) -> crate::error::Result<u32>;
 

@@ -1,12 +1,12 @@
 //! Smart flow configuration types
 //!
 //! Contains intent detection and semantic matching configuration:
-//! - SmartFlowConfig: Master config for smart conversation flow
-//! - IntentDetectionConfig: AI-powered intent detection settings
-//! - SuggestionParsingConfig: AI response suggestion parsing
-//! - SmartMatchingConfig: Multi-layer semantic matching system
-//! - ContextRuleConfig: Context-aware matching rules
-//! - KeywordRuleConfig: Weighted keyword matching rules
+//! - `SmartFlowConfig`: Master config for smart conversation flow
+//! - `IntentDetectionConfig`: AI-powered intent detection settings
+//! - `SuggestionParsingConfig`: AI response suggestion parsing
+//! - `SmartMatchingConfig`: Multi-layer semantic matching system
+//! - `ContextRuleConfig`: Context-aware matching rules
+//! - `KeywordRuleConfig`: Weighted keyword matching rules
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -76,7 +76,7 @@ pub struct IntentDetectionConfig {
     #[serde(default = "default_true")]
     pub search: bool,
 
-    /// Enable video capability (YouTube, Bilibili analysis)
+    /// Enable video capability (`YouTube`, Bilibili analysis)
     #[serde(default = "default_true")]
     pub video: bool,
 
@@ -250,47 +250,47 @@ pub struct ContextRuleConfig {
     /// Unique rule identifier
     pub id: String,
 
-    /// Condition type: "pending_param", "app_context", "time_context", "conversation"
+    /// Condition type: "`pending_param`", "`app_context`", "`time_context`", "conversation"
     #[serde(default = "default_condition_type")]
     pub condition_type: String,
 
-    /// Parameter name (for pending_param condition)
+    /// Parameter name (for `pending_param` condition)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub param_name: Option<String>,
 
-    /// Intent type to match (for pending_param condition)
+    /// Intent type to match (for `pending_param` condition)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<String>,
 
-    /// Bundle IDs to match (for app_context condition)
+    /// Bundle IDs to match (for `app_context` condition)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bundle_ids: Vec<String>,
 
-    /// Hours of day to match (for time_context condition, 0-23)
+    /// Hours of day to match (for `time_context` condition, 0-23)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hours: Vec<u8>,
 
-    /// Days of week to match (for time_context condition, 0=Sunday)
+    /// Days of week to match (for `time_context` condition, 0=Sunday)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub days_of_week: Vec<u8>,
 
-    /// Action type: "complete_param", "add_capability", "set_provider", "add_prompt"
+    /// Action type: "`complete_param`", "`add_capability`", "`set_provider`", "`add_prompt`"
     #[serde(default = "default_action_type")]
     pub action_type: String,
 
-    /// Use input as parameter value (for complete_param action)
+    /// Use input as parameter value (for `complete_param` action)
     #[serde(default)]
     pub use_input_as_value: bool,
 
-    /// Capability to add (for add_capability action)
+    /// Capability to add (for `add_capability` action)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability: Option<String>,
 
-    /// Provider name (for set_provider action)
+    /// Provider name (for `set_provider` action)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
 
-    /// System prompt to add (for add_prompt action)
+    /// System prompt to add (for `add_prompt` action)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
 }

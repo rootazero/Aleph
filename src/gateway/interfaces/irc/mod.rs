@@ -8,7 +8,7 @@
 //!
 //! - **Receiving:** Reads `\r\n`-terminated lines from the TCP stream
 //! - **Sending:** `PRIVMSG <target> :<message>\r\n`
-//! - **Auth:** NICK/USER registration, optional NickServ IDENTIFY
+//! - **Auth:** NICK/USER registration, optional `NickServ` IDENTIFY
 //! - **Keepalive:** PING/PONG automatic response
 //!
 //! # Usage

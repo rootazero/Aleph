@@ -1,7 +1,7 @@
 //! Gateway Context
 //!
 //! Provides a shared context struct containing references to core gateway
-//! components. This is passed to session tools (sessions_list, sessions_send)
+//! components. This is passed to session tools (`sessions_list`, `sessions_send`)
 //! via `BuiltinToolConfig` to enable agent-to-agent communication.
 
 use crate::sync_primitives::Arc;

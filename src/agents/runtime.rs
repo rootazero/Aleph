@@ -79,7 +79,7 @@ pub enum TranscriptOutcome {
 pub struct SubagentTranscript {
     /// Unique identifier for the agent instance.
     pub agent_id: String,
-    /// Agent type name (from agent_def).
+    /// Agent type name (from `agent_def`).
     pub agent_type: String,
     /// Summary of the task that was executed.
     pub task_summary: String,
@@ -125,17 +125,17 @@ pub struct AgentRuntime {
     /// `None` keeps the legacy "no guardrails" path; `Some(_)` propagates
     /// to every `SpawnerBase` built by `spawn_subagent`.
     guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
-    /// Stage A (P1) — stall watchdog config threaded into SpawnerBase.
+    /// Stage A (P1) — stall watchdog config threaded into `SpawnerBase`.
     stall_config: Option<crate::harness::StallConfig>,
-    /// Stage A (P1) — consecutive-failure cap threaded into SpawnerBase.
+    /// Stage A (P1) — consecutive-failure cap threaded into `SpawnerBase`.
     consecutive_failure_cap: Option<usize>,
-    /// Stage A (P1) — per-turn timeout threaded into SpawnerBase.
+    /// Stage A (P1) — per-turn timeout threaded into `SpawnerBase`.
     turn_timeout: Option<std::time::Duration>,
-    /// Stage A (P1) — trace sink threaded into SpawnerBase.
+    /// Stage A (P1) — trace sink threaded into `SpawnerBase`.
     trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
     /// A2 — subagent concurrency cap, threaded into every `SpawnerBase`.
     subagent_semaphore: Option<Arc<tokio::sync::Semaphore>>,
-    /// B2 — global plugin registry, threaded into SpawnerBase for per-agent
+    /// B2 — global plugin registry, threaded into `SpawnerBase` for per-agent
     /// MCP scope provisioning.
     plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
     /// Phase 3 — `provider_hint` → pinned-then-fall-through provider. An empty
@@ -465,7 +465,7 @@ pub fn truncate_for_log(s: &str, max_len: usize) -> String {
     }
 }
 
-/// Format a TranscriptOutcome for log output.
+/// Format a `TranscriptOutcome` for log output.
 #[must_use]
 pub const fn format_outcome(outcome: &TranscriptOutcome) -> &str {
     match outcome {

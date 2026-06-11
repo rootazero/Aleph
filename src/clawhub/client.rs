@@ -1,7 +1,7 @@
-//! ClawHub HTTP client — thin wrapper around clawhub.ai public API.
+//! `ClawHub` HTTP client — thin wrapper around clawhub.ai public API.
 //!
 //! All endpoints are public (no authentication required).
-//! API contract verified from OpenClaw source code and clawhub CLI v0.7.0.
+//! API contract verified from `OpenClaw` source code and clawhub CLI v0.7.0.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -45,7 +45,7 @@ fn encode_slug_path(slug: &str) -> String {
         .join("/")
 }
 
-/// HTTP client for ClawHub skill registry.
+/// HTTP client for `ClawHub` skill registry.
 ///
 /// All methods are read-only (search, browse, download).
 /// No authentication required for public API endpoints.

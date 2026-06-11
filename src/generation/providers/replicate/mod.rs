@@ -13,7 +13,7 @@
 //!
 //! - Flux Schnell (fast image generation)
 //! - SDXL (high-quality image generation)
-//! - MusicGen (audio generation)
+//! - `MusicGen` (audio generation)
 //!
 //! # Example
 //!

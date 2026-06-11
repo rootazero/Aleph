@@ -1,7 +1,7 @@
 //! Agent Environment Store
 //!
-//! Each agent has an environment (AgentEnv) that provides context isolation
-//! and profile-based configuration. An AgentEnv is a runtime instance of a
+//! Each agent has an environment (`AgentEnv`) that provides context isolation
+//! and profile-based configuration. An `AgentEnv` is a runtime instance of a
 //! profile, with its own session, cache state, and memory scope.
 //!
 //! # Architecture
@@ -260,9 +260,9 @@ impl AgentEnv {
 /// Provider-side context caching state
 ///
 /// Different providers have different caching mechanisms:
-/// - Anthropic: Ephemeral (cache_control blocks, no persistent state)
+/// - Anthropic: Ephemeral (`cache_control` blocks, no persistent state)
 /// - Gemini: Persistent (explicit cache name, stored on provider side)
-/// - OpenAI: Transparent (automatic, no state needed)
+/// - `OpenAI`: Transparent (automatic, no state needed)
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CacheState {
@@ -271,7 +271,7 @@ pub enum CacheState {
     None,
 
     /// Anthropic-style ephemeral caching
-    /// Only need to track where to insert cache_control markers
+    /// Only need to track where to insert `cache_control` markers
     Ephemeral {
         /// Index in message history where cache breakpoint is set
         cache_breakpoint_index: Option<usize>,
@@ -334,7 +334,7 @@ impl CacheState {
 /// pipeline (Thinker, Memory, Executor). It carries the resolved profile
 /// configuration and a memory filter scoped to this agent.
 ///
-/// Created via `from_manager()` (when a AgentEnvStore is available) or
+/// Created via `from_manager()` (when a `AgentEnvStore` is available) or
 /// `default_global()` (fallback when no manager exists).
 #[derive(Debug, Clone)]
 pub struct ActiveAgentEnv {
@@ -352,9 +352,9 @@ pub struct ActiveAgentEnv {
 }
 
 impl ActiveAgentEnv {
-    /// Resolve the active agent environment from an agent from the AgentEnvStore.
+    /// Resolve the active agent environment from an agent from the `AgentEnvStore`.
     ///
-    /// Since Agent↔AgentEnv is 1:1, the agent_id is used directly as agent_id.
+    /// Since Agent↔AgentEnv is 1:1, the `agent_id` is used directly as `agent_id`.
     /// Resolves the profile binding and builds a memory filter.
     ///
     /// Falls back to a default global agent environment if not found.
@@ -422,7 +422,7 @@ impl ActiveAgentEnv {
         }
     }
 
-    /// Create a default global agent environment when no AgentEnvStore is available.
+    /// Create a default global agent environment when no `AgentEnvStore` is available.
     ///
     /// Uses "global" as the agent ID, default profile configuration,
     /// and a memory filter scoped to "global".
@@ -448,7 +448,7 @@ impl ActiveAgentEnv {
 // AgentEnvStore
 // =============================================================================
 
-/// Configuration for AgentEnvStore
+/// Configuration for `AgentEnvStore`
 #[derive(Debug, Clone)]
 pub struct AgentEnvStoreConfig {
     /// Database path for agent environment storage
@@ -471,7 +471,7 @@ impl Default for AgentEnvStoreConfig {
     }
 }
 
-/// AgentEnv manager with SQLite persistence
+/// `AgentEnv` manager with `SQLite` persistence
 pub struct AgentEnvStore {
     pub(super) config: AgentEnvStoreConfig,
     pub(super) conn: Arc<Mutex<Connection>>,

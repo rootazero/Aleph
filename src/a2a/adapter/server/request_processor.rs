@@ -72,7 +72,7 @@ impl JsonRpcResponse {
         }
     }
 
-    /// Build an error response from an A2AError
+    /// Build an error response from an `A2AError`
     #[must_use]
     pub fn from_a2a_error(id: Option<Value>, err: &A2AError) -> Self {
         Self {
@@ -89,7 +89,7 @@ impl JsonRpcResponse {
 /// Dispatches JSON-RPC requests to the appropriate A2A handler.
 ///
 /// Each method is authorized before execution. Unknown methods
-/// return a standard JSON-RPC MethodNotFound error.
+/// return a standard JSON-RPC `MethodNotFound` error.
 pub struct A2ARequestProcessor {
     state: Arc<A2AServerState>,
 }
@@ -300,7 +300,7 @@ impl A2ARequestProcessor {
         }
     }
 
-    /// Dispatch push notification config operations — all require ManagePushConfig permission
+    /// Dispatch push notification config operations — all require `ManagePushConfig` permission
     async fn handle_push_config(
         &self,
         request: JsonRpcRequest,

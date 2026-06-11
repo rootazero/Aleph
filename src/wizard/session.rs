@@ -172,7 +172,7 @@ impl WizardSession {
         *self.status.read().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Build a Done result, carrying finish_data payload if set.
+    /// Build a Done result, carrying `finish_data` payload if set.
     pub(crate) fn done_result(&self) -> WizardNextResult {
         match self
             .finish_data

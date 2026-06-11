@@ -3,7 +3,7 @@
 //! Resolves credentials and injects them into outbound HTTP requests so that
 //! WASM plugins never see secret values. The host looks up the secret by
 //! name, matches the target URL against declared host patterns, and applies
-//! the appropriate injection strategy (Bearer, Basic, Header, Query, UrlPath).
+//! the appropriate injection strategy (Bearer, Basic, Header, Query, `UrlPath`).
 
 use url::Url;
 

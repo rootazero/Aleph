@@ -21,9 +21,9 @@
 //! # Key Concepts
 //!
 //! - **Channel**: A messaging platform adapter (iMessage, Telegram, etc.)
-//! - **InboundMessage**: Message received from a channel
-//! - **OutboundMessage**: Message to be sent through a channel
-//! - **ChannelCapabilities**: What a channel supports (attachments, reactions, etc.)
+//! - **`InboundMessage`**: Message received from a channel
+//! - **`OutboundMessage`**: Message to be sent through a channel
+//! - **`ChannelCapabilities`**: What a channel supports (attachments, reactions, etc.)
 
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -544,7 +544,7 @@ pub struct ChannelInfo {
 ///
 /// Encapsulates thread-safe status tracking and inbound message broadcast.
 /// Every Channel should embed this and return it from `fn state()`.
-/// Wrapper around broadcast::Sender that provides mpsc-compatible send() for
+/// Wrapper around `broadcast::Sender` that provides mpsc-compatible `send()` for
 /// backward compatibility with existing channel implementations.
 #[derive(Debug, Clone)]
 pub struct InboundMessageSender {
@@ -566,7 +566,7 @@ impl From<broadcast::Sender<InboundMessage>> for InboundMessageSender {
 }
 
 pub struct ChannelState {
-    /// Thread-safe status — set by start()/stop(), read by status()
+    /// Thread-safe status — set by `start()/stop()`, read by `status()`
     status: Arc<tokio::sync::RwLock<ChannelStatus>>,
     /// Broadcast sender — channel impl pushes inbound messages here
     /// Multiple consumers can subscribe via `inbound_subscribe()`
@@ -606,7 +606,7 @@ impl ChannelState {
         self.health.clone()
     }
 
-    /// Read current status (non-blocking via try_read, fallback Connecting).
+    /// Read current status (non-blocking via `try_read`, fallback Connecting).
     #[must_use]
     pub fn status(&self) -> ChannelStatus {
         self.status
@@ -702,7 +702,7 @@ pub trait Channel: Send + Sync {
         None
     }
 
-    /// Get pairing data (e.g., QR code for WhatsApp or pairing code for iMessage)
+    /// Get pairing data (e.g., QR code for `WhatsApp` or pairing code for iMessage)
     async fn get_pairing_data(&self) -> ChannelResult<PairingData> {
         Ok(PairingData::None)
     }
@@ -798,7 +798,7 @@ pub trait Channel: Send + Sync {
         Ok(())
     }
 
-    /// Get native stream handler (if channel supports StreamProtocol::Native)
+    /// Get native stream handler (if channel supports `StreamProtocol::Native`)
     fn native_stream_handler(&self) -> Option<Arc<dyn NativeStreamHandler>> {
         None
     }
@@ -807,7 +807,7 @@ pub trait Channel: Send + Sync {
 /// Handler for channels that support native streaming protocols (e.g., Teams streaminfo)
 #[async_trait]
 pub trait NativeStreamHandler: Send + Sync {
-    /// Start streaming — send initial status indicator, returns stream_id
+    /// Start streaming — send initial status indicator, returns `stream_id`
     async fn stream_start(
         &self,
         conversation_id: &ConversationId,
@@ -857,7 +857,7 @@ pub fn paradigm_for_channel_type(
 }
 
 /// Channels implement this to declare their interaction capabilities.
-/// The manifest is used by ContextAggregator to filter tools and
+/// The manifest is used by `ContextAggregator` to filter tools and
 /// generate appropriate system prompts.
 pub trait ChannelProvider {
     /// Get the interaction manifest for this channel

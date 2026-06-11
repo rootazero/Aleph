@@ -133,20 +133,20 @@ impl CommandNode {
         self
     }
 
-    /// Builder: set source_id
+    /// Builder: set `source_id`
     pub fn with_source_id(mut self, source_id: impl Into<String>) -> Self {
         self.source_id = Some(source_id.into());
         self
     }
 
-    /// Builder: set source_type
+    /// Builder: set `source_type`
     #[must_use]
     pub const fn with_source_type(mut self, source_type: ToolSourceType) -> Self {
         self.source_type = source_type;
         self
     }
 
-    /// Builder: set node_type (override the default)
+    /// Builder: set `node_type` (override the default)
     #[must_use]
     pub const fn with_node_type(mut self, node_type: CommandType) -> Self {
         self.node_type = node_type;

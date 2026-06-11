@@ -1,14 +1,14 @@
 //! Tools configuration types
 //!
 //! Contains tool and MCP configuration:
-//! - ToolsConfig: Legacy system tools configuration
-//! - McpConfig: MCP server configuration
-//! - McpExternalServerConfig: External MCP server settings
-//! - UnifiedToolsConfig: New unified tools configuration
-//! - NativeToolsConfig: Native tool settings container
-//! - Individual tool configs (Fs, Git, Shell, SystemInfo, etc.)
-//! - McpServerConfig: Unified MCP server settings
-//! - ToolServiceConfig: Phase 2 ToolService runtime tunables (timeouts)
+//! - `ToolsConfig`: Legacy system tools configuration
+//! - `McpConfig`: MCP server configuration
+//! - `McpExternalServerConfig`: External MCP server settings
+//! - `UnifiedToolsConfig`: New unified tools configuration
+//! - `NativeToolsConfig`: Native tool settings container
+//! - Individual tool configs (Fs, Git, Shell, `SystemInfo`, etc.)
+//! - `McpServerConfig`: Unified MCP server settings
+//! - `ToolServiceConfig`: Phase 2 `ToolService` runtime tunables (timeouts)
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -258,7 +258,7 @@ impl Default for UnifiedToolsConfig {
 }
 
 impl UnifiedToolsConfig {
-    /// Create from legacy ToolsConfig and McpConfig (migration helper)
+    /// Create from legacy `ToolsConfig` and `McpConfig` (migration helper)
     pub fn from_legacy(tools: &ToolsConfig, mcp: &McpConfig) -> Self {
         let mut unified = Self {
             enabled: mcp.enabled,
@@ -568,7 +568,7 @@ impl Default for ScreenCaptureToolConfig {
     }
 }
 
-/// Search tool configuration (wraps existing SearchRegistry as tool)
+/// Search tool configuration (wraps existing `SearchRegistry` as tool)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchToolConfig {
     /// Enable search tool
@@ -608,7 +608,7 @@ impl Default for SearchToolConfig {
 
 /// MCP external server configuration (unified format)
 ///
-/// This is similar to McpExternalServerConfig but with a cleaner structure
+/// This is similar to `McpExternalServerConfig` but with a cleaner structure
 /// where the server name is the TOML table key instead of a field.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct McpServerConfig {

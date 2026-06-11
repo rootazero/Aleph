@@ -17,7 +17,7 @@ use crate::tools::AlephTool;
 // Args
 // =============================================================================
 
-/// Arguments for the voice_mode_set tool
+/// Arguments for the `voice_mode_set` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct VoiceModeSetArgs {
     /// Whether to enable (true) or disable (false) voice mode
@@ -40,7 +40,7 @@ pub struct VoiceModeSetArgs {
 // Output
 // =============================================================================
 
-/// Output from voice_mode_set tool
+/// Output from `voice_mode_set` tool
 #[derive(Debug, Clone, Serialize)]
 pub struct VoiceModeSetOutput {
     /// Whether the operation succeeded
@@ -59,7 +59,7 @@ pub struct VoiceModeSetOutput {
 
 /// Tool that enables or disables voice mode for a channel.
 ///
-/// Voice mode causes the ReplyEmitter to synthesise TTS audio for every
+/// Voice mode causes the `ReplyEmitter` to synthesise TTS audio for every
 /// outbound text reply on the channel. Provider and voice can optionally be
 /// overridden per-call.
 #[derive(Clone)]
@@ -68,7 +68,7 @@ pub struct VoiceModeSetTool {
 }
 
 impl VoiceModeSetTool {
-    /// Create a new VoiceModeSetTool backed by the given registry.
+    /// Create a new `VoiceModeSetTool` backed by the given registry.
     pub const fn new(channel_registry: Arc<ChannelRegistry>) -> Self {
         Self { channel_registry }
     }

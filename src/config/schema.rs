@@ -11,7 +11,7 @@ pub(crate) fn generate_config_schema() -> Schema {
     schema_for!(Config)
 }
 
-/// Generate JSON Schema as a serde_json::Value.
+/// Generate JSON Schema as a `serde_json::Value`.
 pub fn generate_config_schema_json() -> serde_json::Value {
     let schema = generate_config_schema();
     serde_json::to_value(&schema).unwrap_or_else(|e| {

@@ -130,7 +130,7 @@ pub struct TeamMessage {
 // NewMessage
 // ---------------------------------------------------------------------------
 
-/// Input for creating a new team message (no id, timestamps, or thread_id).
+/// Input for creating a new team message (no id, timestamps, or `thread_id`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewMessage {
     pub team_id: String,

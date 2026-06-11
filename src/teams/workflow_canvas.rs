@@ -1,4 +1,4 @@
-//! CoordTask DAG ↔ Obsidian JSON Canvas bridge.
+//! `CoordTask` DAG ↔ Obsidian JSON Canvas bridge.
 //!
 //! Renders a team's `coord_tasks` graph as a JSON Canvas `Document` (Obsidian
 //! 1.0 spec) and parses canvas documents back into `NewCoordTask`s. This is

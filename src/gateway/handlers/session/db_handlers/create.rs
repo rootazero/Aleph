@@ -49,12 +49,12 @@ pub async fn handle_create_db(
 /// Handle sessions.new RPC request — close current session and create a new epoch
 ///
 /// Params:
-///   - session_key (required): current session key string
+///   - `session_key` (required): current session key string
 ///   - topic (optional): topic for the closing session (if omitted, no topic is stored)
 ///
 /// Returns:
-///   - old_session_key: the closed session key
-///   - new_session_key: the newly created session key (epoch incremented)
+///   - `old_session_key`: the closed session key
+///   - `new_session_key`: the newly created session key (epoch incremented)
 ///   - topic: the topic stored (if any)
 pub async fn handle_new_session_db(
     request: JsonRpcRequest,

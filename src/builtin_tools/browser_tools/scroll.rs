@@ -31,7 +31,7 @@ impl From<ScrollDir> for ScrollDirection {
     }
 }
 
-/// Arguments for the browser_scroll tool.
+/// Arguments for the `browser_scroll` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserScrollArgs {
     /// Browser profile name (default: "default").
@@ -41,7 +41,7 @@ pub struct BrowserScrollArgs {
     pub direction: ScrollDir,
 }
 
-/// Output from the browser_scroll tool.
+/// Output from the `browser_scroll` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserScrollOutput {
     pub success: bool,

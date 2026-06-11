@@ -1,4 +1,4 @@
-//! PresenceSnapshot — the periodic broadcast payload.
+//! `PresenceSnapshot` — the periodic broadcast payload.
 
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -22,7 +22,7 @@ pub enum IdleState {
 }
 
 impl IdleState {
-    /// Classify by elapsed idle time. Mirrors openclaw's PresenceReporter thresholds.
+    /// Classify by elapsed idle time. Mirrors openclaw's `PresenceReporter` thresholds.
     #[must_use]
     pub fn classify(idle_seconds: Option<f64>) -> Self {
         match idle_seconds {

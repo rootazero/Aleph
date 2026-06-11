@@ -43,7 +43,7 @@ pub struct ReembedResult {
 /// and upserts embeddings.
 ///
 /// Cancellation: checked between batches via `cancel` flag.
-/// Idempotent: safe to re-run; upsert_embedding overwrites existing vectors.
+/// Idempotent: safe to re-run; `upsert_embedding` overwrites existing vectors.
 pub async fn reembed_all(
     database: &MemoryBackend,
     memory_dir: &Path,

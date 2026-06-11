@@ -1,9 +1,9 @@
-//! TeamTaskControl — R3 admin-context task control.
+//! `TeamTaskControl` — R3 admin-context task control.
 //!
 //! Complements `WorkflowStepReviewTool`. That tool is reviewer-context
 //! (approve / reject / retry / skip a *finished* run). This tool is
 //! admin-context — it manipulates task lifecycle without requiring a
-//! prior run, mirroring ClawTeam's `task pause / resume / retry`.
+//! prior run, mirroring `ClawTeam`'s `task pause / resume / retry`.
 //!
 //! Why a separate tool: keeping the surfaces split lets the lead agent
 //! (and the panel) reason cleanly about *what kind* of override is
@@ -25,21 +25,21 @@ use crate::tools::AlephTool;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case", tag = "action")]
 pub enum TeamTaskControlArgs {
-    /// Suspend dispatch of a pending / blocked / waiting_review task.
-    /// Rejects in_progress and terminal-state tasks.
+    /// Suspend dispatch of a pending / blocked / `waiting_review` task.
+    /// Rejects `in_progress` and terminal-state tasks.
     Pause { task_id: String },
     /// Undo a previous pause — task returns to pending.
     Resume { task_id: String },
     /// Hard-retry any terminal task (Completed / Failed / Cancelled /
-    /// Skipped / WaitingReview / Paused). Clears result, resets to
-    /// pending. Prior runs stay in coord_task_runs history.
+    /// Skipped / `WaitingReview` / Paused). Clears result, resets to
+    /// pending. Prior runs stay in `coord_task_runs` history.
     Retry { task_id: String },
     /// Mark as Skipped — satisfies downstream dependencies. Works at
     /// any non-terminal state.
     Skip { task_id: String },
     /// Cancel a not-yet-finished task. Unlike `skip`, Cancelled does NOT
     /// satisfy downstream dependencies — dependents become unsatisfiable.
-    /// An in_progress task's running attempt finishes on its own but cannot
+    /// An `in_progress` task's running attempt finishes on its own but cannot
     /// resurrect the task. Idempotent on already-cancelled tasks; rejects
     /// completed / failed / skipped (already settled — use retry instead).
     Cancel { task_id: String },

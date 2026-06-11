@@ -108,7 +108,7 @@ pub async fn capture_snapshot(
 /// `dry_run = true` (the default at the tool layer) computes a diff without
 /// touching live state. `dry_run = false` performs:
 /// - Members: add missing, remove extras (leader never removed).
-/// - Tasks: create missing by subject+owner; skip InProgress live tasks
+/// - Tasks: create missing by subject+owner; skip `InProgress` live tasks
 ///   (don't yank work mid-flight).
 /// - Team config and `created_at` are NOT overwritten — they are immutable
 ///   audit anchors.

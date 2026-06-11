@@ -1,6 +1,6 @@
 //! Recursive stats: per-file line/byte counts plus an aggregate summary.
 //!
-//! Replaces the "loop file_read N times then count lines" anti-pattern that
+//! Replaces the "loop `file_read` N times then count lines" anti-pattern that
 //! forced the LLM to make N round-trips just to answer "how many lines does
 //! this directory contain?".
 

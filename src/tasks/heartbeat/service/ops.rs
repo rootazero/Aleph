@@ -13,7 +13,7 @@ use crate::tasks::shared::schedule::compute_backoff_ms_for;
 
 // ── Schedule computation ─────────────────────────────────────────────
 
-/// Compute next_due_ms for a task based on interval and error backoff.
+/// Compute `next_due_ms` for a task based on interval and error backoff.
 ///
 /// Returns `None` if the task is disabled.
 ///
@@ -39,7 +39,7 @@ pub fn compute_next_due(task: &HeartbeatTask, now_ms: i64) -> Option<i64> {
     Some(base + backoff)
 }
 
-/// Recompute next_due_ms for a task using the given clock.
+/// Recompute `next_due_ms` for a task using the given clock.
 pub fn recompute_schedule<C: Clock>(task: &mut HeartbeatTask, clock: &C) {
     task.state.next_due_ms = compute_next_due(task, clock.now_ms());
 }

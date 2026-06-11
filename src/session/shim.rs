@@ -147,12 +147,12 @@ pub async fn mirror_turn_started(
 }
 
 /// Dispatch a `SessionManager::add_message`-shaped write into the right
-/// mirror helper based on the role string recorded in SQLite.
+/// mirror helper based on the role string recorded in `SQLite`.
 ///
 /// Unknown roles are logged at `debug` and skipped. A fresh `TurnId` is
 /// minted per call because the legacy `add_message` API does not carry a
 /// turn correlation — once call sites migrate to `SessionService` directly
-/// they will thread a real turn_id through.
+/// they will thread a real `turn_id` through.
 pub async fn mirror_message_by_role(
     svc: &Arc<dyn SessionService>,
     id: &SessionId,

@@ -28,7 +28,7 @@ pub struct RigAgentConfig {
     /// Max tokens
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
-    /// Max turns for tool calling loop (prevents MaxDepthError)
+    /// Max turns for tool calling loop (prevents `MaxDepthError`)
     #[serde(default = "default_max_turns")]
     pub max_turns: usize,
     /// Request timeout in seconds

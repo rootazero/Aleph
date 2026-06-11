@@ -1,6 +1,6 @@
 //! Local action types for the executor module
 //!
-//! These types were previously in agent_loop but have been moved here
+//! These types were previously in `agent_loop` but have been moved here
 //! since they are only used by the executor subsystem.
 
 use async_trait::async_trait;
@@ -109,7 +109,7 @@ pub enum SingleToolResult {
     Error { error: String, retryable: bool },
 }
 
-/// Result of a tool call (wraps SingleToolResult with metadata)
+/// Result of a tool call (wraps `SingleToolResult` with metadata)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallResult {
     pub call_id: String,

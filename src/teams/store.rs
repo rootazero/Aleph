@@ -187,7 +187,7 @@ impl SqliteTeamStore {
 
 /// Add a column to a table only if it does not already exist.
 ///
-/// Idempotent on SQLite where `ALTER TABLE ... ADD COLUMN` raises on
+/// Idempotent on `SQLite` where `ALTER TABLE ... ADD COLUMN` raises on
 /// duplicate columns. Inspected via `PRAGMA table_info` to avoid relying
 /// on error string matching.
 fn add_column_if_missing(
@@ -264,7 +264,7 @@ fn read_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamSummary> {
 /// Mirrors the coord-task store pattern (`agents/swarm/tasks/store/mod.rs`):
 /// `TeamEventLogger` persists these into `team_events` so the kanban drawer
 /// renders team lifecycle transitions (creation, membership changes, disband)
-/// alongside task events. GlobalBus is a singleton — no injection required —
+/// alongside task events. `GlobalBus` is a singleton — no injection required —
 /// and broadcasting with zero subscribers (library tests) is safe.
 async fn broadcast_team_event(team_id: &str, event: crate::event::AlephEvent) {
     crate::event::GlobalBus::global()

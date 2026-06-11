@@ -1,7 +1,7 @@
 //! Timer loop and tick execution for heartbeat tasks.
 //!
 //! The timer loop is the heartbeat of the heartbeat service (meta!). It wakes
-//! up periodically or on WakeQueue notification, finds due tasks, runs L1 probes,
+//! up periodically or on `WakeQueue` notification, finds due tasks, runs L1 probes,
 //! optionally triggers L2 agent analysis, handles dedup and delivery, and writes
 //! back results.
 
@@ -56,7 +56,7 @@ pub struct HeartbeatTickResult {
 /// Run the heartbeat timer loop until shutdown is requested.
 ///
 /// Each iteration:
-/// 1. Sleep for `tick_interval_secs` OR wake on WakeQueue notification
+/// 1. Sleep for `tick_interval_secs` OR wake on `WakeQueue` notification
 /// 2. Collect due tasks (marking them running) — disjoint sets per tick
 /// 3. Spawn each task detached, bounded by a shared semaphore
 ///

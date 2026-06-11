@@ -1,4 +1,4 @@
-//! TeamDisbandTool — mark a team as disbanded.
+//! `TeamDisbandTool` — mark a team as disbanded.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -24,7 +24,7 @@ pub struct TeamDisbandArgs {
     pub team_id: String,
 }
 
-/// Output from team_disband.
+/// Output from `team_disband`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TeamDisbandOutput {
     pub team_id: String,

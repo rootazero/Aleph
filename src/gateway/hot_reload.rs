@@ -56,7 +56,7 @@ pub enum ConfigEvent {
     FileError(String),
 }
 
-/// Configuration for the ConfigWatcher
+/// Configuration for the `ConfigWatcher`
 #[derive(Debug, Clone)]
 pub struct ConfigWatcherConfig {
     /// Path to the configuration file
@@ -87,7 +87,7 @@ pub struct ConfigWatcher {
 }
 
 impl ConfigWatcher {
-    /// Create a new ConfigWatcher
+    /// Create a new `ConfigWatcher`
     pub fn new(config: ConfigWatcherConfig) -> Result<Self, ConfigWatcherError> {
         // Validate config path exists
         if !config.config_path.exists() {
@@ -109,7 +109,7 @@ impl ConfigWatcher {
         })
     }
 
-    /// Create a ConfigWatcher with default path
+    /// Create a `ConfigWatcher` with default path
     pub fn with_default_path() -> Result<Self, ConfigWatcherError> {
         Self::new(ConfigWatcherConfig::default())
     }
@@ -144,7 +144,7 @@ impl ConfigWatcher {
     /// Start watching for configuration changes
     ///
     /// This spawns a background task that monitors the config file.
-    /// Returns a JoinHandle that can be used to stop the watcher.
+    /// Returns a `JoinHandle` that can be used to stop the watcher.
     #[must_use]
     pub fn start_watching(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         let watcher = self.clone();

@@ -1,4 +1,4 @@
-//! DailyDigest stage — generates a daily activity summary from recently changed notes.
+//! `DailyDigest` stage — generates a daily activity summary from recently changed notes.
 
 use async_trait::async_trait;
 

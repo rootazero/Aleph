@@ -6,7 +6,7 @@
 
 use super::protocol::{CoordinatorPlan, GroupChatError, Persona, RespondentPlan};
 
-/// Maximum number of characters from a persona's system_prompt to include
+/// Maximum number of characters from a persona's `system_prompt` to include
 /// in the coordinator prompt (to keep token usage reasonable).
 const SYSTEM_PROMPT_TRUNCATE_LEN: usize = 120;
 

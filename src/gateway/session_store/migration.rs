@@ -8,7 +8,7 @@ use crate::gateway::session_store::types::{MessageRecord, SessionMetadata};
 
 const MIGRATION_MARKER: &str = ".migrated_from_sqlite";
 
-/// Check whether a legacy SQLite sessions database exists and has not yet been migrated.
+/// Check whether a legacy `SQLite` sessions database exists and has not yet been migrated.
 #[must_use]
 pub fn migration_needed(base_dir: &Path) -> bool {
     let marker = base_dir.join(MIGRATION_MARKER);
@@ -20,7 +20,7 @@ pub fn migration_needed(base_dir: &Path) -> bool {
     legacy_db.exists()
 }
 
-/// Export legacy SQLite sessions and messages into the file backend.
+/// Export legacy `SQLite` sessions and messages into the file backend.
 /// Writes a marker file on success so the migration is not re-run.
 ///
 /// Resolves the legacy DB path from `get_sessions_db_path()` and delegates to
@@ -38,7 +38,7 @@ pub async fn export_legacy_messages(
     export_legacy_messages_from(&legacy_db, store).await
 }
 
-/// Migrate sessions/messages from an explicit legacy SQLite path into `store`.
+/// Migrate sessions/messages from an explicit legacy `SQLite` path into `store`.
 /// Split out from [`export_legacy_messages`] so integration tests can drive
 /// migration against fixture databases without depending on `$HOME`.
 pub async fn export_legacy_messages_from(

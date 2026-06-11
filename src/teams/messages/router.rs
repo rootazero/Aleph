@@ -175,7 +175,7 @@ impl MessageRouter {
     }
 
     /// If the thread exceeds the threshold and no escalation notification has
-    /// been sent yet, send a SystemNotification to the leader.
+    /// been sent yet, send a `SystemNotification` to the leader.
     async fn maybe_escalate(
         &self,
         team_id: &str,

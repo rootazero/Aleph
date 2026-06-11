@@ -20,7 +20,7 @@ mod web_fetch_fallback;
 /// # Supported Providers
 ///
 /// - **Tavily**: AI-optimized search (recommended default)
-/// - **SearXNG**: Privacy-first, self-hosted
+/// - **`SearXNG`**: Privacy-first, self-hosted
 /// - **Brave**: Privacy + quality balance
 /// - **Google CSE**: Comprehensive coverage
 /// - **Bing**: Cost-effective
@@ -78,7 +78,7 @@ pub enum SearchProviderType {
     Tavily,
     /// Brave privacy-focused search
     Brave,
-    /// SearXNG self-hosted metasearch
+    /// `SearXNG` self-hosted metasearch
     Searxng,
     /// Google Custom Search Engine
     Google,
@@ -88,7 +88,7 @@ pub enum SearchProviderType {
     Exa,
     /// Jina AI search
     Jina,
-    /// DuckDuckGo HTML-scrape search
+    /// `DuckDuckGo` HTML-scrape search
     DuckDuckGo,
 }
 
@@ -178,7 +178,7 @@ pub struct SearchProviderTestConfig {
     pub provider_type: SearchProviderType,
     /// API key (required for most providers)
     pub api_key: Option<String>,
-    /// Base URL (required for SearXNG)
+    /// Base URL (required for `SearXNG`)
     pub base_url: Option<String>,
     /// Engine ID (required for Google CSE)
     pub engine_id: Option<String>,

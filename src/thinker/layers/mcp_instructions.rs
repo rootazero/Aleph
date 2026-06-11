@@ -1,4 +1,4 @@
-//! McpInstructionsLayer — MCP server instruction injection (priority 1705)
+//! `McpInstructionsLayer` — MCP server instruction injection (priority 1705)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 pub struct Relation {
     /// Target note path ("entity/bob") or raw wikilink target.
     pub to: String,
-    /// Free-form snake_case relationship verb chosen by the LLM (no fixed
-    /// taxonomy — R7 LLM sovereignty). E.g. "works_at", "colleague".
+    /// Free-form `snake_case` relationship verb chosen by the LLM (no fixed
+    /// taxonomy — R7 LLM sovereignty). E.g. "`works_at`", "colleague".
     #[serde(rename = "type")]
     pub rel_type: String,
     /// LLM-judged edge confidence in [0,1]; defaults to 1.0 when absent.

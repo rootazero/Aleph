@@ -182,7 +182,7 @@ fn stage_plugin_copy(
 }
 
 /// Verify the SHA-256 hash of a directory by hashing all files recursively.
-/// Returns Ok(()) if hash matches or if expected_hash is None (no verification).
+/// Returns Ok(()) if hash matches or if `expected_hash` is None (no verification).
 pub fn verify_plugin_integrity(
     source_path: &Path,
     expected_hash: Option<&str>,

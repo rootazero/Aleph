@@ -1,7 +1,7 @@
 //! Media pipeline configuration
 //!
 //! Contains settings for the media understanding pipeline:
-//! - MediaConfig: Top-level toggle and policy settings
+//! - `MediaConfig`: Top-level toggle and policy settings
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

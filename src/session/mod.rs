@@ -3,7 +3,7 @@
 //! Phase 1 of the managed-agents refactor. Consumers (primarily `agent_loop`)
 //! interact with sessions exclusively through the `SessionService` trait;
 //! the underlying `InProcessActorSessionService` spawns one tokio task per
-//! session and persists events synchronously to SQLite.
+//! session and persists events synchronously to `SQLite`.
 //!
 //! See `docs/superpowers/specs/2026-04-18-session-service-actor-design.md`.
 

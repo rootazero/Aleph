@@ -1,4 +1,4 @@
-//! ChromeMcpBackend — BrowserBackend implementation routing through Chrome DevTools MCP.
+//! `ChromeMcpBackend` — `BrowserBackend` implementation routing through Chrome `DevTools` MCP.
 
 use std::sync::Arc;
 
@@ -82,7 +82,7 @@ impl ChromeMcpBackend {
     }
 
     /// Select a page by its index before performing operations on it.
-    /// Chrome DevTools MCP uses `pageId` (number) for page selection.
+    /// Chrome `DevTools` MCP uses `pageId` (number) for page selection.
     async fn select_page(&self, tab_id: &str) -> Result<(), BrowserError> {
         let page_id: u32 = tab_id.parse().map_err(|_| {
             BrowserError::ActionFailed(format!(
@@ -94,7 +94,7 @@ impl ChromeMcpBackend {
         Ok(())
     }
 
-    /// Extract text content from Chrome DevTools MCP response.
+    /// Extract text content from Chrome `DevTools` MCP response.
     /// MCP responses have format: {"content": [{"text": "...", "type": "text"}]}
     /// Returns empty string when no text content is present — callers must NOT
     /// dump raw JSON (image / binary frames) into snapshot output downstream.
@@ -512,9 +512,9 @@ impl BrowserBackend for ChromeMcpBackend {
 }
 
 /// Best-effort extraction of page URL and title from the first few lines of a snapshot.
-/// Chrome DevTools MCP snapshot text begins with header lines like:
+/// Chrome `DevTools` MCP snapshot text begins with header lines like:
 ///
-///   - Page URL: https://example.com/
+///   - Page URL: <https://example.com>/
 ///   - Page Title: Hello
 ///
 /// Returns empty strings when the fields are absent (graceful degradation).

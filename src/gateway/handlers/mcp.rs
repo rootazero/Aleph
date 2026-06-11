@@ -3,7 +3,7 @@
 //! Handlers for MCP server management: list, add, update, delete, status, logs,
 //! start, stop, restart, and capability aggregation (tools, resources, prompts).
 //!
-//! These handlers are wired to the McpManagerHandle actor for server lifecycle
+//! These handlers are wired to the `McpManagerHandle` actor for server lifecycle
 //! management and capability discovery.
 
 use serde::Deserialize;
@@ -408,7 +408,7 @@ pub async fn handle_list_prompts_placeholder(request: JsonRpcRequest) -> JsonRpc
 // Approval Handlers
 // ============================================================================
 
-/// Parameters for mcp.respond_approval
+/// Parameters for `mcp.respond_approval`
 #[derive(Debug, Deserialize)]
 pub struct RespondApprovalParams {
     pub request_id: String,
@@ -416,13 +416,13 @@ pub struct RespondApprovalParams {
     pub reason: Option<String>,
 }
 
-/// Parameters for mcp.cancel_approval
+/// Parameters for `mcp.cancel_approval`
 #[derive(Debug, Deserialize)]
 pub struct CancelApprovalParams {
     pub request_id: String,
 }
 
-/// Handle mcp.list_pending_approvals
+/// Handle `mcp.list_pending_approvals`
 ///
 /// Returns all pending approval requests awaiting user response.
 pub async fn handle_list_pending_approvals(request: JsonRpcRequest) -> JsonRpcResponse {
@@ -438,7 +438,7 @@ pub async fn handle_list_pending_approvals(request: JsonRpcRequest) -> JsonRpcRe
     JsonRpcResponse::success(request.id, json!([]))
 }
 
-/// Handle mcp.respond_approval
+/// Handle `mcp.respond_approval`
 ///
 /// Submit user's response to an approval request.
 pub async fn handle_respond_approval(request: JsonRpcRequest) -> JsonRpcResponse {
@@ -464,7 +464,7 @@ pub async fn handle_respond_approval(request: JsonRpcRequest) -> JsonRpcResponse
     JsonRpcResponse::success(request.id, json!({"success": true}))
 }
 
-/// Handle mcp.cancel_approval
+/// Handle `mcp.cancel_approval`
 ///
 /// Cancel a pending approval request.
 pub async fn handle_cancel_approval(request: JsonRpcRequest) -> JsonRpcResponse {

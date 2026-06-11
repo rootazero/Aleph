@@ -1,6 +1,6 @@
 //! Spec B — per-session result diversification.
 //!
-//! HybridAssembler returns top-K candidate facts mixed across sessions
+//! `HybridAssembler` returns top-K candidate facts mixed across sessions
 //! (e.g. 3 d0 chunks from session A, 2 from session B, 1 from session C).
 //! `top_per_session` collapses these to one best-scoring entry per
 //! `session_key`, capped at `max_sessions`.

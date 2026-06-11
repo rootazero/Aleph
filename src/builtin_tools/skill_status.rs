@@ -1,4 +1,4 @@
-//! skill_status — LLM Tool for querying skill system status.
+//! `skill_status` — LLM Tool for querying skill system status.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -10,7 +10,7 @@ use crate::tools::AlephTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SkillStatusArgs {
-    /// Filter skills by status: "all", "ready", "needs_setup", "disabled"
+    /// Filter skills by status: "all", "ready", "`needs_setup`", "disabled"
     #[serde(default = "default_filter")]
     pub filter: String,
 }

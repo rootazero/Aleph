@@ -1,7 +1,7 @@
 //! Bounded regex compilation for untrusted (config- or user-supplied) patterns.
 //!
 //! Rust's `regex` crate guarantees linear-time matching with no catastrophic
-//! backtracking, so it is **immune to classic ReDoS** by construction. The
+//! backtracking, so it is **immune to classic `ReDoS`** by construction. The
 //! residual risk from an untrusted pattern is therefore not match-time blowup
 //! but *compile-time memory* blowup: a tiny source such as `(a{1000}){1000}`
 //! can expand into an enormous compiled automaton.

@@ -1,4 +1,4 @@
-//! SkillRegistry — in-memory registry with priority-based deduplication.
+//! `SkillRegistry` — in-memory registry with priority-based deduplication.
 
 use std::collections::HashMap;
 

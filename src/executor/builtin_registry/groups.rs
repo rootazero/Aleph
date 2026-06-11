@@ -8,7 +8,7 @@ use serde::Serialize;
 /// A logical group of tools for UI display
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolCategory {
-    /// Group identifier (e.g., "search_web")
+    /// Group identifier (e.g., "`search_web`")
     pub id: &'static str,
     /// Human-readable group name
     pub name: &'static str,

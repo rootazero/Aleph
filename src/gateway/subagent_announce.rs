@@ -14,7 +14,7 @@
 //!
 //! - parent idle → a fresh run processes the result and reports to the user
 //!   (the reply fans out to the session's origin channel, mirroring
-//!   `handlers::agent`'s OriginFanout wiring);
+//!   `handlers::agent`'s `OriginFanout` wiring);
 //! - parent mid-run → `ExecutionEngine::execute`'s busy-input path injects the
 //!   notice as steering, so the live run absorbs it at the next turn boundary
 //!   (no extra run is spawned);

@@ -1,6 +1,6 @@
 //! MCP Manager Handle
 //!
-//! Public API for interacting with the McpManager actor.
+//! Public API for interacting with the `McpManager` actor.
 //!
 //! The handle provides a thread-safe interface for:
 //! - Server lifecycle management (add, remove, start, stop, restart)
@@ -20,7 +20,7 @@ use crate::mcp::{McpClient, McpPrompt, McpResource, McpTool};
 
 /// Handle for interacting with the MCP Manager actor
 ///
-/// This is the public interface for the McpManager. It is cheap to clone
+/// This is the public interface for the `McpManager`. It is cheap to clone
 /// and can be shared across threads. All operations are non-blocking and
 /// communicate with the actor via channels.
 ///
@@ -52,7 +52,7 @@ pub struct McpManagerHandle {
 impl McpManagerHandle {
     /// Create a new handle
     ///
-    /// This is typically called by the McpManager when spawning.
+    /// This is typically called by the `McpManager` when spawning.
     pub(crate) const fn new(
         tx: mpsc::Sender<McpCommand>,
         event_tx: broadcast::Sender<McpManagerEvent>,
@@ -196,7 +196,7 @@ impl McpManagerHandle {
 
     // ===== Query Methods =====
 
-    /// Get the McpClient for a specific server
+    /// Get the `McpClient` for a specific server
     ///
     /// Returns `None` if the server doesn't exist or is not running.
     pub async fn get_client(&self, server_id: impl Into<String>) -> Result<Option<Arc<McpClient>>> {

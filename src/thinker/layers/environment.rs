@@ -1,4 +1,4 @@
-//! EnvironmentLayer — baseline runtime hints (date, OS, cwd) plus
+//! `EnvironmentLayer` — baseline runtime hints (date, OS, cwd) plus
 //! optional environment contract (paradigm / capabilities / constraints).
 //!
 //! Time is rendered **date-granular** (`YYYY-MM-DD UTC`) so the assembled

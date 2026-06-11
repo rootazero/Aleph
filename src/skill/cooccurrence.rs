@@ -3,7 +3,7 @@
 //! Sibling of [`crate::skill::usage`]'s `.usage.json` sidecar, living in the
 //! same skills dir as `.cooccur.json`. Where the usage sidecar answers "how
 //! often was THIS skill used", this log answers "which skills were used CLOSE
-//! TOGETHER" — the raw signal the dream pipeline mines into MetaSkill
+//! TOGETHER" — the raw signal the dream pipeline mines into `MetaSkill`
 //! (workflow) proposals (see
 //! [`crate::memory::dreaming::stages::WorkflowProposalStage`]).
 //!

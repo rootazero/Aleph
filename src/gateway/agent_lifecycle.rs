@@ -1,6 +1,6 @@
 //! Agent lifecycle events.
 //!
-//! Emitted via GatewayEventBus when agents are registered, started, or stopped.
+//! Emitted via `GatewayEventBus` when agents are registered, started, or stopped.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -44,7 +44,7 @@ pub enum AgentLifecycleEvent {
 }
 
 impl AgentLifecycleEvent {
-    /// Get the event topic string for EventBus routing.
+    /// Get the event topic string for `EventBus` routing.
     #[must_use]
     pub const fn topic(&self) -> &'static str {
         match self {

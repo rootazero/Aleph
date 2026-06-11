@@ -1,7 +1,7 @@
 //! Event handler trait for callbacks from Rust to client code.
 //!
 //! This trait defines the callback interface that Swift/Kotlin clients
-//! must implement to receive events from the Aleph core. UniFFI will
+//! must implement to receive events from the Aleph core. `UniFFI` will
 //! generate a protocol/interface for each target language.
 
 /// Processing states for the Aleph system
@@ -68,7 +68,7 @@ pub struct McpStartupReport {
 }
 
 impl McpStartupReport {
-    /// Create from internal McpStartupReport
+    /// Create from internal `McpStartupReport`
     #[must_use]
     pub fn from_internal(report: &crate::mcp::McpStartupReport) -> Self {
         Self {

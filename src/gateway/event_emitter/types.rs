@@ -195,7 +195,7 @@ pub enum StreamEvent {
         seq: u64,
         /// Provider that just failed.
         provider: String,
-        /// 1-based attempt about to run (2..=max_attempts).
+        /// 1-based attempt about to run (`2..=max_attempts`).
         attempt: u32,
         /// Total dispatch attempts before the run gives up.
         max_attempts: u32,
@@ -232,7 +232,7 @@ impl UncertaintyAction {
 }
 
 impl StreamEvent {
-    /// Create a new ReasoningBlock event
+    /// Create a new `ReasoningBlock` event
     pub fn reasoning_block(
         run_id: impl Into<String>,
         seq: u64,
@@ -252,7 +252,7 @@ impl StreamEvent {
         }
     }
 
-    /// Create a new ReasoningBlock event with confidence
+    /// Create a new `ReasoningBlock` event with confidence
     pub fn reasoning_block_with_confidence(
         run_id: impl Into<String>,
         seq: u64,
@@ -273,7 +273,7 @@ impl StreamEvent {
         }
     }
 
-    /// Create a new UncertaintySignal event
+    /// Create a new `UncertaintySignal` event
     pub fn uncertainty_signal(
         run_id: impl Into<String>,
         seq: u64,

@@ -1,4 +1,4 @@
-//! MemoryFact aggregate root — the core fact entity for the memory system.
+//! `MemoryFact` aggregate root — the core fact entity for the memory system.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +14,7 @@ pub(crate) fn default_namespace() -> String {
     "owner".to_string()
 }
 
-/// Default serde helper for agent_id field
+/// Default serde helper for `agent_id` field
 pub(crate) fn default_agent_id() -> String {
     "default".to_string()
 }
@@ -43,7 +43,7 @@ pub struct MemoryFact {
     pub updated_at: i64,
     /// Whether this fact is still valid (soft delete)
     pub is_valid: bool,
-    /// Reason for invalidation (if is_valid = false)
+    /// Reason for invalidation (if `is_valid` = false)
     pub invalidation_reason: Option<String>,
     /// Timestamp when fact was invalidated due to decay (Unix seconds)
     /// Used for recycle bin retention period
@@ -61,7 +61,7 @@ pub struct MemoryFact {
     /// Similarity score (when retrieved from search)
     #[serde(skip)]
     pub similarity_score: Option<f32>,
-    /// VFS path for hierarchical organization (e.g., "aleph://user/preferences/coding")
+    /// VFS path for hierarchical organization (e.g., "<aleph://user/preferences/coding>")
     pub path: String,
     /// Tiered loading level for retrieval.
     pub layer: MemoryLayer,
@@ -267,7 +267,7 @@ impl MemoryFact {
         self
     }
 
-    /// Set created_at timestamp (builder pattern, useful for tests)
+    /// Set `created_at` timestamp (builder pattern, useful for tests)
     #[must_use]
     pub const fn with_created_at(mut self, ts: i64) -> Self {
         self.created_at = ts;

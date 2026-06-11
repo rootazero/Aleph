@@ -1,6 +1,6 @@
 //! Core dispatcher configuration types
 //!
-//! Contains DispatcherConfigToml and AgentConfigToml for the Dispatcher Layer (Aleph Cortex).
+//! Contains `DispatcherConfigToml` and `AgentConfigToml` for the Dispatcher Layer (Aleph Cortex).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

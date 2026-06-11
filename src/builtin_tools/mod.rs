@@ -4,7 +4,7 @@
 //!
 //! # Built-in Tools
 //!
-//! - [`SearchTool`] - Web search via SearXNG
+//! - [`SearchTool`] - Web search via `SearXNG`
 //! - [`WebFetchTool`] - Web page fetching
 //! - [`FileOpsTool`] - File system operations (list, read, write, move, copy, delete, mkdir, search)
 //! - [`CodeExecTool`] - Code execution (Python, JavaScript, Shell)

@@ -35,7 +35,7 @@ pub struct MatrixRoomPolicy {
 /// Matrix channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatrixConfig {
-    /// Matrix homeserver URL (e.g., "https://matrix.org")
+    /// Matrix homeserver URL (e.g., "<https://matrix.org>")
     pub homeserver_url: String,
 
     /// Access token for authentication (Bearer token)
@@ -61,11 +61,11 @@ pub struct MatrixConfig {
     #[serde(default)]
     pub allowed_users: Vec<String>,
 
-    /// Sync state persistent store path (default: ~/.aleph/state/matrix_sync.db)
+    /// Sync state persistent store path (default: ~/.`aleph/state/matrix_sync.db`)
     #[serde(default)]
     pub state_store_path: Option<String>,
 
-    /// Event deduplication store path (default: ~/.aleph/state/matrix_dedupe.db)
+    /// Event deduplication store path (default: ~/.`aleph/state/matrix_dedupe.db`)
     #[serde(default)]
     pub dedupe_store_path: Option<String>,
 

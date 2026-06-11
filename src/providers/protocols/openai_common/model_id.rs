@@ -1,30 +1,30 @@
-//! Shared OpenAI model-id normalization.
+//! Shared `OpenAI` model-id normalization.
 //!
 //! Both the Chat Completions and Responses protocols accept the same family of
-//! OpenAI model ids and hit the same aggregator quirks (no-dash typos, leaked
+//! `OpenAI` model ids and hit the same aggregator quirks (no-dash typos, leaked
 //! `openai/` vendor-routing prefixes). Keeping the canonicalization in one place
 //! means the two adapters can never drift — previously only Chat normalized,
 //! while Responses passed the raw id straight through.
 //!
 //! **Endpoint awareness (hermes-parity).** The `openai/` vendor prefix means
-//! opposite things on different hosts: on the first-party OpenAI API
+//! opposite things on different hosts: on the first-party `OpenAI` API
 //! (`api.openai.com`, `*.openai.azure.com`) the wire id is bare (`gpt-4o`) and
-//! a leaked `openai/` must be stripped; but on an OpenAI-*protocol* aggregator
-//! (OpenRouter etc.) the `vendor/model` slug — `openai/gpt-4o` — is the
+//! a leaked `openai/` must be stripped; but on an `OpenAI`-*protocol* aggregator
+//! (`OpenRouter` etc.) the `vendor/model` slug — `openai/gpt-4o` — is the
 //! REQUIRED routing key and stripping it mis-routes the request. So the strip
 //! is gated on the endpoint host (see [`normalize_openai_model_id`]). The
 //! no-dash typo repairs are universally safe and always applied.
 
 use std::borrow::Cow;
 
-/// Forgive common OpenAI model-id typos that production users hit, and strip a
+/// Forgive common `OpenAI` model-id typos that production users hit, and strip a
 /// leaked `openai/` vendor-routing prefix **only when the endpoint is the
-/// first-party OpenAI API**.
+/// first-party `OpenAI` API**.
 ///
 /// `base_url` is the provider's configured endpoint (`None` ⇒ the default
-/// first-party OpenAI host). The `openai/` prefix is stripped iff the host is
-/// first-party (`api.openai.com`, Azure OpenAI); on aggregators that speak the
-/// OpenAI protocol but require `vendor/model` slugs (OpenRouter, …) the prefix
+/// first-party `OpenAI` host). The `openai/` prefix is stripped iff the host is
+/// first-party (`api.openai.com`, Azure `OpenAI`); on aggregators that speak the
+/// `OpenAI` protocol but require `vendor/model` slugs (`OpenRouter`, …) the prefix
 /// is preserved so the request routes to the right upstream model.
 ///
 /// Covers the no-dash variants returned by some routing aggregators
@@ -58,10 +58,10 @@ pub fn normalize_openai_model_id<'a>(model_id: &'a str, base_url: Option<&str>) 
     }
 }
 
-/// Whether `base_url` points at a first-party OpenAI endpoint (where the wire
+/// Whether `base_url` points at a first-party `OpenAI` endpoint (where the wire
 /// model id is bare and a leaked `openai/` prefix should be stripped).
 ///
-/// `None`/empty ⇒ the default OpenAI host ⇒ first-party. Reuses the
+/// `None`/empty ⇒ the default `OpenAI` host ⇒ first-party. Reuses the
 /// scheme-tolerant host parse from the endpoint catalog (no duplication); an
 /// unparseable URL conservatively counts as first-party so the historical
 /// strip behaviour is preserved when the host can't be determined. Matches

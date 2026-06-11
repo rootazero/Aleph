@@ -60,7 +60,7 @@ pub enum SessionEndReason {
 }
 
 impl RawMemorySource {
-    /// Split enum into `(token, optional_detail_json)` for SQLite storage.
+    /// Split enum into `(token, optional_detail_json)` for `SQLite` storage.
     /// Legacy variants return `(token, None)` so existing rows stay unchanged.
     #[must_use]
     pub fn to_persisted(&self) -> (&'static str, Option<String>) {
@@ -198,7 +198,7 @@ impl RawMemorySource {
     }
 }
 
-/// A raw memory record — ephemeral data consumed by CompressionService.
+/// A raw memory record — ephemeral data consumed by `CompressionService`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawMemory {
     pub id: String,
@@ -267,7 +267,7 @@ pub trait RawMemoryStore: Send + Sync {
     /// get the winning row when a race is possible.
     ///
     /// Default impl calls `insert_raw_memory` and swallows errors whose
-    /// message contains "UNIQUE constraint failed". SQLite backends override
+    /// message contains "UNIQUE constraint failed". `SQLite` backends override
     /// this with `INSERT OR IGNORE` SQL for proper atomicity.
     async fn insert_raw_memory_or_ignore(&self, raw: &RawMemory) -> Result<(), AlephError> {
         match self.insert_raw_memory(raw).await {
@@ -283,14 +283,14 @@ pub trait RawMemoryStore: Send + Sync {
         }
     }
 
-    /// Get unprocessed raw memories for an agent, ordered by created_at ASC.
+    /// Get unprocessed raw memories for an agent, ordered by `created_at` ASC.
     async fn get_unprocessed_raw_memories(
         &self,
         agent_id: &str,
         limit: usize,
     ) -> Result<Vec<RawMemory>, AlephError>;
 
-    /// Mark raw memories as processed after CompressionService consumes them.
+    /// Mark raw memories as processed after `CompressionService` consumes them.
     async fn mark_raw_as_processed(&self, ids: &[String]) -> Result<usize, AlephError>;
 
     /// Count unprocessed raw memories for an agent.
@@ -300,13 +300,13 @@ pub trait RawMemoryStore: Send + Sync {
     /// raw memory. Used by `CompressionService::compress` to fan out across
     /// every agent rather than only the historical "main" default.
     /// Default impl returns just `["main"]` for backwards compatibility with
-    /// in-memory test stores; the SQLite backend overrides with a real query.
+    /// in-memory test stores; the `SQLite` backend overrides with a real query.
     async fn unprocessed_agent_ids(&self) -> Result<Vec<String>, AlephError> {
         Ok(vec!["main".to_string()])
     }
 
     /// Get raw memories whose `path` starts with the given prefix, scoped to an agent.
-    /// Used for session data retrieval (e.g. "aleph://session/{id}/").
+    /// Used for session data retrieval (e.g. "<aleph://session/{id>}/").
     async fn get_raw_by_path_prefix(
         &self,
         path_prefix: &str,
@@ -340,7 +340,7 @@ pub trait RawMemoryStore: Send + Sync {
 
     /// Returns the single `RawMemory` row whose `(agent_id, path)` matches
     /// exactly, or `Ok(None)` if no such row exists. Default impl reuses
-    /// `get_raw_by_path_prefix` and filters in-Rust; the SQLite backend
+    /// `get_raw_by_path_prefix` and filters in-Rust; the `SQLite` backend
     /// overrides with an indexed exact-match SELECT for efficiency.
     async fn find_by_path(
         &self,
@@ -357,7 +357,7 @@ pub trait RawMemoryStore: Send + Sync {
     /// Used for cross-session retrieval (e.g. all `SessionCompressed` summaries).
     ///
     /// Default impl fetches all unprocessed memories and filters client-side;
-    /// SQLite backend overrides with an efficient indexed query.
+    /// `SQLite` backend overrides with an efficient indexed query.
     async fn get_raw_by_source(
         &self,
         source: RawMemorySource,

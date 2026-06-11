@@ -113,7 +113,7 @@ pub fn validate_plugin_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate plugin name format (alias for validate_plugin_id)
+/// Validate plugin name format (alias for `validate_plugin_id`)
 pub fn validate_plugin_name(name: &str) -> ExtensionResult<()> {
     validate_plugin_id(name).map_err(|reason| ExtensionError::invalid_plugin_name(name, reason))
 }
@@ -234,7 +234,7 @@ pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManife
     auto_discover_manifest(dir)
 }
 
-/// Synchronous version of parse_manifest_from_dir
+/// Synchronous version of `parse_manifest_from_dir`
 pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifest> {
     // 1. .claude-plugin/plugin.toml (CC-compat, preferred)
     let cc_toml_path = dir.join(CC_PLUGIN_TOML);

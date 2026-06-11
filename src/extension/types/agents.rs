@@ -43,7 +43,7 @@ pub enum PermissionAction {
     Ask,
 }
 
-/// Extension agent definition (unified with AgentRegistration).
+/// Extension agent definition (unified with `AgentRegistration`).
 ///
 /// This is now a type alias for `AgentRegistration`, which contains all fields
 /// needed for both plugin-registered and filesystem-discovered agents.

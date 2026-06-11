@@ -1,7 +1,7 @@
 //! Event drain: maps `FlowStreamEvent` variants to `EventEmitter` calls.
 //!
 //! This is a pure, stateless-per-call helper extracted from the in-progress
-//! StreamCallback. It holds drain-side state in `DrainState` (text
+//! `StreamCallback`. It holds drain-side state in `DrainState` (text
 //! accumulator, chunk counter, scrubber) so callers don't need to replicate
 //! that logic. Wired into the live path by `helpers::run_dispatch_and_drain`
 //! (called from `run_loop.rs`).

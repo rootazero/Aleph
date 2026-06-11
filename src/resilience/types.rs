@@ -1,9 +1,9 @@
 //! Multi-Agent Resilience Types
 //!
 //! Core types for the Multi-Agent Resilience architecture:
-//! - AgentTask: Task state and recovery checkpoints
-//! - TaskTrace: Structured execution traces for Shadow Replay
-//! - AgentEvent: Tiered event persistence (Skeleton & Pulse)
+//! - `AgentTask`: Task state and recovery checkpoints
+//! - `TaskTrace`: Structured execution traces for Shadow Replay
+//! - `AgentEvent`: Tiered event persistence (Skeleton & Pulse)
 
 use aleph_protocol::AgentTraceEvent;
 use serde::{Deserialize, Serialize};
@@ -377,7 +377,7 @@ pub struct AgentEvent {
 }
 
 impl AgentEvent {
-    /// Create a new event (is_structural determined by caller)
+    /// Create a new event (`is_structural` determined by caller)
     pub fn new(
         task_id: impl Into<String>,
         seq: u64,

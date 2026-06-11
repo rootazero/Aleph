@@ -7,9 +7,9 @@ use serde::Deserialize;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-/// SearXNG search provider
+/// `SearXNG` search provider
 ///
-/// SearXNG is a privacy-first, self-hosted metasearch engine
+/// `SearXNG` is a privacy-first, self-hosted metasearch engine
 const NAME: &str = "searxng";
 
 /// Default request-spacing applied when the backend doesn't set
@@ -26,7 +26,7 @@ fn resolve_min_interval(ms: Option<u64>) -> Duration {
     Duration::from_millis(ms.unwrap_or(DEFAULT_MIN_INTERVAL_MS))
 }
 
-/// Build the SearXNG `/search` query parameters. Pure (no I/O) so the
+/// Build the `SearXNG` `/search` query parameters. Pure (no I/O) so the
 /// `engines` pinning and option mapping are unit-testable.
 fn build_params(
     query: &str,
@@ -67,7 +67,7 @@ pub struct SearxngProvider {
 struct SearxngResponse {
     #[serde(default)]
     results: Vec<SearxngResult>,
-    /// Engines that failed for this query — SearXNG returns an empty `results`
+    /// Engines that failed for this query — `SearXNG` returns an empty `results`
     /// array when every engine is suspended/CAPTCHA-blocked, which we surface
     /// as an error so the LLM doesn't keep trying new queries against a dead
     /// backend. Shape: `[["engine_name", "reason"], ...]`.

@@ -1,4 +1,4 @@
-//! AgentEnv CRUD, channel active agent, and maintenance operations
+//! `AgentEnv` CRUD, channel active agent, and maintenance operations
 
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -318,7 +318,7 @@ impl AgentEnvStore {
 
     /// Get the active agent for a channel.
     ///
-    /// Returns the agent_id bound to this channel, or None if unbound.
+    /// Returns the `agent_id` bound to this channel, or None if unbound.
     pub fn get_active_agent(&self, channel: &str) -> Result<Option<String>, AgentEnvError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
@@ -404,7 +404,7 @@ impl AgentEnvStore {
     // Internal Helpers
     // =========================================================================
 
-    /// Parse an agent environment row from SQLite
+    /// Parse an agent environment row from `SQLite`
     fn row_to_agent_env(row: &rusqlite::Row) -> rusqlite::Result<AgentEnv> {
         let cache_state_json: Option<String> = row.get(4)?;
         let env_vars_json: Option<String> = row.get(5)?;

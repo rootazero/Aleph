@@ -35,7 +35,7 @@ use crate::tools::AlephTool;
 // ListToolsTool
 // ============================================================================
 
-/// Arguments for list_tools
+/// Arguments for `list_tools`
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct ListToolsArgs {
     /// Category filter (optional): core, builtin, mcp, skill, custom
@@ -44,7 +44,7 @@ pub struct ListToolsArgs {
     pub category: Option<String>,
 }
 
-/// Output from list_tools containing categorized tool lists
+/// Output from `list_tools` containing categorized tool lists
 #[derive(Debug, Clone, Serialize)]
 pub struct ListToolsOutput {
     /// Total number of tools
@@ -83,7 +83,7 @@ impl ListToolsTool {
     /// Tool description for AI prompt
     pub const DESCRIPTION: &'static str = "List available tools by category. Use this to discover what tools are available before calling get_tool_schema for specific tools.";
 
-    /// Create a new ListToolsTool with registry reference
+    /// Create a new `ListToolsTool` with registry reference
     pub const fn new(registry: Arc<RwLock<ToolCatalog>>) -> Self {
         Self { registry }
     }
@@ -133,7 +133,7 @@ impl Clone for ListToolsTool {
     }
 }
 
-/// Implementation of AlephTool trait for ListToolsTool
+/// Implementation of `AlephTool` trait for `ListToolsTool`
 #[async_trait]
 impl AlephTool for ListToolsTool {
     const NAME: &'static str = "list_tools";
@@ -151,14 +151,14 @@ impl AlephTool for ListToolsTool {
 // GetToolSchemaTool
 // ============================================================================
 
-/// Arguments for get_tool_schema
+/// Arguments for `get_tool_schema`
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct GetToolSchemaArgs {
     /// Name of the tool to get schema for
     pub tool_name: String,
 }
 
-/// Output from get_tool_schema containing full tool definition
+/// Output from `get_tool_schema` containing full tool definition
 #[derive(Debug, Clone, Serialize)]
 pub struct GetToolSchemaOutput {
     /// Whether the tool was found
@@ -218,7 +218,7 @@ impl GetToolSchemaTool {
     /// Tool description for AI prompt
     pub const DESCRIPTION: &'static str = "Get the full JSON Schema definition for a specific tool. Use this before calling a tool that's not in your full-schema set.";
 
-    /// Create a new GetToolSchemaTool with registry reference
+    /// Create a new `GetToolSchemaTool` with registry reference
     pub const fn new(registry: Arc<RwLock<ToolCatalog>>) -> Self {
         Self { registry }
     }
@@ -296,7 +296,7 @@ impl Clone for GetToolSchemaTool {
     }
 }
 
-/// Implementation of AlephTool trait for GetToolSchemaTool
+/// Implementation of `AlephTool` trait for `GetToolSchemaTool`
 #[async_trait]
 impl AlephTool for GetToolSchemaTool {
     const NAME: &'static str = "get_tool_schema";
@@ -314,7 +314,7 @@ impl AlephTool for GetToolSchemaTool {
 // SearchToolsTool
 // ============================================================================
 
-/// Arguments for search_tools
+/// Arguments for `search_tools`
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct SearchToolsArgs {
     /// Free-text query describing the capability you need (e.g. "screenshot",
@@ -326,7 +326,7 @@ pub struct SearchToolsArgs {
     pub limit: Option<usize>,
 }
 
-/// A single ranked hit from search_tools.
+/// A single ranked hit from `search_tools`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchToolHit {
     /// Canonical tool name to pass to `get_tool_schema` / invoke directly.
@@ -339,7 +339,7 @@ pub struct SearchToolHit {
     pub requires_confirmation: bool,
 }
 
-/// Output from search_tools.
+/// Output from `search_tools`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchToolsOutput {
     /// The query that was searched.
@@ -390,7 +390,7 @@ impl SearchToolsTool {
     /// Tool description for AI prompt
     pub const DESCRIPTION: &'static str = "Search the available tools by a free-text keyword/intent (e.g. \"screenshot\", \"create pull request\"). Use this to find the right tool when you don't know its exact name, then call get_tool_schema for its parameters.";
 
-    /// Create a new SearchToolsTool with registry reference
+    /// Create a new `SearchToolsTool` with registry reference
     pub const fn new(registry: Arc<RwLock<ToolCatalog>>) -> Self {
         Self { registry }
     }
@@ -481,7 +481,7 @@ impl Clone for SearchToolsTool {
     }
 }
 
-/// Implementation of AlephTool trait for SearchToolsTool
+/// Implementation of `AlephTool` trait for `SearchToolsTool`
 #[async_trait]
 impl AlephTool for SearchToolsTool {
     const NAME: &'static str = "search_tools";

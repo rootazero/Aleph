@@ -15,7 +15,7 @@ use crate::gateway::security::SharedTokenManager;
 use crate::gateway::voice::inbound::{resolve_stt_config, transcribe_bytes};
 use crate::sync_primitives::Arc;
 
-/// OpenAI Whisper rejects payloads larger than 25 MB; reject early so we never
+/// `OpenAI` Whisper rejects payloads larger than 25 MB; reject early so we never
 /// stream a doomed request and to bound the base64 we decode.
 const MAX_AUDIO_BYTES: usize = 25 * 1024 * 1024;
 
@@ -319,7 +319,7 @@ pub async fn handle_synthesize(
 }
 
 /// Map a bridge-reported audio `format` (e.g. "m4a") to a MIME type the Whisper
-/// multipart endpoint accepts. AVFoundation records AAC/m4a by default.
+/// multipart endpoint accepts. `AVFoundation` records AAC/m4a by default.
 fn mime_for_format(format: &str) -> &'static str {
     match format.trim().to_lowercase().as_str() {
         "m4a" | "mp4" | "aac" => "audio/mp4",

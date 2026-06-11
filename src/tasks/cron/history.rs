@@ -1,6 +1,6 @@
-//! SQLite execution history for cron job runs.
+//! `SQLite` execution history for cron job runs.
 //!
-//! Stores job execution records in SQLite for observability and debugging.
+//! Stores job execution records in `SQLite` for observability and debugging.
 //! Functions accept a `rusqlite::Connection` to stay decoupled from any
 //! specific database wrapper.
 
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 // ── Schema ──────────────────────────────────────────────────────────────
 
-/// SQL to create the cron_job_runs table and indices.
+/// SQL to create the `cron_job_runs` table and indices.
 pub const CREATE_SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS cron_job_runs (
     id TEXT PRIMARY KEY,
@@ -45,7 +45,7 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// Add `column` to `table` with the given SQLite type if it is not already there.
+/// Add `column` to `table` with the given `SQLite` type if it is not already there.
 /// `PRAGMA table_info` is the lightest way to introspect columns and avoids the
 /// "duplicate column" error that ALTER would raise on a repeat run.
 fn ensure_column(
@@ -91,8 +91,8 @@ pub struct CronRunRecord {
     pub delivery_status: Option<String>,
     pub created_at: i64,
     /// Wire token from [`crate::tasks::shared::retry_hint::RetryCategory::as_str`]
-    /// when the run failed transiently (rate_limit / overloaded / network /
-    /// timeout / server_error). `None` on success or permanent failure.
+    /// when the run failed transiently (`rate_limit` / overloaded / network /
+    /// timeout / `server_error`). `None` on success or permanent failure.
     #[serde(default)]
     pub retry_category: Option<String>,
     /// `Some(true)` if the writeback path classified the error as retryable,

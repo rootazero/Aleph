@@ -1,4 +1,4 @@
-//! CitationStandardsLayer — memory citation standards (priority 900)
+//! `CitationStandardsLayer` — memory citation standards (priority 900)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

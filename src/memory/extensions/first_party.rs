@@ -11,7 +11,7 @@ use crate::memory::extensions::types::RetrieveCtx;
 use async_trait::async_trait;
 
 /// POC first-party extension: drop envelope items whose `relevance` is
-/// below the configured floor. Serves as a smoke test of the on_retrieve
+/// below the configured floor. Serves as a smoke test of the `on_retrieve`
 /// dispatch pipeline; also a mild trimming optimization.
 pub struct EnvelopeRelevanceFloorExtension {
     floor: f32,

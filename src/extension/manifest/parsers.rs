@@ -2,7 +2,7 @@
 //!
 //! These functions scan plugin component directories (skills, commands, agents)
 //! and configuration files (hooks, MCP) and produce `CapabilityDeclaration` values.
-//! They are used by all `ManifestAdapter` implementations (CC, Codex, Cursor, AutoDiscover).
+//! They are used by all `ManifestAdapter` implementations (CC, Codex, Cursor, `AutoDiscover`).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -19,7 +19,7 @@ use crate::extension::types::{HookEvent, McpServerConfig};
 // Frontmatter types (for parsing SKILL.md / command.md / agent.md)
 // ============================================================================
 
-/// Frontmatter for SKILL.md files, targeting SkillRegistration output
+/// Frontmatter for SKILL.md files, targeting `SkillRegistration` output
 #[derive(Debug, Default, Deserialize)]
 struct SkillFm {
     #[serde(default)]
@@ -34,7 +34,7 @@ struct SkillFm {
     category: Option<String>,
 }
 
-/// Frontmatter for command .md files, targeting CommandRegistration output
+/// Frontmatter for command .md files, targeting `CommandRegistration` output
 #[derive(Debug, Default, Deserialize)]
 struct CommandFm {
     #[serde(default)]
@@ -43,7 +43,7 @@ struct CommandFm {
     description: Option<String>,
 }
 
-/// Frontmatter for agent .md files, targeting AgentRegistration output
+/// Frontmatter for agent .md files, targeting `AgentRegistration` output
 #[derive(Debug, Default, Deserialize)]
 struct AgentFm {
     #[serde(default)]

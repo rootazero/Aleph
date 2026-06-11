@@ -1,7 +1,7 @@
 //! Transport trait abstraction for bridge process communication.
 //!
 //! Defines a platform-independent IPC interface that bridge processes
-//! (Signal, WhatsApp, Telegram, etc.) implement to communicate with
+//! (Signal, `WhatsApp`, Telegram, etc.) implement to communicate with
 //! the Aleph gateway. The transport layer handles JSON-RPC 2.0
 //! framing over various IPC mechanisms (Unix sockets, stdio, etc.).
 

@@ -1,4 +1,4 @@
-//! ToolSignalSink — per-invocation tool metric capture.
+//! `ToolSignalSink` — per-invocation tool metric capture.
 //!
 //! Spec 3 wiring: every tool call completion (success or failure) flows
 //! through a `ToolSignalSink` so the Dream cycle's `compute_raw_metrics()`

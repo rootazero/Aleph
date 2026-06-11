@@ -20,7 +20,7 @@ use crate::harness::TraceSink;
 /// The existing `StreamCallback` retains its own persistence path during the
 /// 4c flip — this sink is a parallel hook for the orchestrator drain so
 /// production code can call `trace_sink.flush()` once `AgentHarnessRunner::run`
-/// completes (harness_bridge.rs already does this).
+/// completes (`harness_bridge.rs` already does this).
 pub trait TraceFlushHandle: Send + Sync {
     fn on_trace(&self, event: &LoopTraceEvent);
     fn flush_blocking(&self);

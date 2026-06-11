@@ -1,7 +1,7 @@
-//! Session handlers operating against the SessionStore trait.
+//! Session handlers operating against the `SessionStore` trait.
 //!
 //! All `handle_*_db` functions operate against any `SessionStore` implementation
-//! (SQLite or file backend) for production use.
+//! (`SQLite` or file backend) for production use.
 
 mod checkpoint;
 mod create;

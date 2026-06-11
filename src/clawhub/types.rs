@@ -1,4 +1,4 @@
-//! ClawHub API types — request/response models for clawhub.ai REST API.
+//! `ClawHub` API types — request/response models for clawhub.ai REST API.
 
 use serde::{Deserialize, Serialize};
 
@@ -166,7 +166,7 @@ pub struct OwnerInfo {
     pub display_name: String,
 }
 
-/// Local metadata for installed ClawHub skills
+/// Local metadata for installed `ClawHub` skills
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClawHubMeta {
     pub slug: String,

@@ -13,7 +13,7 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_type tool.
+/// Arguments for the `browser_type` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserTypeArgs {
     /// Browser profile name (default: "default").
@@ -23,18 +23,18 @@ pub struct BrowserTypeArgs {
     pub text: String,
     /// CSS selector of the element to type into (optional, uses focused element if omitted).
     pub selector: Option<String>,
-    /// Accessibility ref_id from a previous snapshot (optional).
+    /// Accessibility `ref_id` from a previous snapshot (optional).
     pub ref_id: Option<String>,
 }
 
-/// Output from the browser_type tool.
+/// Output from the `browser_type` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserTypeOutput {
     pub success: bool,
     pub message: Option<String>,
 }
 
-/// Types text into an element on the page, identified by selector, ref_id, or the focused element.
+/// Types text into an element on the page, identified by selector, `ref_id`, or the focused element.
 #[derive(Clone)]
 pub struct BrowserTypeTool {
     manager: Arc<ProfileManager>,

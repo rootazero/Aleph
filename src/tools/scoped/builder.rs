@@ -183,7 +183,7 @@ impl ScopedToolService {
     }
 
     /// Attach an extension-shipped `HookExecutor`. Wires `BeforeToolCall`
-    /// interceptors (block / deny / ask / update_input) and
+    /// interceptors (block / deny / ask / `update_input`) and
     /// `AfterToolCall` / `AfterToolCallFailure` observers around every tool
     /// dispatch. `session_id` flows into `HookContext` so command hooks see
     /// the `$SESSION_ID` variable.

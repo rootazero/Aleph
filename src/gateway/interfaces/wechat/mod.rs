@@ -1,6 +1,6 @@
-//! WeChat Channel Implementation
+//! `WeChat` Channel Implementation
 //!
-//! iLink Bot API integration for WeChat messaging.
+//! iLink Bot API integration for `WeChat` messaging.
 
 pub mod api;
 pub mod auth;
@@ -240,7 +240,7 @@ impl Channel for WeChatChannel {
     }
 }
 
-/// Factory for creating WeChat channels.
+/// Factory for creating `WeChat` channels.
 pub struct WeChatChannelFactory;
 
 #[async_trait]

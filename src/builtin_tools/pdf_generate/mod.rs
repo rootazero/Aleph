@@ -1,6 +1,6 @@
 //! PDF generation tool for AI agent integration
 //!
-//! Implements AlephTool trait to provide PDF generation capabilities.
+//! Implements `AlephTool` trait to provide PDF generation capabilities.
 //! Supports plain text and Markdown to PDF conversion with multiple rendering engines.
 //!
 //! # Engines
@@ -37,7 +37,7 @@ pub use args::{ContentFormat, PageSize, PdfGenerateArgs, PdfGenerateOutput, Rend
 /// PDF generation tool
 #[derive(Clone)]
 pub struct PdfGenerateTool {
-    /// Handle to workspace-scoped tool context (provides output_dir, etc.)
+    /// Handle to workspace-scoped tool context (provides `output_dir`, etc.)
     pub tool_context_handle: Option<crate::tools::ToolContextHandle>,
 }
 
@@ -70,7 +70,7 @@ Examples:\n\
         }
     }
 
-    /// Attach a ToolContext handle for workspace-scoped output path resolution
+    /// Attach a `ToolContext` handle for workspace-scoped output path resolution
     pub fn with_tool_context(mut self, handle: crate::tools::ToolContextHandle) -> Self {
         self.tool_context_handle = Some(handle);
         self
@@ -81,7 +81,7 @@ Examples:\n\
     /// Path resolution rules:
     /// 1. Absolute paths (starting with `/`) - used as-is
     /// 2. Home paths (starting with `~`) - expanded to home directory
-    /// 3. Relative paths - resolved via ToolContext output_dir, or global fallback
+    /// 3. Relative paths - resolved via `ToolContext` `output_dir`, or global fallback
     async fn resolve_output_path(
         &self,
         output_path: &str,
@@ -129,7 +129,7 @@ impl Default for PdfGenerateTool {
     }
 }
 
-/// Implementation of AlephTool trait for PdfGenerateTool
+/// Implementation of `AlephTool` trait for `PdfGenerateTool`
 #[async_trait]
 impl AlephTool for PdfGenerateTool {
     const NAME: &'static str = "pdf_generate";

@@ -1,6 +1,6 @@
 //! Service lifecycle manager for background plugin services
 //!
-//! This module provides the ServiceManager which handles starting, stopping, and
+//! This module provides the `ServiceManager` which handles starting, stopping, and
 //! tracking the state of background services registered by plugins.
 //!
 //! # Architecture
@@ -64,16 +64,16 @@ use super::types::{ServiceInfo, ServiceResult, ServiceState};
 
 /// Manages background service lifecycle for plugins.
 ///
-/// The ServiceManager tracks the state of all running background services
+/// The `ServiceManager` tracks the state of all running background services
 /// and provides methods to start, stop, and query them.
 ///
 /// # Thread Safety
 ///
-/// ServiceManager methods require mutable access (`&mut self`) because they
-/// modify internal state. When used in a concurrent context (like ExtensionManager),
-/// wrap in an appropriate synchronization primitive (RwLock, Mutex).
+/// `ServiceManager` methods require mutable access (`&mut self`) because they
+/// modify internal state. When used in a concurrent context (like `ExtensionManager`),
+/// wrap in an appropriate synchronization primitive (`RwLock`, Mutex).
 pub struct ServiceManager {
-    /// Running services by service_id (format: "plugin_id:service_id")
+    /// Running services by `service_id` (format: "`plugin_id:service_id`")
     services: HashMap<String, ServiceInfo>,
     /// Registration snapshot captured at start time, keyed like `services`.
     ///
@@ -93,7 +93,7 @@ impl ServiceManager {
         }
     }
 
-    /// Build a composite service key from plugin_id and service_id.
+    /// Build a composite service key from `plugin_id` and `service_id`.
     fn make_key(plugin_id: &str, service_id: &str) -> String {
         format!("{plugin_id}:{service_id}")
     }
@@ -104,7 +104,7 @@ impl ServiceManager {
     /// 1. Creates a composite service key
     /// 2. Checks if the service is already running (returns existing info if so)
     /// 3. Sets state to Starting
-    /// 4. Calls the plugin's start_handler via the loader
+    /// 4. Calls the plugin's `start_handler` via the loader
     /// 5. Sets state to Running or Failed based on result
     ///
     /// # Arguments
@@ -207,7 +207,7 @@ impl ServiceManager {
     /// This method:
     /// 1. Gets the current service info (if any)
     /// 2. Sets state to Stopping
-    /// 3. Calls the plugin's stop_handler via the loader
+    /// 3. Calls the plugin's `stop_handler` via the loader
     /// 4. Sets state to Stopped or Failed based on result
     ///
     /// # Arguments
@@ -367,7 +367,7 @@ impl ServiceManager {
     ///
     /// # Returns
     ///
-    /// Vector of ServiceInfo for each stopped service.
+    /// Vector of `ServiceInfo` for each stopped service.
     pub fn stop_plugin_services(
         &mut self,
         plugin_id: &str,
@@ -436,7 +436,7 @@ impl ServiceManager {
     ///
     /// Called after a hot-reload rebuilt the plugin registry: a plugin that
     /// was removed or disabled on disk leaves its services running with no
-    /// registry entry to stop them. `is_active` reports whether a plugin_id
+    /// registry entry to stop them. `is_active` reports whether a `plugin_id`
     /// is still active after the reload.
     pub fn stop_orphaned(
         &mut self,

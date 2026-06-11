@@ -1,4 +1,4 @@
-//! TraceSink — observability side-channel for AgentHarness runs.
+//! `TraceSink` — observability side-channel for `AgentHarness` runs.
 //!
 //! Events not exposed via `FlowStreamEvent` (internal trace,
 //! confirmation prompts, persistence flush) route here instead.
@@ -24,7 +24,7 @@ pub trait TraceSink: Send + Sync {
     fn on_init_seam(&self, _stage: &'static str, _seam: &'static str, _configured: bool) {}
 }
 
-/// No-op implementation for tests / internal flow_run calls.
+/// No-op implementation for tests / internal `flow_run` calls.
 pub struct NoopTraceSink;
 
 impl TraceSink for NoopTraceSink {

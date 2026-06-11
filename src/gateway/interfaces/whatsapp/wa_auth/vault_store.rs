@@ -1,4 +1,4 @@
-//! Vault-backed WhatsApp auth storage
+//! Vault-backed `WhatsApp` auth storage
 
 use crate::secrets::vault::SecretVault;
 use crate::sync_primitives::{Arc, Mutex};
@@ -79,7 +79,7 @@ impl WaAuthManager {
         vault.exists(&self.key())
     }
 
-    /// Returns the SQLite database path for whatsapp-rust backend storage.
+    /// Returns the `SQLite` database path for whatsapp-rust backend storage.
     #[must_use]
     pub fn db_path(&self) -> String {
         let base = dirs::data_dir().map_or_else(|| std::env::temp_dir().join("aleph").join("whatsapp"), |p| p.join("aleph").join("whatsapp"));

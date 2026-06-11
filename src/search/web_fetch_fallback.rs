@@ -46,7 +46,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// Time a mirror is silenced after returning an error or zero results.
-/// 5 min matches the SearchRegistry provider-test cache TTL — a value
+/// 5 min matches the `SearchRegistry` provider-test cache TTL — a value
 /// long enough that the next agent iteration won't re-probe a dead
 /// mirror, short enough that a 15-min outage recovers automatically
 /// without process restart.

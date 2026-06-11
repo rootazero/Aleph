@@ -1,4 +1,4 @@
-//! ManifestAdapter trait and AdapterRegistry
+//! `ManifestAdapter` trait and `AdapterRegistry`
 //!
 //! Provides a trait-based system for parsing plugin directories from
 //! multiple platform formats (Claude Code, Codex, Cursor, auto-discover).
@@ -41,7 +41,7 @@ pub trait ManifestAdapter: Send + Sync {
     /// Parse the plugin directory and return all declared capabilities.
     fn parse(&self, plugin_dir: &Path) -> Result<AdapterOutput>;
 
-    /// Human-readable name of this adapter's format (e.g., "claude_code", "codex").
+    /// Human-readable name of this adapter's format (e.g., "`claude_code`", "codex").
     fn format_name(&self) -> &str;
 
     /// Priority for ordering. Higher values are tried first.

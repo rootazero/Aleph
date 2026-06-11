@@ -1,4 +1,4 @@
-//! Skills RPC Handlers — unified interface for skill management via SkillSystem.
+//! Skills RPC Handlers — unified interface for skill management via `SkillSystem`.
 
 use serde::Deserialize;
 use serde_json::json;
@@ -8,7 +8,7 @@ use super::parse_params;
 use crate::domain::skill::{PromptScope, SkillId};
 use crate::skill::{default_skill_dirs, SkillConfigUpdate, SkillSystem};
 
-/// Shared SkillSystem instance — delegates to the process-wide singleton.
+/// Shared `SkillSystem` instance — delegates to the process-wide singleton.
 ///
 /// Lazily ensures the shared instance is initialized with the default skill
 /// directories. `init` is re-runnable; `ExtensionManager` may also call it

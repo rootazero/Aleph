@@ -1,6 +1,6 @@
 //! MCP Manager Module
 //!
-//! Provides the McpManager actor for orchestrating multiple MCP server connections.
+//! Provides the `McpManager` actor for orchestrating multiple MCP server connections.
 //!
 //! # Architecture
 //!

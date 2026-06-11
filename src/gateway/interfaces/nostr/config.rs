@@ -99,7 +99,7 @@ impl NostrConfig {
 
     /// Check if a public key is allowed
     ///
-    /// Returns true if allowed_pubkeys is empty (allow all) or if the given
+    /// Returns true if `allowed_pubkeys` is empty (allow all) or if the given
     /// pubkey is in the allowed list.
     #[must_use]
     pub fn is_pubkey_allowed(&self, pubkey: &str) -> bool {

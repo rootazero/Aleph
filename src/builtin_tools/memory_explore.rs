@@ -1,7 +1,7 @@
-//! Memory explore tool — multi-hop knowledge exploration via RippleTask
+//! Memory explore tool — multi-hop knowledge exploration via `RippleTask`
 //!
 //! Embeds a query, retrieves seed facts by vector similarity, loads their
-//! embeddings, then uses RippleTask BFS to discover related facts across
+//! embeddings, then uses `RippleTask` BFS to discover related facts across
 //! configurable hops.
 
 use crate::sync_primitives::Arc;
@@ -31,7 +31,7 @@ const fn default_max_per_hop() -> usize {
 
 // ── Args / Output ───────────────────────────────────────────────────────────
 
-/// Arguments for memory_explore tool
+/// Arguments for `memory_explore` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct MemoryExploreArgs {
     /// Starting query to explore related knowledge from
@@ -57,13 +57,13 @@ pub struct ExploredFact {
     pub path: String,
     /// Relevance / similarity score
     pub relevance_score: f32,
-    /// Typed outgoing entity-graph edges, formatted "type→to_note" (Gap A).
+    /// Typed outgoing entity-graph edges, formatted "`type→to_note`" (Gap A).
     /// Empty for notes with no typed relations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relations: Vec<String>,
 }
 
-/// Output from memory_explore tool
+/// Output from `memory_explore` tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MemoryExploreOutput {
     /// Seed facts retrieved from the initial query
@@ -78,7 +78,7 @@ pub struct MemoryExploreOutput {
 
 // ── Tool struct ─────────────────────────────────────────────────────────────
 
-/// Multi-hop knowledge exploration tool backed by RippleTask
+/// Multi-hop knowledge exploration tool backed by `RippleTask`
 pub struct MemoryExploreTool {
     database: MemoryBackend,
     embedder: Arc<dyn EmbeddingProvider>,
@@ -86,7 +86,7 @@ pub struct MemoryExploreTool {
 }
 
 impl MemoryExploreTool {
-    /// Create a new MemoryExploreTool
+    /// Create a new `MemoryExploreTool`
     pub fn new(database: MemoryBackend, embedder: Arc<dyn EmbeddingProvider>) -> Self {
         Self {
             database,
@@ -95,7 +95,7 @@ impl MemoryExploreTool {
         }
     }
 
-    /// Create a new MemoryExploreTool with an explicit agent ID
+    /// Create a new `MemoryExploreTool` with an explicit agent ID
     pub fn with_agent_id(
         database: MemoryBackend,
         embedder: Arc<dyn EmbeddingProvider>,
@@ -240,7 +240,7 @@ impl MemoryExploreTool {
     }
 
     /// Look up typed outgoing edges for a note path and format them as
-    /// "type→to_note" labels. Best-effort: a lookup error yields no labels.
+    /// "`type→to_note`" labels. Best-effort: a lookup error yields no labels.
     async fn edge_labels(&self, note_path: &str) -> Vec<String> {
         match self
             .database

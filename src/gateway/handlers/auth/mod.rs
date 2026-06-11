@@ -78,7 +78,7 @@ pub struct ConnectParams {
     /// `connect.challenge`, sign it with their bearer (`HMAC-SHA256(token,
     /// nonce + timestamp + device_id)` — see [`crate::gateway::challenge`]),
     /// and echo `{nonce, signature}` here. When `require_challenge=true`
-    /// the server rejects token/shared_token connects that omit this
+    /// the server rejects `token/shared_token` connects that omit this
     /// payload, hardening LAN/Tailnet bind modes against replay attacks.
     #[serde(default)]
     pub challenge: Option<ChallengeResponseParams>,

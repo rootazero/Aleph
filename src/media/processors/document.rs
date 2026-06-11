@@ -11,7 +11,7 @@ use crate::media::types::*;
 /// Document provider for plain text formats (TXT, Markdown, HTML).
 ///
 /// For formats requiring heavy parsing (PDF, DOCX, XLSX), this provider
-/// returns UnsupportedFormat — those should be handled by plugin providers.
+/// returns `UnsupportedFormat` — those should be handled by plugin providers.
 pub struct TextDocumentProvider;
 
 #[async_trait]

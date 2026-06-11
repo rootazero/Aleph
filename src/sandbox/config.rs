@@ -19,22 +19,22 @@ use crate::sandbox::rate_limit::{SandboxRateLimitConfig, ToolCategory, WindowCon
 pub struct WindowsSandboxConfig {
     /// SP-3a: when `true`, the sandbox-init-windows subcommand attempts
     /// to launch the target via a restricted token at Low IL. Soft-
-    /// degrades to plain CreateProcessW + JobObject if the host lacks
-    /// `SE_INCREASE_QUOTA` (ERROR_PRIVILEGE_NOT_HELD).
+    /// degrades to plain `CreateProcessW` + `JobObject` if the host lacks
+    /// `SE_INCREASE_QUOTA` (`ERROR_PRIVILEGE_NOT_HELD`).
     #[serde(default = "default_windows_use_restricted_token")]
     pub use_restricted_token: bool,
 
     /// SP-3a: when `true`, refuse to spawn (rather than soft-degrade)
-    /// on ERROR_PRIVILEGE_NOT_HELD. Default `false`.
+    /// on `ERROR_PRIVILEGE_NOT_HELD`. Default `false`.
     #[serde(default)]
     pub require_restricted_token: bool,
 
-    /// SP-6: try AppContainer first (strongest Windows sandbox primitive).
+    /// SP-6: try `AppContainer` first (strongest Windows sandbox primitive).
     /// Soft-degrades to SP-3a restricted-token on failure. Default `true`.
     #[serde(default = "default_windows_use_app_container")]
     pub use_app_container: bool,
 
-    /// SP-6: when `true`, refuse to spawn if AppContainer setup fails.
+    /// SP-6: when `true`, refuse to spawn if `AppContainer` setup fails.
     /// Default `false` → soft-degrade.
     #[serde(default)]
     pub require_app_container: bool,
@@ -361,7 +361,7 @@ pub struct SandboxConfig {
     /// (`SSH_AUTH_SOCK`), a PostgreSQL/MySQL `.sock`, `gpg-agent`, or a
     /// language-server socket fail with no TCP/IP intent. Entries grant
     /// access to the socket path *and any socket beneath it* (subpath).
-    /// Empty by default → no AF_UNIX allowance (boot unchanged, default
+    /// Empty by default → no `AF_UNIX` allowance (boot unchanged, default
     /// deny preserved). macOS-seatbelt only today; mirrors codex's
     /// `network.allow_unix_sockets`.
     #[serde(default)]

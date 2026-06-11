@@ -1,4 +1,4 @@
-//! CancellationToken — drop-in replacement for `std::task::Poll` cancellation.
+//! `CancellationToken` — drop-in replacement for `std::task::Poll` cancellation.
 //!
 //! Provides a shared, multi-subscriber cancellation flag with tokio broadcast
 //! integration. Channels and long-running operations use this to coordinate

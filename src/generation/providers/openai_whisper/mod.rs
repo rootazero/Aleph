@@ -1,4 +1,4 @@
-//! OpenAI Whisper transcription provider (`GenerationType::Transcription`).
+//! `OpenAI` Whisper transcription provider (`GenerationType::Transcription`).
 //!
 //! Mirrors [`OpenAiTtsProvider`](super::openai_tts) on the reverse direction:
 //! takes an audio source (local file path in `request.prompt`, or URL /
@@ -42,7 +42,7 @@ pub mod types;
 
 pub use types::{OpenAiError, OpenAiErrorResponse, WhisperResponse};
 
-/// Default API endpoint for OpenAI.
+/// Default API endpoint for `OpenAI`.
 const DEFAULT_ENDPOINT: &str = "https://api.openai.com";
 
 /// Default Whisper model.
@@ -51,10 +51,10 @@ const DEFAULT_MODEL: &str = "whisper-1";
 /// Default request timeout — audio uploads can be slow.
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
-/// OpenAI's 25 MB upload cap. We reject locally rather than waste the request.
+/// `OpenAI`'s 25 MB upload cap. We reject locally rather than waste the request.
 const MAX_AUDIO_BYTES: u64 = 25 * 1024 * 1024;
 
-/// OpenAI Whisper transcription provider.
+/// `OpenAI` Whisper transcription provider.
 #[derive(Clone)]
 pub struct OpenAiWhisperProvider {
     client: Client,

@@ -1,4 +1,4 @@
-//! PlaywrightCliBackend — implements `BrowserBackend` by shelling out to `playwright-cli`.
+//! `PlaywrightCliBackend` — implements `BrowserBackend` by shelling out to `playwright-cli`.
 
 use std::path::Path;
 use std::sync::Arc;

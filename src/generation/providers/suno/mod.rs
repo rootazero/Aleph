@@ -38,7 +38,7 @@ pub use types::{SunoClip, SunoError, SunoGenerateRequest};
 const DEFAULT_ENDPOINT: &str = "https://api.sunoaiapi.com";
 const DEFAULT_MODEL: &str = "chirp-v3-5";
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
-/// Total poll budget = MAX_POLL_ATTEMPTS × POLL_INTERVAL_SECS. Suno renders
+/// Total poll budget = `MAX_POLL_ATTEMPTS` × `POLL_INTERVAL_SECS`. Suno renders
 /// typically finish within 60-120 s; 60 attempts × 5 s = 5 min headroom.
 const MAX_POLL_ATTEMPTS: u32 = 60;
 const POLL_INTERVAL_SECS: u64 = 5;

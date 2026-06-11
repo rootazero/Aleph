@@ -1,8 +1,8 @@
-//! Request/response types for OpenAI TTS API.
+//! Request/response types for `OpenAI` TTS API.
 
 use serde::{Deserialize, Serialize};
 
-/// Request body for OpenAI TTS API
+/// Request body for `OpenAI` TTS API
 #[derive(Debug, Clone, Serialize)]
 pub struct TtsRequest {
     /// Model to use (e.g., "tts-1", "tts-1-hd")
@@ -19,13 +19,13 @@ pub struct TtsRequest {
     pub speed: Option<f32>,
 }
 
-/// OpenAI API error response format
+/// `OpenAI` API error response format
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenAiErrorResponse {
     pub error: OpenAiError,
 }
 
-/// OpenAI API error details
+/// `OpenAI` API error details
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenAiError {
     pub message: String,

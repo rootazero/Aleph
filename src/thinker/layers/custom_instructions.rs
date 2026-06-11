@@ -1,4 +1,4 @@
-//! CustomInstructionsLayer — user-provided custom instructions (priority 1500)
+//! `CustomInstructionsLayer` — user-provided custom instructions (priority 1500)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

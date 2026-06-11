@@ -1,9 +1,9 @@
 //! Memory Configuration Handlers
 //!
 //! RPC handlers for managing memory/RAG configuration:
-//! - memory_config.get: Get current memory configuration
-//! - memory_config.update: Update memory configuration
-//! - memory.retrieve_with_trace: Retrieve memories with scoring trace (placeholder)
+//! - `memory_config.get`: Get current memory configuration
+//! - `memory_config.update`: Update memory configuration
+//! - `memory.retrieve_with_trace`: Retrieve memories with scoring trace (placeholder)
 //!
 //! All modifications are persisted to config file and broadcast as events.
 //!
@@ -18,7 +18,7 @@ use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 
-/// Handle memory_config.get request
+/// Handle `memory_config.get` request
 pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
     let cfg = config.read().await;
 
@@ -39,7 +39,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
     JsonRpcResponse::success(request.id, memory_config)
 }
 
-/// Handle memory_config.update request
+/// Handle `memory_config.update` request
 ///
 /// Uses JSON merge to update only the fields provided by the caller,
 /// preserving any fields not present in the incoming payload (e.g.
@@ -129,7 +129,7 @@ pub async fn handle_update(
 // Retrieve with Trace (placeholder)
 // ============================================================================
 
-/// Handle memory.retrieve_with_trace request
+/// Handle `memory.retrieve_with_trace` request
 ///
 /// Placeholder — full wiring requires the memory service. Returns a mock trace
 /// to validate the RPC registration works.

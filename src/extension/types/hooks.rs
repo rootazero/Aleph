@@ -13,8 +13,8 @@ use std::path::PathBuf;
 /// Unified hook event types for both shell-based hooks and plugin hooks.
 ///
 /// This enum is the single source of truth for all hook events in Aleph.
-/// It uses **snake_case** serialization for JSON-RPC IPC with plugins,
-/// with PascalCase aliases for backward compatibility with hooks.json files.
+/// It uses **`snake_case`** serialization for JSON-RPC IPC with plugins,
+/// with `PascalCase` aliases for backward compatibility with hooks.json files.
 ///
 /// # Example (hooks config in CLAUDE.md)
 /// ```json

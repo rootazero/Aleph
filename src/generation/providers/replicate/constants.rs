@@ -24,6 +24,6 @@ pub const MODEL_FLUX_SCHNELL: &str = "black-forest-labs/flux-schnell";
 pub const MODEL_SDXL: &str =
     "stability-ai/sdxl:39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b";
 
-/// Meta MusicGen - audio/music generation
+/// Meta `MusicGen` - audio/music generation
 pub const MODEL_MUSICGEN: &str =
     "meta/musicgen:b05b1dff1d8c6dc63d14b0cdb42135378dcb87f6373b0d3d341ede46e59e2b38";

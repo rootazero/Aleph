@@ -1,4 +1,4 @@
-//! TaskReadArtifactTool — read artifacts submitted for a task.
+//! `TaskReadArtifactTool` — read artifacts submitted for a task.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -24,7 +24,7 @@ pub struct TaskReadArtifactArgs {
     pub artifact_id: Option<String>,
 }
 
-/// Output from task_read_artifact.
+/// Output from `task_read_artifact`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskReadArtifactOutput {
     pub artifacts: Vec<TaskArtifact>,

@@ -28,7 +28,7 @@ use super::request_processor::{
 /// - `POST /a2a/stream` — streaming JSON-RPC via SSE
 ///
 /// Note: The server must be started with `.into_make_service_with_connect_info::<SocketAddr>()`
-/// to support `ConnectInfo<SocketAddr>`. If ConnectInfo is not available, a fallback
+/// to support `ConnectInfo<SocketAddr>`. If `ConnectInfo` is not available, a fallback
 /// address (127.0.0.1:0) is used.
 pub fn a2a_routes(state: Arc<A2AServerState>) -> Router {
     Router::new()
@@ -82,7 +82,7 @@ async fn a2a_handler(
 /// - `tasks/resubscribe` — re-attach to the live event stream of a task that
 ///   is already running (e.g. after a dropped SSE connection)
 ///
-/// Any other method is rejected with a JSON-RPC MethodNotFound error, since the
+/// Any other method is rejected with a JSON-RPC `MethodNotFound` error, since the
 /// synchronous `/a2a` endpoint is the correct target for it.
 async fn a2a_stream_handler(
     State(state): State<Arc<A2AServerState>>,
@@ -288,7 +288,7 @@ fn update_event_to_sse(
     Event::default().event(event_type).data(data)
 }
 
-/// Build an SSE error response from a JsonRpcResponse
+/// Build an SSE error response from a `JsonRpcResponse`
 fn sse_error(resp: JsonRpcResponse) -> axum::response::Response {
     let json = serde_json::to_string(&resp).unwrap_or_default();
     let stream = futures::stream::once(async move {
@@ -317,7 +317,7 @@ fn extract_credentials(headers: &HeaderMap) -> Credentials {
     Credentials::None
 }
 
-/// Convert axum HeaderMap to a plain HashMap
+/// Convert axum `HeaderMap` to a plain `HashMap`
 fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
     headers
         .iter()
@@ -325,9 +325,9 @@ fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
         .collect()
 }
 
-/// Fallback socket address when ConnectInfo is not available.
+/// Fallback socket address when `ConnectInfo` is not available.
 /// WARNING: All remote requests appear as loopback — IP-based access control is ineffective.
-/// ConnectInfo must be wired via `.into_make_service_with_connect_info::<SocketAddr>()`.
+/// `ConnectInfo` must be wired via `.into_make_service_with_connect_info::<SocketAddr>()`.
 fn fallback_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 0))
 }
@@ -338,7 +338,7 @@ fn fallback_addr() -> SocketAddr {
 /// `.into_make_service_with_connect_info::<SocketAddr>()` (always present when
 /// the server is wired that way) and falls back to a loopback address when it
 /// is absent — e.g. a `oneshot` request in tests. This keeps the handlers
-/// infallible instead of returning a 500 when ConnectInfo is missing.
+/// infallible instead of returning a 500 when `ConnectInfo` is missing.
 struct PeerAddr(SocketAddr);
 
 impl<S> FromRequestParts<S> for PeerAddr

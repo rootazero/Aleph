@@ -1,6 +1,6 @@
 //! Channel Registry - Central management for all channel instances
 //!
-//! The ChannelRegistry manages the lifecycle of all channels, routes messages,
+//! The `ChannelRegistry` manages the lifecycle of all channels, routes messages,
 //! and provides a unified interface for channel operations.
 //!
 //! # Architecture

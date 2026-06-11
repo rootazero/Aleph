@@ -103,7 +103,7 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -
 // Get
 // ============================================================================
 
-/// Parameters for mcp_config.get
+/// Parameters for `mcp_config.get`
 #[derive(Debug, Deserialize)]
 pub struct GetParams {
     pub name: String,
@@ -164,7 +164,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
 // Create
 // ============================================================================
 
-/// Parameters for mcp_config.create
+/// Parameters for `mcp_config.create`
 #[derive(Debug, Deserialize)]
 pub struct CreateParams {
     pub name: String,
@@ -252,7 +252,7 @@ pub async fn handle_create(
 // Update
 // ============================================================================
 
-/// Parameters for mcp_config.update
+/// Parameters for `mcp_config.update`
 #[derive(Debug, Deserialize)]
 pub struct UpdateParams {
     pub name: String,
@@ -340,7 +340,7 @@ pub async fn handle_update(
 // Delete
 // ============================================================================
 
-/// Parameters for mcp_config.delete
+/// Parameters for `mcp_config.delete`
 #[derive(Debug, Deserialize)]
 pub struct DeleteParams {
     pub name: String,

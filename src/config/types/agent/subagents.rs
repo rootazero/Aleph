@@ -1,6 +1,6 @@
 //! Sub-agent orchestration configuration
 //!
-//! Contains SubagentsConfigToml for configuring sub-agent spawning behavior,
+//! Contains `SubagentsConfigToml` for configuring sub-agent spawning behavior,
 //! including allowed agents whitelist, default cleanup policy, and timeout settings.
 
 use schemars::JsonSchema;
@@ -64,7 +64,7 @@ pub struct SubagentsConfigToml {
 // Default Functions
 // =============================================================================
 
-/// Default allow_agents whitelist - allows all agents
+/// Default `allow_agents` whitelist - allows all agents
 pub fn default_allow_agents() -> Vec<String> {
     vec!["*".to_string()]
 }
@@ -142,7 +142,7 @@ impl SubagentsConfigToml {
         self.allow_agents.iter().any(|a| a == agent_id)
     }
 
-    /// Get the allow_agents list for use with SessionsSpawnTool
+    /// Get the `allow_agents` list for use with `SessionsSpawnTool`
     pub fn get_allow_agents(&self) -> Vec<String> {
         self.allow_agents.clone()
     }

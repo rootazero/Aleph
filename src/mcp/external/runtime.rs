@@ -91,7 +91,7 @@ pub struct RuntimeCheckResult {
 /// * `kind` - The runtime to check for
 ///
 /// # Returns
-/// RuntimeCheckResult with availability and version info
+/// `RuntimeCheckResult` with availability and version info
 pub fn check_runtime(kind: RuntimeKind) -> RuntimeCheckResult {
     let cmd = match kind.check_command() {
         Some(cmd) => cmd,

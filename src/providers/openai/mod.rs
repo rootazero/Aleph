@@ -1,16 +1,16 @@
-/// OpenAI API client implementation
+/// `OpenAI` API client implementation
 ///
-/// Implements the `AiProvider` trait for OpenAI's chat completion API.
+/// Implements the `AiProvider` trait for `OpenAI`'s chat completion API.
 /// Supports GPT-4o, GPT-4o-mini, and other chat models.
 ///
 /// # Configuration
 ///
 /// Required fields:
-/// - `api_key`: OpenAI API key (from https://platform.openai.com)
+/// - `api_key`: `OpenAI` API key (from <https://platform.openai.com>)
 /// - `model`: Model name (e.g., "gpt-4o", "gpt-4o-mini")
 ///
 /// Optional fields:
-/// - `base_url`: Custom API endpoint (defaults to "https://api.openai.com/v1")
+/// - `base_url`: Custom API endpoint (defaults to "<https://api.openai.com/v1>")
 /// - `timeout_seconds`: Request timeout (defaults to 300)
 /// - `max_tokens`: Maximum response tokens
 /// - `temperature`: Response randomness (0.0-2.0)

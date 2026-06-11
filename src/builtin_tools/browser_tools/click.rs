@@ -11,7 +11,7 @@ use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_click tool.
+/// Arguments for the `browser_click` tool.
 ///
 /// At least one targeting method must be provided: `selector`, `ref_id`, or coordinates (`x`/`y`).
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -21,25 +21,25 @@ pub struct BrowserClickArgs {
     pub profile: String,
     /// CSS selector of the element to click.
     pub selector: Option<String>,
-    /// Accessibility ref_id from a previous snapshot.
+    /// Accessibility `ref_id` from a previous snapshot.
     pub ref_id: Option<String>,
     /// X coordinate for coordinate-based clicking.
     pub x: Option<f64>,
     /// Y coordinate for coordinate-based clicking.
     pub y: Option<f64>,
-    /// Double-click instead of single-click (requires ref_id targeting).
+    /// Double-click instead of single-click (requires `ref_id` targeting).
     #[serde(default)]
     pub double: bool,
 }
 
-/// Output from the browser_click tool.
+/// Output from the `browser_click` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserClickOutput {
     pub success: bool,
     pub message: Option<String>,
 }
 
-/// Clicks an element on the page by selector, ref_id, or coordinates.
+/// Clicks an element on the page by selector, `ref_id`, or coordinates.
 #[derive(Clone)]
 pub struct BrowserClickTool {
     manager: Arc<ProfileManager>,

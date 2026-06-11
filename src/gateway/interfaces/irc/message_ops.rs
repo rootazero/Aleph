@@ -212,9 +212,9 @@ impl IrcMessageOps {
     /// This function:
     /// 1. Connects TCP to server:port
     /// 2. Sends NICK + USER registration
-    /// 3. Optionally sends NickServ IDENTIFY
+    /// 3. Optionally sends `NickServ` IDENTIFY
     /// 4. Reads lines from the server
-    /// 5. Handles PING/PONG, 001 (RPL_WELCOME), 433 (nick in use), PRIVMSG
+    /// 5. Handles PING/PONG, 001 (`RPL_WELCOME`), 433 (nick in use), PRIVMSG
     /// 6. Processes outbound messages from the write channel
     /// 7. Reconnects with exponential backoff on disconnection
     /// 8. Sends QUIT on shutdown

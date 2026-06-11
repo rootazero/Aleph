@@ -301,7 +301,7 @@ impl TeamDispatcher {
     ///
     /// - For an `Agent` kind we re-check the registry so missing in-process
     ///   agents still fail fast (preserving the pre-A2 behaviour).
-    /// - For an `AcpSession` kind we trust the team_members row and skip
+    /// - For an `AcpSession` kind we trust the `team_members` row and skip
     ///   the registry check entirely — the ACP runner validates the
     ///   harness id when it tries to spawn.
     /// - Missing team or member rows surface as a fail-task reason so the
@@ -360,7 +360,7 @@ impl TeamDispatcher {
     /// `TeamTaskFailed` with a descriptive reason so the panel surfaces the
     /// state instead of leaving the task perpetually "in progress".
     ///
-    /// Inspired by ClawTeam's `list_zombie_agents(max_hours=2.0)`; threshold
+    /// Inspired by `ClawTeam`'s `list_zombie_agents(max_hours=2.0)`; threshold
     /// configurable via [`DispatcherConfig::zombie_ttl_secs`].
     async fn reclaim_zombies(self: &Arc<Self>) {
         let zombie_ttl = self.config.zombie_ttl_secs;

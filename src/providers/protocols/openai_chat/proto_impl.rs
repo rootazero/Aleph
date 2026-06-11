@@ -14,7 +14,7 @@ use crate::sync_primitives::Arc;
 use super::{sanitize_tool_name, OpenAiProtocol};
 
 impl OpenAiProtocol {
-    /// Create a new OpenAI protocol adapter with the given HTTP client
+    /// Create a new `OpenAI` protocol adapter with the given HTTP client
     #[must_use]
     pub fn new(client: reqwest::Client) -> Self {
         Self {
@@ -52,7 +52,7 @@ impl OpenAiProtocol {
         }
     }
 
-    /// Convert UnifiedMessages to OpenAI Messages
+    /// Convert `UnifiedMessages` to `OpenAI` Messages
     pub(super) fn convert_messages(
         messages: &[UnifiedMessage],
         system_prompt: Option<&str>,
@@ -193,7 +193,7 @@ impl OpenAiProtocol {
         result
     }
 
-    /// Map ThinkLevel to OpenAI `reasoning_effort`.
+    /// Map `ThinkLevel` to `OpenAI` `reasoning_effort`.
     ///
     /// Emits all five non-`Off` levels faithfully — `minimal` and `xhigh` are
     /// real effort values on the gpt-5 family, so collapsing them (the old
@@ -201,7 +201,7 @@ impl OpenAiProtocol {
     /// The endpoint-level `supports_reasoning_effort` capability still strips
     /// the whole field for backends that don't accept it; value-level
     /// compatibility (e.g. o-series capping at `high`) is the model's concern,
-    /// consistent with the "think_level set ⇒ reasoning model" assumption.
+    /// consistent with the "`think_level` set ⇒ reasoning model" assumption.
     pub(super) fn map_think_level(level: &ThinkLevel) -> Option<String> {
         match level {
             ThinkLevel::Off => None,

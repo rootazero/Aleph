@@ -1,7 +1,7 @@
 //! Built-in tools configuration and creation
 //!
 //! This module creates tool server instances using the unified builtin registry.
-//! All tool definitions come from executor::builtin_registry for consistency.
+//! All tool definitions come from `executor::builtin_registry` for consistency.
 
 #![allow(deprecated)]
 
@@ -27,7 +27,7 @@ pub const BUILTIN_TOOLS: &[&str] = &[
 
 /// Configuration for built-in tools
 ///
-/// DEPRECATED: Use executor::builtin_registry::BuiltinToolConfig instead.
+/// DEPRECATED: Use `executor::builtin_registry::BuiltinToolConfig` instead.
 /// This type is kept for backward compatibility.
 #[deprecated(
     since = "0.1.0",
@@ -38,7 +38,7 @@ pub struct BuiltinToolConfig {
     /// Tavily API key for search tool
     pub tavily_api_key: Option<String>,
     /// Generation provider registry for image/video/audio generation
-    /// Wrapped in Arc<RwLock<>> for thread-safe access
+    /// Wrapped in Arc<`RwLock`<>> for thread-safe access
     pub generation_registry: Option<Arc<RwLock<GenerationProviderRegistry>>>,
 }
 
@@ -62,8 +62,8 @@ impl std::fmt::Debug for BuiltinToolConfig {
 
 /// Create a tool server handle with built-in tools
 ///
-/// This function uses the unified builtin registry from executor::builtin_registry
-/// to ensure consistency with BuiltinToolRegistry used by Agent Loop.
+/// This function uses the unified builtin registry from `executor::builtin_registry`
+/// to ensure consistency with `BuiltinToolRegistry` used by Agent Loop.
 ///
 /// Returns an `AlephToolServerHandle` that can be shared across threads.
 pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> AlephToolServerHandle {

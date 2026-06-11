@@ -101,7 +101,7 @@ impl Default for SubAgentConfig {
 }
 
 impl SubAgentConfig {
-    /// Create a new SubAgentConfig with default values
+    /// Create a new `SubAgentConfig` with default values
     pub fn new() -> Self {
         Self::default()
     }

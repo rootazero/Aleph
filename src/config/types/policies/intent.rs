@@ -72,7 +72,7 @@ impl IntentDetectionPolicy {
         (0.0..=1.0).contains(&self.confidence_threshold)
     }
 
-    /// Get timeout as std::time::Duration
+    /// Get timeout as `std::time::Duration`
     pub const fn timeout_duration(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.timeout_ms)
     }

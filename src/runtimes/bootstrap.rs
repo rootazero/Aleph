@@ -20,7 +20,7 @@ pub enum BootstrapResult {
     UnknownCapability { capability: String },
 }
 
-/// Errors raised by the dispatcher itself (not captured in BootstrapResult).
+/// Errors raised by the dispatcher itself (not captured in `BootstrapResult`).
 #[derive(Debug, thiserror::Error)]
 pub enum BootstrapError {
     #[error("I/O error: {0}")]

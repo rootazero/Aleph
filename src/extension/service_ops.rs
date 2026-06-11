@@ -1,4 +1,4 @@
-//! Service management operations for ExtensionManager
+//! Service management operations for `ExtensionManager`
 
 use crate::extension::error::*;
 use crate::extension::types::ServiceInfo;
@@ -198,8 +198,8 @@ impl ExtensionManager {
         self.service_manager.read().await
     }
 
-    /// Find a service registration by plugin_id and service_id.
-    /// Extracted from the duplicated lookup logic in start_service/stop_service.
+    /// Find a service registration by `plugin_id` and `service_id`.
+    /// Extracted from the duplicated lookup logic in `start_service/stop_service`.
     async fn find_service_registration(
         &self,
         plugin_id: &str,

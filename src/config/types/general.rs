@@ -1,8 +1,8 @@
 //! General configuration types
 //!
 //! Contains core application settings:
-//! - GeneralConfig: App-wide settings (default provider, logging, language)
-//! - BehaviorConfig: Input/output behavior settings
+//! - `GeneralConfig`: App-wide settings (default provider, logging, language)
+//! - `BehaviorConfig`: Input/output behavior settings
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,7 +38,7 @@ pub struct GeneralConfig {
     #[serde(default)]
     pub queue_mode: QueueMode,
     /// Collection window in milliseconds for Collect queue mode.
-    /// Only used when queue_mode = "collect". Default: 3000ms.
+    /// Only used when `queue_mode` = "collect". Default: 3000ms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collect_window_ms: Option<u64>,
     /// Browser system configuration (profiles, SSRF policy, Playwright CLI).
@@ -70,14 +70,14 @@ pub fn default_hotkey() -> String {
 /// Behavior configuration for output mode and typing speed
 ///
 /// Active fields:
-/// - output_mode: "typewriter" (character-by-character) or "instant" (all at once)
-/// - typing_speed: Characters per second for typewriter mode (50-400)
+/// - `output_mode`: "typewriter" (character-by-character) or "instant" (all at once)
+/// - `typing_speed`: Characters per second for typewriter mode (50-400)
 ///
 /// Deprecated fields (kept for backward compatibility, ignored by code):
-/// - input_mode: Replaced by trigger system
-/// - pii_scrubbing_enabled: Migrated to search.pii.enabled
-/// - multi_turn_enabled: No longer used
-/// - keep_window_visible_during_processing: No longer used
+/// - `input_mode`: Replaced by trigger system
+/// - `pii_scrubbing_enabled`: Migrated to search.pii.enabled
+/// - `multi_turn_enabled`: No longer used
+/// - `keep_window_visible_during_processing`: No longer used
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BehaviorConfig {
     /// Output mode: "typewriter" or "instant"

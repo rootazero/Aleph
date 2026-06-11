@@ -1,7 +1,7 @@
 //! Generation implementation for OpenAI-compatible provider
 //!
 //! Supports two response modes:
-//! - **Synchronous**: API returns `{ "data": [...] }` directly (OpenAI standard)
+//! - **Synchronous**: API returns `{ "data": [...] }` directly (`OpenAI` standard)
 //! - **Async polling**: API returns `{ "task_id": "..." }`, then poll for completion
 //!
 //! The mode is auto-detected from the response — no configuration needed.

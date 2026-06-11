@@ -17,7 +17,7 @@ use crate::gateway::session_store::types::{CheckpointSummary, MessageRecord};
 use crate::routing::session_key::SessionKey;
 use crate::tools::AlephTool;
 
-/// Arguments for the sessions_list tool
+/// Arguments for the `sessions_list` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct SessionsListArgs {
     /// Filter by session kinds (e.g., ["main", "group", "task", "dm", "subagent", "ephemeral"])
@@ -56,7 +56,7 @@ pub struct SessionListRow {
     pub updated_at: Option<i64>,
     /// Number of messages in the session
     pub message_count: usize,
-    /// Recent messages (if message_limit > 0)
+    /// Recent messages (if `message_limit` > 0)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub messages: Option<Vec<MessageRecord>>,
     /// Agent that owns this session
@@ -81,7 +81,7 @@ pub struct SessionListRow {
     pub checkpoints: Vec<CheckpointSummary>,
 }
 
-/// Output from the sessions_list tool
+/// Output from the `sessions_list` tool
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionsListOutput {
     /// Total count of sessions returned
@@ -103,7 +103,7 @@ pub struct SessionsListTool {
 }
 
 impl SessionsListTool {
-    /// Create a new sessions_list tool.
+    /// Create a new `sessions_list` tool.
     ///
     /// # Arguments
     ///

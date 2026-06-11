@@ -5,7 +5,7 @@
 //! `BUILTIN_TOOL_DEFINITIONS` is the static, unconditional subset of the
 //! builtin tool surface: the names/descriptions that exist regardless of
 //! runtime configuration. It seeds the slash-command catalog and the base of
-//! the LLM tool list, and AlephToolServer sources tool construction from it
+//! the LLM tool list, and `AlephToolServer` sources tool construction from it
 //! via `create_tool_boxed()`.
 //!
 //! It is deliberately NOT the complete tool surface. Conditionally-registered
@@ -20,7 +20,7 @@
 //! # Usage
 //!
 //! - `BUILTIN_TOOL_DEFINITIONS` - List of all tool definitions
-//! - `create_tool_boxed()` - Create boxed tool instance for AlephToolServer
+//! - `create_tool_boxed()` - Create boxed tool instance for `AlephToolServer`
 //! - `get_builtin_tool_names()` - Get list of all tool names
 //! - `is_builtin_tool()` - Check if a name is a builtin tool
 
@@ -52,7 +52,7 @@ use super::BuiltinToolConfig;
 /// This struct describes how to create and identify a builtin tool.
 #[derive(Clone)]
 pub struct BuiltinToolDefinition {
-    /// Tool name (e.g., "search", "bash", "file_ops")
+    /// Tool name (e.g., "search", "bash", "`file_ops`")
     pub name: &'static str,
     /// Tool description for AI prompts
     pub description: &'static str,
@@ -63,7 +63,7 @@ pub struct BuiltinToolDefinition {
 /// All builtin tools in the system - Single Source of Truth
 ///
 /// This is the authoritative list of all builtin tools.
-/// Both BuiltinToolRegistry and AlephToolServer use this list.
+/// Both `BuiltinToolRegistry` and `AlephToolServer` use this list.
 pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "search",
@@ -795,11 +795,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
 
 /// Create a boxed tool instance by name
 ///
-/// This function is used by AlephToolServer to create tool instances
+/// This function is used by `AlephToolServer` to create tool instances
 /// for tool management and hot-reload capabilities.
 ///
 /// # Arguments
-/// * `name` - Tool name (must match BUILTIN_TOOL_DEFINITIONS)
+/// * `name` - Tool name (must match `BUILTIN_TOOL_DEFINITIONS`)
 /// * `config` - Optional configuration for tools that need it
 ///
 /// # Returns

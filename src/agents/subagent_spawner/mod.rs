@@ -2,9 +2,9 @@
 //!
 //! Replacement for the legacy pre-Harness `run_subagent` entry point.
 //! The spawner takes a `SpawnerBase` (shared session/tools/sandbox/provider)
-//! plus a `SpawnRequest` (agent_def, task, model, timeout, cancel), builds a
+//! plus a `SpawnRequest` (`agent_def`, task, model, timeout, cancel), builds a
 //! child ephemeral `SessionKey`, assembles a `HarnessDeps` bundle with the
-//! agent's system prompt and max_iterations + a tool service wrapped in
+//! agent's system prompt and `max_iterations` + a tool service wrapped in
 //! `AllowlistToolService`, seeds the task as a `UserMessage`, runs
 //! `AgentHarness::run` under `tokio::time::timeout` + `catch_unwind` for
 //! timeout + panic isolation, then walks the child session event log to
@@ -56,7 +56,7 @@ pub struct SpawnerBase {
     /// `ChainContext::child()`.
     pub chain: ChainContext,
     /// Spec 1 G2 — when set, the spawner emits a `RawMemory(Delegation)`
-    /// row after a successful spawn so CompressionService can distil
+    /// row after a successful spawn so `CompressionService` can distil
     /// LESSON-flavoured notes for the parent agent's long-term memory.
     /// The pre-phase7 A2A path emits the same row from `a2a/sub_agent.rs`;
     /// this field plugs the gap on the post-phase7 intra-process path.
@@ -81,7 +81,7 @@ pub struct SpawnerBase {
     pub consecutive_failure_cap: Option<usize>,
     /// Stage A (P1) — per-turn wall-clock timeout from `[stability]`.
     pub turn_timeout: Option<std::time::Duration>,
-    /// Stage A (P1) — trace sink, cloned from parent's HarnessDeps.
+    /// Stage A (P1) — trace sink, cloned from parent's `HarnessDeps`.
     /// Subagent run events flow into the same sink as the main runner.
     pub trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
     /// P3 Stage I — global plugin registry. Used by `McpScope::provision`
@@ -97,7 +97,7 @@ pub struct SpawnerBase {
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
 pub struct SpawnRequest<'a> {
-    /// Agent definition (id, allowed_tools, max_iterations, model_hint, …).
+    /// Agent definition (id, `allowed_tools`, `max_iterations`, `model_hint`, …).
     pub agent_def: &'a AgentDef,
     /// Task description — seeded as the child's first `UserMessage`.
     pub task: &'a str,
@@ -113,7 +113,7 @@ pub struct SpawnRequest<'a> {
     /// Cancellation token observed between turns by the harness.
     pub cancel: CancellationToken,
     /// Strict isolation mode (P3 Stage H). `None` = inherit parent's
-    /// HarnessDeps (legacy / default). `Some(IsolationMode::Worktree)`
+    /// `HarnessDeps` (legacy / default). `Some(IsolationMode::Worktree)`
     /// will provision a detached-HEAD git worktree in Task 9.
     pub isolation: Option<crate::agents::IsolationMode>,
 }
@@ -545,7 +545,7 @@ async fn extract_run_result(
     })
 }
 
-/// Generate a unique ephemeral SessionKey for this sub-agent spawn.
+/// Generate a unique ephemeral `SessionKey` for this sub-agent spawn.
 fn ephemeral_for(agent_id: &str) -> SessionKey {
     let nonce = uuid::Uuid::new_v4();
     SessionKey::Ephemeral {

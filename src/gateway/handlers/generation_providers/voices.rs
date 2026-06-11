@@ -11,8 +11,8 @@ use tokio::sync::RwLock;
 ///
 /// Resolution order:
 /// 1. Try dynamic fetch from provider API (`{base_url}/v1/audio/voices`)
-/// 2. Detect model family (MiniMax, OpenAI, etc.) and return known voices
-/// 3. Fall back to static list by provider_type
+/// 2. Detect model family (`MiniMax`, `OpenAI`, etc.) and return known voices
+/// 3. Fall back to static list by `provider_type`
 pub async fn handle_voices(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,

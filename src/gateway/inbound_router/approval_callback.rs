@@ -1,6 +1,6 @@
 //! Interface 层与 core 审批管理之间的窄接口。
 //!
-//! `InboundMessageRouter` 保持纯 I/O：把回调 callback_data 交给注入的
+//! `InboundMessageRouter` 保持纯 I/O：把回调 `callback_data` 交给注入的
 //! `ApprovalCallbackSink`、再把返回文案渲染回通道 —— 自身不解析、不 resolve。
 
 use async_trait::async_trait;

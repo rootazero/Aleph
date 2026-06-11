@@ -1,4 +1,4 @@
-//! VoiceModeLayer — injects voice mode guidelines when active (priority 1710)
+//! `VoiceModeLayer` — injects voice mode guidelines when active (priority 1710)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

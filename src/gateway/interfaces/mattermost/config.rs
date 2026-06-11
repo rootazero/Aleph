@@ -11,7 +11,7 @@ const fn default_true() -> bool {
 /// Mattermost channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MattermostConfig {
-    /// Mattermost server URL (e.g., "https://mattermost.example.com")
+    /// Mattermost server URL (e.g., "<https://mattermost.example.com>")
     pub server_url: String,
 
     /// Personal access token or bot token

@@ -1,10 +1,10 @@
 //! Inbound voice middleware — STT transcription for incoming audio attachments.
 //!
 //! When a user sends a voice message via any Channel (Telegram, Discord, etc.),
-//! the audio attachment arrives in the InboundMessage. This middleware transcribes
+//! the audio attachment arrives in the `InboundMessage`. This middleware transcribes
 //! it to text before the Agent Loop sees it.
 //!
-//! Uses Whisper-compatible API directly (no MediaPipeline dependency).
+//! Uses Whisper-compatible API directly (no `MediaPipeline` dependency).
 
 use crate::gateway::channel::{Attachment, InboundMessage};
 use tracing::{debug, warn};

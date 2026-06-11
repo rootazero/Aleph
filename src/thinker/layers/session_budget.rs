@@ -1,4 +1,4 @@
-//! SessionBudgetLayer — iteration-cap awareness + self-tracking protocol
+//! `SessionBudgetLayer` — iteration-cap awareness + self-tracking protocol
 //! (priority 820).
 //!
 //! Surfaces the per-run Think→Act iteration cap so the LLM can plan

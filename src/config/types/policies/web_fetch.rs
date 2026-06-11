@@ -109,7 +109,7 @@ fn default_content_selectors() -> Vec<String> {
 }
 
 impl WebFetchPolicy {
-    /// Get timeout as std::time::Duration
+    /// Get timeout as `std::time::Duration`
     pub const fn timeout_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.timeout_seconds)
     }

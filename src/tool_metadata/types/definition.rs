@@ -1,10 +1,10 @@
 //! Tool Definition Types
 //!
 //! Contains tool definition and structured metadata types:
-//! - ToolDefinition: Basic tool definition for LLM function calling
+//! - `ToolDefinition`: Basic tool definition for LLM function calling
 //! - Capability: Precise capability description
-//! - ToolDiff: Tool differentiation for similar tools
-//! - StructuredToolMeta: Grouped metadata for tool selection
+//! - `ToolDiff`: Tool differentiation for similar tools
+//! - `StructuredToolMeta`: Grouped metadata for tool selection
 
 use super::category::ToolCategory;
 use serde::{Deserialize, Serialize};
@@ -69,7 +69,7 @@ impl ToolDefinition {
         }
     }
 
-    /// Set requires_confirmation flag
+    /// Set `requires_confirmation` flag
     #[must_use]
     pub const fn with_confirmation(mut self, requires: bool) -> Self {
         self.requires_confirmation = requires;
@@ -109,7 +109,7 @@ impl ToolDefinition {
         )
     }
 
-    /// Convert to OpenAI function calling format
+    /// Convert to `OpenAI` function calling format
     #[must_use]
     pub fn to_openai_function(&self) -> Value {
         let mut func = serde_json::json!({

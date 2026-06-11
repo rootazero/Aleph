@@ -1,6 +1,6 @@
-//! WhatsApp Pairing State Machine
+//! `WhatsApp` Pairing State Machine
 //!
-//! Fine-grained lifecycle tracking for WhatsApp's QR-based pairing flow.
+//! Fine-grained lifecycle tracking for `WhatsApp`'s QR-based pairing flow.
 //! Maps to the coarse 5-state `ChannelStatus` enum for gateway-level reporting.
 //!
 //! # State Transitions
@@ -32,9 +32,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::gateway::channel::ChannelStatus;
 
-/// Fine-grained pairing lifecycle state for WhatsApp.
+/// Fine-grained pairing lifecycle state for `WhatsApp`.
 ///
-/// WhatsApp pairing involves a multi-step QR scan + key sync flow.
+/// `WhatsApp` pairing involves a multi-step QR scan + key sync flow.
 /// This enum captures every meaningful phase so the UI can give
 /// precise feedback, while `to_channel_status()` maps down to
 /// the gateway's coarse 5-state model.

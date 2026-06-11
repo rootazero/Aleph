@@ -1,4 +1,4 @@
-//! FeedbackFloorLoader — always-on surfacing of High/Critical feedback rules.
+//! `FeedbackFloorLoader` — always-on surfacing of High/Critical feedback rules.
 //!
 //! Query-relevance retrieval can miss a standing correction when the current
 //! turn's text doesn't lexically match it — which is exactly when the user is

@@ -95,7 +95,7 @@ fn is_cross_origin(a: &Url, b: &Url) -> bool {
 /// Performs all pre-flight SSRF validation on a URL: scheme, legacy IP, credentials,
 /// hostname blocklist/allowlist, user blocklist, and DNS resolution with pinning.
 ///
-/// Returns the parsed URL and a pinned SocketAddr for connection.
+/// Returns the parsed URL and a pinned `SocketAddr` for connection.
 async fn validate_url_full(
     url_str: &str,
     policy: &SsrfPolicy,
@@ -146,7 +146,7 @@ async fn validate_url_full(
     Ok((url, pinned))
 }
 
-/// Strips sensitive authentication headers from a HeaderMap.
+/// Strips sensitive authentication headers from a `HeaderMap`.
 fn strip_auth_headers(headers: &mut HeaderMap) {
     headers.remove("authorization");
     headers.remove("cookie");

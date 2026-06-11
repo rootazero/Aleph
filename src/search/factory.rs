@@ -10,7 +10,7 @@
 //!   and is intentionally not hot-pluggable; runtime registration of a
 //!   new provider type would require recompilation.
 //! - Factory `build` returns `Ok(None)` when the backend is configured
-//!   but unusable (e.g., missing api_key) — callers log+skip rather than
+//!   but unusable (e.g., missing `api_key`) — callers log+skip rather than
 //!   aborting the whole load, matching the prior behaviour of
 //!   `SearchRegistry::from_config`.
 
@@ -36,7 +36,7 @@ pub trait ProviderFactory: Send + Sync {
     /// - `Ok(Some(provider))` — provider was constructed and is ready to
     ///   serve requests.
     /// - `Ok(None)` — backend is configured but **intentionally unusable**
-    ///   (e.g. `provider_type = "tavily"` with no api_key in the vault).
+    ///   (e.g. `provider_type = "tavily"` with no `api_key` in the vault).
     ///   The registry logs a warning at WARN level and continues with the
     ///   remaining backends; the search tool can still satisfy requests
     ///   via other providers or the legacy `TAVILY_API_KEY` env path.
@@ -93,7 +93,7 @@ impl ProviderFactoryRegistry {
         self.factories.insert(factory.provider_type(), factory);
     }
 
-    /// Return the set of provider_type strings this registry can build.
+    /// Return the set of `provider_type` strings this registry can build.
     /// Used by the config validator so it stays in sync without a
     /// hard-coded allowlist.
     #[must_use]
@@ -107,7 +107,7 @@ impl ProviderFactoryRegistry {
     ///
     /// Returns:
     /// - `Ok(Some(provider))` on success
-    /// - `Ok(None)` when the factory chose to skip (e.g. missing api_key)
+    /// - `Ok(None)` when the factory chose to skip (e.g. missing `api_key`)
     /// - `Ok(None)` when no factory is registered for the `provider_type`
     ///   (a typo or unknown provider — logged at WARN by caller)
     /// - `Err(_)` on hard construction failures

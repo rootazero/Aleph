@@ -49,7 +49,7 @@ pub struct MaterializedTeam {
     pub leader_id: String,
     /// Member agent ids that were enrolled (excluding leader).
     pub member_ids: Vec<String>,
-    /// (template_task_key → coord_task_id) — useful for callers that want to
+    /// (`template_task_key` → `coord_task_id`) — useful for callers that want to
     /// surface a "what got scheduled" report.
     pub task_ids: Vec<(String, String)>,
     pub message: String,
@@ -450,7 +450,7 @@ async fn provision_member(
 }
 
 /// Append a team-strategy section to an existing agent's SOUL.md,
-/// idempotently. R3 (ClawTeam parity): team-scope counterpart of
+/// idempotently. R3 (`ClawTeam` parity): team-scope counterpart of
 /// [`inject_role_prompt`]. Same I/O pattern; different section heading
 /// so the two can coexist in one SOUL.md without ambiguity.
 async fn inject_strategy_prompt(deps: &MaterializeDeps, agent_id: &str, body: &str) {

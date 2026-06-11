@@ -1,10 +1,10 @@
-//! Bash execution tool - a convenience wrapper around CodeExecTool
+//! Bash execution tool - a convenience wrapper around `CodeExecTool`
 //!
 //! This tool provides a simplified interface for executing bash commands,
-//! automatically routing to CodeExecTool with language=shell.
+//! automatically routing to `CodeExecTool` with language=shell.
 //!
 //! This exists to maintain compatibility with AI prompts and skills that
-//! reference "bash" as a tool name instead of "code_exec".
+//! reference "bash" as a tool name instead of "`code_exec`".
 //!
 //! Phase 3 Task 8: like `CodeExecTool`, this wrapper now carries the shared
 //! `Arc<dyn Sandbox>` transitively — all subprocess execution routes through
@@ -80,7 +80,7 @@ pub struct BashExecArgs {
     pub justification: Option<String>,
 }
 
-/// Bash execution tool - wraps CodeExecTool for bash/shell commands
+/// Bash execution tool - wraps `CodeExecTool` for bash/shell commands
 #[derive(Clone)]
 pub struct BashExecTool {
     inner: CodeExecTool,
@@ -112,7 +112,7 @@ impl Default for BashExecTool {
     }
 }
 
-/// Implementation of AlephTool trait for BashExecTool
+/// Implementation of `AlephTool` trait for `BashExecTool`
 #[async_trait]
 impl AlephTool for BashExecTool {
     const NAME: &'static str = "bash";

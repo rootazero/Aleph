@@ -2,7 +2,7 @@
 //!
 //! All outbound message operations extracted from the Channel trait impl.
 //! Each function takes a `&Bot` directly (no `&self`), making them
-//! independently testable and reusable from both Channel and MessageOps.
+//! independently testable and reusable from both Channel and `MessageOps`.
 
 use crate::gateway::channel::{
     Attachment, ChannelError, ChannelResult, InlineKeyboard, MessageId, OutboundMessage, SendResult,
@@ -128,7 +128,7 @@ const fn error_class_to_kind(ec: &ErrorClass) -> ErrorKind {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Parse a conversation_id that may contain a forum topic suffix.
+/// Parse a `conversation_id` that may contain a forum topic suffix.
 ///
 /// Format: `"{chat_id}"` or `"{chat_id}:topic:{thread_id}"`.
 /// Returns the `ChatId` and an optional raw thread id (i32).

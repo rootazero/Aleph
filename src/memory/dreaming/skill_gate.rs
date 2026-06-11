@@ -1,4 +1,4 @@
-//! Skill Validation Gate — pre-apply checks on LLM-emitted DistillActions.
+//! Skill Validation Gate — pre-apply checks on LLM-emitted `DistillActions`.
 //!
 //! Spec 5 wiring: sits between `parse_distill_response` (LLM output) and
 //! `apply_distill_action` (filesystem mutation). Catches the malformed and

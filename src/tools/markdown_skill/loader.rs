@@ -32,7 +32,7 @@ impl SkillLoader {
 
     /// Load all skills from the base directory
     ///
-    /// Returns (loaded_tools, errors) - partial failures are logged but don't abort
+    /// Returns (`loaded_tools`, errors) - partial failures are logged but don't abort
     pub async fn load_all(&self) -> (Vec<MarkdownCliTool>, Vec<(PathBuf, anyhow::Error)>) {
         let mut tools = Vec::new();
         let mut errors = Vec::new();
@@ -130,7 +130,7 @@ impl SkillLoader {
         Ok(skill_files)
     }
 
-    /// Static version for use in spawn_blocking
+    /// Static version for use in `spawn_blocking`
     fn is_skill_file_static(path: &Path) -> bool {
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
             name.eq_ignore_ascii_case("SKILL.md") || name.to_lowercase().ends_with(".skill.md")

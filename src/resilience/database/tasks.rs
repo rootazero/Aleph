@@ -1,4 +1,4 @@
-//! CRUD operations for agent_tasks table
+//! CRUD operations for `agent_tasks` table
 //!
 //! Provides database operations for task management with recovery support.
 
@@ -8,11 +8,11 @@ use crate::resilience::{AgentTask, Lane, RiskLevel, TaskStatus};
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 
-/// Construct AgentTask from a rusqlite row.
-/// Expected column order: id, parent_session_id, agent_id, task_prompt, status,
-///     risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
-///     recursion_depth, parent_task_id, created_at, updated_at,
-///     started_at, completed_at, metadata_json
+/// Construct `AgentTask` from a rusqlite row.
+/// Expected column order: id, `parent_session_id`, `agent_id`, `task_prompt`, status,
+///     `risk_level`, lane, `checkpoint_snapshot_path`, `last_tool_call_id`,
+///     `recursion_depth`, `parent_task_id`, `created_at`, `updated_at`,
+///     `started_at`, `completed_at`, `metadata_json`
 fn agent_task_from_row(row: &rusqlite::Row) -> rusqlite::Result<AgentTask> {
     Ok(AgentTask {
         id: row.get(0)?,

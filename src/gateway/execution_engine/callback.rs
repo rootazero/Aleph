@@ -1,4 +1,4 @@
-//! Callback adapter that bridges AgentLoop events to Gateway StreamEvents.
+//! Callback adapter that bridges `AgentLoop` events to Gateway `StreamEvents`.
 
 use crate::sync_primitives::{Arc, AtomicU32, AtomicU64, Mutex, Ordering};
 

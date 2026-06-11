@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A chat completion request mirroring the OpenAI API format.
+/// A chat completion request mirroring the `OpenAI` API format.
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionRequest {
     pub model: String,
@@ -25,9 +25,9 @@ pub struct ChatCompletionRequest {
     pub frequency_penalty: Option<f64>,
     #[serde(default)]
     pub presence_penalty: Option<f64>,
-    /// OpenAI streaming control. Only `include_usage` is honored; when true the
+    /// `OpenAI` streaming control. Only `include_usage` is honored; when true the
     /// stream emits a dedicated final chunk carrying token usage with an empty
-    /// `choices` array (per the OpenAI Chat Completions streaming contract).
+    /// `choices` array (per the `OpenAI` Chat Completions streaming contract).
     #[serde(default)]
     pub stream_options: Option<StreamOptions>,
 }
@@ -42,9 +42,9 @@ pub struct StreamOptions {
 /// Deserialize a message `content` field that may be either a plain string or
 /// an array of content parts, flattening the array form to concatenated text.
 ///
-/// OpenAI's `content` is a `string | array` union. The previous `Option<String>`
+/// `OpenAI`'s `content` is a `string | array` union. The previous `Option<String>`
 /// field rejected the array form outright, failing the *entire* request with a
-/// 400 for any client (notably the official OpenAI SDK) that sends segmented or
+/// 400 for any client (notably the official `OpenAI` SDK) that sends segmented or
 /// multimodal content. This accepts both and yields the text the downstream
 /// text-only pipeline consumes; non-text parts (images, audio, files) are
 /// dropped rather than rejected.

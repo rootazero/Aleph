@@ -1,11 +1,11 @@
 //! Search configuration types
 //!
 //! Contains search capability configuration:
-//! - SearchConfigInternal: Internal search config with HashMap backends
-//! - SearchConfig: UniFFI-compatible search config with Vec backends
-//! - SearchBackendConfig: Individual search backend settings
-//! - SearchBackendEntry: Backend with name (for UniFFI)
-//! - PIIConfig: PII scrubbing settings
+//! - `SearchConfigInternal`: Internal search config with `HashMap` backends
+//! - `SearchConfig`: UniFFI-compatible search config with Vec backends
+//! - `SearchBackendConfig`: Individual search backend settings
+//! - `SearchBackendEntry`: Backend with name (for `UniFFI`)
+//! - `PIIConfig`: PII scrubbing settings
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -40,7 +40,7 @@ pub struct SearchConfigInternal {
     /// Backend configurations
     pub backends: HashMap<String, SearchBackendConfig>,
 
-    /// PII scrubbing configuration (migrate from behavior.pii_scrubbing_enabled)
+    /// PII scrubbing configuration (migrate from `behavior.pii_scrubbing_enabled`)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pii: Option<PIIConfig>,
 
@@ -90,7 +90,7 @@ pub const fn default_search_timeout() -> u64 {
 
 /// PII (Personally Identifiable Information) scrubbing configuration
 ///
-/// Migrated from behavior.pii_scrubbing_enabled to search.pii
+/// Migrated from `behavior.pii_scrubbing_enabled` to search.pii
 /// (integrate-search-registry proposal)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PIIConfig {
@@ -151,7 +151,7 @@ pub struct SearchBackendConfig {
     #[schemars(skip)]
     pub api_key: Option<String>,
 
-    /// Base URL (required for SearXNG, optional for others)
+    /// Base URL (required for `SearXNG`, optional for others)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
 
@@ -159,15 +159,15 @@ pub struct SearchBackendConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_id: Option<String>,
 
-    /// SearXNG only — comma-separated upstream engines to query
+    /// `SearXNG` only — comma-separated upstream engines to query
     /// (e.g. "bing,baidu,360search"). Pins requests to rate-tolerant engines
     /// so a burst of agent searches doesn't trigger CAPTCHA / rate-limit
     /// suspension on sensitive engines (brave/duckduckgo). When unset, the
-    /// SearXNG instance's default engine set is used. Ignored by other providers.
+    /// `SearXNG` instance's default engine set is used. Ignored by other providers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engines: Option<String>,
 
-    /// SearXNG only — minimum interval between requests to this backend, in
+    /// `SearXNG` only — minimum interval between requests to this backend, in
     /// milliseconds. Throttles request rate so rate-sensitive upstream engines
     /// don't get suspended under a burst. Defaults to 2000ms (empirically tuned)
     /// when unset; set to 0 to disable throttling. Ignored by other providers.
@@ -183,7 +183,7 @@ pub struct SearchBackendConfig {
 // SearchBackendEntry
 // =============================================================================
 
-/// Search backend entry (name + config) - used for UniFFI serialization
+/// Search backend entry (name + config) - used for `UniFFI` serialization
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchBackendEntry {
     pub name: String,
@@ -194,7 +194,7 @@ pub struct SearchBackendEntry {
 // SearchConfig (UniFFI)
 // =============================================================================
 
-/// Search configuration for UniFFI (backends as Vec instead of HashMap)
+/// Search configuration for `UniFFI` (backends as Vec instead of `HashMap`)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchConfig {
     pub enabled: bool,
@@ -208,7 +208,7 @@ pub struct SearchConfig {
     pub backends: Vec<SearchBackendEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pii: Option<PIIConfig>,
-    /// Mirrors [`SearchConfigInternal::web_fetch_fallback`]. UniFFI
+    /// Mirrors [`SearchConfigInternal::web_fetch_fallback`]. `UniFFI`
     /// surface for the panel / mobile clients.
     #[serde(default = "default_web_fetch_fallback")]
     pub web_fetch_fallback: bool,

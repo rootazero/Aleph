@@ -1,4 +1,4 @@
-//! ArenaManager — lifecycle management for SharedArena instances.
+//! `ArenaManager` — lifecycle management for `SharedArena` instances.
 //!
 //! Responsible for creating arenas, distributing handles to participants,
 //! tracking active arenas per agent, and settling arenas when collaboration ends.
@@ -14,13 +14,13 @@ use super::aggregate::SharedArena;
 use super::handle::ArenaHandle;
 use super::types::*;
 
-/// Manages SharedArena creation, handle distribution, and settling lifecycle.
+/// Manages `SharedArena` creation, handle distribution, and settling lifecycle.
 pub struct ArenaManager {
     arenas: HashMap<ArenaId, Arc<RwLock<SharedArena>>>,
 }
 
 impl ArenaManager {
-    /// Create an empty ArenaManager.
+    /// Create an empty `ArenaManager`.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -30,7 +30,7 @@ impl ArenaManager {
 
     /// Create a new arena from the given manifest.
     ///
-    /// Creates the SharedArena, activates it, wraps it in `Arc<RwLock>`,
+    /// Creates the `SharedArena`, activates it, wraps it in `Arc<RwLock>`,
     /// and returns handles for all participants.
     pub fn create_arena(
         &mut self,
@@ -156,7 +156,7 @@ impl ArenaManager {
 
     /// Settle an arena: drain shared facts, count artifacts, archive, and return a report.
     ///
-    /// The caller is responsible for persisting the returned facts to MemoryStore.
+    /// The caller is responsible for persisting the returned facts to `MemoryStore`.
     pub fn settle_with_facts(
         &mut self,
         arena_id: &ArenaId,

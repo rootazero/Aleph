@@ -172,7 +172,7 @@ pub const fn install_allowed(level: ThreatLevel, trust: TrustLevel) -> bool {
 /// Files that cannot be read are silently skipped (defensive: partial scan
 /// beats a hard error that would bypass the gate entirely).
 ///
-/// This is the shared primitive used by both the ClawHub install path and the
+/// This is the shared primitive used by both the `ClawHub` install path and the
 /// markdown-skills RPC install/load path.
 #[must_use]
 pub fn scan_skill_directory(dir: &std::path::Path) -> ScanVerdict {

@@ -1,4 +1,4 @@
-//! Shared secret detection patterns for LeakDetector and SecretMasker.
+//! Shared secret detection patterns for `LeakDetector` and `SecretMasker`.
 //!
 //! All secret patterns are defined here in one place to prevent drift
 //! between the two consumers.

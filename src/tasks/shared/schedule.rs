@@ -1,7 +1,7 @@
 //! Pure-function scheduling computation.
 //!
 //! All functions are stateless — they take raw i64 millisecond timestamps
-//! and return computed results. No CronJob references, no persistence.
+//! and return computed results. No `CronJob` references, no persistence.
 
 use chrono::{DateTime, Utc};
 
@@ -45,7 +45,7 @@ pub const WINDOWED_BACKOFF_FLOOR_MS: i64 = 300_000; // 5 min
 /// Special cases:
 /// - `now == anchor` → returns `anchor` (fire at anchor point)
 /// - Future anchor (anchor > now) → returns `anchor`
-/// - Future manual trigger (last_run_at > now) → returns `last_run_at + every`
+/// - Future manual trigger (`last_run_at` > now) → returns `last_run_at + every`
 #[must_use]
 pub fn compute_next_every(
     now_ms: i64,
@@ -98,7 +98,7 @@ pub fn apply_min_gap(next_run_ms: i64, last_ended_ms: Option<i64>) -> i64 {
     }
 }
 
-/// Resolve the anchor timestamp: use explicit if provided, else fall back to created_at.
+/// Resolve the anchor timestamp: use explicit if provided, else fall back to `created_at`.
 #[must_use]
 pub fn resolve_anchor(explicit: Option<i64>, created_at_ms: i64) -> i64 {
     explicit.unwrap_or(created_at_ms)
@@ -154,7 +154,7 @@ pub fn compute_backoff_ms(consecutive_errors: u32) -> i64 {
 /// categories.
 ///
 /// Identical to [`compute_backoff_ms`] for non-windowed categories
-/// (network / timeout / server_error / unclassified). For [`RateLimit`] and
+/// (network / timeout / `server_error` / unclassified). For [`RateLimit`] and
 /// [`Overloaded`] — which are enforced over a rolling provider time window —
 /// the result is floored at [`WINDOWED_BACKOFF_FLOOR_MS`] so a fast first-tier
 /// retry doesn't immediately re-hit the same limit.

@@ -1,6 +1,6 @@
 //! Helper functions for session management tools.
 //!
-//! These helpers are used by sessions_list and sessions_send tools to
+//! These helpers are used by `sessions_list` and `sessions_send` tools to
 //! classify, format, parse, and extract information from session keys.
 
 use serde::{Deserialize, Serialize};
@@ -52,7 +52,7 @@ impl std::fmt::Display for SessionKind {
 /// * `key` - The session key to classify
 ///
 /// # Returns
-/// The SessionKind enum variant corresponding to the session key type.
+/// The `SessionKind` enum variant corresponding to the session key type.
 ///
 /// # Example
 /// ```
@@ -127,7 +127,7 @@ pub fn parse_session_key(display: &str) -> Result<SessionKey, String> {
 
 /// Extract the channel name from a session key.
 ///
-/// For session types that have a channel (DirectMessage, Group), returns the channel name.
+/// For session types that have a channel (`DirectMessage`, Group), returns the channel name.
 /// For other session types, returns "unknown".
 ///
 /// # Arguments

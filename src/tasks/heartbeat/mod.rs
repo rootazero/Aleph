@@ -21,7 +21,7 @@ use crate::tasks::heartbeat::service::HeartbeatServiceState;
 use crate::tasks::heartbeat::store::HeartbeatStore;
 use crate::tasks::shared::clock::Clock;
 
-/// Shared handle to the HeartbeatService.
+/// Shared handle to the `HeartbeatService`.
 pub type SharedHeartbeatService = Arc<Mutex<HeartbeatService>>;
 
 /// Top-level heartbeat service facade.
@@ -31,14 +31,14 @@ pub type SharedHeartbeatService = Arc<Mutex<HeartbeatService>>;
 pub struct HeartbeatService {
     state: Arc<HeartbeatServiceState>,
     wake_queue: Arc<wake::WakeQueue>,
-    /// Optional event-bus handle, mirrored from [[CronService]]. Wired via
+    /// Optional event-bus handle, mirrored from [[`CronService`]]. Wired via
     /// [`with_event_bus`] at startup so each successful mutation publishes
     /// `HeartbeatTaskChanged` for the panel to drop polling.
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 }
 
 impl HeartbeatService {
-    /// Create a new HeartbeatService with the given store and config.
+    /// Create a new `HeartbeatService` with the given store and config.
     pub fn new(store: HeartbeatStore, config: HeartbeatConfig) -> Self {
         let state = Arc::new(HeartbeatServiceState::new(
             Arc::new(tokio::sync::Mutex::new(store)),

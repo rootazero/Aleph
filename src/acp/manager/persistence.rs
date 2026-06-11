@@ -48,7 +48,7 @@ pub fn save_persisted_sessions(sessions: &[crate::acp::session::PersistedAcpSess
 }
 
 /// Wire up file-based persistence for ACP sessions.
-/// Call this after creating the AcpAdapterManager at startup.
+/// Call this after creating the `AcpAdapterManager` at startup.
 pub async fn wire_persistence(manager: &AcpAdapterManager) {
     use crate::sync_primitives::Mutex;
 

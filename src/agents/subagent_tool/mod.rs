@@ -1,4 +1,4 @@
-//! SubagentTool — delegates tasks to a temporary child harness.
+//! `SubagentTool` — delegates tasks to a temporary child harness.
 //!
 //! When the parent agent needs to run a complex sub-task autonomously,
 //! it calls the `subagent` tool. `AgentRuntime::execute_via_harness` spawns a
@@ -47,7 +47,7 @@ use types::DEFAULT_MAX_CONCURRENT_SUBAGENTS;
 // SubagentTool struct
 // =============================================================================
 
-/// A LoopTool that delegates tasks to a temporary AgentLoop.
+/// A `LoopTool` that delegates tasks to a temporary `AgentLoop`.
 pub struct SubagentTool {
     pub(super) provider: Arc<dyn AiProvider>,
     pub(super) chain: crate::harness::chain_context::ChainContext,
@@ -61,9 +61,9 @@ pub struct SubagentTool {
     pub(super) sandbox: Arc<dyn Sandbox>,
     /// Optional teammate manager for auto team creation/registration.
     pub(super) teammate_manager: Option<Arc<TeammateManager>>,
-    /// Optional message router for send_message actions.
+    /// Optional message router for `send_message` actions.
     pub(super) message_router: Option<Arc<MessageRouter>>,
-    /// Optional inbox for read_inbox actions.
+    /// Optional inbox for `read_inbox` actions.
     pub(super) inbox: Option<Arc<Inbox>>,
     /// Identifies the calling agent (default: "primary").
     pub(super) parent_agent_id: String,
@@ -76,7 +76,7 @@ pub struct SubagentTool {
     /// the row untagged for session-level lookups.
     pub(super) parent_session_id: Option<String>,
     /// Stage F (P2) — parent trace sink threaded into background subagent
-    /// runtimes wrapped by ForwardingTraceSink for progress observation.
+    /// runtimes wrapped by `ForwardingTraceSink` for progress observation.
     /// Sync subagents do NOT receive this wrapper (Stage A inheritance suffices).
     pub(super) trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
     /// A2 — shared concurrency cap; one per tool instance (= per agent run).
@@ -84,7 +84,7 @@ pub struct SubagentTool {
     /// A3 — parent run's cancellation token. Each spawn path derives a
     /// `child_token()` so a cancelled parent stops its subagents.
     pub(super) parent_cancel: Option<CancellationToken>,
-    /// B2 — global plugin registry, threaded into each AgentRuntime.
+    /// B2 — global plugin registry, threaded into each `AgentRuntime`.
     pub(super) plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
     /// B3 — stall watchdog config inherited by subagents.
     pub(super) stall_config: Option<crate::harness::StallConfig>,
@@ -104,7 +104,7 @@ pub struct SubagentTool {
 }
 
 impl SubagentTool {
-    /// Create a new SubagentTool.
+    /// Create a new `SubagentTool`.
     ///
     /// - `provider`: the AI provider for the sub-agent's LLM calls
     /// - `chain`: the parent's chain context for depth tracking
@@ -204,14 +204,14 @@ impl SubagentTool {
         self
     }
 
-    /// Set the message router for send_message actions.
+    /// Set the message router for `send_message` actions.
     #[must_use]
     pub fn with_message_router(mut self, router: Arc<MessageRouter>) -> Self {
         self.message_router = Some(router);
         self
     }
 
-    /// Set the inbox for read_inbox actions.
+    /// Set the inbox for `read_inbox` actions.
     #[must_use]
     pub fn with_inbox(mut self, inbox: Arc<Inbox>) -> Self {
         self.inbox = Some(inbox);
@@ -249,7 +249,7 @@ impl SubagentTool {
     }
 
     /// Stage F (P2) — thread the parent trace sink so background subagents can
-    /// be observed via ForwardingTraceSink. Only wired on the background path.
+    /// be observed via `ForwardingTraceSink`. Only wired on the background path.
     pub fn with_trace_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
         self.trace_sink = Some(sink);
         self

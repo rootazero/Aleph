@@ -1,6 +1,6 @@
-//! Constants for ElevenLabs TTS provider.
+//! Constants for `ElevenLabs` TTS provider.
 
-/// Default API endpoint for ElevenLabs
+/// Default API endpoint for `ElevenLabs`
 pub const DEFAULT_ENDPOINT: &str = "https://api.elevenlabs.io";
 
 /// Default model for TTS
@@ -12,7 +12,7 @@ pub const DEFAULT_VOICE_ID: &str = "21m00Tcm4TlvDq8ikWAM";
 /// Default timeout for TTS requests (60 seconds)
 pub const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
-/// Available voices (name -> voice_id)
+/// Available voices (name -> `voice_id`)
 pub const VOICES: &[(&str, &str)] = &[
     ("rachel", "21m00Tcm4TlvDq8ikWAM"),
     ("domi", "AZnzlk1XvdvUeBnXmlld"),

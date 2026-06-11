@@ -1,6 +1,6 @@
-//! Arena Tools — AlephTool implementations for SharedArena interaction.
+//! Arena Tools — `AlephTool` implementations for `SharedArena` interaction.
 //!
-//! Provides three tools for agents to interact with the SharedArena system:
+//! Provides three tools for agents to interact with the `SharedArena` system:
 //! - `arena_create` — Create a new collaboration arena
 //! - `arena_query` — Query arena status and slot details
 //! - `arena_settle` — Settle an arena (archive and persist facts)
@@ -44,7 +44,7 @@ pub struct ArenaCreateOutput {
     pub participants_count: usize,
 }
 
-/// Tool that creates a new SharedArena for multi-agent collaboration.
+/// Tool that creates a new `SharedArena` for multi-agent collaboration.
 #[derive(Clone)]
 pub struct ArenaCreateTool {
     manager: Arc<RwLock<ArenaManager>>,
@@ -149,7 +149,7 @@ pub struct ArenaQueryOutput {
     pub slots: Vec<SlotSummary>,
 }
 
-/// Tool that queries a SharedArena's current status and slot details.
+/// Tool that queries a `SharedArena`'s current status and slot details.
 #[derive(Clone)]
 pub struct ArenaQueryTool {
     manager: Arc<RwLock<ArenaManager>>,
@@ -300,7 +300,7 @@ pub struct ArenaSettleOutput {
     pub status: String,
 }
 
-/// Tool that settles a SharedArena, archiving artifacts and persisting facts.
+/// Tool that settles a `SharedArena`, archiving artifacts and persisting facts.
 #[derive(Clone)]
 pub struct ArenaSettleTool {
     manager: Arc<RwLock<ArenaManager>>,

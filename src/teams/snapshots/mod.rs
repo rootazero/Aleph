@@ -2,7 +2,7 @@
 //! tasks + recent events. Restore is **dry-run by default** so callers can
 //! inspect the diff before clobbering live state.
 //!
-//! Inspired by ClawTeam's `SnapshotManager`. Adapted to Aleph's SQLite split:
+//! Inspired by `ClawTeam`'s `SnapshotManager`. Adapted to Aleph's `SQLite` split:
 //! snapshots live in the **coord task** database alongside `coord_tasks`
 //! (not in `teams.db`) so the read path holds one lock for the bulk content.
 //! No FK on `coord_tasks` — historical snapshots must survive task deletion.

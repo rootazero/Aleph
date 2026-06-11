@@ -1,6 +1,6 @@
 //! GET /v1/models — hybrid model listing.
 //!
-//! Returns virtual agent IDs (aleph/default, aleph/{agent_id}) plus
+//! Returns virtual agent IDs (aleph/default, `aleph/{agent_id`}) plus
 //! real model names from all configured providers.
 
 use crate::sync_primitives::Arc;
@@ -14,7 +14,7 @@ use super::auth::{extract_bearer_token, ApiError};
 use super::state::OpenAiApiState;
 use super::types::{ModelList, ModelObject};
 
-/// Validate bearer token against state.api_token (shared auth logic).
+/// Validate bearer token against `state.api_token` (shared auth logic).
 fn check_auth(state: &OpenAiApiState, headers: &HeaderMap) -> Result<(), ApiError> {
     let auth_header = headers
         .get("authorization")

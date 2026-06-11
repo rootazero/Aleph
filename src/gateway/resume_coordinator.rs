@@ -1,4 +1,4 @@
-//! ResumeCoordinator — boot-scan auto-resume of interrupted agent runs.
+//! `ResumeCoordinator` — boot-scan auto-resume of interrupted agent runs.
 //!
 //! Cycle 6 of the long-task hardening directive. See
 //! `docs/superpowers/specs/2026-05-21-mid-run-trajectory-resume-design.md`.

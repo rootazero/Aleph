@@ -1,7 +1,7 @@
-//! RecallSignalStore — tracks which notes get retrieved during conversations.
+//! `RecallSignalStore` — tracks which notes get retrieved during conversations.
 //!
-//! Each retrieval hit is recorded as a signal keyed by (note_path, query_hash,
-//! day_bucket, channel) for natural deduplication.  Aggregated signals later
+//! Each retrieval hit is recorded as a signal keyed by (`note_path`, `query_hash`,
+//! `day_bucket`, channel) for natural deduplication.  Aggregated signals later
 //! feed the 8-dimensional promotion scorer that decides which short-term
 //! memories should be promoted to long-term.
 
@@ -62,7 +62,7 @@ pub fn today_bucket() -> String {
 impl SqliteMemoryBackend {
     /// Record retrieval signals for a batch of hits.
     ///
-    /// Uses `INSERT OR IGNORE` so the same (fact_id, query_hash, day_bucket,
+    /// Uses `INSERT OR IGNORE` so the same (`fact_id`, `query_hash`, `day_bucket`,
     /// channel) combination is recorded at most once per day per channel.
     ///
     /// Returns the number of newly inserted rows.
@@ -121,7 +121,7 @@ impl SqliteMemoryBackend {
     /// Aggregate recall signals for a set of fact IDs.
     ///
     /// Returns one `RecallAggregate` per fact that has at least one signal.
-    /// SQLite max bound parameters per statement.
+    /// `SQLite` max bound parameters per statement.
     const SQLITE_MAX_VARS: usize = 999;
 
     pub fn aggregate_for_facts(

@@ -1,4 +1,4 @@
-//! Adapters bridging existing tool traits to LoopTool.
+//! Adapters bridging existing tool traits to `LoopTool`.
 
 mod builtin_adapter;
 pub mod mcp_adapter;

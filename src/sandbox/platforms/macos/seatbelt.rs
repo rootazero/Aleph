@@ -2,7 +2,7 @@
 //! via `/usr/bin/sandbox-exec`.
 //!
 //! Inspired by codex's seatbelt implementation but adapted for Aleph's
-//! SandboxPolicy / SandboxCapabilities model.
+//! `SandboxPolicy` / `SandboxCapabilities` model.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -520,7 +520,7 @@ impl SeatbeltDriver {
             .is_ok_and(|m| m.is_file())
     }
 
-    /// Generate SBPL profile from SandboxPolicy.
+    /// Generate SBPL profile from `SandboxPolicy`.
     fn generate_profile(&self, policy: &SandboxPolicy, cwd: &Path) -> Result<String, SandboxError> {
         let mut profile = String::with_capacity(8192);
 

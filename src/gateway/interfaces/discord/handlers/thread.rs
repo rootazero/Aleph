@@ -55,7 +55,7 @@ pub enum ThreadBindingError {
 /// Handler for thread bindings
 #[derive(Clone)]
 pub struct ThreadBindingHandler {
-    /// Thread ID -> ThreadInfo
+    /// Thread ID -> `ThreadInfo`
     bindings: Arc<RwLock<HashMap<u64, ThreadInfo>>>,
     /// Parent message ID -> Thread ID
     message_to_thread: Arc<RwLock<HashMap<u64, u64>>>,
@@ -64,7 +64,7 @@ pub struct ThreadBindingHandler {
 }
 
 impl ThreadBindingHandler {
-    /// Create a new ThreadBindingHandler
+    /// Create a new `ThreadBindingHandler`
     #[must_use]
     pub fn new() -> Self {
         Self {

@@ -28,7 +28,7 @@ pub fn render_orientation_envelope(s: &OrientationSnapshot) -> String {
     )
 }
 
-/// Process-wide handle used by the SessionEnd evict path.
+/// Process-wide handle used by the `SessionEnd` evict path.
 ///
 /// `emit_session_end_raw_with_registry` lives in `gateway::session_manager::ops`
 /// and has 3 callsites + 2 test fixtures. Threading an optional
@@ -53,7 +53,7 @@ pub fn session_end_mcp() -> Option<Arc<super::MemoryContextProvider>> {
     SESSION_END_MCP.get().cloned()
 }
 
-/// Process-wide handle used by the SessionEnd summarization path (Spec B).
+/// Process-wide handle used by the `SessionEnd` summarization path (Spec B).
 ///
 /// Mirrors the `SESSION_END_MCP` pattern: registered once at startup by
 /// `agent_init`, consumed fire-and-forget at session-end in
@@ -103,7 +103,7 @@ pub fn session_reflector() -> Option<Arc<crate::memory::session_reflection::Sess
 
 /// Process-wide opt-in flag for injecting last session's open loops into the
 /// next session's curated context (Batch 2 — `[memory.reflection]
-/// open_loop_inject_prompt`). Mirrors the OnceCell idiom above to avoid
+/// open_loop_inject_prompt`). Mirrors the `OnceCell` idiom above to avoid
 /// threading a bool through the `MemoryContextProvider` constructor and its
 /// callers. Set once at startup by `agent_init`; read in `capture_curated`.
 /// Unset (default) reads `false`, so the open-loops block is never injected

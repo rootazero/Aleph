@@ -26,7 +26,7 @@ use crate::sync_primitives::Arc;
 use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use crate::tools::AlephToolDyn;
 
-/// Arguments for mcp_login tool
+/// Arguments for `mcp_login` tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct McpLoginArgs {
     /// Id of the configured remote MCP server to authorize
@@ -36,7 +36,7 @@ pub struct McpLoginArgs {
     pub scope: Option<String>,
 }
 
-/// Output from mcp_login tool
+/// Output from `mcp_login` tool
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpLoginOutput {
     /// URL the user must open in a browser to approve access

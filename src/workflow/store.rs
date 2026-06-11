@@ -14,7 +14,7 @@
 //! `import → save → export`, so an exported template faithfully reproduces the
 //! engineering format. Execution still consumes only the projected core via
 //! [`WorkflowManifest::to_def`] (R10 — the executor never sees the extra
-//! metadata). Legacy snake_case `WorkflowDef.json` files load unchanged via a
+//! metadata). Legacy `snake_case` `WorkflowDef.json` files load unchanged via a
 //! serde alias on the manifest step.
 
 use std::fs;
@@ -137,7 +137,7 @@ pub fn write_text(name: &str, ext: &str, body: &str) -> Result<PathBuf> {
 }
 
 /// Load a workflow by `name` from `dir`. Errors if missing or parse fails.
-/// Legacy snake_case `WorkflowDef.json` files deserialise transparently via the
+/// Legacy `snake_case` `WorkflowDef.json` files deserialise transparently via the
 /// `depends_on` serde alias on [`WorkflowManifest`]'s step.
 pub fn load_at(dir: &Path, name: &str) -> Result<WorkflowManifest> {
     let path = resolve_path_at(dir, name);

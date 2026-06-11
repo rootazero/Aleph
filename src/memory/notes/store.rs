@@ -1,4 +1,4 @@
-//! NoteStore trait — persistence contract for knowledge note indexes.
+//! `NoteStore` trait — persistence contract for knowledge note indexes.
 //!
 //! The trait abstracts the index/link/FTS storage so the indexer and
 //! gateway layers never depend on a concrete database implementation.
@@ -224,7 +224,7 @@ pub trait NoteStore: Send + Sync {
     }
 
     /// Read all stored provenance rows for `(agent_id, note_path)`, ordered by
-    /// fact_idx ascending.
+    /// `fact_idx` ascending.
     async fn get_provenance(
         &self,
         agent_id: &str,

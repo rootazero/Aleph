@@ -88,7 +88,7 @@ pub(super) struct Frontmatter {
 }
 
 /// Accept a YAML date field as either a quoted string, a native YAML date
-/// (which serde_yaml may surface as a Tagged value or other scalar depending
+/// (which `serde_yaml` may surface as a Tagged value or other scalar depending
 /// on version), or null. Re-serialize non-string variants and strip
 /// surrounding quotes/whitespace so downstream callers always receive a clean
 /// `YYYY-MM-DD`-shaped string (or `None` for empty/null).

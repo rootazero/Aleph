@@ -1,4 +1,4 @@
-//! Synthesis prompt for MemoryReflector.
+//! Synthesis prompt for `MemoryReflector`.
 
 pub const PROMPT_SYNTHESIS: &str = include_str!("prompts/snapshots/synthesis.txt");
 

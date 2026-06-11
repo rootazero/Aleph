@@ -15,7 +15,7 @@ use serde_json::json;
 use super::GatewaySharedState;
 
 /// `GET /health` — always 200 OK while the process is alive. The body
-/// gives the version + per-process instance_id + uptime so operators can
+/// gives the version + per-process `instance_id` + uptime so operators can
 /// distinguish processes across restarts.
 pub async fn handle_health(State(state): State<Arc<GatewaySharedState>>) -> impl IntoResponse {
     let uptime_secs = (chrono::Utc::now().timestamp() - state.started_at_unix).max(0);
@@ -32,7 +32,7 @@ pub async fn handle_health(State(state): State<Arc<GatewaySharedState>>) -> impl
 }
 
 /// `GET /ready` — 200 OK once boot phase-2 has flipped the ready flag,
-/// 503 SERVICE_UNAVAILABLE before that or during shutdown. The body
+/// 503 `SERVICE_UNAVAILABLE` before that or during shutdown. The body
 /// always includes the current phase for diagnostic visibility.
 pub async fn handle_ready(State(state): State<Arc<GatewaySharedState>>) -> impl IntoResponse {
     let ready = state.ready.load(Ordering::Acquire);

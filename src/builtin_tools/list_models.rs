@@ -1,4 +1,4 @@
-//! ListModelsTool — LLM-facing model discovery (R8 "everything is a tool").
+//! `ListModelsTool` — LLM-facing model discovery (R8 "everything is a tool").
 //!
 //! The discover half of the `discover → choose` pair completed by
 //! [`SelectModelTool`](crate::builtin_tools::select_model). `select_model`
@@ -56,7 +56,7 @@ pub struct ModelEntry {
     pub provider: String,
     /// Model id to pass as `select_model.model`.
     pub model: String,
-    /// The provider has a usable credential (config api_key or vault entry).
+    /// The provider has a usable credential (config `api_key` or vault entry).
     pub configured: bool,
     /// This is the current system default (provider + its default model).
     pub is_default: bool,
@@ -120,7 +120,7 @@ impl ListModelsTool {
         self
     }
 
-    /// True when the provider has a usable credential: an api_key in
+    /// True when the provider has a usable credential: an `api_key` in
     /// `config.toml` or a secret under `ai:{provider}` in the vault. Mirrors
     /// `handle_catalog`'s `has_api_key` derivation.
     fn provider_configured(&self, name: &str, cfg_api_key: Option<&String>) -> bool {

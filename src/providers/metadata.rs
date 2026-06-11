@@ -26,9 +26,9 @@ pub enum Modality {
     Image,
     /// Text/image → video generation (Veo, Sora, Runway, Luma, Kling, …).
     Video,
-    /// Text → music / song generation (Suno, Udio, MusicGen).
+    /// Text → music / song generation (Suno, Udio, `MusicGen`).
     Music,
-    /// Text → speech (TTS — OpenAI TTS, ElevenLabs, Azure, …).
+    /// Text → speech (TTS — `OpenAI` TTS, `ElevenLabs`, Azure, …).
     Speech,
     /// Audio → text (STT / transcription — Whisper, Deepgram, Scribe).
     Transcription,

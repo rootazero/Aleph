@@ -1,7 +1,7 @@
-//! CRUD operations for memory_events table
+//! CRUD operations for `memory_events` table
 //!
-//! Memory event persistence methods on StateDatabase.
-//! Follows the same pattern as events.rs (agent_events).
+//! Memory event persistence methods on `StateDatabase`.
+//! Follows the same pattern as events.rs (`agent_events`).
 
 use super::StateDatabase;
 use crate::error::AlephError;
@@ -306,7 +306,7 @@ struct MemoryEventRow {
 
 impl MemoryEventRow {
     /// Construct from a rusqlite row.
-    /// Expected column order: id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
+    /// Expected column order: id, `fact_id`, seq, `event_type`, `event_json`, actor, tier, timestamp, `correlation_id`
     fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
         let seq_i64: i64 = row.get(2)?;
         let seq = u64::try_from(seq_i64).map_err(|_| {

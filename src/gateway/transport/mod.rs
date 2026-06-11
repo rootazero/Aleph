@@ -2,7 +2,7 @@
 //!
 //! Provides a platform-independent abstraction ([`Transport`]) over
 //! various IPC mechanisms used to communicate with external bridge
-//! processes (Signal, WhatsApp, etc.).
+//! processes (Signal, `WhatsApp`, etc.).
 //!
 //! # Available transports
 //!

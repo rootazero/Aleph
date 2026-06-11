@@ -25,13 +25,13 @@ pub struct CommandDescriptor {
 
 /// 一个已连入的节点会话（中心侧视图）。
 pub struct NodeSession {
-    /// = device_id，直接当环境 id。
+    /// = `device_id，直接当环境` id。
     pub node_id: String,
-    /// 对应 0a reverse_rpc 表的键，断线清理对账用。
+    /// 对应 0a `reverse_rpc` 表的键，断线清理对账用。
     pub conn_id: String,
     /// 人类可读名（来自 connect 帧）。
     pub device_name: String,
-    /// 0a 通道的 clone —— 0c 的 node_invoke 经它下发。
+    /// 0a 通道的 clone —— 0c 的 `node_invoke` 经它下发。
     pub channel: ReverseRpcChannel,
     /// 节点自声明的 command 目录，0b 只存只显。
     pub declared_commands: Vec<CommandDescriptor>,
@@ -92,9 +92,9 @@ pub struct NodeMatch {
 
 #[derive(Default)]
 struct RegistryInner {
-    /// node_id → session（权威）。
+    /// `node_id` → session（权威）。
     nodes_by_id: HashMap<String, NodeSession>,
-    /// conn_id → node_id（断线反查）。
+    /// `conn_id` → `node_id（断线反查`）。
     nodes_by_conn: HashMap<String, String>,
 }
 
@@ -110,7 +110,7 @@ impl NodeRegistry {
         Self::default()
     }
 
-    /// 登记一个节点会话。同 node_id 重连 → 覆盖旧会话，并清掉旧 conn 映射。
+    /// 登记一个节点会话。同 `node_id` 重连 → 覆盖旧会话，并清掉旧 conn 映射。
     pub fn register(&self, session: NodeSession) {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let node_id = session.node_id.clone();
@@ -125,7 +125,7 @@ impl NodeRegistry {
         inner.nodes_by_id.insert(node_id, session);
     }
 
-    /// 注销一个连接的节点会话。仅当该 node_id 当前会话确属此 conn_id 时才移除
+    /// 注销一个连接的节点会话。仅当该 `node_id` 当前会话确属此 `conn_id` 时才移除
     /// （重连安全：旧连接 cleanup 不会误删新会话）。返回是否移除了会话。
     pub fn deregister(&self, conn_id: &str) -> bool {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
@@ -159,7 +159,7 @@ impl NodeRegistry {
             .collect()
     }
 
-    /// 取某节点的反向 RPC 通道 clone（0c 的 node_invoke 用；0b 建好接口不调）。
+    /// 取某节点的反向 RPC 通道 clone（0c 的 `node_invoke` 用；0b 建好接口不调）。
     pub fn get(&self, node_id: &str) -> Option<ReverseRpcChannel> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         inner.nodes_by_id.get(node_id).map(|s| s.channel.clone())
@@ -176,9 +176,9 @@ impl NodeRegistry {
         Some((s.node_id.clone(), s.device_name.clone()))
     }
 
-    /// 把 name/id 解析为唯一的 node_id（多级匹配，registry 只存在线会话故无需
+    /// 把 name/id 解析为唯一的 `node_id（多级匹配，registry` 只存在线会话故无需
     /// "prefer-connected" tie-break——所有候选都在线）。匹配级别（强→弱）：
-    /// ① 精确 node_id ② 精确 device_name ③ 模糊（id 前缀 ≥4 OR name 子串，
+    /// ① 精确 `node_id` ② 精确 `device_name` ③ 模糊（id 前缀 ≥4 OR name 子串，
     /// 大小写不敏感）。每级若多命中即 `Ambiguous`，绝不静默挑第一个。
     fn match_id(inner: &RegistryInner, q: &str) -> std::result::Result<String, ResolveError> {
         // ① 精确 id。
@@ -229,7 +229,7 @@ impl NodeRegistry {
         Ok((s.channel.clone(), s.declared_commands.clone()))
     }
 
-    /// 同 [`resolve`] 的多级匹配，但只回 node_id —— `cluster.deregister` 用它把
+    /// 同 [`resolve`] 的多级匹配，但只回 `node_id` —— `cluster.deregister` 用它把
     /// operator 给的 name/id 落到唯一节点身份，再驱逐 + 撤 token。
     pub fn resolve_id(&self, name_or_id: &str) -> std::result::Result<String, ResolveError> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
@@ -256,9 +256,9 @@ impl NodeRegistry {
             .collect()
     }
 
-    /// 按 node_id 主动驱逐一个会话（operator deregister 用）。从两张表都抹除，
+    /// 按 `node_id` 主动驱逐一个会话（operator deregister 用）。从两张表都抹除，
     /// 持有的 [`ReverseRpcChannel`] clone 随之 drop。返回是否确有会话被移除。
-    /// 与 [`deregister`](Self::deregister)（按 conn_id 的断线对账）正交。
+    /// 与 [`deregister`](Self::deregister)（按 `conn_id` 的断线对账）正交。
     pub fn forget(&self, node_id: &str) -> bool {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         match inner.nodes_by_id.remove(node_id) {
@@ -286,7 +286,7 @@ fn candidate_labels(sessions: &[&NodeSession]) -> Vec<String> {
 }
 
 /// connect→register 接缝：仅当 `role == Some("node")` 时把这条连接登记进
-/// NodeRegistry。`params` 是 connect 帧的 params（取 device_name + commands）。
+/// `NodeRegistry`。`params` 是 connect 帧的 params（取 `device_name` + commands）。
 /// 返回是否登记。抽成纯函数以便单测，且让 `handler.rs` 保持薄。
 pub fn maybe_register_node(
     registry: &NodeRegistry,

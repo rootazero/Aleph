@@ -49,7 +49,7 @@ impl Default for SchedulerConfig {
 }
 
 impl SchedulerConfig {
-    /// Create a SchedulerConfig from policy configuration
+    /// Create a `SchedulerConfig` from policy configuration
     #[must_use]
     pub const fn from_policy(policy: &CompressionPolicy) -> Self {
         Self {
@@ -86,7 +86,7 @@ impl CompressionScheduler {
 
     /// Check if compression should be triggered
     ///
-    /// Priority: TurnThreshold > IdleTimeout
+    /// Priority: `TurnThreshold` > `IdleTimeout`
     pub fn should_trigger_compression(&self) -> CompressionTrigger {
         let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         let turns = self.pending_turns.load(Ordering::Acquire);
@@ -127,7 +127,7 @@ impl CompressionScheduler {
         self.pending_turns.fetch_add(1, Ordering::Release);
     }
 
-    /// Increment turns by specified amount (saturates at u32::MAX).
+    /// Increment turns by specified amount (saturates at `u32::MAX`).
     pub fn increment_turns_by(&self, count: u32) {
         let _ = self
             .pending_turns

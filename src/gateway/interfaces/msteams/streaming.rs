@@ -5,7 +5,7 @@
 //! # Protocol Flow
 //!
 //! 1. `stream_start` — sends a typing activity with `streaminfo` entity (streamType: "informative")
-//!    to establish the stream. Returns the activity ID as the stream_id.
+//!    to establish the stream. Returns the activity ID as the `stream_id`.
 //! 2. `stream_update` — sends typing activities with `streaminfo` (streamType: "streaming",
 //!    streamSequence: N) carrying accumulated text chunks.
 //! 3. `stream_finalize` — sends the final message activity with `streaminfo` (streamType: "final")
@@ -50,12 +50,12 @@ pub struct StreamConversationRef {
 
 /// Native streaming handler for Microsoft Teams using the streaminfo protocol.
 ///
-/// This struct wraps the BotFrameworkClient and a snapshot of cached conversation
+/// This struct wraps the `BotFrameworkClient` and a snapshot of cached conversation
 /// references so it can be returned as an `Arc<dyn NativeStreamHandler>` without
 /// requiring a reference to the parent `MsTeamsChannel`.
 pub struct MsTeamsStreamHandler {
     client: Arc<BotFrameworkClient>,
-    /// Shared conversation refs map (same Arc as MsTeamsChannel holds).
+    /// Shared conversation refs map (same Arc as `MsTeamsChannel` holds).
     conversation_refs: Arc<RwLock<HashMap<String, super::ConversationReference>>>,
 }
 
@@ -276,7 +276,7 @@ impl PendingStream {
     }
 }
 
-/// Coalescing wrapper for NativeStreamHandler that buffers updates.
+/// Coalescing wrapper for `NativeStreamHandler` that buffers updates.
 ///
 /// Reduces HTTP request overhead by batching text chunks until:
 /// - `min_chars` (1500) threshold reached → immediate flush

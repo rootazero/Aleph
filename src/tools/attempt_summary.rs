@@ -5,14 +5,14 @@
 //!
 //! Each individual `SessionEvent::ToolError` already carries a routing hint
 //! (see `tools::fallback_registry::render_persistence_hint`) appended at
-//! emit time. That hint is single-failure scoped: "this 401 on web_fetch →
+//! emit time. That hint is single-failure scoped: "this 401 on `web_fetch` →
 //! try alternate source / autocli". A model that keeps banging on the same
 //! ladder rung still sees only one hint per attempt and can lose sight of
 //! the broader pattern.
 //!
 //! When the same run accumulates ≥ [`SUMMARY_THRESHOLD`] tool errors, the
 //! aggregate view becomes the more useful signal: "you've burned 3 search
-//! calls and 2 web_fetch calls on rate_limited — escalate to browser
+//! calls and 2 `web_fetch` calls on `rate_limited` — escalate to browser
 //! tooling, don't retry the same family again."
 //!
 //! ## What it is NOT
@@ -51,7 +51,7 @@ use std::collections::HashMap;
 use crate::session::events::{SessionEvent, SessionEventRecord};
 use crate::tools::error_kind::{classify_error_str, ToolErrorKind};
 
-/// Minimum total ToolError count in the visible event window before the
+/// Minimum total `ToolError` count in the visible event window before the
 /// summary is rendered. Below this threshold each individual error's hint
 /// (from `fallback_registry::render_persistence_hint`) is enough; the
 /// aggregate adds noise.
@@ -160,7 +160,7 @@ fn push_usize(out: &mut String, n: usize) {
 
 /// Walk backwards from `error_idx` looking for the most recent
 /// `ToolCallRequested` whose `call_id` matches. O(n) per error but n is
-/// the tail-slice length (≲ harness max_iterations × ~2), not the full
+/// the tail-slice length (≲ harness `max_iterations` × ~2), not the full
 /// session log.
 fn resolve_tool_name<'a>(
     events: &'a [SessionEventRecord],

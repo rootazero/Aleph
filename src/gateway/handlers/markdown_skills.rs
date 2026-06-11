@@ -90,12 +90,12 @@ impl From<&MarkdownCliTool> for MarkdownSkillInfo {
 // Install (from Git URL or local path)
 // ============================================================================
 
-/// Parameters for markdown_skills.install
+/// Parameters for `markdown_skills.install`
 #[derive(Debug, Deserialize)]
 pub struct InstallParams {
     /// Git URL or local path to install skills from
     pub url: String,
-    /// If true, clone repo contents directly into skills_dir (no subdirectory)
+    /// If true, clone repo contents directly into `skills_dir` (no subdirectory)
     #[serde(default)]
     pub flatten: bool,
 }
@@ -215,7 +215,7 @@ fn copy_dir_contents(src: &std::path::Path, dst: &std::path::Path) -> std::io::R
     Ok(())
 }
 
-/// Download and extract a ZIP file into skills_dir/<archive-name>/
+/// Download and extract a ZIP file into `skills_dir`/<archive-name>/
 async fn install_from_zip(source: &str, skills_dir: &std::path::Path) -> Result<PathBuf, String> {
     let zip_data = if source.starts_with("http://") || source.starts_with("https://") {
         // Download ZIP from URL
@@ -389,7 +389,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
 // Load
 // ============================================================================
 
-/// Parameters for markdown_skills.load
+/// Parameters for `markdown_skills.load`
 #[derive(Debug, Deserialize)]
 pub struct LoadParams {
     /// Path to directory containing SKILL.md files
@@ -478,7 +478,7 @@ pub async fn handle_load(request: JsonRpcRequest) -> JsonRpcResponse {
 // Reload
 // ============================================================================
 
-/// Parameters for markdown_skills.reload
+/// Parameters for `markdown_skills.reload`
 #[derive(Debug, Deserialize)]
 pub struct ReloadParams {
     /// Skill name to reload
@@ -576,7 +576,7 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
 // Unload
 // ============================================================================
 
-/// Parameters for markdown_skills.unload
+/// Parameters for `markdown_skills.unload`
 #[derive(Debug, Deserialize)]
 pub struct UnloadParams {
     /// Skill name to unload

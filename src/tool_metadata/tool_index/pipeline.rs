@@ -1,6 +1,6 @@
 //! Hydration Pipeline for semantic tool retrieval
 //!
-//! Integrates ToolRetrieval with the Agent Loop by:
+//! Integrates `ToolRetrieval` with the Agent Loop by:
 //! - Embedding user queries
 //! - Retrieving relevant tools semantically
 //! - Classifying tools into hydration levels (full/summary/indexed)
@@ -15,7 +15,7 @@ use crate::sync_primitives::Arc;
 /// Configuration for the hydration pipeline
 #[derive(Debug, Clone)]
 pub struct HydrationPipelineConfig {
-    /// Retrieval configuration (thresholds, max_tools)
+    /// Retrieval configuration (thresholds, `max_tools`)
     pub retrieval: ToolRetrievalConfig,
     /// Maximum number of tools to include with full schema (default: 5)
     pub max_full_schema: usize,
@@ -71,11 +71,11 @@ impl HydrationPipelineConfig {
 /// - `indexed_tool_names`: Low confidence (0.4-0.6), just names for reference
 #[derive(Debug, Clone)]
 pub struct HydrationResult {
-    /// Tools to inject with full JSON schema (score >= high_confidence_threshold)
+    /// Tools to inject with full JSON schema (score >= `high_confidence_threshold`)
     pub full_schema_tools: Vec<HydratedTool>,
-    /// Tools to inject with summary/description only (soft_threshold <= score < high_confidence)
+    /// Tools to inject with summary/description only (`soft_threshold` <= score < `high_confidence`)
     pub summary_tools: Vec<HydratedTool>,
-    /// Tool names available but not hydrated (hard_threshold <= score < soft_threshold)
+    /// Tool names available but not hydrated (`hard_threshold` <= score < `soft_threshold`)
     pub indexed_tool_names: Vec<String>,
 }
 
@@ -121,7 +121,7 @@ impl HydrationResult {
 /// Hydration Pipeline for integrating semantic tool retrieval into Agent Loop
 ///
 /// The pipeline:
-/// 1. Embeds the user query using EmbeddingProvider
+/// 1. Embeds the user query using `EmbeddingProvider`
 /// 2. Retrieves semantically similar tools from the tool index
 /// 3. Classifies tools by hydration level based on similarity score
 /// 4. Ensures core tools are always included with full schema
@@ -156,7 +156,7 @@ impl HydrationPipeline {
     /// * `query` - The user's request/query text
     ///
     /// # Returns
-    /// HydrationResult with tools classified by confidence level
+    /// `HydrationResult` with tools classified by confidence level
     pub async fn hydrate(&self, query: &str) -> Result<HydrationResult, AlephError> {
         // 1. Embed the query
         let query_embedding = self.embedder.embed(query).await?;

@@ -34,7 +34,7 @@ impl AgentManager {
         Ok(wrapper.agents)
     }
 
-    /// Load config file as a toml_edit Document for format-preserving edits
+    /// Load config file as a `toml_edit` Document for format-preserving edits
     pub(super) fn load_document(&self) -> Result<DocumentMut> {
         let content = fs::read_to_string(&self.config_path).map_err(|e| {
             AlephError::IoError(format!(
@@ -119,7 +119,7 @@ impl AgentManager {
         )))
     }
 
-    /// Append an AgentDefinition to the [[agents.list]] array in the document
+    /// Append an `AgentDefinition` to the [[agents.list]] array in the document
     pub(super) fn append_agent_to_document(
         &self,
         doc: &mut DocumentMut,
@@ -204,7 +204,7 @@ impl AgentManager {
     }
 }
 
-/// 把 `AgentModelRef` 写成 toml_edit Item:
+/// 把 `AgentModelRef` 写成 `toml_edit` Item:
 /// Legacy → 裸字符串;Qualified → 内联表 `{ provider, model }`。
 pub(super) fn model_ref_to_item(m: &AgentModelRef) -> toml_edit::Item {
     match m {

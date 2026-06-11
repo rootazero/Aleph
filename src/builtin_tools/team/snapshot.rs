@@ -1,6 +1,6 @@
-//! TeamSnapshotTool — unified team-snapshot CRUD via an `action` field.
+//! `TeamSnapshotTool` — unified team-snapshot CRUD via an `action` field.
 //!
-//! Combines what ClawTeam exposes as four CLI subcommands (`create`, `list`,
+//! Combines what `ClawTeam` exposes as four CLI subcommands (`create`, `list`,
 //! `get`, `restore`) into one builtin tool with an action discriminant. The
 //! single-tool shape keeps the registration footprint small (5-file cycle
 //! once) and gives the LLM one schema to reason about instead of four.
@@ -88,7 +88,7 @@ pub struct TeamSnapshotTool {
     team_store: Arc<dyn TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
     snapshot_store: Arc<SqliteSnapshotStore>,
-    /// Injected by ExecutionEngine before each call (for audit logging only).
+    /// Injected by `ExecutionEngine` before each call (for audit logging only).
     pub current_agent_id: String,
 }
 

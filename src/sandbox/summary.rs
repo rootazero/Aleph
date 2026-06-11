@@ -17,7 +17,7 @@ use crate::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
 
 /// The sandbox filesystem/permission posture as an **ordered** type, so code
 /// can reason about "at least as permissive as" instead of matching magic
-/// strings. Maps OpenSquilla's ordered `SecurityLevel` IntEnum onto idiomatic
+/// strings. Maps `OpenSquilla`'s ordered `SecurityLevel` `IntEnum` onto idiomatic
 /// Rust: the derived `Ord` ranks tiers from least to most permissive, so a
 /// guard like `summary.tier() >= PolicyTier::DangerFullAccess` is meaningful
 /// and total.

@@ -5,7 +5,7 @@
 //!
 //! The harness emits a structured trace stream (`TurnStarted`, `TextEmitted`,
 //! `ToolCallStarted/Completed`, …) via the [`TraceSink`] for persistence and
-//! channel progress. The WebChat Panel's per-step segmentation + workspace
+//! channel progress. The `WebChat` Panel's per-step segmentation + workspace
 //! timeline are built to consume those events on the wire as `agent_trace`
 //! notifications (each carries an `iteration`, the per-step key). But the
 //! gateway run path drains the *separate* `FlowStreamEvent` stream into
@@ -35,7 +35,7 @@ use crate::gateway::event_emitter::EventEmitter;
 use crate::harness::trace::LoopTraceEvent;
 use crate::harness::TraceSink;
 
-/// True for the trace variants the WebChat Panel consumes as `agent_trace`
+/// True for the trace variants the `WebChat` Panel consumes as `agent_trace`
 /// (`views/chat/events.rs`): turn boundaries, authoritative per-step text, and
 /// tool lifecycle, plus the two recovery/watchdog moments that explain *why*
 /// the loop changed course — reactive context compaction (problem: context

@@ -1,4 +1,4 @@
-//! Builder / constructor for BuiltinToolRegistry
+//! Builder / constructor for `BuiltinToolRegistry`
 //!
 //! Extracted from registry.rs to keep file sizes manageable.
 //! Contains the `with_config()` constructor that wires up all tool instances
@@ -34,9 +34,9 @@ impl BuiltinToolRegistry {
     /// multi-step tasks including file operations and code execution.
     ///
     /// # Safety Notes
-    /// - Dangerous commands are still blocked by CommandChecker (rm -rf /, sudo, etc.)
-    /// - File operations are sandboxed by PathPermissionChecker
-    /// - Tool policy is enforced layered (Guardrails + Sandbox + ApprovalGate).
+    /// - Dangerous commands are still blocked by `CommandChecker` (rm -rf /, sudo, etc.)
+    /// - File operations are sandboxed by `PathPermissionChecker`
+    /// - Tool policy is enforced layered (Guardrails + Sandbox + `ApprovalGate`).
     ///   See docs/reference/SANDBOX.md.
     pub async fn with_config(config: BuiltinToolConfig) -> Self {
         let search_tool = if let Some(ref registry) = config.search_registry {

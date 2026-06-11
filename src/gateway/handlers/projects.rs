@@ -17,7 +17,7 @@ use crate::projects::{Project, ProjectError, ProjectStore};
 use crate::sync_primitives::Arc;
 
 /// Serializable view of a project — `path` is stringified so JSON consumers
-/// (Panel, CLI) never have to deal with platform-specific PathBuf wire
+/// (Panel, CLI) never have to deal with platform-specific `PathBuf` wire
 /// formats.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectView {

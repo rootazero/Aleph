@@ -380,7 +380,7 @@ impl GatewayEventBus {
     ///   The handler extracts `method` for subscription matching (`stream.*`),
     ///   and the frontend converts `stream.X` → `run.X` for dispatch.
     ///
-    /// - **Other events** (config, channel, etc.): wrapped as TopicEvent
+    /// - **Other events** (config, channel, etc.): wrapped as `TopicEvent`
     ///   `{"topic": "<topic_name>", "data": <frame>}`.
     ///   The handler wraps this into `{"method": "event", "params": {...}}`.
     pub fn publish_frame(&self, frame: &GatewayEventFrame) -> Result<usize, serde_json::Error> {

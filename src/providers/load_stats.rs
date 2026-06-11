@@ -33,7 +33,7 @@ const EWMA_SHIFT: u32 = 3; // divide by 2^3 = 8
 ///
 /// Deliberately monotonic (a process-global [`Instant`] base) rather than wall
 /// clock: an NTP step or DST jump can only ever cost one window's worth of
-/// counts, never a negative duration or a permanently-stuck window. LiteLLM's
+/// counts, never a negative duration or a permanently-stuck window. `LiteLLM`'s
 /// wall-clock minute buckets do not have this guarantee.
 fn now_min() -> u64 {
     static BASE: OnceLock<Instant> = OnceLock::new();

@@ -11,7 +11,7 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_pdf tool.
+/// Arguments for the `browser_pdf` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserPdfArgs {
     /// Browser profile name (default: "default").
@@ -21,7 +21,7 @@ pub struct BrowserPdfArgs {
     pub output_path: String,
 }
 
-/// Output from the browser_pdf tool.
+/// Output from the `browser_pdf` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserPdfOutput {
     pub success: bool,

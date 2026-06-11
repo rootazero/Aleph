@@ -628,8 +628,8 @@ pub async fn handle_test_connection(
 }
 
 /// `generation_providers.list_presets` — return the authoritative preset
-/// catalogue (id, provider_type, default_model, base_url, display_name,
-/// modalities, homepage, notes, signup_url) read off the unified
+/// catalogue (id, `provider_type`, `default_model`, `base_url`, `display_name`,
+/// modalities, homepage, notes, `signup_url`) read off the unified
 /// `GenerationPreset` (Phase 2 fold removed the parallel metadata map).
 ///
 /// Stateless. Panel consumes this to render the preset-card grid; the panel

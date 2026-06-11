@@ -43,10 +43,10 @@ pub enum SessionPart {
     PlanCreated(PlanPart),
     SubAgentCall(SubAgentPart),
     Summary(SummaryPart),
-    /// Marker for compaction boundary - used by filter_compacted() to find
+    /// Marker for compaction boundary - used by `filter_compacted()` to find
     /// the point where old context was summarized
     CompactionMarker(CompactionMarker),
-    /// System reminder for context injection (aligns with OpenCode's <system-reminder>)
+    /// System reminder for context injection (aligns with `OpenCode`'s <system-reminder>)
     SystemReminder(SystemReminderPart),
     /// Step boundary - start
     StepStart(StepStartPart),

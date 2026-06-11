@@ -30,9 +30,9 @@ pub struct AcpDelegateArgs {
     pub prompt: String,
     /// Working directory for the agent session. Defaults to home directory if not specified.
     pub cwd: Option<String>,
-    /// Execution mode override: "oneshot" or "native_acp". If not specified, uses the harness default.
+    /// Execution mode override: "oneshot" or "`native_acp`". If not specified, uses the harness default.
     pub mode: Option<String>,
-    /// Whether to reuse an existing session for multi-step continuity (native_acp mode only). Defaults to true.
+    /// Whether to reuse an existing session for multi-step continuity (`native_acp` mode only). Defaults to true.
     pub reuse_session: Option<bool>,
     /// Optional session name. Lets you keep multiple parallel sessions in the
     /// same cwd (mirrors acpx's `-s backend` / `-s frontend`). Omit for the
@@ -401,7 +401,7 @@ fn require_field<'a>(field: &'a Option<String>, name: &str, op: &str) -> Result<
     })
 }
 
-/// Translate a method_id into the ACP_AUTH_* env variable name per
+/// Translate a `method_id` into the `ACP_AUTH`_* env variable name per
 /// acpx's `auth-env.ts` policy: trim, non-alphanumeric → `_`, uppercase.
 fn env_token(method_id: &str) -> String {
     method_id

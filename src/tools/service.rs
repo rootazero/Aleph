@@ -1,4 +1,4 @@
-//! ToolService — consumer-side façade over tool dispatch.
+//! `ToolService` — consumer-side façade over tool dispatch.
 //!
 //! See: docs/superpowers/specs/2026-04-18-tool-service-facade-design.md
 
@@ -84,7 +84,7 @@ pub struct ToolDefinitionMetadata {
     pub tags: Vec<String>,
     /// True when re-running this tool with the same input is safe even if
     /// the previous attempt may have reached the server. Read-only / pure
-    /// query tools (memory_search, search, web_fetch, recall_context) set
+    /// query tools (`memory_search`, search, `web_fetch`, `recall_context`) set
     /// this to true; side-effecting tools (write/exec/send_*) leave it
     /// false. Consumed by `tools::retry::execute_with_one_shot_backoff` to
     /// gate retries on `Timeout` / `Transport` errors — non-idempotent
@@ -100,11 +100,11 @@ pub struct ToolDefinitionMetadata {
     pub max_duration_ms: Option<u64>,
     /// Static "always safe under parallel dispatch" hint, mirroring the
     /// inner [`crate::tools::runtime::ToolDefinition::concurrent_safe`].
-    /// Tools that mutate shared state (file_write, bash, code_exec,
+    /// Tools that mutate shared state (`file_write`, bash, `code_exec`,
     /// send_*) leave this `false`; pure read-only queries set it `true`.
     /// The harness uses [`ToolService::is_call_concurrent_safe`] for the
     /// authoritative per-call answer at dispatch time, since some tools
-    /// (e.g. file_ops) flip based on the operation in their input.
+    /// (e.g. `file_ops`) flip based on the operation in their input.
     #[serde(default)]
     pub concurrent_safe: bool,
 }
@@ -176,7 +176,7 @@ pub trait ToolService: Send + Sync + 'static {
         }
     }
 
-    /// Execute a tool call with an opencode-parity AbortSignal token.
+    /// Execute a tool call with an opencode-parity `AbortSignal` token.
     ///
     /// The harness Act phase forks a per-call child token from the run's
     /// cancellation token and threads it here. Production wrappers
@@ -184,7 +184,7 @@ pub trait ToolService: Send + Sync + 'static {
     /// override this to thread `cancel` all the way to
     /// [`crate::tools::runtime::LoopTool::execute`] so individual tools can
     /// `select!` against it or have their futures dropped on cancel
-    /// (kill_on_drop for subprocesses, reqwest abort for HTTP).
+    /// (`kill_on_drop` for subprocesses, reqwest abort for HTTP).
     ///
     /// The default impl discards `cancel` and forwards to [`Self::execute`]
     /// — sufficient for test stubs that don't model cancellation. Anywhere

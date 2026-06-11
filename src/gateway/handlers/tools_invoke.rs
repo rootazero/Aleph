@@ -31,12 +31,12 @@ use crate::executor::ToolRegistry;
 /// Parameters for `tools.invoke`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct InvokeParams {
-    /// Tool name as registered in the BuiltinToolRegistry (e.g. "memory_search", "note_manage").
+    /// Tool name as registered in the `BuiltinToolRegistry` (e.g. "`memory_search`", "`note_manage`").
     pub tool_name: String,
     /// Arguments forwarded to the tool. Schema depends on the tool.
     #[serde(default)]
     pub arguments: Value,
-    /// Optional agent_id; merged into `arguments.agent_id` when present and the
+    /// Optional `agent_id`; merged into `arguments.agent_id` when present and the
     /// arguments object doesn't already carry one. Tools that read `agent_id`
     /// (e.g. `note_manage`) pick it up automatically.
     #[serde(default)]

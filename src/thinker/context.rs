@@ -126,7 +126,7 @@ pub struct DisabledTool {
 /// security constraints.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvironmentContract {
-    /// The interaction paradigm (CLI, WebRich, Messaging, etc.)
+    /// The interaction paradigm (CLI, `WebRich`, Messaging, etc.)
     pub paradigm: InteractionParadigm,
     /// Active capabilities in this environment
     pub active_capabilities: Vec<Capability>,
@@ -188,7 +188,7 @@ impl EnvironmentContract {
 
 /// Resolved context after two-phase filtering
 ///
-/// This is the final output of the ContextAggregator, containing:
+/// This is the final output of the `ContextAggregator`, containing:
 /// - Tools that are fully available for use
 /// - Tools that are disabled (with reasons)
 /// - The environment contract describing the AI's working context
@@ -221,7 +221,7 @@ pub struct ResolvedContext {
     /// by the orchestrator from `scratchpad_registry::active` before prompt
     /// assembly so the live plan stays in context across long tool-only
     /// stretches where the model never re-calls the `scratchpad` tool —
-    /// codex `update_plan` / opencode `todowrite` / Claude Code TodoWrite
+    /// codex `update_plan` / opencode `todowrite` / Claude Code `TodoWrite`
     /// persistent-visibility parity. `None` when no active plan with pending
     /// work, so the layer emits nothing and the prompt is byte-identical.
     #[serde(skip, default)]
@@ -242,7 +242,7 @@ pub struct ResolvedContext {
 
 /// Context Aggregator for reconciling interaction and security layers
 ///
-/// The ContextAggregator performs two-phase filtering:
+/// The `ContextAggregator` performs two-phase filtering:
 ///
 /// 1. **Interaction Phase**: Filter based on channel capabilities
 ///    - Tools unsupported by the channel are silently removed
@@ -259,7 +259,7 @@ impl ContextAggregator {
     /// 1. Check if tool is supported by interaction layer (silent filter)
     /// 2. Check security policy (transparent filter with reasons)
     ///
-    /// Tools requiring approval are added to BOTH available_tools AND disabled_tools
+    /// Tools requiring approval are added to BOTH `available_tools` AND `disabled_tools`
     /// so the AI knows they exist but also knows approval is needed.
     #[must_use]
     pub fn resolve(

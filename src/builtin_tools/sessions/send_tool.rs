@@ -39,7 +39,7 @@ use crate::tools::AlephTool;
 use super::super::notify_tool_start;
 use super::helpers::parse_session_key;
 
-/// Arguments for sessions_send tool
+/// Arguments for `sessions_send` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct SessionsSendArgs {
     /// Target session key (defaults to main if not specified)
@@ -66,13 +66,13 @@ const fn default_timeout() -> u32 {
     30
 }
 
-/// Status of the sessions_send operation
+/// Status of the `sessions_send` operation
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionsSendStatus {
     /// Successfully sent and received response
     Ok,
-    /// Fire-and-forget accepted (timeout_seconds was 0)
+    /// Fire-and-forget accepted (`timeout_seconds` was 0)
     Accepted,
     /// Timed out waiting for response
     Timeout,
@@ -82,7 +82,7 @@ pub enum SessionsSendStatus {
     Error,
 }
 
-/// Output from sessions_send tool
+/// Output from `sessions_send` tool
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionsSendOutput {
     /// Unique identifier for this run
@@ -164,11 +164,11 @@ impl SessionsSendOutput {
 
 /// Sessions send tool for cross-session communication
 ///
-/// Requires GatewayContext to access:
-/// - AgentRegistry: to find the target agent
-/// - ExecutionAdapter: to execute the run
-/// - AgentToAgentPolicy: to check communication permissions
-/// - SessionManager: to fetch the reply from history
+/// Requires `GatewayContext` to access:
+/// - `AgentRegistry`: to find the target agent
+/// - `ExecutionAdapter`: to execute the run
+/// - `AgentToAgentPolicy`: to check communication permissions
+/// - `SessionManager`: to fetch the reply from history
 #[derive(Clone)]
 pub struct SessionsSendTool {
     /// Gateway context containing required components
@@ -187,7 +187,7 @@ impl SessionsSendTool {
         Supports fire-and-forget (timeout_seconds=0) or wait-for-reply modes. \
         Use this to delegate tasks to other agents or communicate across sessions.";
 
-    /// Create a new SessionsSendTool without context (will fail on execute)
+    /// Create a new `SessionsSendTool` without context (will fail on execute)
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -196,7 +196,7 @@ impl SessionsSendTool {
         }
     }
 
-    /// Create a new SessionsSendTool with gateway context
+    /// Create a new `SessionsSendTool` with gateway context
     pub fn with_context(context: GatewayContext, current_agent_id: impl Into<String>) -> Self {
         Self {
             context: Some(context),
@@ -518,7 +518,7 @@ impl Default for SessionsSendTool {
     }
 }
 
-/// Convert routing::SessionKey to gateway::router::SessionKey
+/// Convert `routing::SessionKey` to `gateway::router::SessionKey`
 fn session_key_to_gateway(key: &crate::routing::session_key::SessionKey) -> SessionKey {
     match key {
         crate::routing::session_key::SessionKey::Main { agent_id, .. } => {
@@ -544,7 +544,7 @@ fn session_key_to_gateway(key: &crate::routing::session_key::SessionKey) -> Sess
     }
 }
 
-/// Implementation of AlephTool trait for SessionsSendTool
+/// Implementation of `AlephTool` trait for `SessionsSendTool`
 #[async_trait]
 impl AlephTool for SessionsSendTool {
     const NAME: &'static str = "session_send";

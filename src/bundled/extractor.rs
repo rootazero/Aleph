@@ -2,7 +2,7 @@
 //!
 //! Extraction occurs when:
 //! - manifest.json doesn't exist (first install or upgrade from old version)
-//! - bundled_version differs from manifest's bundled_version
+//! - `bundled_version` differs from manifest's `bundled_version`
 
 use super::manifest::{InstallRegistry, SkillEntry, SkillOrigin};
 use super::{BUNDLED_PLUGINS, BUNDLED_SKILLS, BUNDLED_VERSION};

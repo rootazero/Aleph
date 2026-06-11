@@ -319,7 +319,7 @@ fn build_tool_arguments(tool_id: &str, args_str: &str, raw_input: &str) -> serde
 /// Handles: `--name foo --leader main --blocked_by id1,id2`
 /// Quoted values: `--name "My Team"` or `--name 'My Team'`
 /// Special: values containing `{` are parsed as JSON (for --variables, --metadata)
-/// Arrays: comma-separated values for known array fields (blocked_by)
+/// Arrays: comma-separated values for known array fields (`blocked_by`)
 fn parse_cli_args(args_str: &str) -> serde_json::Value {
     let mut map = serde_json::Map::new();
     let mut current_key: Option<String> = None;

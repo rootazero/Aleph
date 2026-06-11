@@ -182,7 +182,7 @@ pub enum PermissionDecision {
 /// Hook execution result (aggregated from all matching hooks)
 #[derive(Debug, Default)]
 pub struct HookResult {
-    /// Whether the action was blocked (for BeforeToolCall)
+    /// Whether the action was blocked (for `BeforeToolCall`)
     pub blocked: bool,
     /// Block reason (if blocked)
     pub block_reason: Option<String>,

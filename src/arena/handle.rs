@@ -1,4 +1,4 @@
-//! ArenaHandle — permission-guarded access to SharedArena.
+//! `ArenaHandle` — permission-guarded access to `SharedArena`.
 //!
 //! Each agent receives an `ArenaHandle` that wraps `Arc<RwLock<SharedArena>>`
 //! and enforces permission checks before delegating to the underlying arena.
@@ -9,7 +9,7 @@ use crate::sync_primitives::{Arc, RwLock};
 use super::aggregate::SharedArena;
 use super::types::*;
 
-/// Permission-guarded handle for an agent to interact with a SharedArena.
+/// Permission-guarded handle for an agent to interact with a `SharedArena`.
 ///
 /// Each participant holds its own `ArenaHandle` which checks permissions
 /// before forwarding operations to the shared arena behind `Arc<RwLock<>>`.

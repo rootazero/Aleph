@@ -1,4 +1,4 @@
-//! SessionReadTool — read a collaborative session's transcript, status, and outcome.
+//! `SessionReadTool` — read a collaborative session's transcript, status, and outcome.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -31,7 +31,7 @@ pub struct TurnEntry {
     pub timestamp: String,
 }
 
-/// Output from session_read.
+/// Output from `session_read`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionReadOutput {
     pub session_id: String,

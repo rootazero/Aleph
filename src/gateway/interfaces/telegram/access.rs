@@ -45,7 +45,7 @@ pub struct AccessController {
     runtime_users: Arc<RwLock<Vec<i64>>>,
     /// Active pairing codes: code → entry.
     pairing_codes: Arc<RwLock<HashMap<String, PairingEntry>>>,
-    /// Rate-limit map: user_id → last prompt time.
+    /// Rate-limit map: `user_id` → last prompt time.
     prompt_times: Arc<RwLock<HashMap<i64, Instant>>>,
     /// Optional state database for persisting paired users across restarts.
     db: Option<Arc<StateDatabase>>,

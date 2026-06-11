@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 ///   local candidates are appended last as an ungated safe degrade.
 ///
 /// Mirrors the [`CacheRetention`](crate::config::types::provider::CacheRetention)
-/// enum precedent (Copy + Default + snake_case serde).
+/// enum precedent (Copy + Default + `snake_case` serde).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteMode {
@@ -45,7 +45,7 @@ pub enum RouteMode {
 /// Pure **infrastructure** (R7 赋能层): decides ordering from prompt-blind hard
 /// signals only — runtime in-flight counts, observed latency, a rotation
 /// counter — never from message content. Maps the reference routers' strategies
-/// (LiteLLM `least-busy` / `latency-based`, Bifrost weighted selection) onto
+/// (`LiteLLM` `least-busy` / `latency-based`, Bifrost weighted selection) onto
 /// Aleph's lock-free atomics.
 ///
 /// [`Ordered`](LoadBalanceStrategy::Ordered) (the default) is a no-op: the
@@ -66,7 +66,7 @@ pub enum LoadBalanceStrategy {
     LatencyAware,
     /// Prefer the fallback with the most *remaining* rate headroom — the lowest
     /// rpm/tpm utilisation against its configured [`ProviderRateLimit`]. Maps
-    /// LiteLLM `usage-based-routing-v2` (pick the least-used deployment) onto the
+    /// `LiteLLM` `usage-based-routing-v2` (pick the least-used deployment) onto the
     /// lock-free [`crate::providers::load_stats`] window counters. When no
     /// `rate_limits` are configured every provider reads 0% utilisation, so this
     /// degrades to [`Ordered`](LoadBalanceStrategy::Ordered).
@@ -75,7 +75,7 @@ pub enum LoadBalanceStrategy {
 
 /// Per-provider rate ceiling for usage-aware routing.
 ///
-/// Mirrors a LiteLLM deployment's `rpm`/`tpm`: a soft budget the
+/// Mirrors a `LiteLLM` deployment's `rpm`/`tpm`: a soft budget the
 /// [`UsageBased`](LoadBalanceStrategy::UsageBased) strategy spreads load under,
 /// and a hard ceiling above which the provider is deprioritised to the back of
 /// its tier (never dropped — the failover chain must never starve). Both fields
@@ -106,7 +106,7 @@ pub struct ModelRouteConfig {
 
     /// In [`RouteMode::AlwaysLocal`], whether a cloud candidate may still be
     /// tried as an *approval-gated* terminal fallback ("borrow cloud"). When
-    /// `false` (default), cloud candidates are dropped outright in AlwaysLocal.
+    /// `false` (default), cloud candidates are dropped outright in `AlwaysLocal`.
     /// Ignored in `Auto` / `AlwaysCloud`.
     #[serde(default)]
     pub allow_cloud_escalation: bool,

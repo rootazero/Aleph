@@ -1,6 +1,6 @@
-//! Dedicated tokio task that periodically invokes MemoryExtension::produce
+//! Dedicated tokio task that periodically invokes `MemoryExtension::produce`
 //! for all registered plugins. Produced memories go through
-//! insert_with_capture_filter so on_capture still applies.
+//! `insert_with_capture_filter` so `on_capture` still applies.
 
 use crate::memory::extensions::insert_helper::insert_with_capture_filter;
 use crate::memory::extensions::registry::MemoryExtensionRegistry;
@@ -38,7 +38,7 @@ impl MemoryProducerScheduler {
         self
     }
 
-    /// Spawn the tokio background task. Returns a JoinHandle so the caller
+    /// Spawn the tokio background task. Returns a `JoinHandle` so the caller
     /// can abort it on shutdown.
     pub fn spawn(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         let this = self.clone();

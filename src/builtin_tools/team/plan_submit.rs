@@ -1,4 +1,4 @@
-//! PlanSubmitTool — submit a plan for team-leader approval.
+//! `PlanSubmitTool` — submit a plan for team-leader approval.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

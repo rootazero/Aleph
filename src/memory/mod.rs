@@ -1,11 +1,11 @@
 //! Memory module for context-aware local RAG
 //!
 //! This module provides functionality for storing and retrieving interaction memories
-//! with context anchors (window_title + session_id).
+//! with context anchors (`window_title` + `session_id`).
 //!
 //! ## Architecture
 //!
-//! - **Storage**: SQLite + sqlite-vec via `store::sqlite::SqliteMemoryBackend`
+//! - **Storage**: `SQLite` + sqlite-vec via `store::sqlite::SqliteMemoryBackend`
 //!
 //! ## Storage Traits
 //!

@@ -1,4 +1,4 @@
-//! HookExecutor implementation — action dispatch and execution logic
+//! `HookExecutor` implementation — action dispatch and execution logic
 
 use super::{
     substitute_variables, ActionResult, HookContext, HookResult, ShellHookConsent,

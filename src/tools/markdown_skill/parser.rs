@@ -1,11 +1,11 @@
 //! Markdown Skill Parser
 //!
-//! Parses SKILL.md files with YAML frontmatter into AlephSkillSpec.
+//! Parses SKILL.md files with YAML frontmatter into `AlephSkillSpec`.
 
 use super::spec::AlephSkillSpec;
 use anyhow::{Context, Result};
 
-/// Parse a SKILL.md file into AlephSkillSpec
+/// Parse a SKILL.md file into `AlephSkillSpec`
 pub fn parse_skill_file(content: &str) -> Result<AlephSkillSpec> {
     // Normalize Windows line endings so "\n---\n" delimiter matching works
     let content = content.replace("\r\n", "\n");

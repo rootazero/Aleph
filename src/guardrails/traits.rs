@@ -1,5 +1,5 @@
 //! The three Guardrail trait surfaces: Input (turn entry), Output (turn exit),
-//! ToolCall (per dispatch).
+//! `ToolCall` (per dispatch).
 //!
 //! All three are `Send + Sync + 'static` and `async_trait` to permit IO-bound
 //! impls (e.g. external classifier service). All three callsites are live in

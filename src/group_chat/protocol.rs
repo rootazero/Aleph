@@ -48,7 +48,7 @@ impl Speaker {
 // Persona
 // =============================================================================
 
-/// Maximum number of characters allowed in a persona's system_prompt.
+/// Maximum number of characters allowed in a persona's `system_prompt`.
 const MAX_SYSTEM_PROMPT_LEN: usize = 2000;
 
 /// Defines a persona that can participate in group chat discussions.
@@ -74,8 +74,8 @@ pub struct Persona {
 impl Persona {
     /// Validate persona fields.
     ///
-    /// Returns `Err` if the id, name, or system_prompt is empty, or if the
-    /// system_prompt exceeds the maximum length.
+    /// Returns `Err` if the id, name, or `system_prompt` is empty, or if the
+    /// `system_prompt` exceeds the maximum length.
     pub fn validate(&self) -> Result<(), GroupChatError> {
         if self.id.is_empty() {
             return Err(GroupChatError::InvalidPersona(

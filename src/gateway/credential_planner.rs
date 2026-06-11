@@ -53,7 +53,7 @@ pub struct CredentialPlan {
     pub token_expiry_hours: u64,
     /// `host:port` the server is bound to. Useful for "why can't I reach
     /// the gateway from the LAN?" debugging — surfaces `127.0.0.1` vs
-    /// `0.0.0.0` without exposing the underlying SocketAddr type.
+    /// `0.0.0.0` without exposing the underlying `SocketAddr` type.
     pub bind_address: String,
     /// WS ping interval in seconds (half-open TCP detection).
     pub ping_interval_secs: u64,

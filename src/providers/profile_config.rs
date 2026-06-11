@@ -96,7 +96,7 @@ pub struct ProfileConfig {
     /// Provider ID (e.g., "anthropic", "openai")
     pub provider: String,
 
-    /// API key - can be literal or "env:VAR_NAME" for environment variable
+    /// API key - can be literal or "`env:VAR_NAME`" for environment variable
     pub api_key: String,
 
     /// Optional base URL override
@@ -123,7 +123,7 @@ pub struct ProfileConfig {
 impl ProfileConfig {
     /// Resolve the API key, handling env: prefix
     ///
-    /// If the api_key starts with "env:", the rest is treated as an
+    /// If the `api_key` starts with "env:", the rest is treated as an
     /// environment variable name and its value is returned.
     ///
     /// # Returns
@@ -153,7 +153,7 @@ impl ProfileConfig {
 /// Root configuration containing all profiles
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProfilesConfig {
-    /// Map of profile_id -> ProfileConfig
+    /// Map of `profile_id` -> `ProfileConfig`
     #[serde(default)]
     pub profiles: HashMap<String, ProfileConfig>,
 }

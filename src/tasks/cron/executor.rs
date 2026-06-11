@@ -555,7 +555,7 @@ fn deliverable_text(text: &str) -> Option<String> {
     }
 }
 
-/// Deliver the cron job response to the source channel via ChannelRegistry.
+/// Deliver the cron job response to the source channel via `ChannelRegistry`.
 async fn deliver_to_channel(
     cell: &ChannelRegistryCell,
     channel_id: &str,

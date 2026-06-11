@@ -1,7 +1,7 @@
-//! Adapter bridging executor::ToolRegistry to LoopTool.
+//! Adapter bridging `executor::ToolRegistry` to `LoopTool`.
 //!
 //! Wraps `ToolRegistry::execute_tool()` + `UnifiedTool` metadata into
-//! LoopTool instances for use in the agent loop.
+//! `LoopTool` instances for use in the agent loop.
 
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -13,7 +13,7 @@ use crate::tool_metadata::UnifiedTool;
 
 use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
 
-/// A LoopTool backed by a shared ToolRegistry.
+/// A `LoopTool` backed by a shared `ToolRegistry`.
 ///
 /// Each instance holds the metadata from a `UnifiedTool` (name, description,
 /// schema) and delegates execution to `ToolRegistry::execute_tool()`.
@@ -22,11 +22,11 @@ struct RegistryToolAdapter<R: ToolRegistry + 'static> {
     description: String,
     schema: Value,
     registry: Arc<R>,
-    /// Default working directory for bash/code_exec tools (agent workspace)
+    /// Default working directory for `bash/code_exec` tools (agent workspace)
     default_working_dir: Option<String>,
 }
 
-/// Tools that should have working_dir injected when not specified by LLM
+/// Tools that should have `working_dir` injected when not specified by LLM
 const WORKING_DIR_TOOLS: &[&str] = &["bash", "code_exec"];
 
 /// Tools that mutate state and must NOT run concurrently.
@@ -220,8 +220,8 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
 /// Each `UnifiedTool` becomes a `LoopTool` that delegates execution to the
 /// shared `ToolRegistry`. Only active tools are included.
 ///
-/// `default_working_dir` is injected into bash/code_exec tools when the LLM
-/// doesn't specify a working_dir (defaults to agent workspace).
+/// `default_working_dir` is injected into `bash/code_exec` tools when the LLM
+/// doesn't specify a `working_dir` (defaults to agent workspace).
 pub fn build_tool_adapters_from_tools<R: ToolRegistry + 'static>(
     tool_registry: Arc<R>,
     unified_tools: &[UnifiedTool],

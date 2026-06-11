@@ -10,16 +10,16 @@ pub struct PimArgs {
     /// The PIM action to perform.
     ///
     /// Supported via `desktop/*` today:
-    /// Calendar: "calendar_list", "calendar_get", "calendar_create",
-    ///           "calendar_update", "calendar_delete", "calendar_calendars"
-    /// Reminders: "reminders_list", "reminders_get", "reminders_create",
-    ///            "reminders_complete", "reminders_delete", "reminders_lists"
-    /// Notes: "notes_list", "notes_get", "notes_create", "notes_update",
-    ///        "notes_delete", "notes_folders"
-    /// Contacts: "contacts_search", "contacts_get", "contacts_groups"
+    /// Calendar: "`calendar_list`", "`calendar_get`", "`calendar_create`",
+    ///           "`calendar_update`", "`calendar_delete`", "`calendar_calendars`"
+    /// Reminders: "`reminders_list`", "`reminders_get`", "`reminders_create`",
+    ///            "`reminders_complete`", "`reminders_delete`", "`reminders_lists`"
+    /// Notes: "`notes_list`", "`notes_get`", "`notes_create`", "`notes_update`",
+    ///        "`notes_delete`", "`notes_folders`"
+    /// Contacts: "`contacts_search`", "`contacts_get`", "`contacts_groups`"
     ///
-    /// Legacy compatibility actions "contacts_create", "contacts_update", and
-    /// "contacts_delete" are still parsed but currently return an unsupported
+    /// Legacy compatibility actions "`contacts_create`", "`contacts_update`", and
+    /// "`contacts_delete`" are still parsed but currently return an unsupported
     /// message because they are not part of the current `PimCapability` trait.
     pub action: String,
 
@@ -35,11 +35,11 @@ pub struct PimArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
 
-    /// Start of date range for calendar_list (ISO 8601).
+    /// Start of date range for `calendar_list` (ISO 8601).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from: Option<chrono::DateTime<chrono::Utc>>,
 
-    /// End of date range for calendar_list (ISO 8601).
+    /// End of date range for `calendar_list` (ISO 8601).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to: Option<chrono::DateTime<chrono::Utc>>,
 

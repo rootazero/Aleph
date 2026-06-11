@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_open tool.
+/// Arguments for the `browser_open` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserOpenArgs {
     /// URL to open.
@@ -19,7 +19,7 @@ pub struct BrowserOpenArgs {
     pub profile: String,
 }
 
-/// Output from the browser_open tool.
+/// Output from the `browser_open` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserOpenOutput {
     pub success: bool,

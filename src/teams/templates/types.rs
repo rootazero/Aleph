@@ -111,7 +111,7 @@ pub struct TeamTemplate {
     /// Optional team-level strategy prompt — folded into every member's
     /// SOUL.md as a `## Team Strategy` section during materialization.
     ///
-    /// R3 (ClawTeam parity): lets a template encode the collaboration
+    /// R3 (`ClawTeam` parity): lets a template encode the collaboration
     /// mode (plan-then-act, parallel-debate, review-loop, ...) once at
     /// the team scope instead of repeating it on every member's
     /// `prompt_addendum`. Per R7/R10 this is **pure prompt injection** —

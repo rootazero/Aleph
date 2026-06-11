@@ -1,5 +1,5 @@
 use super::migration;
-/// Core StateDatabase struct and initialization
+/// Core `StateDatabase` struct and initialization
 ///
 /// Contains the database connection, schema setup, and migration logic.
 /// Schema DDL is in `schema.rs`, tests are in `tests.rs`.

@@ -33,7 +33,7 @@ pub struct ImageGenerationRequest {
     /// Number of images to generate
     #[serde(skip_serializing_if = "Option::is_none")]
     pub n: Option<u32>,
-    /// Response format ("url" or "b64_json")
+    /// Response format ("url" or "`b64_json`")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<String>,
     /// Optional user identifier
@@ -55,9 +55,9 @@ pub struct ImageGenerationResponse {
 /// Individual image data in the response
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImageData {
-    /// URL to the generated image (if response_format is "url")
+    /// URL to the generated image (if `response_format` is "url")
     pub url: Option<String>,
-    /// Base64-encoded image data (if response_format is "b64_json")
+    /// Base64-encoded image data (if `response_format` is "`b64_json`")
     pub b64_json: Option<String>,
     /// The prompt that was actually used (may differ from input)
     pub revised_prompt: Option<String>,
@@ -69,7 +69,7 @@ pub const POLL_INTERVAL_SECS: u64 = 3;
 /// Maximum polling attempts (10 minutes / 3 seconds = 200)
 pub const MAX_POLL_ATTEMPTS: u32 = 200;
 
-/// Async task submit response (e.g., video generation APIs that return a task_id)
+/// Async task submit response (e.g., video generation APIs that return a `task_id`)
 #[derive(Debug, Clone, Deserialize)]
 pub struct AsyncTaskSubmitResponse {
     /// Task ID for polling
@@ -79,7 +79,7 @@ pub struct AsyncTaskSubmitResponse {
 /// Async task poll response
 #[derive(Debug, Clone, Deserialize)]
 pub struct AsyncTaskPollResponse {
-    /// Task status: typically NOT_START, IN_PROGRESS, SUCCESS, FAILURE
+    /// Task status: typically `NOT_START`, `IN_PROGRESS`, SUCCESS, FAILURE
     #[serde(default)]
     pub status: String,
     /// Failure reason
@@ -106,13 +106,13 @@ impl AsyncTaskData {
     }
 }
 
-/// OpenAI API error response format
+/// `OpenAI` API error response format
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenAiErrorResponse {
     pub error: OpenAiError,
 }
 
-/// OpenAI API error details
+/// `OpenAI` API error details
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenAiError {
     pub message: String,

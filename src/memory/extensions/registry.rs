@@ -1,4 +1,4 @@
-//! Registry + dispatch for MemoryExtension hooks.
+//! Registry + dispatch for `MemoryExtension` hooks.
 
 use crate::error::AlephError;
 use crate::memory::assembler::envelope::MemoryEnvelope;
@@ -34,7 +34,7 @@ pub const ON_DELEGATION_TIMEOUT: Duration = Duration::from_secs(3);
 /// the lock before any await points).
 #[derive(Default)]
 pub struct MemoryExtensionRegistry {
-    /// Extensions in registration order (for on_capture this is the chain order).
+    /// Extensions in registration order (for `on_capture` this is the chain order).
     extensions: RwLock<Vec<Arc<dyn MemoryExtension>>>,
     /// Typed side-table of MCP-backed extensions, retained at their concrete
     /// type so the boot-time bind pass can call `rebind`. Each entry is the
@@ -131,7 +131,7 @@ impl MemoryExtensionRegistry {
             .clone()
     }
 
-    /// on_retrieve: sequential broadcast. Each extension sees the current
+    /// `on_retrieve`: sequential broadcast. Each extension sees the current
     /// (possibly-mutated) envelope. Timeouts drop that plugin's work without
     /// failing the call.
     pub async fn dispatch_on_retrieve(
@@ -150,7 +150,7 @@ impl MemoryExtensionRegistry {
         Ok(())
     }
 
-    /// on_capture: chained pipeline. Each extension's modification of `raw`
+    /// `on_capture`: chained pipeline. Each extension's modification of `raw`
     /// is visible to the next. A Block short-circuits. Error or timeout =>
     /// Block (fail-safe).
     pub async fn dispatch_on_capture(
@@ -205,7 +205,7 @@ impl MemoryExtensionRegistry {
         out
     }
 
-    /// on_session_switch: sequential broadcast. Failures and timeouts are
+    /// `on_session_switch`: sequential broadcast. Failures and timeouts are
     /// logged and skipped — they never block a session rotation.
     ///
     /// **No Aleph-side producer (by design, X1).** Aleph sessions are created
@@ -225,7 +225,7 @@ impl MemoryExtensionRegistry {
         }
     }
 
-    /// on_pre_compress: sequential broadcast. Returns each extension's
+    /// `on_pre_compress`: sequential broadcast. Returns each extension's
     /// contribution joined with a blank line. An empty result means no
     /// extension contributed — callers should treat that as "no extra
     /// summary context", not a failure.
@@ -251,7 +251,7 @@ impl MemoryExtensionRegistry {
         parts.join("\n\n")
     }
 
-    /// on_delegation: sequential broadcast. Fires on parent-side completion
+    /// `on_delegation`: sequential broadcast. Fires on parent-side completion
     /// of a subagent run. Failures/timeouts are logged and skipped.
     ///
     /// **Wire-point TODO**: `SubagentTool` (or whatever orchestrates child

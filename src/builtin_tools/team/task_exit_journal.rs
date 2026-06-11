@@ -1,4 +1,4 @@
-//! TaskExitJournalTool — R3 ClawTeam-parity exit journal.
+//! `TaskExitJournalTool` — R3 ClawTeam-parity exit journal.
 //!
 //! Called by the executing agent when it finishes a task to leave a
 //! structured, machine-readable summary for the reviewer / replay UI.

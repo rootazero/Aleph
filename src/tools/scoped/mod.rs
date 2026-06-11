@@ -1,7 +1,7 @@
-//! ScopedToolService — bridges LoopToolRegistry + SubagentTool to ToolService.
+//! `ScopedToolService` — bridges `LoopToolRegistry` + `SubagentTool` to `ToolService`.
 //!
-//! Adapts the Gateway-side `LoopToolRegistry` (with optional SubagentTool,
-//! ToolRefreshSource, and hook decorator) to the `ToolService` trait consumed
+//! Adapts the Gateway-side `LoopToolRegistry` (with optional `SubagentTool`,
+//! `ToolRefreshSource`, and hook decorator) to the `ToolService` trait consumed
 //! by `AgentHarness`. This is a read-only adapter; it does not modify the
 //! underlying registry.
 //!
@@ -59,7 +59,7 @@ pub struct ScopedToolService {
     pub(super) refresh: Option<Arc<dyn ToolRefreshSource>>,
     pub(super) hook_decorator: Option<Arc<dyn ToolHookDecorator>>,
     /// Extension-shipped hook executor. Fires `BeforeToolCall` interceptors
-    /// (block/deny/ask/update_input) and `AfterToolCall`/`AfterToolCallFailure`
+    /// (`block/deny/ask/update_input`) and `AfterToolCall`/`AfterToolCallFailure`
     /// observers around every tool execution. `None` = no extension hooks.
     pub(super) hook_executor: Option<Arc<HookExecutor>>,
     /// Session identifier surfaced into `HookContext` for extension hooks

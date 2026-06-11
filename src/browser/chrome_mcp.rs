@@ -1,4 +1,4 @@
-//! ChromeMcpDriver — manages Chrome DevTools MCP sessions.
+//! `ChromeMcpDriver` — manages Chrome `DevTools` MCP sessions.
 //!
 //! Spawns `chrome-devtools-mcp` as a stdio MCP server per profile.
 //! Sessions are lazily created on first tool call and cached by profile name.
@@ -18,12 +18,12 @@ use super::profile::ChromeMcpConfig;
 use crate::mcp::{ExternalServerConfig, McpClient};
 use crate::sync_primitives::Mutex;
 
-/// A running Chrome DevTools MCP session.
+/// A running Chrome `DevTools` MCP session.
 struct ChromeMcpSession {
     client: McpClient,
 }
 
-/// Manages Chrome DevTools MCP sessions with lazy creation and profile-keyed caching.
+/// Manages Chrome `DevTools` MCP sessions with lazy creation and profile-keyed caching.
 pub struct ChromeMcpDriver {
     sessions: RwLock<HashMap<String, ChromeMcpSession>>,
     config: ChromeMcpConfig,
@@ -58,7 +58,7 @@ impl ChromeMcpDriver {
             .clone()
     }
 
-    /// Call a tool on the Chrome DevTools MCP server for the given profile.
+    /// Call a tool on the Chrome `DevTools` MCP server for the given profile.
     /// Creates the session lazily if it doesn't exist.
     pub async fn call_tool(
         &self,

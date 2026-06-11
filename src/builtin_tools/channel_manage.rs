@@ -28,7 +28,7 @@ pub enum PairingAction {
     List,
 }
 
-/// Arguments for the channel_pairing tool
+/// Arguments for the `channel_pairing` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct ChannelPairingArgs {
     /// Action to perform
@@ -53,7 +53,7 @@ pub struct PairingCodeEntry {
     pub remaining_ttl_secs: u64,
 }
 
-/// Output from channel_pairing tool
+/// Output from `channel_pairing` tool
 #[derive(Debug, Clone, Serialize)]
 pub struct ChannelPairingOutput {
     /// Human-readable status message
@@ -75,7 +75,7 @@ pub struct ChannelPairingOutput {
 /// Tool for managing channel pairing codes via natural language.
 ///
 /// Supports generating new pairing codes and listing active ones.
-/// Requires access to the ChannelRegistry to find and interact with channels.
+/// Requires access to the `ChannelRegistry` to find and interact with channels.
 #[derive(Clone)]
 pub struct ChannelPairingTool {
     channel_registry: Arc<ChannelRegistry>,

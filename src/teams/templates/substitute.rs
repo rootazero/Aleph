@@ -1,6 +1,6 @@
 //! Forgiving `{var}` substitution for template fields.
 //!
-//! Unknown braces are left intact (matches ClawTeam's `_SafeDict` behaviour),
+//! Unknown braces are left intact (matches `ClawTeam`'s `_SafeDict` behaviour),
 //! so authoring stays low-friction — a typo in a placeholder shows up in the
 //! materialized text rather than aborting the whole template.
 

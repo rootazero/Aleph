@@ -133,7 +133,7 @@ pub struct SkillRegistration {
     /// Unique skill name
     pub name: String,
 
-    /// Plugin name (if from a plugin, used for qualified_name)
+    /// Plugin name (if from a plugin, used for `qualified_name`)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_name: Option<String>,
 

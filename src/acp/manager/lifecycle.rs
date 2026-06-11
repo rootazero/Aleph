@@ -10,13 +10,13 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 
 impl AcpAdapterManager {
-    /// Ensure a live ACP session exists for the given NativeAcp harness + cwd.
+    /// Ensure a live ACP session exists for the given `NativeAcp` harness + cwd.
     ///
     /// - If a session exists and is alive, this is a no-op.
     /// - If a session exists but is dead, it is removed and respawned.
     /// - If no session exists, a new one is spawned.
     ///
-    /// Only meaningful for NativeAcp harnesses; oneshot harnesses don't need sessions.
+    /// Only meaningful for `NativeAcp` harnesses; oneshot harnesses don't need sessions.
     ///
     /// Race safety: after spawning (which happens without holding the session lock),
     /// we re-check whether another task already inserted a live session for the same
@@ -130,7 +130,7 @@ impl AcpAdapterManager {
 
     /// Send a prompt to the specified harness, using the appropriate mode.
     ///
-    /// - **NativeAcp**: Extracts session from pool (brief lock), uses it, re-inserts if alive.
+    /// - **`NativeAcp`**: Extracts session from pool (brief lock), uses it, re-inserts if alive.
     /// - **Oneshot**: Spawns a fresh process, waits for output.
     ///
     /// `mode`: Override the harness default mode. `None` uses `harness.mode()`.

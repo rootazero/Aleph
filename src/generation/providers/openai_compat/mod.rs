@@ -1,15 +1,15 @@
 //! Generic OpenAI-Compatible Image Generation Provider
 //!
 //! This module implements a configurable `GenerationProvider` for any API that follows
-//! OpenAI's image generation format. Use cases include third-party proxies, custom
+//! `OpenAI`'s image generation format. Use cases include third-party proxies, custom
 //! endpoints, and alternative providers.
 //!
-//! # Key Differences from OpenAiImageProvider
+//! # Key Differences from `OpenAiImageProvider`
 //!
 //! - **Configurable name**: Provider name is user-specified, not hardcoded
-//! - **Configurable supported_types**: Can support Image, Video, etc.
+//! - **Configurable `supported_types`**: Can support Image, Video, etc.
 //! - **Configurable color**: Brand color is user-specified
-//! - **Required base_url**: No default endpoint (must be explicitly provided)
+//! - **Required `base_url`**: No default endpoint (must be explicitly provided)
 //!
 //! # Example
 //!

@@ -1,7 +1,7 @@
 //! Routing configuration types
 //!
 //! Contains routing rule configuration:
-//! - RoutingRuleConfig: AI routing rules with command/keyword types
+//! - `RoutingRuleConfig`: AI routing rules with command/keyword types
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 /// ## Keyword Rules
 /// - Pattern does not start with `/` (e.g., `translate to English`, `code optimization`)
 /// - All-match: multiple keyword rules can match simultaneously
-/// - No `provider` field (uses default_provider)
+/// - No `provider` field (uses `default_provider`)
 /// - Multiple matched prompts are combined with `\n\n`
 ///
 /// # Example TOML
@@ -79,7 +79,7 @@ pub struct RoutingRuleConfig {
 
     // ===== Routing hints =====
     /// Intent type identifier (for logging and UI display)
-    /// Examples: "translation", "research", "code_generation", "skills:build-macos-apps"
+    /// Examples: "translation", "research", "`code_generation`", "skills:build-macos-apps"
     /// Default: "general"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent_type: Option<String>,
@@ -198,7 +198,7 @@ impl RoutingRuleConfig {
         }
     }
 
-    /// Check if strip_prefix should be applied
+    /// Check if `strip_prefix` should be applied
     #[must_use]
     pub fn should_strip_prefix(&self) -> bool {
         if self.is_keyword_rule() {

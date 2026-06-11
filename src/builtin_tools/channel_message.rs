@@ -1,4 +1,4 @@
-//! channel_message — LLM-invoked tool for proactively sending messages,
+//! `channel_message` — LLM-invoked tool for proactively sending messages,
 //! reactions, edits, and typing indicators to a specific channel conversation.
 //!
 //! Unlike `media_send` (which only feeds the *current* reply path) and

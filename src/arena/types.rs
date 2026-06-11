@@ -1,4 +1,4 @@
-//! Core domain types for the SharedArena multi-agent collaboration system.
+//! Core domain types for the `SharedArena` multi-agent collaboration system.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -20,7 +20,7 @@ use crate::domain::ValueObject;
 pub struct ArenaId(String);
 
 impl ArenaId {
-    /// Create a new random ArenaId.
+    /// Create a new random `ArenaId`.
     #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4().to_string())
@@ -55,7 +55,7 @@ impl fmt::Display for ArenaId {
 pub struct ArtifactId(String);
 
 impl ArtifactId {
-    /// Create a new random ArtifactId.
+    /// Create a new random `ArtifactId`.
     #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4().to_string())
@@ -228,12 +228,12 @@ impl ArenaManifest {
     /// Build a manifest from raw parameters.
     ///
     /// Centralizes the strategy parsing + participant building logic used by
-    /// AlephTool, RPC handler, and CollaborativeExecutor.
+    /// `AlephTool`, RPC handler, and `CollaborativeExecutor`.
     ///
     /// - `strategy_str`: "peer" or "pipeline"
     /// - `agent_ids`: participant agent IDs (first is coordinator for peer strategy)
     /// - `coordinator`: explicit coordinator override (defaults to first agent)
-    /// - `stages`: explicit pipeline stages (if None for pipeline, auto-generated from agent_ids)
+    /// - `stages`: explicit pipeline stages (if None for pipeline, auto-generated from `agent_ids`)
     pub fn build(
         goal: String,
         strategy_str: &str,

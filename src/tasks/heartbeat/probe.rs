@@ -36,7 +36,7 @@ pub trait ProbeExecutor: Send + Sync {
 
 // ── DefaultProbeExecutor ─────────────────────────────────────────────────────
 
-/// Production probe executor that calls tools via BuiltinToolRegistry.
+/// Production probe executor that calls tools via `BuiltinToolRegistry`.
 pub struct DefaultProbeExecutor {
     registry: Arc<BuiltinToolRegistry>,
 }

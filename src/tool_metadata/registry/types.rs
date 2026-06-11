@@ -1,6 +1,6 @@
 //! Tool Registry Types
 //!
-//! Core data structure for the ToolCatalog.
+//! Core data structure for the `ToolCatalog`.
 
 use crate::sync_primitives::{Arc, AsyncRwLock};
 use std::collections::HashMap;

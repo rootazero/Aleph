@@ -15,10 +15,10 @@ use crate::mcp::manager::McpManagerHandle;
 use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use crate::tools::AlephToolDyn;
 
-/// Arguments for mcp_get_prompt tool
+/// Arguments for `mcp_get_prompt` tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct McpGetPromptArgs {
-    /// Prompt name (e.g., "server_name:prompt_name")
+    /// Prompt name (e.g., "`server_name:prompt_name`")
     pub name: String,
     /// Optional arguments to pass to the prompt
     #[serde(default)]
@@ -34,7 +34,7 @@ pub struct PromptOutputMessage {
     pub content: String,
 }
 
-/// Output from mcp_get_prompt tool
+/// Output from `mcp_get_prompt` tool
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpGetPromptOutput {
     /// Optional description

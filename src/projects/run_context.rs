@@ -8,7 +8,7 @@
 //!
 //! Threading the field through every tool's constructor would force a
 //! signature change on every builtin; instead we publish it as a
-//! task-local that lives for the duration of the run_loop call. Children
+//! task-local that lives for the duration of the `run_loop` call. Children
 //! invoked synchronously (`tokio::time::timeout`, normal await chains)
 //! see the value; children spawned via `tokio::spawn` MUST capture it
 //! before the spawn boundary (use [`current`] at the call site, then

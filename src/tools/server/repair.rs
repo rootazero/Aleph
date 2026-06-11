@@ -1,7 +1,7 @@
 //! Shared tool name repair logic.
 //!
 //! Extracted from `AlephToolServer` and `AlephToolServerHandle` to avoid
-//! duplicating the repair strategies (case-insensitive, snake_case, invalid fallback).
+//! duplicating the repair strategies (case-insensitive, `snake_case`, invalid fallback).
 
 use serde_json::Value;
 
@@ -10,13 +10,13 @@ use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::tools::types::{ToolRepairInfo, ToolRepairType};
 
-/// Convert a string to snake_case.
+/// Convert a string to `snake_case`.
 ///
 /// Handles consecutive uppercase runs correctly:
-/// - "WebSearch" -> "web_search"
-/// - "searchAPI" -> "search_api"
-/// - "HTTPRequest" -> "http_request"
-/// - "already_snake" -> "already_snake"
+/// - "`WebSearch`" -> "`web_search`"
+/// - "searchAPI" -> "`search_api`"
+/// - "`HTTPRequest`" -> "`http_request`"
+/// - "`already_snake`" -> "`already_snake`"
 pub(super) fn to_snake_case(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 4);
     let chars: Vec<char> = s.chars().collect();
@@ -49,7 +49,7 @@ pub(super) fn to_snake_case(s: &str) -> String {
 /// Attempts to call a tool with automatic name repair:
 /// 1. Exact match
 /// 2. Case-insensitive matching
-/// 3. snake_case conversion
+/// 3. `snake_case` conversion
 /// 4. "invalid" tool fallback
 /// 5. Error with suggestion
 pub(super) async fn call_with_repair_impl(

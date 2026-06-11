@@ -192,7 +192,7 @@ impl ProfileManager {
             .unwrap_or(self.config.playwright_cli.headless)
     }
 
-    /// Sweep idle profiles: tear down Chrome MCP sessions for ExistingSession
+    /// Sweep idle profiles: tear down Chrome MCP sessions for `ExistingSession`
     /// profiles past their `idle_timeout_secs`, then reset state to `Idle`.
     /// Returns the number of profiles reaped (best-effort; safe to call any time).
     pub async fn reap_idle(&self) -> usize {

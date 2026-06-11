@@ -2,7 +2,7 @@
 //!
 //! Contains the main polling loop with:
 //! - Dispatcher creation and dispatch
-//! - Watchdog health check (get_me() every 120s)
+//! - Watchdog health check (`get_me()` every 120s)
 //! - Auto-restart with exponential backoff (base 2s, factor 1.8, cap 30s, ±25% jitter)
 //! - Auto-restart with exponential backoff (base 2s, factor 1.8, cap 30s, ±25% jitter)
 

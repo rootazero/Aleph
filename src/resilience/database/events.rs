@@ -1,4 +1,4 @@
-//! CRUD operations for agent_events table
+//! CRUD operations for `agent_events` table
 //!
 //! Provides database operations for tiered event persistence
 //! using the Skeleton & Pulse model.
@@ -18,8 +18,8 @@ fn first_event_logged() -> &'static AtomicBool {
     FIRST_EVENT_LOGGED.get_or_init(|| AtomicBool::new(false))
 }
 
-/// Construct AgentEvent from a rusqlite row.
-/// Expected column order: id, task_id, seq, event_type, payload_json, is_structural, timestamp
+/// Construct `AgentEvent` from a rusqlite row.
+/// Expected column order: id, `task_id`, seq, `event_type`, `payload_json`, `is_structural`, timestamp
 fn agent_event_from_row(row: &rusqlite::Row) -> rusqlite::Result<AgentEvent> {
     Ok(AgentEvent {
         id: row.get(0)?,

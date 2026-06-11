@@ -95,7 +95,7 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
 /// detail/model/order) plus any phase a step references but the manifest did not
 /// declare, appended in topological first-occurrence order. Guarantees every
 /// body `phase()` marker is also declared in `meta`, matching the `.workflow.js`
-/// convention ("use the same titles in meta.phases as in phase() calls"). Pure
+/// convention ("use the same titles in meta.phases as in `phase()` calls"). Pure
 /// field shuffling — no reasoning (R10).
 fn effective_phases(
     manifest: &WorkflowManifest,
@@ -241,7 +241,7 @@ fn render_prompt_arg(prompt: &str) -> String {
 }
 
 /// Render a Rust string as a safe double-quoted JS string literal (handles all
-/// escaping via serde_json — avoids the raw-backtick / quote-escape traps).
+/// escaping via `serde_json` — avoids the raw-backtick / quote-escape traps).
 fn js_str(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }

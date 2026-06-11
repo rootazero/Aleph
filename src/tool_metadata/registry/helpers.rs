@@ -1,4 +1,4 @@
-//! Helper Functions for ToolCatalog
+//! Helper Functions for `ToolCatalog`
 //!
 //! Utility functions used across the registry module.
 

@@ -19,19 +19,19 @@ const MAX_HISTORY_SIZE: usize = 10000;
 /// Uses tokio broadcast channel for multi-subscriber support.
 /// Events are type-safe and all subscribers receive all events.
 ///
-/// The EventBus can optionally be connected to a GlobalBus for cross-agent
+/// The `EventBus` can optionally be connected to a `GlobalBus` for cross-agent
 /// event aggregation. When connected, all published events are automatically
-/// broadcast to the GlobalBus with source context.
+/// broadcast to the `GlobalBus` with source context.
 #[derive(Clone)]
 pub struct EventBus {
     sender: broadcast::Sender<TimestampedEvent>,
     history: Arc<RwLock<Vec<TimestampedEvent>>>,
     config: EventBusConfig,
-    /// Optional agent ID for GlobalBus integration
+    /// Optional agent ID for `GlobalBus` integration
     agent_id: Option<String>,
-    /// Optional session ID for GlobalBus integration
+    /// Optional session ID for `GlobalBus` integration
     session_id: Option<String>,
-    /// Reference to the GlobalBus for auto-broadcast
+    /// Reference to the `GlobalBus` for auto-broadcast
     global_bus: Option<&'static GlobalBus>,
     /// Monotonic sequence counter for events published on this bus
     sequence: Arc<AtomicU64>,
@@ -95,10 +95,10 @@ impl EventBus {
         }
     }
 
-    /// Set the agent ID for GlobalBus integration.
+    /// Set the agent ID for `GlobalBus` integration.
     ///
-    /// When an agent_id is set and the EventBus is connected to a GlobalBus,
-    /// all published events will be broadcast to the GlobalBus with this
+    /// When an `agent_id` is set and the `EventBus` is connected to a `GlobalBus`,
+    /// all published events will be broadcast to the `GlobalBus` with this
     /// agent ID as the source.
     ///
     /// # Arguments
@@ -110,10 +110,10 @@ impl EventBus {
         self
     }
 
-    /// Set the session ID for GlobalBus integration.
+    /// Set the session ID for `GlobalBus` integration.
     ///
-    /// When a session_id is set and the EventBus is connected to a GlobalBus,
-    /// all published events will be broadcast to the GlobalBus with this
+    /// When a `session_id` is set and the `EventBus` is connected to a `GlobalBus`,
+    /// all published events will be broadcast to the `GlobalBus` with this
     /// session ID as the source.
     ///
     /// # Arguments
@@ -125,14 +125,14 @@ impl EventBus {
         self
     }
 
-    /// Connect this EventBus to a GlobalBus for automatic event broadcast.
+    /// Connect this `EventBus` to a `GlobalBus` for automatic event broadcast.
     ///
-    /// When connected, all events published to this EventBus will automatically
-    /// be broadcast to the GlobalBus using the configured agent_id and session_id.
+    /// When connected, all events published to this `EventBus` will automatically
+    /// be broadcast to the `GlobalBus` using the configured `agent_id` and `session_id`.
     ///
     /// # Arguments
     ///
-    /// * `global_bus` - Reference to the GlobalBus singleton
+    /// * `global_bus` - Reference to the `GlobalBus` singleton
     ///
     /// # Example
     ///
@@ -161,7 +161,7 @@ impl EventBus {
         self.session_id.as_deref()
     }
 
-    /// Check if this EventBus is connected to a GlobalBus.
+    /// Check if this `EventBus` is connected to a `GlobalBus`.
     #[must_use]
     pub const fn is_connected_to_global(&self) -> bool {
         self.global_bus.is_some()
@@ -181,7 +181,7 @@ impl EventBus {
         }
     }
 
-    /// Broadcast event to GlobalBus if connected.
+    /// Broadcast event to `GlobalBus` if connected.
     async fn broadcast_to_global(&self, event: AlephEvent) {
         if let Some(global_bus) = self.global_bus {
             let agent_id = self.agent_id.as_deref().unwrap_or("");
@@ -202,9 +202,9 @@ impl EventBus {
     ///
     /// Returns the number of active subscribers that received the event.
     ///
-    /// If this EventBus is connected to a GlobalBus (via `with_global_bus`),
-    /// the event will also be automatically broadcast to the GlobalBus with
-    /// the configured agent_id and session_id.
+    /// If this `EventBus` is connected to a `GlobalBus` (via `with_global_bus`),
+    /// the event will also be automatically broadcast to the `GlobalBus` with
+    /// the configured `agent_id` and `session_id`.
     pub async fn publish(&self, event: AlephEvent) -> usize {
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
         let timestamped = TimestampedEvent::new(event.clone(), sequence);

@@ -20,7 +20,7 @@ const DEFAULT_PAIRING_EXPIRY_MS: i64 = 5 * 60 * 1000;
 /// Maximum pending pairing requests
 const MAX_PENDING_REQUESTS: usize = 10;
 
-/// How long an approved browser credential (device token + device_id) is
+/// How long an approved browser credential (device token + `device_id`) is
 /// retained after pairing.approve runs, giving the cold browser time to
 /// consume it via `pairing.poll`. After this window the entry is dropped from
 /// `approved_browser_sessions` and a late poll returns `PollState::Expired`.
@@ -184,7 +184,7 @@ pub enum PollState {
     /// Pairing record still exists in the store and has not been approved.
     Pending,
     /// `pairing.approve` ran; `record_browser_credential` deposited the
-    /// chat-tier device token + device_id keyed by the pairing code. The
+    /// chat-tier device token + `device_id` keyed by the pairing code. The
     /// browser stores the token in `localStorage["aleph_device_token"]` and
     /// connects via Case 1. Single-use: drained on first approved poll.
     Approved { token: String, device_id: String },
@@ -200,7 +200,7 @@ pub struct PairingManager {
     store: Arc<SecurityStore>,
     expiry_ms: i64,
     max_pending: usize,
-    /// In-memory map: pairing code → (device_token, device_id, approved_at_ms).
+    /// In-memory map: pairing code → (`device_token`, `device_id`, `approved_at_ms`).
     /// Populated by `record_browser_credential` when the operator approves a
     /// Browser pairing; drained single-use by `poll_browser_pairing` on the
     /// first approved poll. TTL bounded by `APPROVED_SESSION_TTL_MS` so a
@@ -460,7 +460,7 @@ impl PairingManager {
         Ok((code, expires_at))
     }
 
-    /// Stash the chat-tier device token + device_id minted by the operator's
+    /// Stash the chat-tier device token + `device_id` minted by the operator's
     /// `pairing.approve` for a Browser pairing, keyed by the pairing code.
     /// Drained single-use by the next approved `poll_browser_pairing`.
     pub fn record_browser_credential(&self, code: &str, token: &str, device_id: &str) {

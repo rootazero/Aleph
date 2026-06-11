@@ -111,7 +111,7 @@ fn canonical_provider_name(name: &str) -> &'static str {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Build a ProviderConfig from preset defaults (used when the provider
+/// Build a `ProviderConfig` from preset defaults (used when the provider
 /// entry doesn't exist yet in config).
 fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
     let preset = get_preset(provider_name);
@@ -180,7 +180,7 @@ fn persist_oauth_blob(
 }
 
 /// Update config and store OAuth token in vault.
-/// Token is stored in vault under "ai:<provider_name>" (same key format as other providers).
+/// Token is stored in vault under "ai:<`provider_name`>" (same key format as other providers).
 async fn update_config_api_key(
     config: &Arc<RwLock<Config>>,
     vault: &Arc<SharedTokenManager>,
@@ -263,7 +263,7 @@ pub(crate) async fn try_refresh(
 /// Restore OAuth state from vault at startup.
 ///
 /// If vault has an access token for "ai:chatgpt", we know the user
-/// previously logged in via OAuth. We build an OAuthTokenCache with
+/// previously logged in via OAuth. We build an `OAuthTokenCache` with
 /// a conservative 1-hour expiry window so that `oauthStatus` will
 /// trigger a refresh if the token is actually stale.
 pub fn restore_from_vault(config: &Config, vault: &SharedTokenManager) -> Option<OAuthTokenCache> {

@@ -34,8 +34,8 @@ pub struct AuthState {
     /// so `pairing.approve` (Browser arm) mints a chat-tier device token that
     /// `pairing.poll` returns to the cold `/pair` page.
     pub pairing_mgr: Arc<crate::gateway::security::PairingManager>,
-    /// Shared AuthContext so the anonymous `/rpc` HTTP route (scoped to
-    /// pairing.start_browser + pairing.poll only) can reach the same
+    /// Shared `AuthContext` so the anonymous `/rpc` HTTP route (scoped to
+    /// `pairing.start_browser` + pairing.poll only) can reach the same
     /// handler functions the WebSocket dispatcher uses. `None` when
     /// `auth_routes` is built in isolation (e.g. legacy bootstrap-only
     /// tests); the production wiring always plumbs it.
@@ -64,7 +64,7 @@ pub fn auth_routes(state: Arc<AuthState>) -> Router {
         .with_state(state)
 }
 
-/// True when the peer is on a loopback interface (127.0.0.0/8 or ::1).
+/// True when the peer is on a loopback interface (127.0.0.0/8 or `::1`).
 /// Used by the bootstrap-consume endpoint to refuse non-local peers
 /// regardless of the `Origin` header.
 #[must_use]

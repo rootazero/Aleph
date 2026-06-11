@@ -21,7 +21,7 @@ pub struct ToolRepairInfo {
 pub enum ToolRepairType {
     /// Converted to lowercase (e.g., "Search" -> "search")
     CaseInsensitive,
-    /// Converted to snake_case (e.g., "WebSearch" -> "web_search")
+    /// Converted to `snake_case` (e.g., "`WebSearch`" -> "`web_search`")
     SnakeCase,
     /// Routed to the "invalid" tool as a fallback
     InvalidFallback,

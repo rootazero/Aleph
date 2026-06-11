@@ -1,6 +1,6 @@
 //! Capability Ledger — lightweight state tracker for runtime capabilities
 //!
-//! The CapabilityLedger replaces the heavy RuntimeRegistry by tracking only
+//! The `CapabilityLedger` replaces the heavy `RuntimeRegistry` by tracking only
 //! the *state* of each capability (Missing, Probing, Bootstrapping, Ready, Stale).
 //! It never downloads or installs anything — that responsibility belongs to
 //! the Prober and Bootstrapper (separate modules).
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use tracing::{debug, warn};
 
-/// Monotonic sequence for unique persist() temp-file names. Static `AtomicU64`
+/// Monotonic sequence for unique `persist()` temp-file names. Static `AtomicU64`
 /// must use `std::sync::atomic` (loom's `new` is not `const fn`).
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 

@@ -3,7 +3,7 @@
 //! Prevents redundant notifications by comparing new probe outputs
 //! against recent history using cosine similarity on embeddings.
 //!
-//! The `DedupEngine` stores embedding vectors in the heartbeat SQLite DB
+//! The `DedupEngine` stores embedding vectors in the heartbeat `SQLite` DB
 //! and compares them against recent history within a configurable time window.
 
 use rusqlite::{params, Connection};
@@ -62,7 +62,7 @@ pub enum DedupVerdict {
 ///
 /// Uses semantic embedding similarity to suppress redundant notifications.
 /// When no embedding provider is configured, all calls degrade gracefully
-/// to no-ops (is_duplicate returns false, record is a no-op).
+/// to no-ops (`is_duplicate` returns false, record is a no-op).
 pub struct DedupEngine {
     config: DedupConfig,
     conn: Option<Arc<Mutex<Connection>>>,
@@ -70,7 +70,7 @@ pub struct DedupEngine {
 }
 
 impl DedupEngine {
-    /// Create a real DedupEngine with a DB connection and optional embedding provider.
+    /// Create a real `DedupEngine` with a DB connection and optional embedding provider.
     ///
     /// Initializes the dedup schema on the given connection.
     /// If `embedding_provider` is None, all dedup operations are no-ops.
@@ -86,7 +86,7 @@ impl DedupEngine {
         }
     }
 
-    /// Create a no-op DedupEngine with no DB connection.
+    /// Create a no-op `DedupEngine` with no DB connection.
     ///
     /// Used as a fallback when no DB is available. All operations degrade
     /// gracefully to no-ops.
@@ -168,7 +168,7 @@ impl DedupEngine {
 
 // ── Schema ─────────────────────────────────────────────────────────────────────
 
-/// Initialize the heartbeat_dedup table schema.
+/// Initialize the `heartbeat_dedup` table schema.
 ///
 /// Safe to call multiple times (uses IF NOT EXISTS).
 pub fn init_dedup_schema(conn: &Connection) -> Result<(), String> {

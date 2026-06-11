@@ -1,7 +1,7 @@
 //! Cross-encoder reranking module
 //!
 //! Provides HTTP-based cross-encoder reranking with 5 provider backends:
-//! Jina, SiliconFlow, Voyage, Pinecone, and vLLM.
+//! Jina, `SiliconFlow`, Voyage, Pinecone, and vLLM.
 //!
 //! ## Usage
 //!
@@ -46,7 +46,7 @@ pub fn build_provider(config: &RerankConfig) -> Box<dyn RerankProvider> {
 ///
 /// Formula: `final = rerank_weight * rerank_score + (1 - rerank_weight) * original_score`
 ///
-/// Documents not present in `reranked` results get a rerank_score of 0.0.
+/// Documents not present in `reranked` results get a `rerank_score` of 0.0.
 /// Results are sorted descending by blended score.
 #[must_use]
 pub fn blend_scores(

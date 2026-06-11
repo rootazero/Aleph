@@ -85,10 +85,10 @@ impl AgentInstanceConfig {
 
     /// Create from a resolved agent definition.
     ///
-    /// Maps ResolvedAgent fields to AgentInstanceConfig:
-    /// - system_prompt <- soul_md (workspace SOUL.md content), falls back to agents_md
-    /// - tool_whitelist <- skills
-    /// - workspace <- workspace_path
+    /// Maps `ResolvedAgent` fields to `AgentInstanceConfig`:
+    /// - `system_prompt` <- `soul_md` (workspace SOUL.md content), falls back to `agents_md`
+    /// - `tool_whitelist` <- skills
+    /// - workspace <- `workspace_path`
     #[must_use]
     pub fn from_resolved(agent: &crate::config::agent_resolver::ResolvedAgent) -> Self {
         // Prioritize SOUL.md over AGENTS.md for system prompt
@@ -131,7 +131,7 @@ pub enum AgentState {
 ///
 /// Each instance has:
 /// - Dedicated workspace directory
-/// - Separate session store (SQLite via SessionManager)
+/// - Separate session store (`SQLite` via `SessionManager`)
 /// - Independent configuration
 /// - Isolated state
 pub struct AgentInstance {
@@ -144,8 +144,8 @@ pub struct AgentInstance {
     /// Session store for persistence
     session_store: Arc<dyn SessionStore>,
     /// Optional L0 raw-memory writer. When set, every persisted user/assistant
-    /// message is also captured into the raw_memories table as a `Transcript`
-    /// entry so the compression pipeline (CompressionService) can later promote
+    /// message is also captured into the `raw_memories` table as a `Transcript`
+    /// entry so the compression pipeline (`CompressionService`) can later promote
     /// it to L1 notes. None falls back to compaction-only capture, which means
     /// short conversations never reach L0.
     raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
@@ -223,7 +223,7 @@ impl AgentInstance {
         &self.config.agent_id
     }
 
-    /// Get the human-readable display name (falls back to agent_id)
+    /// Get the human-readable display name (falls back to `agent_id`)
     #[must_use]
     pub fn display_name(&self) -> &str {
         self.config
@@ -354,13 +354,13 @@ impl AgentInstance {
     }
 
     /// Add a message to a session (delegated to session store) and capture
-    /// it into the L0 raw_memories buffer when a writer is wired.
+    /// it into the L0 `raw_memories` buffer when a writer is wired.
     pub async fn add_message(&self, key: &SessionKey, role: MessageRole, content: &str) {
         self.add_message_with_run_id(key, role, content, None).await;
     }
 
     /// Like [`add_message`], but stamps `metadata.run_id` on the persisted
-    /// row. This is the link that lets `chat.history` surface a run_id so the
+    /// row. This is the link that lets `chat.history` surface a `run_id` so the
     /// Panel can fetch the run's observability trace (`task_traces`) and
     /// rehydrate the workspace step view on session reload/switch. Without it,
     /// assistant rows persist with NULL metadata and the workspace pane goes
@@ -510,7 +510,7 @@ pub struct SessionInfo {
 }
 
 impl SessionInfo {
-    /// Construct from SessionMetadata
+    /// Construct from `SessionMetadata`
     fn from_metadata(meta: &super::session_store::types::SessionMetadata) -> Self {
         Self {
             key: meta.key.clone(),
@@ -525,7 +525,7 @@ impl SessionInfo {
 }
 
 impl SessionMessage {
-    /// Convert from MessageRecord to SessionMessage
+    /// Convert from `MessageRecord` to `SessionMessage`
     fn from_record(record: super::session_store::types::MessageRecord) -> Self {
         let role = match record.role.as_str() {
             "user" => MessageRole::User,
@@ -709,7 +709,7 @@ impl AgentRegistry {
     /// Find an agent by display name (case-insensitive substring match).
     ///
     /// Returns the agent ID if a unique match is found.
-    /// Extracts display_name from either variant without instantiating.
+    /// Extracts `display_name` from either variant without instantiating.
     pub async fn find_by_name(&self, name: &str) -> Option<String> {
         let agents = self.agents.read().await;
         let name_lower = name.to_lowercase();
@@ -743,7 +743,7 @@ impl AgentRegistry {
         matched_id
     }
 
-    /// Get the allowed_links for an agent (None = all allowed).
+    /// Get the `allowed_links` for an agent (None = all allowed).
     /// Extracts from either variant without instantiating.
     pub async fn get_allowed_links(&self, agent_id: &str) -> Option<Option<Vec<String>>> {
         let agents = self.agents.read().await;

@@ -6,12 +6,12 @@
 ///
 /// Providers are organized by **protocol** (not vendor), using a registry-based system:
 ///
-/// - **ProtocolRegistry**: Central registry for all protocol adapters
-///   - Built-in protocols: OpenAI, Anthropic, Gemini
+/// - **`ProtocolRegistry`**: Central registry for all protocol adapters
+///   - Built-in protocols: `OpenAI`, Anthropic, Gemini
 ///   - Dynamic protocols: Loaded from YAML configurations at runtime
 ///
-/// - **OpenAI Protocol**: Handled by `HttpProvider` + `OpenAiProtocol` adapter
-///   - Supports: OpenAI, DeepSeek, Moonshot, Doubao, T8Star, and any OpenAI-compatible API
+/// - **`OpenAI` Protocol**: Handled by `HttpProvider` + `OpenAiProtocol` adapter
+///   - Supports: `OpenAI`, `DeepSeek`, Moonshot, Doubao, `T8Star`, and any OpenAI-compatible API
 ///   - Configuration: Use presets (e.g., `deepseek`) or provide custom `base_url`
 ///
 /// - **Anthropic Protocol**: Handled by `HttpProvider` + `AnthropicProtocol` adapter
@@ -22,8 +22,8 @@
 ///   - Supports: Google Gemini (all models)
 ///   - Configuration: Use presets (`gemini`, `google`)
 ///
-/// - **OpenAI Responses Protocol**: Handled by `HttpProvider` + `OpenAiResponsesProtocol` adapter
-///   - Supports: OpenAI /v1/responses API and compatible relay providers (OpenRouter, etc.)
+/// - **`OpenAI` Responses Protocol**: Handled by `HttpProvider` + `OpenAiResponsesProtocol` adapter
+///   - Supports: `OpenAI` /v1/responses API and compatible relay providers (`OpenRouter`, etc.)
 ///   - Configuration: Use presets (e.g., `openrouter`) or set `protocol: "openai-responses"`
 ///
 /// - **Native Protocols**: Have dedicated implementations
@@ -32,7 +32,7 @@
 /// # Adding New Protocol-Compatible Providers
 ///
 /// To add a new provider that uses an existing protocol:
-/// 1. Add a preset to `presets.rs` with base_url, protocol, and color
+/// 1. Add a preset to `presets.rs` with `base_url`, protocol, and color
 /// 2. That's it! The factory will automatically route to `HttpProvider` via the registry
 ///
 /// # Example
@@ -142,8 +142,8 @@ use crate::sync_primitives::Arc;
 
 /// Create a mock provider for testing
 ///
-/// Returns an Arc<dyn AiProvider> wrapping a MockProvider with a default response.
-/// This is useful for testing services that require an AiProvider.
+/// Returns an Arc<dyn AiProvider> wrapping a `MockProvider` with a default response.
+/// This is useful for testing services that require an `AiProvider`.
 #[must_use]
 pub fn create_mock_provider() -> Arc<dyn AiProvider> {
     Arc::new(MockProvider::new("Mock LLM response for testing"))
@@ -157,16 +157,16 @@ pub fn create_mock_provider() -> Arc<dyn AiProvider> {
 /// # Provider Resolution Order
 ///
 /// 1. Check for preset providers by name (deepseek, moonshot, etc.)
-/// 2. Apply preset defaults (base_url, protocol)
+/// 2. Apply preset defaults (`base_url`, protocol)
 /// 3. Route to appropriate provider based on protocol
 ///
 /// # Supported Protocols
 ///
-/// - `"openai"` - OpenAI and OpenAI-compatible APIs (via HttpProvider)
+/// - `"openai"` - `OpenAI` and OpenAI-compatible APIs (via `HttpProvider`)
 /// - `"claude"` / `"anthropic"` - Anthropic Claude API (native)
 /// - `"gemini"` - Google Gemini API (native)
-/// - `"codex"` - Codex Responses API / ChatGPT subscription backend (via OAuth)
-/// - `"openai-responses"` - OpenAI Responses API (via HttpProvider), for OpenRouter etc.
+/// - `"codex"` - Codex Responses API / `ChatGPT` subscription backend (via OAuth)
+/// - `"openai-responses"` - `OpenAI` Responses API (via `HttpProvider`), for `OpenRouter` etc.
 /// - `"ollama"` - Local Ollama models (native)
 pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn AiProvider>> {
     // Get the global protocol registry (built-in protocols registered at init via Lazy)
@@ -225,7 +225,7 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
 
 /// Unified interface for AI providers.
 ///
-/// All AI backends (OpenAI, Claude, Ollama, etc.) implement this trait
+/// All AI backends (`OpenAI`, Claude, Ollama, etc.) implement this trait
 /// to provide a consistent API for processing requests.
 ///
 /// # Architecture
@@ -245,7 +245,7 @@ pub trait AiProvider: Send + Sync {
     /// Provider brand color
     fn color(&self) -> &str;
 
-    /// Whether this provider supports native tool_use
+    /// Whether this provider supports native `tool_use`
     fn supports_native_tools(&self) -> bool {
         false
     }
@@ -261,16 +261,16 @@ pub trait AiProvider: Send + Sync {
     /// Model behavior override from provider config.
     ///
     /// When set, this takes precedence over the protocol-based auto-mapping.
-    /// Used for providers like OpenRouter that use one protocol but route to
+    /// Used for providers like `OpenRouter` that use one protocol but route to
     /// a different model family.
     fn model_behavior_override(&self) -> Option<&str> {
         None
     }
 
-    /// Downcast to HttpProvider for streaming access.
+    /// Downcast to `HttpProvider` for streaming access.
     ///
-    /// Returns Some(&HttpProvider) only for HttpProvider instances.
-    /// Used by AiProviderBridge to call stream_raw().
+    /// Returns Some(&HttpProvider) only for `HttpProvider` instances.
+    /// Used by `AiProviderBridge` to call `stream_raw()`.
     fn as_http_provider(&self) -> Option<&http_provider::HttpProvider> {
         None
     }

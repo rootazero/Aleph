@@ -63,7 +63,7 @@ pub struct MsTeamsChannel {
     jwt_validator: Arc<JwtValidator>,
     graph_client: Arc<GraphClient>,
     conversation_refs: Arc<RwLock<HashMap<String, ConversationReference>>>,
-    /// Reverse map: message_id → (conversation_id, inserted_at) for delete without conversation context
+    /// Reverse map: `message_id` → (`conversation_id`, `inserted_at`) for delete without conversation context
     sent_messages: Arc<RwLock<HashMap<String, (String, Instant)>>>,
     /// Test mode: skip JWKS refresh, bypass JWT validation
     test_mode: bool,
@@ -231,7 +231,7 @@ impl MsTeamsChannel {
         self.graph_client.list_channels_for_team(team_id).await
     }
 
-    /// Convert an OutboundMessage into a Bot Framework Activity.
+    /// Convert an `OutboundMessage` into a Bot Framework Activity.
     fn build_outbound_activity(message: &OutboundMessage) -> Activity {
         let mut activity = Activity::text_message(&message.text);
 

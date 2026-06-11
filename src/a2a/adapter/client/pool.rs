@@ -5,7 +5,7 @@ use super::http_client::A2AClient;
 use crate::a2a::port::{A2AResult, AgentHealth, RegisteredAgent};
 use crate::sync_primitives::AsyncRwLock;
 
-/// Connection pool managing A2AClient instances per agent.
+/// Connection pool managing `A2AClient` instances per agent.
 ///
 /// Lazily creates clients on first access and caches them by agent ID.
 /// Thread-safe via `AsyncRwLock` (read-heavy, write-rare pattern).

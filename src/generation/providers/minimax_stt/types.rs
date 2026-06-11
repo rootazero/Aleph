@@ -1,6 +1,6 @@
-//! Request/response shapes for MiniMax's native `/v1/audio_to_text` endpoint.
+//! Request/response shapes for `MiniMax`'s native `/v1/audio_to_text` endpoint.
 //!
-//! MiniMax's STT diverges from OpenAI Whisper in two ways:
+//! `MiniMax`'s STT diverges from `OpenAI` Whisper in two ways:
 //!
 //! * Auth requires a per-account `GroupId` query parameter alongside the
 //!   bearer token — there's no global account scope.
@@ -15,7 +15,7 @@
 
 use serde::Deserialize;
 
-/// Top-level MiniMax response envelope.
+/// Top-level `MiniMax` response envelope.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MinimaxSttResponse {
     /// Either the transcript text (success) or empty/missing on failure.
@@ -44,7 +44,7 @@ impl MinimaxBaseResp {
     }
 
     /// Best-effort message — falls back to a stringified status code when
-    /// the upstream omits a status_msg.
+    /// the upstream omits a `status_msg`.
     #[must_use]
     pub fn best_message(&self) -> String {
         self.status_msg

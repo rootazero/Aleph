@@ -27,7 +27,7 @@ pub enum SessionAction {
     Load,
 }
 
-/// Arguments for the browser_session tool.
+/// Arguments for the `browser_session` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserSessionArgs {
     /// Browser profile name (default: "default").
@@ -41,7 +41,7 @@ pub struct BrowserSessionArgs {
     pub name: String,
 }
 
-/// Output from the browser_session tool.
+/// Output from the `browser_session` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserSessionOutput {
     pub success: bool,

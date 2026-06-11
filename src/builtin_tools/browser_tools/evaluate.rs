@@ -10,7 +10,7 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_evaluate tool.
+/// Arguments for the `browser_evaluate` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserEvaluateArgs {
     /// Browser profile name (default: "default").
@@ -20,7 +20,7 @@ pub struct BrowserEvaluateArgs {
     pub script: String,
 }
 
-/// Output from the browser_evaluate tool.
+/// Output from the `browser_evaluate` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserEvaluateOutput {
     pub success: bool,

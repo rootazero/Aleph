@@ -5,7 +5,7 @@
 //! a hidden CLI subcommand on the existing aleph-server binary (no
 //! separate helper artifact — R3 core minimalism).
 //!
-//! The init prelude runs inside the JobObject that the driver already
+//! The init prelude runs inside the `JobObject` that the driver already
 //! assigned, *before* the untrusted target gets to execute. That's the
 //! correct security hook point: the process container is already in
 //! place, but the primary token is still the host's (full privileges,
@@ -28,29 +28,29 @@ pub struct WindowsInitPolicy {
     /// fails with `ERROR_PRIVILEGE_NOT_HELD` (host lacks
     /// `SE_INCREASE_QUOTA`). Default `false` → soft-degrade to
     /// `CreateProcessW` with the host token (cycle 1 behavior).
-    /// JobObject containment continues to apply either way.
+    /// `JobObject` containment continues to apply either way.
     #[serde(default)]
     pub require_restricted_token: bool,
 
-    /// SP-6: try AppContainer first (strongest sandbox primitive).
+    /// SP-6: try `AppContainer` first (strongest sandbox primitive).
     /// Soft-degrades to restricted-token (SP-3a) on failure.
     #[serde(default)]
     pub use_app_container: bool,
 
-    /// SP-6: when `true`, refuse to spawn if AppContainer setup fails.
+    /// SP-6: when `true`, refuse to spawn if `AppContainer` setup fails.
     /// Default `false` → soft-degrade to SP-3a's path.
     #[serde(default)]
     pub require_app_container: bool,
 
     /// SP-6: capability names (lowercase Win32 form like
-    /// `internetClient`) to grant inside the AppContainer. Empty list
+    /// `internetClient`) to grant inside the `AppContainer`. Empty list
     /// = "no capabilities". Translated to SIDs via
     /// `DeriveCapabilitySidsFromName` at init time.
     #[serde(default)]
     pub app_container_capabilities: Vec<String>,
 
     /// SP-6: absolute path to the session workspace dir. SP-6 adds an
-    /// Allow-Modify ACE for the per-execution AppContainer SID on this
+    /// Allow-Modify ACE for the per-execution `AppContainer` SID on this
     /// directory before spawn so the target can read/write its
     /// workspace. `None` → no DACL grant (target may fail on writes).
     #[serde(default)]
@@ -61,12 +61,12 @@ pub struct WindowsInitPolicy {
     /// read, even though they live inside the otherwise-readable
     /// workspace. The init resolves each glob against `workspace_path`
     /// and stamps a `DENY_ACCESS` read ACE for the per-execution
-    /// AppContainer SID on every match — the Windows analogue of the
+    /// `AppContainer` SID on every match — the Windows analogue of the
     /// macOS seatbelt `deny_read_globs` floor (and codex's
     /// `deny_read_acl`). Empty list → no deny-read pass → byte-identical
     /// to the pre-Cycle-7 behaviour.
     ///
-    /// Enforced only on the AppContainer path (the default): the
+    /// Enforced only on the `AppContainer` path (the default): the
     /// restricted-token path shares the host user SID, so a per-SID deny
     /// would also lock out the parent. With `use_app_container = true`
     /// (the default) the common path is covered.
@@ -74,7 +74,7 @@ pub struct WindowsInitPolicy {
     pub deny_read_globs: Vec<String>,
 }
 
-/// Translate `NetworkPolicy` → AppContainer capability names. Lives at
+/// Translate `NetworkPolicy` → `AppContainer` capability names. Lives at
 /// crate top so it's testable cross-platform.
 #[must_use]
 pub fn capability_names_for_network(
@@ -93,7 +93,7 @@ pub fn capability_names_for_network(
     }
 }
 
-/// SP-6 v2: DACL inheritance flags applied to AppContainer workspace
+/// SP-6 v2: DACL inheritance flags applied to `AppContainer` workspace
 /// grants. `CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE` so the ACE
 /// propagates to existing children whose default DACL inheritance is
 /// enabled (the NTFS default) plus all future children.
@@ -119,7 +119,7 @@ pub(crate) const DACL_INHERIT_FLAGS_FOR_APPCONTAINER: u32 = 0x2 | 0x1;
 /// the shared path's DACL (init B reads the DACL before init A writes its
 /// ACE, so A's ACE is lost when B writes back). Dropping a per-execution
 /// *deny* ACE is the dangerous case: a `.git` that should be read-only for
-/// init A's AppContainer SID silently becomes writable.
+/// init A's `AppContainer` SID silently becomes writable.
 ///
 /// We close the window exactly as codex does with its
 /// `Local\CodexSandboxReadAcl` named mutex. `Local\` scope is correct here:

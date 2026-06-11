@@ -1,4 +1,4 @@
-//! BackgroundAgentTracker — tracks sub-agents running in background tokio tasks.
+//! `BackgroundAgentTracker` — tracks sub-agents running in background tokio tasks.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -117,7 +117,7 @@ impl BackgroundAgentTracker {
     ///
     /// The entry stays queryable **non-destructively** until pruned by the
     /// TTL in `cleanup`, so a parent may poll `check_status` for the same
-    /// request_id more than once without the result vanishing.
+    /// `request_id` more than once without the result vanishing.
     pub fn mark_completed(&self, request_id: &str, outcome: CompletedOutcome) {
         let now = Instant::now();
         let prior = {
@@ -149,7 +149,7 @@ impl BackgroundAgentTracker {
         );
     }
 
-    /// Cancel a running background agent. Returns `true` if the request_id
+    /// Cancel a running background agent. Returns `true` if the `request_id`
     /// was found in the running set and the `CancellationToken` was hit;
     /// `false` if no such running agent exists (already completed / never
     /// registered). The cooperative cancellation still relies on the
@@ -168,7 +168,7 @@ impl BackgroundAgentTracker {
     }
 
     /// Non-destructively read a finished agent's outcome. Returns `None`
-    /// when the request_id was never registered or has been TTL-pruned.
+    /// when the `request_id` was never registered or has been TTL-pruned.
     /// Unlike a consume, repeated polls return the same snapshot — this is
     /// what lets a parent re-check a completed subagent.
     pub fn result_snapshot(&self, request_id: &str) -> Option<CompletedSnapshot> {
@@ -183,7 +183,7 @@ impl BackgroundAgentTracker {
         })
     }
 
-    /// List running agents as (request_id, task_description, elapsed_secs).
+    /// List running agents as (`request_id`, `task_description`, `elapsed_secs`).
     pub fn list_running(&self) -> Vec<(String, String, u64)> {
         let running = self.running.read().unwrap_or_else(|e| {
             warn!("BackgroundAgentTracker lock poisoned, recovering");
@@ -202,7 +202,7 @@ impl BackgroundAgentTracker {
     }
 
     /// Lightweight metadata for one still-running agent. `None` when the
-    /// request_id is unknown (never registered, or already completed).
+    /// `request_id` is unknown (never registered, or already completed).
     pub fn running_meta(&self, request_id: &str) -> Option<RunningMeta> {
         let running = self.running.read().unwrap_or_else(|e| {
             warn!("BackgroundAgentTracker lock poisoned, recovering");
@@ -238,7 +238,7 @@ impl BackgroundAgentTracker {
     }
 
     /// Append a progress event to the running agent's queue.
-    /// Capped at 50 events FIFO. Silently no-ops if request_id is unknown
+    /// Capped at 50 events FIFO. Silently no-ops if `request_id` is unknown
     /// (race condition: tracker may have moved entry to completed).
     pub fn push_progress(&self, request_id: &str, event: SubagentProgress) {
         let mut running = self.running.write().unwrap_or_else(|e| {
@@ -254,7 +254,7 @@ impl BackgroundAgentTracker {
     }
 
     /// Return up to `limit` most-recent progress events (chronological order).
-    /// Returns empty Vec if request_id is unknown or already completed.
+    /// Returns empty Vec if `request_id` is unknown or already completed.
     pub fn progress_snapshot(&self, request_id: &str, limit: usize) -> Vec<SubagentProgress> {
         let running = self.running.read().unwrap_or_else(|e| {
             warn!("BackgroundAgentTracker lock poisoned, recovering");

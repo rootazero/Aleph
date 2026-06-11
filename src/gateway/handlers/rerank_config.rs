@@ -1,7 +1,7 @@
 //! Rerank Configuration RPC handlers
 //!
 //! Dedicated handlers for cross-encoder reranking provider configuration,
-//! decoupled from the broader memory_config module.
+//! decoupled from the broader `memory_config` module.
 //!
 //! API keys are stored in the encrypted vault, never in config.toml.
 //!
@@ -42,7 +42,7 @@ fn resolve_api_key(provider_name: &str, vault: &SharedTokenManager) -> Option<St
     super::resolve_vault_secret(&vault_key(provider_name), vault)
 }
 
-/// Handle rerank_config.get request
+/// Handle `rerank_config.get` request
 ///
 /// If params contains `"provider": "jina"`, reports whether that provider has a
 /// vault key; otherwise checks the active provider. The stored secret is never
@@ -75,7 +75,7 @@ pub async fn handle_get(
     JsonRpcResponse::success(request.id, rerank)
 }
 
-/// Handle rerank_config.update request
+/// Handle `rerank_config.update` request
 ///
 /// Stores API key in vault, saves remaining config to config.toml.
 pub async fn handle_update(
@@ -145,10 +145,10 @@ pub async fn handle_update(
     JsonRpcResponse::success(request.id, json!({ "success": true }))
 }
 
-/// Handle rerank_config.test request
+/// Handle `rerank_config.test` request
 ///
 /// Builds a rerank provider from the supplied config and sends a test query.
-/// If no api_key in request, falls back to vault.
+/// If no `api_key` in request, falls back to vault.
 /// On success, persists verified=true to config.
 pub async fn handle_test(
     request: JsonRpcRequest,

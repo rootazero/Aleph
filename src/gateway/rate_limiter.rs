@@ -54,7 +54,7 @@ impl fmt::Display for RateLimitScope {
 /// Compound key: (identity, scope). One entry per unique combination.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct RateLimitKey {
-    /// IP address or device_id of the caller.
+    /// IP address or `device_id` of the caller.
     pub identity: String,
     /// Which rate-limit bucket this key belongs to.
     pub scope: RateLimitScope,
@@ -431,7 +431,7 @@ pub fn scope_for_method(method: &str) -> RateLimitScope {
 /// Check whether an identity string represents a loopback address.
 ///
 /// Handles both bare IPs ("127.0.0.1") and socket-address strings
-/// that include a port suffix ("127.0.0.1:54321", "[::1]:8080").
+/// that include a port suffix ("127.0.0.1:54321", "[`::1`]:8080").
 fn is_loopback(identity: &str) -> bool {
     identity == "127.0.0.1"
         || identity == "::1"

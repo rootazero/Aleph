@@ -3,7 +3,7 @@
 //! Shared Token Management
 //!
 //! A single shared token used as the "entry key" for UI login and API access.
-//! The plaintext token is held in memory; only the hash is stored in SQLite.
+//! The plaintext token is held in memory; only the hash is stored in `SQLite`.
 //! Also manages the encrypted secret vault, using the token as master key.
 
 use super::crypto::{generate_secret, hmac_sign};
@@ -17,7 +17,7 @@ use uuid::Uuid;
 /// Manages a single shared token for UI/API authentication.
 ///
 /// On generation, the plaintext is kept in memory and the HMAC hash
-/// is persisted to SQLite via `SecurityStore`. Validation re-computes
+/// is persisted to `SQLite` via `SecurityStore`. Validation re-computes
 /// the HMAC and compares against the stored hash.
 ///
 /// Also owns a `SecretVault` for encrypted secret storage, using the
@@ -239,7 +239,7 @@ impl SharedTokenManager {
     ///
     /// Flow:
     /// 1. Decrypt all entries with current token
-    /// 2. Generate new token (updates HMAC, current_token)
+    /// 2. Generate new token (updates HMAC, `current_token`)
     /// 3. Re-encrypt all entries with new token
     /// 4. Atomically replace vault entries
     pub fn reset_token(&self) -> Result<String, SharedTokenError> {

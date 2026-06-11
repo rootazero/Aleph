@@ -1,6 +1,6 @@
-//! ElevenLabs Text-to-Speech Provider
+//! `ElevenLabs` Text-to-Speech Provider
 //!
-//! This module implements the `GenerationProvider` trait for ElevenLabs' Text-to-Speech API.
+//! This module implements the `GenerationProvider` trait for `ElevenLabs`' Text-to-Speech API.
 //!
 //! # API Reference
 //!
@@ -45,19 +45,19 @@ pub mod types;
 
 pub use types::{ElevenLabsErrorDetail, ElevenLabsErrorResponse, TtsRequest, VoiceSettings};
 
-/// ElevenLabs Text-to-Speech Provider
+/// `ElevenLabs` Text-to-Speech Provider
 ///
-/// This provider integrates with ElevenLabs' TTS API to synthesize high-quality
+/// This provider integrates with `ElevenLabs`' TTS API to synthesize high-quality
 /// speech from text input using various voices.
 #[derive(Clone)]
 pub struct ElevenLabsProvider {
     /// HTTP client for making requests
     client: Client,
-    /// ElevenLabs API key
+    /// `ElevenLabs` API key
     pub api_key: String,
-    /// API endpoint (e.g., "https://api.elevenlabs.io")
+    /// API endpoint (e.g., "<https://api.elevenlabs.io>")
     pub endpoint: String,
-    /// Model to use (e.g., "eleven_monolingual_v1")
+    /// Model to use (e.g., "`eleven_monolingual_v1`")
     pub model: String,
     /// Default voice ID to use
     pub default_voice_id: String,
@@ -76,7 +76,7 @@ impl std::fmt::Debug for ElevenLabsProvider {
 }
 
 impl ElevenLabsProvider {
-    /// Create a new ElevenLabs TTS Provider
+    /// Create a new `ElevenLabs` TTS Provider
     pub fn new<S: Into<String>>(
         api_key: S,
         base_url: Option<String>,
@@ -219,7 +219,7 @@ impl ElevenLabsProvider {
         format!("{}/v1/text-to-speech/{}", self.endpoint, voice_id)
     }
 
-    /// Build the API request body from a GenerationRequest
+    /// Build the API request body from a `GenerationRequest`
     fn build_request_body(&self, request: &GenerationRequest) -> types::TtsRequest {
         let model_id = request
             .params
@@ -249,7 +249,7 @@ impl ElevenLabsProvider {
         }
     }
 
-    /// Parse API error response and convert to GenerationError
+    /// Parse API error response and convert to `GenerationError`
     fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError {
         // Try to parse as ElevenLabs error format
         if let Ok(error_response) = serde_json::from_str::<types::ElevenLabsErrorResponse>(body) {

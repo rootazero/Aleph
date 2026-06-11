@@ -1,4 +1,4 @@
-//! PlanResolveTool — approve or reject a submitted plan (team leader).
+//! `PlanResolveTool` — approve or reject a submitted plan (team leader).
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -14,7 +14,7 @@ use crate::tools::AlephTool;
 pub struct PlanResolveArgs {
     /// ID of the team
     pub team_id: String,
-    /// The plan_message_id returned by plan_submit
+    /// The `plan_message_id` returned by `plan_submit`
     pub plan_message_id: String,
     /// Agent ID of the member who submitted the plan
     pub submitter_agent_id: String,

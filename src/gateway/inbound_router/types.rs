@@ -430,7 +430,7 @@ pub(crate) fn check_link_access(
     }
 }
 
-/// Metadata key for slash command execution mode in RunRequest
+/// Metadata key for slash command execution mode in `RunRequest`
 pub const SLASH_COMMAND_MODE_KEY: &str = "slash_command_mode";
 
 #[cfg(test)]

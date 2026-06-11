@@ -72,7 +72,7 @@ pub struct WebhookChannel {
     channel_state: ChannelState,
     /// HTTP client for outbound requests
     client: reqwest::Client,
-    /// The webhook handler (created on start, shared with WebhookReceiver)
+    /// The webhook handler (created on start, shared with `WebhookReceiver`)
     handler: Option<Arc<GenericWebhookHandler>>,
 }
 
@@ -139,7 +139,7 @@ impl WebhookChannel {
         self.channel_state.sender()
     }
 
-    /// Get the webhook handler for registration with WebhookReceiver.
+    /// Get the webhook handler for registration with `WebhookReceiver`.
     ///
     /// Returns `None` if `start()` has not been called yet.
     #[must_use]
@@ -208,7 +208,7 @@ impl Channel for WebhookChannel {
     }
 }
 
-/// WebhookHandler implementation for the generic webhook channel.
+/// `WebhookHandler` implementation for the generic webhook channel.
 ///
 /// This struct is registered with the shared `WebhookReceiver` HTTP server
 /// to handle incoming POST requests on the configured path.

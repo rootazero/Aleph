@@ -1,7 +1,7 @@
 //! Provider Factory for Gateway
 //!
 //! Creates AI providers from environment variables or configuration.
-//! Primarily used by the Gateway to initialize the ExecutionEngine.
+//! Primarily used by the Gateway to initialize the `ExecutionEngine`.
 
 use crate::sync_primitives::Arc;
 use std::env;
@@ -30,7 +30,7 @@ const DEFAULT_OPENAI_MODEL: &str = "gpt-5.4";
 const CLAUDE_COLOR: &str = "#d97757";
 const OPENAI_COLOR: &str = "#10a37f";
 
-/// Create a ClaudeProvider from environment variables
+/// Create a `ClaudeProvider` from environment variables
 ///
 /// Environment variables:
 /// - `ANTHROPIC_API_KEY` (required): API key for Anthropic
@@ -39,7 +39,7 @@ const OPENAI_COLOR: &str = "#10a37f";
 ///
 /// # Returns
 ///
-/// A configured ClaudeProvider wrapped in Arc<dyn AiProvider>
+/// A configured `ClaudeProvider` wrapped in Arc<dyn AiProvider>
 pub fn create_claude_provider_from_env() -> Result<Arc<dyn AiProvider>, ProviderFactoryError> {
     // Read API key from environment
     let api_key = env::var("ANTHROPIC_API_KEY")
@@ -104,16 +104,16 @@ pub fn create_claude_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
     Ok(provider)
 }
 
-/// Create an OpenAI provider from environment variables
+/// Create an `OpenAI` provider from environment variables
 ///
 /// Environment variables:
-/// - `OPENAI_API_KEY` (required): API key for OpenAI
+/// - `OPENAI_API_KEY` (required): API key for `OpenAI`
 /// - `OPENAI_MODEL` (optional): Model to use, defaults to gpt-5.4
 /// - `OPENAI_BASE_URL` (optional): Custom API endpoint (for OpenAI-compatible APIs)
 ///
 /// # Returns
 ///
-/// A configured OpenAI provider wrapped in Arc<dyn AiProvider>
+/// A configured `OpenAI` provider wrapped in Arc<dyn AiProvider>
 pub fn create_openai_provider_from_env() -> Result<Arc<dyn AiProvider>, ProviderFactoryError> {
     // Read API key from environment
     let api_key = env::var("OPENAI_API_KEY")
@@ -176,14 +176,14 @@ pub fn create_openai_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
     Ok(provider)
 }
 
-/// Create a SingleProviderRegistry from environment
+/// Create a `SingleProviderRegistry` from environment
 ///
 /// This is a convenience function that creates a provider from environment
-/// variables and wraps it in a SingleProviderRegistry for use with ExecutionEngine.
+/// variables and wraps it in a `SingleProviderRegistry` for use with `ExecutionEngine`.
 ///
 /// Tries providers in order:
-/// 1. Anthropic (ANTHROPIC_API_KEY)
-/// 2. OpenAI (OPENAI_API_KEY)
+/// 1. Anthropic (`ANTHROPIC_API_KEY`)
+/// 2. `OpenAI` (`OPENAI_API_KEY`)
 pub fn create_provider_registry_from_env(
 ) -> Result<Arc<SingleProviderRegistry>, ProviderFactoryError> {
     // Try Anthropic first
@@ -202,7 +202,7 @@ pub fn create_provider_registry_from_env(
 
 /// Check if a provider can be created from environment
 ///
-/// Returns true if ANTHROPIC_API_KEY or OPENAI_API_KEY is set and non-empty
+/// Returns true if `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set and non-empty
 #[must_use]
 pub fn can_create_provider_from_env() -> bool {
     env::var("ANTHROPIC_API_KEY")

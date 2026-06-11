@@ -1,4 +1,4 @@
-//! AcpAdapter trait — abstraction over external CLI tools that speak ACP.
+//! `AcpAdapter` trait — abstraction over external CLI tools that speak ACP.
 
 use async_trait::async_trait;
 use tokio::process::Command;

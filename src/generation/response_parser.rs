@@ -51,7 +51,7 @@ static GENERATE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 /// * `response` - The AI response text to parse
 ///
 /// # Returns
-/// ParseResult containing extracted requests and cleaned response text
+/// `ParseResult` containing extracted requests and cleaned response text
 pub fn parse_generation_requests(response: &str) -> ParseResult {
     let mut requests = Vec::new();
     let mut cleaned_response = response.to_string();

@@ -1,4 +1,4 @@
-//! Maps external identities (Telegram, WhatsApp) to internal user IDs
+//! Maps external identities (Telegram, `WhatsApp`) to internal user IDs
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -19,9 +19,9 @@ pub struct PlatformIdentity {
 
 /// Bidirectional mapping between platform identities and internal user IDs
 pub struct IdentityMap {
-    /// "platform:user_id" -> UserId
+    /// "`platform:user_id`" -> `UserId`
     external_to_internal: DashMap<String, UserId>,
-    /// UserId -> Vec<"platform:user_id">
+    /// `UserId` -> Vec<"`platform:user_id`">
     internal_to_external: DashMap<UserId, Vec<String>>,
 }
 
@@ -34,7 +34,7 @@ impl IdentityMap {
         }
     }
 
-    /// Create identity key from platform and user_id
+    /// Create identity key from platform and `user_id`
     fn make_key(platform: &str, platform_user_id: &str) -> String {
         format!("{platform}:{platform_user_id}")
     }

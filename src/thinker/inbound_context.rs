@@ -20,7 +20,7 @@ pub struct SenderInfo {
 pub struct ChannelContext {
     /// e.g. "telegram", "discord", "cli", "websocket"
     pub kind: String,
-    /// e.g. ["inline_buttons", "reactions", "threads"]
+    /// e.g. ["`inline_buttons`", "reactions", "threads"]
     pub capabilities: Vec<String>,
     pub is_group_chat: bool,
     pub is_mentioned: bool,

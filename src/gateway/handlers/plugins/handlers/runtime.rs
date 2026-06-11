@@ -59,7 +59,7 @@ pub async fn handle_call_tool(request: JsonRpcRequest) -> JsonRpcResponse {
 /// - `args`: JSON arguments to pass to the command handler
 ///
 /// # Returns
-/// - `result`: The command's DirectCommandResult containing content, data, and success flag
+/// - `result`: The command's `DirectCommandResult` containing content, data, and success flag
 ///
 /// # Errors
 /// - `INTERNAL_ERROR`: Extension manager not initialized or command execution failed

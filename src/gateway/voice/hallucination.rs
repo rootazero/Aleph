@@ -2,7 +2,7 @@
 //!
 //! Whisper-family models fabricate plausible-but-absent text when fed silence,
 //! background noise, or music — almost always boilerplate harvested from their
-//! YouTube training data ("Thanks for watching!", "Please subscribe", etc.) or
+//! `YouTube` training data ("Thanks for watching!", "Please subscribe", etc.) or
 //! a single token looped dozens of times. Left unfiltered, these phantom
 //! phrases enter the agent's context layer as if the user had spoken them,
 //! polluting memory and triggering spurious replies.

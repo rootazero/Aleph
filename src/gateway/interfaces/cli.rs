@@ -81,7 +81,7 @@ pub struct CliChannel {
     config: CliChannelConfig,
     cli_state: Arc<RwLock<CliChannelState>>,
     channel_state: ChannelState,
-    /// Test mode: skip stdin thread, allow inject_message without I/O
+    /// Test mode: skip stdin thread, allow `inject_message` without I/O
     test_mode: bool,
 }
 

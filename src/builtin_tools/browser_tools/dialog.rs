@@ -19,7 +19,7 @@ pub enum DialogAction {
     Dismiss,
 }
 
-/// Arguments for the browser_dialog tool.
+/// Arguments for the `browser_dialog` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserDialogArgs {
     /// Browser profile name (default: "default").
@@ -32,7 +32,7 @@ pub struct BrowserDialogArgs {
     pub prompt_text: Option<String>,
 }
 
-/// Output from the browser_dialog tool.
+/// Output from the `browser_dialog` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserDialogOutput {
     pub success: bool,

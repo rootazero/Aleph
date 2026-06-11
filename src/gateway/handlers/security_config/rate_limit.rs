@@ -28,7 +28,7 @@ const fn default_burst_allow() -> u32 {
     20
 }
 
-/// Sandbox rate limit configuration (mirrors SandboxRateLimitConfigSchema from sandbox/config.rs).
+/// Sandbox rate limit configuration (mirrors `SandboxRateLimitConfigSchema` from sandbox/config.rs).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SandboxRateLimitConfigSchema {
     #[serde(default = "default_rate_limit_enabled")]
@@ -75,7 +75,7 @@ const fn default_rate_limit_admin() -> WindowConfigSchema {
     }
 }
 
-/// Read sandbox rate limit config from [sandbox.rate_limit] in config TOML.
+/// Read sandbox rate limit config from [`sandbox.rate_limit`] in config TOML.
 pub(super) fn read_sandbox_rate_limit_from_toml(
     patcher: &ConfigPatcher,
 ) -> SandboxRateLimitConfigSchema {
@@ -136,7 +136,7 @@ pub(super) fn read_sandbox_rate_limit_from_toml(
     SandboxRateLimitConfigSchema::default()
 }
 
-/// Write sandbox rate limit config to [sandbox.rate_limit] in config TOML.
+/// Write sandbox rate limit config to [`sandbox.rate_limit`] in config TOML.
 pub(super) fn write_sandbox_rate_limit_to_toml(
     path: &Path,
     config: &SandboxRateLimitConfigSchema,

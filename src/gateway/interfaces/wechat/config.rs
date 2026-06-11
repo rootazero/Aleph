@@ -1,4 +1,4 @@
-//! WeChat Channel Configuration
+//! `WeChat` Channel Configuration
 //!
 //! Configuration types for the iLink Bot API integration.
 
@@ -32,10 +32,10 @@ pub enum GroupPolicy {
     Allowlist,
 }
 
-/// WeChat channel configuration.
+/// `WeChat` channel configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeChatConfig {
-    /// Account identifier for this WeChat instance.
+    /// Account identifier for this `WeChat` instance.
     pub account_id: String,
 
     /// iLink bot token.
@@ -45,7 +45,7 @@ pub struct WeChatConfig {
     #[serde(default = "default_base_url")]
     pub base_url: String,
 
-    /// WeChat CDN base URL for media downloads.
+    /// `WeChat` CDN base URL for media downloads.
     #[serde(default = "default_cdn_url")]
     pub cdn_base_url: String,
 
@@ -57,11 +57,11 @@ pub struct WeChatConfig {
     #[serde(default)]
     pub group_policy: GroupPolicy,
 
-    /// Allowed user IDs for DMs (used when dm_policy is Allowlist).
+    /// Allowed user IDs for DMs (used when `dm_policy` is Allowlist).
     #[serde(default)]
     pub allow_from: Vec<String>,
 
-    /// Allowed group IDs (used when group_policy is Allowlist).
+    /// Allowed group IDs (used when `group_policy` is Allowlist).
     #[serde(default)]
     pub group_allow_from: Vec<String>,
 

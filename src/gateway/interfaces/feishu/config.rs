@@ -50,18 +50,18 @@ pub struct FeishuConfig {
     /// Connection mode: "websocket" (default) or "webhook"
     #[serde(default = "default_connection_mode")]
     pub connection_mode: String,
-    /// Webhook server port (only used when connection_mode = "webhook")
+    /// Webhook server port (only used when `connection_mode` = "webhook")
     #[serde(default = "default_webhook_port")]
     pub webhook_port: u16,
-    /// Webhook server host (only used when connection_mode = "webhook")
+    /// Webhook server host (only used when `connection_mode` = "webhook")
     #[serde(default = "default_webhook_host")]
     pub webhook_host: String,
-    /// Webhook endpoint path (only used when connection_mode = "webhook")
+    /// Webhook endpoint path (only used when `connection_mode` = "webhook")
     #[serde(default = "default_webhook_path")]
     pub webhook_path: String,
-    /// Verification token for webhook URL verification (only used when connection_mode = "webhook")
+    /// Verification token for webhook URL verification (only used when `connection_mode` = "webhook")
     pub verification_token: Option<String>,
-    /// Encrypt key for webhook signature verification (only used when connection_mode = "webhook")
+    /// Encrypt key for webhook signature verification (only used when `connection_mode` = "webhook")
     pub encrypt_key: Option<String>,
     #[serde(default)]
     pub accounts: Option<std::collections::HashMap<String, FeishuAccountEntry>>,
@@ -94,7 +94,7 @@ pub enum GroupSessionScope {
     Group,
     /// One session per user within a group
     User,
-    /// One session per message thread (root_id)
+    /// One session per message thread (`root_id`)
     Thread,
 }
 

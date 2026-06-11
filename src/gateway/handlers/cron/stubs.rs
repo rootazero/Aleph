@@ -1,4 +1,4 @@
-//! Stub cron handlers — stateless, used in HandlerRegistry::new()
+//! Stub cron handlers — stateless, used in `HandlerRegistry::new()`
 //! before the real `CronService` is wired in.
 
 use serde_json::{json, Value};

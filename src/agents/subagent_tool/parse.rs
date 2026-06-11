@@ -1,7 +1,7 @@
 //! Input JSON → `SubagentAction` parsing.
 //!
 //! Supports an explicit `action` discriminator plus legacy heuristics
-//! (request_id → check_status, task → run). Validates field shape but
+//! (`request_id` → `check_status`, task → run). Validates field shape but
 //! does no execution.
 
 use serde_json::Value;

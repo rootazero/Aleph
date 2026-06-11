@@ -32,7 +32,7 @@ use crate::session::events::MessageContent;
 ///
 /// The harness's `seed_session` replays each turn as the corresponding session
 /// event before emitting the trailing user prompt. Only text content survives
-/// this conversion today — multimodal blocks (images, tool_calls) are carried
+/// this conversion today — multimodal blocks (images, `tool_calls`) are carried
 /// separately via the `Multimodal(Vec<MessageContent>)` variant.
 ///
 /// `prompt` is the fresh user message that triggered this run.

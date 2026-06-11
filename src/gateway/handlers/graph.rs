@@ -1,7 +1,7 @@
 //! Graph Query Handler
 //!
 //! Handles JSON-RPC requests for knowledge graph visualization.
-//! These handlers query the NoteStore for note index data and links.
+//! These handlers query the `NoteStore` for note index data and links.
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::graph_types::{
@@ -15,7 +15,7 @@ use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::memory::store::MemoryBackend;
 use crate::sync_primitives::Arc;
 
-/// Convert a NoteIndexEntry into a NoteNodeDto.
+/// Convert a `NoteIndexEntry` into a `NoteNodeDto`.
 fn entry_to_dto(entry: &NoteIndexEntry) -> NoteNodeDto {
     NoteNodeDto {
         id: entry.path.clone(),
@@ -39,7 +39,7 @@ fn notes_dir() -> std::path::PathBuf {
 
 /// Handle graph.query — returns nodes and edges for visualization.
 ///
-/// Requires NoteStore wired at Gateway startup.
+/// Requires `NoteStore` wired at Gateway startup.
 pub async fn handle_query(req: JsonRpcRequest) -> JsonRpcResponse {
     JsonRpcResponse::error(
         req.id,
@@ -50,7 +50,7 @@ pub async fn handle_query(req: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Handle graph.neighbors — returns neighbors of a node up to a given depth.
 ///
-/// Requires NoteStore wired at Gateway startup.
+/// Requires `NoteStore` wired at Gateway startup.
 pub async fn handle_neighbors(req: JsonRpcRequest) -> JsonRpcResponse {
     JsonRpcResponse::error(
         req.id,
@@ -59,9 +59,9 @@ pub async fn handle_neighbors(req: JsonRpcRequest) -> JsonRpcResponse {
     )
 }
 
-/// Handle graph.node_detail — returns full detail for a single note.
+/// Handle `graph.node_detail` — returns full detail for a single note.
 ///
-/// Requires NoteStore wired at Gateway startup.
+/// Requires `NoteStore` wired at Gateway startup.
 pub async fn handle_node_detail(req: JsonRpcRequest) -> JsonRpcResponse {
     JsonRpcResponse::error(
         req.id,
@@ -72,7 +72,7 @@ pub async fn handle_node_detail(req: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Handle graph.search — full-text search over notes.
 ///
-/// Requires NoteStore wired at Gateway startup.
+/// Requires `NoteStore` wired at Gateway startup.
 pub async fn handle_search(req: JsonRpcRequest) -> JsonRpcResponse {
     JsonRpcResponse::error(
         req.id,
@@ -81,7 +81,7 @@ pub async fn handle_search(req: JsonRpcRequest) -> JsonRpcResponse {
     )
 }
 
-/// Handle graph.update_note — persist an edited note body.
+/// Handle `graph.update_note` — persist an edited note body.
 ///
 /// Requires a `NoteIndexer` wired at Gateway startup.
 pub async fn handle_update_note(req: JsonRpcRequest) -> JsonRpcResponse {
@@ -98,7 +98,7 @@ pub async fn handle_update_note(req: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Real implementation of graph.query.
 ///
-/// Returns notes sorted by link_count + recency (up to `limit`),
+/// Returns notes sorted by `link_count` + recency (up to `limit`),
 /// plus all edges (links) between the returned notes.
 pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: GraphQueryParams = match serde_json::from_value(
@@ -229,7 +229,7 @@ pub async fn handle_neighbors_impl(req: JsonRpcRequest, db: MemoryBackend) -> Js
     }
 }
 
-/// Real implementation of graph.node_detail.
+/// Real implementation of `graph.node_detail`.
 ///
 /// Returns the note index entry, full markdown content (read from disk),
 /// and backlinks (incoming links from other notes).
@@ -296,7 +296,7 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
     }
 }
 
-/// Real implementation of graph.update_note.
+/// Real implementation of `graph.update_note`.
 ///
 /// Persists the edited markdown for a single note verbatim (via
 /// `NoteIndexer::write_note_raw`, which writes byte-for-byte and re-indexes),
@@ -395,7 +395,7 @@ fn compute_hop_depth(center_id: &str, target_id: &str, edges: &[NoteLinkDto]) ->
 
 /// Real implementation of graph.search.
 ///
-/// Full-text search over note content via NoteStore FTS index.
+/// Full-text search over note content via `NoteStore` FTS index.
 pub async fn handle_search_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: GraphSearchParams = match req
         .params

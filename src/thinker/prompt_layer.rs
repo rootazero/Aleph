@@ -1,4 +1,4 @@
-//! PromptLayer trait — the composable unit of prompt assembly
+//! `PromptLayer` trait — the composable unit of prompt assembly
 
 use super::context::ResolvedContext;
 use super::identity_files::IdentityFiles;
@@ -79,7 +79,7 @@ pub struct LayerInput<'a> {
     pub hydration: Option<&'a HydrationResult>,
     pub soul: Option<&'a SoulManifest>,
     pub context: Option<&'a ResolvedContext>,
-    /// Active workspace profile (system_prompt overlay, tool whitelist, etc.)
+    /// Active workspace profile (`system_prompt` overlay, tool whitelist, etc.)
     pub profile: Option<&'a crate::config::ProfileConfig>,
     /// Prompt mode for this assembly (default: Full)
     pub mode: PromptMode,
@@ -126,7 +126,7 @@ pub struct LayerInput<'a> {
     /// Subagent call-chain position for `ChainContextLayer`.
     ///
     /// Threaded through from `HarnessDeps.chain_context` (the value the
-    /// orchestrator and subagent_spawner already maintain). Layer omits
+    /// orchestrator and `subagent_spawner` already maintain). Layer omits
     /// the section entirely when the chain is at root (`depth == 0`) or
     /// the field is `None`, so the top-level harness path stays unaffected.
     pub chain_context: Option<&'a crate::harness::chain_context::ChainContext>,
@@ -355,7 +355,7 @@ impl<'a> LayerInput<'a> {
     }
 
     /// Attach a subagent call-chain context. Used by `ChainContextLayer`
-    /// to surface depth / chain_id to the LLM. Root chains (depth=0) and
+    /// to surface depth / `chain_id` to the LLM. Root chains (depth=0) and
     /// `None` both render an empty section.
     #[must_use]
     pub const fn with_chain_context(
@@ -380,8 +380,8 @@ impl<'a> LayerInput<'a> {
     /// Attach an optional `ResolvedContext` to this input.
     ///
     /// Used by the Basic / Hydration / Soul entry points so the Phase 2
-    /// widened layers (security, operational_guidelines, protocol_tokens,
-    /// runtime_context) can consume context on every assembly path
+    /// widened layers (security, `operational_guidelines`, `protocol_tokens`,
+    /// `runtime_context`) can consume context on every assembly path
     /// without forcing a switch to the dedicated `Context` route. The
     /// `Context` path's `LayerInput::context` constructor already sets
     /// this field, so callers on that path leave it alone.

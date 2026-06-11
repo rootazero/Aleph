@@ -14,7 +14,7 @@
 //! contributes **no scheduler and no reasoning** — it is a schema + a file
 //! store + a deterministic compiler (R10 / R7 safe). Each step is a full
 //! agent run; dependency edges drive Tokio-concurrent execution that the
-//! single-agent reference designs (e.g. OpenHands) cannot express.
+//! single-agent reference designs (e.g. `OpenHands`) cannot express.
 
 pub mod clarify;
 pub mod compile;

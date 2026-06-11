@@ -251,7 +251,7 @@ pub async fn handle_clear(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRp
 // List Facts
 // ============================================================================
 
-/// Parameters for memory.list_facts
+/// Parameters for `memory.list_facts`
 #[derive(Debug, Default, Deserialize)]
 pub struct ListFactsParams {
     /// Filter by agent ID (workspace isolation)
@@ -285,7 +285,7 @@ pub struct FactEntry {
     pub path: String,
 }
 
-/// List note memories (compiled knowledge notes from notes_index).
+/// List note memories (compiled knowledge notes from `notes_index`).
 pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     use crate::memory::notes::store::NoteStore;
 

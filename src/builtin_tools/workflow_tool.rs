@@ -64,7 +64,7 @@ pub enum WorkflowArgs {
         run_id: Option<String>,
     },
     /// Cancel the remaining steps of a workflow run: every not-yet-finished
-    /// task (pending / blocked / paused / waiting_review / in_progress) is
+    /// task (pending / blocked / paused / `waiting_review` / `in_progress`) is
     /// marked Cancelled. An in-progress step's member run finishes on its own
     /// but cannot resurrect the task; finished steps keep their results.
     Cancel {
@@ -84,7 +84,7 @@ pub enum WorkflowArgs {
         #[serde(default)]
         write_file: bool,
     },
-    /// Parse a `.workflow.js` (or AWI manifest JSON) into a WorkflowDef.
+    /// Parse a `.workflow.js` (or AWI manifest JSON) into a `WorkflowDef`.
     Import {
         /// Raw `.workflow.js` text or AWI manifest JSON.
         source: String,
@@ -92,10 +92,10 @@ pub enum WorkflowArgs {
         #[serde(default)]
         save: bool,
     },
-    /// List the gated MetaSkill proposals the dream pipeline auto-drafted from
+    /// List the gated `MetaSkill` proposals the dream pipeline auto-drafted from
     /// recurring skill co-occurrence. These are NOT active until accepted.
     Proposals {},
-    /// Accept (activate) a gated MetaSkill proposal: promote it from the
+    /// Accept (activate) a gated `MetaSkill` proposal: promote it from the
     /// `proposals/` draft dir into the active workflow store, then run it with
     /// `action='run'`. The draft is removed once accepted.
     AcceptProposal {
@@ -105,7 +105,7 @@ pub enum WorkflowArgs {
 }
 
 /// One step of a workflow run in a `status` report — a mechanical projection
-/// of the backing coord_task (R7: data for the LLM to reason over, no
+/// of the backing `coord_task` (R7: data for the LLM to reason over, no
 /// judgement of its own).
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowRunStep {
@@ -205,7 +205,7 @@ impl WorkflowTool {
     }
 
     /// Reject a `run` whose team cannot execute it *before* materialising any
-    /// coord_tasks. A clarify step is owned by the sentinel (not a team member),
+    /// `coord_tasks`. A clarify step is owned by the sentinel (not a team member),
     /// so it is exempt; only agent steps require a covering member. When no team
     /// store is wired the check is a no-op — the dispatcher still fail-fasts a
     /// doomed task, just after the run already reported success.

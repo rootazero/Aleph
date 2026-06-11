@@ -1,4 +1,4 @@
-//! Spec B — filter for restricting HybridAssembler results by `FactSource`.
+//! Spec B — filter for restricting `HybridAssembler` results by `FactSource`.
 //!
 //! Default behaviour (`Any`) is byte-for-byte identical to pre-Spec-B
 //! assembler output. `Only(_)` and `Excluding(_)` are non-default values

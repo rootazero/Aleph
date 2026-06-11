@@ -1,6 +1,6 @@
 //! Web search tool with Tavily API integration
 //!
-//! Implements AlephTool trait for AI agent integration.
+//! Implements `AlephTool` trait for AI agent integration.
 
 use async_trait::async_trait;
 use reqwest::Client;
@@ -74,9 +74,9 @@ impl SearchTool {
     pub const DESCRIPTION: &'static str =
         "Search the internet for current information. Use for questions requiring up-to-date data.";
 
-    /// Create a new SearchTool instance
+    /// Create a new `SearchTool` instance
     ///
-    /// Reads TAVILY_API_KEY from environment variable
+    /// Reads `TAVILY_API_KEY` from environment variable
     pub fn new() -> Self {
         let api_key = env::var("TAVILY_API_KEY").ok();
         if api_key.is_none() {
@@ -89,9 +89,9 @@ impl SearchTool {
         }
     }
 
-    /// Create a new SearchTool instance with explicit API key
+    /// Create a new `SearchTool` instance with explicit API key
     ///
-    /// Falls back to TAVILY_API_KEY environment variable if api_key is None
+    /// Falls back to `TAVILY_API_KEY` environment variable if `api_key` is None
     pub fn with_api_key(api_key: Option<String>) -> Self {
         let resolved_key = api_key.or_else(|| env::var("TAVILY_API_KEY").ok());
         if resolved_key.is_none() {
@@ -108,7 +108,7 @@ impl SearchTool {
         }
     }
 
-    /// Create with a SearchRegistry for multi-provider support
+    /// Create with a `SearchRegistry` for multi-provider support
     pub fn with_registry(registry: Arc<SearchRegistry>) -> Self {
         info!("SearchTool initialized with multi-provider registry");
         Self {
@@ -249,9 +249,9 @@ impl Clone for SearchTool {
     }
 }
 
-/// Implementation of AlephTool trait for SearchTool
+/// Implementation of `AlephTool` trait for `SearchTool`
 ///
-/// This allows SearchTool to be used with Aleph's unified tool system.
+/// This allows `SearchTool` to be used with Aleph's unified tool system.
 #[async_trait]
 impl AlephTool for SearchTool {
     const NAME: &'static str = "search";

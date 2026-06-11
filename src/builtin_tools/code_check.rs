@@ -31,7 +31,7 @@
 //! `tsconfig.json`, `go.mod`, or `pyproject.toml`/`ruff.toml`, prints an
 //! `ALEPH_TC=<kind>` marker, then runs the matching checker. The marker tells the
 //! host-side parser which format to expect — `cargo --message-format=json`
-//! (parsed via serde_json) or a generic `file:line:col` scan (tsc / mypy / go /
+//! (parsed via `serde_json`) or a generic `file:line:col` scan (tsc / mypy / go /
 //! clang style).
 
 use std::time::Duration;

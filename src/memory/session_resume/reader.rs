@@ -1,4 +1,4 @@
-//! SnapshotReader — load the most recent SessionSnapshot from disk.
+//! `SnapshotReader` — load the most recent `SessionSnapshot` from disk.
 
 use super::snapshot::SessionSnapshot;
 use std::path::PathBuf;

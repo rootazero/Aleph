@@ -9,7 +9,7 @@ static SECRET_PATTERNS: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::
         .collect()
 });
 
-/// SecretMasker for redacting sensitive information.
+/// `SecretMasker` for redacting sensitive information.
 #[derive(Debug, Clone, Default)]
 pub struct SecretMasker {
     /// Additional custom patterns

@@ -70,7 +70,7 @@ impl CostEstimate {
 pub enum CostStatus {
     /// All non-zero token components hit a populated rate.
     Complete,
-    /// Some components (e.g. cache_creation) lacked a rate; the figure is a
+    /// Some components (e.g. `cache_creation`) lacked a rate; the figure is a
     /// lower bound — the unknown components were billed as zero.
     PartialMissingPrice,
     /// Provider or model not in the table.
@@ -92,7 +92,7 @@ struct Rates {
     /// Anthropic prompt-cache write rate (slight premium over input).
     cache_creation_per_mtok: Option<f64>,
     /// Reasoning tokens — only Gemini bills these separately. Anthropic
-    /// already folds reasoning into `output`; OpenAI o-series likewise.
+    /// already folds reasoning into `output`; `OpenAI` o-series likewise.
     reasoning_per_mtok: Option<f64>,
 }
 

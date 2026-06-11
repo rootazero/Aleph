@@ -1,7 +1,7 @@
 //! Security Context for Channel Capability Awareness
 //!
 //! This module defines policy-driven security types that describe what is ALLOWED
-//! by security policy, orthogonal to InteractionManifest which describes what is
+//! by security policy, orthogonal to `InteractionManifest` which describes what is
 //! technically possible.
 //!
 //! # Architecture
@@ -120,7 +120,7 @@ pub enum ElevatedPolicy {
 /// Security context defining what operations are allowed by policy
 ///
 /// This is orthogonal to `InteractionManifest` which describes technical
-/// capabilities. SecurityContext describes what is ALLOWED, not what is
+/// capabilities. `SecurityContext` describes what is ALLOWED, not what is
 /// technically possible.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityContext {
@@ -241,10 +241,10 @@ impl SecurityContext {
     /// Check if a tool is allowed by this security context
     ///
     /// The check follows this precedence:
-    /// 1. If tool is in denied_tools -> Denied
-    /// 2. If allowed_tools is Some and tool not in it -> Denied
-    /// 3. If tool is exec/bash -> check elevated_policy
-    /// 4. If network_allowed is false and tool is network tool -> Denied
+    /// 1. If tool is in `denied_tools` -> Denied
+    /// 2. If `allowed_tools` is Some and tool not in it -> Denied
+    /// 3. If tool is exec/bash -> check `elevated_policy`
+    /// 4. If `network_allowed` is false and tool is network tool -> Denied
     /// 5. Otherwise -> Allowed
     #[must_use]
     pub fn check_tool(&self, tool_name: &str) -> ToolPermission {
@@ -382,9 +382,9 @@ impl SecurityContext {
 /// Check if a tool is a network-related tool
 ///
 /// Network tools include:
-/// - web_search: Performs web searches
-/// - web_fetch: Fetches web pages
-/// - http_request: Makes HTTP requests
+/// - `web_search`: Performs web searches
+/// - `web_fetch`: Fetches web pages
+/// - `http_request`: Makes HTTP requests
 #[must_use]
 pub fn is_network_tool(tool_name: &str) -> bool {
     matches!(

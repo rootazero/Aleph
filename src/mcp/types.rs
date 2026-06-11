@@ -8,7 +8,7 @@ use serde_json::Value;
 /// MCP Tool definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpTool {
-    /// Unique tool name (e.g., "file_read", "git_status")
+    /// Unique tool name (e.g., "`file_read`", "`git_status`")
     pub name: String,
     /// Human-readable description
     pub description: String,
@@ -152,7 +152,7 @@ impl McpToolResult {
 /// MCP Resource definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpResource {
-    /// Resource URI (e.g., "file:///path/to/file")
+    /// Resource URI (e.g., "<file:///path/to/file>")
     pub uri: String,
     /// Human-readable name
     pub name: String,
@@ -185,7 +185,7 @@ pub enum TransportPreference {
 pub struct McpRemoteServerConfig {
     /// Server name (used for identification and logging)
     pub name: String,
-    /// Server URL (e.g., "https://api.example.com/mcp")
+    /// Server URL (e.g., "<https://api.example.com/mcp>")
     pub url: String,
     /// Custom HTTP headers (for authorization tokens, API keys, etc.)
     pub headers: std::collections::HashMap<String, String>,
@@ -302,7 +302,7 @@ pub struct McpServerConfig {
     pub color: String,
 }
 
-/// Environment variable key-value pair (for UniFFI)
+/// Environment variable key-value pair (for `UniFFI`)
 #[derive(Debug, Clone)]
 pub struct McpEnvVar {
     pub key: String,
@@ -338,7 +338,7 @@ pub struct McpServiceInfo {
 /// MCP tool information for UI display
 #[derive(Debug, Clone)]
 pub struct McpToolInfo {
-    /// Tool name (e.g., "fs:read_file", "git:status")
+    /// Tool name (e.g., "`fs:read_file`", "git:status")
     pub name: String,
     /// Tool description
     pub description: String,

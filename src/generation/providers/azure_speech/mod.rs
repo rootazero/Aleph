@@ -47,7 +47,7 @@ const USER_AGENT: &str = "Aleph";
 const DEFAULT_OUTPUT_FORMAT: &str = "audio-24khz-48kbitrate-mono-mp3";
 
 /// Output formats we expose under the canonical `format` field. The values
-/// are the human-friendly aliases; map_output_format() resolves to Azure's
+/// are the human-friendly aliases; `map_output_format()` resolves to Azure's
 /// hyphenated long-form names.
 pub const AVAILABLE_FORMATS: [&str; 3] = ["mp3", "wav", "opus"];
 

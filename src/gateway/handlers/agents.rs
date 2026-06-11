@@ -6,7 +6,7 @@
 //! - agents.create: Create a new agent
 //! - agents.update: Update an existing agent
 //! - agents.delete: Delete an agent
-//! - agents.set_default: Set the default agent
+//! - `agents.set_default`: Set the default agent
 //! - agents.files.list: List workspace files
 //! - agents.files.get: Read a workspace file
 //! - agents.files.set: Write a workspace file
@@ -260,7 +260,7 @@ pub async fn handle_delete(
     }
 }
 
-/// Handle agents.set_default — set an agent as the default
+/// Handle `agents.set_default` — set an agent as the default
 pub async fn handle_set_default(
     request: JsonRpcRequest,
     manager: Arc<AgentManager>,
@@ -397,7 +397,7 @@ pub async fn handle_files_delete(
     }
 }
 
-/// Handle agents.tools_schema — return tool category metadata for Panel UI
+/// Handle `agents.tools_schema` — return tool category metadata for Panel UI
 pub async fn handle_tools_schema(request: JsonRpcRequest) -> JsonRpcResponse {
     use crate::executor::{BUILTIN_TOOL_DEFINITIONS, TOOL_CATEGORIES};
 

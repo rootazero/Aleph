@@ -1,4 +1,4 @@
-//! Query Methods for ToolCatalog
+//! Query Methods for `ToolCatalog`
 //!
 //! Methods for querying and searching tools in the registry.
 
@@ -7,7 +7,7 @@ use crate::config::RoutingRuleConfig;
 use super::super::types::{ChannelType, ToolSource, UnifiedTool};
 use super::types::ToolStorage;
 
-/// Query functionality for ToolCatalog
+/// Query functionality for `ToolCatalog`
 pub struct ToolQuery {
     tools: ToolStorage,
 }
@@ -28,7 +28,7 @@ impl ToolQuery {
 
     /// List builtin tools only
     ///
-    /// Returns the system builtin commands sorted by sort_order.
+    /// Returns the system builtin commands sorted by `sort_order`.
     pub async fn list_builtin_tools(&self) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
         let mut builtins: Vec<_> = tools
@@ -68,7 +68,7 @@ impl ToolQuery {
     /// This is the SINGLE SOURCE OF TRUTH for builtin command routing configuration.
     /// Config module should call this instead of maintaining separate hardcoded rules.
     ///
-    /// Returns RoutingRuleConfig for each builtin tool that has routing_regex set.
+    /// Returns `RoutingRuleConfig` for each builtin tool that has `routing_regex` set.
     pub async fn get_builtin_routing_rules(&self) -> Vec<RoutingRuleConfig> {
         let tools = self.tools.read().await;
         tools
@@ -88,7 +88,7 @@ impl ToolQuery {
             .collect()
     }
 
-    /// List all tools for UI display (sorted by sort_order, then name)
+    /// List all tools for UI display (sorted by `sort_order`, then name)
     ///
     /// Returns all active tools suitable for Settings UI display.
     pub async fn list_all_for_ui(&self) -> Vec<UnifiedTool> {
@@ -374,7 +374,7 @@ impl ToolQuery {
     ///
     /// # Arguments
     ///
-    /// * `id` - Full tool ID (e.g., "native:search", "mcp:fs:read_file")
+    /// * `id` - Full tool ID (e.g., "native:search", "`mcp:fs:read_file`")
     pub async fn get_by_id(&self, id: &str) -> Option<UnifiedTool> {
         let tools = self.tools.read().await;
         tools.get(id).cloned()

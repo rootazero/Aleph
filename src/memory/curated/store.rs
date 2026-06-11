@@ -1,4 +1,4 @@
-//! CuratedMemoryStore: load → mutate → atomic write, with cross-process locking.
+//! `CuratedMemoryStore`: load → mutate → atomic write, with cross-process locking.
 
 use crate::error::AlephError;
 use crate::sync_primitives::Mutex;
@@ -234,7 +234,7 @@ impl CuratedMemoryStore {
     }
 
     /// Snapshot the current store state with an arbitrary message — used by
-    /// callers (e.g. RememberTool) to construct a tool-result envelope for
+    /// callers (e.g. `RememberTool`) to construct a tool-result envelope for
     /// soft rejections (duplicate / over-budget / scanner-block) without
     /// raising a hard error and aborting the harness turn.
     pub fn snapshot_outcome(&self, message: impl Into<String>) -> WriteOutcome {

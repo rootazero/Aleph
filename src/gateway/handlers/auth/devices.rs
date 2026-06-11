@@ -67,11 +67,11 @@ pub async fn handle_devices_revoke(
     }
 }
 
-/// Handle "devices.set_level" request — permanently change an approved
+/// Handle "`devices.set_level`" request — permanently change an approved
 /// device's permission tier (chat <-> config) and refresh any live
 /// connection(s) of that device in place so the change takes effect on the
 /// device's next request (no reconnect required). Operator-only (gated in
-/// method_authz). device_store.permissions is the SSOT; security_store is
+/// `method_authz`). `device_store.permissions` is the SSOT; `security_store` is
 /// deliberately not touched (its device role/scopes are not consulted by the
 /// live authz gate).
 pub async fn handle_devices_set_level(

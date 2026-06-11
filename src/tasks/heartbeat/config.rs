@@ -163,7 +163,7 @@ impl HeartbeatTask {
 /// L1 probe configuration — defines what to check and when to trigger
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProbeConfig {
-    /// Tool name to call for the probe (e.g. "gmail.unread_count")
+    /// Tool name to call for the probe (e.g. "`gmail.unread_count`")
     pub tool_name: String,
     /// Optional parameters to pass to the tool
     pub tool_params: Option<serde_json::Value>,
@@ -216,7 +216,7 @@ pub struct HeartbeatState {
 
 // ── HeartbeatTaskView ────────────────────────────────────────────────────────
 
-/// Read-only view of a HeartbeatTask for API responses
+/// Read-only view of a `HeartbeatTask` for API responses
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatTaskView {
     pub id: String,

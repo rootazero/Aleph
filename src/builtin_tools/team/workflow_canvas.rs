@@ -1,4 +1,4 @@
-//! TeamWorkflowCanvasTool — R8 wrapper around the DAG ↔ JSON Canvas bridge.
+//! `TeamWorkflowCanvasTool` — R8 wrapper around the DAG ↔ JSON Canvas bridge.
 //!
 //! Exposes both directions of [`crate::teams::workflow_canvas`] as one
 //! builtin tool with an `action` discriminant (`export` or `import`),

@@ -230,7 +230,7 @@ pub enum ErrorReason {
 }
 
 impl ErrorReason {
-    /// Stable snake_case category token (`"transient"` / `"permanent"`).
+    /// Stable `snake_case` category token (`"transient"` / `"permanent"`).
     ///
     /// This is the wire form the `cron_runs.error_reason` column stores and
     /// that history consumers filter on — never the Rust `Debug` rendering
@@ -357,7 +357,7 @@ pub struct CronJob {
     #[serde(default)]
     pub source_channel_id: Option<String>,
 
-    /// Conversation ID within the channel (e.g. Telegram chat_id) for delivery routing
+    /// Conversation ID within the channel (e.g. Telegram `chat_id`) for delivery routing
     #[serde(default)]
     pub source_conversation_id: Option<String>,
 
@@ -506,7 +506,7 @@ pub struct JobSnapshot {
     pub agent_id: Option<String>,
     /// Channel to deliver results to
     pub source_channel_id: Option<String>,
-    /// Conversation ID within the channel (e.g. Telegram chat_id)
+    /// Conversation ID within the channel (e.g. Telegram `chat_id`)
     pub source_conversation_id: Option<String>,
     /// Template-rendered prompt
     pub prompt: String,
@@ -542,7 +542,7 @@ pub struct ExecutionResult {
 
 // ── CronJobView ─────────────────────────────────────────────────────────
 
-/// Read-only view of a CronJob for API responses
+/// Read-only view of a `CronJob` for API responses
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJobView {
     pub id: String,

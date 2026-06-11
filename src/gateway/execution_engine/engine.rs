@@ -1,4 +1,4 @@
-//! ExecutionEngine — bridges Gateway requests to the AgentLoop.
+//! `ExecutionEngine` — bridges Gateway requests to the `AgentLoop`.
 //!
 //! This file contains the struct definition, constructor, builder methods,
 //! and the main `execute()` / `get_status()` / `cancel()` public API.
@@ -32,7 +32,7 @@ pub struct ContinuationDeps {
     pub gate: Option<Arc<Vec<Arc<dyn crate::verification::stop_hooks::StopHookHandler>>>>,
 }
 
-/// Execution engine that bridges Gateway to the AgentLoop
+/// Execution engine that bridges Gateway to the `AgentLoop`
 pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> {
     pub(super) config: ExecutionEngineConfig,
     pub(super) active_runs: Arc<RwLock<HashMap<String, ActiveRun>>>,
@@ -64,9 +64,9 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) state_database: Option<Arc<StateDatabase>>,
     /// Teammate manager for named sub-agent team creation/registration.
     pub(super) teammate_manager: Option<Arc<crate::agents::teammates::TeammateManager>>,
-    /// Message router for sub-agent send_message actions.
+    /// Message router for sub-agent `send_message` actions.
     pub(super) message_router: Option<Arc<crate::teams::messages::router::MessageRouter>>,
-    /// Inbox for sub-agent read_inbox actions.
+    /// Inbox for sub-agent `read_inbox` actions.
     pub(super) inbox: Option<Arc<crate::teams::messages::inbox::Inbox>>,
     /// Process-lifetime registry of background sub-agent runs. Shared across
     /// every run this engine executes so `check_status` / `list` / `cancel`
@@ -82,7 +82,7 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// Continuation deps injected after boot assembly so the post-run hook
     /// can enqueue an autonomous continuation in the SAME session when the
     /// session's standing goal has `PursuitMode::Active` and `should_continue`.
-    /// Holds (AgentInstanceRegistry, self-as-ExecutionAdapter). `None` / empty
+    /// Holds (`AgentInstanceRegistry`, self-as-ExecutionAdapter). `None` / empty
     /// until populated via `continuation_cell()` + boot wiring; absent in all
     /// tests and non-production paths, so the hook is a safe no-op by default.
     pub(super) continuation_deps: Arc<std::sync::OnceLock<ContinuationDeps>>,
@@ -143,7 +143,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self
     }
 
-    /// Return the orchestrator OnceLock handle so boot code can inject the
+    /// Return the orchestrator `OnceLock` handle so boot code can inject the
     /// `Arc<Orchestrator>` after `initialize_orchestrator` completes.
     #[must_use]
     pub fn orchestrator_cell(
@@ -152,7 +152,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self.orchestrator.clone()
     }
 
-    /// Return the continuation-deps OnceLock handle so boot code can inject
+    /// Return the continuation-deps `OnceLock` handle so boot code can inject
     /// `(AgentRegistry, self-as-ExecutionAdapter)` after the engine is wrapped
     /// in `Arc`. Enables the post-run autonomous-continuation hook in
     /// `execute.rs` without storing a self-referential field at construction
@@ -259,7 +259,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     ///
     /// When set, the engine resolves the user's active workspace at the start
     /// of each run and injects the workspace profile into the prompt builder
-    /// and the workspace_id into the request context metadata.
+    /// and the `workspace_id` into the request context metadata.
     #[must_use]
     pub fn with_workspace_manager(mut self, manager: Arc<AgentEnvStore>) -> Self {
         self.workspace_manager = Some(manager);
@@ -276,7 +276,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self
     }
 
-    /// Set the message router for sub-agent send_message actions.
+    /// Set the message router for sub-agent `send_message` actions.
     #[must_use]
     pub fn with_message_router(
         mut self,
@@ -286,7 +286,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self
     }
 
-    /// Set the inbox for sub-agent read_inbox actions.
+    /// Set the inbox for sub-agent `read_inbox` actions.
     #[must_use]
     pub fn with_inbox(mut self, inbox: Arc<crate::teams::messages::inbox::Inbox>) -> Self {
         self.inbox = Some(inbox);

@@ -12,14 +12,14 @@
 //!
 //! 1. **`TURN_CONTEXT`** task-local (HITL P3) — scoped by
 //!    `ScopedToolService::execute`, the production gateway tool-dispatch
-//!    chokepoint. Carries channel_id + conversation_id directly; works on
+//!    chokepoint. Carries `channel_id` + `conversation_id` directly; works on
 //!    every gateway-driven session type including per-peer DMs whose
 //!    `SessionKey` alone does not encode channel coordinates.
 //!
 //! 2. **`SESSION_ID`** task-local → `channel_route(SessionKey)` — scoped by
 //!    `with_session_scope` / `invoke_with_session_trace` (non-gateway paths:
 //!    cron, heartbeat, scheduled tools). Recovers channel from the structured
-//!    SessionKey.
+//!    `SessionKey`.
 //!
 //! Both unset, a non-channel turn, or an unreachable channel → `Denied` with
 //! an explicit warning. Never a silent auto-approve.

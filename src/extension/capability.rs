@@ -2,7 +2,7 @@
 //!
 //! This module defines the `CapabilityDeclaration` enum — the unified model for
 //! everything a plugin can contribute. Each variant maps 1:1 to a registration
-//! type in the PluginRegistry.
+//! type in the `PluginRegistry`.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,19 +17,19 @@ use crate::extension::types::{McpServerConfig, PluginOrigin};
 // Type Aliases (Declaration → Registration mapping)
 // ============================================================================
 
-/// A tool declaration is a ToolRegistration
+/// A tool declaration is a `ToolRegistration`
 pub type ToolDeclaration = ToolRegistration;
-/// A hook declaration is a HookRegistration
+/// A hook declaration is a `HookRegistration`
 pub type HookDeclaration = HookRegistration;
-/// A service declaration is a ServiceRegistration
+/// A service declaration is a `ServiceRegistration`
 pub type ServiceDeclaration = ServiceRegistration;
-/// An in-chat command declaration is a CommandRegistration
+/// An in-chat command declaration is a `CommandRegistration`
 pub type CommandDeclaration = CommandRegistration;
-/// A skill declaration is a SkillRegistration
+/// A skill declaration is a `SkillRegistration`
 pub type SkillDeclaration = SkillRegistration;
-/// An agent declaration is an AgentRegistration
+/// An agent declaration is an `AgentRegistration`
 pub type AgentDeclaration = AgentRegistration;
-/// An MCP server declaration is a McpServerConfig
+/// An MCP server declaration is a `McpServerConfig`
 pub type McpServerDeclaration = McpServerConfig;
 
 // ============================================================================
@@ -38,7 +38,7 @@ pub type McpServerDeclaration = McpServerConfig;
 
 /// Unified enum of everything a plugin can contribute.
 ///
-/// Each variant maps 1:1 to a registration type in the PluginRegistry.
+/// Each variant maps 1:1 to a registration type in the `PluginRegistry`.
 /// The `#[serde(tag = "type")]` attribute allows serialization as:
 /// `{ "type": "tool", "name": "my_tool", ... }`
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,7 +117,7 @@ pub enum Tier {
     Core,
     /// Important capabilities (Command, Agent)
     Important,
-    /// Pluggable capabilities (Service, McpServer)
+    /// Pluggable capabilities (Service, `McpServer`)
     Pluggable,
 }
 

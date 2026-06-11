@@ -14,11 +14,11 @@ use tokio::sync::RwLock;
 /// Browser config for the Panel UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct BrowserConfigResponse {
-    /// Default profile driver: "managed" (headless) or "existing_session" (Chrome DevTools)
+    /// Default profile driver: "managed" (headless) or "`existing_session`" (Chrome `DevTools`)
     pub default_driver: String,
     /// Whether Playwright CLI runs in headless mode
     pub headless: bool,
-    /// DevTools profile: "user" (user's Chrome) or "managed" (Aleph-managed instance)
+    /// `DevTools` profile: "user" (user's Chrome) or "managed" (Aleph-managed instance)
     pub devtools_profile: String,
     /// SSRF protection: block private network access
     pub block_private: bool,
@@ -26,7 +26,7 @@ pub(crate) struct BrowserConfigResponse {
     pub blocked_domains: Vec<String>,
     /// SSRF: allowed domain patterns (whitelist mode)
     pub allowed_domains: Vec<String>,
-    /// Timeout (seconds) for navigate / wait_for_text
+    /// Timeout (seconds) for navigate / `wait_for_text`
     pub nav_timeout_secs: u64,
     /// Timeout (seconds) for other actions (click/fill/type/etc)
     pub action_timeout_secs: u64,

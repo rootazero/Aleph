@@ -1,7 +1,7 @@
 //! Google Gemini API types
 //!
 //! Type definitions for the Google Gemini API protocol.
-//! Based on: https://ai.google.dev/api/rest/v1beta/models/generateContent
+//! Based on: <https://ai.google.dev/api/rest/v1beta/models/generateContent>
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -1,7 +1,7 @@
 // Aleph/core/src/event/filter.rs
 //! Event filtering for subscription-based event routing.
 //!
-//! The `EventFilter` provides flexible filtering capabilities for the GlobalBus,
+//! The `EventFilter` provides flexible filtering capabilities for the `GlobalBus`,
 //! allowing subscribers to filter events based on:
 //! - Session ID (single or multiple)
 //! - Agent ID (single or multiple)
@@ -156,7 +156,7 @@ impl EventFilter {
     /// Returns `true` if ALL of the following conditions are met:
     /// 1. Session filter passes (no filter OR event session is in the set)
     /// 2. Agent filter passes (no filter OR event agent is in the set OR event has empty agent ID)
-    /// 3. Event type filter passes (event_types contains EventType::All OR event type is in the list)
+    /// 3. Event type filter passes (`event_types` contains `EventType::All` OR event type is in the list)
     ///
     /// # Arguments
     ///

@@ -1,6 +1,6 @@
-//! SessionState — in-memory reducer over SessionEvent.
+//! `SessionState` — in-memory reducer over `SessionEvent`.
 //!
-//! Pure function of the event stream. Used by SessionActor during replay
+//! Pure function of the event stream. Used by `SessionActor` during replay
 //! and after each emitted event. Never persisted; always rebuilt from the
 //! event log.
 

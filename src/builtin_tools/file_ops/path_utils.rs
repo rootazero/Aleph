@@ -13,7 +13,7 @@ use crate::builtin_tools::error::ToolError;
 /// comparison, so a directory entry (e.g. `~/.ssh`) covers everything beneath
 /// it and a leaf file (e.g. `~/.netrc`) covers exactly that file.
 ///
-/// The credential breadth here mirrors OpenSquilla's `sensitive_paths.py`
+/// The credential breadth here mirrors `OpenSquilla`'s `sensitive_paths.py`
 /// (SSH/cloud/registry/secret stores) layered onto Aleph's stronger checker,
 /// and — like hermes-agent's `get_read_block_error` — extends the deny set to
 /// Aleph's *own* credential surface (the encrypted `secrets.vault` and the
@@ -96,7 +96,7 @@ pub fn get_denied_paths() -> Vec<String> {
 /// 4. Relative paths - resolved relative to:
 ///    a. the per-run `FsScope` task-local base — per-run truth, immune to a
 ///    concurrent run rewriting the shared `ToolContextHandle` mid-run
-///    b. `output_dir_override` if provided (workspace-scoped output dir from ToolContext)
+///    b. `output_dir_override` if provided (workspace-scoped output dir from `ToolContext`)
 ///    c. Error if neither is available — no global fallback
 ///
 /// The deny check always runs on the FINAL path (post-rebase), so a remap can

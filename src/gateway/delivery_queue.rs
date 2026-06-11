@@ -31,7 +31,7 @@
 //!
 //! # Layering (no reference cycle)
 //!
-//! [`DeliveryStore`] owns only the SQLite handle — it holds *no* reference to
+//! [`DeliveryStore`] owns only the `SQLite` handle — it holds *no* reference to
 //! the registry. [`ChannelRegistry`](super::channel_registry::ChannelRegistry)
 //! holds `Option<Arc<DeliveryStore>>` and enqueues on transient failure. The
 //! drain task ([`drain_loop`] / [`spawn_drain`]) is a free function holding
@@ -85,7 +85,7 @@ impl Default for DeliveryQueueConfig {
 /// A single persisted outbound delivery, rehydrated for a drain attempt.
 #[derive(Debug, Clone)]
 pub struct DeliveryRecord {
-    /// SQLite row id (primary key).
+    /// `SQLite` row id (primary key).
     pub id: i64,
     /// Target channel id (e.g. `telegram`, `signal`).
     pub channel_id: String,

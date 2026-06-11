@@ -83,7 +83,7 @@ pub struct LinkConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 
-    /// Bridge-specific settings (validated against bridge's settings_schema)
+    /// Bridge-specific settings (validated against bridge's `settings_schema`)
     #[serde(default = "default_settings")]
     pub settings: serde_json::Value,
 

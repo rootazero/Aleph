@@ -1,7 +1,7 @@
-//! ToolErrorKind — stable taxonomy over `ToolError` for prompt rendering.
+//! `ToolErrorKind` — stable taxonomy over `ToolError` for prompt rendering.
 //!
 //! The `ToolError` enum already discriminates the *Aleph-internal* error
-//! shapes (Timeout, Transport, ValidationFailed, …) but a tool that
+//! shapes (Timeout, Transport, `ValidationFailed`, …) but a tool that
 //! fails on a network call typically lands in `Execution { cause }`
 //! with the upstream status code embedded in the cause string. The LLM
 //! sees the raw cause and has to infer "did this fail because of auth?

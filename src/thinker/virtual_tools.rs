@@ -1,9 +1,9 @@
-//! Virtual tools for native tool_use mode
+//! Virtual tools for native `tool_use` mode
 //!
 //! These are not real tools -- they are decision signals registered as tool definitions
-//! so the LLM can express Complete/AskUser/Fail decisions through the native tool_use API.
+//! so the LLM can express Complete/AskUser/Fail decisions through the native `tool_use` API.
 //!
-//! In native tool_use mode, ALL LLM outputs must go through tool calls. These virtual
+//! In native `tool_use` mode, ALL LLM outputs must go through tool calls. These virtual
 //! tools allow the LLM to signal non-tool decisions (task completion, asking for
 //! clarification, reporting failure) using the same mechanism.
 
@@ -18,7 +18,7 @@ pub const VIRTUAL_FAIL: &str = "__fail";
 /// Priority order for conflicting terminal actions: fail > ask > complete
 pub const TERMINAL_PRIORITY: &[&str] = &[VIRTUAL_FAIL, VIRTUAL_ASK_USER, VIRTUAL_COMPLETE];
 
-/// Generate virtual tool definitions for native tool_use mode
+/// Generate virtual tool definitions for native `tool_use` mode
 ///
 /// Returns three virtual tools:
 /// - `__complete`: Signal task completion with a summary

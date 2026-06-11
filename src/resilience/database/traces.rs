@@ -1,4 +1,4 @@
-//! CRUD operations for task_traces table
+//! CRUD operations for `task_traces` table
 //!
 //! Provides database operations for execution trace management,
 //! enabling Shadow Replay for deterministic task recovery.
@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 /// Per-agent rollup of `ProviderUsage` trace events.
 ///
-/// Sums are saturating-cast from SQLite `INTEGER` (i64) to u64; in practice
+/// Sums are saturating-cast from `SQLite` `INTEGER` (i64) to u64; in practice
 /// token counts fit comfortably below `i64::MAX`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AgentUsageTotal {
@@ -31,7 +31,7 @@ pub struct AgentUsageTotal {
 impl AgentUsageTotal {
     /// Cumulative cache-hit ratio across every `ProviderUsage` event that
     /// contributed to this rollup. `None` when no cached input was ever
-    /// observed (cumulative cache_read == 0 AND input == 0); `Some(0.0)`
+    /// observed (cumulative `cache_read` == 0 AND input == 0); `Some(0.0)`
     /// when input was non-zero but no cache reads occurred. See
     /// [`crate::providers::adapter::TokenUsage::cache_hit_ratio`] for the
     /// per-call counterpart and the cross-protocol denominator logic.
@@ -57,8 +57,8 @@ impl AgentUsageTotal {
     }
 }
 
-/// Construct TaskTrace from a rusqlite row.
-/// Expected column order: id, task_id, step_index, event_kind, event_json, timestamp
+/// Construct `TaskTrace` from a rusqlite row.
+/// Expected column order: id, `task_id`, `step_index`, `event_kind`, `event_json`, timestamp
 fn task_trace_from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskTrace> {
     let event_kind: String = row.get(3)?;
     let event_json: String = row.get(4)?;
@@ -152,7 +152,7 @@ impl StateDatabase {
         Ok(())
     }
 
-    /// Get all traces for a task (ordered by step_index)
+    /// Get all traces for a task (ordered by `step_index`)
     pub async fn get_traces_by_task(&self, task_id: &str) -> Result<Vec<TaskTrace>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn

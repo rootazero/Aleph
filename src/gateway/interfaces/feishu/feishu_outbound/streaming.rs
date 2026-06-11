@@ -110,7 +110,7 @@ impl FeishuStreamingCard {
     }
 }
 
-/// EventEmitter that streams to Feishu cards in real-time.
+/// `EventEmitter` that streams to Feishu cards in real-time.
 pub struct FeishuEventEmitter {
     inner: ReplyEmitter,
     api: Arc<FeishuApi>,

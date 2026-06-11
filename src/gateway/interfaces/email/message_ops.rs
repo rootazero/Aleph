@@ -227,7 +227,7 @@ impl EmailMessageOps {
     /// Run the IMAP polling loop.
     ///
     /// Spawned as a tokio task. Connects to the IMAP server, polls for unseen
-    /// messages, converts them to InboundMessages, and marks them as seen.
+    /// messages, converts them to `InboundMessages`, and marks them as seen.
     pub async fn run_imap_poll_loop(
         config: EmailConfig,
         inbound_tx: InboundMessageSender,

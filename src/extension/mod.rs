@@ -160,14 +160,14 @@ pub struct ExtensionManager {
     /// Monotonic revision for active plugin tool snapshot changes.
     plugin_tool_revision: Arc<AtomicU64>,
 
-    /// Guard to serialize concurrent load_all() calls
+    /// Guard to serialize concurrent `load_all()` calls
     load_guard: Mutex<()>,
 
     /// Memory extension registry (Spec 4 Task 11).
     /// When set, `load_runtime_plugin` / `ensure_plugin_loaded` call
     /// `load_plugin_with_memory` so that plugins declaring a `[memory]`
     /// section are auto-registered as `McpMemoryExtension` entries.
-    /// Wrapped in RwLock so it can be injected after construction (the manager
+    /// Wrapped in `RwLock` so it can be injected after construction (the manager
     /// is typically behind an Arc by the time Task 11 calls `set_memory_registry`).
     memory_registry: crate::sync_primitives::RwLock<
         Option<crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
@@ -676,7 +676,7 @@ impl ExtensionManager {
     }
 
     /// Stop the hot-reload watcher (no-op if not started). Tests use this
-    /// to release watch handles before TempDir drops.
+    /// to release watch handles before `TempDir` drops.
     pub fn stop_watcher(&self) -> ExtensionResult<()> {
         let mut guard = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(w) = guard.take() {
@@ -782,10 +782,10 @@ impl ExtensionManager {
         tracing::info!(count, removed, "Loaded user-level hook configs");
     }
 
-    /// Sync hooks from PluginRegistry to HookExecutor.
+    /// Sync hooks from `PluginRegistry` to `HookExecutor`.
     ///
-    /// Reads HookRegistration entries from the registry and converts them
-    /// to HookConfig entries that HookExecutor understands.
+    /// Reads `HookRegistration` entries from the registry and converts them
+    /// to `HookConfig` entries that `HookExecutor` understands.
     async fn sync_hooks_from_registry(&self) {
         let registry = self.plugin_registry.read().await;
         let hook_regs = registry.list_hooks();

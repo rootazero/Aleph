@@ -1,4 +1,4 @@
-//! FileOpsTool implementation with AlephTool trait
+//! `FileOpsTool` implementation with `AlephTool` trait
 
 use std::path::Path;
 
@@ -19,7 +19,7 @@ use crate::tools::AlephTool;
 pub struct FileOpsTool {
     /// Denied path patterns (security)
     denied_paths: Vec<String>,
-    /// Optional ToolContext handle for workspace-scoped output path resolution
+    /// Optional `ToolContext` handle for workspace-scoped output path resolution
     tool_context_handle: Option<crate::tools::ToolContextHandle>,
 }
 
@@ -46,7 +46,7 @@ PATH RESOLUTION:
 
 IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead of multiple 'move' calls!"#;
 
-    /// Create a new FileOpsTool with default settings
+    /// Create a new `FileOpsTool` with default settings
     pub fn new() -> Self {
         let denied_paths = get_denied_paths();
         info!(
@@ -60,13 +60,13 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         }
     }
 
-    /// Configure the tool to use a ToolContext handle for workspace-scoped output paths
+    /// Configure the tool to use a `ToolContext` handle for workspace-scoped output paths
     pub fn with_tool_context(mut self, handle: crate::tools::ToolContextHandle) -> Self {
         self.tool_context_handle = Some(handle);
         self
     }
 
-    /// Resolve the output directory from the ToolContext handle (if available).
+    /// Resolve the output directory from the `ToolContext` handle (if available).
     /// Returns the workspace `documents/` subdirectory when a handle is wired in.
     async fn resolve_output_dir(&self) -> Option<std::path::PathBuf> {
         if let Some(ref handle) = self.tool_context_handle {
@@ -225,8 +225,8 @@ impl Clone for FileOpsTool {
     }
 }
 
-/// Implementation of rig's Tool trait for FileOpsTool
-/// Implementation of AlephTool trait for FileOpsTool
+/// Implementation of rig's Tool trait for `FileOpsTool`
+/// Implementation of `AlephTool` trait for `FileOpsTool`
 #[async_trait]
 impl AlephTool for FileOpsTool {
     const NAME: &'static str = "file_ops";

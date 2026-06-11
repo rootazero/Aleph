@@ -1,4 +1,4 @@
-/// Database schema definitions for StateDatabase
+/// Database schema definitions for `StateDatabase`
 ///
 /// Contains the SQL DDL statements for all tables, indexes, triggers,
 /// and virtual tables used by the resilience subsystem.
@@ -390,12 +390,12 @@ impl StateDatabase {
         )
     }
 
-    /// One-time migration: drop obsolete memory_facts / facts_fts / facts_vec
-    /// tables from existing state_database files. Safe to re-run (uses IF EXISTS).
+    /// One-time migration: drop obsolete `memory_facts` / `facts_fts` / `facts_vec`
+    /// tables from existing `state_database` files. Safe to re-run (uses IF EXISTS).
     ///
-    /// These were a planned CQRS read model for memory_events but were never wired
+    /// These were a planned CQRS read model for `memory_events` but were never wired
     /// up. After the facts→notes migration the notes layer is the actual materialized
-    /// view. The DROP order matters: virtual tables that reference memory_facts must
+    /// view. The DROP order matters: virtual tables that reference `memory_facts` must
     /// be dropped before the base table.
     pub(super) fn drop_obsolete_state_facts_tables(
         conn: &rusqlite::Connection,

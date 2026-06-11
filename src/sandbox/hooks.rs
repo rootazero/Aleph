@@ -1,4 +1,4 @@
-//! SandboxHooks — lifecycle hooks for sandbox-backed tool execution.
+//! `SandboxHooks` — lifecycle hooks for sandbox-backed tool execution.
 //!
 //! Hooks fire before and after sandboxed execution, enabling per-tool
 //! capability checks, audit logging, and environment preparation without
@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::sandbox::command::SandboxCommand;
 
-/// Result type for SandboxHook operations.
+/// Result type for `SandboxHook` operations.
 #[derive(Debug)]
 pub enum SandboxHookResult {
     /// Allow execution to proceed.

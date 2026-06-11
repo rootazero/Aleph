@@ -69,7 +69,7 @@ impl std::fmt::Display for CleanupPolicy {
     }
 }
 
-/// Arguments for sessions_spawn tool
+/// Arguments for `sessions_spawn` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct SessionsSpawnArgs {
     /// The task description/prompt to send to the spawned agent
@@ -123,7 +123,7 @@ const fn default_run_timeout() -> u32 {
     300
 }
 
-/// Status of the sessions_spawn operation
+/// Status of the `sessions_spawn` operation
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SpawnStatus {
@@ -135,7 +135,7 @@ pub enum SpawnStatus {
     Error,
 }
 
-/// Output from sessions_spawn tool
+/// Output from `sessions_spawn` tool
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionsSpawnOutput {
     /// Status of the spawn operation
@@ -229,7 +229,7 @@ impl SessionsSpawnOutput {
 /// - `["translator", "summarizer"]` only allows those specific agents
 /// - Empty list `[]` blocks all spawns
 ///
-/// Additionally, the A2A policy from GatewayContext is checked.
+/// Additionally, the A2A policy from `GatewayContext` is checked.
 #[derive(Clone)]
 pub struct SessionsSpawnTool {
     /// Gateway context for accessing registry and execution adapter
@@ -255,7 +255,7 @@ impl SessionsSpawnTool {
         specialized tasks, or when you need to delegate work to another agent. \
         Returns immediately with the child session key and run ID for tracking.";
 
-    /// Create a new SessionsSpawnTool without context (will fail on execute)
+    /// Create a new `SessionsSpawnTool` without context (will fail on execute)
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -265,7 +265,7 @@ impl SessionsSpawnTool {
         }
     }
 
-    /// Create a new SessionsSpawnTool with gateway context
+    /// Create a new `SessionsSpawnTool` with gateway context
     pub fn with_context(
         context: GatewayContext,
         current_agent_id: impl Into<String>,
@@ -449,7 +449,7 @@ impl Default for SessionsSpawnTool {
     }
 }
 
-/// Implementation of AlephTool trait for SessionsSpawnTool
+/// Implementation of `AlephTool` trait for `SessionsSpawnTool`
 #[async_trait]
 impl AlephTool for SessionsSpawnTool {
     const NAME: &'static str = "sessions_spawn";

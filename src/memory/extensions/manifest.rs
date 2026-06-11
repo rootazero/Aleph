@@ -18,7 +18,7 @@ pub struct MemoryManifestSection {
     /// Hooks the plugin implements. Other hooks use the trait's no-op defaults.
     pub hooks: Vec<MemoryHook>,
 
-    /// Priority for on_capture chain ordering (lower = earlier).
+    /// Priority for `on_capture` chain ordering (lower = earlier).
     #[serde(default = "default_priority")]
     pub priority: i32,
 
@@ -27,7 +27,7 @@ pub struct MemoryManifestSection {
     #[serde(default)]
     pub produce_interval_seconds: Option<u64>,
 
-    /// When the plugin's on_capture call times out, what default to use
+    /// When the plugin's `on_capture` call times out, what default to use
     /// for its decision. "block" is the fail-safe default; "allow" is for
     /// plugins that prefer a more permissive posture.
     #[serde(default = "default_on_capture_timeout_action")]

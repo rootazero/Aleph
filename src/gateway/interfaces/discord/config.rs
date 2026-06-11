@@ -261,7 +261,7 @@ pub struct DiscordChannelConfig {
     #[serde(default)]
     pub default: DiscordChannelSettings,
 
-    /// Account configurations (account_id -> AccountConfig)
+    /// Account configurations (`account_id` -> `AccountConfig`)
     /// Multiple bot instances supported
     #[serde(default)]
     pub accounts: HashMap<String, AccountConfig>,
@@ -279,7 +279,7 @@ pub struct AccountConfig {
     #[serde(default)]
     pub default_settings: DiscordChannelSettings,
 
-    /// Per-guild settings (guild_id -> DiscordGuildSettings)
+    /// Per-guild settings (`guild_id` -> `DiscordGuildSettings`)
     #[serde(default)]
     pub guilds: HashMap<u64, DiscordGuildSettings>,
 }
@@ -292,7 +292,7 @@ pub struct DiscordGuildSettings {
     #[serde(default)]
     pub settings: DiscordChannelSettings,
 
-    /// Per-channel settings (channel_id -> DiscordChannelSettings)
+    /// Per-channel settings (`channel_id` -> `DiscordChannelSettings`)
     #[serde(default)]
     pub channels: HashMap<u64, DiscordChannelSettings>,
 }

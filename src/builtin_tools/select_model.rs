@@ -1,4 +1,4 @@
-//! SelectModelTool — LLM-facing model picker (R8 "everything is a tool").
+//! `SelectModelTool` — LLM-facing model picker (R8 "everything is a tool").
 //!
 //! The "A layer" of AI dynamic routing: lets the main-loop LLM choose the model
 //! for the rest of the conversation in one inference, rather than a separate

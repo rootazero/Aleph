@@ -1,6 +1,6 @@
 //! Code execution executor configuration
 //!
-//! Contains CodeExecConfigToml for configuring code/script execution behavior.
+//! Contains `CodeExecConfigToml` for configuring code/script execution behavior.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

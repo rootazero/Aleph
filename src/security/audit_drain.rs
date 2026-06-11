@@ -1,4 +1,4 @@
-//! Background task that drains SecurityAuditLog entries to SQL.
+//! Background task that drains `SecurityAuditLog` entries to SQL.
 
 use std::sync::Arc;
 

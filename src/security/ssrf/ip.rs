@@ -76,9 +76,9 @@ pub(crate) const fn is_blocked_ipv4(ip: Ipv4Addr) -> bool {
 /// Extracts an embedded IPv4 address from an IPv6 address if one of the
 /// known transition mechanisms is detected.
 ///
-/// Handles: ::ffff:x.x.x.x (mapped), 64:ff9b::x.x.x.x (NAT64),
-/// 2002:xxxx::  (6to4), 2001:0000:: (Teredo with XOR decode),
-/// ::x.x.x.x (IPv4-compatible, deprecated).
+/// Handles: `::ffff:x.x.x.x` (mapped), `64:ff9b::x.x.x.x` (NAT64),
+/// `2002:xxxx::`  (6to4), `2001:0000::` (Teredo with XOR decode),
+/// `::x.x.x.x` (IPv4-compatible, deprecated).
 fn extract_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
     let segments = ip.segments();
     let octets = ip.octets();
@@ -130,8 +130,8 @@ fn extract_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
 
 /// Returns true if the IPv6 address falls in any blocked range.
 ///
-/// Blocks: ::1 (loopback), :: (unspecified), fe80::/10 (link-local),
-/// fc00::/7 (unique local), ff00::/8 (multicast).
+/// Blocks: `::1` (loopback), :: (unspecified), `fe80::/10` (link-local),
+/// `fc00::/7` (unique local), `ff00::/8` (multicast).
 /// Also extracts and validates embedded IPv4 addresses from transition mechanisms.
 pub(crate) fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
     // ::1 — loopback

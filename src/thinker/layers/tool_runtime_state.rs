@@ -1,4 +1,4 @@
-//! ToolRuntimeStateLayer — emits `<tool_runtime_state>` XML at priority 502.
+//! `ToolRuntimeStateLayer` — emits `<tool_runtime_state>` XML at priority 502.
 //!
 //! Sits immediately after `ToolsLayer` (500) and `HydratedToolsLayer` (501).
 //! Surfaces per-tool runtime state (depth limits, sandbox availability,

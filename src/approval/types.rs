@@ -11,7 +11,7 @@ use std::fmt;
 /// Classification of actions that require approval.
 ///
 /// Each variant maps to a specific capability that an agent can invoke.
-/// The serialization uses snake_case to match the JSON policy config format.
+/// The serialization uses `snake_case` to match the JSON policy config format.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionType {

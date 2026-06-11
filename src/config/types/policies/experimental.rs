@@ -34,7 +34,7 @@ pub struct ExperimentalPolicy {
     /// - Uses ~300 tokens instead of ~2000 tokens
     /// - Separates executor and conversational prompts
     ///
-    /// Default: false (use legacy AgentModePrompt)
+    /// Default: false (use legacy `AgentModePrompt`)
     #[serde(default)]
     pub use_new_prompt_system: bool,
 

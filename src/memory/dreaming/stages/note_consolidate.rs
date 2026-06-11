@@ -1,4 +1,4 @@
-//! NoteConsolidate stage — merges similar/duplicate notes within the same category.
+//! `NoteConsolidate` stage — merges similar/duplicate notes within the same category.
 //!
 //! Algorithm:
 //!   1. Group notes by category.
@@ -6,7 +6,7 @@
 //!      call asking for consolidation suggestions.
 //!   3. For categories with >20 notes, use title-based heuristics (shared prefix
 //!      or near-identical titles) to reduce the candidate set before calling LLM.
-//!   4. For each suggested pair, execute MERGE / ABSORB_A / ABSORB_B decisions.
+//!   4. For each suggested pair, execute MERGE / `ABSORB_A` / `ABSORB_B` decisions.
 //!   5. Update the index after every modification.
 //!
 //! Safety: all files being modified are backed up (`.bak`) before any write.
@@ -376,7 +376,7 @@ Respond with exactly one word: MERGE, COEXIST, ABSORB_A, or ABSORB_B.";
 
 #[derive(Debug, Clone, Copy)]
 enum MergeMode {
-    /// Full merge: deduplicate facts, write to keeper (earlier created_at), delete other.
+    /// Full merge: deduplicate facts, write to keeper (earlier `created_at`), delete other.
     Merge,
     /// Absorb: append unique facts from absorbed note into keeper, delete absorbed.
     AbsorbIntoA,

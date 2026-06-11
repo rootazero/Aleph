@@ -20,7 +20,7 @@ use crate::tools::AlephTool;
 // Args / Output types
 // =============================================================================
 
-/// Arguments for the session_complete tool.
+/// Arguments for the `session_complete` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SessionCompleteArgs {
     /// Brief summary of what the task accomplished.
@@ -30,7 +30,7 @@ pub struct SessionCompleteArgs {
     pub key_learnings: Option<Vec<String>>,
 }
 
-/// Result returned to the LLM after calling session_complete.
+/// Result returned to the LLM after calling `session_complete`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionCompleteResult {
     pub ok: bool,
@@ -44,18 +44,18 @@ pub struct SessionCompleteResult {
 /// LLM-callable tool that marks a self-contained task as complete.
 ///
 /// Emits a `RawMemory(SessionEnd { reason: TaskDone })` row so that the
-/// CompressionService can trigger a retrospective extraction.  Does NOT
+/// `CompressionService` can trigger a retrospective extraction.  Does NOT
 /// end the conversation — it is a signal, not a teardown.
 #[derive(Clone)]
 pub struct SessionCompleteTool {
     db: MemoryBackend,
     agent_id: String,
     /// Injected at agent-loop startup via `set_session_id`.
-    /// Wrapped in Arc<RwLock<…>> so it can be updated without re-building
+    /// Wrapped in Arc<`RwLock`<…>> so it can be updated without re-building
     /// the registry (same pattern as `memory_workspace_handle`).
     session_id: Option<Arc<tokio::sync::RwLock<String>>>,
     /// Optional capture-filter registry (Spec 4 Task 6).
-    /// When set, the SessionEnd row goes through `insert_with_capture_filter`.
+    /// When set, the `SessionEnd` row goes through `insert_with_capture_filter`.
     /// Task 11 wires the real registry at startup; `None` falls back to direct insert.
     capture_registry: Option<Arc<MemoryExtensionRegistry>>,
 }
@@ -79,7 +79,7 @@ impl SessionCompleteTool {
 
     /// Attach a capture-filter registry (Spec 4 Task 6).
     ///
-    /// When set, the SessionEnd raw-memory row goes through
+    /// When set, the `SessionEnd` raw-memory row goes through
     /// `insert_with_capture_filter` so extensions can mutate or block it.
     /// Task 11 wires the real registry at startup; `None` preserves current behaviour.
     pub fn with_capture_registry(mut self, registry: Arc<MemoryExtensionRegistry>) -> Self {

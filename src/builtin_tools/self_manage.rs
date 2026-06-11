@@ -1,4 +1,4 @@
-//! SelfManageTool — enter self-management mode via LLM intent recognition
+//! `SelfManageTool` — enter self-management mode via LLM intent recognition
 //!
 //! When the LLM detects that the user wants to configure, modify, fix, or
 //! manage Aleph settings, it calls this tool to get the full self-management

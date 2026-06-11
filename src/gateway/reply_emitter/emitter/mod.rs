@@ -32,7 +32,7 @@ pub struct ReplyEmitter {
 
     pub(crate) seq_counter: AtomicU64,
     pub(crate) has_sent: AtomicBool,
-    /// Guard against duplicate RunComplete events (orchestrator drain + engine.rs both emit).
+    /// Guard against duplicate `RunComplete` events (orchestrator drain + engine.rs both emit).
     pub(crate) run_complete_handled: AtomicBool,
     pub(crate) run_id: String,
 
@@ -47,21 +47,21 @@ pub struct ReplyEmitter {
     /// Per-channel voice state
     pub(crate) voice_state: Mutex<crate::gateway::voice::VoiceState>,
 
-    /// Pending media items from tool outputs (shared with StreamCallback)
+    /// Pending media items from tool outputs (shared with `StreamCallback`)
     pub(crate) pending_media: PendingMedia,
     /// Media cache for downloading media items
     pub(crate) media_cache: MediaCache,
     /// Real-time streaming state machine (replaces old typewriter mode)
     pub(crate) streaming: Mutex<StreamingController>,
 
-    /// Native stream handler (if channel supports StreamProtocol::Native)
+    /// Native stream handler (if channel supports `StreamProtocol::Native`)
     pub(crate) native_handler: Option<Arc<dyn crate::gateway::channel::NativeStreamHandler>>,
     /// Active native stream state
     pub(crate) native_stream_state: Mutex<Option<NativeStreamState>>,
     /// Whether native streaming disabled due to error
     pub(crate) native_disabled: AtomicBool,
 
-    /// Fallback model info — stored when ModelResolved fires with is_fallback=true.
+    /// Fallback model info — stored when `ModelResolved` fires with `is_fallback=true`.
     /// Appended as a notice line to non-Panel channel replies.
     pub(crate) fallback_info: Mutex<Option<crate::providers::health::ModelInfo>>,
 
@@ -70,7 +70,7 @@ pub struct ReplyEmitter {
     /// never emitted `ModelResolved` (older execution paths).
     pub(crate) model_label: Mutex<Option<String>>,
 
-    /// Accumulated reasoning text from StreamEvent::Reasoning / ReasoningBlock.
+    /// Accumulated reasoning text from `StreamEvent::Reasoning` / `ReasoningBlock`.
     pub(crate) reasoning_buffer: Mutex<String>,
 }
 
@@ -82,7 +82,7 @@ pub(crate) struct NativeStreamState {
 }
 
 impl ReplyEmitter {
-    /// Create a new ReplyEmitter with default configuration (instant mode)
+    /// Create a new `ReplyEmitter` with default configuration (instant mode)
     pub fn new(
         channel_registry: Arc<ChannelRegistry>,
         route: ReplyRoute,
@@ -118,7 +118,7 @@ impl ReplyEmitter {
         }
     }
 
-    /// Create a new ReplyEmitter with custom configuration
+    /// Create a new `ReplyEmitter` with custom configuration
     pub fn with_config(
         channel_registry: Arc<ChannelRegistry>,
         route: ReplyRoute,
@@ -167,7 +167,7 @@ impl ReplyEmitter {
     }
 
     /// Overflow threshold in characters. Returns 0 when overflow detection
-    /// is disabled (channel has no max_message_length or streaming is off).
+    /// is disabled (channel has no `max_message_length` or streaming is off).
     /// Subtracts a safety margin (~300) for HTML tag overhead.
     pub(crate) const fn overflow_threshold(&self) -> usize {
         let max = self.config.max_message_length;

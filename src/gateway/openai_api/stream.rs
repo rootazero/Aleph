@@ -1,7 +1,7 @@
 //! Shared SSE formatting utilities for OpenAI-compatible streaming responses.
 //!
 //! Provides helpers to convert [`ProviderDelta`] streams into Server-Sent Events
-//! (SSE) text frames conforming to the OpenAI Chat Completions streaming format.
+//! (SSE) text frames conforming to the `OpenAI` Chat Completions streaming format.
 
 use std::collections::HashMap;
 
@@ -19,7 +19,7 @@ use super::types::{ChatCompletionChunk, Delta, DeltaFunction, DeltaToolCall, Str
 /// Terminal SSE frame indicating the stream is complete.
 pub const SSE_DONE: &str = "data: [DONE]\n\n";
 
-/// Generate a unique completion ID in the OpenAI format: `chatcmpl-{uuid}`.
+/// Generate a unique completion ID in the `OpenAI` format: `chatcmpl-{uuid}`.
 #[must_use]
 pub fn completion_id() -> String {
     format!("chatcmpl-{}", uuid::Uuid::new_v4())
@@ -47,9 +47,9 @@ pub fn sse_data(chunk: &ChatCompletionChunk) -> String {
 // ToolCallTracker
 // =============================================================================
 
-/// Maps tool_call IDs to sequential indices for streaming delta ordering.
+/// Maps `tool_call` IDs to sequential indices for streaming delta ordering.
 ///
-/// OpenAI streaming format requires each tool call delta to carry an `index`
+/// `OpenAI` streaming format requires each tool call delta to carry an `index`
 /// field. This tracker assigns a monotonically increasing index to each unique
 /// tool call ID on first sight.
 #[derive(Debug, Default)]
@@ -82,9 +82,9 @@ impl ToolCallTracker {
 /// provider delta to the corresponding OpenAI-compatible SSE chunk, tracking
 /// tool call indices and accumulating usage statistics.
 /// `include_usage` mirrors the request's `stream_options.include_usage`. When
-/// false (the OpenAI default) no usage is sent in the stream at all. When true,
+/// false (the `OpenAI` default) no usage is sent in the stream at all. When true,
 /// usage is emitted as a dedicated terminal chunk with an empty `choices` array,
-/// after the finish chunk and before `[DONE]` — the shape OpenAI SDK clients read.
+/// after the finish chunk and before `[DONE]` — the shape `OpenAI` SDK clients read.
 #[must_use]
 pub fn provider_deltas_to_sse(
     deltas: BoxStream<'static, anyhow::Result<ProviderDelta>>,
@@ -331,7 +331,7 @@ fn make_chunk(
 }
 
 /// Build the trailing usage-only chunk: an empty `choices` array with usage set,
-/// matching OpenAI's `stream_options.include_usage` contract.
+/// matching `OpenAI`'s `stream_options.include_usage` contract.
 fn usage_chunk(id: &str, created: u64, model: &str, usage: Usage) -> ChatCompletionChunk {
     ChatCompletionChunk {
         id: id.to_string(),

@@ -1,9 +1,9 @@
-//! TeamNotifier — proactive notification of team task outcomes.
+//! `TeamNotifier` — proactive notification of team task outcomes.
 //!
 //! An [`EventHandler`] that listens for dispatcher task events and routes a
 //! message to the team leader's inbox:
 //! - a task **failure** alerts the leader immediately;
-//! - a task parked in **waiting_review** alerts the leader immediately — the
+//! - a task parked in **`waiting_review`** alerts the leader immediately — the
 //!   review gate only resolves through `workflow_step_review`, so without
 //!   this nudge a gated DAG would stall silently;
 //! - a task **completion** notifies the leader only once the whole team's work

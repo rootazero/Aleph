@@ -1,4 +1,4 @@
-//! SessionEventStore trait and SQLite schema for the session event log.
+//! `SessionEventStore` trait and `SQLite` schema for the session event log.
 //!
 //! Phase 1 Task 2 adds the backing table. Task 3 introduces the
 //! `SessionEventStore` trait defined below. Task 4 adds `SqliteEventStore`,
@@ -35,7 +35,7 @@ use crate::session::service::{SessionError, SessionId};
 
 #[async_trait]
 pub trait SessionEventStore: Send + Sync + 'static {
-    /// Append a single event at the given seq. Fails if (session_id, seq) already exists.
+    /// Append a single event at the given seq. Fails if (`session_id`, seq) already exists.
     async fn append(
         &self,
         session_id: &SessionId,
@@ -159,7 +159,7 @@ pub fn migrate_add_session_events(conn: &Connection) -> Result<(), AlephError> {
 /// from the context window, the model can retrieve the relevant slices via the
 /// `session_search` tool instead of re-importing the whole history.
 ///
-/// Idempotent. Requires SQLite built with FTS5, which `rusqlite`'s `bundled`
+/// Idempotent. Requires `SQLite` built with FTS5, which `rusqlite`'s `bundled`
 /// feature provides — the same prerequisite already relied on by
 /// [`crate::context::retrieval::ContentIndex`], so no new dependency. The body
 /// is the only indexed column; the rest are `UNINDEXED` storage used for

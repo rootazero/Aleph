@@ -103,7 +103,7 @@ pub(crate) async fn check_browser_approval(
 
 /// Parse one `list_tabs` line into `(id, url)`.
 ///
-/// Handles both the Chrome DevTools MCP format `"N: URL"` and the Playwright
+/// Handles both the Chrome `DevTools` MCP format `"N: URL"` and the Playwright
 /// CLI format `"Tab N: URL"`, and strips a trailing annotation such as
 /// `" [selected]"` from the URL. Returns `None` for lines without a numeric id.
 fn parse_tab_line(line: &str) -> Option<(String, String)> {

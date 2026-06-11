@@ -1,4 +1,4 @@
-//! AgentListTool — list all registered agents and show which is active.
+//! `AgentListTool` — list all registered agents and show which is active.
 
 use std::fmt;
 

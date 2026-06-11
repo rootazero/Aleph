@@ -6,7 +6,7 @@
 //!
 //! [`no_progress`](crate::tools::no_progress) is the closest sibling: it flags
 //! an *idempotent* read tool that returns the identical payload on identical
-//! args. It deliberately **excludes non-idempotent tools** (bash, code_exec,
+//! args. It deliberately **excludes non-idempotent tools** (bash, `code_exec`,
 //! writes, sends) on the reasoning that their results are *meant* to change
 //! between calls, so flagging them would false-positive a legitimately
 //! progressing loop.
@@ -23,13 +23,13 @@
 //! - [`crate::tools::attempt_summary`] counts only `SessionEvent::ToolError`;
 //!   these failures are `Ok` `ToolResult`s carrying `success:false` in the
 //!   payload, so the failure aggregator never sees them.
-//! - [`no_progress`](crate::tools::no_progress) excludes bash/code_exec.
-//! - [`gather_budget`](crate::tools::gather_budget) counts only search/web_fetch.
+//! - [`no_progress`](crate::tools::no_progress) excludes `bash/code_exec`.
+//! - [`gather_budget`](crate::tools::gather_budget) counts only `search/web_fetch`.
 //!
 //! This module closes that gap as the exact **complement** of `no_progress`:
 //!
 //! - **Covers non-idempotent tools** (`!is_idempotent_builtin_name`) — bash,
-//!   code_exec, writes, sends, MCP/extension tools. Idempotent reads stay with
+//!   `code_exec`, writes, sends, MCP/extension tools. Idempotent reads stay with
 //!   `no_progress`, so the two partition the tool space with no double-nudge.
 //! - **Gated on result identity** — the safety that lets it include
 //!   side-effecting tools without false-positiving a progressing loop. A tool

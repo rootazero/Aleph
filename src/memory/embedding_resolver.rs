@@ -27,7 +27,7 @@ pub enum EmbeddingLocality {
     /// Runs on the local machine (Ollama today; future in-process backends).
     /// Embedding inputs never leave the host — 数据不出本机.
     Local,
-    /// Calls out to a remote API (OpenAI, SiliconFlow, or a custom endpoint).
+    /// Calls out to a remote API (`OpenAI`, `SiliconFlow`, or a custom endpoint).
     Remote,
 }
 

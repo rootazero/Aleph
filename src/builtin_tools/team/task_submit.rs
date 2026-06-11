@@ -1,4 +1,4 @@
-//! TaskSubmitTool — submit a structured artifact as the output of a task.
+//! `TaskSubmitTool` — submit a structured artifact as the output of a task.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -30,7 +30,7 @@ pub struct TaskSubmitArgs {
     pub metadata: serde_json::Value,
 }
 
-/// Output from task_submit.
+/// Output from `task_submit`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskSubmitOutput {
     pub artifact_id: String,

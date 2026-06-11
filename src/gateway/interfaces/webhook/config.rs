@@ -24,7 +24,7 @@ pub struct WebhookChannelConfig {
     #[serde(default = "default_path")]
     pub path: String,
 
-    /// List of allowed sender_ids (empty = all allowed)
+    /// List of allowed `sender_ids` (empty = all allowed)
     #[serde(default)]
     pub allowed_senders: Vec<String>,
 }
@@ -66,7 +66,7 @@ impl WebhookChannelConfig {
         Ok(())
     }
 
-    /// Check if a sender_id is allowed
+    /// Check if a `sender_id` is allowed
     #[must_use]
     pub fn is_sender_allowed(&self, sender_id: &str) -> bool {
         if self.allowed_senders.is_empty() {

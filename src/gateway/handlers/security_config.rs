@@ -1,10 +1,10 @@
 //! Security Configuration Handlers
 //!
 //! RPC handlers for managing security settings:
-//! - security_config.get: Get current security configuration
-//! - security_config.update: Update security configuration
-//! - security_config.list_devices: List all paired devices
-//! - security_config.revoke_device: Revoke a device's access
+//! - `security_config.get`: Get current security configuration
+//! - `security_config.update`: Update security configuration
+//! - `security_config.list_devices`: List all paired devices
+//! - `security_config.revoke_device`: Revoke a device's access
 //!
 //! All modifications are persisted and broadcast as events.
 
@@ -188,7 +188,7 @@ pub struct DeviceInfo {
     pub tier: String,
 }
 
-/// Handle security_config.get request
+/// Handle `security_config.get` request
 pub async fn handle_get(
     request: JsonRpcRequest,
     config_patcher: Arc<ConfigPatcher>,
@@ -227,7 +227,7 @@ pub async fn handle_get(
     JsonRpcResponse::success(request.id, result)
 }
 
-/// Handle security_config.update request
+/// Handle `security_config.update` request
 pub async fn handle_update(
     request: JsonRpcRequest,
     config_patcher: Arc<ConfigPatcher>,
@@ -407,7 +407,7 @@ pub async fn handle_update(
     )
 }
 
-/// Handle security_config.list_devices request
+/// Handle `security_config.list_devices` request
 pub async fn handle_list_devices(
     request: JsonRpcRequest,
     device_store: Arc<DeviceStore>,
@@ -432,7 +432,7 @@ pub async fn handle_list_devices(
     JsonRpcResponse::success(request.id, result)
 }
 
-/// Handle security_config.revoke_device request
+/// Handle `security_config.revoke_device` request
 pub async fn handle_revoke_device(
     request: JsonRpcRequest,
     device_store: Arc<DeviceStore>,

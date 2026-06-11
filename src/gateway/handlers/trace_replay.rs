@@ -15,7 +15,7 @@ struct TraceByRunsParams {
 const MAX_RUNS: usize = 200;
 
 /// Read-only: return the persisted agent-trace event stream for each given
-/// run_id (= task_id), grouped by run, ordered by step_index. Unknown or
+/// `run_id` (= `task_id`), grouped by run, ordered by `step_index`. Unknown or
 /// trace-less runs yield an empty array (never an error). Reads the
 /// `task_traces` observability table only — never the memory store.
 pub async fn handle_by_runs(request: JsonRpcRequest, db: Arc<StateDatabase>) -> JsonRpcResponse {
@@ -108,7 +108,7 @@ pub async fn handle_list(request: JsonRpcRequest, db: Arc<StateDatabase>) -> Jso
 }
 
 /// Read-only: return the full persisted trace replay for one `task_id`
-/// (= run_id), as the `AgentTraceReplay` envelope the panel deserializes:
+/// (= `run_id`), as the `AgentTraceReplay` envelope the panel deserializes:
 /// `{ task: AgentTraceTaskSummary, traces: [{ step, event }] }`. The traces
 /// come from the `task_traces` observability table; the task summary from the
 /// `agent_tasks` table (synthesized from the trace stream when no task row

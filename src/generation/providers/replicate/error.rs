@@ -5,7 +5,7 @@
 use super::types::ErrorResponse;
 use crate::generation::GenerationError;
 
-/// Parse API error response into GenerationError
+/// Parse API error response into `GenerationError`
 pub fn parse_error_response(status: u16, body: &str) -> GenerationError {
     // Try to parse as JSON error
     if let Ok(error_response) = serde_json::from_str::<ErrorResponse>(body) {

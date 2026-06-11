@@ -47,10 +47,10 @@ pub struct DispatcherConfig {
     /// A task that has been `InProgress` for longer than this (seconds) and is
     /// not running in this process is declared a **zombie** and force-failed.
     /// Acts as a safety net for the rare window where a worker process dies
-    /// after the run_task spawn but before the outcome-recording code runs —
+    /// after the `run_task` spawn but before the outcome-recording code runs —
     /// in that case `reclaim_orphaned` would loop it back to Pending forever.
     ///
-    /// Inspired by ClawTeam's `list_zombie_agents(max_hours=2.0)`. Default
+    /// Inspired by `ClawTeam`'s `list_zombie_agents(max_hours=2.0)`. Default
     /// is generous (2 hours) — set lower for short-task workloads, but never
     /// below `task_timeout_secs` or healthy long-running tasks get clobbered.
     pub zombie_ttl_secs: u64,

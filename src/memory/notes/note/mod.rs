@@ -1,4 +1,4 @@
-//! KnowledgeNote — the primary memory unit backed by a markdown file.
+//! `KnowledgeNote` — the primary memory unit backed by a markdown file.
 
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};

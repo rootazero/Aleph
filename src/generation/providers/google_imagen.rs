@@ -80,7 +80,7 @@ pub const PERSON_GENERATION_OPTIONS: &[&str] = &["dont_allow", "allow_adult", "a
 /// - Imagen 3/4 image generation
 /// - Configurable aspect ratio and sample count
 /// - Person generation control
-/// - SynthID watermarking (automatic)
+/// - `SynthID` watermarking (automatic)
 ///
 /// # Example
 ///
@@ -103,7 +103,7 @@ pub struct GoogleImagenProvider {
     client: Client,
     /// Google API key
     api_key: String,
-    /// API endpoint (e.g., "https://generativelanguage.googleapis.com")
+    /// API endpoint (e.g., "<https://generativelanguage.googleapis.com>")
     endpoint: String,
     /// Model to use (e.g., "imagen-3.0-generate-002")
     model: String,
@@ -167,7 +167,7 @@ impl GoogleImagenProvider {
         format!("{}/v1beta/models/{}:predict", self.endpoint, self.model)
     }
 
-    /// Build the API request body from a GenerationRequest
+    /// Build the API request body from a `GenerationRequest`
     fn build_request_body(&self, request: &GenerationRequest) -> GoogleImagenRequest {
         // Build instance with prompt
         let instance = ImagenInstance {
@@ -251,7 +251,7 @@ impl GoogleImagenProvider {
         DEFAULT_ASPECT_RATIO.to_string()
     }
 
-    /// Parse API error response and convert to GenerationError
+    /// Parse API error response and convert to `GenerationError`
     fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError {
         // Try to parse as Google API error format
         if let Ok(error_response) = serde_json::from_str::<GoogleErrorResponse>(body) {
@@ -329,7 +329,7 @@ pub struct ImagenParameters {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub person_generation: Option<String>,
 
-    /// Whether to add SynthID watermark
+    /// Whether to add `SynthID` watermark
     #[serde(skip_serializing_if = "Option::is_none")]
     pub add_watermark: Option<bool>,
 

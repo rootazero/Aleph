@@ -1,6 +1,6 @@
-//! SharedArena — multi-agent collaboration domain.
+//! `SharedArena` — multi-agent collaboration domain.
 //!
-//! This module provides the core domain types for SharedArena,
+//! This module provides the core domain types for `SharedArena`,
 //! a structured workspace where multiple agents collaborate on a shared goal.
 
 pub mod aggregate;

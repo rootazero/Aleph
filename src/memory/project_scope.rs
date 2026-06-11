@@ -19,7 +19,7 @@
 //!   the sentinel [`GLOBAL_NS`] and [`scoped_agent_id`] returns the base id
 //!   unchanged — byte-for-byte the pre-feature behaviour.
 //! - **Stable.** The project hash uses SHA-256 (already a dependency) rather
-//!   than `DefaultHasher`, whose SipHash output is not guaranteed stable across
+//!   than `DefaultHasher`, whose `SipHash` output is not guaranteed stable across
 //!   Rust versions. A persisted namespace key MUST be reproducible across
 //!   restarts and compiler upgrades.
 //! - **Floors stay global.** The always-on user-profile and feedback floors are

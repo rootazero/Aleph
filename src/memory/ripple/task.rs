@@ -1,4 +1,4 @@
-//! RippleTask implementation for knowledge graph exploration
+//! `RippleTask` implementation for knowledge graph exploration
 
 use std::collections::HashSet;
 
@@ -9,7 +9,7 @@ use crate::Result;
 
 use super::config::{RippleConfig, RippleResult};
 
-/// RippleTask explores related facts using vector similarity
+/// `RippleTask` explores related facts using vector similarity
 pub struct RippleTask {
     database: MemoryBackend,
     config: RippleConfig,
@@ -17,7 +17,7 @@ pub struct RippleTask {
 }
 
 impl RippleTask {
-    /// Create a new RippleTask
+    /// Create a new `RippleTask`
     pub fn new(database: MemoryBackend, config: RippleConfig, agent_id: impl Into<String>) -> Self {
         Self {
             database,
@@ -106,9 +106,9 @@ impl RippleTask {
 
     /// Explore cross-domain facts via tunnel edges.
     ///
-    /// Previously used graph_nodes/graph_edges for tunnel discovery.
+    /// Previously used `graph_nodes/graph_edges` for tunnel discovery.
     /// That graph system has been deprecated. This is now a no-op stub.
-    /// Future: tunnel discovery will use notes_links for cross-domain linking.
+    /// Future: tunnel discovery will use `notes_links` for cross-domain linking.
     pub async fn explore_tunnels(
         &self,
         _seed_facts: &[MemoryFact],
@@ -119,7 +119,7 @@ impl RippleTask {
 
     /// Check if a candidate fact meets the similarity threshold.
     ///
-    /// Uses the `similarity_score` populated by vector_search rather than
+    /// Uses the `similarity_score` populated by `vector_search` rather than
     /// re-computing cosine similarity, since SQLite-backed facts do not
     /// carry embeddings in the returned rows.
     fn is_similar(&self, _seed: &MemoryFact, candidate: &MemoryFact) -> bool {

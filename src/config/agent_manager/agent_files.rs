@@ -7,7 +7,7 @@ use crate::error::{AlephError, Result};
 use super::{AgentManager, WorkspaceFile, BOOTSTRAP_FILES};
 
 impl AgentManager {
-    /// Validate agent_id: only alphanumeric, underscore, hyphen
+    /// Validate `agent_id`: only alphanumeric, underscore, hyphen
     pub(super) fn validate_agent_id(&self, agent_id: &str) -> Result<()> {
         if agent_id.is_empty() {
             return Err(AlephError::invalid_config(

@@ -1,4 +1,4 @@
-//! TaskUpdateTool — update a coordination task's status, owner, result, or metadata.
+//! `TaskUpdateTool` — update a coordination task's status, owner, result, or metadata.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -23,7 +23,7 @@ use crate::tools::AlephTool;
 pub struct TaskUpdateArgs {
     /// ID of the task to update
     pub task_id: String,
-    /// New status: pending, in_progress, completed, failed, cancelled
+    /// New status: pending, `in_progress`, completed, failed, cancelled
     #[serde(default)]
     pub status: Option<String>,
     /// New owner agent ID

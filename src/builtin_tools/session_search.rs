@@ -42,9 +42,9 @@ const fn default_max_results() -> usize {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub enum SummarySource {
-    /// Reused from the existing session_compactor d{depth}/{seq} facts.
+    /// Reused from the existing `session_compactor` d{depth}/{seq} facts.
     Compactor,
-    /// Produced by the on_session_end hook backstop.
+    /// Produced by the `on_session_end` hook backstop.
     SessionEnd,
     /// Synthesized at query time as a fallback for in-flight short sessions.
     Lazy,
@@ -74,11 +74,11 @@ pub struct SessionSearchOutput {
 pub struct SessionSearchTool {
     context: Arc<GatewayContext>,
     caller_agent_id: String,
-    /// HybridAssembler for summary-driven primary retrieval. `None` when MCP
-    /// is not yet injected; call_impl falls through to the raw FTS5 fallback.
+    /// `HybridAssembler` for summary-driven primary retrieval. `None` when MCP
+    /// is not yet injected; `call_impl` falls through to the raw FTS5 fallback.
     assembler: Option<Arc<dyn WorkingMemoryAssembler>>,
-    /// SummarySynthesizer for lazy on-demand fallback synthesis. `None` when
-    /// no AiProvider is configured; fallback skips synthesis and marks hit as unavailable.
+    /// `SummarySynthesizer` for lazy on-demand fallback synthesis. `None` when
+    /// no `AiProvider` is configured; fallback skips synthesis and marks hit as unavailable.
     synthesizer: Option<Arc<SummarySynthesizer>>,
 }
 

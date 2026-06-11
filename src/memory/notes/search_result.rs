@@ -1,4 +1,4 @@
-//! NoteSearchResult — search results from notes-based retrieval.
+//! `NoteSearchResult` — search results from notes-based retrieval.
 //!
 //! Carries full content and metadata, with `to_memory_fact()` bridge to
 //! produce `MemoryFact` / `ScoredFact` for downstream compatibility.
@@ -22,11 +22,11 @@ pub struct NoteSearchResult {
 }
 
 impl NoteSearchResult {
-    /// Convert to MemoryFact for downstream compatibility.
+    /// Convert to `MemoryFact` for downstream compatibility.
     ///
     /// Uses `path` as the ID and formats `note://{path}` as the VFS path.
-    /// Tags are forwarded as source_memory_ids for traceability.
-    /// Defaults: is_valid=true.
+    /// Tags are forwarded as `source_memory_ids` for traceability.
+    /// Defaults: `is_valid=true`.
     #[must_use]
     pub fn to_memory_fact(&self, agent_id: &str) -> MemoryFact {
         let note_type = NoteType::from_str_or_other(&self.category);

@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_snapshot tool.
+/// Arguments for the `browser_snapshot` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserSnapshotArgs {
     /// Browser profile name (default: "default").
@@ -19,7 +19,7 @@ pub struct BrowserSnapshotArgs {
     pub max_chars: Option<usize>,
 }
 
-/// Output from the browser_snapshot tool.
+/// Output from the `browser_snapshot` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserSnapshotOutput {
     pub success: bool,

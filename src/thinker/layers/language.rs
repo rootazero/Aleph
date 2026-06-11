@@ -1,4 +1,4 @@
-//! LanguageLayer — response language setting (priority 1600)
+//! `LanguageLayer` — response language setting (priority 1600)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};

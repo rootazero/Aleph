@@ -1,7 +1,7 @@
 //! Strategy Selector — deterministic signal-to-strategy mapping.
 //!
 //! No LLM calls. Uses composite signal scores and a sliding-window
-//! personality adaptation to choose the optimal DreamStrategy.
+//! personality adaptation to choose the optimal `DreamStrategy`.
 
 use std::collections::VecDeque;
 

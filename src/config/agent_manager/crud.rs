@@ -12,7 +12,7 @@ use crate::error::{AlephError, Result};
 use super::{AgentManager, AgentPatch};
 
 impl AgentManager {
-    /// Create a new AgentManager
+    /// Create a new `AgentManager`
     ///
     /// On construction, ensures at least one default agent exists in the config
     /// file. If `[[agents.list]]` is empty or missing, writes a default "main"
@@ -76,7 +76,7 @@ impl AgentManager {
         mgr
     }
 
-    /// Scan agents_root for directories that have no matching config entry
+    /// Scan `agents_root` for directories that have no matching config entry
     /// and register them as minimal agent definitions.
     fn reconcile_orphan_workspaces(&self) {
         let entries = match fs::read_dir(&self.agents_root) {

@@ -110,7 +110,7 @@ impl ErrorCooldown {
         }
     }
 
-    /// Remove expired cooldown entries to prevent unbounded DashMap growth.
+    /// Remove expired cooldown entries to prevent unbounded `DashMap` growth.
     /// Should be called periodically (e.g., every hour from a background task).
     pub fn sweep_expired(&self) {
         let before = self.cooldowns.len();

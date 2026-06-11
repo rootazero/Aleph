@@ -32,7 +32,7 @@ pub fn provider_vault_key(provider_name: &str) -> String {
 }
 
 /// Probe a single provider with a lightweight `ping` round-trip and measure
-/// latency. Takes a fully-resolved [`ProviderConfig`] (api_key already
+/// latency. Takes a fully-resolved [`ProviderConfig`] (`api_key` already
 /// injected from the vault). Read-only: never mutates config or health state.
 pub async fn probe_provider(label: &str, provider_config: ProviderConfig) -> ProbeOutcome {
     let provider = match crate::providers::create_provider(label, provider_config) {

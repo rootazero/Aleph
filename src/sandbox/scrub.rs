@@ -88,7 +88,7 @@ pub fn scrub_secrets_bytes<'a>(bytes: &'a [u8], injected: &[InjectedSecret]) -> 
 ///
 /// This is the redline-safe half of prompt-injection defense — a deterministic
 /// hard filter on a fixed set of control characters, like stripping ANSI
-/// escapes. It maps OpenSquilla's `injection_guard` "invisible character" class
+/// escapes. It maps `OpenSquilla`'s `injection_guard` "invisible character" class
 /// onto Aleph WITHOUT porting its semantic regex classifier (prompt-override /
 /// role-hijack / exfiltration heuristics), which would be content scoring and
 /// violate the no-content-review redline (R7 / R10).

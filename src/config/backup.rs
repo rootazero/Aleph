@@ -27,7 +27,7 @@ pub struct ConfigBackup {
 }
 
 impl ConfigBackup {
-    /// Create a new ConfigBackup manager
+    /// Create a new `ConfigBackup` manager
     ///
     /// # Arguments
     /// * `backup_dir` - Directory to store backup files

@@ -76,7 +76,7 @@ impl TemplateContext {
         self
     }
 
-    /// Apply per-request overrides from RequestPayload (temperature, max_tokens)
+    /// Apply per-request overrides from `RequestPayload` (temperature, `max_tokens`)
     ///
     /// Must be called after `with_config()` to override config values.
     #[must_use]
@@ -123,7 +123,7 @@ impl TemplateContext {
         self
     }
 
-    /// Build the final context as a serde_json::Value
+    /// Build the final context as a `serde_json::Value`
     ///
     /// Returns a JSON object containing all context data.
     #[must_use]
@@ -166,7 +166,7 @@ impl TemplateRenderer {
     /// # Arguments
     ///
     /// * `template` - Template string with Handlebars syntax (e.g., "{{variable}}")
-    /// * `context` - Context data as a serde_json::Value
+    /// * `context` - Context data as a `serde_json::Value`
     ///
     /// # Errors
     ///
@@ -184,7 +184,7 @@ impl TemplateRenderer {
     /// # Arguments
     ///
     /// * `template` - Template string that should produce valid JSON
-    /// * `context` - Context data as a serde_json::Value
+    /// * `context` - Context data as a `serde_json::Value`
     ///
     /// # Errors
     ///

@@ -1,4 +1,4 @@
-//! Passthrough path — direct LLM proxy via HttpProvider.
+//! Passthrough path — direct LLM proxy via `HttpProvider`.
 
 use crate::sync_primitives::Arc;
 
@@ -47,7 +47,7 @@ pub fn convert_openai_tools(tools: &[Value]) -> Vec<ToolDefinition> {
         .collect()
 }
 
-/// Convert OpenAI-format tool_choice value to internal `ToolChoice`.
+/// Convert OpenAI-format `tool_choice` value to internal `ToolChoice`.
 #[must_use]
 pub fn convert_tool_choice(choice: &Value) -> Option<ToolChoice> {
     match choice {

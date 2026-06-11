@@ -1,6 +1,6 @@
 //! Per-model decision: which Chat-API token-limit field name to send.
 //!
-//! OpenAI reasoning model families (`o1-`, `o3-`, `o4-`, `gpt-5`) reject
+//! `OpenAI` reasoning model families (`o1-`, `o3-`, `o4-`, `gpt-5`) reject
 //! `max_tokens` with HTTP 400; they require `max_completion_tokens` instead.
 //! All other models (gpt-4o, gpt-4-turbo, gpt-3.5-turbo, third-party compat
 //! backends, ...) continue to use `max_tokens`.

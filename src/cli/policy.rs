@@ -1,7 +1,7 @@
 //! Declarative policy + dispatch helpers for CLI subcommands.
 //!
 //! Every CLI subcommand declares one of three policies and dispatches
-//! through `run_no_lock` (NoLock) or `with_policy` (LockOnly / LockOrIpc,
+//! through `run_no_lock` (`NoLock`) or `with_policy` (`LockOnly` / `LockOrIpc`,
 //! filled in by Task 11).
 
 use std::fmt;
@@ -66,7 +66,7 @@ pub enum CommandPolicy {
     },
 }
 
-/// Dispatch a NoLock subcommand. Currently a thin pass-through; the
+/// Dispatch a `NoLock` subcommand. Currently a thin pass-through; the
 /// indirection exists so reverse-regression checks (Task 23) can scan
 /// `src/bin/aleph-server/commands/` for `run_no_lock(` to verify every
 /// command file has gone through policy classification.

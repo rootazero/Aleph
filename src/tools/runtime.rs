@@ -1,4 +1,4 @@
-//! LoopTool trait and LoopToolRegistry.
+//! `LoopTool` trait and `LoopToolRegistry`.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -38,7 +38,7 @@ pub struct ToolDefinition {
     /// time. Informational only — the harness queries
     /// `ToolService::is_call_concurrent_safe(name, &actual_input)` at
     /// dispatch time for the authoritative answer, since input-dependent
-    /// tools (e.g. file_ops) may flip per call.
+    /// tools (e.g. `file_ops`) may flip per call.
     #[serde(default)]
     pub concurrent_safe: bool,
     /// Static "running this tool needs explicit user confirmation" hint,
@@ -73,7 +73,7 @@ pub trait LoopTool: Send + Sync {
 
     /// Execute the tool with the given input.
     ///
-    /// `cancel` carries opencode-parity AbortSignal semantics: the harness
+    /// `cancel` carries opencode-parity `AbortSignal` semantics: the harness
     /// forks a per-call child token from the run's [`ChainContext::cancellation_token`]
     /// and the harness itself wraps the call in `tokio::select!`. Tools that
     /// run unbounded loops or want to emit partial results on abort should
@@ -136,7 +136,7 @@ pub trait LoopTool: Send + Sync {
     ///   [`crate::tools::result_processing::resolve_result_budget`].
     ///
     /// Default returns `None`; override on tools whose outputs are large
-    /// enough to warrant offloading (bash, web_fetch, etc.) or whose
+    /// enough to warrant offloading (bash, `web_fetch`, etc.) or whose
     /// outputs should never be persisted (`read_file`-family).
     fn max_result_tokens(&self) -> Option<usize> {
         None

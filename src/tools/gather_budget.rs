@@ -18,7 +18,7 @@
 //! Guidelines #12 ("Converge") and the persistence-doctrine "Ceiling" clause
 //! already say this in the static system prompt, but a constant prose rule gets tuned
 //! out over a long run. This signal is *dynamic*: it surfaces the live call
-//! count ("you have made 47 search/web_fetch calls this run"), which is far
+//! count ("you have made 47 `search/web_fetch` calls this run"), which is far
 //! harder to ignore than always-present prose — the same rationale that makes
 //! [`attempt_summary`] a per-turn message rather than a [`PromptLayer`].
 //!

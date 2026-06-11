@@ -1,4 +1,4 @@
-//! ExecutionAdapter trait implementation for ExecutionEngine.
+//! `ExecutionAdapter` trait implementation for `ExecutionEngine`.
 
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -10,9 +10,9 @@ use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 
-/// Implement ExecutionAdapter for the ExecutionEngine.
+/// Implement `ExecutionAdapter` for the `ExecutionEngine`.
 ///
-/// This allows InboundMessageRouter to use ExecutionEngine via a trait object,
+/// This allows `InboundMessageRouter` to use `ExecutionEngine` via a trait object,
 /// enabling routing without being generic over provider and tool registry types.
 #[async_trait]
 impl<P, R> ExecutionAdapter for ExecutionEngine<P, R>

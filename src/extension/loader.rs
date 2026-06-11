@@ -1,7 +1,7 @@
 //! Plugin Loader - Manages runtime loading of WASM and MCP plugins
 //!
 //! Provides a unified interface to load plugins into their appropriate runtimes
-//! based on PluginKind, and invoke tools/hooks on loaded plugins.
+//! based on `PluginKind`, and invoke tools/hooks on loaded plugins.
 //!
 //! # Architecture
 //!
@@ -14,9 +14,9 @@
 //!
 //! # MCP Plugin Flow
 //!
-//! MCP-type plugins delegate to Aleph's MCP client system (McpManager).
-//! The PluginLoader reads `.mcp.json`, stores the configs, and exposes them
-//! via `get_mcp_configs()`. The caller (ExtensionManager or Gateway) is
+//! MCP-type plugins delegate to Aleph's MCP client system (`McpManager`).
+//! The `PluginLoader` reads `.mcp.json`, stores the configs, and exposes them
+//! via `get_mcp_configs()`. The caller (`ExtensionManager` or Gateway) is
 //! responsible for registering these configs with `McpManager`.
 
 use crate::sync_primitives::Arc;
@@ -37,10 +37,10 @@ pub struct PluginLoader {
     /// WASM runtime (lazy initialized)
     wasm_runtime: Option<WasmRuntime>,
 
-    /// MCP server configs per plugin: plugin_id -> (server_id -> McpManagerConfig)
+    /// MCP server configs per plugin: `plugin_id` -> (`server_id` -> `McpManagerConfig`)
     mcp_configs: HashMap<String, HashMap<String, McpManagerConfig>>,
 
-    /// Map of plugin_id -> runtime kind for fast lookup
+    /// Map of `plugin_id` -> runtime kind for fast lookup
     loaded_plugins: HashMap<String, PluginKind>,
 }
 
@@ -93,7 +93,7 @@ impl PluginLoader {
         self.mcp_configs.get(plugin_id)
     }
 
-    /// Get all MCP server configs as a flat HashMap (server_id -> config).
+    /// Get all MCP server configs as a flat `HashMap` (`server_id` -> config).
     ///
     /// If two plugins register MCP servers with the same ID, the later one wins
     /// and a warning is logged.
@@ -260,7 +260,7 @@ impl PluginLoader {
 
     /// Call a tool handler on a loaded plugin.
     ///
-    /// For MCP plugins, tool calls should go through the MCP system (McpManager).
+    /// For MCP plugins, tool calls should go through the MCP system (`McpManager`).
     pub fn call_tool(
         &self,
         plugin_id: &str,

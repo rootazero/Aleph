@@ -14,7 +14,7 @@ use std::collections::HashSet;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ToolSafetyPolicy {
     /// Keywords indicating high-risk irreversible operations
-    /// Default: ["delete", "remove", "drop", "shell", "execute", "run_command",
+    /// Default: ["delete", "remove", "drop", "shell", "execute", "`run_command`",
     ///           "bash", "terminal", "destroy", "erase", "purge"]
     #[serde(default = "default_high_risk_keywords")]
     pub high_risk_keywords: Vec<String>,
@@ -37,7 +37,7 @@ pub struct ToolSafetyPolicy {
     pub readonly_keywords: Vec<String>,
 
     /// Default safety level for unmatched Builtin tools
-    /// Values: "readonly", "reversible", "irreversible_low_risk", "irreversible_high_risk"
+    /// Values: "readonly", "reversible", "`irreversible_low_risk`", "`irreversible_high_risk`"
     #[serde(default = "default_builtin_fallback")]
     pub builtin_fallback: String,
 
@@ -108,7 +108,7 @@ impl ToolSafetyPolicy {
     }
 
     /// Parse a safety level string to enum-compatible value
-    /// Returns: "readonly", "reversible", "irreversible_low_risk", "irreversible_high_risk"
+    /// Returns: "readonly", "reversible", "`irreversible_low_risk`", "`irreversible_high_risk`"
     pub fn parse_safety_level(&self, level: &str) -> &'static str {
         match level.to_lowercase().as_str() {
             "readonly" | "read_only" | "read-only" => "readonly",
@@ -123,22 +123,22 @@ impl ToolSafetyPolicy {
         }
     }
 
-    /// Convert to HashSet for efficient lookup (internal use)
+    /// Convert to `HashSet` for efficient lookup (internal use)
     pub fn high_risk_set(&self) -> HashSet<String> {
         self.high_risk_keywords.iter().cloned().collect()
     }
 
-    /// Convert to HashSet for efficient lookup (internal use)
+    /// Convert to `HashSet` for efficient lookup (internal use)
     pub fn low_risk_set(&self) -> HashSet<String> {
         self.low_risk_keywords.iter().cloned().collect()
     }
 
-    /// Convert to HashSet for efficient lookup (internal use)
+    /// Convert to `HashSet` for efficient lookup (internal use)
     pub fn reversible_set(&self) -> HashSet<String> {
         self.reversible_keywords.iter().cloned().collect()
     }
 
-    /// Convert to HashSet for efficient lookup (internal use)
+    /// Convert to `HashSet` for efficient lookup (internal use)
     pub fn readonly_set(&self) -> HashSet<String> {
         self.readonly_keywords.iter().cloned().collect()
     }

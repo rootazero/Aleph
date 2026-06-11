@@ -25,7 +25,7 @@ pub struct SessionConfig {
     #[serde(default)]
     pub dm_scope: DmScope,
 
-    /// Cross-channel identity links: canonical_name -> [channel:id, ...]
+    /// Cross-channel identity links: `canonical_name` -> [channel:id, ...]
     #[serde(
         default,
         deserialize_with = "deserialize_identity_links_with_validation"

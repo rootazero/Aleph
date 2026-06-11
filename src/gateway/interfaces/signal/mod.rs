@@ -51,7 +51,7 @@ pub struct SignalChannel {
     shutdown_tx: Option<watch::Sender<bool>>,
     /// HTTP client for signal-cli API calls
     client: reqwest::Client,
-    /// Override API base URL for testing (replaces config.api_url in send)
+    /// Override API base URL for testing (replaces `config.api_url` in send)
     api_base: Option<String>,
 }
 

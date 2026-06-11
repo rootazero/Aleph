@@ -28,19 +28,19 @@ pub trait ToolRegistry: Send + Sync {
         arguments: Value,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>>;
 
-    /// Get the shared workspace handle for workspace-aware tools (e.g., memory_search).
+    /// Get the shared workspace handle for workspace-aware tools (e.g., `memory_search`).
     ///
-    /// The execution engine writes the active workspace_id to this handle after
+    /// The execution engine writes the active `workspace_id` to this handle after
     /// workspace resolution, so tools use the correct workspace by default.
     /// Returns None if no workspace-aware tools are registered.
     fn workspace_handle(&self) -> Option<Arc<tokio::sync::RwLock<String>>> {
         None
     }
 
-    /// Get the shared SmartRecallConfig handle for the memory_search tool.
+    /// Get the shared `SmartRecallConfig` handle for the `memory_search` tool.
     ///
-    /// The execution engine writes the active workspace profile's SmartRecallConfig
-    /// here so the memory_search tool can use Two-Phase Smart Recall.
+    /// The execution engine writes the active workspace profile's `SmartRecallConfig`
+    /// here so the `memory_search` tool can use Two-Phase Smart Recall.
     fn smart_recall_config_handle(
         &self,
     ) -> Option<Arc<tokio::sync::RwLock<Option<crate::config::types::profile::SmartRecallConfig>>>>
@@ -50,7 +50,7 @@ pub trait ToolRegistry: Send + Sync {
 
     /// Get the shared session context handle for agent management tools.
     ///
-    /// The execution engine writes the current channel/peer_id here so agent
+    /// The execution engine writes the current `channel/peer_id` here so agent
     /// tools can bind agent switches to the correct conversation.
     fn session_context_handle(
         &self,
@@ -60,8 +60,8 @@ pub trait ToolRegistry: Send + Sync {
 
     /// Get the shared tool policy handle for per-agent tool access control.
     ///
-    /// When set, execute_tool() checks this policy before dispatching.
-    /// Default ToolPolicy (empty whitelist/blacklist) allows all tools.
+    /// When set, `execute_tool()` checks this policy before dispatching.
+    /// Default `ToolPolicy` (empty whitelist/blacklist) allows all tools.
     fn tool_policy_handle(
         &self,
     ) -> Option<Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>> {
@@ -70,16 +70,16 @@ pub trait ToolRegistry: Send + Sync {
 
     /// Get the shared tool context handle for workspace-scoped output paths.
     ///
-    /// The execution engine writes the active agent's ToolContext here so
+    /// The execution engine writes the active agent's `ToolContext` here so
     /// tools that write output files use the correct workspace directory.
     fn tool_context_handle(&self) -> Option<crate::tools::ToolContextHandle> {
         None
     }
 
-    /// Get the shared session key handle for memory_search scope=current_session.
+    /// Get the shared session key handle for `memory_search` `scope=current_session`.
     ///
     /// The execution engine writes the active session's key string here after
-    /// session resolution so memory_search can filter facts by session scope.
+    /// session resolution so `memory_search` can filter facts by session scope.
     fn session_key_handle(&self) -> Option<Arc<tokio::sync::RwLock<String>>> {
         None
     }

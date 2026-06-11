@@ -101,7 +101,7 @@ pub enum DistillOutcome {
 /// to keep the on-disk log forward-compatible if `Severity` ever evolves.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistillActionRecord {
-    /// Stage that emitted the action ("skill_distill" or "feedback_distill").
+    /// Stage that emitted the action ("`skill_distill`" or "`feedback_distill`").
     pub stage: String,
     /// Action variant ("new" | "strengthen" | "supersede" | "skip").
     pub action_kind: String,

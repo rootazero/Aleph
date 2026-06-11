@@ -1,7 +1,7 @@
 //! Image generation tool
 //!
 //! Generates images from text prompts using configured AI providers.
-//! Implements AlephTool trait for AI agent integration.
+//! Implements `AlephTool` trait for AI agent integration.
 
 use crate::sync_primitives::{Arc, RwLock};
 use async_trait::async_trait;
@@ -57,7 +57,7 @@ pub struct ImageGenerateOutput {
     /// Location of the generated image (URL or file path)
     pub image_location: String,
 
-    /// Type of location: "url", "file", or "data_url"
+    /// Type of location: "url", "file", or "`data_url`"
     pub location_type: String,
 
     /// Original prompt used
@@ -76,7 +76,7 @@ pub struct ImageGenerateOutput {
     pub duration_ms: u64,
 }
 
-/// Image generation tool using GenerationProviderRegistry
+/// Image generation tool using `GenerationProviderRegistry`
 ///
 /// The registry is wrapped in `Arc<RwLock<>>` for thread-safe access
 /// since it may be shared across multiple tool instances.
@@ -91,7 +91,7 @@ impl ImageGenerateTool {
     /// Tool description for AI prompt
     pub const DESCRIPTION: &'static str = "Generate an image from a text description. Use this when you need to create visual content based on a prompt.";
 
-    /// Create a new ImageGenerateTool with the given provider registry
+    /// Create a new `ImageGenerateTool` with the given provider registry
     pub const fn new(registry: Arc<RwLock<GenerationProviderRegistry>>) -> Self {
         Self { registry }
     }
@@ -255,7 +255,7 @@ impl Clone for ImageGenerateTool {
     }
 }
 
-/// Implementation of AlephTool trait for ImageGenerateTool
+/// Implementation of `AlephTool` trait for `ImageGenerateTool`
 #[async_trait]
 impl AlephTool for ImageGenerateTool {
     const NAME: &'static str = "image_generate";

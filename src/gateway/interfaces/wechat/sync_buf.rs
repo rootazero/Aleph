@@ -1,6 +1,6 @@
 //! Sync Buffer Persistence
 //!
-//! Persists the get_updates_buf for incremental sync across restarts.
+//! Persists the `get_updates_buf` for incremental sync across restarts.
 
 use std::path::Path;
 

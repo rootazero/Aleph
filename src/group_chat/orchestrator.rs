@@ -1,4 +1,4 @@
-//! GroupChat Orchestrator — ties together persona registry, sessions, and coordination.
+//! `GroupChat` Orchestrator — ties together persona registry, sessions, and coordination.
 //!
 //! The orchestrator manages session lifecycle (create, get, end, list) and
 //! enforces config-driven limits (max personas, max rounds). It does NOT make

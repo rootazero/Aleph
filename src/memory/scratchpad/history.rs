@@ -23,7 +23,7 @@ pub struct HistoryEntry {
 }
 
 impl SessionHistory {
-    /// Create a new SessionHistory manager
+    /// Create a new `SessionHistory` manager
     #[must_use]
     pub const fn new(path: PathBuf) -> Self {
         Self { path }

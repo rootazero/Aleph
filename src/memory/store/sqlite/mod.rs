@@ -1,4 +1,4 @@
-//! SQLite + sqlite-vec memory backend.
+//! `SQLite` + sqlite-vec memory backend.
 //!
 //! Provides the SQLite-backed persistence layer for the notes system
 //! (Knowledge Notes + embeddings), raw memories, recall signals, and dream

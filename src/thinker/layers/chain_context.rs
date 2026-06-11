@@ -1,4 +1,4 @@
-//! ChainContextLayer — surfaces subagent call-chain position to the LLM.
+//! `ChainContextLayer` — surfaces subagent call-chain position to the LLM.
 //!
 //! `HarnessDeps.chain_context` is propagated through every subagent spawn
 //! (see `agents::subagent_spawner`), but until now it was invisible to

@@ -16,7 +16,7 @@ pub struct ProfileInfo {
     pub name: String,
     /// Current state (e.g. "Idle", "Running").
     pub state: String,
-    /// Driver mode: "managed" (headless, default) or "existing_session" (visible browser, use only when user explicitly requests).
+    /// Driver mode: "managed" (headless, default) or "`existing_session`" (visible browser, use only when user explicitly requests).
     pub driver: String,
 }
 
@@ -33,14 +33,14 @@ pub enum ProfileAction {
     },
 }
 
-/// Arguments for the browser_profile tool.
+/// Arguments for the `browser_profile` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserProfileArgs {
     /// Profile action to perform.
     pub action: ProfileAction,
 }
 
-/// Output from the browser_profile tool.
+/// Output from the `browser_profile` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserProfileOutput {
     pub success: bool,

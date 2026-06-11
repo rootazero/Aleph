@@ -1,4 +1,4 @@
-//! ToolAwareChunker — semantic unit parsing and pair-aware chunking.
+//! `ToolAwareChunker` — semantic unit parsing and pair-aware chunking.
 //!
 //! Treats `tool_use` / `tool_result` pairs as atomic semantic units that must
 //! never be split across compaction chunks.  A [`ToolRound`] always contains

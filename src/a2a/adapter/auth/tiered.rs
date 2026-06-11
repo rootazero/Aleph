@@ -11,12 +11,12 @@ use crate::sync_primitives::AsyncRwLock;
 
 use super::token_store::TokenStore;
 
-/// Tiered trust authenticator implementing localhost -> token -> OAuth2 -> reject.
+/// Tiered trust authenticator implementing localhost -> token -> `OAuth2` -> reject.
 ///
 /// Security tiers:
 /// - **Local**: Loopback connections bypass auth entirely (configurable)
 /// - **Trusted**: Valid bearer token or API key grants full access
-/// - **Public**: OAuth2 tokens get restricted access
+/// - **Public**: `OAuth2` tokens get restricted access
 /// - **Reject**: No valid credentials results in Unauthorized error
 pub struct TieredAuthenticator {
     local_bypass: bool,

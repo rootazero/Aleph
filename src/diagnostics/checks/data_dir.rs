@@ -1,7 +1,7 @@
 //! `core/data-dir` — the `~/.aleph/data` directory must exist and be writable.
 //!
 //! A missing data dir is the single most common first-run / corrupted-state
-//! failure: the SQLite stores, vault, and instance lock all live under it.
+//! failure: the `SQLite` stores, vault, and instance lock all live under it.
 //! This is the canonical *repairable* check — recreating the directory is
 //! deterministic and safe.
 

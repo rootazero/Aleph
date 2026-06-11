@@ -59,11 +59,11 @@ pub struct ScratchpadArgs {
     pub project_id: String,
     /// Action to perform
     pub action: ScratchpadAction,
-    /// Value for Initialize (objective), SetObjective, AppendNote
+    /// Value for Initialize (objective), `SetObjective`, `AppendNote`
     pub value: Option<String>,
-    /// Plan items for SetPlan
+    /// Plan items for `SetPlan`
     pub items: Option<Vec<String>>,
-    /// Item index for StartItem / CompleteItem (0-based)
+    /// Item index for `StartItem` / `CompleteItem` (0-based)
     pub item_index: Option<usize>,
 }
 

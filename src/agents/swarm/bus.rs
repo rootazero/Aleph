@@ -137,7 +137,7 @@ impl AgentMessageBus {
 
     /// Subscribe to all event tiers
     ///
-    /// Returns a tuple of (critical_rx, important_rx, info_rx)
+    /// Returns a tuple of (`critical_rx`, `important_rx`, `info_rx`)
     pub async fn subscribe_all(
         &self,
     ) -> Result<(

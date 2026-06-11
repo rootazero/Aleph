@@ -24,7 +24,7 @@ use crate::tools::AlephTool;
 // Args & Output
 // =============================================================================
 
-/// Arguments for the file_read tool.
+/// Arguments for the `file_read` tool.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct FileReadArgs {
     /// Absolute or relative path to the file to read.
@@ -39,7 +39,7 @@ pub struct FileReadArgs {
     pub limit: Option<u64>,
 }
 
-/// Output returned by the file_read tool.
+/// Output returned by the `file_read` tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileReadOutput {
     /// Whether the operation succeeded.
@@ -71,12 +71,12 @@ pub struct FileReadTool {
     max_read_size: u64,
     /// Security-denied path patterns.
     denied_paths: Vec<String>,
-    /// Optional ToolContext handle for workspace-scoped output path resolution.
+    /// Optional `ToolContext` handle for workspace-scoped output path resolution.
     tool_context_handle: Option<crate::tools::ToolContextHandle>,
 }
 
 impl FileReadTool {
-    /// Create a new FileReadTool with default settings.
+    /// Create a new `FileReadTool` with default settings.
     pub fn new() -> Self {
         let denied_paths = get_denied_paths();
         info!(
@@ -91,13 +91,13 @@ impl FileReadTool {
         }
     }
 
-    /// Configure the tool to use a ToolContext handle for workspace-scoped output paths.
+    /// Configure the tool to use a `ToolContext` handle for workspace-scoped output paths.
     pub fn with_tool_context(mut self, handle: crate::tools::ToolContextHandle) -> Self {
         self.tool_context_handle = Some(handle);
         self
     }
 
-    /// Resolve the output directory from the ToolContext handle (if available).
+    /// Resolve the output directory from the `ToolContext` handle (if available).
     async fn resolve_output_dir(&self) -> Option<std::path::PathBuf> {
         if let Some(ref handle) = self.tool_context_handle {
             let ctx = handle.read().await;

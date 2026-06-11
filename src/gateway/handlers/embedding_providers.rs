@@ -26,7 +26,7 @@ use tokio::sync::RwLock;
 use tracing::{error, warn};
 
 /// Get preset defaults for an embedding provider based on its preset field.
-/// Returns (default_api_base, default_model).
+/// Returns (`default_api_base`, `default_model`).
 const fn get_embedding_preset_defaults(preset: &EmbeddingPreset) -> Option<(&'static str, &'static str)> {
     match preset {
         EmbeddingPreset::SiliconFlow => Some(("https://api.siliconflow.cn/v1", "BAAI/bge-m3")),
@@ -36,7 +36,7 @@ const fn get_embedding_preset_defaults(preset: &EmbeddingPreset) -> Option<(&'st
     }
 }
 
-/// Restore preset defaults for empty api_base / model fields.
+/// Restore preset defaults for empty `api_base` / model fields.
 fn apply_embedding_preset_defaults(config: &mut EmbeddingProviderConfig) {
     if let Some((default_base, default_model)) = get_embedding_preset_defaults(&config.preset) {
         if config.api_base.trim().is_empty() {
@@ -63,7 +63,7 @@ fn save_config(cfg: &Config) -> Result<(), String> {
 }
 
 /// Serialize a provider config to JSON and inject `is_active` based on the active provider id.
-/// The `verified` field is already part of EmbeddingProviderConfig and serialized automatically.
+/// The `verified` field is already part of `EmbeddingProviderConfig` and serialized automatically.
 fn inject_is_active(provider: &EmbeddingProviderConfig, active_id: &str) -> serde_json::Value {
     let mut val = serde_json::to_value(provider).unwrap_or_default();
     if let Some(obj) = val.as_object_mut() {

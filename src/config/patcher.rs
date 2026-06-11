@@ -1,4 +1,4 @@
-//! ConfigPatcher — central engine for self-configuration
+//! `ConfigPatcher` — central engine for self-configuration
 //!
 //! This module provides the core patching pipeline that sits between the LLM
 //! tools / RPC layer and the config persistence layer. It performs:
@@ -59,7 +59,7 @@ pub struct PatchRequest {
 /// Result of a patch operation.
 #[derive(Debug, Clone, Serialize)]
 pub struct PatchResult {
-    /// Whether the patch was applied (false for dry_run or validation failure)
+    /// Whether the patch was applied (false for `dry_run` or validation failure)
     pub success: bool,
     /// Top-level TOML sections that were touched
     pub applied_sections: Vec<String>,
@@ -121,7 +121,7 @@ pub struct ConfigPatcher {
 }
 
 impl ConfigPatcher {
-    /// Create a new ConfigPatcher.
+    /// Create a new `ConfigPatcher`.
     pub fn new(config: Arc<RwLock<Config>>, config_path: PathBuf, backup: ConfigBackup) -> Self {
         Self {
             config,
@@ -157,21 +157,21 @@ impl ConfigPatcher {
     /// Apply a patch to the configuration.
     ///
     /// Full pipeline:
-    /// 1. Parse top_section from path
+    /// 1. Parse `top_section` from path
     /// 2. Read config as JSON (read lock)
     /// 3. Get old values for diff
     /// 4. Deep-merge patch at path
     /// 5. Validate against JSON Schema
     /// 6. Deserialize back to Config
-    /// 7. Run Config::validate()
+    /// 7. Run `Config::validate()`
     /// 8. Compute diff
-    /// 9. If dry_run: return early with diff
+    /// 9. If `dry_run`: return early with diff
     /// 10. Check conflict (mtime)
-    /// 11. Route secrets to vault (currently ignored; secrets managed via SharedTokenManager)
+    /// 11. Route secrets to vault (currently ignored; secrets managed via `SharedTokenManager`)
     /// 12. Backup snapshot
-    /// 13. Write lock -> replace config -> save_incremental([top_section])
+    /// 13. Write lock -> replace config -> `save_incremental`([`top_section`])
     /// 14. Update mtime
-    /// 15. Return PatchResult
+    /// 15. Return `PatchResult`
     pub async fn apply(&self, request: PatchRequest) -> Result<PatchResult> {
         let mut warnings: Vec<String> = Vec::new();
 

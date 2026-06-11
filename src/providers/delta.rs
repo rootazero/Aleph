@@ -12,7 +12,7 @@
 //! # Error Semantics
 //!
 //! - `ProviderDelta::Error(msg)` — provider-level semantic error (Anthropic error SSE,
-//!   OpenAI response.failed). The stream may continue after this event.
+//!   `OpenAI` response.failed). The stream may continue after this event.
 //! - `Result::Err` wrapping a delta — infrastructure failure (HTTP disconnect, invalid SSE).
 //!   The stream is broken and no further deltas should be expected.
 
@@ -49,7 +49,7 @@ pub enum ProviderDelta {
     /// `signature` carries Gemini 3's `thoughtSignature`: an opaque token the
     /// model attaches to a `functionCall` part that must be replayed verbatim
     /// on later turns to keep the model's reasoning chain intact. It is `None`
-    /// for providers that do not sign tool calls (Anthropic, OpenAI, older
+    /// for providers that do not sign tool calls (Anthropic, `OpenAI`, older
     /// Gemini). Gemini delivers a whole `functionCall` in one SSE chunk, so the
     /// signature is always known at start.
     ToolCallStart {
@@ -61,7 +61,7 @@ pub enum ProviderDelta {
     ToolCallArgDelta { id: String, delta: String },
     /// Authoritative, complete argument JSON for a tool call.
     ///
-    /// Some providers (OpenAI Responses API) re-send the fully assembled
+    /// Some providers (`OpenAI` Responses API) re-send the fully assembled
     /// arguments in a terminal event (`response.function_call_arguments.done`
     /// and `response.output_item.done`) in addition to the incremental
     /// `...arguments.delta` fragments. The streamed fragments can be dropped or
@@ -80,7 +80,7 @@ pub enum ProviderDelta {
     /// Provider-level semantic error.
     ///
     /// This is a provider-reported error embedded in the stream (e.g. Anthropic error SSE,
-    /// OpenAI `response.failed`). The stream *may* continue after this event.
+    /// `OpenAI` `response.failed`). The stream *may* continue after this event.
     /// Contrast with `Result::Err` which signals an infrastructure failure.
     Error(String),
 }
@@ -88,7 +88,7 @@ pub enum ProviderDelta {
 /// True when the queue holds a terminal delta — a successful [`ProviderDelta::Done`]
 /// or a provider-reported [`ProviderDelta::Error`].
 ///
-/// Used by the OpenAI protocol unfolds at HTTP-stream end to distinguish a
+/// Used by the `OpenAI` protocol unfolds at HTTP-stream end to distinguish a
 /// properly terminated stream from a mid-stream drop (connection closed before
 /// any terminal signal), which must surface as a transient error instead of a
 /// silently truncated turn (`DeltaCollector` defaults the stop reason to
@@ -486,7 +486,7 @@ fn repair_json_emission_defects(raw: &str) -> Option<String> {
 
 /// Maps a u64 stream index to a String id.
 ///
-/// Used by OpenAI Chat and Anthropic streaming to correlate tool call deltas
+/// Used by `OpenAI` Chat and Anthropic streaming to correlate tool call deltas
 /// that arrive by numeric index (e.g. `choices[0].delta.tool_calls[0]`) with
 /// the id assigned at `ToolCallStart`.
 #[derive(Debug, Default)]

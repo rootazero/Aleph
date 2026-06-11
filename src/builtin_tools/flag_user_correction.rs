@@ -3,7 +3,7 @@
 //! Phase 3 self-evolution path α: when the main LLM detects that the user has
 //! corrected, pushed back, or expressed a strong preference, it calls this
 //! tool. The signal is persisted as a typed `RawMemorySource::Correction`
-//! row in raw_memory under the path prefix `aleph://correction/...`, where
+//! row in `raw_memory` under the path prefix `aleph://correction/...`, where
 //! the `FeedbackDistill` Dream stage will later read and distill it into a
 //! `feedback/` knowledge note.
 //!
@@ -33,7 +33,7 @@ pub struct FlagUserCorrectionArgs {
     /// - `critical`: an absolute redline (safety / privacy / correctness)
     pub severity: Severity,
     /// Optional one-line imperative for how you should behave next time
-    /// (e.g. "never write JSDoc", "always quote file paths in shell args").
+    /// (e.g. "never write `JSDoc`", "always quote file paths in shell args").
     #[serde(default)]
     pub suggested_rule: Option<String>,
 }
@@ -47,7 +47,7 @@ pub struct FlagUserCorrectionOutput {
     pub raw_memory_id: String,
 }
 
-/// Records user-correction signals into raw_memory under
+/// Records user-correction signals into `raw_memory` under
 /// `aleph://correction/{id}` for later distillation by `FeedbackDistill`.
 pub struct FlagUserCorrectionTool {
     store: Arc<dyn RawMemoryStore>,

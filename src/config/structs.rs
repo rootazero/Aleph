@@ -42,7 +42,7 @@ fn is_default_session(s: &crate::routing::config::SessionConfig) -> bool {
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Config {
-    /// Legacy hotkey field (deprecated, use trigger.replace_hotkey/append_hotkey instead)
+    /// Legacy hotkey field (deprecated, use `trigger.replace_hotkey/append_hotkey` instead)
     /// Kept for backward compatibility with old config files
     #[serde(default = "crate::config::types::general::default_hotkey")]
     pub default_hotkey: String,
@@ -53,7 +53,7 @@ pub struct Config {
     #[serde(default)]
     pub memory: MemoryConfig,
     /// AI provider configurations (Phase 5)
-    /// Note: Not exposed through UniFFI dictionary, managed via separate methods
+    /// Note: Not exposed through `UniFFI` dictionary, managed via separate methods
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub providers: HashMap<String, ProviderConfig>,
     /// Routing rules for smart AI provider selection (Phase 5)
@@ -78,7 +78,7 @@ pub struct Config {
     /// If present, takes precedence over legacy [tools] and [mcp] sections
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unified_tools: Option<UnifiedToolsConfig>,
-    /// Phase 2 ToolService runtime tunables (timeouts, per-tool overrides)
+    /// Phase 2 `ToolService` runtime tunables (timeouts, per-tool overrides)
     #[serde(default)]
     pub tool_service: ToolServiceConfig,
     /// Phase 3 Sandbox runtime tunables (workspace root, timeout, output cap,
@@ -155,7 +155,7 @@ pub struct Config {
     /// Profiles define the "Physics" of workspaces: model binding, tool whitelist, system prompt
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub profiles: HashMap<String, ProfileConfig>,
-    /// Secret provider backends (e.g., local_vault, 1password, bitwarden)
+    /// Secret provider backends (e.g., `local_vault`, 1password, bitwarden)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub secret_providers: HashMap<String, SecretProviderConfig>,
     /// Logical secret name -> provider mapping
@@ -186,7 +186,7 @@ pub struct Config {
     #[serde(default)]
     pub agents: AgentsConfig,
     /// Channel → Agent routing bindings
-    /// Maps channel/peer patterns to specific agents using RouteBinding
+    /// Maps channel/peer patterns to specific agents using `RouteBinding`
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bindings: Vec<crate::routing::config::RouteBinding>,
     /// 会话隔离策略（DM scope）。单用户 owner 设 `dm_scope = "main"`
@@ -204,7 +204,7 @@ pub struct Config {
     pub stop_hooks: Vec<StopHookConfig>,
     /// Phase-6 wiring (#12) — single-switch guardrails section. When `Some`
     /// and `enabled = true`, the orchestrator wires `PiiSecretsGuardrail`
-    /// onto Input + Output + ToolCall surfaces.
+    /// onto Input + Output + `ToolCall` surfaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guardrails: Option<GuardrailsToml>,
     /// Phase-6 wiring (#12) — P0 rescue knobs (stall / consecutive failure
@@ -267,10 +267,10 @@ const KNOWN_CHANNEL_TYPES: &[&str] = &[
     "qq",
 ];
 
-/// A resolved channel instance from the channels config HashMap.
+/// A resolved channel instance from the channels config `HashMap`.
 #[derive(Debug, Clone)]
 pub struct ChannelInstanceConfig {
-    /// Instance identifier (the HashMap key)
+    /// Instance identifier (the `HashMap` key)
     pub id: String,
     /// Channel platform type (e.g. "telegram", "discord")
     pub channel_type: String,
@@ -279,10 +279,10 @@ pub struct ChannelInstanceConfig {
 }
 
 impl Config {
-    /// Parse the `channels` HashMap into resolved channel instances.
+    /// Parse the `channels` `HashMap` into resolved channel instances.
     ///
     /// Type resolution rules:
-    /// 1. If value has a `type` string field -> use it as channel_type
+    /// 1. If value has a `type` string field -> use it as `channel_type`
     /// 2. If no `type` field and key is a known platform name -> infer type = key
     /// 3. Otherwise -> warn and skip
     pub fn resolved_channels(&self) -> Vec<ChannelInstanceConfig> {
@@ -322,7 +322,7 @@ impl Config {
 // FullConfig (UniFFI)
 // =============================================================================
 
-/// Full configuration exposed through UniFFI
+/// Full configuration exposed through `UniFFI`
 /// This wraps Config with a flattened provider list
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FullConfig {

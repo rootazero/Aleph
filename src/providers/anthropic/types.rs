@@ -47,7 +47,7 @@ pub struct MessagesRequest {
 }
 
 /// Anthropic abuse-detection / rate-limit metadata.
-/// Spec: https://docs.anthropic.com/en/api/messages#body-metadata
+/// Spec: <https://docs.anthropic.com/en/api/messages#body-metadata>
 #[derive(Debug, Serialize)]
 pub struct Metadata {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -144,7 +144,7 @@ pub enum ContentBlock {
     /// Extended-thinking block from a prior assistant turn.
     ///
     /// Anthropic requires a signed thinking block to be replayed verbatim when
-    /// the same turn also contains tool_use blocks; the signature is opaque
+    /// the same turn also contains `tool_use` blocks; the signature is opaque
     /// and must round-trip exactly.
     Thinking { thinking: String, signature: String },
     /// Tool use (assistant requesting tool execution)
@@ -192,7 +192,7 @@ pub struct AnthropicTool {
 /// Content block in Anthropic response (tagged union)
 ///
 /// Anthropic API returns an array of content blocks, each with a "type" field.
-/// This enum handles text, thinking, and tool_use block types.
+/// This enum handles text, thinking, and `tool_use` block types.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum AnthropicContentBlock {

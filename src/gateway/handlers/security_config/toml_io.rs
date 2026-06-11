@@ -131,7 +131,7 @@ pub(super) fn read_gateway_host_from_config(patcher: &ConfigPatcher) -> String {
 }
 /// Read SSRF settings from the canonical top-level `[ssrf]` section
 /// (`crate::security::ssrf::SsrfPolicy`) — the same section the runtime
-/// consumes when building the WebFetch SSRF guard.
+/// consumes when building the `WebFetch` SSRF guard.
 ///
 /// Returns `(enabled, allow_private_network, max_redirects, allowed_hosts,
 /// blocked_hosts)`.
@@ -266,7 +266,7 @@ pub(super) fn read_shell_security_from_toml(patcher: &ConfigPatcher) -> ShellSec
     ShellSecurityConfig::default()
 }
 
-/// Read custom PII rules from [[privacy.custom_rules]] entries.
+/// Read custom PII rules from [[`privacy.custom_rules`]] entries.
 pub(super) fn read_custom_pii_rules_from_toml(patcher: &ConfigPatcher) -> Vec<CustomPiiRule> {
     let config_path = patcher.config_path();
     if let Ok(contents) = std::fs::read_to_string(config_path) {
@@ -323,7 +323,7 @@ pub(super) fn read_custom_pii_rules_from_toml(patcher: &ConfigPatcher) -> Vec<Cu
     Vec::new()
 }
 
-/// Read secret protection from [secrets_config] section.
+/// Read secret protection from [`secrets_config`] section.
 pub(super) fn read_secrets_protection_from_toml(
     patcher: &ConfigPatcher,
 ) -> SecretsProtectionConfig {
@@ -534,7 +534,7 @@ pub(super) fn write_shell_security_to_toml(
     Ok(())
 }
 
-/// Write custom PII rules to [[privacy.custom_rules]] section.
+/// Write custom PII rules to [[`privacy.custom_rules`]] section.
 pub(super) fn write_custom_pii_rules_to_toml(
     path: &std::path::Path,
     rules: &[CustomPiiRule],
@@ -609,7 +609,7 @@ pub(super) fn write_custom_pii_rules_to_toml(
     Ok(())
 }
 
-/// Write secret protection to [secrets_config] section.
+/// Write secret protection to [`secrets_config`] section.
 pub(super) fn write_secrets_protection_to_toml(
     path: &std::path::Path,
     secrets: &SecretsProtectionConfig,

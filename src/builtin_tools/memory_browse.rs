@@ -1,4 +1,4 @@
-//! memory_browse — browse the knowledge notes filesystem.
+//! `memory_browse` — browse the knowledge notes filesystem.
 //!
 //! Replaces the VFS-based browse model. Since notes are stored as real
 //! markdown files at `~/.aleph/memory/note/{agent}/{category}/{filename}.md`,
@@ -44,7 +44,7 @@ pub enum MemoryBrowseAction {
     Read,
 }
 
-/// Arguments for memory_browse tool
+/// Arguments for `memory_browse` tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MemoryBrowseArgs {
     /// Action to perform: list (browse categories/files) or read (get note content).
@@ -55,7 +55,7 @@ pub struct MemoryBrowseArgs {
     pub path: Option<String>,
 }
 
-/// Output from memory_browse tool
+/// Output from `memory_browse` tool
 #[derive(Debug, Clone, Serialize)]
 pub struct MemoryBrowseOutput {
     pub success: bool,

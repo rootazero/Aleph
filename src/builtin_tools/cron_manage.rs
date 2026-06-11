@@ -55,7 +55,7 @@ pub enum ScheduleInput {
     /// IMPORTANT: Use the current system time as reference. For example,
     /// 2026-03-30 10:00:00 Asia/Shanghai = 2026-03-30 02:00:00 UTC = 1774850400000 ms.
     /// Tip: 1 hour = 3600000 ms, 1 day = 86400000 ms. You can compute
-    /// at_ms = current_time_ms + offset_ms for relative scheduling.
+    /// `at_ms` = `current_time_ms` + `offset_ms` for relative scheduling.
     At {
         /// Timestamp in milliseconds since epoch (UTC).
         /// Must be in the future — past timestamps will be rejected.
@@ -145,7 +145,7 @@ impl From<ScheduleInput> for ScheduleKind {
     }
 }
 
-/// Arguments for the cron_manage tool
+/// Arguments for the `cron_manage` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct CronManageArgs {
     /// Action to perform
@@ -179,14 +179,14 @@ pub struct CronManageArgs {
 
     // ── Internal (injected by dispatcher, not LLM-visible) ────────
     /// Source channel ID — injected by the tool dispatcher from session context.
-    /// Used to set source_channel_id on created jobs so results are delivered
+    /// Used to set `source_channel_id` on created jobs so results are delivered
     /// back to the originating channel.
     #[serde(default, rename = "__channel")]
     #[schemars(skip)]
     pub __channel: Option<String>,
 
     /// Source conversation ID — injected by the tool dispatcher from session context.
-    /// For Telegram this is the chat_id; used so cron results can be sent to the correct chat.
+    /// For Telegram this is the `chat_id`; used so cron results can be sent to the correct chat.
     #[serde(default, rename = "__conversation_id")]
     #[schemars(skip)]
     pub __conversation_id: Option<String>,
@@ -202,7 +202,7 @@ pub struct CronManageArgs {
 // Output
 // =============================================================================
 
-/// Output from cron_manage tool
+/// Output from `cron_manage` tool
 #[derive(Debug, Clone, Serialize)]
 pub struct CronManageOutput {
     /// Human-readable status message

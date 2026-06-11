@@ -7,7 +7,7 @@
 //! # Protocol
 //!
 //! - **IMAP** (polling): Connects to the configured IMAP server, polls for
-//!   unseen messages in specified folders, and converts them to InboundMessages.
+//!   unseen messages in specified folders, and converts them to `InboundMessages`.
 //! - **SMTP** (STARTTLS): Sends HTML emails via the configured SMTP server,
 //!   converting Markdown body to a styled HTML email.
 //!

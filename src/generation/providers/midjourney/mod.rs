@@ -1,6 +1,6 @@
-//! T8Star Midjourney Image Generation Provider
+//! `T8Star` Midjourney Image Generation Provider
 //!
-//! This module implements the `GenerationProvider` trait for T8Star's Midjourney
+//! This module implements the `GenerationProvider` trait for `T8Star`'s Midjourney
 //! API proxy service, enabling high-quality image generation through Midjourney.
 //!
 //! # API Reference

@@ -54,7 +54,7 @@ pub struct ToolEntry {
 // Grouping Logic
 // =============================================================================
 
-/// Extract a (group_id, label) pair from a ToolSource.
+/// Extract a (`group_id`, label) pair from a `ToolSource`.
 #[must_use]
 pub fn extract_source(source: &ToolSource) -> (String, String) {
     match source {
@@ -69,7 +69,7 @@ pub fn extract_source(source: &ToolSource) -> (String, String) {
 
 /// Filter tools by source descriptor. Exact match (e.g. `"native"`,
 /// `"mcp:github"`) or family-prefix wildcard (`"mcp:*"`). `None` passes
-/// through unchanged. Mirrors OpenClaw's tools.catalog source filter for
+/// through unchanged. Mirrors `OpenClaw`'s tools.catalog source filter for
 /// Panel/Webchat consumers that render source-by-source tabs.
 #[must_use]
 pub fn filter_by_source(tools: Vec<UnifiedTool>, source: Option<&str>) -> Vec<UnifiedTool> {
@@ -92,7 +92,7 @@ pub fn filter_by_source(tools: Vec<UnifiedTool>, source: Option<&str>) -> Vec<Un
 
 /// Group a flat list of tools into `ToolGroup`s by source.
 ///
-/// Groups are sorted by group ID (BTreeMap) for deterministic output.
+/// Groups are sorted by group ID (`BTreeMap`) for deterministic output.
 #[must_use]
 pub fn group_tools(tools: Vec<UnifiedTool>) -> Vec<ToolGroup> {
     let mut map: BTreeMap<String, (String, Vec<ToolEntry>)> = BTreeMap::new();

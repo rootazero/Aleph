@@ -1,4 +1,4 @@
-/// OpenAI request building
+/// `OpenAI` request building
 ///
 /// Functions for constructing chat completion requests.
 use crate::config::ProviderConfig;
@@ -96,7 +96,7 @@ pub fn build_request_with_mode(
 
 /// Apply thinking configuration to an existing request
 ///
-/// For OpenAI o1/o3 models, this sets the reasoning_effort field.
+/// For `OpenAI` o1/o3 models, this sets the `reasoning_effort` field.
 /// Call this after building the base request if thinking is enabled.
 pub fn apply_thinking_config(request: &mut ChatCompletionRequest, reasoning_effort: Option<&str>) {
     request.reasoning_effort = reasoning_effort.map(|s| s.to_string());
@@ -156,7 +156,7 @@ pub fn build_vision_request(
     }
 }
 
-/// Build request body with MediaAttachment for vision API (add-multimodal-content-support)
+/// Build request body with `MediaAttachment` for vision API (add-multimodal-content-support)
 #[must_use]
 pub fn build_multimodal_request(
     config: &ProviderConfig,

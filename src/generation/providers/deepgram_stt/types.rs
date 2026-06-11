@@ -34,7 +34,7 @@ pub struct DeepgramAlternative {
     pub confidence: Option<f32>,
 }
 
-/// Deepgram error envelope — distinct from OpenAI's shape.
+/// Deepgram error envelope — distinct from `OpenAI`'s shape.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeepgramError {
     #[serde(rename = "err_code", default)]

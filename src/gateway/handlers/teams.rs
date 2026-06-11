@@ -6,8 +6,8 @@
 //! - teams.disband: Mark a team as disbanded
 //! - teams.delete: Permanently delete a disbanded team
 //! - agents.teams: List all teams an agent belongs to
-//! - teams.list_tasks / teams.create_task / teams.update_task: kanban-facing
-//!   CoordTask operations
+//! - `teams.list_tasks` / `teams.create_task` / `teams.update_task`: kanban-facing
+//!   `CoordTask` operations
 //! - teams.snapshot.{create,list,get,restore,delete}: snapshot lifecycle —
 //!   thin direct surface in addition to the `team_snapshot` builtin tool
 
@@ -198,7 +198,7 @@ pub struct ListTasksParams {
     pub owner: Option<String>,
 }
 
-/// Handle teams.list_tasks — list all CoordTasks for a team with optional status/owner filter
+/// Handle `teams.list_tasks` — list all `CoordTasks` for a team with optional status/owner filter
 pub async fn handle_list_tasks(
     request: JsonRpcRequest,
     coord_store: Arc<dyn CoordTaskStore>,
@@ -251,7 +251,7 @@ pub struct UpdateTaskParams {
     pub metadata: Option<serde_json::Value>,
 }
 
-/// Handle teams.update_task — patch a CoordTask. Topic emission happens
+/// Handle `teams.update_task` — patch a `CoordTask`. Topic emission happens
 /// inside the store, so any subscriber sees the change automatically.
 pub async fn handle_update_task(
     request: JsonRpcRequest,
@@ -320,7 +320,7 @@ pub struct CreateTaskParams {
     pub metadata: Option<serde_json::Value>,
 }
 
-/// Handle teams.create_task — create a CoordTask on a team's board. Topic
+/// Handle `teams.create_task` — create a `CoordTask` on a team's board. Topic
 /// emission happens inside the store, so the kanban panel refreshes itself.
 pub async fn handle_create_task(
     request: JsonRpcRequest,
@@ -406,7 +406,7 @@ pub struct TaskIdParams {
     pub task_id: String,
 }
 
-/// Handle teams.list_task_runs — return all run records for a task, oldest
+/// Handle `teams.list_task_runs` — return all run records for a task, oldest
 /// first. The drawer renders this as the "Runs" timeline.
 pub async fn handle_list_task_runs(
     request: JsonRpcRequest,
@@ -440,7 +440,7 @@ pub struct AddTaskCommentParams {
     pub body: String,
 }
 
-/// Handle teams.add_task_comment — append a free-text note to a task. Used
+/// Handle `teams.add_task_comment` — append a free-text note to a task. Used
 /// by workers to leave handoff context and by panel users to annotate state.
 pub async fn handle_add_task_comment(
     request: JsonRpcRequest,
@@ -483,7 +483,7 @@ pub async fn handle_add_task_comment(
     }
 }
 
-/// Handle teams.list_task_comments — return all comments for a task,
+/// Handle `teams.list_task_comments` — return all comments for a task,
 /// oldest first.
 pub async fn handle_list_task_comments(
     request: JsonRpcRequest,
@@ -513,7 +513,7 @@ pub async fn handle_list_task_comments(
 // teams.list_task_events — read team_events filtered to one task_id
 // =============================================================================
 
-/// Handle teams.list_task_events — return team events whose payload references
+/// Handle `teams.list_task_events` — return team events whose payload references
 /// `task_id`. Walks the team's event log and filters in-memory; cheap for the
 /// kanban-scale event volumes in practice (Aleph's logger isn't a firehose).
 ///
@@ -937,7 +937,7 @@ pub struct AcpMemberRemoveParams {
     pub agent_id: String,
 }
 
-/// teams.acp_member.add — register an external coding CLI session as a
+/// `teams.acp_member.add` — register an external coding CLI session as a
 /// team member. Subsequent tasks created with `owner = <agent_id>` will be
 /// dispatched through the ACP adapter pool instead of the in-process agent
 /// registry. Idempotent: re-adding the same (team, harness, cwd, name)
@@ -973,7 +973,7 @@ pub async fn handle_acp_member_add(
     }
 }
 
-/// teams.acp_member.remove — detach an ACP-backed member from a team. The
+/// `teams.acp_member.remove` — detach an ACP-backed member from a team. The
 /// underlying ACP session in the pool is **not** killed (other teams may
 /// still reference it); use `acp.sessions.shutdown` for that.
 pub async fn handle_acp_member_remove(
@@ -1032,7 +1032,7 @@ pub async fn handle_acp_member_remove(
     }
 }
 
-/// teams.acp_member.list — return only the ACP-backed members of a team.
+/// `teams.acp_member.list` — return only the ACP-backed members of a team.
 /// Convenience filter — `teams.get` returns mixed-kind members.
 pub async fn handle_acp_member_list(
     request: JsonRpcRequest,
@@ -1094,7 +1094,7 @@ fn parse_reviewer_kind(s: &str) -> Result<ReviewerKind, &'static str> {
     ReviewerKind::from_stored(s).ok_or("reviewer_kind must be one of: user, lead_agent, auto")
 }
 
-/// teams.workflow.approve_step — stamp the latest run as approved and
+/// `teams.workflow.approve_step` — stamp the latest run as approved and
 /// transition the task to Completed so downstream dependents unblock.
 /// Idempotent on Completed tasks (re-approve is a no-op). Refuses to
 /// approve tasks that have not yet finished a run.
@@ -1162,7 +1162,7 @@ pub async fn handle_workflow_approve_step(
     JsonRpcResponse::success(request.id, json!({ "status": "completed" }))
 }
 
-/// teams.workflow.reject_step — stamp the latest run as rejected and
+/// `teams.workflow.reject_step` — stamp the latest run as rejected and
 /// transition the task to Failed. Downstream dependents stay blocked.
 pub async fn handle_workflow_reject_step(
     request: JsonRpcRequest,
@@ -1222,7 +1222,7 @@ pub async fn handle_workflow_reject_step(
     JsonRpcResponse::success(request.id, json!({ "status": "failed" }))
 }
 
-/// teams.workflow.retry_step — re-queue a failed / rejected step. Clears
+/// `teams.workflow.retry_step` — re-queue a failed / rejected step. Clears
 /// the lock + result fields and resets status to Pending so the
 /// dispatcher (or `team_delegate`) can re-run. Prior runs stay in history.
 pub async fn handle_workflow_retry_step(
@@ -1277,7 +1277,7 @@ pub async fn handle_workflow_retry_step(
 // list_task_comments / list_task_events). We reuse it.
 
 /// teams.task.pause — manually suspend a task so the dispatcher will not
-/// claim it. Valid from Pending or WaitingReview. InProgress is rejected
+/// claim it. Valid from Pending or `WaitingReview`. `InProgress` is rejected
 /// because the in-flight run is unsafe to silently abandon — use
 /// `teams.task.skip` or wait for the run to finish.
 pub async fn handle_task_pause(
@@ -1657,7 +1657,7 @@ pub struct UsageParams {
 
 /// teams.usage — returns provider-token usage aggregated across all members
 /// of `team_id`, plus a per-agent breakdown. Pure read-side: derived from
-/// `task_traces` ProviderUsage events that are already persisted by the
+/// `task_traces` `ProviderUsage` events that are already persisted by the
 /// gateway execution engine.
 ///
 /// Cost is intentionally not computed here — tokens are factual, cost is
@@ -2161,12 +2161,12 @@ pub struct ExportCanvasParams {
     /// When unset, every coord-task in the team is rendered.
     #[serde(default)]
     pub status: Option<String>,
-    /// Optional owner filter (agent_id).
+    /// Optional owner filter (`agent_id`).
     #[serde(default)]
     pub owner: Option<String>,
 }
 
-/// Handle `teams.workflow.export_canvas` — render the team's CoordTask DAG as
+/// Handle `teams.workflow.export_canvas` — render the team's `CoordTask` DAG as
 /// an Obsidian JSON Canvas 1.0 document. The panel's canvas engine accepts
 /// the same wire shape, so this is what powers the "Workflow" tab.
 pub async fn handle_workflow_export_canvas(

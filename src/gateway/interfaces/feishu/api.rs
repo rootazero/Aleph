@@ -24,7 +24,7 @@ impl From<String> for FeishuSendError {
     }
 }
 
-/// Feishu HTTP API client. Wraps a TokenManager for auth.
+/// Feishu HTTP API client. Wraps a `TokenManager` for auth.
 pub struct FeishuApi {
     auth: Arc<TokenManager>,
     base_url: String,
@@ -312,7 +312,7 @@ impl FeishuApi {
 
     // ── Card Kit (Streaming Cards) ──
 
-    /// Create a streaming card and return the card_id.
+    /// Create a streaming card and return the `card_id`.
     pub async fn create_streaming_card(&self, initial_text: &str) -> Result<String, String> {
         let token = self.auth.get_token().await?;
         let url = format!("{}/open-apis/cardkit/v1/cards", self.base_url);
@@ -445,7 +445,7 @@ impl FeishuApi {
         Ok(())
     }
 
-    /// Close a streaming card (disable streaming_mode).
+    /// Close a streaming card (disable `streaming_mode`).
     pub async fn close_streaming_card(
         &self,
         card_id: &str,
@@ -539,7 +539,7 @@ impl FeishuApi {
 
     // ── Reactions ──
 
-    /// Add an emoji reaction to a message. Returns reaction_id.
+    /// Add an emoji reaction to a message. Returns `reaction_id`.
     pub async fn add_reaction(&self, message_id: &str, emoji_type: &str) -> Result<String, String> {
         let token = self.auth.get_token().await?;
         let url = format!(
@@ -603,7 +603,7 @@ impl FeishuApi {
 
     // ── User Info ──
 
-    /// Fetch user info by open_id. Returns name if available.
+    /// Fetch user info by `open_id`. Returns name if available.
     pub async fn get_user_info(&self, open_id: &str) -> Result<Option<String>, String> {
         let token = self.auth.get_token().await?;
         let url = format!("{}/open-apis/contact/v3/users/{}", self.base_url, open_id);

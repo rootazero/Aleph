@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 // === Constants ===
 
-/// Default API endpoint for T8Star Midjourney service
+/// Default API endpoint for `T8Star` Midjourney service
 pub const DEFAULT_ENDPOINT: &str = "https://ai.t8star.cn";
 
 /// Default timeout for HTTP requests (30 seconds per request, not total)
@@ -97,7 +97,7 @@ pub struct TaskResponse {
     /// Task ID
     pub id: String,
 
-    /// Task status (NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE)
+    /// Task status (`NOT_START`, SUBMITTED, `IN_PROGRESS`, SUCCESS, FAILURE)
     pub status: String,
 
     /// Progress percentage (e.g., "50%")

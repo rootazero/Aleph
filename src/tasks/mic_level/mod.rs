@@ -1,4 +1,4 @@
-//! MicLevelReporter — periodic mic-level snapshot publisher.
+//! `MicLevelReporter` — periodic mic-level snapshot publisher.
 //!
 //! Mirrors the [`crate::tasks::presence`] reporter's brain–limb split:
 //! - **brain** here: poll cadence, change detection, event-bus publish format.

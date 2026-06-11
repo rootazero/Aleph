@@ -11,7 +11,7 @@ pub(super) enum SubagentAction {
     Run(RunArgs),
     /// Check status of a background sub-agent.
     CheckStatus(String),
-    /// Cancel a still-running background sub-agent by request_id. Hits the
+    /// Cancel a still-running background sub-agent by `request_id`. Hits the
     /// shared `CancellationToken`; the running task observes it on its next
     /// await point and unwinds cleanly. Idempotent — cancelling an unknown
     /// or already-completed request returns an error rather than panicking.
@@ -25,7 +25,7 @@ pub(super) enum SubagentAction {
     /// Read inbox messages.
     ReadInbox { team_name: String },
     /// Enumerate every background sub-agent (running + recently-completed)
-    /// so the parent can recover request_ids it no longer holds.
+    /// so the parent can recover `request_ids` it no longer holds.
     List,
 }
 
@@ -51,6 +51,6 @@ pub(super) struct RunArgs {
     /// Optional team name — enables shared tasks and messages.
     pub(super) team_name: Option<String>,
     /// Batch tasks for parallel execution. When provided, all tasks run in
-    /// background automatically and a list of request_ids is returned.
+    /// background automatically and a list of `request_ids` is returned.
     pub(super) batch_tasks: Option<Vec<BatchTask>>,
 }

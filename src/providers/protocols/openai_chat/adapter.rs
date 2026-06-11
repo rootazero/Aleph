@@ -1,4 +1,4 @@
-//! ProtocolAdapter trait implementation for OpenAiProtocol.
+//! `ProtocolAdapter` trait implementation for `OpenAiProtocol`.
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
@@ -252,11 +252,11 @@ impl ProtocolAdapter for OpenAiProtocol {
             .json(&body))
     }
 
-    /// Stream fine-grained delta events from the OpenAI Chat Completions SSE format.
+    /// Stream fine-grained delta events from the `OpenAI` Chat Completions SSE format.
     ///
     /// Parses SSE events from the Chat Completions streaming format and emits
     /// fine-grained [`ProviderDelta`] events. Uses the unfold+pending-queue pattern
-    /// so that finish_reason chunks (which produce multiple deltas) can emit all
+    /// so that `finish_reason` chunks (which produce multiple deltas) can emit all
     /// of them without loss.
     async fn stream_deltas(
         &self,
@@ -323,10 +323,10 @@ impl ProtocolAdapter for OpenAiProtocol {
             line_buf: Vec<u8>,
             /// Maps tool call stream index → call id (from first chunk with `id` field)
             index_tracker: crate::providers::delta::IndexIdTracker,
-            /// Pending deltas queued from multi-delta events (e.g. finish_reason chunk)
+            /// Pending deltas queued from multi-delta events (e.g. `finish_reason` chunk)
             pending: VecDeque<Result<ProviderDelta>>,
             /// A terminal `Done` delta held back until the trailing
-            /// `stream_options.include_usage` usage chunk arrives. OpenAI sends
+            /// `stream_options.include_usage` usage chunk arrives. `OpenAI` sends
             /// `finish_reason` and the usage chunk as *separate* chunks in that
             /// order; emitting `Done` immediately would end the stream before
             /// the usage chunk is read. Released on the usage chunk, the
@@ -481,10 +481,10 @@ impl ProtocolAdapter for OpenAiProtocol {
         "openai"
     }
 
-    /// Forgive common OpenAI model-id typos that production users hit.
+    /// Forgive common `OpenAI` model-id typos that production users hit.
     ///
     /// Endpoint-blind hook (the trait signature carries no `base_url`), so it
-    /// assumes the first-party OpenAI host. The hot path in `build_request`
+    /// assumes the first-party `OpenAI` host. The hot path in `build_request`
     /// instead calls [`normalize_openai_model_id`] directly with the configured
     /// `base_url`, which preserves the `openai/` slug on aggregators.
     fn normalize_model_id<'a>(&self, model_id: &'a str) -> std::borrow::Cow<'a, str> {

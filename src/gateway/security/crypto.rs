@@ -32,7 +32,7 @@ pub enum CryptoError {
     HmacVerificationFailed,
 }
 
-/// Device fingerprint - first 16 hex characters of SHA256(public_key)
+/// Device fingerprint - first 16 hex characters of `SHA256(public_key)`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DeviceFingerprint(pub String);
 
@@ -56,7 +56,7 @@ impl std::fmt::Display for DeviceFingerprint {
 
 /// Generate a new Ed25519 keypair
 ///
-/// Returns (signing_key_bytes, verifying_key_bytes)
+/// Returns (`signing_key_bytes`, `verifying_key_bytes`)
 #[must_use]
 pub fn generate_keypair() -> ([u8; 32], [u8; 32]) {
     // An Ed25519 signing key is a 32-byte seed; sourcing the seed bytes

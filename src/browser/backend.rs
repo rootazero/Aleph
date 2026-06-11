@@ -1,4 +1,4 @@
-//! BrowserBackend trait — text-first unified contract for browser drivers.
+//! `BrowserBackend` trait — text-first unified contract for browser drivers.
 
 use std::path::Path;
 
@@ -58,7 +58,7 @@ pub trait BrowserBackend: Send + Sync {
     ///
     /// Default impl drives the page via `evaluate` with an arrow-function body —
     /// both real backends' eval surfaces (`playwright-cli eval` and Chrome
-    /// DevTools MCP `evaluate_script`) require a function expression, not a bare
+    /// `DevTools` MCP `evaluate_script`) require a function expression, not a bare
     /// statement. Backends with a native history primitive override this so the
     /// command waits for the resulting navigation to complete.
     async fn history(&self, tab_id: &str, nav: HistoryNav) -> Result<(), BrowserError> {
@@ -107,7 +107,7 @@ pub trait BrowserBackend: Send + Sync {
 
     /// Bring the given tab to the foreground / make it the active page.
     /// Default impl returns Unsupported — only backends with a real notion of
-    /// active page (e.g. Chrome DevTools MCP) override.
+    /// active page (e.g. Chrome `DevTools` MCP) override.
     async fn switch_tab(&self, _tab_id: &str) -> Result<(), BrowserError> {
         Err(BrowserError::ActionFailed(
             "switch_tab not supported".into(),

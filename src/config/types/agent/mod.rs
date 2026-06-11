@@ -1,9 +1,9 @@
 //! Agent configuration types
 //!
 //! Contains Agent task orchestration configuration:
-//! - CoworkConfigToml: Main configuration for the Agent engine
-//! - FileOpsConfigToml: File operations executor configuration
-//! - CodeExecConfigToml: Code execution executor configuration
+//! - `CoworkConfigToml`: Main configuration for the Agent engine
+//! - `FileOpsConfigToml`: File operations executor configuration
+//! - `CodeExecConfigToml`: Code execution executor configuration
 
 mod code_exec;
 mod file_ops;

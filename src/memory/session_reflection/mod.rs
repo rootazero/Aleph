@@ -46,7 +46,7 @@ pub struct SessionReflector {
     session_store: Arc<dyn SessionStore>,
     llm: Arc<dyn SummaryLlm>,
     config: ReflectionConfig,
-    /// agent_id -> unix-seconds of last reflection attempt. In-memory only: a
+    /// `agent_id` -> unix-seconds of last reflection attempt. In-memory only: a
     /// soft anti-spam throttle, so losing it on restart (at most one extra
     /// reflection per agent) is acceptable.
     last_reflect: Mutex<HashMap<String, i64>>,

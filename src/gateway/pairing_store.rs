@@ -49,7 +49,7 @@ pub enum PairingError {
 #[async_trait]
 pub trait PairingStore: Send + Sync {
     /// Create or get existing pairing request for a sender
-    /// Returns (code, was_created)
+    /// Returns (code, `was_created`)
     async fn upsert(
         &self,
         channel: &str,
@@ -85,7 +85,7 @@ pub struct SqlitePairingStore {
 }
 
 impl SqlitePairingStore {
-    /// Create a new SQLite pairing store
+    /// Create a new `SQLite` pairing store
     pub fn new(db_path: impl AsRef<Path>) -> Result<Self, PairingError> {
         let conn = crate::utils::sqlite_open::open_sqlite_safe(db_path.as_ref())?;
         Self::init_schema(&conn)?;

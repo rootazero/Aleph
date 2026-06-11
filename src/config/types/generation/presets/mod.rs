@@ -19,7 +19,7 @@ pub use registry::{GENERATION_METADATA, PRESETS};
 
 /// Generation provider preset configuration.
 ///
-/// The first three fields (provider_type / default_model / base_url) are
+/// The first three fields (`provider_type` / `default_model` / `base_url`) are
 /// required and used by the factory to instantiate the right provider.
 /// The remaining fields are hermes-parity opt-in metadata; defaults are
 /// safe (no aliases, chat-modality-less, no homepage) and entries opt in
@@ -42,7 +42,7 @@ pub struct GenerationPreset {
     pub modalities: &'static [Modality],
     /// Human-friendly display name; falls back to canonical preset name.
     pub display_name: Option<&'static str>,
-    /// One-line description shown alongside display_name.
+    /// One-line description shown alongside `display_name`.
     pub description: Option<&'static str>,
     /// Vendor docs / landing URL.
     pub homepage: Option<&'static str>,
@@ -120,7 +120,7 @@ pub fn get_preset(name: &str) -> Option<&'static GenerationPreset> {
     PRESETS.get(name)
 }
 
-/// Find a generation preset by provider_type.
+/// Find a generation preset by `provider_type`.
 ///
 /// `PRESETS` is a `HashMap`, so a plain `.find()` would return an arbitrary
 /// preset when several share the same `provider_type` (e.g. 17 `fal-*`

@@ -1,6 +1,6 @@
-//! WhatsApp Channel Implementation
+//! `WhatsApp` Channel Implementation
 //!
-//! Native Rust integration with WhatsApp using whatsapp-rust.
+//! Native Rust integration with `WhatsApp` using whatsapp-rust.
 //!
 //! # Features
 //!
@@ -55,7 +55,7 @@ use tokio::sync::{oneshot, RwLock};
 
 use pairing::PairingState;
 
-/// WhatsApp channel implementation backed by native Rust runtime.
+/// `WhatsApp` channel implementation backed by native Rust runtime.
 pub struct WhatsAppChannel {
     info: ChannelInfo,
     config: WhatsAppConfig,
@@ -332,7 +332,7 @@ impl Channel for WhatsAppChannel {
     }
 }
 
-/// Factory for creating WhatsApp channels
+/// Factory for creating `WhatsApp` channels
 pub struct WhatsAppChannelFactory;
 
 #[async_trait]
@@ -354,9 +354,9 @@ fn whatsapp_factory_creator(
     Ok(Arc::new(WhatsAppChannelFactory))
 }
 
-/// Register the WhatsApp channel factory with the global channel plugin
+/// Register the `WhatsApp` channel factory with the global channel plugin
 /// registry so that config-driven creation (`create_channel_from_config`)
-/// can instantiate it. Without this the entire WhatsApp channel is
+/// can instantiate it. Without this the entire `WhatsApp` channel is
 /// unreachable through configuration.
 pub fn register_with_plugin() {
     crate::gateway::interfaces::plugin::register("whatsapp", whatsapp_factory_creator);

@@ -1,7 +1,7 @@
 //! Media processing pipeline for multimodal LLM interaction.
 //!
 //! Handles attachment download, caching, image injection, and audio transcription.
-//! MediaProcessor is the unified entry point, owned by ExecutionEngine.
+//! `MediaProcessor` is the unified entry point, owned by `ExecutionEngine`.
 //!
 //! # Data Flow
 //!

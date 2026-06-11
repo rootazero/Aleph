@@ -60,7 +60,7 @@ pub fn migrate_to_draft_2020_12(schema: &mut Value) {
 /// - Sets `additionalProperties: false` on all object types
 /// - Makes all properties required (originally optional ones become nullable)
 ///
-/// Strict mode (OpenAI, Bedrock) requires every property to appear in `required`.
+/// Strict mode (`OpenAI`, Bedrock) requires every property to appear in `required`.
 /// For fields that were NOT originally required, we make them nullable by wrapping
 /// their `type` in an array: `"type": "string"` → `"type": ["string", "null"]`.
 pub fn strictify_schema(schema: &mut Value) {

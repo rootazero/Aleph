@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 
-/// Parameters for debug.tool_call request
+/// Parameters for `debug.tool_call` request
 #[derive(Debug, Deserialize)]
 pub struct DebugToolCallParams {
     /// Tool name to execute on client
@@ -27,7 +27,7 @@ const fn default_timeout() -> u64 {
     30000
 }
 
-/// Result of debug.tool_call
+/// Result of `debug.tool_call`
 #[derive(Debug, Serialize)]
 pub struct DebugToolCallResult {
     /// Whether the call succeeded
@@ -44,7 +44,7 @@ pub struct DebugToolCallResult {
     pub executed_on: String,
 }
 
-/// Parse debug.tool_call parameters from request
+/// Parse `debug.tool_call` parameters from request
 // JsonRpcResponse is 152+ bytes but boxing it would complicate all handler call sites
 #[allow(clippy::result_large_err)]
 pub fn parse_tool_call_params(

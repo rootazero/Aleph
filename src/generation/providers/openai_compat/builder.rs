@@ -1,4 +1,4 @@
-//! Builder pattern for OpenAiCompatProvider
+//! Builder pattern for `OpenAiCompatProvider`
 //!
 //! Provides a fluent interface for constructing an OpenAI-compatible provider
 //! with flexible configuration options.
@@ -10,7 +10,7 @@ use std::time::Duration;
 use super::provider::OpenAiCompatProvider;
 use super::types::{DEFAULT_COLOR, DEFAULT_MODEL, DEFAULT_TIMEOUT_SECS};
 
-/// Builder for OpenAiCompatProvider
+/// Builder for `OpenAiCompatProvider`
 ///
 /// Provides a fluent interface for constructing an OpenAI-compatible provider
 /// with flexible configuration options.
@@ -125,7 +125,7 @@ impl OpenAiCompatProviderBuilder {
         self
     }
 
-    /// Build the OpenAiCompatProvider
+    /// Build the `OpenAiCompatProvider`
     ///
     /// # Returns
     ///
@@ -136,7 +136,7 @@ impl OpenAiCompatProviderBuilder {
     ///
     /// # Errors
     ///
-    /// - `GenerationError::InvalidParametersError` if name, api_key, or base_url is empty
+    /// - `GenerationError::InvalidParametersError` if name, `api_key`, or `base_url` is empty
     /// - `GenerationError::NetworkError` if HTTP client creation fails
     pub fn build(self) -> GenerationResult<OpenAiCompatProvider> {
         // Validate required fields

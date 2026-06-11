@@ -1,6 +1,6 @@
 //! Generic ACP harness — configuration-driven preset adapter.
 //!
-//! Covers ~90% of preset agents (Claude Code, Codex, Gemini, OpenCode, etc.)
+//! Covers ~90% of preset agents (Claude Code, Codex, Gemini, `OpenCode`, etc.)
 //! that differ only in executable name, CLI args, and output format.
 
 use std::time::Duration;
@@ -17,7 +17,7 @@ use crate::error::Result;
 ///
 /// Covers agents that follow the standard pattern:
 /// - Executable name from config
-/// - Fixed args per mode (oneshot vs native_acp)
+/// - Fixed args per mode (oneshot vs `native_acp`)
 /// - Standard output parsing (plain text or JSON field extraction)
 pub struct GenericAcpAdapter {
     id: String,
@@ -32,7 +32,7 @@ pub struct GenericAcpAdapter {
 }
 
 impl GenericAcpAdapter {
-    /// Create from an AcpAdapterEntry config.
+    /// Create from an `AcpAdapterEntry` config.
     #[must_use]
     pub fn from_entry(entry: &AcpAdapterEntry) -> Self {
         let id = entry.preset.clone().unwrap_or_default();

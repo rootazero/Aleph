@@ -1,7 +1,7 @@
 //! Secret encryption engine
 //!
 //! Provides AES-256-GCM encryption with HKDF-SHA256 per-entry key derivation.
-//! Inspired by IronClaw's SecretsCrypto design.
+//! Inspired by `IronClaw`'s `SecretsCrypto` design.
 
 use aes_gcm::{
     aead::{Aead, KeyInit},

@@ -9,7 +9,7 @@ use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_resize tool.
+/// Arguments for the `browser_resize` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserResizeArgs {
     /// Browser profile name (default: "default").
@@ -21,7 +21,7 @@ pub struct BrowserResizeArgs {
     pub height: u32,
 }
 
-/// Output from the browser_resize tool.
+/// Output from the `browser_resize` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserResizeOutput {
     pub success: bool,

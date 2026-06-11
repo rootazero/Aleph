@@ -76,9 +76,9 @@ pub struct ClientInfo {
     pub client_id: String,
     /// Client secret (if provided)
     pub client_secret: Option<String>,
-    /// Unix timestamp when client_id was issued
+    /// Unix timestamp when `client_id` was issued
     pub client_id_issued_at: Option<i64>,
-    /// Unix timestamp when client_secret expires (0 = never)
+    /// Unix timestamp when `client_secret` expires (0 = never)
     pub client_secret_expires_at: Option<i64>,
 }
 

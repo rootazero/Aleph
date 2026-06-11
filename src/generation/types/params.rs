@@ -77,13 +77,13 @@ pub struct GenerationParams {
 }
 
 impl GenerationParams {
-    /// Create a new empty GenerationParams
+    /// Create a new empty `GenerationParams`
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Create a builder for GenerationParams
+    /// Create a builder for `GenerationParams`
     ///
     /// # Example
     ///
@@ -100,7 +100,7 @@ impl GenerationParams {
         GenerationParamsBuilder::default()
     }
 
-    /// Merge another GenerationParams into this one
+    /// Merge another `GenerationParams` into this one
     ///
     /// Values from `other` will override values in `self` if they are `Some`.
     ///
@@ -212,9 +212,9 @@ impl GenerationParams {
     }
 }
 
-/// Builder for GenerationParams
+/// Builder for `GenerationParams`
 ///
-/// Provides a fluent interface for constructing GenerationParams.
+/// Provides a fluent interface for constructing `GenerationParams`.
 #[derive(Debug, Default)]
 pub struct GenerationParamsBuilder {
     params: GenerationParams,
@@ -350,7 +350,7 @@ impl GenerationParamsBuilder {
         self
     }
 
-    /// Build the GenerationParams
+    /// Build the `GenerationParams`
     #[must_use]
     pub fn build(self) -> GenerationParams {
         self.params

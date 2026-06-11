@@ -1,4 +1,4 @@
-//! RuntimeCapabilitiesLayer — available runtime environments (priority 400)
+//! `RuntimeCapabilitiesLayer` — available runtime environments (priority 400)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

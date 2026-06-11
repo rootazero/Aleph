@@ -1,4 +1,4 @@
-//! AuthProfileManager implementation
+//! `AuthProfileManager` implementation
 
 use std::collections::HashMap;
 use std::path::PathBuf;

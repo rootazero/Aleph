@@ -48,10 +48,10 @@ pub fn calculate_cooldown_ms(error_count: u32) -> u64 {
 /// Calculate cooldown duration for billing errors.
 ///
 /// Uses base-2 exponential backoff:
-/// - 1st error: billing_backoff (default 5 hours)
-/// - 2nd error: billing_backoff * 2 (10 hours)
-/// - 3rd error: billing_backoff * 4 (20 hours)
-/// - Max: billing_max (default 24 hours)
+/// - 1st error: `billing_backoff` (default 5 hours)
+/// - 2nd error: `billing_backoff` * 2 (10 hours)
+/// - 3rd error: `billing_backoff` * 4 (20 hours)
+/// - Max: `billing_max` (default 24 hours)
 #[must_use]
 pub fn calculate_billing_cooldown_ms(error_count: u32, config: &CooldownConfig) -> u64 {
     let normalized = error_count.max(1);

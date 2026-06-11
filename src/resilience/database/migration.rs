@@ -8,13 +8,13 @@ use aleph_protocol::{AgentTraceEvent, AgentTraceTextKind};
 use rusqlite::Connection;
 use serde_json::Value;
 
-/// Migrate to add experience_replays table for Cortex evolution system
+/// Migrate to add `experience_replays` table for Cortex evolution system
 ///
-/// This migration creates the experience_replays table for storing distilled
+/// This migration creates the `experience_replays` table for storing distilled
 /// task execution experiences that can be replayed for faster execution.
 ///
 /// # Migration Steps
-/// 1. Check if experience_replays table exists
+/// 1. Check if `experience_replays` table exists
 /// 2. If not, create the table with all required columns
 /// 3. Create indexes for efficient querying
 ///
@@ -116,8 +116,8 @@ pub fn migrate_add_experience_replays(conn: &Connection) -> Result<(), AlephErro
     Ok(())
 }
 
-/// Migrate task_traces from legacy flat role/content storage to structured
-/// AgentTraceEvent storage.
+/// Migrate `task_traces` from legacy flat role/content storage to structured
+/// `AgentTraceEvent` storage.
 ///
 /// The legacy schema stored a best-effort `role` plus arbitrary `content_json`.
 /// The new schema stores a stable `event_kind` alongside the full serialized
@@ -334,9 +334,9 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
     Ok(())
 }
 
-/// Migrate to add channel_offsets table for persistent polling offset tracking.
+/// Migrate to add `channel_offsets` table for persistent polling offset tracking.
 ///
-/// Stores the last processed update_id per channel so that restarts resume
+/// Stores the last processed `update_id` per channel so that restarts resume
 /// from where they left off instead of dropping or re-processing updates.
 ///
 /// # Safety
@@ -392,7 +392,7 @@ pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> 
     Ok(())
 }
 
-/// Migrate to add paired_users table for pairing persistence.
+/// Migrate to add `paired_users` table for pairing persistence.
 ///
 /// Stores which Telegram users are paired (allowed to interact) per channel,
 /// enabling pairing state to survive restarts.
@@ -450,7 +450,7 @@ pub fn migrate_add_paired_users(conn: &Connection) -> Result<(), AlephError> {
     Ok(())
 }
 
-/// Migrate to add sticker_descriptions table for Telegram sticker cache.
+/// Migrate to add `sticker_descriptions` table for Telegram sticker cache.
 ///
 /// Stores LLM-generated descriptions of stickers so they can be reused
 /// without re-running vision inference.

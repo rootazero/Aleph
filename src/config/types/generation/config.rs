@@ -1,6 +1,6 @@
 //! Generation configuration
 //!
-//! Contains the global GenerationConfig struct for media generation settings.
+//! Contains the global `GenerationConfig` struct for media generation settings.
 
 use crate::generation::GenerationType;
 use schemars::JsonSchema;
@@ -60,7 +60,7 @@ pub struct GenerationConfig {
 
     /// Output directory for generated files
     /// Supports ~ for home directory expansion.
-    /// When None, the workspace ToolContext fallback is used.
+    /// When None, the workspace `ToolContext` fallback is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<PathBuf>,
 
@@ -364,7 +364,7 @@ impl GenerationConfig {
 
     /// Resolve the output directory with fallback to workspace default.
     ///
-    /// Priority: explicit user config (from config.toml) > workspace ToolContext fallback
+    /// Priority: explicit user config (from config.toml) > workspace `ToolContext` fallback
     #[must_use]
     pub fn resolve_output_dir(&self, fallback: &std::path::Path) -> PathBuf {
         if let Some(ref configured) = self.output_dir {

@@ -25,7 +25,7 @@ pub enum BrowserDriver {
     /// Aleph launches and manages a dedicated browser instance (Playwright CLI managed via fnm).
     #[default]
     Managed,
-    /// Attach to user's running Chrome via Chrome DevTools MCP.
+    /// Attach to user's running Chrome via Chrome `DevTools` MCP.
     ExistingSession,
 }
 
@@ -48,7 +48,7 @@ pub struct ProfileConfig {
     #[serde(default)]
     pub color: Option<String>,
 
-    /// Proxy server URL (e.g. "socks5://127.0.0.1:1080").
+    /// Proxy server URL (e.g. "<socks5://127.0.0.1:1080>").
     #[serde(default)]
     pub proxy: Option<String>,
 
@@ -162,7 +162,7 @@ pub struct PlaywrightCliConfig {
     #[serde(default = "default_true")]
     pub headless: bool,
 
-    /// Timeout (seconds) for navigate / wait_for_text.
+    /// Timeout (seconds) for navigate / `wait_for_text`.
     #[serde(default = "default_nav_timeout")]
     pub nav_timeout_secs: u64,
 
@@ -195,10 +195,10 @@ impl Default for PlaywrightCliConfig {
     }
 }
 
-/// Configuration for the Chrome DevTools MCP integration.
+/// Configuration for the Chrome `DevTools` MCP integration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ChromeMcpConfig {
-    /// Command to launch Chrome DevTools MCP server.
+    /// Command to launch Chrome `DevTools` MCP server.
     #[serde(default = "default_chrome_mcp_command")]
     pub command: String,
 
@@ -244,7 +244,7 @@ pub struct BrowserSystemConfig {
     #[serde(default, alias = "playwright_mcp")]
     pub playwright_cli: PlaywrightCliConfig,
 
-    /// Chrome DevTools MCP integration settings.
+    /// Chrome `DevTools` MCP integration settings.
     #[serde(default)]
     pub chrome_mcp: ChromeMcpConfig,
 }

@@ -4,9 +4,9 @@
 //! - User and group directory search
 //! - Team and channel listing
 //! - Message history retrieval
-//! - Media/file downloads via SharePoint
+//! - Media/file downloads via `SharePoint`
 //!
-//! Uses separate OAuth2 token from Bot Framework tokens.
+//! Uses separate `OAuth2` token from Bot Framework tokens.
 
 use std::fmt::Write;
 use std::time::{Duration, Instant};
@@ -36,7 +36,7 @@ impl CachedToken {
     }
 }
 
-/// Outbound OAuth2 token cache for Microsoft Graph API calls.
+/// Outbound `OAuth2` token cache for Microsoft Graph API calls.
 ///
 /// Caches `client_credentials` tokens and refreshes them proactively at 80% of
 /// their lifetime so callers always receive a valid token.
@@ -246,7 +246,7 @@ pub struct GraphErrorDetail {
 /// Trait for Graph API token providers.
 ///
 /// Abstracts over different authentication methods:
-/// - `GraphTokenCache`: ClientSecret authentication
+/// - `GraphTokenCache`: `ClientSecret` authentication
 /// - `GraphTokenManager`: Federated authentication
 #[async_trait]
 pub trait GraphTokenSource: Send + Sync {
@@ -275,7 +275,7 @@ pub struct GraphClient {
 }
 
 impl GraphClient {
-    /// Create a new `GraphClient` with a ClientSecret token source.
+    /// Create a new `GraphClient` with a `ClientSecret` token source.
     pub fn new(token_cache: Arc<GraphTokenCache>) -> Self {
         Self {
             http: Client::new(),
@@ -580,9 +580,9 @@ impl GraphClient {
 
     // ── Media & File Operations ─────────────────────────────────────────────────
 
-    /// Download file content from a SharePoint URL.
+    /// Download file content from a `SharePoint` URL.
     ///
-    /// Used for retrieving file attachments that were uploaded to SharePoint
+    /// Used for retrieving file attachments that were uploaded to `SharePoint`
     /// rather than sent as inline content.
     pub async fn download_media(&self, content_url: &str) -> Result<Vec<u8>, ChannelError> {
         let token = self.token_source.get_token().await?;
@@ -610,10 +610,10 @@ impl GraphClient {
         Ok(bytes.to_vec())
     }
 
-    /// Upload a file to SharePoint and return the download URL.
+    /// Upload a file to `SharePoint` and return the download URL.
     ///
     /// Used for sending file attachments in group chats where files need
-    /// to be uploaded to SharePoint first.
+    /// to be uploaded to `SharePoint` first.
     pub async fn upload_to_sharepoint(
         &self,
         channel_id: &str,
@@ -810,7 +810,7 @@ impl GraphClient {
 
 // ── Helper Functions ──────────────────────────────────────────────────────────
 
-/// Encode a string for use in OData query parameters.
+/// Encode a string for use in `OData` query parameters.
 /// Escapes single quotes by doubling them ('').
 fn encode_odata_param(value: &str) -> String {
     value.replace('\'', "''")
@@ -839,7 +839,7 @@ fn encode_uri_component(value: &str) -> String {
     result
 }
 
-/// Map HTTP status codes to ChannelError for Graph API failures.
+/// Map HTTP status codes to `ChannelError` for Graph API failures.
 fn map_graph_error(status: u16, body: &str) -> ChannelError {
     // Try to extract error message from Graph error response
     if let Ok(error_resp) = serde_json::from_str::<GraphErrorResponse>(body) {

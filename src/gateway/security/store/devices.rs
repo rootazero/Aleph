@@ -80,7 +80,7 @@ impl SecurityStore {
         rows.collect()
     }
 
-    /// Update device last_seen_at
+    /// Update device `last_seen_at`
     pub fn touch_device(&self, device_id: &str) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(

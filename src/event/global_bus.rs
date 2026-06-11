@@ -2,7 +2,7 @@
 //! Global event bus for cross-agent event aggregation.
 //!
 //! The `GlobalBus` provides a singleton event bus that aggregates events from
-//! multiple Agent EventBus instances, enabling cross-agent event subscription
+//! multiple Agent `EventBus` instances, enabling cross-agent event subscription
 //! and routing.
 //!
 //! # Example
@@ -71,7 +71,7 @@ pub struct GlobalEvent {
 }
 
 impl GlobalEvent {
-    /// Create a new GlobalEvent with automatic timestamp and sequence.
+    /// Create a new `GlobalEvent` with automatic timestamp and sequence.
     pub fn new(
         source_agent_id: impl Into<String>,
         source_session_id: impl Into<String>,
@@ -113,7 +113,7 @@ impl GlobalEvent {
 pub struct SubscriptionId(String);
 
 impl SubscriptionId {
-    /// Create a new SubscriptionId
+    /// Create a new `SubscriptionId`
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
@@ -187,7 +187,7 @@ impl std::fmt::Debug for Subscription {
 
 /// Global event bus singleton for cross-agent event aggregation.
 ///
-/// The GlobalBus aggregates events from multiple Agent EventBus instances,
+/// The `GlobalBus` aggregates events from multiple Agent `EventBus` instances,
 /// enabling cross-agent event subscription. It uses a broadcast channel
 /// internally and maintains weak references to registered agent buses.
 pub struct GlobalBus {
@@ -205,7 +205,7 @@ pub struct GlobalBus {
 static GLOBAL_BUS: Lazy<GlobalBus> = Lazy::new(GlobalBus::new);
 
 impl GlobalBus {
-    /// Create a new GlobalBus instance.
+    /// Create a new `GlobalBus` instance.
     ///
     /// Note: For most use cases, prefer `GlobalBus::global()` to access
     /// the singleton instance.
@@ -222,7 +222,7 @@ impl GlobalBus {
 
     /// Get the global singleton instance.
     ///
-    /// This is the preferred way to access the GlobalBus.
+    /// This is the preferred way to access the `GlobalBus`.
     #[must_use]
     pub fn global() -> &'static Self {
         &GLOBAL_BUS
@@ -230,13 +230,13 @@ impl GlobalBus {
 
     /// Register an agent's event bus.
     ///
-    /// The GlobalBus maintains a weak reference to the EventBus,
+    /// The `GlobalBus` maintains a weak reference to the `EventBus`,
     /// allowing the agent to be dropped without preventing cleanup.
     ///
     /// # Arguments
     ///
     /// * `agent_id` - Unique identifier for the agent
-    /// * `bus` - The agent's EventBus instance
+    /// * `bus` - The agent's `EventBus` instance
     pub async fn register_agent(&self, agent_id: &str, bus: Arc<EventBus>) {
         let mut buses = self.agent_buses.write().await;
         buses.insert(agent_id.to_string(), Arc::downgrade(&bus));
@@ -257,7 +257,7 @@ impl GlobalBus {
 
     /// Broadcast an event to all matching subscribers.
     ///
-    /// Creates a GlobalEvent and notifies all subscribers whose filters
+    /// Creates a `GlobalEvent` and notifies all subscribers whose filters
     /// match the event.
     ///
     /// # Arguments
@@ -398,7 +398,7 @@ impl GlobalBus {
 
     /// Clean up stale agent references.
     ///
-    /// Removes weak references to EventBus instances that have been dropped.
+    /// Removes weak references to `EventBus` instances that have been dropped.
     pub async fn cleanup_stale_agents(&self) {
         let mut buses = self.agent_buses.write().await;
         let stale_ids: Vec<String> = buses

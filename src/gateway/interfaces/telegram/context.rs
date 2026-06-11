@@ -17,7 +17,7 @@
 //! Created early in the handler pipeline (right after `AccessDecision::Allowed`
 //! is confirmed), lives for the duration of message processing, and is dropped
 //! when the handler returns. It is **not** persisted — session state is stored
-//! separately in SQLite.
+//! separately in `SQLite`.
 
 use crate::gateway::channel::{ConversationId, InboundMessage, MessageId, UserId};
 use chrono::{DateTime, Utc};
@@ -105,7 +105,7 @@ impl AccessLevel {
 /// Format: `"{chat_id}"` or `"{chat_id}:topic:{thread_id}"`
 ///
 /// Using a dedicated struct (rather than raw strings) prevents bugs from
-/// mixing up chat_id and thread_id in string formatting.
+/// mixing up `chat_id` and `thread_id` in string formatting.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConversationKey {
     /// The Telegram chat/group ID.
@@ -143,7 +143,7 @@ impl ConversationKey {
         }
     }
 
-    /// Create a new key from chat_id only (no thread).
+    /// Create a new key from `chat_id` only (no thread).
     #[must_use]
     pub const fn new(chat_id: i64) -> Self {
         Self {
@@ -152,7 +152,7 @@ impl ConversationKey {
         }
     }
 
-    /// Create a new key from chat_id and thread_id.
+    /// Create a new key from `chat_id` and `thread_id`.
     #[must_use]
     pub const fn with_thread(chat_id: i64, thread_id: i64) -> Self {
         Self {
@@ -164,7 +164,7 @@ impl ConversationKey {
 
 /// Session state for a conversation.
 ///
-/// Stored in SQLite, loaded on first message in a session.
+/// Stored in `SQLite`, loaded on first message in a session.
 /// A session is identified by `(chat_id, thread_id)` — a thread-scoped
 /// conversation gets its own session separate from the general topic.
 #[derive(Debug, Clone)]
@@ -256,7 +256,7 @@ pub struct TelegramInboundContext {
     pub access_level: AccessLevel,
     /// Conversation key for session isolation.
     pub conversation_key: ConversationKey,
-    /// Session state (loaded from SQLite on first use, not always present).
+    /// Session state (loaded from `SQLite` on first use, not always present).
     pub session: Option<SessionState>,
     /// Extracted media with Telegram-specific fields.
     pub media: Vec<MediaItem>,

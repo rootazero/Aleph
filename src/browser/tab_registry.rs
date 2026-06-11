@@ -41,11 +41,11 @@ struct Tracked {
     last_used: Instant,
 }
 
-/// Tracks last-used time per (profile, tab_id) so idle / over-cap tabs can be
+/// Tracks last-used time per (profile, `tab_id`) so idle / over-cap tabs can be
 /// reclaimed. Cheap to share behind the `ProfileManager`'s `Arc`.
 #[derive(Default)]
 pub struct TabRegistry {
-    /// profile → (tab_id → last-used).
+    /// profile → (`tab_id` → last-used).
     tabs: Mutex<HashMap<String, HashMap<String, Tracked>>>,
 }
 
@@ -151,7 +151,7 @@ impl TabRegistry {
 
 /// Extract numeric tab ids from a backend `list_tabs` listing.
 ///
-/// Handles both the Chrome DevTools MCP format `"N: URL"` and the Playwright
+/// Handles both the Chrome `DevTools` MCP format `"N: URL"` and the Playwright
 /// CLI format `"Tab N: URL"`. Lower-layer twin of the `(id, url)` parser in the
 /// browser-tools layer — the reaper lives in the `browser` crate layer and may
 /// not reach up into `builtin_tools`, and it only needs the ids.

@@ -1,7 +1,7 @@
 /// Custom error types for Aleph core library.
 ///
 /// All errors in the Aleph core are represented using this enum,
-/// which provides clear error messages and integrates with UniFFI
+/// which provides clear error messages and integrates with `UniFFI`
 /// for automatic conversion to Swift/Kotlin exceptions.
 use thiserror::Error;
 
@@ -596,7 +596,7 @@ impl AlephError {
 
     /// Create a cancelled error
     ///
-    /// Used when an operation is cancelled by the user via CancellationToken.
+    /// Used when an operation is cancelled by the user via `CancellationToken`.
     #[must_use]
     pub const fn cancelled() -> Self {
         Self::Cancelled
@@ -711,7 +711,7 @@ impl AlephError {
     }
 }
 
-/// Type alias for Results using AlephError
+/// Type alias for Results using `AlephError`
 pub type Result<T> = std::result::Result<T, AlephError>;
 
 impl From<serde_json::Error> for AlephError {
@@ -726,9 +726,9 @@ impl From<std::io::Error> for AlephError {
     }
 }
 
-/// Simple exception enum for UniFFI 0.25 compatibility
+/// Simple exception enum for `UniFFI` 0.25 compatibility
 ///
-/// UniFFI 0.25 has bugs with [Error] enum when variants have associated data (flat_error issue).
+/// `UniFFI` 0.25 has bugs with [Error] enum when variants have associated data (`flat_error` issue).
 /// This simple unit-variant enum works. Error details are passed via callback before throwing.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum AlephException {

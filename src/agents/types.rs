@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Origin of an AgentDef. Set by `crate::agents::loader` based on load source;
+/// Origin of an `AgentDef`. Set by `crate::agents::loader` based on load source;
 /// hardcoded `builtin_agents()` entries default to `Builtin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -86,13 +86,13 @@ pub fn load_config_file(path: &Path) -> Result<AlephConfig, ExtensionError> {
     }
 }
 
-/// Parse TOML content into AlephConfig.
+/// Parse TOML content into `AlephConfig`.
 fn parse_toml(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError> {
     toml::from_str(content)
         .map_err(|e| ExtensionError::config_parse(path, format!("TOML parse error: {e}")))
 }
 
-/// Parse JSONC (JSON with comments) content into AlephConfig.
+/// Parse JSONC (JSON with comments) content into `AlephConfig`.
 fn parse_jsonc(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError> {
     let stripped = strip_json_comments(content);
     // Handle trailing commas (common in JSONC)

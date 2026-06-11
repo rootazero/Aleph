@@ -12,7 +12,7 @@
 //! ## Architecture
 //!
 //! - **scratchpad.md**: Current active task state
-//! - **session_history.log**: Archive of completed tasks
+//! - **`session_history.log`**: Archive of completed tasks
 //!
 //! ## Usage
 //!

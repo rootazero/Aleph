@@ -1,6 +1,6 @@
-//! ClawHub RPC Handlers
+//! `ClawHub` RPC Handlers
 //!
-//! Handlers for ClawHub skill registry: search, browse, detail, install.
+//! Handlers for `ClawHub` skill registry: search, browse, detail, install.
 
 use std::sync::OnceLock;
 
@@ -152,7 +152,7 @@ pub struct InstallParams {
     pub version: Option<String>,
 }
 
-/// Install a skill from ClawHub by slug.
+/// Install a skill from `ClawHub` by slug.
 pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
     let params: InstallParams = match parse_params(&request) {
         Ok(p) => p,

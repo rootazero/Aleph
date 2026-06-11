@@ -1,7 +1,7 @@
 //! Team templates — declarative TOML blueprints that materialize a team in one
 //! shot: leader + workers + initial task DAG.
 //!
-//! Inspired by ClawTeam's `templates/*.toml` registry. A template captures
+//! Inspired by `ClawTeam`'s `templates/*.toml` registry. A template captures
 //! "what does *this kind of team* look like" — roles, prompt addenda, and an
 //! initial decomposition of the goal — so users (and the LLM via the
 //! `team_from_template` tool) can stamp out a working team without manually

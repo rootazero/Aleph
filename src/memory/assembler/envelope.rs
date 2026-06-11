@@ -1,6 +1,6 @@
 //! Memory Envelope — the portable data contract.
 //!
-//! All fields are additive within schema_version 1.x. Breaking changes require v2.
+//! All fields are additive within `schema_version` 1.x. Breaking changes require v2.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,4 @@
-//! VaultStoreTool — manage encrypted secret vault
+//! `VaultStoreTool` — manage encrypted secret vault
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

@@ -1,7 +1,7 @@
-//! AllowlistToolService — filters a parent `ToolService` using `AgentDef::is_tool_allowed`.
+//! `AllowlistToolService` — filters a parent `ToolService` using `AgentDef::is_tool_allowed`.
 //!
 //! Used by the subagent spawner so that a sub-agent can only see / execute
-//! the tools its AgentDef permits. Delegates all passing calls to the inner
+//! the tools its `AgentDef` permits. Delegates all passing calls to the inner
 //! service unchanged.
 
 use crate::sync_primitives::Arc;

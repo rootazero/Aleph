@@ -8,7 +8,7 @@ use crate::a2a::domain::*;
 use super::task_manager::A2AResult;
 
 /// Context extracted from an incoming A2A request.
-/// Uses plain HashMap for headers to avoid coupling port traits to axum/http.
+/// Uses plain `HashMap` for headers to avoid coupling port traits to axum/http.
 #[derive(Debug, Clone)]
 pub struct A2AAuthContext {
     pub remote_addr: SocketAddr,

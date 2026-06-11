@@ -41,7 +41,7 @@ impl LeakDecision {
 /// Ordering matters: the specific prefixes (`sk_proj`/`sk_ant`) run before the
 /// generic `openai_sk` catch-all so they win the named redaction tag; once a
 /// match is redacted to `[REDACTED:NAME]` the generic rule no longer matches
-/// it. The trailing three entries (generic OpenAI key, Google API key, PEM
+/// it. The trailing three entries (generic `OpenAI` key, Google API key, PEM
 /// private-key header) mirror the high-confidence `LEAK_PATTERNS` so that
 /// sandbox stdout/stderr is scrubbed of the same secrets the str-side detector
 /// blocks on the network path — closing a previously open leak path where a

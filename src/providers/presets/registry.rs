@@ -690,8 +690,8 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
 /// a preset name through the request-building plumbing.
 ///
 /// Users who override `base_url` on a configured provider will miss this
-/// lookup — that's intentional: overriding base_url opts out of preset
-/// assumptions like temperature_policy.
+/// lookup — that's intentional: overriding `base_url` opts out of preset
+/// assumptions like `temperature_policy`.
 pub(crate) static PRESETS_BY_BASE_URL: Lazy<HashMap<&'static str, &'static ProviderPreset>> =
     Lazy::new(|| {
         let mut m = HashMap::with_capacity(PROFILES.len());

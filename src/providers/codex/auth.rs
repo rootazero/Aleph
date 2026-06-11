@@ -2,7 +2,7 @@
 //!
 //! Implements the browser-based OAuth flow for Codex subscription accounts.
 //! Uses PKCE (Proof Key for Code Exchange) with S256 challenge method,
-//! matching the OpenAI Codex CLI implementation.
+//! matching the `OpenAI` Codex CLI implementation.
 
 use crate::error::{AlephError, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -48,10 +48,10 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
-/// OpenAI OAuth client ID (public client, same as Codex CLI)
+/// `OpenAI` OAuth client ID (public client, same as Codex CLI)
 const OPENAI_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
-/// OpenAI auth issuer
+/// `OpenAI` auth issuer
 const ISSUER: &str = "https://auth.openai.com";
 
 /// OAuth callback timeout (5 minutes)
@@ -60,7 +60,7 @@ const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 /// Callback path (must match Codex CLI convention)
 const CALLBACK_PATH: &str = "/auth/callback";
 
-/// Fixed callback port (must match OpenAI's registered redirect_uri)
+/// Fixed callback port (must match `OpenAI`'s registered `redirect_uri`)
 const CALLBACK_PORT: u16 = 1455;
 
 /// PKCE code verifier + challenge pair
@@ -69,7 +69,7 @@ struct PkceCodes {
     code_challenge: String,
 }
 
-/// Generate PKCE codes (code_verifier + S256 code_challenge)
+/// Generate PKCE codes (`code_verifier` + S256 `code_challenge`)
 fn generate_pkce() -> PkceCodes {
     use rand::Rng;
     let mut bytes = [0u8; 32];
@@ -165,11 +165,11 @@ impl CodexAuth {
 
     /// Run the full OAuth browser authorization flow with PKCE.
     ///
-    /// 1. Generates PKCE codes (code_verifier + code_challenge)
+    /// 1. Generates PKCE codes (`code_verifier` + `code_challenge`)
     /// 2. Binds a random localhost port
     /// 3. Opens the system browser to the OAuth authorize URL
     /// 4. Waits for the callback with an authorization code (5 min timeout)
-    /// 5. Exchanges the code + code_verifier for tokens
+    /// 5. Exchanges the code + `code_verifier` for tokens
     /// 6. Returns a populated `CodexAuth`
     pub async fn authorize_via_browser() -> Result<Self> {
         let pkce = generate_pkce();
@@ -372,7 +372,7 @@ impl CodexAuth {
         })
     }
 
-    /// Refresh the access token using the refresh_token grant
+    /// Refresh the access token using the `refresh_token` grant
     pub async fn refresh(&mut self) -> Result<()> {
         let refresh_token = self.refresh_token.as_ref().ok_or_else(|| {
             AlephError::authentication("chatgpt", "No refresh token available. Please re-login.")

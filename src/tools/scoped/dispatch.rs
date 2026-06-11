@@ -1,5 +1,5 @@
-//! Execute pipeline: confirmation gate, BeforeToolCall hooks, retry, Layer 2
-//! budget, AfterToolCall hooks, error sanitization.
+//! Execute pipeline: confirmation gate, `BeforeToolCall` hooks, retry, Layer 2
+//! budget, `AfterToolCall` hooks, error sanitization.
 
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -18,7 +18,7 @@ use super::ScopedToolService;
 /// XML-escape any literal `<system-reminder>` / `</system-reminder>` boundary
 /// tokens inside untrusted hook-context text.
 ///
-/// Hook `context:` lines can relay external / reflected data (a BeforeToolCall
+/// Hook `context:` lines can relay external / reflected data (a `BeforeToolCall`
 /// interceptor echoing tool input or a scraped payload). Wrapped verbatim, a
 /// context line containing `</system-reminder>` would terminate the reminder
 /// fence early and let the trailing text masquerade as trusted harness prose
@@ -95,7 +95,7 @@ impl ScopedToolService {
     /// token is forked per-call by the harness Act phase and threaded into
     /// the inner [`crate::tools::runtime::LoopToolRegistry::execute`] /
     /// [`crate::agents::subagent_tool::SubagentTool::execute`] so subprocess
-    /// kill_on_drop, reqwest abort, etc. propagate naturally.
+    /// `kill_on_drop`, reqwest abort, etc. propagate naturally.
     pub(super) async fn execute_inner(
         &self,
         name: &str,
@@ -574,7 +574,7 @@ impl ScopedToolService {
     /// Fire `AfterToolCall` / `AfterToolCallFailure` hooks. Observers run in
     /// parallel; Interceptors run sequentially and may override the visible
     /// tool output via `update_output:` on the success path. Any
-    /// `additional_contexts` from BeforeToolCall (`pre_contexts`) plus those
+    /// `additional_contexts` from `BeforeToolCall` (`pre_contexts`) plus those
     /// emitted here are wrapped into the tool output as
     /// `<system-reminder>` blocks so the LLM actually sees them next turn.
     async fn run_after_tool_hooks(

@@ -18,10 +18,10 @@ use super::normalize_phone;
 impl InboundMessageRouter {
     /// Resolve agent ID using multi-tier route bindings with workspace fallback.
     ///
-    /// Priority: resolve_route(bindings) → workspace_manager → default_agent_id
+    /// Priority: `resolve_route(bindings)` → `workspace_manager` → `default_agent_id`
     ///
-    /// Returns (agent_id, Option<ResolvedRoute>). The ResolvedRoute carries the
-    /// correctly computed session_key from the new routing system.
+    /// Returns (`agent_id`, Option<ResolvedRoute>). The `ResolvedRoute` carries the
+    /// correctly computed `session_key` from the new routing system.
     pub(super) async fn resolve_agent_id_async(
         &self,
         msg: &InboundMessage,
@@ -103,7 +103,7 @@ impl InboundMessageRouter {
         Some((self.default_agent_id.clone(), None))
     }
 
-    /// Build InboundContext from message with pre-resolved agent ID
+    /// Build `InboundContext` from message with pre-resolved agent ID
     pub(super) async fn build_context_with_agent(
         &self,
         msg: &InboundMessage,
@@ -142,7 +142,7 @@ impl InboundMessageRouter {
             .with_sender_normalized(sender_normalized)
     }
 
-    /// Resolve SessionKey for a message with pre-resolved agent ID
+    /// Resolve `SessionKey` for a message with pre-resolved agent ID
     pub(super) fn resolve_session_key_with_agent(
         &self,
         msg: &InboundMessage,

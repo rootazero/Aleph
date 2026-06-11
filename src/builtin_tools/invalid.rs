@@ -4,7 +4,7 @@
 //! This allows the LLM to receive feedback about invalid tool names and
 //! available alternatives, rather than causing hard errors.
 //!
-//! Inspired by OpenCode's experimental_repairToolCall pattern.
+//! Inspired by `OpenCode`'s `experimental_repairToolCall` pattern.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -49,13 +49,13 @@ pub struct InvalidTool {
 }
 
 impl InvalidTool {
-    /// Create a new InvalidTool with a list of available tools
+    /// Create a new `InvalidTool` with a list of available tools
     #[must_use]
     pub const fn new(available_tools: Vec<String>) -> Self {
         Self { available_tools }
     }
 
-    /// Create an InvalidTool with no available tools (will be updated later)
+    /// Create an `InvalidTool` with no available tools (will be updated later)
     #[must_use]
     pub const fn empty() -> Self {
         Self {

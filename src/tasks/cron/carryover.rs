@@ -25,7 +25,7 @@
 //!
 //! ## Why a file, not the job snapshot?
 //!
-//! Cron job snapshots live in SQLite (`tasks::cron::store`). Adding a
+//! Cron job snapshots live in `SQLite` (`tasks::cron::store`). Adding a
 //! `partial_summary` column would require a migration AND threading the
 //! new field through the snapshot DTO + every test fixture. File-based
 //! carry-over is additive — keeps store schema stable, survives daemon

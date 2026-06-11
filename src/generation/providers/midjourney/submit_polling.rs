@@ -34,7 +34,7 @@ pub(crate) trait SubmitPolling {
         image_url: &str,
     ) -> impl std::future::Future<Output = GenerationResult<Vec<u8>>> + Send;
 
-    /// Parse API error response and convert to GenerationError
+    /// Parse API error response and convert to `GenerationError`
     fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError;
 }
 
@@ -232,7 +232,7 @@ impl SubmitPolling for MidjourneyProvider {
         Ok(bytes.to_vec())
     }
 
-    /// Parse API error response and convert to GenerationError
+    /// Parse API error response and convert to `GenerationError`
     fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError {
         // Try to parse as API error format
         if let Ok(error_response) = serde_json::from_str::<SubmitResponse>(body) {

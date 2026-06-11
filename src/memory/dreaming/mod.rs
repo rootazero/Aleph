@@ -1,4 +1,4 @@
-//! DreamDaemon: background memory consolidation for the notes layer.
+//! `DreamDaemon`: background memory consolidation for the notes layer.
 //!
 //! This module implements a staged dream pipeline architecture.
 //! Each stage implements the `DreamStage` trait and operates on a shared
@@ -146,8 +146,8 @@ impl DreamPipeline {
         Self { stages }
     }
 
-    /// Build a pipeline from a DreamStrategy, threading runtime config into stages
-    /// that need it (currently SkillDistill's per-cycle cap, D5).
+    /// Build a pipeline from a `DreamStrategy`, threading runtime config into stages
+    /// that need it (currently `SkillDistill`'s per-cycle cap, D5).
     #[must_use]
     pub fn from_strategy(
         strategy: DreamStrategy,
@@ -307,7 +307,7 @@ pub(crate) fn now_timestamp() -> i64 {
         .as_secs() as i64
 }
 
-/// Record user activity for DreamDaemon idle tracking.
+/// Record user activity for `DreamDaemon` idle tracking.
 pub fn record_activity() {
     LAST_ACTIVITY_TS.store(now_timestamp(), Ordering::Release);
 }
@@ -336,7 +336,7 @@ pub async fn try_run_now() -> Result<DreamReport, AlephError> {
     daemon.run_now().await
 }
 
-/// Ensure DreamDaemon is running (once) when memory is enabled.
+/// Ensure `DreamDaemon` is running (once) when memory is enabled.
 pub fn ensure_dream_daemon(
     database: MemoryBackend,
     config: Arc<MemoryConfig>,
@@ -354,7 +354,7 @@ pub fn ensure_dream_daemon(
     );
 }
 
-/// Ensure DreamDaemon is running (once) when memory is enabled, with optional orientation handle.
+/// Ensure `DreamDaemon` is running (once) when memory is enabled, with optional orientation handle.
 pub fn ensure_dream_daemon_with_orientation(
     database: MemoryBackend,
     config: Arc<MemoryConfig>,
@@ -449,7 +449,7 @@ impl DailyInsight {
     }
 }
 
-/// DreamDaemon status record.
+/// `DreamDaemon` status record.
 #[derive(Debug, Clone, Default)]
 pub struct DreamStatus {
     pub last_run_at: Option<i64>,
@@ -472,7 +472,7 @@ impl DreamRunStatus {
     }
 }
 
-/// DreamDaemon orchestrates idle-time consolidation.
+/// `DreamDaemon` orchestrates idle-time consolidation.
 pub struct DreamDaemon {
     database: MemoryBackend,
     config: ConfigDreamingConfig,
@@ -492,7 +492,7 @@ pub struct DreamDaemon {
     /// `get_note_memory_dir()` when unset; injected explicitly so the dir
     /// matches the rest of the boot wiring and the daemon is unit-testable.
     note_memory_dir: Option<PathBuf>,
-    /// Optional wiki orientation — forwarded into DreamContext for IndexRefresherStage.
+    /// Optional wiki orientation — forwarded into `DreamContext` for `IndexRefresherStage`.
     orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
     /// Strategy selector with personality adaptation.
     selector: crate::sync_primitives::Mutex<StrategySelector>,
@@ -555,7 +555,7 @@ impl DreamDaemon {
         self
     }
 
-    /// Attach a wiki orientation handle for the IndexRefresher dream stage.
+    /// Attach a wiki orientation handle for the `IndexRefresher` dream stage.
     pub fn with_orientation(
         mut self,
         orientation: Arc<dyn crate::memory::notes::orientation::NoteOrientation>,
@@ -586,7 +586,7 @@ impl DreamDaemon {
     /// Used by the `dreaming.run_now` admin RPC for deterministic test harnesses.
     /// The `is_running` latch is still respected so concurrent triggers cannot
     /// stack. Persists `last_run_at` / `last_status` exactly like the scheduler
-    /// path so observers (Panel, journalctl, dream_status table) see the cycle.
+    /// path so observers (Panel, journalctl, `dream_status` table) see the cycle.
     pub async fn run_now(&self) -> Result<DreamReport, AlephError> {
         if self
             .is_running

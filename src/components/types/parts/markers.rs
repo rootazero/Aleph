@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Marker for compaction boundary
 ///
 /// This marker is inserted into the session when compaction occurs,
-/// allowing filter_compacted() to find the boundary and discard
+/// allowing `filter_compacted()` to find the boundary and discard
 /// old context that has been summarized.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactionMarker {

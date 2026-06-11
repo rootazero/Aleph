@@ -17,7 +17,7 @@
 //!
 //! ## Response (error)
 //! Returns RPC error with `INTERNAL_ERROR` code when:
-//! - DreamDaemon is not initialized (memory disabled or simulated mode)
+//! - `DreamDaemon` is not initialized (memory disabled or simulated mode)
 //! - A dream cycle is already running
 
 use serde_json::json;

@@ -1,4 +1,4 @@
-//! ExtraFilesLayer — inject `[prompt.extra_files]` content (priority 1735)
+//! `ExtraFilesLayer` — inject `[prompt.extra_files]` content (priority 1735)
 //!
 //! Renders the user-configured extra files (`config.prompt.extra_files`)
 //! that the harness bridge loads off disk, size-capped, per prompt build.

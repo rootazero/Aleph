@@ -1,4 +1,4 @@
-//! EventLog — append-only audit trail for Dream cycles.
+//! `EventLog` — append-only audit trail for Dream cycles.
 //!
 //! Each Dream cycle produces one `DreamEvent` serialized as a JSON line
 //! in `{agent_dir}/dream_events.jsonl`.

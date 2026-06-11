@@ -50,7 +50,7 @@ impl SecurityStore {
         }
     }
 
-    /// Update token last_used_at
+    /// Update token `last_used_at`
     pub fn touch_token(&self, token_id: &str) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
@@ -120,7 +120,7 @@ impl SecurityStore {
         Ok(())
     }
 
-    /// Load the persisted HMAC secret (if any) from the shared_token table.
+    /// Load the persisted HMAC secret (if any) from the `shared_token` table.
     pub fn get_shared_token_secret(&self) -> SqliteResult<Option<[u8; 32]>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare("SELECT hmac_secret FROM shared_token LIMIT 1")?;
@@ -144,7 +144,7 @@ impl SecurityStore {
         }
     }
 
-    /// Load the persisted plaintext token (if any) from the shared_token table.
+    /// Load the persisted plaintext token (if any) from the `shared_token` table.
     pub fn get_shared_token_plaintext(&self) -> SqliteResult<Option<String>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare("SELECT plaintext_token FROM shared_token LIMIT 1")?;
@@ -179,7 +179,7 @@ impl SecurityStore {
 
     // ========== Token Manager Secret Persistence ==========
 
-    /// Store the TokenManager HMAC secret so device tokens survive restarts.
+    /// Store the `TokenManager` HMAC secret so device tokens survive restarts.
     pub fn set_token_manager_secret(&self, secret: &[u8; 32]) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM token_manager_secret", [])?;
@@ -191,7 +191,7 @@ impl SecurityStore {
         Ok(())
     }
 
-    /// Load the persisted TokenManager HMAC secret (if any).
+    /// Load the persisted `TokenManager` HMAC secret (if any).
     pub fn get_token_manager_secret(&self) -> SqliteResult<Option<[u8; 32]>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare("SELECT hmac_secret FROM token_manager_secret LIMIT 1")?;

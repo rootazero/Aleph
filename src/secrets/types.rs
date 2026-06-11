@@ -15,7 +15,7 @@ pub struct DecryptedSecret {
 }
 
 impl DecryptedSecret {
-    /// Create a new DecryptedSecret from a string value.
+    /// Create a new `DecryptedSecret` from a string value.
     pub fn new(value: impl Into<String>) -> Self {
         Self {
             value: SecretString::from(value.into()),

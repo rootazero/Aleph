@@ -1,6 +1,6 @@
 //! Media tool — camera capture and audio device management.
 //!
-//! Delegates to `DesktopPlatform::media()` (MediaCapability).
+//! Delegates to `DesktopPlatform::media()` (`MediaCapability`).
 //! When the capability is absent, all operations return a friendly message.
 
 use crate::sync_primitives::Arc;
@@ -28,21 +28,21 @@ impl MediaTool {
 /// Arguments for the media tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MediaArgs {
-    /// Action to perform: "camera_snap", "camera_clip", "record_audio", "list_audio_devices", "speech_to_text"
+    /// Action to perform: "`camera_snap`", "`camera_clip`", "`record_audio`", "`list_audio_devices`", "`speech_to_text`"
     pub action: String,
-    /// JPEG quality (0.0–1.0). Used by camera_snap. Default: 0.9
+    /// JPEG quality (0.0–1.0). Used by `camera_snap`. Default: 0.9
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<f32>,
-    /// Recording duration in seconds (0.25–60.0). Used by camera_clip. Default: 3.0
+    /// Recording duration in seconds (0.25–60.0). Used by `camera_clip`. Default: 3.0
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
-    /// Include audio from microphone. Used by camera_clip. Default: false
+    /// Include audio from microphone. Used by `camera_clip`. Default: false
     #[serde(skip_serializing_if = "Option::is_none")]
     pub with_audio: Option<bool>,
-    /// Path to an audio file. Used by speech_to_text.
+    /// Path to an audio file. Used by `speech_to_text`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_path: Option<String>,
-    /// Recognition language (e.g., "en-US", "zh-Hans"). Used by speech_to_text. Default: "en-US"
+    /// Recognition language (e.g., "en-US", "zh-Hans"). Used by `speech_to_text`. Default: "en-US"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 }

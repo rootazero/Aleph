@@ -1,10 +1,10 @@
-//! WorkflowStepReviewTool — step-level workflow control (Phase C).
+//! `WorkflowStepReviewTool` — step-level workflow control (Phase C).
 //!
 //! Lets a lead agent (or via panel an end user) approve, reject, or retry
 //! a single coordination task. Approval is the openteams "control point"
 //! between dependent tasks: a downstream task only unblocks once its
 //! upstreams are Completed (or Skipped). The dispatcher does NOT auto-
-//! transition InProgress → Completed when `lead_review_required` is set
+//! transition `InProgress` → Completed when `lead_review_required` is set
 //! on a task — it leaves the run in `WaitingReview` for this tool to
 //! resolve.
 //!

@@ -2,7 +2,7 @@
 //!
 //! These types represent user overrides for built-in default values used during
 //! serde deserialization. Because serde calls `fn default_*()` functions while
-//! parsing config.toml, this file must be loaded and the OnceLock initialized
+//! parsing config.toml, this file must be loaded and the `OnceLock` initialized
 //! BEFORE config.toml is parsed.
 //!
 //! All fields are Option<T> so users only need to specify the defaults they

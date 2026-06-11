@@ -6,11 +6,11 @@
 //! # Supported formats
 //!
 //! - **Markdown** (passthrough, canonical internal format)
-//! - **TelegramHtml**: `<b>`, `<i>`, `<code>`, `<pre><code>`, `<a href="">`
-//! - **SlackMrkdwn**: `*bold*`, `_italic_`, `` `code` ``, `<url|text>`
-//! - **DiscordMarkdown**: Discord-flavored Markdown (close to standard)
-//! - **IrcFormatting**: mIRC control codes (`\x02` bold, `\x1D` italic)
-//! - **PlainText**: all formatting stripped
+//! - **`TelegramHtml`**: `<b>`, `<i>`, `<code>`, `<pre><code>`, `<a href="">`
+//! - **`SlackMrkdwn`**: `*bold*`, `_italic_`, `` `code` ``, `<url|text>`
+//! - **`DiscordMarkdown`**: Discord-flavored Markdown (close to standard)
+//! - **`IrcFormatting`**: mIRC control codes (`\x02` bold, `\x1D` italic)
+//! - **`PlainText`**: all formatting stripped
 //!
 //! # Example
 //!

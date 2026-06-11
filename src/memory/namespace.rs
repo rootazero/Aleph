@@ -1,7 +1,7 @@
 //! Namespace-scoped memory access control
 //!
 //! Provides type-safe namespace isolation for multi-user memory data.
-//! Enforces data isolation at compile-time using NamespaceScope enum.
+//! Enforces data isolation at compile-time using `NamespaceScope` enum.
 
 use crate::gateway::security::DeviceRole;
 
@@ -22,7 +22,7 @@ pub enum NamespaceScope {
 impl NamespaceScope {
     /// Converts namespace scope to SQL WHERE clause filter
     ///
-    /// Returns (filter_clause, bind_params)
+    /// Returns (`filter_clause`, `bind_params`)
     #[must_use]
     pub fn to_sql_filter(&self) -> (String, Vec<String>) {
         match self {
@@ -47,14 +47,14 @@ impl NamespaceScope {
         }
     }
 
-    /// Creates NamespaceScope from authentication context
+    /// Creates `NamespaceScope` from authentication context
     ///
     /// # Arguments
     /// * `role` - Device role from authentication
     /// * `guest_id` - Optional guest ID (required for Node role)
     ///
     /// # Errors
-    /// Returns error if Node role is used without guest_id
+    /// Returns error if Node role is used without `guest_id`
     pub fn from_auth_context(role: &DeviceRole, guest_id: Option<&str>) -> Result<Self, String> {
         match role {
             DeviceRole::Operator => Ok(Self::Owner),

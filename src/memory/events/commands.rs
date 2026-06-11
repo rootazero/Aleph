@@ -1,6 +1,6 @@
 //! Command structs for memory mutations.
 //!
-//! Each command maps to one or more MemoryEvents.
+//! Each command maps to one or more `MemoryEvents`.
 //! Commands are the input to [`super::handler::MemoryCommandHandler`].
 
 use crate::memory::context::{FactSource, NoteType};

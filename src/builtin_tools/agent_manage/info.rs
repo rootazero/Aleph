@@ -1,4 +1,4 @@
-//! AgentInfoTool — return full agent definition details for a given agent ID.
+//! `AgentInfoTool` — return full agent definition details for a given agent ID.
 
 use std::fmt;
 

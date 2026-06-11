@@ -1,4 +1,4 @@
-//! Conversion and utility methods for UnifiedTool
+//! Conversion and utility methods for `UnifiedTool`
 //!
 //! Includes tool index generation, safety level inference, and prompt line
 //! formatting.

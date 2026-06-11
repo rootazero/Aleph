@@ -1,12 +1,12 @@
-//! SQLite Store for Cron Jobs
+//! `SQLite` Store for Cron Jobs
 //!
-//! Persistent storage using SQLite with in-memory cache.
-//! The CronStore maintains a `Vec<CronJob>` in memory for fast access,
-//! and writes changes to SQLite on `persist()`. This keeps the same
+//! Persistent storage using `SQLite` with in-memory cache.
+//! The `CronStore` maintains a `Vec<CronJob>` in memory for fast access,
+//! and writes changes to `SQLite` on `persist()`. This keeps the same
 //! API as the previous JSON store while gaining query capabilities
 //! and consistency with other Aleph subsystems.
 //!
-//! The CronStore is designed to be wrapped in a `tokio::sync::Mutex`
+//! The `CronStore` is designed to be wrapped in a `tokio::sync::Mutex`
 //! by the service layer.
 
 use std::path::PathBuf;
@@ -32,7 +32,7 @@ pub struct CronStore {
 }
 
 impl CronStore {
-    /// Open (or create) the SQLite store at the given path.
+    /// Open (or create) the `SQLite` store at the given path.
     ///
     /// Creates the schema if needed, runs migrations, and loads all
     /// jobs into memory.
@@ -184,7 +184,7 @@ impl CronStore {
 
 // ── Schema management ────────────────────────────────────────────────
 
-/// Create the cron_jobs table if it doesn't exist.
+/// Create the `cron_jobs` table if it doesn't exist.
 fn init_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS cron_jobs (

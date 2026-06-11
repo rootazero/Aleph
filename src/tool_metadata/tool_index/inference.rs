@@ -1,7 +1,7 @@
 //! Semantic purpose inference for tools
 //!
 //! Implements ranked inference strategy:
-//! - L0: Extract from tool's structured_meta (preferred, already curated)
+//! - L0: Extract from tool's `structured_meta` (preferred, already curated)
 //! - L1: Rule-based template using name, category, description (fallback)
 //! - L2: Async LLM enhancement (eventual consistency, background optimization)
 
@@ -15,7 +15,7 @@ use crate::sync_primitives::Arc;
 pub struct InferredPurpose {
     /// The inferred semantic description
     pub description: String,
-    /// Which inference level was used (0 = structured_meta, 1 = template, 2 = LLM)
+    /// Which inference level was used (0 = `structured_meta`, 1 = template, 2 = LLM)
     pub level: u8,
     /// Confidence score (0.0 to 1.0)
     pub confidence: f32,
@@ -52,7 +52,7 @@ impl SemanticPurposeInferrer {
     /// L2 is triggered when:
     /// - LLM provider is available
     /// - L1 confidence is below threshold (< 0.7)
-    /// - No structured_meta available (level != 0)
+    /// - No `structured_meta` available (level != 0)
     #[must_use]
     pub fn should_trigger_l2(&self, inferred: &InferredPurpose) -> bool {
         self.llm_provider.is_some()
@@ -126,7 +126,7 @@ impl SemanticPurposeInferrer {
     }
 
     /// Convert tool name to human-readable description
-    /// e.g., "read_file" -> "Read file", "searchCode" -> "Search code"
+    /// e.g., "`read_file`" -> "Read file", "searchCode" -> "Search code"
     fn humanize_name(name: &str) -> String {
         // Handle snake_case
         let words: Vec<&str> = name.split('_').collect();

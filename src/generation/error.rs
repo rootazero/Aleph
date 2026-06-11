@@ -566,7 +566,7 @@ impl GenerationError {
     }
 }
 
-/// Convert GenerationError to AlephError for integration with core error handling
+/// Convert `GenerationError` to `AlephError` for integration with core error handling
 impl From<GenerationError> for AlephError {
     fn from(err: GenerationError) -> Self {
         match err {

@@ -1,4 +1,4 @@
-//! InitializationCoordinator - unified first-time setup
+//! `InitializationCoordinator` - unified first-time setup
 
 use super::error::InitError;
 use crate::config::Config;

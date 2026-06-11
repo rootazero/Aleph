@@ -1,6 +1,6 @@
 // core/src/gateway/security/store.rs
 
-//! Unified SQLite storage for security data.
+//! Unified `SQLite` storage for security data.
 //!
 //! Manages devices, tokens, pairing requests, and approved senders.
 
@@ -24,7 +24,7 @@ pub use types::*;
 /// Schema version for migrations
 const SCHEMA_VERSION: i32 = 10;
 
-/// Unified security storage backed by SQLite
+/// Unified security storage backed by `SQLite`
 pub struct SecurityStore {
     pub(crate) conn: Mutex<Connection>,
 }
@@ -308,7 +308,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 "#;
 
-/// Schema v4 SQL — add HMAC secret column to shared_token for persistence across restarts
+/// Schema v4 SQL — add HMAC secret column to `shared_token` for persistence across restarts
 const SCHEMA_V4: &str = r#"
 ALTER TABLE shared_token ADD COLUMN hmac_secret BLOB;
 "#;
@@ -341,7 +341,7 @@ CREATE INDEX IF NOT EXISTS idx_channel_policies_channel ON channel_policies(chan
 
 /// Schema v9 SQL — browser pairing variant.
 ///
-/// SQLite can `ADD COLUMN` freely, but it cannot edit a `CHECK` constraint
+/// `SQLite` can `ADD COLUMN` freely, but it cannot edit a `CHECK` constraint
 /// in place. The v2 table was created with `CHECK (pairing_type IN
 /// ('device', 'channel'))` — to admit the new `'browser'` value we must
 /// rebuild the table. Pending pairings are short-lived (5min default) so
@@ -373,7 +373,7 @@ CREATE INDEX IF NOT EXISTS idx_pairing_expires ON pairing_requests(expires_at);
 
 /// Schema v10 SQL — cluster-node pairing variant.
 ///
-/// Same rationale as v9: SQLite cannot edit a `CHECK` constraint in place, so
+/// Same rationale as v9: `SQLite` cannot edit a `CHECK` constraint in place, so
 /// to admit the new `'node'` value we rebuild the table. Pending pairings are
 /// short-lived (5min default) and never useful after a daemon restart, so
 /// dropping the table is the safe move.

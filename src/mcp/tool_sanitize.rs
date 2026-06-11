@@ -1,7 +1,7 @@
 //! Ingest-time hygiene for untrusted tool metadata from external MCP servers.
 //!
 //! External MCP servers routinely emit JSON Schemas that strict LLM providers
-//! (Anthropic, OpenAI strict mode, Google AI Studio, Moonshot/Kimi) reject
+//! (Anthropic, `OpenAI` strict mode, Google AI Studio, Moonshot/Kimi) reject
 //! outright: a `required` entry that references a property the schema never
 //! declares, an object schema with no `type`, a pre-2020-12 `definitions` block
 //! instead of `$defs`. Aleph previously forwarded these schemas verbatim from

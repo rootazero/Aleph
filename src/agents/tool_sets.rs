@@ -1,13 +1,13 @@
 //! Named tool sets for declarative agent allowlists (P2 Stage G).
 //!
 //! Per locked design (Q7-1 simplified positive): only 3 positive sets, no
-//! ALL_AGENT_DENIED_TOOLS auto-deny, no allow_override field. Defense layers
+//! `ALL_AGENT_DENIED_TOOLS` auto-deny, no `allow_override` field. Defense layers
 //! (recursion guard via Stage B, user-frontmatter mode forcing via Stage E)
 //! live elsewhere.
 //!
 //! Tool names match those registered in `src/builtin_tools/` (see
 //! `crate::builtin_tools::register_*`). This file's 3 constants are the only
-//! place tool sets are defined; AgentDef.allowed_tool_sets references them by name.
+//! place tool sets are defined; `AgentDef.allowed_tool_sets` references them by name.
 
 // Tool names below MUST match the names registered in
 // `src/builtin_tools/` (see each tool's `AlephTool::NAME`). Earlier values
@@ -25,7 +25,7 @@
 /// Pure read-only filesystem inspection tools.
 pub const READ_ONLY: &[&str] = &["file_read", "file_ops"];
 
-/// READ_ONLY ∪ remote read tools ∪ subagent (Primary-only via Stage B guard).
+/// `READ_ONLY` ∪ remote read tools ∪ subagent (Primary-only via Stage B guard).
 /// SubAgent-mode agents that include INVESTIGATION still cannot spawn subagent
 /// (Stage B `is_tool_allowed` mode-aware deny).
 ///
@@ -35,12 +35,12 @@ pub const READ_ONLY: &[&str] = &["file_read", "file_ops"];
 pub const INVESTIGATION: &[&str] = &["file_read", "file_ops", "search", "web_fetch", "subagent"];
 
 /// Subset of INVESTIGATION safe for autonomous background execution: no
-/// exfiltration risk (no web_fetch). Excludes subagent to defend against
+/// exfiltration risk (no `web_fetch`). Excludes subagent to defend against
 /// background recursion misuse beyond Stage B guarantees.
 pub const ASYNC_SAFE: &[&str] = &["file_read", "file_ops", "search"];
 
 /// Resolve a set name to its tool list. Returns None for unknown names so
-/// callers can warn (loader) or treat as empty allowance (is_tool_allowed)
+/// callers can warn (loader) or treat as empty allowance (`is_tool_allowed`)
 /// without rejecting valid agent definitions.
 pub fn resolve(set_name: &str) -> Option<&'static [&'static str]> {
     match set_name {

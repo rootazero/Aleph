@@ -1,4 +1,4 @@
-//! Media Processing for WhatsApp
+//! Media Processing for `WhatsApp`
 //!
 //! Handles media optimization and format conversion for outbound media.
 

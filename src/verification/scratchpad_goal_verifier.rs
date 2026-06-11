@@ -12,7 +12,7 @@
 //! `StandingGoalLayer` + `src/tasks/goal_pursuit.rs`), not here. See
 //! docs/superpowers/specs/2026-06-08-standing-goal-design.md.
 //!
-//! ## Why this is a structural watchdog, not a JudgeVerifier (R7 / R10)
+//! ## Why this is a structural watchdog, not a `JudgeVerifier` (R7 / R10)
 //!
 //! [`crate::verification`] permanently prohibits cognitive
 //! `JudgeVerifier`s — completion judgment belongs to the LLM, in the

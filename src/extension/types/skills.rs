@@ -99,7 +99,7 @@ pub enum SkillType {
     Skill,
 }
 
-/// Extension skill definition (unified with SkillRegistration).
+/// Extension skill definition (unified with `SkillRegistration`).
 ///
 /// This is now a type alias for `SkillRegistration`, which contains all fields
 /// needed for both plugin-registered and filesystem-discovered skills.

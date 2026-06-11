@@ -15,24 +15,24 @@ use crate::tool_metadata::ToolCatalog;
 pub struct BuiltinToolConfig {
     /// Tavily API key for search tool
     pub tavily_api_key: Option<String>,
-    /// Search registry for multi-provider search (SearXNG, Tavily, Brave, etc.)
+    /// Search registry for multi-provider search (`SearXNG`, Tavily, Brave, etc.)
     pub search_registry: Option<Arc<crate::search::SearchRegistry>>,
     /// Generation provider registry for image/video/audio generation
     pub generation_registry: Option<Arc<RwLock<GenerationProviderRegistry>>>,
     /// Tool catalog for meta tools (smart tool discovery)
     pub tool_catalog: Option<Arc<tokio::sync::RwLock<ToolCatalog>>>,
-    /// Shared config handle for ConfigReadTool
+    /// Shared config handle for `ConfigReadTool`
     pub config: Option<Arc<tokio::sync::RwLock<Config>>>,
-    /// ConfigPatcher for ConfigUpdateTool
+    /// `ConfigPatcher` for `ConfigUpdateTool`
     pub config_patcher: Option<Arc<ConfigPatcher>>,
-    /// Memory backend for memory_search and memory_browse tools
+    /// Memory backend for `memory_search` and `memory_browse` tools
     pub memory_db: Option<MemoryBackend>,
     /// Embedding provider for semantic memory search
     pub embedder: Option<Arc<dyn EmbeddingProvider>>,
-    /// Gateway context for sessions tools (sessions_list, sessions_send)
+    /// Gateway context for sessions tools (`sessions_list`, `sessions_send`)
     pub gateway_context: Option<Arc<GatewayContext>>,
-    /// Session store for session tools (session_new, session_set_topic).
-    /// Used when gateway_context is not available (e.g., agent loop without full gateway).
+    /// Session store for session tools (`session_new`, `session_set_topic`).
+    /// Used when `gateway_context` is not available (e.g., agent loop without full gateway).
     pub session_manager: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
     /// Agent registry for agent management tools
     pub agent_registry: Option<Arc<crate::gateway::agent_instance::AgentRegistry>>,
@@ -46,11 +46,11 @@ pub struct BuiltinToolConfig {
     pub agent_manager: Option<Arc<crate::config::agent_manager::AgentManager>>,
     /// Browser profile manager for browser_* tools
     pub browser_profile_manager: Option<Arc<crate::browser::manager::ProfileManager>>,
-    /// Media pipeline for media_understand tool
+    /// Media pipeline for `media_understand` tool
     pub media_pipeline: Option<Arc<crate::media::MediaPipeline>>,
     /// Extension manager for plugin tool execution
     pub extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
-    /// ACP harness manager for delegate tools (claude_code, codex, gemini_cli, acp_switch)
+    /// ACP harness manager for delegate tools (`claude_code`, codex, `gemini_cli`, `acp_switch`)
     pub acp_manager: Option<Arc<AcpAdapterManager>>,
     /// A2A tool handle for the `a2a_delegate` / `a2a_agents` outbound tools.
     /// Filled by A2A subsystem init *after* the registry is built (late binding).
@@ -62,13 +62,13 @@ pub struct BuiltinToolConfig {
     pub heartbeat_service: Option<crate::tasks::heartbeat::SharedHeartbeatService>,
     /// Tool context handle for workspace-scoped output paths
     pub tool_context: Option<crate::tools::ToolContextHandle>,
-    /// Shared token manager for vault_store tool
+    /// Shared token manager for `vault_store` tool
     pub shared_token_manager: Option<Arc<crate::gateway::security::SharedTokenManager>>,
     /// Memory similarity threshold from config (overrides hardcoded default)
     pub memory_similarity_threshold: Option<f32>,
     /// Coordination task store for task/team management tools
     pub coord_task_store: Option<Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>>,
-    /// Team snapshot store (sibling to coord_task_store; shares its connection).
+    /// Team snapshot store (sibling to `coord_task_store`; shares its connection).
     /// Populated alongside `coord_task_store` in the boot path so the
     /// `team_snapshot` builtin tool can capture/restore state bundles.
     pub snapshot_store: Option<Arc<crate::teams::SqliteSnapshotStore>>,
@@ -78,7 +78,7 @@ pub struct BuiltinToolConfig {
     pub dispatch_signal: Option<Arc<tokio::sync::Notify>>,
     /// Agent message bus for task update/wait event notifications
     pub agent_message_bus: Option<Arc<crate::agents::swarm::AgentMessageBus>>,
-    /// Team store for team management tools (team_create, team_delegate, team_status, team_disband)
+    /// Team store for team management tools (`team_create`, `team_delegate`, `team_status`, `team_disband`)
     pub team_store: Option<Arc<dyn crate::teams::TeamStore>>,
     /// Artifact store for persisting task artifacts (delegation results, reports, etc.)
     pub artifact_store: Option<Arc<dyn crate::teams::artifacts::ArtifactStore>>,
@@ -88,19 +88,19 @@ pub struct BuiltinToolConfig {
     pub current_session_key: Option<crate::routing::SessionKey>,
     /// Channel registry for channel management tools (pairing, etc.)
     pub channel_registry: Option<Arc<crate::gateway::channel_registry::ChannelRegistry>>,
-    /// Event log store for team_digest tool
+    /// Event log store for `team_digest` tool
     pub event_store: Option<Arc<dyn crate::teams::events::EventLogStore>>,
-    /// Message router for message_send tool
+    /// Message router for `message_send` tool
     pub message_router: Option<Arc<crate::teams::messages::MessageRouter>>,
-    /// Inbox helper for inbox_read tool
+    /// Inbox helper for `inbox_read` tool
     pub inbox: Option<Arc<crate::teams::messages::Inbox>>,
     /// Session coordinator for collaborative session tools
     pub session_coordinator: Option<Arc<crate::teams::sessions::SessionCoordinator>>,
-    /// Session store for session_read tool (read-only access)
+    /// Session store for `session_read` tool (read-only access)
     pub session_store: Option<Arc<dyn crate::teams::sessions::SessionStore>>,
     /// Message store for disbandment cleanup (expire pending messages)
     pub message_store: Option<Arc<dyn crate::teams::messages::MessageStore>>,
-    /// State database for memory_timeline tool (event sourcing store)
+    /// State database for `memory_timeline` tool (event sourcing store)
     pub state_db: Option<Arc<crate::resilience::database::StateDatabase>>,
     /// Controls which memory-retrieval tools are exposed to the LLM.
     /// `Context` → skip all six retrieval tools (LLM can't call them).
@@ -115,12 +115,12 @@ pub struct BuiltinToolConfig {
 
     /// Note orientation handle (Spec 5 Task 12).
     /// When set, `note_orient` tool is registered and dispatched, and
-    /// `note_schema` tool always has its memory_dir resolved.
+    /// `note_schema` tool always has its `memory_dir` resolved.
     /// `None` → note orientation tools unavailable at runtime (schema tool still registered
-    /// but dispatched stateless from memory_dir derived from paths).
+    /// but dispatched stateless from `memory_dir` derived from paths).
     pub orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
 
-    /// Memory dir root for note_schema tool (Spec 5 Task 12).
+    /// Memory dir root for `note_schema` tool (Spec 5 Task 12).
     /// Points to the `note` subdirectory (e.g. `~/.aleph/memory/note`).
     pub note_memory_dir: Option<std::path::PathBuf>,
 
@@ -129,12 +129,12 @@ pub struct BuiltinToolConfig {
     pub profile_synthesizer:
         Option<Arc<dyn crate::memory::notes::profile::synthesizer::ProfileSynthesizer>>,
 
-    /// Arena manager for arena collaboration tools (arena_create, arena_query, arena_settle).
+    /// Arena manager for arena collaboration tools (`arena_create`, `arena_query`, `arena_settle`).
     pub arena_manager: Option<
         crate::sync_primitives::Arc<crate::sync_primitives::RwLock<crate::arena::ArenaManager>>,
     >,
 
-    /// Sandbox for exec-class tools (code_exec, bash_exec).
+    /// Sandbox for exec-class tools (`code_exec`, `bash_exec`).
     /// `None` → tools return a structured "sandbox not configured" error.
     pub sandbox: Option<Arc<dyn crate::sandbox::Sandbox>>,
 

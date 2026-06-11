@@ -1,7 +1,7 @@
 //! Agent execution for inbound messages
 //!
 //! Collapsed from the original two near-identical methods
-//! (execute_for_context / execute_for_context_with_metadata)
+//! (`execute_for_context` / `execute_for_context_with_metadata`)
 //! into a single parameterized implementation.
 
 use crate::sync_primitives::Arc;
@@ -470,7 +470,7 @@ impl InboundMessageRouter {
         Ok(())
     }
 
-    /// Try to create a FeishuEventEmitter for feishu channels.
+    /// Try to create a `FeishuEventEmitter` for feishu channels.
     async fn try_create_feishu_emitter(
         &self,
         ctx: &InboundContext,
@@ -537,7 +537,7 @@ impl InboundMessageRouter {
         ))
     }
 
-    /// Try to create a TelegramEventEmitter for telegram channels.
+    /// Try to create a `TelegramEventEmitter` for telegram channels.
     async fn try_create_telegram_emitter(
         &self,
         ctx: &InboundContext,

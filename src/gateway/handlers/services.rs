@@ -76,7 +76,7 @@ pub struct StartParams {
 /// - `serviceId`: ID of the service to start
 ///
 /// # Returns
-/// - `service`: ServiceInfo object with current state
+/// - `service`: `ServiceInfo` object with current state
 ///
 /// # Errors
 /// - `INTERNAL_ERROR`: Extension manager not initialized or service failed to start
@@ -134,7 +134,7 @@ pub struct StopParams {
 /// - `serviceId`: ID of the service to stop
 ///
 /// # Returns
-/// - `service`: ServiceInfo object with current state
+/// - `service`: `ServiceInfo` object with current state
 ///
 /// # Errors
 /// - `INTERNAL_ERROR`: Extension manager not initialized or service failed to stop
@@ -194,7 +194,7 @@ pub struct ListParams {
 /// - `state`: Filter by state (stopped, starting, running, stopping, failed)
 ///
 /// # Returns
-/// - `services`: Array of ServiceInfo objects
+/// - `services`: Array of `ServiceInfo` objects
 /// - `total`: Total count of matching services
 /// - `running`: Count of running services
 ///
@@ -290,7 +290,7 @@ pub struct StatusParams {
 /// - `serviceId`: ID of the service
 ///
 /// # Returns
-/// - `service`: ServiceInfo object or null if service not found
+/// - `service`: `ServiceInfo` object or null if service not found
 ///
 /// # Errors
 /// - `INTERNAL_ERROR`: Extension manager not initialized

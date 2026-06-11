@@ -137,7 +137,7 @@ impl ToolCatalog {
         self.health.invalidate_all();
     }
 
-    /// Register skills from SkillInfo list (Flat Namespace Mode)
+    /// Register skills from `SkillInfo` list (Flat Namespace Mode)
     pub async fn register_skills(&self, skills: &[SkillInfo]) {
         self.registrar
             .register_skills(skills, &self.conflict_resolver)
@@ -209,7 +209,7 @@ impl ToolCatalog {
         self.health.invalidate_all();
     }
 
-    /// Atomic refresh - build new HashMap and replace in one operation
+    /// Atomic refresh - build new `HashMap` and replace in one operation
     pub async fn refresh_atomic(&self, new_tools: Vec<UnifiedTool>) {
         self.state.refresh_atomic(new_tools).await;
         self.health.invalidate_all();
@@ -302,7 +302,7 @@ impl ToolCatalog {
         self.query.get_builtin_routing_rules().await
     }
 
-    /// List all tools for UI display (sorted by sort_order, then name)
+    /// List all tools for UI display (sorted by `sort_order`, then name)
     pub async fn list_all_for_ui(&self) -> Vec<UnifiedTool> {
         self.query.list_all_for_ui().await
     }

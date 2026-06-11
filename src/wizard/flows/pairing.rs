@@ -1,4 +1,4 @@
-//! Same-machine PairingFlow.
+//! Same-machine `PairingFlow`.
 //!
 //! Walks the desktop shell through device pairing in two user-visible
 //! beats — "welcome" then "approve" — and returns the issued device
@@ -44,8 +44,8 @@ impl PairingFlow {
         }
     }
 
-    /// Synthesise a deterministic 32-byte public-key placeholder from the device_id.
-    /// Uses SHA-256 so the output is stable across restarts (unlike DefaultHasher).
+    /// Synthesise a deterministic 32-byte public-key placeholder from the `device_id`.
+    /// Uses SHA-256 so the output is stable across restarts (unlike `DefaultHasher`).
     fn placeholder_pubkey(device_id: &str) -> [u8; 32] {
         use sha2::{Digest, Sha256};
         let hash = Sha256::digest(device_id.as_bytes());

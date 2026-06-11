@@ -8,7 +8,7 @@ use super::super::types::{ToolIndex, ToolIndexCategory, ToolIndexEntry, UnifiedT
 use super::health::{HealthSnapshot, ToolHealthCache};
 use super::types::ToolStorage;
 
-/// Smart discovery functionality for ToolCatalog
+/// Smart discovery functionality for `ToolCatalog`
 pub struct ToolDiscovery {
     tools: ToolStorage,
 }
@@ -81,9 +81,9 @@ impl ToolDiscovery {
     ///
     /// # Returns
     ///
-    /// Tuple of (tool_definitions, tool_index_prompt)
-    /// - tool_definitions: Vec of tools with full schema for function calling
-    /// - tool_index_prompt: Markdown prompt for index-only tools
+    /// Tuple of (`tool_definitions`, `tool_index_prompt`)
+    /// - `tool_definitions`: Vec of tools with full schema for function calling
+    /// - `tool_index_prompt`: Markdown prompt for index-only tools
     pub async fn generate_smart_prompt(
         &self,
         core_tools: &[&str],
@@ -161,7 +161,7 @@ impl ToolDiscovery {
     ///
     /// # Returns
     ///
-    /// Full UnifiedTool if found, None otherwise. When several tools match
+    /// Full `UnifiedTool` if found, None otherwise. When several tools match
     /// (e.g. one whose `name` equals the query and another whose `id` ends
     /// with `:{name}`), selection is deterministic: an exact name match wins,
     /// then highest source priority, then the lexicographically smallest id.

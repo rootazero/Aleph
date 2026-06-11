@@ -42,7 +42,7 @@ use std::collections::HashSet;
 /// Thinking level for LLM reasoning depth control
 ///
 /// Provides 6 levels of reasoning depth from no thinking to extended deep reasoning.
-/// Inspired by Moltbot's ThinkLevel system.
+/// Inspired by Moltbot's `ThinkLevel` system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkLevel {
@@ -180,7 +180,7 @@ impl std::str::FromStr for ThinkLevel {
 /// - "thinkhard", "think-hard" -> Low
 /// - "thinkharder", "harder" -> Medium
 /// - "ultrathink", "ultra", "max" -> High
-/// - "xhigh", "x-high", "extended" -> XHigh
+/// - "xhigh", "x-high", "extended" -> `XHigh`
 ///
 /// # Arguments
 ///
@@ -309,7 +309,7 @@ pub fn is_binary_thinking_provider(provider: &str) -> bool {
 /// Check if model supports xhigh (extended) thinking
 ///
 /// Extended thinking is only available on specific high-capability models
-/// like Claude Opus and OpenAI o1/o3 series.
+/// like Claude Opus and `OpenAI` o1/o3 series.
 #[must_use]
 pub fn supports_xhigh_thinking(provider: &str, model: &str) -> bool {
     let model_key = model.trim().to_lowercase();

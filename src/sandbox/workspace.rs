@@ -1,4 +1,4 @@
-//! WorkspaceSandbox — lazy per-session workspace directory + capability enforcement.
+//! `WorkspaceSandbox` — lazy per-session workspace directory + capability enforcement.
 //!
 //! Implements the `Sandbox` trait by materializing `~/.aleph/workspaces/{hash(session_id)}/`
 //! on first exec-class call and routing commands through the 6-step pipeline:
@@ -529,7 +529,7 @@ impl WorkspaceSandbox {
     ///   also live and `ALEPH_SANDBOX_PROXY_ROUTE_SPEC` is injected so the
     ///   driver bind-mounts the UDS and `sandbox-init` runs the local bridge.
     /// - `Ok(None)` — policy is not `AllowHosts`, allowlist is empty, or the
-    ///   platform cannot reach the proxy (Windows AppContainer; see Phase D).
+    ///   platform cannot reach the proxy (Windows `AppContainer`; see Phase D).
     /// - `Err(_)` — bind/spawn failure surfaces as `SandboxError::Other`.
     ///
     /// The caller holds the returned guard alive across the OS driver `run`.

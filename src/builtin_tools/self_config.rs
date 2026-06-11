@@ -1,8 +1,8 @@
-//! SelfConfigTool — structured access to identity files and config.toml
+//! `SelfConfigTool` — structured access to identity files and config.toml
 //!
 //! Gives the LLM the ability to list, read, and write identity files
 //! (SOUL.md, IDENTITY.md, AGENTS.md, TOOLS.md, HEARTBEAT.md)
-//! and to read/update config.toml sections via the ConfigPatcher pipeline.
+//! and to read/update config.toml sections via the `ConfigPatcher` pipeline.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -98,7 +98,7 @@ pub struct SelfConfigOutput {
     pub success: bool,
     pub message: String,
     pub data: Option<serde_json::Value>,
-    /// Human-readable preview of config changes (only present for dry_run=true)
+    /// Human-readable preview of config changes (only present for `dry_run=true`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_message: Option<String>,
 }
@@ -549,7 +549,7 @@ impl SelfConfigTool {
         })
     }
 
-    /// Roll config.toml back to a prior snapshot via the ConfigPatcher pipeline.
+    /// Roll config.toml back to a prior snapshot via the `ConfigPatcher` pipeline.
     async fn rollback_config(
         &self,
         timestamp: Option<String>,

@@ -14,9 +14,9 @@
 //! The doctrine block in `provider_guidance.rs` tells the model "if
 //! search fails, climb the ladder". But the model has to *remember*
 //! the ladder when the failure happens — and ladders vary per tool
-//! family (network → web_fetch; file → file_ops; bash → check sandbox).
+//! family (network → `web_fetch`; file → `file_ops`; bash → check sandbox).
 //! Putting the ladder in the prompt is necessary but not sufficient;
-//! repeating the relevant rung in the tool_result error message turns
+//! repeating the relevant rung in the `tool_result` error message turns
 //! "remember this general principle" into "here are 3 concrete next
 //! moves." Same idea as claude-code's `is_error: true` flag — the LLM
 //! decides, we just make the decision well-informed.
@@ -55,13 +55,13 @@ impl FallbackSuggestion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolFamily {
     /// Anything that fetches data from the public internet: search,
-    /// web_fetch, fetch_url, curl_like, http_get, scrape, ...
+    /// `web_fetch`, `fetch_url`, `curl_like`, `http_get`, scrape, ...
     Network,
-    /// Filesystem operations: file_read, file_write, file_ops, ls, ...
+    /// Filesystem operations: `file_read`, `file_write`, `file_ops`, ls, ...
     File,
-    /// Shell / code execution: bash, exec, code_exec, python, run, ...
+    /// Shell / code execution: bash, exec, `code_exec`, python, run, ...
     Exec,
-    /// Memory subsystem: memory_search, recall, note_*, raw_memory_*.
+    /// Memory subsystem: `memory_search`, recall, note_*, `raw_memory`_*.
     Memory,
     /// Skill / MCP / extension dispatch where no other family fits.
     Other,
@@ -290,7 +290,7 @@ fn family_suggestions(family: ToolFamily, kind: ToolErrorKind) -> Vec<FallbackSu
 /// LLM aligned with the persistence doctrine in `provider_guidance.rs`.
 ///
 /// The output is intentionally compact (single line, ~200 chars typ.)
-/// so it doesn't dominate the tool_result body in the next prompt.
+/// so it doesn't dominate the `tool_result` body in the next prompt.
 #[must_use]
 pub fn render_persistence_hint(err: &ToolError, tool_name: &str) -> String {
     let kind = err.kind();

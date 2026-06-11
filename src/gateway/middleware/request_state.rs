@@ -11,7 +11,7 @@ use uuid::Uuid;
 /// Global state registry holder for access by handlers.
 ///
 /// This allows the `request.state` handler to access the registry
-/// without requiring it to be passed through the HandlerRegistry.
+/// without requiring it to be passed through the `HandlerRegistry`.
 static STATE_REGISTRY: std::sync::OnceLock<RwLock<Option<Arc<RequestStateRegistry>>>> =
     std::sync::OnceLock::new();
 
@@ -21,7 +21,7 @@ fn state_registry() -> &'static RwLock<Option<Arc<RequestStateRegistry>>> {
 
 /// Set the global state registry.
 ///
-/// Called by MiddlewareChain during initialization.
+/// Called by `MiddlewareChain` during initialization.
 pub fn set_global_registry(registry: Arc<RequestStateRegistry>) {
     let mut guard = state_registry().write().unwrap_or_else(|e| e.into_inner());
     *guard = Some(registry);
@@ -62,7 +62,7 @@ impl RequestState {
         self as u8
     }
 
-    /// Try to create a RequestState from a u8 value.
+    /// Try to create a `RequestState` from a u8 value.
     #[must_use]
     pub const fn from_u8(value: u8) -> Option<Self> {
         match value {
@@ -149,7 +149,7 @@ impl Clone for RequestStateData {
 }
 
 impl RequestStateData {
-    /// Create a new RequestStateData in the Pending state.
+    /// Create a new `RequestStateData` in the Pending state.
     #[must_use]
     pub fn new(_request_id: Uuid) -> Self {
         let now = current_timestamp_ms();
@@ -216,7 +216,7 @@ fn current_timestamp_ms() -> u64 {
 
 /// Thread-safe registry for tracking all in-flight request states.
 ///
-/// Uses DashMap for concurrent access without locking.
+/// Uses `DashMap` for concurrent access without locking.
 #[derive(Debug, Clone)]
 pub struct RequestStateRegistry {
     /// Map of request ID to state data.

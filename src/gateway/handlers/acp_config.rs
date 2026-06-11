@@ -78,7 +78,7 @@ struct SetEnabledParams {
 // Helpers
 // =============================================================================
 
-/// Build an AcpAdapterInfo from the manager state for a single harness.
+/// Build an `AcpAdapterInfo` from the manager state for a single harness.
 async fn build_harness_info(
     id: &str,
     entry: &AcpAdapterEntry,
@@ -371,7 +371,7 @@ pub async fn handle_update(
 
 /// Handle acp.delete — remove a custom harness.
 ///
-/// Preset harnesses cannot be deleted — disable them via acp.set_enabled instead.
+/// Preset harnesses cannot be deleted — disable them via `acp.set_enabled` instead.
 pub async fn handle_delete(
     request: JsonRpcRequest,
     acp_manager: Arc<AcpAdapterManager>,
@@ -470,7 +470,7 @@ pub async fn handle_test(
     )
 }
 
-/// Handle acp.set_enabled — enable or disable a harness.
+/// Handle `acp.set_enabled` — enable or disable a harness.
 pub async fn handle_set_enabled(
     request: JsonRpcRequest,
     acp_manager: Arc<AcpAdapterManager>,
@@ -579,7 +579,7 @@ pub async fn handle_sessions_list(
 }
 
 /// Handle acp.sessions.cancel — fire a cooperative cancel notification
-/// at the given (harness, cwd, optional session_name). Returns success
+/// at the given (harness, cwd, optional `session_name`). Returns success
 /// even if no in-flight prompt — the cancel is fire-and-forget.
 #[derive(Debug, Deserialize)]
 struct SessionCancelParams {
@@ -643,7 +643,7 @@ pub async fn handle_sessions_shutdown(
     }
 }
 
-/// Handle acp.presets_meta — return lightweight metadata for all presets.
+/// Handle `acp.presets_meta` — return lightweight metadata for all presets.
 pub async fn handle_presets_meta(request: JsonRpcRequest) -> JsonRpcResponse {
     let presets = crate::config::types::acp::HARNESS_PRESETS;
     let result: Vec<serde_json::Value> = presets

@@ -1,6 +1,6 @@
-//! Builder methods for UnifiedTool
+//! Builder methods for `UnifiedTool`
 //!
-//! Fluent builder API for constructing UnifiedTool instances with optional fields.
+//! Fluent builder API for constructing `UnifiedTool` instances with optional fields.
 
 use super::{ChannelType, DispatchMode, UnifiedTool};
 use crate::tool_metadata::types::definition::{Capability, StructuredToolMeta, ToolDiff};
@@ -125,7 +125,7 @@ impl UnifiedTool {
         self
     }
 
-    /// Builder method: set has_subtools flag
+    /// Builder method: set `has_subtools` flag
     #[must_use]
     pub const fn with_has_subtools(mut self, has: bool) -> Self {
         self.has_subtools = has;

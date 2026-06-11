@@ -1,7 +1,7 @@
-//! RawMemoryStore implementation for SqliteMemoryBackend.
+//! `RawMemoryStore` implementation for `SqliteMemoryBackend`.
 //!
 //! Stores ephemeral raw memory records in the `raw_memories` table.
-//! Records are consumed by CompressionService and marked processed.
+//! Records are consumed by `CompressionService` and marked processed.
 
 use async_trait::async_trait;
 use rusqlite::params;

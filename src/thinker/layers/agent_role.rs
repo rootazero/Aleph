@@ -1,4 +1,4 @@
-//! AgentRoleLayer — sub-agent role header and protocol constraints (priority 55)
+//! `AgentRoleLayer` — sub-agent role header and protocol constraints (priority 55)
 
 use crate::agents::AgentMode;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
@@ -6,7 +6,7 @@ use crate::thinker::prompt_mode::PromptMode;
 
 /// Injects sub-agent role descriptions and protocol constraints.
 ///
-/// Priority 55 — runs right after SoulLayer (50) and before ProfileLayer (75).
+/// Priority 55 — runs right after `SoulLayer` (50) and before `ProfileLayer` (75).
 /// Active on the Basic, Soul, and Context assembly paths.
 pub struct AgentRoleLayer;
 

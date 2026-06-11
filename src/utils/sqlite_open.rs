@@ -1,12 +1,12 @@
-//! Standard SQLite open helpers for cross-process safety.
+//! Standard `SQLite` open helpers for cross-process safety.
 
 use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
 
-/// Open a SQLite connection with the cross-process safety pragmas:
+/// Open a `SQLite` connection with the cross-process safety pragmas:
 /// - `journal_mode=WAL`     — concurrent reads + writer-friendly
-/// - `busy_timeout=5000`    — 5s wait on lock contention before SQLITE_BUSY
+/// - `busy_timeout=5000`    — 5s wait on lock contention before `SQLITE_BUSY`
 /// - `synchronous=NORMAL`   — WAL-safe, faster than FULL
 /// - `foreign_keys=ON`      — existing project convention
 pub fn open_sqlite_safe(path: &Path) -> rusqlite::Result<Connection> {
@@ -26,7 +26,7 @@ pub fn open_sqlite_safe(path: &Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-/// Open a read-only SQLite connection. Writes will fail with
+/// Open a read-only `SQLite` connection. Writes will fail with
 /// `SQLITE_READONLY`. Same WAL-aware pragmas as the safe writer.
 pub fn open_sqlite_readonly(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open_with_flags(

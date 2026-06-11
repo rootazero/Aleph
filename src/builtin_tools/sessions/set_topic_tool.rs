@@ -14,7 +14,7 @@ use crate::gateway::session_store::SessionStore;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the session_set_topic tool
+/// Arguments for the `session_set_topic` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct SessionSetTopicArgs {
     /// The new topic/title for the session.
@@ -26,7 +26,7 @@ pub struct SessionSetTopicArgs {
     pub __session_key: String,
 }
 
-/// Output from session_set_topic tool
+/// Output from `session_set_topic` tool
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionSetTopicOutput {
     pub session_key: String,

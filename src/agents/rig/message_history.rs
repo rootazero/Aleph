@@ -115,8 +115,8 @@ impl ChatMessage {
 
     /// Create a tool result message
     ///
-    /// Context fields from `ToolCallResult` (summary, goal_contribution,
-    /// extracted_knowledge) are prepended to the content so they are available
+    /// Context fields from `ToolCallResult` (summary, `goal_contribution`,
+    /// `extracted_knowledge`) are prepended to the content so they are available
     /// to the LLM in subsequent turns even though they are not stored as
     /// first-class message fields.
     #[must_use]
@@ -185,7 +185,7 @@ impl ChatMessage {
         self.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty())
     }
 
-    /// Convert to JSON value for API calls (OpenAI format)
+    /// Convert to JSON value for API calls (`OpenAI` format)
     #[must_use]
     pub fn to_openai_format(&self) -> Value {
         let mut msg = serde_json::json!({
@@ -388,7 +388,7 @@ impl ConversationHistory {
         self.messages.last().is_some_and(|m| m.has_tool_calls())
     }
 
-    /// Convert to OpenAI API format
+    /// Convert to `OpenAI` API format
     #[must_use]
     pub fn to_openai_messages(&self) -> Vec<Value> {
         let mut messages = Vec::new();

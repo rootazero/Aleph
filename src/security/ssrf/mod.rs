@@ -10,7 +10,7 @@
 //! - `ip` — IPv4/IPv6 classification against blocked ranges
 //! - `hostname` — Hostname blocklist, allowlist, legacy IP literal detection
 //! - `dns` — Async DNS resolution with address pinning
-//! - `fetch` — Full safe_fetch with redirect chain validation
+//! - `fetch` — Full `safe_fetch` with redirect chain validation
 
 pub(crate) mod dns;
 pub mod fetch;

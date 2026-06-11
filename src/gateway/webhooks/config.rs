@@ -54,7 +54,7 @@ pub struct WebhookEndpointConfig {
     pub agent: String,
 
     /// Session key template with variable substitution
-    /// Supports: {webhook_id}, {event_type}, {source_id}
+    /// Supports: {`webhook_id`}, {`event_type`}, {`source_id`}
     #[serde(default = "default_session_key_template")]
     pub session_key_template: String,
 

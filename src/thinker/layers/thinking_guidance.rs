@@ -1,4 +1,4 @@
-//! ThinkingGuidanceLayer — structured reasoning transparency (priority 1350)
+//! `ThinkingGuidanceLayer` — structured reasoning transparency (priority 1350)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

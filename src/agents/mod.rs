@@ -4,14 +4,14 @@
 //!
 //! ## Agent types and registry (`agents::`)
 //! - `AgentDef`: Agent definition with tools and limits
-//! - `AgentMode`: Primary vs SubAgent distinction
+//! - `AgentMode`: Primary vs `SubAgent` distinction
 //! - `AgentRegistry`: Registry for managing agents
 //!
 //! ## Agent Configuration (`agents::rig::`)
 //! - `RigAgentConfig`: Configuration for the agent loop
 //! - `ChatMessage`, `ConversationHistory`: Message history management
 //! - `BuiltinToolConfig`: Configuration for built-in tools
-//! - `create_builtin_tool_server`: Create a ToolServer with built-in tools
+//! - `create_builtin_tool_server`: Create a `ToolServer` with built-in tools
 //!
 //! ## Sub-agent infrastructure (`agents::sub_agents::`)
 //! - `SubAgent`: Trait for specialized sub-agents (used by A2A)

@@ -1,6 +1,6 @@
 //! Generate `index.md` from `notes_index` rows.
 //!
-//! Grouping: by category (BTree alphabetical). One line per note:
+//! Grouping: by category (`BTree` alphabetical). One line per note:
 //!
 //!   - [[category/filename]] — <summary> (updated YYYY-MM-DD)
 //!

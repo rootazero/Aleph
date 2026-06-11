@@ -15,7 +15,7 @@ pub struct TranscriptionResult {
 
 /// Pluggable audio transcription backend.
 ///
-/// Implementations may call external APIs (OpenAI Whisper, local whisper.cpp, etc.).
+/// Implementations may call external APIs (`OpenAI` Whisper, local whisper.cpp, etc.).
 #[async_trait]
 pub trait TranscriptionService: Send + Sync {
     /// Transcribe the given audio file to text.

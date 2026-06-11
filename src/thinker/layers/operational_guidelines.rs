@@ -1,4 +1,4 @@
-//! OperationalGuidelinesLayer — system operational awareness (priority 800)
+//! `OperationalGuidelinesLayer` — system operational awareness (priority 800)
 
 use crate::thinker::interaction::InteractionParadigm;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};

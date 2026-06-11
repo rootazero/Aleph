@@ -46,16 +46,16 @@ pub enum ApprovalError {
 /// Queue for managing exec command approvals
 #[derive(Clone)]
 pub struct ApprovalQueue {
-    /// Pending approvals: approval_id -> PendingExec
+    /// Pending approvals: `approval_id` -> `PendingExec`
     pending: Arc<RwLock<HashMap<String, PendingExec>>>,
-    /// User's pending approvals: user_id -> Vec<approval_id>
+    /// User's pending approvals: `user_id` -> Vec<`approval_id`>
     user_pending: Arc<RwLock<HashMap<u64, Vec<String>>>>,
     /// TTL in seconds
     ttl_secs: u64,
 }
 
 impl ApprovalQueue {
-    /// Create a new ApprovalQueue
+    /// Create a new `ApprovalQueue`
     #[must_use]
     pub fn new() -> Self {
         Self {

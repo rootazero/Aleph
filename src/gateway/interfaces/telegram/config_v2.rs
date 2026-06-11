@@ -225,7 +225,7 @@ pub struct TelegramAccountConfig {
     pub allowed_groups: Option<Vec<i64>>,
     pub streaming: Option<StreamingOptions>,
     pub error_policy: Option<ErrorPolicy>,
-    /// HTTP proxy URL for Telegram API requests (e.g., "http://proxy.example.com:8080")
+    /// HTTP proxy URL for Telegram API requests (e.g., "<http://proxy.example.com:8080>")
     pub proxy_url: Option<String>,
     /// When true (default), fallback to plain text if HTML parsing fails.
     pub html_fallback: Option<bool>,

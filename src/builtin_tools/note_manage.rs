@@ -1,4 +1,4 @@
-//! note_manage — unified LLM tool for CRUD operations on all note categories.
+//! `note_manage` — unified LLM tool for CRUD operations on all note categories.
 //!
 //! Replaces `wiki_manage` and extends coverage to all note categories:
 //! preference, plan, learning, project, personal, tool, lesson, skill, reference,
@@ -45,7 +45,7 @@ const VALID_CATEGORIES: &[&str] = &[
 // Args / Output types
 // =============================================================================
 
-/// Actions supported by the note_manage tool.
+/// Actions supported by the `note_manage` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum NoteManageAction {
@@ -63,7 +63,7 @@ pub enum NoteManageAction {
     Delete,
 }
 
-/// Arguments for the note_manage tool.
+/// Arguments for the `note_manage` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NoteManageArgs {
     /// Action to perform: create, update, append, query, list, delete.
@@ -127,7 +127,7 @@ pub struct NoteListEntry {
     pub tags: Vec<String>,
 }
 
-/// Result of a note_manage operation.
+/// Result of a `note_manage` operation.
 #[derive(Debug, Clone, Serialize)]
 pub struct NoteManageResult {
     pub success: bool,
@@ -258,12 +258,12 @@ impl NoteManageTool {
         }
     }
 
-    /// Default agent ID (used when args.agent_id is absent).
+    /// Default agent ID (used when `args.agent_id` is absent).
     const fn agent_id(&self) -> &str {
         "default"
     }
 
-    /// Resolve the effective agent_id (storage partition key) for this
+    /// Resolve the effective `agent_id` (storage partition key) for this
     /// invocation: prefer `args.agent_id`, fall back to the tool's default.
     ///
     /// When `project_scoped` is enabled and a project root is active for the

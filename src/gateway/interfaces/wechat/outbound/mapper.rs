@@ -1,6 +1,6 @@
 //! Outbound Message Mapping
 //!
-//! Maps OutboundMessage to iLink format.
+//! Maps `OutboundMessage` to iLink format.
 
 use crate::gateway::channel::OutboundMessage;
 
@@ -35,7 +35,7 @@ pub fn build_send_payload(
     }
 }
 
-/// Map OutboundMessage to iLink send payload.
+/// Map `OutboundMessage` to iLink send payload.
 #[must_use]
 pub fn map_outbound_to_payload(
     outbound: &OutboundMessage,

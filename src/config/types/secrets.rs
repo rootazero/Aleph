@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 /// The `provider_type` field selects the backend implementation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SecretProviderConfig {
-    /// Backend type: "local_vault", "1password", "bitwarden", etc.
+    /// Backend type: "`local_vault`", "1password", "bitwarden", etc.
     #[serde(rename = "type")]
     pub provider_type: String,
 
@@ -155,7 +155,7 @@ pub struct CustomLeakPattern {
 /// Top-level settings for the secrets subsystem
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SecretsConfig {
-    /// Which provider to use when a SecretMapping omits `provider`
+    /// Which provider to use when a `SecretMapping` omits `provider`
     #[serde(default = "default_provider")]
     pub default_provider: String,
     /// Virtual key aliases: alias -> actual secret name

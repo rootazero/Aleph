@@ -4,7 +4,7 @@
 //! - Phase 1 (async): Probe MCP server for capabilities, collect declarations
 //! - Phase 2 (sync): Acquire registry lock, batch-write all declarations
 //!
-//! This avoids holding RwLockWriteGuard across await points.
+//! This avoids holding `RwLockWriteGuard` across await points.
 
 use crate::extension::capability::CapabilityDeclaration;
 use crate::extension::manifest::PluginPermission;
@@ -160,7 +160,7 @@ pub struct McpScope {
     pub(crate) inline_handles: Vec<InlineMcpHandle>,
     pub(crate) trace_sink: Option<Arc<dyn TraceSink>>,
     pub(crate) agent_id: String,
-    /// Read-only view of the parent global registry (for tools() lookups).
+    /// Read-only view of the parent global registry (for `tools()` lookups).
     pub(crate) global: Arc<PluginRegistry>,
 }
 

@@ -1,4 +1,4 @@
-//! SkillInstructionsLayer — skill system v2 instructions with scope filtering (priority 1050)
+//! `SkillInstructionsLayer` — skill system v2 instructions with scope filtering (priority 1050)
 
 use crate::domain::skill::{PromptScope, SkillManifest};
 use crate::skill::prompt::build_skills_prompt_xml;

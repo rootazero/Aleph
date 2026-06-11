@@ -1,6 +1,6 @@
 //! Generic HTTP-based AI provider
 //!
-//! Uses a ProtocolAdapter for protocol-specific logic.
+//! Uses a `ProtocolAdapter` for protocol-specific logic.
 
 use crate::config::ProviderConfig;
 use crate::error::Result;
@@ -59,7 +59,7 @@ fn log_rejected_request_body(
 
 /// True when a provider error reports a rejected encrypted reasoning replay.
 ///
-/// The OpenAI Responses API rejects a replayed `reasoning` input item whose
+/// The `OpenAI` Responses API rejects a replayed `reasoning` input item whose
 /// `encrypted_content` blob was minted by a different endpoint/model (or has
 /// expired) with HTTP 400 `invalid_encrypted_content`. Scoped to
 /// [`AlephError::ProviderError`] so unrelated error kinds (auth, rate limit,
@@ -76,7 +76,7 @@ fn is_stale_encrypted_reasoning_error(err: &crate::error::AlephError) -> bool {
 /// Returns `None` when no message carries a signature — the caller then knows
 /// the encrypted-content error cannot be about this conversation and skips the
 /// retry. Thinking *text* is preserved; only the opaque replay verifier (the
-/// NDJSON `{"id","ec"}` blob for OpenAI Responses, the signed-block verifier
+/// NDJSON `{"id","ec"}` blob for `OpenAI` Responses, the signed-block verifier
 /// for Anthropic) is removed, so the retried request simply omits the
 /// reasoning replay items.
 fn strip_thinking_signatures(messages: &[UnifiedMessage]) -> Option<Vec<UnifiedMessage>> {
@@ -112,8 +112,8 @@ fn strip_thinking_signatures(messages: &[UnifiedMessage]) -> Option<Vec<UnifiedM
 
 /// Generic HTTP-based AI provider
 ///
-/// This provider uses a ProtocolAdapter for protocol-specific request/response handling.
-/// It implements the AiProvider trait by delegating to the adapter.
+/// This provider uses a `ProtocolAdapter` for protocol-specific request/response handling.
+/// It implements the `AiProvider` trait by delegating to the adapter.
 pub struct HttpProvider {
     name: String,
     config: ProviderConfig,
@@ -130,7 +130,7 @@ impl std::fmt::Debug for HttpProvider {
 }
 
 impl HttpProvider {
-    /// Create a new HttpProvider with the given adapter
+    /// Create a new `HttpProvider` with the given adapter
     pub fn new(
         name: String,
         config: ProviderConfig,
@@ -198,7 +198,7 @@ impl HttpProvider {
     /// relies on. With `sink = None` the behaviour is byte-identical to before.
     ///
     /// Recovery: when the provider rejects a replayed encrypted reasoning item
-    /// (OpenAI Responses `invalid_encrypted_content` — the blob was minted by a
+    /// (`OpenAI` Responses `invalid_encrypted_content` — the blob was minted by a
     /// different endpoint/model, or expired), the request is retried exactly
     /// once with all thinking signatures stripped. Without this, the stale blob
     /// in session history fails the turn on every attempt — the retry layer
@@ -455,8 +455,8 @@ impl HttpProvider {
 
     /// Expose raw delta stream with outbound safety checks applied.
     ///
-    /// Used by AiProviderBridge for real streaming to AgentLoop.
-    /// Inbound leak check is deferred to the DeltaCollector consumer.
+    /// Used by `AiProviderBridge` for real streaming to `AgentLoop`.
+    /// Inbound leak check is deferred to the `DeltaCollector` consumer.
     pub async fn stream_raw<'a>(
         &'a self,
         payload: RequestPayload<'a>,

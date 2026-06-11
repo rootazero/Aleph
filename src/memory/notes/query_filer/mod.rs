@@ -1,4 +1,4 @@
-//! Query filed-back: archive valuable memory_reflect answers as query/ notes.
+//! Query filed-back: archive valuable `memory_reflect` answers as query/ notes.
 
 pub mod filer;
 pub mod prompts;

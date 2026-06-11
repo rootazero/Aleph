@@ -1,6 +1,6 @@
 //! Markdown CLI Tool Adapter
 //!
-//! Implements AlephToolDyn for Markdown-defined CLI tools.
+//! Implements `AlephToolDyn` for Markdown-defined CLI tools.
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -26,7 +26,7 @@ impl MarkdownCliTool {
         Self { spec }
     }
 
-    /// Build JSON Schema from input_hints
+    /// Build JSON Schema from `input_hints`
     fn build_dynamic_schema(&self) -> Value {
         let mut properties = serde_json::Map::new();
         let mut required_fields = Vec::new();

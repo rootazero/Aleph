@@ -84,9 +84,9 @@ impl DesktopTool {
 
     /// Attach an approval policy to gate sensitive actions.
     ///
-    /// When a policy is set, mutating actions (click, type_text, key_combo,
-    /// launch_app, etc.) are checked before execution. Read-only actions
-    /// (screenshot, ocr, window_list, cursor_position, etc.) are always allowed.
+    /// When a policy is set, mutating actions (click, `type_text`, `key_combo`,
+    /// `launch_app`, etc.) are checked before execution. Read-only actions
+    /// (screenshot, ocr, `window_list`, `cursor_position`, etc.) are always allowed.
     pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
         self.approval_policy = Some(policy);
         self

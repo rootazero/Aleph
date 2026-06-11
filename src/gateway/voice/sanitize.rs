@@ -5,13 +5,13 @@
 //! code block, or a bare `https://…` makes the TTS engine read punctuation and
 //! URL characters aloud one by one. This pass defensively strips speech-hostile
 //! syntax just before synthesis and clamps the result to the provider's hard
-//! character ceiling (OpenAI TTS rejects > 4096 chars outright), truncating on a
+//! character ceiling (`OpenAI` TTS rejects > 4096 chars outright), truncating on a
 //! sentence/word boundary so a long reply degrades gracefully instead of erroring.
 //!
 //! Inspired by hermes-agent's pre-TTS markdown stripping, re-expressed without
 //! a regex engine — fixed-shape markdown markers are cheap to strip by hand.
 
-/// Hard upper bound on characters sent to a TTS provider. OpenAI's `/audio/speech`
+/// Hard upper bound on characters sent to a TTS provider. `OpenAI`'s `/audio/speech`
 /// rejects inputs above 4096; we leave a small margin and truncate gracefully.
 pub const MAX_TTS_CHARS: usize = 4000;
 

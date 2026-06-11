@@ -41,7 +41,7 @@ impl GeminiProtocol {
         format!("{base_url}/v1beta/models/{model}:streamGenerateContent")
     }
 
-    /// Convert UnifiedMessages to Gemini Contents
+    /// Convert `UnifiedMessages` to Gemini Contents
     pub(super) fn convert_messages(messages: &[UnifiedMessage]) -> Vec<Content> {
         let mut result = Vec::new();
         for msg in messages {
@@ -206,7 +206,7 @@ impl GeminiProtocol {
         })
     }
 
-    /// Map ThinkLevel to Gemini ThinkingConfig.
+    /// Map `ThinkLevel` to Gemini `ThinkingConfig`.
     ///
     /// - Gemini 2.5 models → `thinkingBudget` (integer)
     /// - All others (Gemini 3+) → `thinkingLevel` (enum)

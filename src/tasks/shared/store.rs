@@ -1,4 +1,4 @@
-//! Shared SQLite database handle for the tasks subsystem.
+//! Shared `SQLite` database handle for the tasks subsystem.
 //!
 //! Provides a thin wrapper around a rusqlite connection with WAL mode
 //! and busy timeout configured. Intended to be used by both cron and
@@ -12,7 +12,7 @@ pub struct TaskDatabase {
 }
 
 impl TaskDatabase {
-    /// Open (or create) a SQLite database at the given path.
+    /// Open (or create) a `SQLite` database at the given path.
     ///
     /// Enables WAL journal mode and a 5-second busy timeout.
     pub fn open(path: &Path) -> Result<Self, String> {

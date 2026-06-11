@@ -1,6 +1,6 @@
-//! IdentityFilesLayer — inject remaining identity files (priority 1730)
+//! `IdentityFilesLayer` — inject remaining identity files (priority 1730)
 //!
-//! SOUL.md is handled by SoulLayer (priority 50), AGENTS.md by ProfileLayer
+//! SOUL.md is handled by `SoulLayer` (priority 50), AGENTS.md by `ProfileLayer`
 //! (priority 75). This layer injects the rest: IDENTITY.md, TOOLS.md,
 //! HEARTBEAT.md. MEMORY.md is owned by `CuratedMemoryLayer` (Stable) and
 //! never flows through this Dynamic layer.

@@ -1,6 +1,6 @@
 //! Ripple module for local knowledge graph exploration
 //!
-//! RippleTask enables local exploration around retrieved facts to expand knowledge context.
+//! `RippleTask` enables local exploration around retrieved facts to expand knowledge context.
 //! When a fact is retrieved, it explores related facts within N hops in the knowledge graph,
 //! enriching the context with connected information.
 

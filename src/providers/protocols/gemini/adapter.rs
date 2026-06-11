@@ -1,4 +1,4 @@
-//! ProtocolAdapter trait implementation for GeminiProtocol.
+//! `ProtocolAdapter` trait implementation for `GeminiProtocol`.
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};

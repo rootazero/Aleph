@@ -14,7 +14,7 @@
 //!
 //! Values are intentionally never returned over the wire — `verify`
 //! reports presence + byte length only. Use the local `aleph-server
-//! secret` CLI (LockOnly path) when the raw value is needed.
+//! secret` CLI (`LockOnly` path) when the raw value is needed.
 
 use super::auth::AuthContext;
 use crate::config::Config;

@@ -475,7 +475,7 @@ pub struct SkillManifest {
     invocation: InvocationPolicy,
     /// Where the skill came from.
     source: SkillSource,
-    /// API Key environment variable name (e.g. "OPENAI_API_KEY").
+    /// API Key environment variable name (e.g. "`OPENAI_API_KEY`").
     primary_env: Option<String>,
     /// External documentation / key acquisition URL.
     homepage: Option<String>,
@@ -669,7 +669,7 @@ impl SkillManifest {
         self.emoji = Some(emoji);
     }
 
-    /// Set the when_to_use trigger hint.
+    /// Set the `when_to_use` trigger hint.
     pub fn set_when_to_use(&mut self, hint: String) {
         self.when_to_use = Some(hint);
     }

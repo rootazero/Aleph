@@ -1,6 +1,6 @@
 //! Inbound Message Router
 //!
-//! Consumes the ChannelRegistry's inbound message stream and routes
+//! Consumes the `ChannelRegistry`'s inbound message stream and routes
 //! messages to the appropriate Agent/Session.
 
 mod agent_resolver;
@@ -77,7 +77,7 @@ pub struct InboundMessageRouter {
     pub(super) channel_registry: Arc<ChannelRegistry>,
     pub(super) pairing_store: Arc<dyn PairingStore>,
     pub(super) config: RoutingConfig,
-    /// Channel-specific configs (keyed by channel_id)
+    /// Channel-specific configs (keyed by `channel_id`)
     pub(super) channel_configs: HashMap<String, ChannelConfig>,
     /// Agent registry for looking up agent instances
     pub(super) agent_registry: Option<Arc<AgentRegistry>>,
@@ -87,7 +87,7 @@ pub struct InboundMessageRouter {
     pub(super) workspace_manager: Option<Arc<AgentEnvStore>>,
     /// Route bindings for multi-tier agent resolution (peer → guild → channel → default)
     pub(super) route_bindings: Vec<RouteBinding>,
-    /// Session configuration (dm_scope, identity_links)
+    /// Session configuration (`dm_scope`, `identity_links`)
     pub(super) route_session_config: SessionConfig,
     /// Default agent ID when no binding matches
     pub(super) default_agent_id: String,
@@ -101,7 +101,7 @@ pub struct InboundMessageRouter {
     pub(super) group_chat_orch: Option<SharedOrchestrator>,
     /// Group chat executor
     pub(super) group_chat_executor: Option<Arc<GroupChatExecutor>>,
-    /// Active group chat sessions: "channel_id:conversation_id" -> session_id
+    /// Active group chat sessions: "`channel_id:conversation_id`" -> `session_id`
     pub(super) active_group_sessions: Mutex<HashMap<String, String>>,
 
     /// LLM provider for intent classification and soul generation
@@ -110,7 +110,7 @@ pub struct InboundMessageRouter {
     pub(super) command_parser: Option<Arc<CommandParser>>,
     /// Session manager for session lifecycle
     pub(super) session_store: Option<Arc<dyn super::session_store::SessionStore>>,
-    /// App config for reading output_mode at runtime
+    /// App config for reading `output_mode` at runtime
     pub(super) app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
     /// STT config for voice transcription
     pub(super) stt_config: Option<super::voice::inbound::SttConfig>,
@@ -269,7 +269,7 @@ impl InboundMessageRouter {
         self
     }
 
-    /// Set the app config for reading output_mode at runtime
+    /// Set the app config for reading `output_mode` at runtime
     pub fn with_app_config(mut self, config: Arc<tokio::sync::RwLock<crate::Config>>) -> Self {
         self.app_config = Some(config);
         self

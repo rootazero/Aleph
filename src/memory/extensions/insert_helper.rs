@@ -1,6 +1,6 @@
 //! Bridge helper: runs `on_capture` dispatch then persists the raw memory
 //! only if the chain returns Allow. Callers should prefer this helper over
-//! calling RawMemoryStore::insert_raw_memory directly.
+//! calling `RawMemoryStore::insert_raw_memory` directly.
 
 use crate::error::AlephError;
 use crate::memory::extensions::registry::MemoryExtensionRegistry;

@@ -1,7 +1,7 @@
 //! File operations tool for AI agent integration
 //!
 //! Implements rig's Tool trait to provide file system operations.
-//! Supports: list, read, write, move, copy, delete, mkdir, search, batch_move, organize
+//! Supports: list, read, write, move, copy, delete, mkdir, search, `batch_move`, organize
 
 mod apply_patch;
 mod batch;

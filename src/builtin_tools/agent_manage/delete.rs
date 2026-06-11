@@ -1,4 +1,4 @@
-//! AgentDeleteTool — delete an agent and archive its workspace.
+//! `AgentDeleteTool` — delete an agent and archive its workspace.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

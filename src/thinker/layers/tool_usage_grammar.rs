@@ -1,4 +1,4 @@
-//! ToolUsageGrammarLayer — encode tool usage conventions (priority 550)
+//! `ToolUsageGrammarLayer` — encode tool usage conventions (priority 550)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

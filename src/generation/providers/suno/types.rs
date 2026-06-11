@@ -30,7 +30,7 @@ pub struct SunoGenerateRequest {
 
 /// A single Suno clip record. Field set is the lowest common denominator across
 /// `/api/generate` (returns skeletons immediately) and `/api/get` (returns the
-/// same record enriched with audio_url once render completes).
+/// same record enriched with `audio_url` once render completes).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SunoClip {
     pub id: String,

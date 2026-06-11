@@ -1,4 +1,4 @@
-//! TaskCreateTool — create a new coordination task.
+//! `TaskCreateTool` — create a new coordination task.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

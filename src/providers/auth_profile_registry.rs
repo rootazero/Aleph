@@ -258,7 +258,7 @@ impl AuthProfileProviderRegistry {
     ///
     /// Call this before `default_provider()` to ensure OAuth tokens are fresh.
     /// This is a separate async method because `default_provider()` is sync
-    /// (required by the ProviderRegistry trait).
+    /// (required by the `ProviderRegistry` trait).
     ///
     /// # Integration
     ///

@@ -18,14 +18,14 @@ use serde::{Deserialize, Serialize};
 // Args / Output types
 // =============================================================================
 
-/// Arguments for the memory_reflect tool.
+/// Arguments for the `memory_reflect` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MemoryReflectArgs {
     /// Natural-language question to synthesise an answer for from memory.
     pub query: String,
 }
 
-/// Result returned to the LLM after calling memory_reflect.
+/// Result returned to the LLM after calling `memory_reflect`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryReflectResult {
     pub synthesis: Synthesis,

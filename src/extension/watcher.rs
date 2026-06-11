@@ -6,9 +6,9 @@
 //! Watched directories:
 //! - `~/.claude/` (global, Claude Code compatible)
 //! - `~/.aleph/` (global)
-//! - `~/.aleph/projects/<id>/` (project-level, if project_id provided)
+//! - `~/.aleph/projects/<id>/` (project-level, if `project_id` provided)
 //!
-//! Uses macOS FSEvents for efficient file system monitoring with debouncing.
+//! Uses macOS `FSEvents` for efficient file system monitoring with debouncing.
 
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::{Arc, Mutex};
@@ -113,7 +113,7 @@ impl ExtensionWatcher {
     /// Watches:
     /// - `~/.claude/` (global, Claude Code compatible)
     /// - `~/.aleph/` (global)
-    /// - `~/.aleph/projects/<id>/` (project-level, if project_id provided)
+    /// - `~/.aleph/projects/<id>/` (project-level, if `project_id` provided)
     ///
     /// # Arguments
     /// * `project_id` - Optional project name for watching project-level directories

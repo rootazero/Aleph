@@ -11,20 +11,20 @@
 //!
 //! Acquire locks in this order to prevent deadlock:
 //!
-//! - Level 0: StateDatabase (resilience/database)
-//! - Level 1: MemoryStore (memory/)
-//! - Level 2: ToolCatalog, ChannelRegistry ((tool_metadata/, gateway/))
+//! - Level 0: `StateDatabase` (resilience/database)
+//! - Level 1: `MemoryStore` (memory/)
+//! - Level 2: `ToolCatalog`, `ChannelRegistry` ((`tool_metadata`/, gateway/))
 //! - Level 3: UI state, progress monitors
 
 // Arc is always std::sync::Arc — loom::sync::Arc is incompatible with
 // external crate APIs that expect std::sync::Arc (e.g. tokio::sync).
 pub use std::sync::Arc;
 
-/// Async RwLock for tokio contexts.
+/// Async `RwLock` for tokio contexts.
 ///
 /// Daemon and other async modules use this instead of `std::sync::RwLock`
 /// to avoid deadlocks when holding a guard across `.await` points.
-/// Note: loom does not instrument async RwLock; this is acceptable because
+/// Note: loom does not instrument async `RwLock`; this is acceptable because
 /// loom tests target sync concurrency patterns only.
 pub use tokio::sync::RwLock as AsyncRwLock;
 

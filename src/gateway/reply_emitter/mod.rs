@@ -1,6 +1,6 @@
 //! Reply Emitter - Routes Agent output back to channels
 //!
-//! The ReplyEmitter implements EventEmitter to capture streaming events from the
+//! The `ReplyEmitter` implements `EventEmitter` to capture streaming events from the
 //! agent loop and route responses back to the originating channel/conversation.
 //!
 //! # Output Modes

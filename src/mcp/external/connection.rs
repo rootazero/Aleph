@@ -68,7 +68,7 @@ impl McpServerConnection {
     /// * `env` - Environment variables
     /// * `cwd` - Working directory
     /// * `timeout` - Per-request timeout (defaults to 30s for individual RPCs).
-    ///   The total connection timeout is always DEFAULT_CONNECT_TIMEOUT (300s)
+    ///   The total connection timeout is always `DEFAULT_CONNECT_TIMEOUT` (300s)
     ///   to allow for slow server startup.
     pub async fn connect(
         name: impl Into<String>,

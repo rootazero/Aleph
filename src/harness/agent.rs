@@ -1,17 +1,17 @@
-//! AgentHarness — the concrete Think→Act implementation.
+//! `AgentHarness` — the concrete Think→Act implementation.
 //!
 //! Task 8 implemented the Think half of the loop. Task 9 added:
-//!   * Act dispatch (executing tool_calls sequentially, emitting ToolResult /
-//!     ToolError events).
+//!   * Act dispatch (executing `tool_calls` sequentially, emitting `ToolResult` /
+//!     `ToolError` events).
 //!   * Preservation of assistant `tool_use` intent inside `AssistantMessage`
 //!     events so later Think cycles can reconstruct the conversation.
 //!   * Full-history prompt assembly (now in `agent/prompt.rs`) that re-emits
-//!     the preceding assistant tool_use turn and resolves real tool names
+//!     the preceding assistant `tool_use` turn and resolves real tool names
 //!     for `ToolResult` messages.
 //!
 //! Task 10 (Phase 6b) additionally consumes the optional triad on
 //! `HarnessDeps`:
-//!   * `context_budget.before_turn(...)` — drives compaction / hit_limit.
+//!   * `context_budget.before_turn(...)` — drives compaction / `hit_limit`.
 //!   * `context_compactor.compact(...)` — fires when budget directs warning.
 //!   * `verifier_chain` — consulted between Think and Act every turn;
 //!     a blocking verdict forces one more `Continue` so the model reacts.
@@ -51,7 +51,7 @@ mod think;
 pub(crate) enum InputGuardrailOutcome {
     /// Pass-through; events are unchanged.
     Allow(Vec<crate::session::events::SessionEventRecord>),
-    /// Latest UserMessage's text was rewritten in-memory only — the
+    /// Latest `UserMessage`'s text was rewritten in-memory only — the
     /// session log retains the original event for audit.
     Sanitized(Vec<crate::session::events::SessionEventRecord>),
     /// Guardrail blocked the turn; caller emits `on_safety_block` and
@@ -258,7 +258,7 @@ impl AgentHarness {
 
     /// Tool invocation timeline in run order. Sourced from the same trace
     /// emissions the harness sends to `ToolCallCompleted`, so trace
-    /// consumers and the FlowOutcome see the same metadata.
+    /// consumers and the `FlowOutcome` see the same metadata.
     pub fn tool_timeline(&self) -> Vec<ToolInvocation> {
         self.tool_timeline
             .lock()
@@ -321,7 +321,7 @@ impl AgentHarness {
 
     /// Fold one provider `TokenUsage` into the accumulated breakdown.
     /// Called from `think.rs` alongside the existing `total_tokens`
-    /// fetch_add so the two counters stay in lockstep.
+    /// `fetch_add` so the two counters stay in lockstep.
     pub(crate) fn accumulate_token_breakdown(
         &self,
         usage: &Option<crate::providers::adapter::TokenUsage>,
@@ -786,7 +786,7 @@ impl Harness for AgentHarness {
     }
 }
 
-/// Index at which events "since the last AssistantMessage" begin.
+/// Index at which events "since the last `AssistantMessage`" begin.
 pub(crate) fn tail_start_index(events: &[SessionEventRecord]) -> usize {
     events
         .iter()

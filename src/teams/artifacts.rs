@@ -97,7 +97,7 @@ impl TaskStatus {
         }
     }
 
-    /// Whether self can transition to new_status.
+    /// Whether self can transition to `new_status`.
     #[must_use]
     pub fn can_transition_to(&self, new_status: &Self) -> bool {
         match (self, new_status) {
@@ -140,7 +140,7 @@ pub struct TaskArtifact {
     /// Arbitrary structured metadata.
     pub metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
-    /// When the task moved to InProgress.
+    /// When the task moved to `InProgress`.
     pub started_at: Option<DateTime<Utc>>,
     /// When the task reached a terminal state.
     pub completed_at: Option<DateTime<Utc>>,

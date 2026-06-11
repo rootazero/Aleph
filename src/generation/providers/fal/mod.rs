@@ -12,7 +12,7 @@
 //! The endpoint path is supplied via `model` in the `GenerationParams` or
 //! falls back to the constructor default. This lets us ship one
 //! implementation that reaches Flux, Kling, Pika, Luma, Runway, Hailuo,
-//! Jimeng and MusicGen by varying just the preset/model — exactly the
+//! Jimeng and `MusicGen` by varying just the preset/model — exactly the
 //! aggregator shape openclaw uses.
 //!
 //! API reference: <https://fal.ai/docs/model-endpoints>
@@ -257,7 +257,7 @@ impl FalProvider {
         }
     }
 
-    /// POST → request_id.
+    /// POST → `request_id`.
     async fn submit(&self, model_path: &str, input: &Value) -> GenerationResult<FalSubmitResponse> {
         let url = self.submit_url(model_path);
         debug!(url = %url, "fal submit");

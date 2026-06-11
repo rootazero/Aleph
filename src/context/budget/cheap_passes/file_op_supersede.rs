@@ -312,7 +312,7 @@ impl PreflightStage for FileOpSupersedeStage {
     }
 }
 
-/// Total `char` count across all text / json / thinking / tool_call
+/// Total `char` count across all text / json / thinking / `tool_call`
 /// content blocks. Mirrors the estimator used by other compactors (Aleph
 /// treats `chars / ratio` as the canonical token proxy).
 fn content_chars(blocks: &[ContentBlock]) -> usize {

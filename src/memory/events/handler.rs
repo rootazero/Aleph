@@ -1,8 +1,8 @@
-//! MemoryCommandHandler — write-side facade for event-sourced memory mutations.
+//! `MemoryCommandHandler` — write-side facade for event-sourced memory mutations.
 //!
 //! All fact mutations go through this handler:
-//! 1. Build MemoryEvent from command
-//! 2. Append to SQLite event store
+//! 1. Build `MemoryEvent` from command
+//! 2. Append to `SQLite` event store
 //! 3. Project to notes store via `project_to_notes` (primary write path)
 
 use crate::sync_primitives::Arc;
@@ -21,7 +21,7 @@ use super::commands::*;
 
 pub struct MemoryCommandHandler {
     db: Arc<StateDatabase>,
-    /// NoteIndexer for the notes write path.
+    /// `NoteIndexer` for the notes write path.
     /// When present, every create/update/delete also writes to the notes filesystem layer.
     note_indexer: Option<Arc<NoteIndexer<SqliteMemoryBackend>>>,
 }
@@ -159,7 +159,7 @@ impl MemoryCommandHandler {
         Ok(())
     }
 
-    /// Create a new fact. Returns the generated fact_id.
+    /// Create a new fact. Returns the generated `fact_id`.
     pub async fn create_fact(&self, cmd: CreateNoteCommand) -> Result<String, AlephError> {
         let fact_id = Uuid::new_v4().to_string();
         let seq = self.db.get_memory_event_latest_seq(&fact_id).await? + 1;

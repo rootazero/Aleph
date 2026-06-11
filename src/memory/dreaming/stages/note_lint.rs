@@ -1,4 +1,4 @@
-//! NoteLint stage — frontmatter normalization and broken wikilink repair.
+//! `NoteLint` stage — frontmatter normalization and broken wikilink repair.
 //!
 //! This stage:
 //!   1. Checks each note's frontmatter for required fields (`category`, `tags`,

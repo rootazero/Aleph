@@ -1,4 +1,4 @@
-//! Memory search/store adapters exposing the memory system as LoopTool.
+//! Memory search/store adapters exposing the memory system as `LoopTool`.
 //!
 //! Defines a `MemoryBackend` trait for testability and two tools:
 //! - `MemorySearchTool` — semantic search over long-term memory

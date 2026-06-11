@@ -12,7 +12,7 @@ use super::conflict::ConflictResolver;
 use super::helpers::{extract_command_name, truncate_description};
 use super::types::ToolStorage;
 
-/// Registration functionality for ToolCatalog
+/// Registration functionality for `ToolCatalog`
 pub struct ToolRegistrar {
     tools: ToolStorage,
 }
@@ -193,7 +193,7 @@ impl ToolRegistrar {
         info!("Registered builtin tools (generate_* + skill_* + snapshot_capture + switch + groupchat + session_new [alias: new] + cron_manage + voice)");
     }
 
-    /// Register skills from SkillInfo list (Flat Namespace Mode)
+    /// Register skills from `SkillInfo` list (Flat Namespace Mode)
     ///
     /// In flat namespace mode, skills are registered as root-level commands
     /// with automatic conflict resolution. Users can invoke them directly
@@ -253,7 +253,7 @@ impl ToolRegistrar {
     ///
     /// # Arguments
     ///
-    /// * `tools` - List of (plugin_id, tool_name, tool_description) tuples
+    /// * `tools` - List of (`plugin_id`, `tool_name`, `tool_description`) tuples
     /// * `conflict_resolver` - Conflict resolver for handling name conflicts
     ///
     /// # Conflict Resolution

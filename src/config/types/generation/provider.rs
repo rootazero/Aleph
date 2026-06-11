@@ -1,6 +1,6 @@
 //! Generation provider configuration
 //!
-//! Contains the GenerationProviderConfig struct for individual provider settings.
+//! Contains the `GenerationProviderConfig` struct for individual provider settings.
 
 use crate::generation::GenerationType;
 use schemars::JsonSchema;
@@ -16,7 +16,7 @@ use super::defaults::GenerationDefaults;
 /// Configuration for a single generation provider
 ///
 /// Defines API credentials, capabilities, and default parameters
-/// for a media generation provider like DALL-E, Stable Diffusion, or ElevenLabs.
+/// for a media generation provider like DALL-E, Stable Diffusion, or `ElevenLabs`.
 ///
 /// # Example TOML
 /// ```toml
@@ -85,12 +85,12 @@ pub struct GenerationProviderConfig {
     #[serde(default)]
     pub verified: bool,
 
-    /// Optional explicit edit endpoint URL (for openai_compat providers with non-standard edit paths)
+    /// Optional explicit edit endpoint URL (for `openai_compat` providers with non-standard edit paths)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edit_url: Option<String>,
 
     /// Optional explicit voices endpoint URL (for fetching available TTS voices)
-    /// When omitted, auto-derived as {base_url}/v1/audio/voices
+    /// When omitted, auto-derived as {`base_url}/v1/audio/voices`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voices_url: Option<String>,
 }

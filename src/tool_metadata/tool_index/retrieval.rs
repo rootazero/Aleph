@@ -29,7 +29,7 @@ pub enum HydrationLevel {
 /// A tool retrieved with hydration level information
 #[derive(Debug, Clone)]
 pub struct HydratedTool {
-    /// Tool name (extracted from fact ID, e.g., "tool:read_file" -> "read_file")
+    /// Tool name (extracted from fact ID, e.g., "`tool:read_file`" -> "`read_file`")
     pub name: String,
     /// Semantic description from the tool fact
     pub description: String,
@@ -39,7 +39,7 @@ pub struct HydratedTool {
     pub hydration_level: HydrationLevel,
     /// The underlying memory fact
     pub fact: MemoryFact,
-    /// Cached JSON schema for the tool (populated from ToolCatalog)
+    /// Cached JSON schema for the tool (populated from `ToolCatalog`)
     pub cached_schema: Option<String>,
 }
 
@@ -49,7 +49,7 @@ impl HydratedTool {
         fact_id.strip_prefix("tool:").unwrap_or(fact_id).to_string()
     }
 
-    /// Create from a MemoryFact with calculated hydration level
+    /// Create from a `MemoryFact` with calculated hydration level
     #[must_use]
     pub fn from_fact(fact: MemoryFact, config: &ToolRetrievalConfig) -> Self {
         let score = fact.similarity_score.unwrap_or(0.0);
@@ -66,7 +66,7 @@ impl HydratedTool {
         }
     }
 
-    /// Set the cached schema (typically from ToolCatalog lookup)
+    /// Set the cached schema (typically from `ToolCatalog` lookup)
     #[must_use]
     pub fn with_schema(mut self, schema: String) -> Self {
         self.cached_schema = Some(schema);
@@ -104,7 +104,7 @@ pub struct ToolRetrieval {
 }
 
 impl ToolRetrieval {
-    /// Create a new ToolRetrieval with custom config
+    /// Create a new `ToolRetrieval` with custom config
     pub const fn new(db: MemoryBackend, config: ToolRetrievalConfig) -> Self {
         Self { db, config }
     }

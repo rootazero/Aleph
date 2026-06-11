@@ -10,7 +10,7 @@
 //!
 //! This is the Rust mapping of hermes-agent's Python `pty_bridge.py`: where
 //! hermes used `ptyprocess` + `select` + a per-connection WebSocket, Aleph uses
-//! a cross-platform `portable-pty` abstraction (Unix + Windows ConPTY), a typed
+//! a cross-platform `portable-pty` abstraction (Unix + Windows `ConPTY`), a typed
 //! session handle, and the gateway's topic broadcaster.
 
 use std::io::{Read, Write};

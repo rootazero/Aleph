@@ -1,4 +1,4 @@
-//! LifecycleResolveShutdownTool — leader approves or rejects a worker's
+//! `LifecycleResolveShutdownTool` — leader approves or rejects a worker's
 //! shutdown request. Mirrors the `plan_resolve` two-verb-in-one pattern:
 //! `decision: "approve" | "reject"`.
 

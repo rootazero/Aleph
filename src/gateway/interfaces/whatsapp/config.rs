@@ -1,6 +1,6 @@
-//! WhatsApp Channel Configuration
+//! `WhatsApp` Channel Configuration
 //!
-//! Configuration for the WhatsApp channel adapter.
+//! Configuration for the `WhatsApp` channel adapter.
 
 use crate::gateway::channel_chunking::ChunkMode;
 use crate::gateway::channel_policy::{ChannelAccessConfig, DmPolicy, GroupPolicy};

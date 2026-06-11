@@ -1,4 +1,4 @@
-//! Bridge between the Phase 5 Orchestrator and the Phase 4 AgentHarness.
+//! Bridge between the Phase 5 Orchestrator and the Phase 4 `AgentHarness`.
 //!
 //! `AgentHarnessRunner` implements [`HarnessRunner`] by:
 //!   1. Verifying `spec.agent` is registered in the [`AgentRegistry`].
@@ -8,8 +8,8 @@
 //!   5. Extracting the last `AssistantMessage.text` as `final_text`.
 //!
 //! # Phase 6 follow-ups
-//! * Thread `AgentDef` + `FlowOverrides` (max_iterations, extra_system_prompt,
-//!   context_mode) into `HarnessDeps`. Requires widening the Phase 4 API.
+//! * Thread `AgentDef` + `FlowOverrides` (`max_iterations`, `extra_system_prompt`,
+//!   `context_mode`) into `HarnessDeps`. Requires widening the Phase 4 API.
 //! * Honour [`BrainRef::Strict`] model selection — `AiProvider` does not
 //!   expose `select_model` at this layer yet.
 
@@ -106,7 +106,7 @@ pub struct AgentHarnessRunner {
     /// diminishing-returns state must never be shared across concurrent
     /// sessions. `None` disables mid-run compaction entirely.
     pub context_budget_config: Option<ContextBudgetConfig>,
-    /// Shared v2 SkillSystem. When `Some`, `build_system_prompt` injects the
+    /// Shared v2 `SkillSystem`. When `Some`, `build_system_prompt` injects the
     /// eligible-skill `<available_skills>` block into the system prompt.
     pub skill_system: Option<crate::skill::SkillSystem>,
 
@@ -155,7 +155,7 @@ pub struct AgentHarnessRunner {
     pub memory_context_provider:
         Option<Arc<crate::thinker::memory_context_provider::MemoryContextProvider>>,
 
-    /// SQLite memory backend, threaded into the per-run `ContextCompactor` so
+    /// `SQLite` memory backend, threaded into the per-run `ContextCompactor` so
     /// it can reuse the hierarchical session summaries written by
     /// `SessionCompactor` for zero-API-cost compaction. `None` (tests / boot
     /// without a memory backend) keeps the LLM summarization path.
@@ -179,7 +179,7 @@ pub struct AgentHarnessRunner {
     /// When set, `ContextCompactor::call_llm` routes its summarization call
     /// to this provider instead of the main LLM. Recommended target: a
     /// flash-tier alias of the same provider family (e.g. Haiku for Claude,
-    /// `deepseek-v4-flash` for DeepSeek). `None` preserves the legacy
+    /// `deepseek-v4-flash` for `DeepSeek`). `None` preserves the legacy
     /// behaviour of reusing the main LLM for summarization.
     pub cheap_provider: Option<Arc<dyn AiProvider>>,
 

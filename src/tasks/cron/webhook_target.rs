@@ -14,7 +14,7 @@ use crate::tasks::shared::delivery::{
 };
 
 pub struct WebhookTarget {
-    /// The user-configured SSRF policy (`[ssrf]`) — the same one the WebFetch
+    /// The user-configured SSRF policy (`[ssrf]`) — the same one the `WebFetch`
     /// tool uses — so webhook delivery honors `allowed_hosts` / `enabled` /
     /// `allow_private_network` instead of silently enforcing hardcoded defaults.
     policy: SsrfPolicy,

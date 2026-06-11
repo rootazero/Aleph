@@ -1,4 +1,4 @@
-//! Media processors — concrete MediaProvider implementations.
+//! Media processors — concrete `MediaProvider` implementations.
 
 pub mod audio;
 pub mod document;

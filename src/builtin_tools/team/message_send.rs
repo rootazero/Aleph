@@ -1,4 +1,4 @@
-//! MessageSendTool — send a message to team members with to/cc routing.
+//! `MessageSendTool` — send a message to team members with to/cc routing.
 
 use std::collections::HashSet;
 
@@ -50,7 +50,7 @@ pub struct MessageSendArgs {
     pub broadcast: bool,
 }
 
-/// Output from message_send.
+/// Output from `message_send`.
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageSendOutput {
     pub message_id: String,
@@ -62,7 +62,7 @@ pub struct MessageSendOutput {
 // Tool
 // =============================================================================
 
-/// Tool that sends a message to team members via the MessageRouter.
+/// Tool that sends a message to team members via the `MessageRouter`.
 #[derive(Clone)]
 pub struct MessageSendTool {
     router: Arc<MessageRouter>,

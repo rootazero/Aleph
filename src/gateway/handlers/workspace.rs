@@ -1,8 +1,8 @@
 //! Workspace RPC Handlers
 //!
 //! Handlers for workspace management: create, list, get, update, archive.
-//! Channel agent binding: channels.set_agent, agents.bindings.
-//! All handlers delegate to AgentEnvStore (SQLite-backed).
+//! Channel agent binding: `channels.set_agent`, agents.bindings.
+//! All handlers delegate to `AgentEnvStore` (SQLite-backed).
 
 use serde::Deserialize;
 use serde_json::json;
@@ -257,7 +257,7 @@ pub async fn handle_archive(
 // Channel Agent Binding (1:1 model)
 // ============================================================================
 
-/// Parameters for channels.set_agent
+/// Parameters for `channels.set_agent`
 #[derive(Debug, Deserialize)]
 pub struct SetAgentParams {
     pub channel_id: String,

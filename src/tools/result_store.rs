@@ -1,4 +1,4 @@
-//! ToolResultStore — disk persistence for large tool results.
+//! `ToolResultStore` — disk persistence for large tool results.
 //!
 //! When a tool result exceeds the token threshold, it is written to a
 //! session-scoped directory on disk. A compact reference marker is injected
@@ -262,7 +262,7 @@ impl ToolResultStore {
     /// index entries — while keeping the store usable for the rest of the
     /// session (the directory and `index.db` survive; only their contents go).
     ///
-    /// This is the **anti-reference-bypass** countermeasure (maps OpenSquilla's
+    /// This is the **anti-reference-bypass** countermeasure (maps `OpenSquilla`'s
     /// `StaleOutputCache.purge`). Offloaded output is otherwise retrievable
     /// indefinitely via `read_file` on the `[Full output persisted: …]` marker
     /// path or via `ctx_search` over the index — neither of which consults the

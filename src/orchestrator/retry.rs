@@ -1,7 +1,7 @@
 //! Retry utilities for Orchestrator layer.
 //!
 //! Provides exponential backoff computation for transient error retries.
-//! Formula: min(base_delay * 2^min(attempt-1, 10), max_delay)
+//! Formula: `min(base_delay` * 2^min(attempt-1, 10), `max_delay`)
 //!
 //! Note: The LLM layer (`providers/llm_retry.rs`) has its own retry implementation.
 //! This module serves the Orchestrator/Gateway layer retry logic.
@@ -37,7 +37,7 @@ impl Default for RetryConfig {
 }
 
 impl RetryConfig {
-    /// Create a new RetryConfig with custom values.
+    /// Create a new `RetryConfig` with custom values.
     #[must_use]
     pub const fn new(base_delay: Duration, max_delay: Duration, max_attempts: u32) -> Self {
         Self {
@@ -47,7 +47,7 @@ impl RetryConfig {
         }
     }
 
-    /// Create a RetryConfig with only base_delay customized.
+    /// Create a `RetryConfig` with only `base_delay` customized.
     #[must_use]
     pub fn with_base_delay(base_delay: Duration) -> Self {
         Self {
@@ -56,7 +56,7 @@ impl RetryConfig {
         }
     }
 
-    /// Create a RetryConfig with only max_delay customized.
+    /// Create a `RetryConfig` with only `max_delay` customized.
     #[must_use]
     pub fn with_max_delay(max_delay: Duration) -> Self {
         Self {
@@ -68,7 +68,7 @@ impl RetryConfig {
 
 /// Compute the retry delay for a given attempt number.
 ///
-/// Formula: min(base_delay * 2^min(attempt-1, 10), max_delay)
+/// Formula: `min(base_delay` * 2^min(attempt-1, 10), `max_delay`)
 ///
 /// | Attempt | Delay (default config) |
 /// |---------|----------------------|

@@ -2,7 +2,7 @@
 //!
 //! Governance, collaboration, perception, and recovery middleware have been
 //! removed as part of the agent loop migration. Only the database layer
-//! (StateDatabase) and shared types remain.
+//! (`StateDatabase`) and shared types remain.
 
 pub mod database;
 pub mod types;

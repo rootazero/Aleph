@@ -1,4 +1,4 @@
-//! ToolsLayer + HydratedToolsLayer — tool discovery and injection (priority 500/501)
+//! `ToolsLayer` + `HydratedToolsLayer` — tool discovery and injection (priority 500/501)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 

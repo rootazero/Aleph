@@ -36,7 +36,7 @@ pub struct FileSessionStore {
     event_bus: crate::sync_primitives::RwLock<Option<Arc<GatewayEventBus>>>,
     /// Optional raw-memory writer for the session-end emit (Spec 1 G3-A).
     /// When set, `close_session` captures the conversation tail and fires
-    /// `emit_session_end_raw`, mirroring the SQLite `SessionManager` path so
+    /// `emit_session_end_raw`, mirroring the `SQLite` `SessionManager` path so
     /// the file backend also drives session-end summarization / reflection /
     /// profile synthesis. `None` (the default) keeps the legacy behaviour.
     raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,

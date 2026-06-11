@@ -67,7 +67,7 @@ impl SlackMessageOps {
 
     /// Send a message via `chat.postMessage`.
     ///
-    /// Automatically splits long messages and formats using SlackMrkdwn.
+    /// Automatically splits long messages and formats using `SlackMrkdwn`.
     pub async fn send_message(
         client: &reqwest::Client,
         bot_token: &str,

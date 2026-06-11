@@ -23,7 +23,7 @@ use tokio::sync::broadcast;
 /// Metadata for a tool to be indexed
 #[derive(Debug, Clone)]
 pub struct ToolMeta {
-    /// Tool name (e.g., "read_file", "search_code")
+    /// Tool name (e.g., "`read_file`", "`search_code`")
     pub name: String,
     /// Tool's existing description
     pub description: Option<String>,
@@ -36,7 +36,7 @@ pub struct ToolMeta {
 }
 
 impl ToolMeta {
-    /// Create a new ToolMeta with just a name
+    /// Create a new `ToolMeta` with just a name
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -81,8 +81,8 @@ const TOOL_CATEGORY: &str = "tool";
 
 /// Coordinates tool synchronization with Memory system
 ///
-/// Stores tools as notes in the `tool/` category (markdown files + notes_index).
-/// Uses SemanticPurposeInferrer to generate rich content descriptions.
+/// Stores tools as notes in the `tool/` category (markdown files + `notes_index`).
+/// Uses `SemanticPurposeInferrer` to generate rich content descriptions.
 pub struct ToolIndexCoordinator {
     indexer: NoteIndexer<crate::memory::store::SqliteMemoryBackend>,
     inferrer: Arc<SemanticPurposeInferrer>,
@@ -125,7 +125,7 @@ impl ToolIndexCoordinator {
             .as_secs() as i64
     }
 
-    /// Build a fallback KnowledgeNote when markdown parsing fails or file is missing.
+    /// Build a fallback `KnowledgeNote` when markdown parsing fails or file is missing.
     fn build_fallback_note(
         filename: &str,
         created_at: i64,
@@ -147,7 +147,7 @@ impl ToolIndexCoordinator {
 
     /// Reconstruct a `MemoryFact`-compatible struct from a note.
     ///
-    /// Used to preserve the public API shape that callers (tests, ToolRetrieval) depend on.
+    /// Used to preserve the public API shape that callers (tests, `ToolRetrieval`) depend on.
     fn note_to_fact(note: &KnowledgeNote, confidence: f32) -> MemoryFact {
         let now = Self::now_timestamp();
         let content = note.facts.join("\n");
@@ -407,7 +407,7 @@ impl ToolIndexCoordinator {
 
     /// Get all valid tool notes from Memory as `MemoryFact`s.
     ///
-    /// Returns entries ordered by updated_at descending.
+    /// Returns entries ordered by `updated_at` descending.
     pub async fn get_tool_facts(&self) -> Result<Vec<MemoryFact>, AlephError> {
         let entries = self
             .indexer
@@ -522,11 +522,11 @@ impl ToolIndexCoordinator {
     /// - `SkillRemoved`: Remove the skill's tool note
     ///
     /// # Arguments
-    /// * `registry` - The SkillsRegistry to listen to
-    /// * `skill_to_tool` - Callback to convert skill_id -> ToolMeta
+    /// * `registry` - The `SkillsRegistry` to listen to
+    /// * `skill_to_tool` - Callback to convert `skill_id` -> `ToolMeta`
     ///
     /// # Returns
-    /// A JoinHandle for the spawned task
+    /// A `JoinHandle` for the spawned task
     pub fn start_skill_listener<F>(
         self: Arc<Self>,
         system: SkillSystem,

@@ -9,13 +9,13 @@ use super::types::{ImageGenerationRequest, OpenAiErrorResponse};
 
 impl OpenAiCompatProvider {
     /// Get the full URL for the generations endpoint
-    /// Endpoint is auto-completed from base URL during build (see builder::normalize_endpoint)
+    /// Endpoint is auto-completed from base URL during build (see `builder::normalize_endpoint`)
     pub(crate) fn generations_url(&self) -> String {
         self.endpoint.clone()
     }
 
     /// Get the full URL for the edits endpoint
-    /// Uses explicit edit_endpoint if set, otherwise derives from generations URL
+    /// Uses explicit `edit_endpoint` if set, otherwise derives from generations URL
     pub(crate) fn edits_url(&self) -> String {
         if let Some(ref edit_url) = self.edit_endpoint {
             return edit_url.clone();
@@ -25,7 +25,7 @@ impl OpenAiCompatProvider {
         self.endpoint.replace("/generations", "/edits")
     }
 
-    /// Build the API request body from a GenerationRequest
+    /// Build the API request body from a `GenerationRequest`
     pub(crate) fn build_request_body(&self, request: &GenerationRequest) -> ImageGenerationRequest {
         let model = request
             .params
@@ -51,7 +51,7 @@ impl OpenAiCompatProvider {
         }
     }
 
-    /// Parse API error response and convert to GenerationError
+    /// Parse API error response and convert to `GenerationError`
     pub(crate) fn parse_error_response(
         &self,
         status: reqwest::StatusCode,

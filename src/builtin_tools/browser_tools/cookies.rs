@@ -28,7 +28,7 @@ pub enum CookieAction {
     Clear,
 }
 
-/// Arguments for the browser_cookies tool.
+/// Arguments for the `browser_cookies` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserCookiesArgs {
     /// Browser profile name (default: "default").
@@ -51,13 +51,13 @@ pub struct BrowserCookiesArgs {
     /// Expiration as a unix timestamp (seconds) — `set` only.
     #[serde(default)]
     pub expires: Option<i64>,
-    /// Mark the cookie HttpOnly — `set` only.
+    /// Mark the cookie `HttpOnly` — `set` only.
     #[serde(default)]
     pub http_only: Option<bool>,
     /// Mark the cookie Secure — `set` only.
     #[serde(default)]
     pub secure: Option<bool>,
-    /// SameSite attribute — `set` only.
+    /// `SameSite` attribute — `set` only.
     #[serde(default)]
     pub same_site: Option<SameSite>,
 }
@@ -107,7 +107,7 @@ impl BrowserCookiesArgs {
     }
 }
 
-/// Output from the browser_cookies tool.
+/// Output from the `browser_cookies` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserCookiesOutput {
     pub success: bool,

@@ -1,6 +1,6 @@
-//! OpenAI DALL-E 3 Image Generation Provider
+//! `OpenAI` DALL-E 3 Image Generation Provider
 //!
-//! This module implements the `GenerationProvider` trait for OpenAI's DALL-E 3 image generation API.
+//! This module implements the `GenerationProvider` trait for `OpenAI`'s DALL-E 3 image generation API.
 //!
 //! # API Reference
 //!
@@ -41,7 +41,7 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
-/// Default API endpoint for OpenAI
+/// Default API endpoint for `OpenAI`
 const DEFAULT_ENDPOINT: &str = "https://api.openai.com";
 
 /// Default model for image generation
@@ -50,9 +50,9 @@ const DEFAULT_MODEL: &str = "dall-e-3";
 /// Default timeout for image generation requests (120 seconds)
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
-/// OpenAI Image Generation Provider (DALL-E 3)
+/// `OpenAI` Image Generation Provider (DALL-E 3)
 ///
-/// This provider integrates with OpenAI's image generation API to create images
+/// This provider integrates with `OpenAI`'s image generation API to create images
 /// from text prompts using DALL-E 3.
 ///
 /// # Features
@@ -80,7 +80,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 120;
 pub struct OpenAiImageProvider {
     /// HTTP client for making requests
     client: Client,
-    /// OpenAI API key (redacted in Debug)
+    /// `OpenAI` API key (redacted in Debug)
     api_key: String,
     /// API endpoint — fully resolved generations URL
     endpoint: String,
@@ -103,12 +103,12 @@ impl std::fmt::Debug for OpenAiImageProvider {
 }
 
 impl OpenAiImageProvider {
-    /// Create a new OpenAI Image Provider
+    /// Create a new `OpenAI` Image Provider
     ///
     /// # Arguments
     ///
-    /// * `api_key` - OpenAI API key
-    /// * `base_url` - Optional custom API endpoint (defaults to "https://api.openai.com")
+    /// * `api_key` - `OpenAI` API key
+    /// * `base_url` - Optional custom API endpoint (defaults to "<https://api.openai.com>")
     /// * `model` - Optional model name (defaults to "dall-e-3")
     ///
     /// # Example
@@ -166,7 +166,7 @@ impl OpenAiImageProvider {
         self.resolved.secondary_endpoint(GenerationType::Image)
     }
 
-    /// Build the API request body from a GenerationRequest
+    /// Build the API request body from a `GenerationRequest`
     fn build_request_body(&self, request: &GenerationRequest) -> ImageGenerationRequest {
         let model = request
             .params
@@ -192,7 +192,7 @@ impl OpenAiImageProvider {
         }
     }
 
-    /// Parse API error response and convert to GenerationError
+    /// Parse API error response and convert to `GenerationError`
     fn parse_error_response(&self, status: reqwest::StatusCode, body: &str) -> GenerationError {
         // Try to parse as OpenAI error format
         if let Ok(error_response) = serde_json::from_str::<OpenAiErrorResponse>(body) {
@@ -241,7 +241,7 @@ impl OpenAiImageProvider {
     }
 }
 
-/// Request body for OpenAI image generation API
+/// Request body for `OpenAI` image generation API
 #[derive(Debug, Clone, Serialize)]
 struct ImageGenerationRequest {
     /// Model to use (e.g., "dall-e-3")
@@ -260,7 +260,7 @@ struct ImageGenerationRequest {
     /// Number of images to generate (only 1 supported for DALL-E 3)
     #[serde(skip_serializing_if = "Option::is_none")]
     n: Option<u32>,
-    /// Response format ("url" or "b64_json")
+    /// Response format ("url" or "`b64_json`")
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<String>,
     /// Optional user identifier
@@ -268,7 +268,7 @@ struct ImageGenerationRequest {
     user: Option<String>,
 }
 
-/// Response from OpenAI image generation API
+/// Response from `OpenAI` image generation API
 #[derive(Debug, Clone, Deserialize)]
 struct ImageGenerationResponse {
     /// Unix timestamp of when the request was created
@@ -281,21 +281,21 @@ struct ImageGenerationResponse {
 /// Individual image data in the response
 #[derive(Debug, Clone, Deserialize)]
 struct ImageData {
-    /// URL to the generated image (if response_format is "url")
+    /// URL to the generated image (if `response_format` is "url")
     url: Option<String>,
-    /// Base64-encoded image data (if response_format is "b64_json")
+    /// Base64-encoded image data (if `response_format` is "`b64_json`")
     b64_json: Option<String>,
     /// The prompt that was actually used (may differ from input)
     revised_prompt: Option<String>,
 }
 
-/// OpenAI API error response format
+/// `OpenAI` API error response format
 #[derive(Debug, Clone, Deserialize)]
 struct OpenAiErrorResponse {
     error: OpenAiError,
 }
 
-/// OpenAI API error details
+/// `OpenAI` API error details
 #[derive(Debug, Clone, Deserialize)]
 struct OpenAiError {
     message: String,

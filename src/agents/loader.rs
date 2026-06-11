@@ -1,6 +1,6 @@
 //! Filesystem agent loader for P2 Stage E.
 //!
-//! Loads AgentDef definitions from markdown files with YAML frontmatter:
+//! Loads `AgentDef` definitions from markdown files with YAML frontmatter:
 //!   - Project tier: `<project>/.aleph/agents/*.md`  (highest precedence)
 //!   - User tier:    `~/.aleph/data/agents/*.md`
 //!   - Builtin tier: `crate::agents::registry::builtin_agents()` (lowest precedence)

@@ -3,7 +3,7 @@
 //! Configurable keyword rules for intent detection using weighted matching.
 //!
 //! Note: Types are prefixed with "Policy" to avoid naming conflicts with
-//! similar types in the smart_flow module.
+//! similar types in the `smart_flow` module.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ const fn default_weight() -> f32 {
 pub struct PolicyKeywordRule {
     /// Unique identifier for this rule
     pub id: String,
-    /// The intent type this rule matches (e.g., "FileOrganize")
+    /// The intent type this rule matches (e.g., "`FileOrganize`")
     pub intent_type: String,
     /// List of weighted keywords
     pub keywords: Vec<PolicyWeightedKeyword>,

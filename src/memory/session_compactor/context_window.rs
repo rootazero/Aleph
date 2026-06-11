@@ -30,7 +30,7 @@ pub fn estimate_total_tokens(messages: &[UnifiedMessage], ratio: f64) -> usize {
         .sum()
 }
 
-/// Partition messages into (compressible, fresh_tail).
+/// Partition messages into (compressible, `fresh_tail`).
 ///
 /// Returns the index where `fresh_tail` begins. Messages in `[0..idx]` are
 /// candidates for compression; messages in `[idx..]` are kept verbatim.

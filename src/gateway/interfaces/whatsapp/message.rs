@@ -1,6 +1,6 @@
 //! Message Converter
 //!
-//! Converts between WhatsApp wire formats and Aleph's canonical types.
+//! Converts between `WhatsApp` wire formats and Aleph's canonical types.
 
 use crate::gateway::channel::{ChannelId, ConversationId, InboundMessage, MessageId, UserId};
 use chrono::TimeZone;

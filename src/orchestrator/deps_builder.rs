@@ -1,8 +1,8 @@
-//! Shared HarnessDeps builder functions.
+//! Shared `HarnessDeps` builder functions.
 //!
 //! Used by both the main runner (`aleph-server` bin's `orchestrator_init.rs`)
 //! and the subagent spawner (`agents::subagent_spawner`) to assemble
-//! HarnessDeps fields consistently. Subagents inherit identical config; no
+//! `HarnessDeps` fields consistently. Subagents inherit identical config; no
 //! override params are accepted (per P1 zero-override decision).
 
 use crate::sync_primitives::Arc;

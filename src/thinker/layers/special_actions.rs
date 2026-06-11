@@ -1,4 +1,4 @@
-//! SpecialActionsLayer — finishing / escalation discipline (priority 1100)
+//! `SpecialActionsLayer` — finishing / escalation discipline (priority 1100)
 //!
 //! Historical note: this layer used to document `complete` / `fail` as
 //! callable actions of the legacy `{reasoning, action}` JSON envelope.

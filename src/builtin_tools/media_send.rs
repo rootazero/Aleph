@@ -1,7 +1,7 @@
-//! media_send — LLM-invoked tool for delivering media to the user.
+//! `media_send` — LLM-invoked tool for delivering media to the user.
 //!
 //! This tool does NO processing. It simply passes the input items as `_media`
-//! output, which the ReplyEmitter picks up for download and channel delivery.
+//! output, which the `ReplyEmitter` picks up for download and channel delivery.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -12,7 +12,7 @@ use crate::gateway::media::MediaItem;
 use crate::security::ssrf::{validate_url, SsrfPolicy};
 use crate::tools::AlephTool;
 
-/// Input arguments for media_send tool.
+/// Input arguments for `media_send` tool.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct MediaSendArgs {
     /// List of media items to send to the user.
@@ -35,16 +35,16 @@ pub struct MediaSendItem {
     pub filename: Option<String>,
 }
 
-/// Output from media_send tool.
+/// Output from `media_send` tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct MediaSendOutput {
     /// Human-readable display text
     pub _display: String,
-    /// Media items for channel delivery (consumed by ReplyEmitter)
+    /// Media items for channel delivery (consumed by `ReplyEmitter`)
     pub _media: Vec<MediaItem>,
 }
 
-/// The media_send tool — passes media URLs through for channel delivery.
+/// The `media_send` tool — passes media URLs through for channel delivery.
 #[derive(Clone)]
 pub struct MediaSendTool;
 

@@ -1,4 +1,4 @@
-//! `ToolResultPruningStage` — replace stale large tool_results with one-line
+//! `ToolResultPruningStage` — replace stale large `tool_results` with one-line
 //! placeholders to save tokens before the LLM compactor runs.
 //!
 //! Hermes-borrowed heuristic: tool results outside the fresh tail rarely add

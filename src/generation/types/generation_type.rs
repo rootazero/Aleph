@@ -23,7 +23,7 @@ pub enum GenerationType {
     Video,
     /// Audio/music generation (Suno, Udio, etc.)
     Audio,
-    /// Text-to-speech synthesis (ElevenLabs, OpenAI TTS, etc.)
+    /// Text-to-speech synthesis (`ElevenLabs`, `OpenAI` TTS, etc.)
     Speech,
     /// Speech-to-text transcription (Whisper, etc.)
     Transcription,

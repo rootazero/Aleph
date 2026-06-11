@@ -55,7 +55,7 @@ pub struct ExecApprovalRecord {
 }
 
 impl ExecApprovalRecord {
-    /// Create from ApprovalRequest
+    /// Create from `ApprovalRequest`
     #[must_use]
     pub fn from_request(request: &ApprovalRequest, timeout_ms: u64) -> Self {
         let now = std::time::SystemTime::now()

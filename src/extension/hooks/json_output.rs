@@ -64,7 +64,7 @@ struct JsonHookOutput {
     hook_specific_output: Option<HookSpecificOutput>,
 }
 
-/// Nested `hookSpecificOutput` block (Claude-Code modern PreToolUse form).
+/// Nested `hookSpecificOutput` block (Claude-Code modern `PreToolUse` form).
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct HookSpecificOutput {

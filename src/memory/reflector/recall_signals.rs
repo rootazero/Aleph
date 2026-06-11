@@ -1,4 +1,4 @@
-//! Record a `recall_signals` row per note fed into a reflect() synthesis call.
+//! Record a `recall_signals` row per note fed into a `reflect()` synthesis call.
 
 use crate::error::AlephError;
 use crate::memory::reflector::packet_adapter::NoteMeta;

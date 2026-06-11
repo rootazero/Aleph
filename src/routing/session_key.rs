@@ -109,7 +109,7 @@ impl SessionKey {
 
     /// Create a DM session key with scope strategy
     ///
-    /// If dm_scope is Main, returns a Main session key (DMs collapse into main).
+    /// If `dm_scope` is Main, returns a Main session key (DMs collapse into main).
     pub fn dm(
         agent_id: impl Into<String>,
         channel: impl Into<String>,
@@ -239,7 +239,7 @@ impl SessionKey {
         }
     }
 
-    /// Get the epoch of this session key (only Main and DirectMessage have epochs)
+    /// Get the epoch of this session key (only Main and `DirectMessage` have epochs)
     #[must_use]
     pub const fn epoch(&self) -> u32 {
         match self {

@@ -1,4 +1,4 @@
-//! POST /v1/responses — OpenAI Responses API passthrough.
+//! POST /v1/responses — `OpenAI` Responses API passthrough.
 
 pub mod sse;
 

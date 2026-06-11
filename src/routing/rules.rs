@@ -56,7 +56,7 @@ impl Default for RoutingPatternsConfig {
 }
 
 /// Maximum message length to attempt regex matching against.
-/// Messages longer than this are skipped to prevent regex DoS.
+/// Messages longer than this are skipped to prevent regex `DoS`.
 const MAX_CLASSIFY_MESSAGE_LEN: usize = 10_000;
 
 /// Compiled routing rules for zero-latency classification.
@@ -82,9 +82,9 @@ impl RoutingRules {
 
     /// Classify a message using rule-based pattern matching.
     ///
-    /// Priority order: collaborative > critical > multi_step > simple.
+    /// Priority order: collaborative > critical > `multi_step` > simple.
     /// Returns `None` if no pattern matches or the message exceeds the
-    /// length limit (prevents regex DoS on adversarially long input).
+    /// length limit (prevents regex `DoS` on adversarially long input).
     pub fn classify(&self, message: &str) -> Option<TaskRoute> {
         if message.len() > MAX_CLASSIFY_MESSAGE_LEN {
             warn!(

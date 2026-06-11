@@ -1,6 +1,6 @@
 //! Session Handlers
 //!
-//! RPC handlers for session management using the SQLite-backed SessionManager.
+//! RPC handlers for session management using the SQLite-backed `SessionManager`.
 
 mod db_handlers;
 

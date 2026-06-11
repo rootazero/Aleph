@@ -1,9 +1,9 @@
-//! PresenceReporter configuration.
+//! `PresenceReporter` configuration.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Configuration for the PresenceReporter background task.
+/// Configuration for the `PresenceReporter` background task.
 ///
 /// Defaults are conservative: enabled, 30-second tick.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -1,4 +1,4 @@
-//! Arena RPC handlers — create, query, and settle SharedArena instances.
+//! Arena RPC handlers — create, query, and settle `SharedArena` instances.
 
 use serde::Deserialize;
 use serde_json::json;
@@ -9,7 +9,7 @@ use crate::sync_primitives::{Arc, RwLock};
 use super::parse_params;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 
-/// Shared ArenaManager type alias used by handler registration.
+/// Shared `ArenaManager` type alias used by handler registration.
 pub type SharedArenaManager = Arc<RwLock<ArenaManager>>;
 
 // =============================================================================
@@ -49,7 +49,7 @@ pub struct SettleArenaParams {
 // Handlers
 // =============================================================================
 
-/// Handle `arena.create` — build an ArenaManifest and create a new arena.
+/// Handle `arena.create` — build an `ArenaManifest` and create a new arena.
 pub async fn handle_create(
     request: JsonRpcRequest,
     manager: SharedArenaManager,

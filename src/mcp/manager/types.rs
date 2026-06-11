@@ -1,6 +1,6 @@
 //! MCP Manager Types
 //!
-//! Types for the McpManager actor, including commands, events, and server configuration.
+//! Types for the `McpManager` actor, including commands, events, and server configuration.
 //!
 //! This module provides the foundational types for MCP orchestration:
 //! - `McpManagerConfig` - Persistence-friendly server configuration
@@ -488,7 +488,7 @@ pub enum McpCommand {
         respond_to: oneshot::Sender<Result<(), String>>,
     },
 
-    /// Get the McpClient for a specific server
+    /// Get the `McpClient` for a specific server
     GetClient {
         /// Server ID
         server_id: String,

@@ -1,14 +1,14 @@
-//! OpenAI prompt-cache routing helpers shared by the Chat and Responses adapters.
+//! `OpenAI` prompt-cache routing helpers shared by the Chat and Responses adapters.
 
 use std::borrow::Cow;
 
-/// OpenAI rejects a `prompt_cache_key` longer than 64 characters.
+/// `OpenAI` rejects a `prompt_cache_key` longer than 64 characters.
 pub const PROMPT_CACHE_KEY_MAX_CHARS: usize = 64;
 
-/// Clamp a `prompt_cache_key` to OpenAI's 64-character limit on a char boundary.
+/// Clamp a `prompt_cache_key` to `OpenAI`'s 64-character limit on a char boundary.
 ///
 /// Aleph routes prompt-cache affinity by session id, but composite session keys
-/// can exceed 64 chars — OpenAI then rejects the request (or silently ignores
+/// can exceed 64 chars — `OpenAI` then rejects the request (or silently ignores
 /// the key). Mirrors pi's `clampOpenAIPromptCacheKey`, but clamps by `char`
 /// rather than UTF-16 code unit so a multibyte key is never split mid-codepoint.
 /// Returns `Cow::Borrowed` (no allocation) when already within bounds.

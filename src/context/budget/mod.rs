@@ -193,7 +193,7 @@ pub struct ContextBudgetConfig {
 // =============================================================================
 
 /// Tracks consecutive compaction attempts. If compaction keeps firing without
-/// the pressure dropping, we escalate to FinalReply instead of looping forever.
+/// the pressure dropping, we escalate to `FinalReply` instead of looping forever.
 #[derive(Debug)]
 struct CompactionCircuitBreaker {
     max_consecutive: usize,
@@ -285,7 +285,7 @@ pub struct ContextBudget {
     last_pressure: Option<ContextPressure>,
     /// Number of session splits that have already occurred in this run.
     split_count: usize,
-    /// Maximum session splits allowed before the circuit-breaker trip falls back to FinalReply.
+    /// Maximum session splits allowed before the circuit-breaker trip falls back to `FinalReply`.
     max_splits: usize,
     /// Self-learning multiplier applied to the heuristic token estimate,
     /// calibrated against the provider's reported prompt size after each turn.

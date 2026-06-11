@@ -1,12 +1,12 @@
-//! MediaProcessor — unified entry point that converts `Vec<Attachment>` into
+//! `MediaProcessor` — unified entry point that converts `Vec<Attachment>` into
 //! `Vec<ContentBlock>` for LLM injection.
 //!
 //! Processing rules per MIME prefix:
 //!
-//! | MIME prefix | supports_vision=true | supports_vision=false |
+//! | MIME prefix | `supports_vision=true` | `supports_vision=false` |
 //! |-------------|----------------------|-----------------------|
-//! | `image/*`   | base64 Image block   | VisionPipeline fallback → text description |
-//! | `audio/*`   | TranscriptionService → text | Same |
+//! | `image/*`   | base64 Image block   | `VisionPipeline` fallback → text description |
+//! | `audio/*`   | `TranscriptionService` → text | Same |
 //! | Other       | `[Attachment: name (mime)]` | Same |
 //!
 //! Each attachment is processed independently — a single failure produces a
@@ -124,7 +124,7 @@ impl MediaProcessor {
     /// Process an image attachment.
     ///
     /// - `supports_vision=true`: resolve → base64 → `ContentBlock::Image`
-    /// - `supports_vision=false`: resolve → base64 → VisionPipeline description → text
+    /// - `supports_vision=false`: resolve → base64 → `VisionPipeline` description → text
     async fn process_image(
         &self,
         attachment: &Attachment,
@@ -211,7 +211,7 @@ impl MediaProcessor {
         }
     }
 
-    /// Use the VisionPipeline to produce a text description of an image.
+    /// Use the `VisionPipeline` to produce a text description of an image.
     async fn describe_image_fallback(
         &self,
         b64: &str,

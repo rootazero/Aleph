@@ -37,7 +37,7 @@ const INTERRUPTION_NOTE: &str = "<system-reminder>\n\
 /// G2 (opencode parity): wraps real mid-loop user messages in
 /// `<system-reminder>` so the model recognises them as genuine user
 /// interjections rather than synthetic harness chatter. Synthetic user
-/// messages (verifier vetoes, MAX_STEPS hints) pass through unwrapped, and
+/// messages (verifier vetoes, `MAX_STEPS` hints) pass through unwrapped, and
 /// the conversation-opening user message (`tail_start == 0`) is never
 /// wrapped.
 pub(crate) fn build_prompt(
@@ -203,11 +203,11 @@ pub(crate) fn build_prompt(
 /// Reconstruct one persisted assistant turn into provider content blocks.
 ///
 /// `resolved` is the set of tool-call ids whose `ToolResult`/`ToolError`
-/// appears later in the log; tool_use blocks without one are orphans (an
+/// appears later in the log; `tool_use` blocks without one are orphans (an
 /// interrupted turn) and are dropped — Anthropic-compatible backends reject
-/// orphan tool_use with HTTP 400. The signed thinking block is replayed only
-/// alongside a surviving tool_use (a lone thinking block is also rejected).
-/// Returns `None` when nothing survives (no text and only orphan tool_use),
+/// orphan `tool_use` with HTTP 400. The signed thinking block is replayed only
+/// alongside a surviving `tool_use` (a lone thinking block is also rejected).
+/// Returns `None` when nothing survives (no text and only orphan `tool_use`),
 /// so the caller emits no empty assistant placeholder.
 fn reconstruct_assistant_blocks(
     content: &crate::session::events::MessageContent,

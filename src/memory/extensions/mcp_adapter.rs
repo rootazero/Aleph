@@ -1,5 +1,5 @@
 //! Adapter: wraps an MCP client so a third-party plugin can be used
-//! wherever MemoryExtension is expected.
+//! wherever `MemoryExtension` is expected.
 
 use crate::error::AlephError;
 use crate::memory::assembler::envelope::{EnvelopeItem, MemoryEnvelope};

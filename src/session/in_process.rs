@@ -1,9 +1,9 @@
-//! InProcessActorSessionService — the default SessionService implementation.
+//! `InProcessActorSessionService` — the default `SessionService` implementation.
 //!
 //! Owns a router map from `SessionId` to the mpsc inbox of that session's
 //! actor. `attach`/`wake` manage actor lifecycle; `emit_event`/`get_events`/
 //! `subscribe` route commands to the right actor; `detach` shuts an actor
-//! down. Events survive actor restarts because they live in SQLite.
+//! down. Events survive actor restarts because they live in `SQLite`.
 
 use std::collections::HashMap;
 use std::sync::Arc;

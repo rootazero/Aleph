@@ -1,7 +1,7 @@
 use crate::gateway::interfaces::feishu::types::*;
 use serde::Deserialize;
 
-/// Parse a raw WebSocket text frame into a FeishuEvent.
+/// Parse a raw WebSocket text frame into a `FeishuEvent`.
 ///
 /// Returns `Ok(None)` for ping/pong frames (handled separately).
 /// Returns `Ok(Some(event))` for business events.
@@ -482,7 +482,7 @@ pub fn extract_text_content(content: &str, mentions: &[Mention]) -> Option<Strin
     }
 }
 
-/// Mark mentions that refer to the bot, given the bot's open_id.
+/// Mark mentions that refer to the bot, given the bot's `open_id`.
 pub fn mark_bot_mentions(mentions: &mut [Mention], bot_open_id: &str) {
     for mention in mentions.iter_mut() {
         if mention.id == bot_open_id {

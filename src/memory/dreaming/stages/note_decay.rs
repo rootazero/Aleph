@@ -1,4 +1,4 @@
-//! NoteDecay stage — archive low-activity notes.
+//! `NoteDecay` stage — archive low-activity notes.
 //!
 //! This stage computes an "activity score" for each note and moves
 //! low-scoring notes to an `archive/` subdirectory.  Notes are never
@@ -6,12 +6,12 @@
 //!
 //! ## Scoring
 //!
-//! score = access_weight * 0.4 + recency_weight * 0.3 + link_weight * 0.3
+//! score = `access_weight` * 0.4 + `recency_weight` * 0.3 + `link_weight` * 0.3
 //!
-//! - `access_weight`  — 1.0 / (1.0 + days_since_last_recall / 30.0) from the
+//! - `access_weight`  — 1.0 / (1.0 + `days_since_last_recall` / 30.0) from the
 //!   note's latest `recall_signals` hit, or 0.0 if it was never recalled
-//! - `recency_weight` — 1.0 / (1.0 + days_since_update / 30.0)
-//! - `link_weight`    — min(incoming_link_count / 3.0, 1.0)
+//! - `recency_weight` — 1.0 / (1.0 + `days_since_update` / 30.0)
+//! - `link_weight`    — `min(incoming_link_count` / 3.0, 1.0)
 //!
 //! ## Protection rules (score not computed; note skipped)
 //!
@@ -58,7 +58,7 @@ const DECAY_WRITE_EPSILON: f32 = 0.02;
 // Stage struct
 // ---------------------------------------------------------------------------
 
-/// NoteDecay stage, parameterised by the runtime [`MemoryDecayPolicy`] so the
+/// `NoteDecay` stage, parameterised by the runtime [`MemoryDecayPolicy`] so the
 /// previously-dead `memory.memory_decay.*` config finally drives behaviour.
 ///
 /// `half_life_days` replaces the old hard-coded `DECAY_TAU_DAYS = 90`,
@@ -388,7 +388,7 @@ impl DreamStage for NoteDecayStage {
 
 /// Patch (or insert) the `confidence:` scalar inside a note's YAML frontmatter,
 /// leaving the body (prose, headings, code, supersession markers) byte-for-byte
-/// intact. Mirrors `to_markdown`'s `confidence: {:.4}` formatting so the SQLite
+/// intact. Mirrors `to_markdown`'s `confidence: {:.4}` formatting so the `SQLite`
 /// reparse stays consistent.
 ///
 /// Returns `None` if `content` has no leading `---`-delimited frontmatter block.

@@ -1,7 +1,7 @@
 //! OAuth token auto-refresh.
 //!
 //! Checks if an OAuth credential is near expiry and refreshes it
-//! using the refresh_token grant.
+//! using the `refresh_token` grant.
 
 use anyhow::Result;
 use std::sync::OnceLock;
@@ -24,7 +24,7 @@ fn oauth_client() -> &'static reqwest::Client {
 /// Default refresh margin: refresh 5 minutes before expiry.
 const REFRESH_MARGIN_SECS: u64 = 300;
 
-/// Google OAuth2 token endpoint.
+/// Google `OAuth2` token endpoint.
 const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
 /// Check if an OAuth credential needs refresh.

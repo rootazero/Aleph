@@ -1,4 +1,4 @@
-//! query_filed table access — dedup lookups and inserts for the query filer.
+//! `query_filed` table access — dedup lookups and inserts for the query filer.
 
 use rusqlite::params;
 use rusqlite::OptionalExtension;
@@ -34,8 +34,8 @@ impl SqliteMemoryBackend {
         Ok(result)
     }
 
-    /// Insert a query_filed row. Uses INSERT OR IGNORE so duplicates are silently
-    /// rejected by the UNIQUE(agent_id, query_hash) constraint.
+    /// Insert a `query_filed` row. Uses INSERT OR IGNORE so duplicates are silently
+    /// rejected by the `UNIQUE(agent_id`, `query_hash`) constraint.
     pub fn query_filed_insert(&self, row: &QueryFiledRow) -> Result<(), AlephError> {
         let conn = self
             .conn

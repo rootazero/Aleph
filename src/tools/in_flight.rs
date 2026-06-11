@@ -106,7 +106,7 @@ impl InFlightToolCalls {
     /// a `let _guard = ...;` binding so the cleanup runs on early-return too.
     ///
     /// A duplicate `call_id` overwrites the previous entry. In practice the
-    /// LLM should never reuse a tool_call_id within a run, so a clash means
+    /// LLM should never reuse a `tool_call_id` within a run, so a clash means
     /// either an upstream bug or a duplicate dispatch by the harness; the
     /// latest registration wins so the most recent cancel target stays valid.
     pub fn register(

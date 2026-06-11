@@ -100,10 +100,10 @@ pub struct EndpointConfig {
 /// Response field mapping
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ResponseMapping {
-    /// Path to content field (JSONPath)
+    /// Path to content field (`JSONPath`)
     pub content: String,
 
-    /// Path to error field (JSONPath)
+    /// Path to error field (`JSONPath`)
     #[serde(default)]
     pub error: Option<String>,
 }

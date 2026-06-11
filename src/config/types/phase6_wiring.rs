@@ -3,7 +3,7 @@
 //! Stage 5a/5b + P0 rescue from None placeholders to live values.
 //!
 //! Missing section → corresponding `Config` field stays `None` →
-//! AgentHarnessRunner field stays `None` → behavior identical to
+//! `AgentHarnessRunner` field stays `None` → behavior identical to
 //! Stage 7 ship (commit c2cd8d293) main HEAD.
 //!
 //! Wired into `AgentHarnessRunner` by `orchestrator_init::build_*` helpers.
@@ -12,8 +12,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// `[guardrails]` — single switch wiring `PiiSecretsGuardrail`
-/// onto Input + Output + ToolCall trait surfaces. Phase-6 has only one real
-/// `GuardrailImpl`; future detectors (e.g. content_safety) extend this struct
+/// onto Input + Output + `ToolCall` trait surfaces. Phase-6 has only one real
+/// `GuardrailImpl`; future detectors (e.g. `content_safety`) extend this struct
 /// additively without breaking existing toml.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct GuardrailsToml {
@@ -105,7 +105,7 @@ pub struct ContextBudgetToml {
     pub enabled: bool,
     /// Model context-window size in tokens. Set this to your model's real
     /// window — compaction thresholds are fractions of this budget, so an
-    /// inaccurate value compacts too early or too late. Default 200_000.
+    /// inaccurate value compacts too early or too late. Default `200_000`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<u64>,
     /// Fraction of `token_budget` at which compaction begins. Default 0.70.

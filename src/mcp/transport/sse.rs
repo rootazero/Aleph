@@ -33,7 +33,7 @@ pub type RequestCallback =
 /// SSE transport configuration
 #[derive(Debug, Clone)]
 pub struct SseTransportConfig {
-    /// Server URL for POST requests (e.g., "https://example.com/mcp")
+    /// Server URL for POST requests (e.g., "<https://example.com/mcp>")
     pub url: String,
     /// Custom HTTP headers (for auth tokens, etc.)
     pub headers: HashMap<String, String>,
@@ -91,8 +91,8 @@ pub struct SseTransport {
     client: Client,
     /// Connection state
     alive: Arc<RwLock<bool>>,
-    /// Notification handler (crate::sync_primitives::Mutex wrapped in Arc so the spawned
-    /// SSE listener task can access it without block_in_place)
+    /// Notification handler (`crate::sync_primitives::Mutex` wrapped in Arc so the spawned
+    /// SSE listener task can access it without `block_in_place`)
     notification_handler: Arc<crate::sync_primitives::Mutex<Option<NotificationCallback>>>,
     /// Handler for server-initiated requests (sampling, etc.)
     request_handler: Arc<crate::sync_primitives::Mutex<Option<RequestCallback>>>,

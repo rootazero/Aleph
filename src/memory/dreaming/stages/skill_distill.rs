@@ -1,4 +1,4 @@
-//! SkillDistill stage — extracts reusable skill-notes from synthesis output.
+//! `SkillDistill` stage — extracts reusable skill-notes from synthesis output.
 //!
 //! Per Phase 2 Decision 2, this stage uses **code-injected candidates**:
 //! before each LLM call, [`find_similar_notes`] retrieves the top-N most

@@ -1,4 +1,4 @@
-//! TaskWaitTool — wait for coordination tasks to complete.
+//! `TaskWaitTool` — wait for coordination tasks to complete.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

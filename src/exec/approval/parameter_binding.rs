@@ -4,11 +4,11 @@ use std::collections::HashMap;
 /// Binding between tool parameter and capability
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ParameterBinding {
-    /// Capability string: "filesystem.read_only", "filesystem.read_write"
+    /// Capability string: "`filesystem.read_only`", "`filesystem.read_write`"
     pub capability: String,
-    /// Validation rule: is_file, is_directory
+    /// Validation rule: `is_file`, `is_directory`
     pub validation: ValidationRule,
-    /// Mapping type: single, each_element (for arrays)
+    /// Mapping type: single, `each_element` (for arrays)
     #[serde(default)]
     pub mapping: MappingType,
 }

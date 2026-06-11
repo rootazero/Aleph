@@ -1,4 +1,4 @@
-//! Background spawn + AgentRuntime construction for `SubagentTool`.
+//! Background spawn + `AgentRuntime` construction for `SubagentTool`.
 //!
 //! All three call sites (foreground sync, sync batch, background) route
 //! their per-call `CancellationToken` through `cancel_for_child_with` so a

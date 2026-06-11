@@ -1,6 +1,6 @@
 //! Memory search tool with hybrid retrieval and post-retrieval arbitration
 //!
-//! Implements AlephTool trait for AI agent integration.
+//! Implements `AlephTool` trait for AI agent integration.
 
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -23,7 +23,7 @@ use crate::memory::{
 };
 use crate::tools::AlephTool;
 
-/// Arguments for memory_search tool
+/// Arguments for `memory_search` tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct MemorySearchArgs {
     /// Search query
@@ -42,7 +42,7 @@ pub struct MemorySearchArgs {
     #[serde(default)]
     pub cross_workspace: Option<bool>,
     /// Search scope: "all" (default) searches long-term memory only,
-    /// "current_session" searches only the current session's compressed summaries,
+    /// "`current_session`" searches only the current session's compressed summaries,
     /// "both" searches long-term memory and the current session summaries together.
     #[serde(default)]
     pub scope: Option<String>,
@@ -71,7 +71,7 @@ pub struct TranscriptResult {
     pub similarity_score: f32,
 }
 
-/// Output from memory_search tool
+/// Output from `memory_search` tool
 #[derive(Debug, Clone, Serialize)]
 pub struct MemorySearchOutput {
     pub facts: Vec<FactResult>,
@@ -154,10 +154,10 @@ pub struct MemorySearchTool {
     _indexer: Arc<TranscriptIndexer>,
     /// Shared default workspace ID, written per-request by the execution engine
     /// (`execute.rs`) from the session's agent id.
-    /// Falls back to DEFAULT_AGENT ("main") when not set.
+    /// Falls back to `DEFAULT_AGENT` ("main") when not set.
     default_workspace: Arc<RwLock<String>>,
     /// Shared session key for the current session, set by the execution engine.
-    /// Used to scope "current_session" searches to the active session's summaries.
+    /// Used to scope "`current_session`" searches to the active session's summaries.
     default_session_key: Arc<RwLock<String>>,
     /// Smart recall config from the active workspace profile.
     /// Updated by the execution engine when workspace is resolved.
@@ -185,7 +185,7 @@ impl MemorySearchTool {
     /// recall (not missing relevant memories) with precision (not returning noise).
     const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.3;
 
-    /// Create a new MemorySearchTool instance.
+    /// Create a new `MemorySearchTool` instance.
     ///
     /// `similarity_threshold`: if `Some`, overrides the default (from config.toml).
     pub fn new_with_embedder(
@@ -195,7 +195,7 @@ impl MemorySearchTool {
         Self::new_with_config(database, embedder, None, None, None)
     }
 
-    /// Create a new MemorySearchTool with explicit similarity threshold from config.
+    /// Create a new `MemorySearchTool` with explicit similarity threshold from config.
     ///
     /// `rerank_config`: when `Some` and enabled, attaches a cross-encoder
     /// reranker to the long-term recall path. `None` / disabled leaves recall
@@ -257,7 +257,7 @@ impl MemorySearchTool {
     /// Get a shared handle to the current session key.
     ///
     /// The execution engine writes the active session's key string here after
-    /// session resolution. Used by scope="current_session" to filter SQLite
+    /// session resolution. Used by `scope="current_session`" to filter `SQLite`
     /// facts under `aleph://session/{session_key}/`.
     #[must_use]
     pub fn default_session_key_handle(&self) -> Arc<RwLock<String>> {
@@ -266,7 +266,7 @@ impl MemorySearchTool {
 
     /// Get a shared handle to the smart recall config.
     ///
-    /// The execution engine writes the active workspace profile's SmartRecallConfig
+    /// The execution engine writes the active workspace profile's `SmartRecallConfig`
     /// here after workspace resolution.
     #[must_use]
     pub fn smart_recall_config_handle(&self) -> Arc<RwLock<Option<SmartRecallConfig>>> {
@@ -581,7 +581,7 @@ impl Clone for MemorySearchTool {
     }
 }
 
-/// Implementation of AlephTool trait for MemorySearchTool
+/// Implementation of `AlephTool` trait for `MemorySearchTool`
 #[async_trait]
 impl AlephTool for MemorySearchTool {
     const NAME: &'static str = "memory_search";

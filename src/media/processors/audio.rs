@@ -1,4 +1,4 @@
-//! Audio processor — stub MediaProvider for audio transcription.
+//! Audio processor — stub `MediaProvider` for audio transcription.
 //!
 //! Actual processing is delegated to external API providers (e.g., Whisper).
 //! This stub provides the trait interface for the media pipeline.

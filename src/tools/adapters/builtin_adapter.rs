@@ -1,4 +1,4 @@
-//! Adapter from AlephToolDyn to LoopTool.
+//! Adapter from `AlephToolDyn` to `LoopTool`.
 //!
 //! Wraps an existing `AlephToolDyn` trait object so it can be used
 //! seamlessly within the agent loop.

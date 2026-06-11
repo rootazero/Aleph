@@ -1,6 +1,6 @@
 //! CLI Execution Backends
 //!
-//! Implements host, Docker, and VirtualFs execution modes for Markdown CLI tools.
+//! Implements host, Docker, and `VirtualFs` execution modes for Markdown CLI tools.
 
 use anyhow::Result;
 use std::path::PathBuf;
@@ -26,7 +26,7 @@ impl MarkdownCliTool {
             .map_or(DEFAULT_EXECUTION_TIMEOUT, Duration::from_secs)
     }
 
-    /// Execute on host system (with SafetyGate if configured).
+    /// Execute on host system (with `SafetyGate` if configured).
     ///
     /// # Host-mode contract (see `docs/superpowers/specs/2026-05-20-host-sandbox-netns-decision-design.md`)
     ///
@@ -314,7 +314,7 @@ impl MarkdownCliTool {
         }
     }
 
-    /// Execute in VirtualFs sandbox (lightweight isolation)
+    /// Execute in `VirtualFs` sandbox (lightweight isolation)
     ///
     /// Provides filesystem isolation through:
     /// - Temporary isolated working directory
@@ -388,7 +388,7 @@ impl MarkdownCliTool {
     }
 }
 
-/// VirtualFs Sandbox Environment
+/// `VirtualFs` Sandbox Environment
 ///
 /// Provides lightweight filesystem isolation by creating a temporary
 /// directory structure and redirecting environment variables.
@@ -426,7 +426,7 @@ struct VirtualFsSandbox {
 }
 
 impl VirtualFsSandbox {
-    /// Create a new VirtualFs sandbox
+    /// Create a new `VirtualFs` sandbox
     fn new(tool_name: &str) -> Result<Self> {
         // Create root sandbox directory with unique name
         let root_dir = std::env::temp_dir().join(format!(

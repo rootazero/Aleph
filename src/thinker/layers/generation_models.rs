@@ -1,4 +1,4 @@
-//! GenerationModelsLayer — media generation models (priority 1000)
+//! `GenerationModelsLayer` — media generation models (priority 1000)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

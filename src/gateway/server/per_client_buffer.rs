@@ -1,8 +1,8 @@
 //! Per-client event buffer with backpressure support
 //!
-//! Provides bounded buffering between the global GatewayEventBus and individual
+//! Provides bounded buffering between the global `GatewayEventBus` and individual
 //! WebSocket connections. Uses tokio broadcast channel for sync recv compatibility
-//! with tokio::select!.
+//! with `tokio::select`!.
 
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicU64, Ordering};

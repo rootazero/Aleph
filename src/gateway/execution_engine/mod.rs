@@ -1,11 +1,11 @@
 //! Execution Engine
 //!
-//! Bridges the Gateway with the AgentLoop.
+//! Bridges the Gateway with the `AgentLoop`.
 //! Manages run lifecycle, emits events, and handles cancellation.
 //!
 //! # Module structure
 //!
-//! - `engine` - Full `ExecutionEngine<P,R>` with AgentLoop integration
+//! - `engine` - Full `ExecutionEngine<P,R>` with `AgentLoop` integration
 //! - `simple` - `SimpleExecutionEngine` for when providers/tools are not available
 
 mod adapter;
@@ -126,7 +126,7 @@ pub enum BusyInputMode {
     /// The message waits in the inbound router's per-agent FIFO busy queue and
     /// is delivered as a fresh run once the current one finishes — the
     /// follow-up lane every reference harness exposes (openclaw `followup`,
-    /// hermes `queue`, Pi `followUp`, OpenSquilla `followup`). Bounded wait:
+    /// hermes `queue`, Pi `followUp`, `OpenSquilla` `followup`). Bounded wait:
     /// past the queue deadline the user is notified instead of the message
     /// being silently dropped.
     Queue,
@@ -217,7 +217,7 @@ pub struct RunRequest {
     /// resolution chain.
     pub max_iterations_override: Option<u32>,
     /// Chat-window picker — per-turn model override. When `Some`, the
-    /// run_loop short-circuits `provider_registry.resolve_with_fallback`
+    /// `run_loop` short-circuits `provider_registry.resolve_with_fallback`
     /// and pins the requested (provider, model) pair (Qualified) or the
     /// requested model with auto-resolved provider (Raw). `None` keeps the
     /// agent's configured default + fallback chain.

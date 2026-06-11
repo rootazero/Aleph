@@ -1,4 +1,4 @@
-//! AgentLoopBridge — bridges A2A protocol messages to Aleph's internal Agent Loop.
+//! `AgentLoopBridge` — bridges A2A protocol messages to Aleph's internal Agent Loop.
 //!
 //! Implements the `A2AMessageHandler` port by translating incoming `A2AMessage`
 //! into `RunRequest`, executing via `ExecutionAdapter`, and mapping results
@@ -71,7 +71,7 @@ impl AgentLoopBridge {
         }
     }
 
-    /// Determine the context_id: use session_id if provided, otherwise task_id.
+    /// Determine the `context_id`: use `session_id` if provided, otherwise `task_id`.
     fn context_id<'a>(task_id: &'a str, session_id: Option<&'a str>) -> &'a str {
         session_id.unwrap_or(task_id)
     }

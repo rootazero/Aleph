@@ -1,7 +1,7 @@
 //! MCP plugin configuration reader
 //!
 //! Reads `.mcp.json` from plugin directories and prepares MCP server configs
-//! for registration with Aleph's MCP client system (McpManager).
+//! for registration with Aleph's MCP client system (`McpManager`).
 //!
 //! # .mcp.json Format
 //!

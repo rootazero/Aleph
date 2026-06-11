@@ -1,4 +1,4 @@
-//! SessionTurnTool — respond in a collaborative session or propose its conclusion.
+//! `SessionTurnTool` — respond in a collaborative session or propose its conclusion.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -38,7 +38,7 @@ pub struct SessionTurnArgs {
     pub dissent: Option<String>,
 }
 
-/// Output from session_turn.
+/// Output from `session_turn`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionTurnOutput {
     pub session_id: String,

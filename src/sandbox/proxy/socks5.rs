@@ -15,7 +15,7 @@
 //!                  RSV(0x00) ATYP ADDR PORT
 //! ```
 //!
-//! UDP_ASSOCIATE (0x03) and BIND (0x02) are refused (REP=0x07).
+//! `UDP_ASSOCIATE` (0x03) and BIND (0x02) are refused (REP=0x07).
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;

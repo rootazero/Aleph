@@ -302,8 +302,8 @@ impl SubAgentRequest {
 
     /// Create a sub-agent request from parent execution context
     ///
-    /// This extracts relevant information from the parent's ExecutionContext
-    /// and populates the ExecutionContextInfo for the sub-agent.
+    /// This extracts relevant information from the parent's `ExecutionContext`
+    /// and populates the `ExecutionContextInfo` for the sub-agent.
     ///
     /// # Arguments
     ///

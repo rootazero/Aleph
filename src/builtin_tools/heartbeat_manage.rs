@@ -24,11 +24,11 @@ use crate::tools::AlephTool;
 // Heartbeat List Tool
 // =============================================================================
 
-/// Arguments for heartbeat_list — no parameters required
+/// Arguments for `heartbeat_list` — no parameters required
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct HeartbeatListArgs {}
 
-/// Output from heartbeat_list
+/// Output from `heartbeat_list`
 #[derive(Debug, Clone, Serialize)]
 pub struct HeartbeatListOutput {
     /// Human-readable status message
@@ -104,12 +104,12 @@ impl From<TriggerConditionInput> for TriggerCondition {
     }
 }
 
-/// Arguments for heartbeat_create
+/// Arguments for `heartbeat_create`
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct HeartbeatCreateArgs {
     /// Human-readable name for this monitoring task
     pub name: String,
-    /// Probe tool to call for L1 monitoring (e.g. "gmail.unread_count")
+    /// Probe tool to call for L1 monitoring (e.g. "`gmail.unread_count`")
     pub probe_tool_name: String,
     /// How often to run the probe, in milliseconds (e.g. 300000 for 5 minutes)
     pub interval_ms: u64,
@@ -124,7 +124,7 @@ pub struct HeartbeatCreateArgs {
     pub probe_tool_params: Option<serde_json::Value>,
 }
 
-/// Output from heartbeat_create
+/// Output from `heartbeat_create`
 #[derive(Debug, Clone, Serialize)]
 pub struct HeartbeatCreateOutput {
     /// Human-readable status message
@@ -206,7 +206,7 @@ impl AlephTool for HeartbeatCreateTool {
 // Heartbeat Update Tool
 // =============================================================================
 
-/// Arguments for heartbeat_update
+/// Arguments for `heartbeat_update`
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct HeartbeatUpdateArgs {
     /// Task ID to update (required)
@@ -225,7 +225,7 @@ pub struct HeartbeatUpdateArgs {
     pub enabled: Option<bool>,
 }
 
-/// Output from heartbeat_update
+/// Output from `heartbeat_update`
 #[derive(Debug, Clone, Serialize)]
 pub struct HeartbeatUpdateOutput {
     /// Human-readable status message
@@ -300,14 +300,14 @@ impl AlephTool for HeartbeatUpdateTool {
 // Heartbeat Delete Tool
 // =============================================================================
 
-/// Arguments for heartbeat_delete
+/// Arguments for `heartbeat_delete`
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct HeartbeatDeleteArgs {
     /// Task ID to delete (required)
     pub id: String,
 }
 
-/// Output from heartbeat_delete
+/// Output from `heartbeat_delete`
 #[derive(Debug, Clone, Serialize)]
 pub struct HeartbeatDeleteOutput {
     /// Human-readable status message
@@ -356,14 +356,14 @@ impl AlephTool for HeartbeatDeleteTool {
 // Heartbeat Toggle Tool
 // =============================================================================
 
-/// Arguments for heartbeat_toggle
+/// Arguments for `heartbeat_toggle`
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct HeartbeatToggleArgs {
     /// Task ID to toggle (required)
     pub id: String,
 }
 
-/// Output from heartbeat_toggle
+/// Output from `heartbeat_toggle`
 #[derive(Debug, Clone, Serialize)]
 pub struct HeartbeatToggleOutput {
     /// Human-readable status message
@@ -415,7 +415,7 @@ impl AlephTool for HeartbeatToggleTool {
 // Heartbeat Report Tool (L2 output tool)
 // =============================================================================
 
-/// Action for heartbeat_report
+/// Action for `heartbeat_report`
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HeartbeatReportAction {
@@ -425,7 +425,7 @@ pub enum HeartbeatReportAction {
     Notify,
 }
 
-/// Arguments for heartbeat_report
+/// Arguments for `heartbeat_report`
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct HeartbeatReportArgs {
     /// Action to take: "silent" (no notification) or "notify" (send message to user)
@@ -435,7 +435,7 @@ pub struct HeartbeatReportArgs {
     pub message: Option<String>,
 }
 
-/// Output from heartbeat_report
+/// Output from `heartbeat_report`
 #[derive(Debug, Clone, Serialize)]
 pub struct HeartbeatReportOutput {
     /// The action taken

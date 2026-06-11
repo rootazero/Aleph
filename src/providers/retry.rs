@@ -1,7 +1,7 @@
 /// Retry logic with exponential backoff for AI provider requests
 ///
 /// This module provides utilities for retrying failed requests with
-/// exponential backoff strategy. Inspired by OpenCode's retry.ts.
+/// exponential backoff strategy. Inspired by `OpenCode`'s retry.ts.
 use crate::config::RetryPolicy;
 use crate::error::{AlephError, Result};
 use crate::tool_metadata::DEFAULT_MAX_RETRIES;
@@ -10,7 +10,7 @@ use std::future::Future;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-/// Constants matching OpenCode's retry.ts
+/// Constants matching `OpenCode`'s retry.ts
 pub const RETRY_INITIAL_DELAY_MS: u64 = 2000; // 2 seconds
 pub const RETRY_BACKOFF_FACTOR: f64 = 2.0;
 pub const RETRY_MAX_DELAY_NO_HEADERS_MS: u64 = 30_000; // 30 seconds
@@ -63,8 +63,8 @@ fn is_retryable(error: &AlephError) -> bool {
 /// Determines if an error is retryable using provided policy.
 ///
 /// Retryable errors:
-/// - Network errors (if retry_on_network_error is true)
-/// - Timeout errors (if retry_on_timeout is true)
+/// - Network errors (if `retry_on_network_error` is true)
+/// - Timeout errors (if `retry_on_timeout` is true)
 /// - Server errors (matching status codes in policy)
 ///
 /// Non-retryable errors:
@@ -99,7 +99,7 @@ fn is_retryable_with_policy(error: &AlephError, policy: &RetryPolicy) -> bool {
 /// Check if error message indicates an overloaded condition (retryable)
 ///
 /// Matches server-side overload conditions that are transient.
-/// NOTE: "rate limit" and "too_many_requests" are intentionally excluded —
+/// NOTE: "rate limit" and "`too_many_requests`" are intentionally excluded —
 /// rate limits indicate quota exhaustion and retrying amplifies the problem.
 fn is_overloaded_message(message: &str) -> bool {
     let lower = message.to_lowercase();
@@ -108,7 +108,7 @@ fn is_overloaded_message(message: &str) -> bool {
 
 /// Extended retryable check that returns the reason if retryable
 ///
-/// Matches OpenCode's retryable() function signature.
+/// Matches `OpenCode`'s `retryable()` function signature.
 #[must_use]
 pub fn retryable_reason(error: &AlephError) -> Option<String> {
     let default_policy = RetryPolicy::default();
@@ -121,10 +121,10 @@ pub fn retryable_reason(error: &AlephError) -> Option<String> {
 
 /// Calculate delay for a retry attempt
 ///
-/// This matches OpenCode's delay() function from retry.ts.
+/// This matches `OpenCode`'s `delay()` function from retry.ts.
 /// Priority:
-/// 1. Use retry_after_ms if provided (from Retry-After-Ms header)
-/// 2. Use retry_after_secs if provided (from Retry-After header, parsed)
+/// 1. Use `retry_after_ms` if provided (from Retry-After-Ms header)
+/// 2. Use `retry_after_secs` if provided (from Retry-After header, parsed)
 /// 3. Fall back to exponential backoff
 #[must_use]
 pub fn calculate_delay(

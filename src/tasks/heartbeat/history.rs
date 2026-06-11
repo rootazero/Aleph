@@ -1,6 +1,6 @@
-//! SQLite execution history for heartbeat task runs.
+//! `SQLite` execution history for heartbeat task runs.
 //!
-//! Stores task execution records in SQLite for observability and debugging.
+//! Stores task execution records in `SQLite` for observability and debugging.
 //! Functions accept a `rusqlite::Connection` to stay decoupled from any
 //! specific database wrapper.
 

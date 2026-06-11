@@ -1,10 +1,10 @@
 //! ACP (Agent Communication Protocol) configuration types
 //!
 //! Contains configuration for ACP harness management:
-//! - AcpConfig: Top-level ACP settings (enable/disable, harness registry)
-//! - AcpAdapterEntry: Individual harness configuration
-//! - AdapterModeSerde: Communication mode (NativeAcp vs Oneshot)
-//! - OutputFormatSerde: Output parsing format (PlainText vs Json)
+//! - `AcpConfig`: Top-level ACP settings (enable/disable, harness registry)
+//! - `AcpAdapterEntry`: Individual harness configuration
+//! - `AdapterModeSerde`: Communication mode (`NativeAcp` vs Oneshot)
+//! - `OutputFormatSerde`: Output parsing format (`PlainText` vs Json)
 //! - Preset factory methods for well-known harnesses (Claude Code, Codex, Gemini)
 
 use schemars::JsonSchema;
@@ -248,8 +248,8 @@ impl From<&PresetSpec> for AcpAdapterEntry {
 
 /// Built-in preset adapters.
 ///
-/// Covers agents from acpx's AGENT_REGISTRY that follow the standard
-/// executable + args pattern. Each entry maps to a GenericAcpAdapter.
+/// Covers agents from acpx's `AGENT_REGISTRY` that follow the standard
+/// executable + args pattern. Each entry maps to a `GenericAcpAdapter`.
 pub const HARNESS_PRESETS: &[PresetSpec] = &[
     // Claude Code — supports both oneshot (--print) and native ACP (--acp)
     PresetSpec {
@@ -439,7 +439,7 @@ impl AcpAdapterEntry {
         })
     }
 
-    /// Preset: Codex (OpenAI CLI)
+    /// Preset: Codex (`OpenAI` CLI)
     #[must_use]
     pub fn preset_codex() -> Self {
         Self::preset_by_id("codex").unwrap_or_else(|| {

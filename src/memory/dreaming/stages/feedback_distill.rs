@@ -1,4 +1,4 @@
-//! FeedbackDistill stage — distills user-correction signals into feedback notes.
+//! `FeedbackDistill` stage — distills user-correction signals into feedback notes.
 //!
 //! Reads `RawMemorySource::Correction` rows written by the
 //! `flag_user_correction` tool (Phase 3 path α) and asks the LLM to choose
@@ -279,7 +279,7 @@ impl DreamStage for FeedbackDistillStage {
     }
 }
 
-/// Build the LLM prompt for FeedbackDistill with code-injected candidates and
+/// Build the LLM prompt for `FeedbackDistill` with code-injected candidates and
 /// an injection-resistant fence around each user-supplied correction.
 #[must_use]
 pub fn build_feedback_distill_prompt(

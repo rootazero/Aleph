@@ -195,7 +195,7 @@ impl WebhookMessageOps {
         format!("wh-{}", hex::encode(hasher.finalize()))
     }
 
-    /// Build outbound JSON payload from an OutboundMessage.
+    /// Build outbound JSON payload from an `OutboundMessage`.
     #[must_use]
     pub fn build_outbound_payload(message: &OutboundMessage) -> serde_json::Value {
         serde_json::json!({
@@ -209,7 +209,7 @@ impl WebhookMessageOps {
         })
     }
 
-    /// Send an outbound message by POSTing to the callback URL.
+    /// Send an outbound message by `POSTing` to the callback URL.
     ///
     /// Signs the request body with HMAC-SHA256 and includes the signature
     /// in the `X-Webhook-Signature` header.

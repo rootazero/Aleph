@@ -102,7 +102,7 @@ const DEFAULT_MODEL_COOLDOWN: Duration = Duration::from_secs(60);
 pub struct FailoverConfig {
     /// Same-candidate retries on a transient error before the chain advances.
     pub max_retries: u32,
-    /// Initial circuit-breaker cooldown. Doubles on each HalfOpen probe
+    /// Initial circuit-breaker cooldown. Doubles on each `HalfOpen` probe
     /// failure, capped at [`MAX_COOLDOWN`].
     pub unhealthy_cooldown: Duration,
 }

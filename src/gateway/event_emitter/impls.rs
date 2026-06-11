@@ -1,4 +1,4 @@
-//! EventEmitter implementations
+//! `EventEmitter` implementations
 //!
 //! Concrete implementations of the `EventEmitter` trait:
 //! - `GatewayEventEmitter` — broadcasts via the Gateway event bus
@@ -261,7 +261,7 @@ impl EventEmitter for CollectingEventEmitter {
     }
 }
 
-/// Wrapper for dynamic EventEmitter trait objects
+/// Wrapper for dynamic `EventEmitter` trait objects
 ///
 /// This wrapper allows passing `Arc<dyn EventEmitter + Send + Sync>` to generic
 /// functions that require `E: EventEmitter + Send + Sync + 'static`.
@@ -271,7 +271,7 @@ pub struct DynEventEmitter {
 }
 
 impl DynEventEmitter {
-    /// Create a new wrapper around a dynamic EventEmitter
+    /// Create a new wrapper around a dynamic `EventEmitter`
     pub fn new(emitter: Arc<dyn EventEmitter + Send + Sync>) -> Self {
         Self { inner: emitter }
     }

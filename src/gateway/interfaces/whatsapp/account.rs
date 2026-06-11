@@ -1,6 +1,6 @@
-//! WhatsApp Account
+//! `WhatsApp` Account
 //!
-//! Single WhatsApp account instance with state management.
+//! Single `WhatsApp` account instance with state management.
 
 use crate::gateway::channel::ChannelHealth;
 use crate::gateway::channel_policy::E164Number;

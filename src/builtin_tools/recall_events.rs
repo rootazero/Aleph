@@ -1,7 +1,7 @@
 //! `RecallEventsTool` — BM25 retrieval over the current session's event log.
 //!
 //! Aleph records every message, tool call, tool result, and error of a session
-//! in the `session_events` SQLite log. Compaction evicts old turns from the
+//! in the `session_events` `SQLite` log. Compaction evicts old turns from the
 //! *context window* once it grows large, but those events remain on disk. This
 //! tool makes them BM25-searchable, so after a compaction the model can recover
 //! *what it did* earlier this session — the file it was editing, the command

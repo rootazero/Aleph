@@ -65,7 +65,7 @@ pub struct ProviderPreset {
     pub signup_url: Option<&'static str>,
     /// Human-friendly display name; falls back to canonical name when None.
     pub display_name: Option<&'static str>,
-    /// One-line description shown under display_name.
+    /// One-line description shown under `display_name`.
     pub description: Option<&'static str>,
     /// Non-standard temperature handling (Kimi server-managed, GPT-5 fixed, …).
     /// `None` → pass caller's temperature through unchanged.
@@ -222,7 +222,7 @@ impl ProviderPreset {
 ///
 /// Returns `None` only when the preset itself is unknown — every existing
 /// preset now derives its metadata from its own `ProviderPreset` fields
-/// (display_name / description / homepage / modalities), so the parallel
+/// (`display_name` / description / homepage / modalities), so the parallel
 /// `PRESET_METADATA` map is just a cached view onto the same data.
 pub fn provider_metadata(name: &str) -> Option<&'static ProviderMetadata> {
     PRESET_METADATA.get(name.to_lowercase().as_str())
@@ -300,9 +300,9 @@ pub fn get_merged_preset(
 /// * `policy = Some(Force(f))`   → `Some(f)` (override caller's value)
 ///
 /// Adapters look the policy up via [`temperature_for_base_url`] using
-/// `config.base_url`, which they already have on hand. Custom base_urls
+/// `config.base_url`, which they already have on hand. Custom `base_urls`
 /// (user override) silently miss the lookup, which is the right default —
-/// users overriding base_url have opted out of preset assumptions.
+/// users overriding `base_url` have opted out of preset assumptions.
 #[must_use]
 pub const fn apply_temperature_policy(
     policy: Option<TemperaturePolicy>,

@@ -4,7 +4,7 @@
 //! Location: ~/.aleph/secrets.vault
 //!
 //! This is a pure storage container — encryption/decryption is the caller's
-//! responsibility (handled by SharedTokenManager).
+//! responsibility (handled by `SharedTokenManager`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -111,7 +111,7 @@ impl SecretVault {
         }
     }
 
-    /// Create an empty vault (for when open() fails).
+    /// Create an empty vault (for when `open()` fails).
     pub fn empty(path: impl Into<PathBuf>) -> Self {
         Self {
             data: VaultData {

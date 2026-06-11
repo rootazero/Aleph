@@ -1,6 +1,6 @@
 //! System tool — app management, clipboard, notifications, system info.
 //!
-//! Delegates to `DesktopPlatform::system()` (SystemCapability).
+//! Delegates to `DesktopPlatform::system()` (`SystemCapability`).
 //! When the capability is absent, all operations return a friendly message.
 
 use crate::sync_primitives::Arc;
@@ -28,16 +28,16 @@ impl SystemTool {
 /// Arguments for the system tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SystemArgs {
-    /// Action to perform: "launch_app", "quit_app", "list_running_apps",
-    /// "send_notification", "clipboard_read", "clipboard_write", "system_info"
+    /// Action to perform: "`launch_app`", "`quit_app`", "`list_running_apps`",
+    /// "`send_notification`", "`clipboard_read`", "`clipboard_write`", "`system_info`"
     pub action: String,
-    /// Application name or bundle ID (required for launch_app, quit_app).
+    /// Application name or bundle ID (required for `launch_app`, `quit_app`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_name: Option<String>,
-    /// Notification title (required for send_notification).
+    /// Notification title (required for `send_notification`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Notification body (required for send_notification) or text for clipboard_write.
+    /// Notification body (required for `send_notification`) or text for `clipboard_write`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
 }

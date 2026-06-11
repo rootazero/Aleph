@@ -1,13 +1,13 @@
 //! Code execution tool for AI agent integration
 //!
-//! Implements AlephTool trait to provide code/script execution capabilities.
+//! Implements `AlephTool` trait to provide code/script execution capabilities.
 //! Supports: Python, JavaScript/Node.js, Shell (bash).
 //!
 //! # Safety
 //!
 //! This tool routes subprocess execution through `Arc<dyn Sandbox>` (Phase 3
 //! Task 8). The sandbox enforces:
-//! - Capability-level approval for escalations (network / extra fs_write /
+//! - Capability-level approval for escalations (network / extra `fs_write` /
 //!   subprocess spawn) via the shared `ApprovalGate`
 //! - Per-session workspace cwd — `cwd=None` lands in the session workspace
 //!   root materialised lazily by `WorkspaceSandbox`
@@ -652,7 +652,7 @@ impl Default for CodeExecTool {
     }
 }
 
-/// Implementation of AlephTool trait for CodeExecTool
+/// Implementation of `AlephTool` trait for `CodeExecTool`
 #[async_trait]
 impl AlephTool for CodeExecTool {
     const NAME: &'static str = "code_exec";

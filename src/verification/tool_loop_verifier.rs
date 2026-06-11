@@ -1,7 +1,7 @@
 //! `ToolLoopVerifier` — structural watchdog that vetoes when the
 //! model has issued N consecutive identical tool calls (same `name` +
 //! `args_hash`), regardless of any narration text on the turn (closes
-//! master roadmap § 1.4 P1: "stop hook 仅在模型停手触发；tool_use 死循环不覆盖").
+//! master roadmap § 1.4 P1: "stop hook `仅在模型停手触发；tool_use` 死循环不覆盖").
 //!
 //! Detection rule (deliberately conservative — false positives are
 //! costly because they inject a [verifier veto] message that disrupts
@@ -17,7 +17,7 @@
 //!   - at `repeat_threshold` identical trailing calls → emit a `Veto`
 //!     (`ErrorClass::Recoverable`). The harness injects it as a user message so
 //!     the model sees explicit feedback and gets a chance to course-correct.
-//!   - at `halt_threshold` (≥ repeat_threshold) identical trailing calls → emit
+//!   - at `halt_threshold` (≥ `repeat_threshold`) identical trailing calls → emit
 //!     a `Halt`. By this point the model has ignored several vetoes and is still
 //!     repeating the same call with no thinking text; continuing would only burn
 //!     LLM round-trips until the provider's rate limit (or a turn/stall

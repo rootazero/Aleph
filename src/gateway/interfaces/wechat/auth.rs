@@ -1,4 +1,4 @@
-//! WeChat Authentication & Token Management
+//! `WeChat` Authentication & Token Management
 //!
 //! QR login flow, context token storage, and session persistence.
 
@@ -7,7 +7,7 @@ use std::path::Path;
 use tokio::sync::RwLock;
 
 /// Context token store for per-conversation tokens.
-/// Each (account_id, user_id) pair has its own context_token.
+/// Each (`account_id`, `user_id`) pair has its own `context_token`.
 pub struct ContextTokenStore {
     root: std::path::PathBuf,
     cache: RwLock<HashMap<String, String>>,

@@ -1,4 +1,4 @@
-//! PlaywrightCliDriver — manages per-session `playwright-cli` subprocesses.
+//! `PlaywrightCliDriver` — manages per-session `playwright-cli` subprocesses.
 //!
 //! Each tool call spawns a fresh process with `-s=<session_key>`; the CLI
 //! keeps browser state in memory across invocations under the same key.

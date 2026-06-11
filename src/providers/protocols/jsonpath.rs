@@ -1,19 +1,19 @@
-//! JSONPath parser for extracting values from provider responses
+//! `JSONPath` parser for extracting values from provider responses
 //!
 //! Different AI providers return responses in different JSON structures.
-//! This module provides JSONPath querying to extract values from arbitrary
+//! This module provides `JSONPath` querying to extract values from arbitrary
 //! JSON responses using expressions like `$.data.choices[0].message.content`.
 
 use crate::error::{AlephError, Result};
 use jsonpath_rust::JsonPath;
 use serde_json::Value;
 
-/// Extract a value from JSON using a JSONPath expression
+/// Extract a value from JSON using a `JSONPath` expression
 ///
 /// # Arguments
 ///
 /// * `json` - The JSON value to query
-/// * `path` - JSONPath expression (e.g., "$.data.choices[0].message.content")
+/// * `path` - `JSONPath` expression (e.g., "$.data.choices[0].message.content")
 ///
 /// # Returns
 ///
@@ -27,7 +27,7 @@ use serde_json::Value;
 /// # Errors
 ///
 /// Returns `AlephError::ProviderError` if:
-/// - The JSONPath expression is invalid
+/// - The `JSONPath` expression is invalid
 /// - The path does not exist in the JSON structure
 /// - No values match the path
 /// - JSON serialization fails

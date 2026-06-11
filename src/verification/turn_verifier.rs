@@ -55,7 +55,7 @@ pub struct TurnVerifyContext<'a> {
     /// current turn's calls.
     pub recent_tool_calls: &'a [ToolCallSummary],
     /// `Some("end_turn")` when the model is about to stop (no
-    /// tool_calls produced); `None` mid-turn (tool_calls produced and
+    /// `tool_calls` produced); `None` mid-turn (`tool_calls` produced and
     /// about to enter Act).
     pub stop_reason: Option<&'a str>,
     /// Live session key string for the current run, when available.

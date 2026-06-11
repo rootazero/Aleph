@@ -1,12 +1,12 @@
 //! Messages Database Reader
 //!
-//! Reads messages from ~/Library/Messages/chat.db (SQLite).
+//! Reads messages from ~/Library/Messages/chat.db (`SQLite`).
 //!
 //! # Apple Timestamps
 //!
 //! Apple uses "Apple Cocoa Core Data timestamp" which is:
 //! - Nanoseconds since 2001-01-01 00:00:00 UTC
-//! - Stored as INTEGER in SQLite
+//! - Stored as INTEGER in `SQLite`
 //!
 //! To convert to Unix timestamp:
 //! `unix_timestamp = apple_timestamp / 1_000_000_000 + 978307200`
@@ -23,7 +23,7 @@ use crate::gateway::channel::{
 /// Apple epoch offset (2001-01-01 00:00:00 UTC in Unix timestamp)
 const APPLE_EPOCH_OFFSET: i64 = 978307200;
 
-/// Convert Apple timestamp to DateTime<Utc>
+/// Convert Apple timestamp to `DateTime`<Utc>
 fn apple_timestamp_to_datetime(apple_ts: i64) -> DateTime<Utc> {
     // Apple timestamps are in nanoseconds since 2001-01-01
     let unix_secs = apple_ts / 1_000_000_000 + APPLE_EPOCH_OFFSET;

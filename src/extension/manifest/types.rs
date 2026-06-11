@@ -123,7 +123,7 @@ impl<'de> Deserialize<'de> for PluginPermission {
 }
 
 impl PluginPermission {
-    /// Parse a permission string into a PluginPermission.
+    /// Parse a permission string into a `PluginPermission`.
     ///
     /// Unrecognized strings are kept as `Custom` so deserialization never
     /// fails on an unknown name.

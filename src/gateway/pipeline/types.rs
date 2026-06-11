@@ -1,7 +1,7 @@
 //! Core data types for the message pipeline.
 //!
 //! These types flow through the pipeline stages:
-//! InboundContext → MergedMessage → EnrichedMessage → (ready for execution)
+//! `InboundContext` → `MergedMessage` → `EnrichedMessage` → (ready for execution)
 
 use std::path::PathBuf;
 

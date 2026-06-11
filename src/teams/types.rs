@@ -143,7 +143,7 @@ pub struct TeamMember {
 
 /// Build the synthetic `agent_id` for an ACP-backed team member.
 ///
-/// The id is stable for a given (harness, cwd, session_name) triple so the
+/// The id is stable for a given (harness, cwd, `session_name`) triple so the
 /// dispatcher can reconcile a `CoordTask.owner` string back to a member row.
 #[must_use]
 pub fn acp_member_id(harness_id: &str, cwd: &str, session_name: Option<&str>) -> String {

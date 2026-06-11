@@ -110,8 +110,8 @@ pub(super) fn apply_reconcile_preamble(text: String, has_active_scratchpad: bool
 }
 
 /// Upper bound on un-consumed steering messages a single run may accumulate
-/// before the gateway applies backpressure (OpenSquilla `max_pending_per_session`
-/// / OpenClaw FIFO-cap parity). A flooding channel that keeps sending while the
+/// before the gateway applies backpressure (`OpenSquilla` `max_pending_per_session`
+/// / `OpenClaw` FIFO-cap parity). A flooding channel that keeps sending while the
 /// agent is mid-loop would otherwise append unbounded `UserMessage` events to the
 /// live log, bloating the very next prompt. Past the cap the injection is
 /// rejected so the inbound router's FIFO busy queue redelivers the message once

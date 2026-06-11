@@ -1,4 +1,4 @@
-//! AiProviderBridge — connects existing AiProvider implementations to the harness.
+//! `AiProviderBridge` — connects existing `AiProvider` implementations to the harness.
 //!
 //! The bridge converts between the harness's local `ToolDefinition` (3 fields)
 //! and the `tool_metadata` `ToolDefinition` (7 fields), and passes `UnifiedMessage`
@@ -41,8 +41,8 @@ pub trait LoopProvider: Send + Sync {
 
 /// Bridge from `LoopProvider` to any `Arc<dyn AiProvider>`.
 ///
-/// Translates UnifiedMessage conversation history through transform_messages
-/// and converts minimal ToolDefinitions into `tool_metadata` ToolDefinitions
+/// Translates `UnifiedMessage` conversation history through `transform_messages`
+/// and converts minimal `ToolDefinitions` into `tool_metadata` `ToolDefinitions`
 /// for the underlying provider's `process` method.
 pub struct AiProviderBridge {
     provider: Arc<dyn AiProvider>,
@@ -50,7 +50,7 @@ pub struct AiProviderBridge {
 }
 
 impl AiProviderBridge {
-    /// Create a new bridge wrapping an existing AiProvider.
+    /// Create a new bridge wrapping an existing `AiProvider`.
     pub fn new(provider: Arc<dyn AiProvider>) -> Self {
         Self {
             provider,
@@ -65,7 +65,7 @@ impl AiProviderBridge {
         self
     }
 
-    /// Convert a loop ToolDefinition to the `tool_metadata` ToolDefinition.
+    /// Convert a loop `ToolDefinition` to the `tool_metadata` `ToolDefinition`.
     fn convert_tool_def(def: &LoopToolDefinition) -> MetadataToolDefinition {
         MetadataToolDefinition {
             name: def.name.clone(),

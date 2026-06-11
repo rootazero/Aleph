@@ -1,4 +1,4 @@
-//! AsyncSecretResolver impl backed by SharedTokenManager.
+//! `AsyncSecretResolver` impl backed by `SharedTokenManager`.
 
 use std::sync::Arc;
 

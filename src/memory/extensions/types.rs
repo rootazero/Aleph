@@ -1,4 +1,4 @@
-//! Public context types passed to each MemoryExtension hook.
+//! Public context types passed to each `MemoryExtension` hook.
 
 use crate::memory::namespace::NamespaceScope;
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ pub struct CaptureCtx {
     pub agent_id: String,
     pub namespace: NamespaceScope,
     pub session_id: Option<String>,
-    /// Source of the raw memory (SessionCompressed, Transcript, PreCompress, ...).
+    /// Source of the raw memory (`SessionCompressed`, Transcript, `PreCompress`, ...).
     pub source_hint: String,
 }
 
@@ -74,7 +74,7 @@ impl SessionSwitchCtx {
     }
 }
 
-/// Context passed to `on_pre_compress`. Carries only metadata + agent_id;
+/// Context passed to `on_pre_compress`. Carries only metadata + `agent_id`;
 /// extensions that need full message bodies should query their own store
 /// using `agent_id`/`session_id`. This avoids cloning a potentially huge
 /// `Vec<Message>` into every plugin.

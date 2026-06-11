@@ -1,12 +1,12 @@
-//! OpenAI strict schema normalization.
+//! `OpenAI` strict schema normalization.
 //!
 //! Recursively injects `additionalProperties: false` and ensures `properties`
-//! exists on all `type: "object"` nodes, matching OpenAI's strict mode
+//! exists on all `type: "object"` nodes, matching `OpenAI`'s strict mode
 //! requirements.
 
 use serde_json::Value;
 
-/// Outcome of normalizing a JSON schema for OpenAI strict mode.
+/// Outcome of normalizing a JSON schema for `OpenAI` strict mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StrictResult {
     /// Schema is fully normalized and strict-compatible.
@@ -21,10 +21,10 @@ pub enum StrictResult {
     },
 }
 
-/// Sanitize the top-level envelope of a tool parameters schema for OpenAI's
+/// Sanitize the top-level envelope of a tool parameters schema for `OpenAI`'s
 /// tool schema validator.
 ///
-/// OpenAI's parser rejects top-level schemas that:
+/// `OpenAI`'s parser rejects top-level schemas that:
 /// - lack `type: "object"` (`schema must be a JSON Schema of 'type: "object"', got 'type: "None"'`)
 /// - contain top-level `oneOf` / `anyOf` / `allOf` / `enum` / `not`
 ///   (`schema must have type 'object' and not have 'oneOf'/'anyOf'/'allOf'/'enum'/'not' at the top level`)
@@ -39,7 +39,7 @@ pub enum StrictResult {
 /// 4. Ensures root `properties: {}` exists even if empty.
 ///
 /// The flatten is lossy on discriminator constraints but preserves all
-/// field-level type info — accepted by OpenAI's parser. Tool descriptions
+/// field-level type info — accepted by `OpenAI`'s parser. Tool descriptions
 /// carry the discriminator semantics for LLM guidance.
 ///
 /// Non-recursive (top-level only). Idempotent.
@@ -140,9 +140,9 @@ pub fn ensure_openai_tool_envelope(schema: &mut Value) {
     }
 }
 
-/// Lenient multi-type rewriter for OpenAI's non-strict tool path.
+/// Lenient multi-type rewriter for `OpenAI`'s non-strict tool path.
 ///
-/// OpenAI's tool schema validator rejects `type: [...]` arrays even in
+/// `OpenAI`'s tool schema validator rejects `type: [...]` arrays even in
 /// non-strict mode. This function rewrites them in-place:
 /// - `["null", X]` (length 2, one null) → `{"anyOf": [{"type":"null"}, {..., "type": X}]}`
 ///   preserves the schema lossless-ly.
@@ -210,7 +210,7 @@ fn lenient_rewrite_node(node: &mut Value) {
     }
 }
 
-/// Recursively normalize a JSON schema for OpenAI strict mode.
+/// Recursively normalize a JSON schema for `OpenAI` strict mode.
 ///
 /// - Injects `additionalProperties: false` on all object schemas
 /// - Ensures `properties` exists (empty object if missing)

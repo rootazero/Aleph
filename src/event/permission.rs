@@ -2,7 +2,7 @@
 //! Permission-related event types for the unified permission system.
 //!
 //! These events enable async permission requests between the agent loop
-//! and UI layer, following OpenCode's permission model.
+//! and UI layer, following `OpenCode`'s permission model.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

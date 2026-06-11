@@ -34,7 +34,7 @@ impl SecurityStore {
         Ok(exists.is_ok())
     }
 
-    /// Update session last_used_at timestamp.
+    /// Update session `last_used_at` timestamp.
     pub fn touch_session(&self, session_id: &str) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
@@ -64,7 +64,7 @@ impl SecurityStore {
         Ok(rows as u64)
     }
 
-    /// List active (non-expired) sessions as (session_id, created_at, expires_at, last_used_at).
+    /// List active (non-expired) sessions as (`session_id`, `created_at`, `expires_at`, `last_used_at`).
     pub fn list_active_sessions(&self) -> SqliteResult<Vec<(String, i64, i64, i64)>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(

@@ -1,8 +1,8 @@
 //! iMessage Channel Implementation
 //!
 //! Provides iMessage integration for the Gateway using:
-//! - SQLite database polling for receiving messages
-//! - AppleScript for sending messages
+//! - `SQLite` database polling for receiving messages
+//! - `AppleScript` for sending messages
 //!
 //! # Requirements
 //!

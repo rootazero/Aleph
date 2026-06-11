@@ -99,7 +99,7 @@ pub fn guess_chat_type(msg: &serde_json::Value, account_id: &str) -> (String, St
     }
 }
 
-/// Map an iLink message to InboundMessage.
+/// Map an iLink message to `InboundMessage`.
 #[must_use]
 pub fn map_message_to_inbound(
     msg: &Message,

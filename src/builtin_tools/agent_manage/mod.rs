@@ -8,9 +8,9 @@ pub mod list;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
-/// Shared session context injected by ExecutionEngine each run.
+/// Shared session context injected by `ExecutionEngine` each run.
 ///
-/// Carries the channel and peer_id of the current conversation so that
+/// Carries the channel and `peer_id` of the current conversation so that
 /// agent management tools can auto-switch the active agent for the caller.
 #[derive(Debug, Clone, Default)]
 pub struct SessionContext {
@@ -18,7 +18,7 @@ pub struct SessionContext {
     pub peer_id: String,
     /// Serialized session key string (e.g. "main:default:0" or "main:dm:telegram:user123:0")
     pub session_key_str: String,
-    /// Conversation ID within the channel (e.g. Telegram chat_id)
+    /// Conversation ID within the channel (e.g. Telegram `chat_id`)
     pub conversation_id: String,
 }
 
@@ -29,7 +29,7 @@ pub fn new_session_context_handle() -> SessionContextHandle {
     Arc::new(RwLock::new(SessionContext::default()))
 }
 
-/// Per-agent tool access policy injected by ExecutionEngine each run.
+/// Per-agent tool access policy injected by `ExecutionEngine` each run.
 #[derive(Debug, Clone, Default)]
 pub struct ToolPolicy {
     /// If non-empty, only these tools are allowed

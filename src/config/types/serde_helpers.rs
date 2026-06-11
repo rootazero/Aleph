@@ -61,7 +61,7 @@ where
     deserializer.deserialize_any(ModelsVisitor)
 }
 
-/// Deserializer for optional models field (used by GenerationProviderConfig).
+/// Deserializer for optional models field (used by `GenerationProviderConfig`).
 /// Accepts String, Vec<String>, or null/missing. Empty vec is valid.
 pub fn deserialize_optional_models<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where

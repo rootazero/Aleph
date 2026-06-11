@@ -1,7 +1,7 @@
 //! Persistent offset tracking for Telegram polling.
 //!
-//! `OffsetTracker` wraps an atomic counter backed by SQLite, ensuring that
-//! restart cycles resume from the last successfully processed update_id
+//! `OffsetTracker` wraps an atomic counter backed by `SQLite`, ensuring that
+//! restart cycles resume from the last successfully processed `update_id`
 //! rather than dropping or re-processing messages.
 
 use crate::resilience::StateDatabase;
@@ -11,7 +11,7 @@ use crate::sync_primitives::{AtomicI64, Ordering};
 /// Tracks the Telegram getUpdates offset with DB persistence.
 ///
 /// The in-memory `AtomicI64` provides lock-free reads on the hot path,
-/// while writes are durably persisted to `channel_offsets` in SQLite.
+/// while writes are durably persisted to `channel_offsets` in `SQLite`.
 pub struct OffsetTracker {
     db: Arc<StateDatabase>,
     channel_id: String,
@@ -62,8 +62,8 @@ impl OffsetTracker {
 
     /// Advance the offset if `update_id` exceeds the current value.
     ///
-    /// The advance is monotonic: stale or duplicate update_ids are ignored.
-    /// On success the new offset is persisted to SQLite.
+    /// The advance is monotonic: stale or duplicate `update_ids` are ignored.
+    /// On success the new offset is persisted to `SQLite`.
     pub fn advance(&self, update_id: i64, bot_id: &str) {
         loop {
             let prev = self.current.load(Ordering::Acquire);

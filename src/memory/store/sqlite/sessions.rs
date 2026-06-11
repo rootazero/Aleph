@@ -1,7 +1,7 @@
-//! DreamStore and CompressionStore implementations for SqliteMemoryBackend.
+//! `DreamStore` and `CompressionStore` implementations for `SqliteMemoryBackend`.
 //!
 //! Persists dream daemon status, daily insights, and compression metadata
-//! in dedicated SQLite tables so state survives restarts.
+//! in dedicated `SQLite` tables so state survives restarts.
 
 use async_trait::async_trait;
 use rusqlite::params;

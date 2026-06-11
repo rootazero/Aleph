@@ -1,4 +1,4 @@
-//! OneOrMany utility type for handling single or multiple values
+//! `OneOrMany` utility type for handling single or multiple values
 //!
 //! This replaces `rig::OneOrMany` to remove the rig-core dependency.
 
@@ -74,7 +74,7 @@ impl<T> From<Vec<T>> for OneOrMany<T> {
     }
 }
 
-/// Iterator for OneOrMany
+/// Iterator for `OneOrMany`
 pub enum OneOrManyIter<'a, T> {
     One(std::iter::Once<&'a T>),
     Many(std::slice::Iter<'a, T>),

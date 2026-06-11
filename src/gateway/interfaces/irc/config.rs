@@ -25,7 +25,7 @@ pub struct IrcConfig {
     /// Bot's IRC nickname
     pub nick: String,
 
-    /// NickServ password (optional, for registered nicks)
+    /// `NickServ` password (optional, for registered nicks)
     #[serde(default)]
     pub password: Option<String>,
 

@@ -15,7 +15,7 @@
 //! carry a `fix_hint` routing to those tools.
 //!
 //! Registered only via [`DiagnosticEngine::with_runtime_checks`]
-//! (super::super) — the offline `default_registry()` stays path-only so
+//! (`super::super`) — the offline `default_registry()` stays path-only so
 //! `aleph-server doctor` keeps working without network access.
 
 use std::time::Duration;

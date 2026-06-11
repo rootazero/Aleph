@@ -388,7 +388,7 @@ impl EventLogStore for SqliteEventLogStore {
 use crate::event::{AlephEvent, EventType};
 use crate::event::{EventContext, EventHandler, HandlerError};
 
-/// Event handler that listens for team-related AlephEvents and logs them
+/// Event handler that listens for team-related `AlephEvents` and logs them
 /// to the team's event store.
 pub struct TeamEventLogger {
     store: Arc<dyn EventLogStore>,
@@ -400,7 +400,7 @@ impl TeamEventLogger {
         Self { store }
     }
 
-    /// Map an AlephEvent team variant to a TeamEventType and extract metadata.
+    /// Map an `AlephEvent` team variant to a `TeamEventType` and extract metadata.
     fn map_event(event: &AlephEvent) -> Option<(TeamEventType, String, serde_json::Value)> {
         match event {
             AlephEvent::TeamCreated {

@@ -9,7 +9,7 @@
 //!
 //! Lifecycle is bound to a [`ProxyHandle`]. Drop = shutdown: the accept
 //! loop returns when the watch channel is signalled. Existing in-flight
-//! connections close when their copy_bidirectional terminates (either
+//! connections close when their `copy_bidirectional` terminates (either
 //! peer EOF or local socket dropped).
 
 use std::net::SocketAddr;

@@ -13,7 +13,7 @@ impl StateDatabase {
     // Channel Offsets
     // =========================================================================
 
-    /// Get the last processed update_id for a channel.
+    /// Get the last processed `update_id` for a channel.
     ///
     /// Returns `None` if no offset has been recorded yet (first startup).
     pub fn get_channel_offset(&self, channel_id: &str) -> Result<Option<i64>, AlephError> {
@@ -29,7 +29,7 @@ impl StateDatabase {
         Ok(result)
     }
 
-    /// Upsert the last processed update_id for a channel.
+    /// Upsert the last processed `update_id` for a channel.
     ///
     /// Uses INSERT OR REPLACE so the row is created on first call and
     /// updated on subsequent calls.

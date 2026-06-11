@@ -421,7 +421,7 @@ impl ChannelApprovalBridge {
     /// 经 `manager.resolve(record.id, ...)` 唤醒。
     ///
     /// `channel_id` / `conversation_id` 为结构化路由参数（来自调用方解析的
-    /// `SessionKey`），不再 parse 有损的字符串 session_key。
+    /// `SessionKey`），不再 parse 有损的字符串 `session_key`。
     ///
     /// `session_key` 是发起会话的结构化 key 字符串（router 侧
     /// `ctx.session_key.to_string()` 的同一形态）：record 必须携带它，

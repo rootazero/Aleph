@@ -4,7 +4,7 @@ use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 
 impl SessionCompactor {
-    /// Create a new SessionCompactor with the given storage backend and config.
+    /// Create a new `SessionCompactor` with the given storage backend and config.
     pub fn new(database: MemoryBackend, config: SessionCompactorConfig) -> Self {
         Self {
             database,

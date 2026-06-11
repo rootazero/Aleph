@@ -1,7 +1,7 @@
-//! SSE formatting for the OpenAI Responses API.
+//! SSE formatting for the `OpenAI` Responses API.
 //!
 //! Converts a [`ProviderDelta`] stream into Server-Sent Events conforming to
-//! the OpenAI Responses API format. Key differences from Chat Completions SSE:
+//! the `OpenAI` Responses API format. Key differences from Chat Completions SSE:
 //!
 //! - Two-line format: `event: <type>\ndata: <json>\n\n`
 //! - Distinct event types (`response.created`, `response.output_text.delta`, etc.)
@@ -42,7 +42,7 @@ struct StreamState {
     model: String,
     created_at: u64,
     text_content: String,
-    /// (id, name, accumulated_args)
+    /// (id, name, `accumulated_args`)
     tool_calls: Vec<(String, String, String)>,
     usage: Option<ResponsesUsage>,
     done: bool,
@@ -57,7 +57,7 @@ struct StreamState {
 /// The output stream yields `String` frames ready to be written to an HTTP
 /// response body. The sequence is:
 ///
-/// 1. `response.created` — initial event with status "in_progress"
+/// 1. `response.created` — initial event with status "`in_progress`"
 /// 2. Per-delta events (`response.output_text.delta`, etc.)
 /// 3. `response.completed` — final event with full response object
 #[must_use]

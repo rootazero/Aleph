@@ -61,7 +61,7 @@ impl SqliteCoordTaskStore {
     /// Hand out a clone of the inner connection handle so a sibling store
     /// living in the same database file (currently
     /// [`crate::teams::snapshots::SqliteSnapshotStore`]) can share the lock
-    /// and avoid the SQLite "database is locked" hazard that would arise
+    /// and avoid the `SQLite` "database is locked" hazard that would arise
     /// from two independent connections to the same file.
     #[must_use]
     pub fn connection_handle(&self) -> Arc<Mutex<Connection>> {
@@ -74,7 +74,7 @@ impl SqliteCoordTaskStore {
     /// paths get audit-logged the same way the dispatcher path does — no
     /// caller-side responsibility, no drift.
     ///
-    /// No-op when the task has no team_id (CoordTasks can be orphan-scoped).
+    /// No-op when the task has no `team_id` (`CoordTasks` can be orphan-scoped).
     async fn emit_task_topic(&self, task: &CoordTask, verb: &str) {
         // --- 1. Gateway WS topic (existing path, fire-and-forget) ----------
         if let Some(bus) = &self.bus {

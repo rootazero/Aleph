@@ -1,6 +1,6 @@
 //! `ScratchpadProgressSink` — the R5 "AI comes to you" progress side-channel.
 //!
-//! `progress_echo` (builtin_tools/scratchpad.rs) renders the task checklist
+//! `progress_echo` (`builtin_tools/scratchpad.rs`) renders the task checklist
 //! into the *tool result*, which is **model-facing** only. When Aleph runs a
 //! long multi-step task headless (background / daemon-triggered), the user
 //! sees nothing until the final reply — a black box.

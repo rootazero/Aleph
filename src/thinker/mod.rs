@@ -296,7 +296,7 @@ impl MultiProviderRegistry {
     }
 
     /// Resolve model → provider name using slash syntax, prefix matching, or default.
-    /// Resolve a model string to (provider_name, actual_model_name).
+    /// Resolve a model string to (`provider_name`, `actual_model_name`).
     ///
     /// For "provider/model" syntax (e.g., "openai/gpt-4o"), strips the prefix
     /// and returns ("openai", "gpt-4o") so native APIs receive the correct model name.

@@ -1,4 +1,4 @@
-//! GroupChat Executor — drives the coordinator->persona LLM loop.
+//! `GroupChat` Executor — drives the coordinator->persona LLM loop.
 //!
 //! Given a session and a user message, the executor:
 //! 1. Records the user message as a System turn

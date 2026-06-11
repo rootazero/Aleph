@@ -1,4 +1,4 @@
-//! CRUD operations for paired_users table
+//! CRUD operations for `paired_users` table
 //!
 //! Provides persistent storage of paired (allowed) Telegram users per channel,
 //! enabling pairing state to survive restarts.

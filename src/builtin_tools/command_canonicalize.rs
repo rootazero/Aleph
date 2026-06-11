@@ -1,4 +1,4 @@
-//! Shell-wrapper unwrap for the `bash` / `code_exec` (Language::Shell) tools.
+//! Shell-wrapper unwrap for the `bash` / `code_exec` (`Language::Shell`) tools.
 //!
 //! When the LLM emits a `cmd` string that itself is a shell invocation —
 //! `bash -lc 'cargo test'`, `sh -c "ls"`, `zsh -lc 'echo hi'` — running it

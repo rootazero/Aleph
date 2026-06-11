@@ -1,4 +1,4 @@
-//! SnapshotWriter — persist SessionSnapshot to disk as JSON.
+//! `SnapshotWriter` — persist `SessionSnapshot` to disk as JSON.
 
 use super::snapshot::SessionSnapshot;
 use std::path::PathBuf;

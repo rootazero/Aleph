@@ -1,4 +1,4 @@
-//! TeamFromTemplateTool — instantiate a team from a TOML blueprint in one shot.
+//! `TeamFromTemplateTool` — instantiate a team from a TOML blueprint in one shot.
 //!
 //! Bundles leader + workers + an initial task DAG so callers (typically the
 //! leader LLM via R8 "everything is a tool") can stand up a working team
@@ -77,7 +77,7 @@ pub struct TeamFromTemplateTool {
     registry: Arc<AgentRegistry>,
     agent_manager: Option<Arc<AgentManager>>,
     session_store: Arc<dyn SessionStore>,
-    /// Set by ExecutionEngine before each call.
+    /// Set by `ExecutionEngine` before each call.
     pub current_agent_id: String,
 }
 

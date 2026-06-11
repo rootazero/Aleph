@@ -1,4 +1,4 @@
-//! UnattendedRedactingSink — secret redaction for unattended autonomous runs.
+//! `UnattendedRedactingSink` — secret redaction for unattended autonomous runs.
 //!
 //! Round 2 made unattended runs fail closed on tool confirmation. This closes
 //! the observability side: when no human is watching, model-authored trace text
@@ -6,7 +6,7 @@
 //! before it reaches persistence, the channel progress push, or the WebSocket
 //! stream. Attended runs are never wrapped, so their trace path is unchanged.
 //!
-//! Lives in `src/gateway/` (a TraceSink consumer), not `src/harness/` (R10).
+//! Lives in `src/gateway/` (a `TraceSink` consumer), not `src/harness/` (R10).
 
 use std::sync::Arc;
 

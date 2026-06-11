@@ -1,4 +1,4 @@
-//! DreamReport for the dream pipeline.
+//! `DreamReport` for the dream pipeline.
 
 use serde::{Deserialize, Serialize};
 

@@ -1,4 +1,4 @@
-//! DreamGate — 3-level cheap-to-expensive gate chain for DreamDaemon consolidation.
+//! `DreamGate` — 3-level cheap-to-expensive gate chain for `DreamDaemon` consolidation.
 //!
 //! Gates run in order:
 //!   1. Time gate   (cheapest — atomic read)
@@ -15,7 +15,7 @@ use std::time::Duration;
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Configuration for the DreamGate chain.
+/// Configuration for the `DreamGate` chain.
 #[derive(Debug, Clone)]
 pub struct DreamGateConfig {
     /// Minimum hours that must have elapsed since the last successful
@@ -94,7 +94,7 @@ pub enum BlockReason {
 // DreamGate
 // ---------------------------------------------------------------------------
 
-/// Thread-safe gate chain that decides whether to trigger the DreamDaemon
+/// Thread-safe gate chain that decides whether to trigger the `DreamDaemon`
 /// consolidation pipeline.
 pub struct DreamGate {
     config: DreamGateConfig,

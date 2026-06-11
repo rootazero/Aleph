@@ -1,6 +1,6 @@
 //! Session state management for Telegram conversations.
 //!
-//! Stores Telegram-specific session metadata in SQLite using the existing
+//! Stores Telegram-specific session metadata in `SQLite` using the existing
 //! `group_chat_sessions` table, extended with a `telegram_session_metadata` table
 //! for per-conversation key/value storage.
 //!
@@ -8,7 +8,7 @@
 //!
 //! 1. **Lookup**: On each inbound message, look up session by `(chat_id, thread_id)`
 //! 2. **Create**: If no session exists and the message warrants a new session, create one
-//! 3. **Update**: After processing, persist metadata changes to SQLite
+//! 3. **Update**: After processing, persist metadata changes to `SQLite`
 //! 4. **Expire**: Background task cleans up sessions idle for longer than `timeout_minutes`
 
 use crate::gateway::interfaces::telegram::context::{ConversationKey, SessionState};

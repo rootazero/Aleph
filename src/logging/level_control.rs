@@ -10,7 +10,7 @@ use tracing::Level;
 
 /// Log level enumeration (matches aleph.udl)
 ///
-/// Note: This type is defined in aleph.udl for UniFFI code generation.
+/// Note: This type is defined in aleph.udl for `UniFFI` code generation.
 /// The Rust definition must match the UDL enum exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -25,7 +25,7 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
-    /// Convert to tracing::Level
+    /// Convert to `tracing::Level`
     #[must_use]
     pub const fn to_tracing_level(&self) -> Level {
         match self {
@@ -37,7 +37,7 @@ impl LogLevel {
         }
     }
 
-    /// Convert to EnvFilter string
+    /// Convert to `EnvFilter` string
     #[must_use]
     pub const fn to_filter_string(&self) -> &'static str {
         match self {
@@ -133,10 +133,10 @@ pub fn get_log_level() -> LogLevel {
 ///
 /// This updates the global log level setting. Note that this affects
 /// the filter directive, but the actual filtering is still controlled
-/// by the EnvFilter set during initialization.
+/// by the `EnvFilter` set during initialization.
 ///
 /// For full dynamic control, the logging system should be reinitialized
-/// with the new level, or use a reload::Layer.
+/// with the new level, or use a `reload::Layer`.
 pub fn set_log_level(level: LogLevel) {
     // Run the one-time RUST_LOG seed before applying the explicit override, so
     // an early `set` is never clobbered by a later lazy env seed (the `Once`

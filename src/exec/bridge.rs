@@ -1,4 +1,4 @@
-//! Approval Bridge - connects ExecApprovalManager with chat channels.
+//! Approval Bridge - connects `ExecApprovalManager` with chat channels.
 //!
 //! Provides utilities for:
 //! - Building approval inline keyboards
@@ -55,7 +55,7 @@ impl ApprovalBridge {
         keyboard
     }
 
-    /// Parse callback data into (approval_id, decision)
+    /// Parse callback data into (`approval_id`, decision)
     ///
     /// Expected format: "approve:{id}:{decision}"
     /// where decision is "once", "session", "always", or "deny"

@@ -81,7 +81,7 @@ pub struct CompressionService {
     /// Hooks fired after `compress_default_notes` finishes successfully for an
     /// agent. Wrapped in `RwLock` so `add_post_hook(&self)` works through
     /// `Arc<CompressionService>` (the engine wraps the service in `Arc` before
-    /// the MCP is constructed; we register the hook later from agent_init).
+    /// the MCP is constructed; we register the hook later from `agent_init`).
     post_hooks: TokioRwLock<Vec<Arc<dyn PostCompressionHook>>>,
 }
 
@@ -99,7 +99,7 @@ impl CompressionService {
         Self::new_with_backend(database, provider, embedder, config, None)
     }
 
-    /// Create a new compression service with an optional MemoryBackend (kept for API compatibility)
+    /// Create a new compression service with an optional `MemoryBackend` (kept for API compatibility)
     pub fn new_with_backend(
         database: MemoryBackend,
         _provider: Arc<dyn AiProvider>,
@@ -157,10 +157,10 @@ impl CompressionService {
         self
     }
 
-    /// Attach a `ProfileSynthesizer` to trigger user-profile updates on SessionEnd.
+    /// Attach a `ProfileSynthesizer` to trigger user-profile updates on `SessionEnd`.
     ///
     /// When set, a fire-and-forget profile update is spawned after each
-    /// SessionEnd batch is successfully ingested.
+    /// `SessionEnd` batch is successfully ingested.
     pub fn with_profile_synthesizer(
         mut self,
         ps: Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>,
@@ -510,8 +510,8 @@ impl CompressionService {
 
     /// Start background compression task with external runtime
     ///
-    /// This method is used during AlephCore initialization when we have a runtime
-    /// but are not yet inside its context (so tokio::spawn won't work).
+    /// This method is used during `AlephCore` initialization when we have a runtime
+    /// but are not yet inside its context (so `tokio::spawn` won't work).
     ///
     /// Compresses unconditionally on each interval tick.
     pub fn start_background_task_with_runtime(

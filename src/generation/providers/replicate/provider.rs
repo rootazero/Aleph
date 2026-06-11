@@ -1,6 +1,6 @@
-//! ReplicateProvider implementation
+//! `ReplicateProvider` implementation
 //!
-//! This module contains the main provider struct and its GenerationProvider trait implementation.
+//! This module contains the main provider struct and its `GenerationProvider` trait implementation.
 
 use super::builder::ReplicateProviderBuilder;
 use super::input::build_input;
@@ -48,7 +48,7 @@ pub struct ReplicateProvider {
     pub(crate) client: Client,
     /// Replicate API token
     pub(crate) api_key: String,
-    /// API endpoint (e.g., "https://api.replicate.com")
+    /// API endpoint (e.g., "<https://api.replicate.com>")
     pub(crate) endpoint: String,
     /// Model alias mappings (e.g., "flux" -> "black-forest-labs/flux-schnell")
     pub(crate) model_mappings: HashMap<String, String>,
@@ -69,7 +69,7 @@ impl std::fmt::Debug for ReplicateProvider {
 }
 
 impl ReplicateProvider {
-    /// Create a new builder for ReplicateProvider
+    /// Create a new builder for `ReplicateProvider`
     ///
     /// # Arguments
     ///

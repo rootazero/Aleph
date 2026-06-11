@@ -1,4 +1,4 @@
-//! Helper that wires ToolService dispatch + SessionService event emission.
+//! Helper that wires `ToolService` dispatch + `SessionService` event emission.
 //!
 //! Bundles the canonical Phase 2 tool-call trace:
 //!   `ToolCallRequested` (pre) → `ToolResult` | `ToolCallDenied` | `ToolError` (post).

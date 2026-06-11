@@ -22,7 +22,7 @@ fn first_sentence(text: &str) -> &str {
 }
 
 /// Deterministic fallback: extract first sentence from each message,
-/// concatenate, limit to max_chars.
+/// concatenate, limit to `max_chars`.
 #[must_use]
 pub fn deterministic_truncate(messages: &[(String, String)], max_chars: usize) -> String {
     // messages is Vec<(role, content)>

@@ -13,7 +13,7 @@
 //! | guests.terminateSession | Terminates an active guest session |
 //! | guests.getActivityLogs | Retrieves activity logs for guest sessions with filtering |
 //!
-//! These handlers require an InvitationManager and GuestSessionManager to be wired at Gateway initialization.
+//! These handlers require an `InvitationManager` and `GuestSessionManager` to be wired at Gateway initialization.
 
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
@@ -71,7 +71,7 @@ pub struct RevokeInvitationResponse {
 
 /// Handle guests.createInvitation - creates a new guest invitation
 ///
-/// Requires a CreateInvitationRequest with guest name and scope.
+/// Requires a `CreateInvitationRequest` with guest name and scope.
 /// Returns an Invitation with token, URL, guest ID, and 15-minute expiry.
 ///
 /// # Example Request
@@ -334,7 +334,7 @@ pub struct TerminateSessionResponse {
 pub struct GetActivityLogsRequest {
     /// Session ID to query (required)
     pub session_id: String,
-    /// Filter by activity type (optional, serialized string like "ToolCall", "RpcRequest")
+    /// Filter by activity type (optional, serialized string like "`ToolCall`", "`RpcRequest`")
     pub activity_type: Option<String>,
     /// Filter by status (optional)
     pub status: Option<ActivityStatus>,

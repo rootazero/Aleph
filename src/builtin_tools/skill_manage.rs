@@ -1,4 +1,4 @@
-//! skill_manage — LLM tool for configuring, authoring, and curating skills.
+//! `skill_manage` — LLM tool for configuring, authoring, and curating skills.
 //!
 //! Mirrors hermes-agent's `skill_manage` self-improvement loop on top of
 //! Aleph's existing skill infrastructure: `parse_skill_content` validates,
@@ -91,10 +91,10 @@ pub struct SkillManageArgs {
     /// patch: replacement text.
     #[serde(default)]
     pub replace: Option<String>,
-    /// write_file: relative path under the skill dir, e.g. 'references/api.md'.
+    /// `write_file`: relative path under the skill dir, e.g. 'references/api.md'.
     #[serde(default)]
     pub file_name: Option<String>,
-    /// write_file: the file content to write.
+    /// `write_file`: the file content to write.
     #[serde(default)]
     pub file_content: Option<String>,
 }
@@ -117,7 +117,7 @@ impl SkillManageOutput {
     }
 }
 
-/// Frontmatter composed for `create` — serialized through serde_yaml so
+/// Frontmatter composed for `create` — serialized through `serde_yaml` so
 /// arbitrary names/descriptions can never break out of the YAML block.
 #[derive(Serialize)]
 struct ComposedFrontmatter<'a> {

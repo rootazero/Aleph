@@ -4,7 +4,7 @@
 //! status, run, runs, toggle.
 //!
 //! Each method has two variants:
-//! - `handle_xxx_stub`: stateless stubs returning fake/empty data (used in HandlerRegistry::new())
+//! - `handle_xxx_stub`: stateless stubs returning fake/empty data (used in `HandlerRegistry::new()`)
 //! - `handle_xxx`: real handlers that delegate to `CronService` via `SharedCronService`
 //!
 //! External callers keep using `cron::handle_xxx` paths unchanged — the

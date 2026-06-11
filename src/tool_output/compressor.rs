@@ -1,13 +1,13 @@
 //! Tool output compression for context-heavy tools.
 //!
-//! Compresses outputs from Chrome DevTools MCP tools before they enter
+//! Compresses outputs from Chrome `DevTools` MCP tools before they enter
 //! conversation history. Each tool type gets a tailored strategy that
 //! preserves actionable information while drastically reducing token count.
 
 use serde_json::Value;
 use tracing::debug;
 
-/// Known Chrome DevTools Protocol tool names.
+/// Known Chrome `DevTools` Protocol tool names.
 const DEVTOOLS_TOOLS: &[&str] = &[
     "take_snapshot",
     "take_screenshot",
@@ -63,14 +63,14 @@ const INTERACTIVE_ROLES: &[&str] = &[
     "slider",
 ];
 
-/// Check whether a tool name belongs to the Chrome DevTools MCP toolset.
+/// Check whether a tool name belongs to the Chrome `DevTools` MCP toolset.
 fn is_devtools_tool(name: &str) -> bool {
     DEVTOOLS_TOOLS.contains(&name)
 }
 
-/// Compress a DevTools tool output using a type-specific strategy.
+/// Compress a `DevTools` tool output using a type-specific strategy.
 ///
-/// Non-DevTools tools are returned unchanged. Each DevTools tool gets a
+/// Non-DevTools tools are returned unchanged. Each `DevTools` tool gets a
 /// tailored compression that preserves actionable information while
 /// drastically reducing token count.
 pub(crate) fn compress_tool_output(tool_name: &str, output: &str) -> String {

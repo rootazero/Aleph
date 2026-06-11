@@ -3,7 +3,7 @@
 //! This module defines the core types for the unified executor architecture:
 //! - `ExecutionResult`: The outcome of executing a plan
 //! - `ToolCallRecord`: Record of a tool call execution
-//! - `TaskExecutionResult`: Result of executing a single task within a TaskGraph
+//! - `TaskExecutionResult`: Result of executing a single task within a `TaskGraph`
 //! - `ExecutionContext`: Context for execution
 //! - `ExecutorError`: Error types for executor operations
 
@@ -19,7 +19,7 @@ use std::time::Duration;
 /// Represents the complete outcome of plan execution, including:
 /// - Content: The final response or output
 /// - Tool calls: All tool calls made during execution
-/// - Task results: Results from individual tasks (for TaskGraph plans)
+/// - Task results: Results from individual tasks (for `TaskGraph` plans)
 /// - Timing and success information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionResult {
@@ -29,7 +29,7 @@ pub struct ExecutionResult {
     /// All tool calls made during execution
     pub tool_calls: Vec<ToolCallRecord>,
 
-    /// Results from individual tasks (for TaskGraph execution)
+    /// Results from individual tasks (for `TaskGraph` execution)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_results: Option<Vec<TaskExecutionResult>>,
 
@@ -237,7 +237,7 @@ impl ToolCallRecord {
 // Task Execution Result
 // =============================================================================
 
-/// Result of executing a single task within a TaskGraph
+/// Result of executing a single task within a `TaskGraph`
 ///
 /// Used when executing multi-step plans to track the outcome
 /// of each individual task.
@@ -319,7 +319,7 @@ impl TaskExecutionResult {
 /// is performed, such as the current application or window.
 #[derive(Debug, Clone)]
 pub struct ExecutionContext {
-    /// Current application context (e.g., "Safari", "VSCode")
+    /// Current application context (e.g., "Safari", "`VSCode`")
     pub app_context: Option<String>,
 
     /// Current window title

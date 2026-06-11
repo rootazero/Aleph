@@ -27,7 +27,7 @@ pub struct ExecutionSession {
     // =========================================================================
     // Unified session model fields (from LoopState)
     // =========================================================================
-    /// User's original request (from LoopState)
+    /// User's original request (from `LoopState`)
     #[serde(default)]
     pub original_request: String,
 
@@ -35,11 +35,11 @@ pub struct ExecutionSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<serde_json::Value>,
 
-    /// Session start timestamp (from LoopState, unix timestamp)
+    /// Session start timestamp (from `LoopState`, unix timestamp)
     #[serde(default)]
     pub started_at: i64,
 
-    /// Whether session needs compaction (for SessionCompactor integration)
+    /// Whether session needs compaction (for `SessionCompactor` integration)
     #[serde(default)]
     pub needs_compaction: bool,
 

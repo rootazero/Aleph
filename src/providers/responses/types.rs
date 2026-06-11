@@ -1,7 +1,7 @@
 //! Shared Responses API request/response types
 //!
-//! Types for the OpenAI Responses API wire format, shared by both
-//! the standard OpenAI Responses protocol (`/v1/responses`) and the
+//! Types for the `OpenAI` Responses API wire format, shared by both
+//! the standard `OpenAI` Responses protocol (`/v1/responses`) and the
 //! Codex protocol (`chatgpt.com/backend-api/codex/responses`).
 
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ pub struct ResponsesRequest {
     /// Maximum number of output tokens (prevents silent truncation)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
-    /// Additional fields to include in response (e.g. reasoning.encrypted_content)
+    /// Additional fields to include in response (e.g. `reasoning.encrypted_content`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include: Option<Vec<String>>,
     /// Continue from a previous response (server-side conversation threading)
@@ -44,7 +44,7 @@ pub struct ResponsesRequest {
     /// Stop sequences — generation halts when any sequence is produced
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,
-    /// Server-side context compaction (OpenAI official endpoints only)
+    /// Server-side context compaction (`OpenAI` official endpoints only)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_management: Option<ContextManagement>,
     /// Deterministic sampling seed (Cycle 3, capability-gated)
@@ -55,10 +55,10 @@ pub struct ResponsesRequest {
     pub top_logprobs: Option<u32>,
     /// Latency/cost tier ("auto" | "default" | "flex" | "priority").
     /// Capability-gated; only set for endpoints whose `supports_service_tier`
-    /// is true (official OpenAI).
+    /// is true (official `OpenAI`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
-    /// Stable cache-routing key (usually the session id). OpenAI routes
+    /// Stable cache-routing key (usually the session id). `OpenAI` routes
     /// requests sharing a `prompt_cache_key` to the same backend to maximize
     /// prompt-cache hit rate. Capability-gated (`supports_prompt_cache`) and
     /// sourced from `RequestPayload.metadata["session_id"]`.
@@ -164,14 +164,14 @@ pub struct ReasoningConfig {
     pub summary: Option<String>,
 }
 
-/// Server-side context compaction (OpenAI official endpoints only)
+/// Server-side context compaction (`OpenAI` official endpoints only)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextManagement {
     #[serde(rename = "type")]
     pub mgmt_type: String,
 }
 
-/// Structured output config (replaces response_format in Responses API)
+/// Structured output config (replaces `response_format` in Responses API)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -250,7 +250,7 @@ pub enum OutputItem {
 /// Text content part within a message output
 #[derive(Debug, Deserialize)]
 pub struct ContentPart {
-    /// Usually "output_text"
+    /// Usually "`output_text`"
     #[serde(rename = "type")]
     pub part_type: String,
     pub text: String,
@@ -262,7 +262,7 @@ pub struct UsageInfo {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub total_tokens: u32,
-    /// Breakdown of input tokens (cache_read).
+    /// Breakdown of input tokens (`cache_read`).
     #[serde(default)]
     pub input_tokens_details: Option<ResponsesInputTokensDetails>,
     /// Breakdown of output tokens (reasoning for o1/o3 reasoning models).
@@ -294,7 +294,7 @@ pub struct ResponseError {
 /// SSE streaming events from the Responses API
 ///
 /// Events arrive as `event: <type>\ndata: <json>\n\n`.
-/// We only need to act on TextDelta (for streaming text),
+/// We only need to act on `TextDelta` (for streaming text),
 /// Completed (final state), and Failed (error).
 /// Other events are accepted but ignored.
 #[derive(Debug, Deserialize)]

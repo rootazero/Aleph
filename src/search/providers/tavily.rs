@@ -27,8 +27,8 @@ struct TavilyRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     include_raw_content: Option<bool>,
     /// Tavily-specific "look back N days" filter (1, 7, 30, 365 — see
-    /// `SearchOptions::tavily_days`). Tavily has no native safe_search /
-    /// language / region knobs; those fields on SearchOptions are intentionally
+    /// `SearchOptions::tavily_days`). Tavily has no native `safe_search` /
+    /// language / region knobs; those fields on `SearchOptions` are intentionally
     /// dropped here.
     #[serde(skip_serializing_if = "Option::is_none")]
     days: Option<u32>,

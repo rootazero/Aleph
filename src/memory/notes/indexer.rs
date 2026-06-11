@@ -1,7 +1,7 @@
-//! NoteIndexer — file I/O, full rebuild, incremental update, and rename cascade.
+//! `NoteIndexer` — file I/O, full rebuild, incremental update, and rename cascade.
 //!
 //! Scans `memory_dir/{agent_id}/{category}/*.md` files, parses them into
-//! `KnowledgeNote`s, and maintains the SQLite index via a `NoteStore` implementation.
+//! `KnowledgeNote`s, and maintains the `SQLite` index via a `NoteStore` implementation.
 
 use crate::sync_primitives::Arc;
 use std::path::{Path, PathBuf};
@@ -162,7 +162,7 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// Skips files whose `content_hash` matches the existing index entry.
     ///
     /// Phase B B3: each category is scanned in its own `tokio` task so the
-    /// directory walks and SQLite reads/writes overlap. Concurrency is bounded
+    /// directory walks and `SQLite` reads/writes overlap. Concurrency is bounded
     /// by `std::thread::available_parallelism()` (falling back to 1 on probing
     /// failure) — a runtime probe that avoids pulling in `num_cpus`.
     pub async fn full_rebuild(&self, agent_id: &str) -> Result<IndexStats, AlephError>
@@ -589,7 +589,7 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// without overshooting on a single high-corroboration round.
     const STRENGTHEN_STEP: f32 = 0.05;
 
-    /// Merge new source_notes into an existing note on disk and bump its
+    /// Merge new `source_notes` into an existing note on disk and bump its
     /// confidence monotonically. Used by both `DistillAction::Strengthen`
     /// (no floor lift) and the `New`-with-collision demotion path
     /// (`confidence_floor = new_action.confidence` lifts the note's
@@ -658,13 +658,13 @@ impl<S: NoteStore> NoteIndexer<S> {
         Ok(())
     }
 
-    /// Apply a `DistillAction` emitted by a Distill stage (SkillDistill, FeedbackDistill).
+    /// Apply a `DistillAction` emitted by a Distill stage (`SkillDistill`, `FeedbackDistill`).
     ///
     /// Pure plumbing — the LLM already judged what to do; this method just executes
     /// the I/O. Phase 2 Decision 2: the candidate selection happens upstream
     /// (`find_similar_notes` → injected into the LLM prompt → LLM emits the action).
     ///
-    /// `category` is the destination/source category (e.g. `"skill"` for SkillDistill).
+    /// `category` is the destination/source category (e.g. `"skill"` for `SkillDistill`).
     /// For `Strengthen` and `Supersede`, the category is parsed from the embedded
     /// note path so cross-category deletes work correctly.
     pub async fn apply_distill_action(

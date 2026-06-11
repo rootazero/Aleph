@@ -1,4 +1,4 @@
-//! Configuration and result types for RippleTask
+//! Configuration and result types for `RippleTask`
 
 use crate::memory::MemoryFact;
 

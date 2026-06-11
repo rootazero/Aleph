@@ -1,7 +1,7 @@
 //! Profiles RPC Handlers
 //!
 //! Handlers for auth profile management: list and status queries.
-//! Profiles are managed through the AuthProfileManager from the providers module.
+//! Profiles are managed through the `AuthProfileManager` from the providers module.
 
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};

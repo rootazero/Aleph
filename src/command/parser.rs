@@ -1,6 +1,6 @@
 //! Unified Slash Command Parser
 //!
-//! Delegates all command resolution to ToolCatalog.
+//! Delegates all command resolution to `ToolCatalog`.
 
 use crate::sync_primitives::Arc;
 use crate::tool_metadata::{ToolCatalog, ToolSource, ToolSourceType, UnifiedTool};
@@ -59,14 +59,14 @@ pub enum CommandContext {
     None,
 }
 
-/// Unified command parser — delegates to ToolCatalog
+/// Unified command parser — delegates to `ToolCatalog`
 pub struct CommandParser {
     /// Tool registry for command resolution
     tool_registry: Arc<ToolCatalog>,
 }
 
 impl CommandParser {
-    /// Create a new command parser backed by ToolCatalog
+    /// Create a new command parser backed by `ToolCatalog`
     #[must_use]
     pub const fn new(tool_registry: Arc<ToolCatalog>) -> Self {
         Self { tool_registry }
@@ -96,14 +96,14 @@ impl CommandParser {
         })
     }
 
-    /// Get a reference to the underlying ToolCatalog
+    /// Get a reference to the underlying `ToolCatalog`
     #[must_use]
     pub const fn tool_registry(&self) -> &Arc<ToolCatalog> {
         &self.tool_registry
     }
 }
 
-/// Derive CommandContext from UnifiedTool fields
+/// Derive `CommandContext` from `UnifiedTool` fields
 fn tool_to_command_context(tool: &UnifiedTool) -> CommandContext {
     match &tool.source {
         ToolSource::Builtin | ToolSource::Native => CommandContext::Builtin {

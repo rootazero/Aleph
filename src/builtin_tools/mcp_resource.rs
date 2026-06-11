@@ -15,14 +15,14 @@ use crate::mcp::ResourceContent;
 use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use crate::tools::AlephToolDyn;
 
-/// Arguments for mcp_read_resource tool
+/// Arguments for `mcp_read_resource` tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct McpReadResourceArgs {
-    /// Resource URI to read (e.g., "server_name:file:///path/to/file")
+    /// Resource URI to read (e.g., "`server_name:file:///path/to/file`")
     pub uri: String,
 }
 
-/// Output from mcp_read_resource tool
+/// Output from `mcp_read_resource` tool
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpReadResourceOutput {
     /// Resource content

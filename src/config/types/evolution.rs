@@ -1,9 +1,9 @@
 //! Evolution configuration types
 //!
 //! Contains Skill Compiler configuration for Phase 10 (The Hands):
-//! - EvolutionConfig: Main evolution settings
-//! - SolidificationThresholds: Detection thresholds
-//! - ToolGenerationConfig: Tool-backed skill generation settings
+//! - `EvolutionConfig`: Main evolution settings
+//! - `SolidificationThresholds`: Detection thresholds
+//! - `ToolGenerationConfig`: Tool-backed skill generation settings
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,7 +38,7 @@ pub struct EvolutionConfig {
     #[serde(default = "default_auto_commit")]
     pub auto_commit: bool,
 
-    /// Auto-push commits to remote (requires auto_commit)
+    /// Auto-push commits to remote (requires `auto_commit`)
     #[serde(default)]
     pub auto_push: bool,
 
@@ -50,7 +50,7 @@ pub struct EvolutionConfig {
     #[serde(default = "default_branch")]
     pub branch: String,
 
-    /// Directory for generated skills (defaults to skills_dir from SkillsConfig)
+    /// Directory for generated skills (defaults to `skills_dir` from `SkillsConfig`)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills_output_dir: Option<String>,
 
@@ -245,7 +245,7 @@ impl EvolutionConfig {
         }
     }
 
-    /// Get the skills output directory, falling back to SkillsConfig default
+    /// Get the skills output directory, falling back to `SkillsConfig` default
     pub fn get_skills_output_dir(&self, skills_config: &super::SkillsConfig) -> std::path::PathBuf {
         if let Some(ref dir) = self.skills_output_dir {
             let path = std::path::Path::new(dir);

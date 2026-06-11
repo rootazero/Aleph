@@ -4,7 +4,7 @@
 //! (see `docs/superpowers/plans/2026-04-20-managed-agents-phase-6a-runtime-flip.md`)
 //! threads implementations of this trait from the Gateway stream sink through
 //! the Orchestrator bridge down to the harness, so user-visible delta
-//! streaming survives the legacy AgentLoop → AgentHarness swap.
+//! streaming survives the legacy `AgentLoop` → `AgentHarness` swap.
 //!
 //! When the active provider exposes an HTTP delta seam and no output guardrail
 //! is wired, the harness streams live: [`HarnessCallback::on_delta`] /

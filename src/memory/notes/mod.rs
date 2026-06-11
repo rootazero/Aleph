@@ -2,7 +2,7 @@
 //!
 //! Each note is a markdown file with YAML frontmatter containing category,
 //! tags, bullet-point facts, and `[[wikilinks]]` to other notes.
-//! SQLite is a rebuildable index; the markdown files are the source of truth.
+//! `SQLite` is a rebuildable index; the markdown files are the source of truth.
 
 pub mod dedup;
 pub mod governance;

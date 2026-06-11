@@ -1,7 +1,7 @@
 //! HTTP Session Management for Panel UI authentication.
 //!
 //! Sessions are created after successful shared token login.
-//! Session IDs are stored in HttpOnly cookies.
+//! Session IDs are stored in `HttpOnly` cookies.
 
 use crate::gateway::security::SecurityStore;
 use crate::sync_primitives::Arc;

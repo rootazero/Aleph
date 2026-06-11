@@ -1,7 +1,7 @@
 //! MCP Client - External Server Registry
 //!
 //! Manages external MCP server connections only.
-//! Native tools (fs, git, shell, etc.) are now handled via AgentTool infrastructure.
+//! Native tools (fs, git, shell, etc.) are now handled via `AgentTool` infrastructure.
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
@@ -28,7 +28,7 @@ use crate::mcp::types::{
 pub struct McpStartupReport {
     /// Names of servers that started successfully
     pub succeeded: Vec<String>,
-    /// Failed servers: (server_name, error_message)
+    /// Failed servers: (`server_name`, `error_message`)
     pub failed: Vec<(String, String)>,
 }
 
@@ -68,7 +68,7 @@ pub struct ExternalServerConfig {
 /// MCP Client - registry for external MCP server connections
 ///
 /// Note: Native tools (fs, git, shell, etc.) are now handled via
-/// the AgentTool infrastructure in the `tools` module. This client
+/// the `AgentTool` infrastructure in the `tools` module. This client
 /// only manages external MCP server connections.
 pub struct McpClient {
     /// External server connections
@@ -305,7 +305,7 @@ impl McpClient {
     }
 
     /// Find the server connection that owns `name` by looking for the
-    /// longest matching "server_name:" prefix.  This handles server ids
+    /// longest matching "`server_name`:" prefix.  This handles server ids
     /// that themselves contain colons (e.g. "my:server:tool").
     fn find_server_by_prefix<'a>(
         &self,
@@ -330,7 +330,7 @@ impl McpClient {
 
     /// Read a resource by URI
     ///
-    /// The URI should include the server prefix (e.g., "server_name:file:///path")
+    /// The URI should include the server prefix (e.g., "`server_name:file:///path`")
     pub async fn read_resource(&self, uri: &str) -> Result<crate::mcp::resources::ResourceContent> {
         // Clone Arc refs under lock, then release lock before awaiting network I/O
         let (direct_match, all_connections) = {
@@ -386,7 +386,7 @@ impl McpClient {
 
     /// Get a prompt by name with optional arguments
     ///
-    /// The name should include the server prefix (e.g., "server_name:prompt_name")
+    /// The name should include the server prefix (e.g., "`server_name:prompt_name`")
     pub async fn get_prompt(
         &self,
         name: &str,
@@ -792,7 +792,7 @@ impl Default for McpClient {
     }
 }
 
-/// Builder for creating McpClient with configuration
+/// Builder for creating `McpClient` with configuration
 pub struct McpClientBuilder {
     client: McpClient,
     external_configs: Vec<ExternalServerConfig>,

@@ -1,4 +1,4 @@
-//! SoulLayer — identity and personality injection (priority 50)
+//! `SoulLayer` — identity and personality injection (priority 50)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

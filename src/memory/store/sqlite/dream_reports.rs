@@ -1,4 +1,4 @@
-//! DreamReportStore — audit trail for dream pipeline executions.
+//! `DreamReportStore` — audit trail for dream pipeline executions.
 //!
 //! Each dream pipeline run (consolidation, decay, promotion, synthesis)
 //! produces a report that is persisted here for observability and debugging.

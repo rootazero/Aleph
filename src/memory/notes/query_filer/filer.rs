@@ -1,4 +1,4 @@
-//! QueryFiler trait + DefaultQueryFiler implementation.
+//! `QueryFiler` trait + `DefaultQueryFiler` implementation.
 //!
 //! Two-tier gating pipeline: cheap heuristic gate → LLM novelty gate → write note.
 
@@ -26,7 +26,7 @@ use crate::utils::json_extract::extract_json_robust;
 // Trait
 // ---------------------------------------------------------------------------
 
-/// Decides whether a memory_reflect synthesis is worth archiving as a query note.
+/// Decides whether a `memory_reflect` synthesis is worth archiving as a query note.
 #[async_trait]
 pub trait QueryFiler: Send + Sync {
     async fn maybe_file(
@@ -59,7 +59,7 @@ struct LlmGateResponse {
 // DefaultQueryFiler
 // ---------------------------------------------------------------------------
 
-/// Production query filer backed by SQLite + an LLM provider.
+/// Production query filer backed by `SQLite` + an LLM provider.
 pub struct DefaultQueryFiler {
     pub store: Arc<SqliteMemoryBackend>,
     pub indexer: Arc<NoteIndexer<SqliteMemoryBackend>>,

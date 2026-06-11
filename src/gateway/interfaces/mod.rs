@@ -21,7 +21,7 @@
 //! - **Nostr**: Nostr NIP-01 relay WebSocket + NIP-04 DM integration
 //! - **Feishu**: Feishu/Lark Bot WebSocket + REST API integration
 //! - **LINE**: LINE Messaging API webhook + REST API integration
-//! - **WeChat**: WeChat iLink Bot API integration
+//! - **`WeChat`**: `WeChat` iLink Bot API integration
 
 pub mod cli;
 pub mod plugin;

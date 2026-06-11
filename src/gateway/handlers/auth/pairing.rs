@@ -500,7 +500,7 @@ pub async fn handle_pairing_list(
     JsonRpcResponse::success(request.id, json!({"pending": items}))
 }
 
-/// Handle "pairing.start_browser" — anonymous RPC from the cold `/pair`
+/// Handle "`pairing.start_browser`" — anonymous RPC from the cold `/pair`
 /// HTML page. Creates a Browser pairing record and emits
 /// `pairing.requested` so the desktop Panel can notify the operator.
 ///
@@ -584,7 +584,7 @@ pub async fn handle_pairing_start_browser(
     )
 }
 
-/// Handle "pairing.start_node" — anonymous RPC from a tokenless
+/// Handle "`pairing.start_node`" — anonymous RPC from a tokenless
 /// `aleph-server node`. Creates a `node` pairing record and emits
 /// `PairingRequested` so the operator's Panel pops the approve card.
 /// Reachable without a token (see `allow_unauth_browser_pairing`); the

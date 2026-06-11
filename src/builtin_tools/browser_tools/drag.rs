@@ -10,19 +10,19 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_drag tool.
+/// Arguments for the `browser_drag` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserDragArgs {
     /// Browser profile name (default: "default").
     #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
     pub profile: String,
-    /// Accessibility ref_id of the source element to drag (from a snapshot).
+    /// Accessibility `ref_id` of the source element to drag (from a snapshot).
     pub from_ref: String,
-    /// Accessibility ref_id of the target element to drop onto (from a snapshot).
+    /// Accessibility `ref_id` of the target element to drop onto (from a snapshot).
     pub to_ref: String,
 }
 
-/// Output from the browser_drag tool.
+/// Output from the `browser_drag` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserDragOutput {
     pub success: bool,

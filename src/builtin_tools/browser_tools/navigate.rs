@@ -28,7 +28,7 @@ pub enum NavigateAction {
     },
 }
 
-/// Arguments for the browser_navigate tool.
+/// Arguments for the `browser_navigate` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserNavigateArgs {
     /// Browser profile name (default: "default").
@@ -38,7 +38,7 @@ pub struct BrowserNavigateArgs {
     pub action: NavigateAction,
 }
 
-/// Output from the browser_navigate tool.
+/// Output from the `browser_navigate` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserNavigateOutput {
     pub success: bool,

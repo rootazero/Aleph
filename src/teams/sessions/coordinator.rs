@@ -1,5 +1,5 @@
-//! Session coordinator — thin wrapper that orchestrates SessionStore,
-//! MessageRouter, EventLogStore and ArtifactStore for collaborative sessions.
+//! Session coordinator — thin wrapper that orchestrates `SessionStore`,
+//! `MessageRouter`, `EventLogStore` and `ArtifactStore` for collaborative sessions.
 
 use chrono::Utc;
 use tracing::debug;

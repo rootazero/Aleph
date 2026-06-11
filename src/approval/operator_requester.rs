@@ -4,12 +4,12 @@
 //! Unlike `ChannelApprovalBridgeAdapter` (which delivers back to the
 //! requester's own channel), this registers a pending approval in the shared
 //! [`ExecApprovalManager`] and publishes a `GatewayEventFrame::Approval*` event
-//! that — after the event_scope `approval.` guard — only operator-tier
+//! that — after the `event_scope` `approval.` guard — only operator-tier
 //! connections receive. The operator resolves it via the existing
 //! `exec.approval.resolve` RPC, waking the oneshot. Used by the config-tier gate
 //! in `ScopedToolService` (Phase 2b sudo).
 //!
-//! Scope (Phase 2b): AllowOnce + AllowSession only. `AllowAlways` collapses to a
+//! Scope (Phase 2b): `AllowOnce` + `AllowSession` only. `AllowAlways` collapses to a
 //! session grant — permanent device elevation is Phase 3.
 
 use async_trait::async_trait;

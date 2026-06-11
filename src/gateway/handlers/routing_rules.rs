@@ -61,7 +61,7 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -
 // Get
 // ============================================================================
 
-/// Parameters for routing_rules.get
+/// Parameters for `routing_rules.get`
 #[derive(Debug, Deserialize)]
 pub struct GetParams {
     pub index: usize,
@@ -101,7 +101,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
 // Create
 // ============================================================================
 
-/// Parameters for routing_rules.create
+/// Parameters for `routing_rules.create`
 #[derive(Debug, Deserialize)]
 pub struct CreateParams {
     pub rule: RoutingRuleConfigJson,
@@ -191,7 +191,7 @@ pub async fn handle_create(
 // Update
 // ============================================================================
 
-/// Parameters for routing_rules.update
+/// Parameters for `routing_rules.update`
 #[derive(Debug, Deserialize)]
 pub struct UpdateParams {
     pub index: usize,
@@ -273,7 +273,7 @@ pub async fn handle_update(
 // Delete
 // ============================================================================
 
-/// Parameters for routing_rules.delete
+/// Parameters for `routing_rules.delete`
 #[derive(Debug, Deserialize)]
 pub struct DeleteParams {
     pub index: usize,
@@ -358,7 +358,7 @@ pub async fn handle_delete(
 // Move
 // ============================================================================
 
-/// Parameters for routing_rules.move
+/// Parameters for `routing_rules.move`
 #[derive(Debug, Deserialize)]
 pub struct MoveParams {
     pub from: usize,

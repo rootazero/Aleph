@@ -1,4 +1,4 @@
-//! MutationGate — detects evolution pathologies and enforces cooldown.
+//! `MutationGate` — detects evolution pathologies and enforces cooldown.
 //!
 //! Three detection mechanisms:
 //! 1. Merge cycle: same note pair merged 3+ consecutive cycles

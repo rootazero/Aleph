@@ -2,9 +2,9 @@
 //!
 //! Registers host functions that are injected into the WASM sandbox:
 //! - log(level, message) — controlled logging
-//! - now_millis() -> u64 — current timestamp
-//! - workspace_read(path) -> JSON string — read workspace files
-//! - secret_exists(name) -> "true"/"false" — check secret availability
+//! - `now_millis()` -> u64 — current timestamp
+//! - `workspace_read(path)` -> JSON string — read workspace files
+//! - `secret_exists(name)` -> "true"/"false" — check secret availability
 
 use crate::sync_primitives::Arc;
 
@@ -12,7 +12,7 @@ use extism::host_fn;
 
 use super::capability_kernel::WasmCapabilityKernel;
 
-/// Shared state passed to all host functions via Extism UserData
+/// Shared state passed to all host functions via Extism `UserData`
 pub struct HostState {
     pub kernel: Arc<WasmCapabilityKernel>,
     pub workspace_root: std::path::PathBuf,

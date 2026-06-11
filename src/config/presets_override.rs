@@ -134,7 +134,7 @@ pub fn load_presets_override(path: &Path) -> PresetsOverride {
 // Owned preset types (for runtime-merged presets)
 // =============================================================================
 
-/// Owned version of ProviderPreset for runtime-merged presets.
+/// Owned version of `ProviderPreset` for runtime-merged presets.
 ///
 /// Unlike `ProviderPreset` which uses `&'static str`, this uses `String`
 /// so it can hold merged values from both built-in presets and user overrides.
@@ -146,7 +146,7 @@ pub struct OwnedProviderPreset {
     pub default_model: String,
 }
 
-/// Owned version of GenerationPreset for runtime-merged presets.
+/// Owned version of `GenerationPreset` for runtime-merged presets.
 #[derive(Debug, Clone)]
 pub struct OwnedGenerationPreset {
     #[allow(dead_code)]
