@@ -71,6 +71,13 @@ pub struct Goal {
     /// kept). `#[serde(default)]` → old payloads read empty.
     #[serde(default)]
     pub lessons: Vec<String>,
+    /// Optional wall-clock deadline (Unix epoch ms). When set and exceeded, the
+    /// autonomous loop stops re-pursuing and blocks the goal for the user — a
+    /// structural stop condition alongside the iteration/token caps (R7: no
+    /// judgment, pure time comparison). `#[serde(default)]` → old payloads read
+    /// `None`.
+    #[serde(default)]
+    pub deadline_ms: Option<u64>,
 }
 
 /// Ring cap on accumulated lessons kept per goal (newest retained). Bounds the
@@ -99,6 +106,7 @@ impl Goal {
             gate_outcome: GateOutcome::Unchecked,
             gate_command: None,
             lessons: Vec::new(),
+            deadline_ms: None,
         }
     }
 
@@ -169,6 +177,14 @@ impl Goal {
     #[must_use]
     pub const fn with_pursuit(mut self, pursuit: PursuitMode) -> Self {
         self.pursuit = pursuit;
+        self
+    }
+
+    /// Configuration, not a lifecycle transition — deliberately does not bump
+    /// `updated_at_ms` (mirrors `with_budget`/`with_pursuit`). `None` clears.
+    #[must_use]
+    pub const fn with_deadline_ms(mut self, deadline_ms: Option<u64>) -> Self {
+        self.deadline_ms = deadline_ms;
         self
     }
 
@@ -336,5 +352,29 @@ mod tests {
         let g: Goal = serde_json::from_str(json).expect("deserialize old payload");
         assert_eq!(g.gate_command, None);
         assert!(g.lessons.is_empty());
+    }
+
+    #[test]
+    fn new_goal_has_no_deadline() {
+        assert_eq!(sample().deadline_ms, None);
+    }
+
+    #[test]
+    fn with_deadline_ms_sets_without_bumping_updated_at() {
+        let g = sample();
+        let after = g.clone().with_deadline_ms(Some(99_999));
+        assert_eq!(after.deadline_ms, Some(99_999));
+        assert_eq!(after.updated_at_ms, g.updated_at_ms, "config, no bump");
+        assert_eq!(g.deadline_ms, None, "original unchanged");
+    }
+
+    #[test]
+    fn old_payload_without_deadline_deserializes_none() {
+        let json = r#"{"id":"goal-1","session_id":"s","objective":"o",
+            "status":"active","token_budget":null,"tokens_at_start":0,
+            "pursuit":{"mode":"passive"},"created_at_ms":1,"updated_at_ms":1,
+            "note":null,"continuations_used":0,"gate_outcome":"unchecked"}"#;
+        let g: Goal = serde_json::from_str(json).expect("deserialize old payload");
+        assert_eq!(g.deadline_ms, None);
     }
 }
