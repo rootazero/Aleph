@@ -220,6 +220,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn incoming_links_any_matches_fullpath_and_filename() {
+        let backend = make_backend();
+        const AGENT: &str = "agent1";
+
+        // Target note: path "reference/target", filename "target".
+        backend
+            .index_note(
+                &KnowledgeNote {
+                    title: "target".into(),
+                    category: "reference".into(),
+                    content_hash: "h0".into(),
+                    ..Default::default()
+                },
+                AGENT,
+                "reference",
+            )
+            .await
+            .unwrap();
+
+        // Source A links by full path -> resolve_target keeps full path in to_note.
+        backend
+            .index_note(
+                &KnowledgeNote {
+                    title: "srcA".into(),
+                    category: "notes".into(),
+                    links: vec!["reference/target".into()],
+                    content_hash: "hA".into(),
+                    ..Default::default()
+                },
+                AGENT,
+                "notes",
+            )
+            .await
+            .unwrap();
+
+        // Source B: force a row whose to_note is the BARE filename (legacy shape).
+        backend
+            .index_note(
+                &KnowledgeNote {
+                    title: "srcB".into(),
+                    category: "notes".into(),
+                    content_hash: "hB".into(),
+                    ..Default::default()
+                },
+                AGENT,
+                "notes",
+            )
+            .await
+            .unwrap();
+        backend
+            .add_link_with_relation(AGENT, "notes/srcB", "target", "related")
+            .await
+            .unwrap();
+
+        let incoming = backend
+            .get_incoming_links_any("reference/target", "target", AGENT)
+            .await
+            .unwrap();
+        assert!(
+            incoming.iter().any(|f| f == "notes/srcA"),
+            "full-path row missing: {incoming:?}"
+        );
+        assert!(
+            incoming.iter().any(|f| f == "notes/srcB"),
+            "bare-filename row missing: {incoming:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn count_all_notes_returns_correct_count() {
         let backend = make_backend();
         backend
