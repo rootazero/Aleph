@@ -10,7 +10,8 @@
     clippy::module_inception,
     clippy::type_complexity,
     clippy::large_enum_variant,
-    clippy::new_ret_no_self
+    clippy::new_ret_no_self,
+    clippy::redundant_locals
 )]
 
 pub mod api;
