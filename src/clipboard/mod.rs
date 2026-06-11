@@ -92,9 +92,15 @@ impl ImageData {
             )));
         }
 
-        let has_base64_param = header
+        let after_data = header
             .strip_prefix("data:")
-            .expect("starts_with already checked")
+            .ok_or_else(|| {
+                AlephError::other(format!(
+                    "Invalid Base64 data URI format: missing 'data:' prefix in header: {header}"
+                ))
+            })?;
+
+        let has_base64_param = after_data
             .split(';')
             .any(|param| param.trim().eq_ignore_ascii_case("base64"));
 
@@ -104,12 +110,11 @@ impl ImageData {
             )));
         }
 
-        let mime_type = header
-            .strip_prefix("data:")
-            .expect("starts_with already checked")
-            .split(';')
-            .next()
-            .expect("split always returns at least one element");
+        let mime_type = after_data.split(';').next().ok_or_else(|| {
+            AlephError::other(format!(
+                "Invalid Base64 data URI format: empty MIME type in header: {header}"
+            ))
+        })?;
 
         let format = match mime_type.trim().to_ascii_lowercase().as_str() {
             "image/png" => ImageFormat::Png,
