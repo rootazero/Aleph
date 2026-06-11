@@ -152,9 +152,9 @@ fn SubTabButton(
             on:click=on_click
             class=move || {
                 if is_active() {
-                    "w-full flex items-center px-3 py-2 rounded-lg text-sm bg-sidebar-active text-sidebar-accent font-medium"
+                    "nav-tile-active w-full flex items-center px-3 py-2 rounded-lg text-sm"
                 } else {
-                    "w-full flex items-center px-3 py-2 rounded-lg text-sm hover:bg-sidebar-active/50 text-text-secondary hover:text-text-primary"
+                    "nav-tile w-full flex items-center px-3 py-2 rounded-lg text-sm"
                 }
             }
         >
