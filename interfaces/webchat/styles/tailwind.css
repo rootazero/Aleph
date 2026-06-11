@@ -515,61 +515,90 @@ html.glass .glass::after { opacity: 0.5; }
    layered instead: translucent fill + 160° sheen + bright top edge +
    soft shadow. Real backdrop-filter stays reserved for transient
    surfaces (.glass on modals/menus).
-   Token states: light default → .dark / html.glass overrides → a
-   media-query branch for System mode (no class on <html>), mirroring
-   the reduced-transparency block below.
+   Token states: per-material primitive blocks (light default → .dark override
+   → a media-query branch for System mode), with ALL surface tokens derived
+   once via color-mix below.
+   ============================================================ */
+
+/* ============================================================
+   Material primitives — one flat block per material × brightness.
+   Every glass surface token below derives from these via color-mix,
+   so a new material = one new block, zero new derivations.
+   This block: LUXE (default material). Liquid/Aurora live further
+   down with the atmosphere primitives.
    ============================================================ */
 :root {
-  --msg-glass-bg: oklch(1 0 0 / 0.65);
-  --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.35), transparent 42%);
-  --msg-glass-border: oklch(0.40 0.02 295 / 0.14);
-  --msg-glass-border-top: oklch(0.40 0.02 295 / 0.20);
-  --msg-glass-shadow: 0 4px 16px oklch(0.35 0.02 295 / 0.10);
-  --glass-inset-bg: oklch(0.45 0.02 295 / 0.06);
-  --glass-inset-border: oklch(0.40 0.02 295 / 0.12);
-  --glass-inset-border-top: oklch(0.40 0.02 295 / 0.16);
-  --code-header-bg: oklch(0.45 0.02 295 / 0.08);
-  --code-pre-bg: oklch(0.45 0.02 295 / 0.05);
+  /* surface inks + fill strengths */
+  --mat-ink-raise: oklch(1 0 0);
+  --mat-ink-sink: oklch(0.45 0.02 295);
+  --mat-fill-bubble: 65%;
+  --mat-fill-inset: 6%;
+  /* edges & light */
+  --mat-bubble-sheen: oklch(1 0 0 / 0.35);
+  --mat-edge: oklch(0.40 0.02 295 / 0.14);
+  --mat-edge-top: oklch(0.40 0.02 295 / 0.20);
+  --mat-edge-sunken: oklch(0.40 0.02 295 / 0.12);
+  --mat-edge-sunken-top: oklch(0.40 0.02 295 / 0.16);
+  /* depth */
+  --mat-shadow: oklch(0.35 0.02 295 / 0.10);
+  /* leaf colours (no useful derivation — keep exact) */
+  --mat-code-header: oklch(0.45 0.02 295 / 0.08);
+  --mat-code-pre: oklch(0.45 0.02 295 / 0.05);
+  /* user bubble accent recipe */
+  --mat-user-fill: 68%;
+  --mat-user-glow: 25%;
 }
 .dark {
-  --msg-glass-bg: oklch(0.24 0.02 310 / 0.75);
-  --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.05), transparent 42%);
-  --msg-glass-border: oklch(1 0 0 / 0.10);
-  --msg-glass-border-top: oklch(1 0 0 / 0.22);
-  --msg-glass-shadow: 0 4px 16px oklch(0 0 0 / 0.25);
-  --glass-inset-bg: oklch(0.19 0.02 310 / 0.7);
-  --glass-inset-border: oklch(1 0 0 / 0.07);
-  --glass-inset-border-top: oklch(1 0 0 / 0.13);
-  --code-header-bg: oklch(0.19 0.02 310 / 0.9);
-  --code-pre-bg: oklch(0.15 0.02 310 / 0.85);
+  --mat-ink-raise: oklch(0.24 0.02 310);
+  --mat-ink-sink: oklch(0.19 0.02 310);
+  --mat-fill-bubble: 75%;
+  --mat-fill-inset: 70%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.05);
+  --mat-edge: oklch(1 0 0 / 0.10);
+  --mat-edge-top: oklch(1 0 0 / 0.22);
+  --mat-edge-sunken: oklch(1 0 0 / 0.07);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.13);
+  --mat-shadow: oklch(0 0 0 / 0.25);
+  --mat-code-header: oklch(0.19 0.02 310 / 0.9);
+  --mat-code-pre: oklch(0.15 0.02 310 / 0.85);
+  --mat-user-fill: 68%;
+  --mat-user-glow: 25%;
 }
-/* Glass theme: dark-adjacent values with a brighter specular top edge. */
-html.glass {
-  --msg-glass-bg: oklch(0.24 0.02 310 / 0.65);
-  --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.07), transparent 42%);
-  --msg-glass-border: oklch(1 0 0 / 0.12);
-  --msg-glass-border-top: oklch(1 0 0 / 0.35);
-  --msg-glass-shadow: 0 4px 16px oklch(0 0 0 / 0.30);
-  --glass-inset-bg: oklch(0.19 0.02 310 / 0.6);
-  --glass-inset-border: oklch(1 0 0 / 0.09);
-  --glass-inset-border-top: oklch(1 0 0 / 0.18);
-  --code-header-bg: oklch(0.17 0.02 310 / 0.85);
-  --code-pre-bg: oklch(0.14 0.02 310 / 0.8);
-}
-/* System mode (no explicit class) + OS dark — same values as .dark. */
+/* System mode (no explicit class) + OS dark — mirror of `.dark`. */
 @media (prefers-color-scheme: dark) {
-  :root:not(.light):not(.glass) {
-    --msg-glass-bg: oklch(0.24 0.02 310 / 0.75);
-    --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.05), transparent 42%);
-    --msg-glass-border: oklch(1 0 0 / 0.10);
-    --msg-glass-border-top: oklch(1 0 0 / 0.22);
-    --msg-glass-shadow: 0 4px 16px oklch(0 0 0 / 0.25);
-    --glass-inset-bg: oklch(0.19 0.02 310 / 0.7);
-    --glass-inset-border: oklch(1 0 0 / 0.07);
-    --glass-inset-border-top: oklch(1 0 0 / 0.13);
-    --code-header-bg: oklch(0.19 0.02 310 / 0.9);
-    --code-pre-bg: oklch(0.15 0.02 310 / 0.85);
+  :root:not(.light) {
+    --mat-ink-raise: oklch(0.24 0.02 310);
+    --mat-ink-sink: oklch(0.19 0.02 310);
+    --mat-fill-bubble: 75%;
+    --mat-fill-inset: 70%;
+    --mat-bubble-sheen: oklch(1 0 0 / 0.05);
+    --mat-edge: oklch(1 0 0 / 0.10);
+    --mat-edge-top: oklch(1 0 0 / 0.22);
+    --mat-edge-sunken: oklch(1 0 0 / 0.07);
+    --mat-edge-sunken-top: oklch(1 0 0 / 0.13);
+    --mat-shadow: oklch(0 0 0 / 0.25);
+    --mat-code-header: oklch(0.19 0.02 310 / 0.9);
+    --mat-code-pre: oklch(0.15 0.02 310 / 0.85);
+    --mat-user-fill: 68%;
+    --mat-user-glow: 25%;
   }
+}
+
+/* ── Derived surface tokens — defined ONCE; all themes/materials flow
+      through the primitives above. All theme classes live on <html>, so
+      single-element cascade resolution makes the var() substitution pick
+      up each material/brightness block automatically. ── */
+:root {
+  --msg-glass-bg: color-mix(in oklch, var(--mat-ink-raise) var(--mat-fill-bubble), transparent);
+  --msg-glass-sheen: linear-gradient(160deg, var(--mat-bubble-sheen), transparent 42%);
+  --msg-glass-border: var(--mat-edge);
+  --msg-glass-border-top: var(--mat-edge-top);
+  --msg-glass-shadow: 0 4px 16px var(--mat-shadow);
+  --glass-inset-bg: color-mix(in oklch, var(--mat-ink-sink) var(--mat-fill-inset), transparent);
+  --glass-inset-border: var(--mat-edge-sunken);
+  --glass-inset-border-top: var(--mat-edge-sunken-top);
+  --code-header-bg: var(--mat-code-header);
+  --code-pre-bg: var(--mat-code-pre);
 }
 
 @layer components {
@@ -590,10 +619,10 @@ html.glass {
   .msg-glass-user {
     color: var(--color-text-inverse);
     background-image: linear-gradient(160deg, oklch(1 0 0 / 0.10), transparent 45%);
-    background-color: color-mix(in oklch, var(--color-primary) 68%, transparent);
+    background-color: color-mix(in oklch, var(--color-primary) var(--mat-user-fill), transparent);
     border: 1px solid color-mix(in oklch, var(--color-primary) 45%, transparent);
     border-top-color: color-mix(in oklch, white 28%, var(--color-primary));
-    box-shadow: 0 4px 14px color-mix(in oklch, var(--color-primary) 25%, transparent);
+    box-shadow: 0 4px 14px color-mix(in oklch, var(--color-primary) var(--mat-user-glow), transparent);
   }
   /* Errored final answer — danger-tinted glass (same recipe, danger hue). */
   .msg-glass-danger {
