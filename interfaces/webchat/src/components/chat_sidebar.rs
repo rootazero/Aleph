@@ -780,11 +780,11 @@ pub fn ChatSidebar() -> impl IntoView {
                                             <div class="relative group">
                                                 <button
                                                     class=move || format!(
-                                                        "w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors flex items-center justify-between {}",
+                                                        "w-full text-left px-3 py-2.5 rounded-lg text-sm flex items-center justify-between {}",
                                                         if is_active() {
-                                                            "bg-primary/10 text-primary font-medium"
+                                                            "nav-tile-active"
                                                         } else {
-                                                            "text-text-secondary hover:bg-surface-sunken hover:text-text-primary"
+                                                            "nav-tile"
                                                         }
                                                     )
                                                     on:click=move |_| {

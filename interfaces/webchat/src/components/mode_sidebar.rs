@@ -311,9 +311,9 @@ fn SettingsSidebar() -> impl IntoView {
                                             href=path
                                             attr:class=move || {
                                                 if is_active() {
-                                                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 bg-sidebar-active text-sidebar-accent font-medium"
+                                                    "nav-tile-active flex items-center gap-3 px-3 py-2 rounded-lg text-sm"
                                                 } else {
-                                                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 hover:bg-sidebar-active/50 text-text-secondary hover:text-text-primary"
+                                                    "nav-tile flex items-center gap-3 px-3 py-2 rounded-lg text-sm"
                                                 }
                                             }
                                         >

@@ -33,16 +33,11 @@ pub fn SidebarItem(
     view! {
         <A href=href attr:class=move || {
             if is_active() {
-                "relative group flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-accent bg-sidebar-active transition-all duration-200 font-medium"
+                "nav-tile-active relative group flex items-center gap-3 px-3 py-2 rounded-lg"
             } else {
-                "relative group flex items-center gap-3 px-3 py-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-sidebar-active/50 transition-all duration-200"
+                "nav-tile relative group flex items-center gap-3 px-3 py-2 rounded-lg"
             }
         }>
-            // Active indicator bar
-            {move || is_active().then(|| view! {
-                <div class="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-sidebar-accent rounded-full"></div>
-            })}
-
             // Icon container (relative for badge positioning)
             <div class="relative flex-shrink-0">
                 <svg
