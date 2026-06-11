@@ -507,7 +507,7 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
    Every glass surface token below derives from these via color-mix,
    so a new material = one new block, zero new derivations.
    This block: LUXE (default material). Liquid/Aurora live further
-   down with the atmosphere primitives.
+   down, after the accent palettes — search `data-material=`.
    Selector convention: brightness → class on <html> (`.dark` / `:root`),
    material → data-attribute on <html> (`html[data-material="liquid"]`).
    ============================================================ */
@@ -595,7 +595,8 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
 /* System mode (no explicit class) + OS dark — exact mirror of `.dark`.
    Edit `.dark` first, then copy every property here. Never tune this block
    independently; it exists only because the media query can't reference
-   the class-based selector. */
+   the class-based selector.
+   (enforced by mirror_blocks_are_verbatim_copies in src/appearance.rs) */
 @media (prefers-color-scheme: dark) {
   :root:not(.light) {
     --mat-ink-raise: oklch(0.24 0.02 310);
@@ -773,10 +774,11 @@ html[data-material="aurora"].dark {
   --mat-pop-grain: 0.35;
 }
 
-/* System mode + OS dark — mirrors of the two material `.dark` blocks above.
+/* System mode + OS dark — mirrors of the material `.dark` blocks above.
    Edit the `.dark` blocks first, then copy every line here verbatim. Never
    tune these independently; they exist only because the media query can't
-   reference the class-based selector. */
+   reference the class-based selector.
+   (enforced by mirror_blocks_are_verbatim_copies in src/appearance.rs) */
 @media (prefers-color-scheme: dark) {
   :root:not(.light)[data-material="liquid"] {
     /* visionOS-style lens: WHITE ink at low fill over a vivid dark field. */

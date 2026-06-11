@@ -617,4 +617,82 @@ mod tests {
         assert_eq!(Material::Liquid.storage_value(), Some("liquid"));
         assert_eq!(Material::Aurora.storage_value(), Some("aurora"));
     }
+
+    /// Body lines of the CSS rule whose selector line, after trimming,
+    /// equals `selector` exactly. Exact-line matching keeps `.dark {` from
+    /// matching `html[data-material="liquid"].dark {` or the kill block's
+    /// `.dark, .dark[data-material] {`. Lines come back trimmed (the system
+    /// mirrors sit one nesting level deeper than the `.dark` blocks they
+    /// copy) with empties dropped; brace depth is tracked so a nested rule
+    /// added later won't truncate the body.
+    fn css_block_body<'a>(css: &'a str, selector: &str) -> Vec<&'a str> {
+        let lines: Vec<&str> = css.lines().collect();
+        let starts: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.trim() == selector)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            starts.len(),
+            1,
+            "selector line {selector:?} must appear exactly once in tailwind.css"
+        );
+        let mut depth: i64 = 1;
+        let mut body = Vec::new();
+        for line in &lines[starts[0] + 1..] {
+            let opens = line.matches('{').count() as i64;
+            let closes = line.matches('}').count() as i64;
+            if depth + opens - closes <= 0 {
+                return body;
+            }
+            depth += opens - closes;
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                body.push(trimmed);
+            }
+        }
+        panic!("unclosed block for selector {selector:?} in tailwind.css");
+    }
+
+    #[test]
+    fn mirror_blocks_are_verbatim_copies() {
+        // The stylesheet keeps a hand-synced `@media (prefers-color-scheme:
+        // dark)` mirror of every `.dark` primitive block (the media query
+        // can't reference the class-based selector). Drift would be silent
+        // and only visible to System-mode users — enforce the copy-verbatim
+        // discipline here. Comment lines participate on purpose: mirrors
+        // are verbatim copies, comments included.
+        let css = include_str!("../styles/tailwind.css");
+        let pairs = [
+            (".dark {", ":root:not(.light) {"),
+            (
+                r#"html[data-material="liquid"].dark {"#,
+                r#":root:not(.light)[data-material="liquid"] {"#,
+            ),
+            (
+                r#"html[data-material="aurora"].dark {"#,
+                r#":root:not(.light)[data-material="aurora"] {"#,
+            ),
+        ];
+        for (dark, mirror) in pairs {
+            let dark_body = css_block_body(css, dark);
+            let mirror_body = css_block_body(css, mirror);
+            for (i, (d, m)) in dark_body.iter().zip(mirror_body.iter()).enumerate() {
+                assert_eq!(
+                    d,
+                    m,
+                    "system-mode mirror {mirror:?} drifted from {dark:?} at body \
+                     line {} — copy the `.dark` block verbatim",
+                    i + 1
+                );
+            }
+            assert_eq!(
+                dark_body.len(),
+                mirror_body.len(),
+                "system-mode mirror {mirror:?} and {dark:?} have different line \
+                 counts — copy the `.dark` block verbatim"
+            );
+        }
+    }
 }
