@@ -98,6 +98,18 @@ impl SwiftBridge {
         }
     }
 
+    /// Returns `true` if the helper subprocess is currently spawned (its
+    /// reader loop is live).
+    ///
+    /// Cheap, non-blocking diagnostic: it `try_lock`s the state slot and never
+    /// awaits. Used to verify the bridge stays idle (unspawned) until the first
+    /// real `desktop.*` call. A momentary lock contention conservatively
+    /// reports `false`.
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.state.try_lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+
     /// Spawn the helper subprocess and wire up reader + stderr tasks.
     /// This is the inner spawn — does NOT touch backoff or `restart_window`.
     async fn spawn_process(&self) -> Result<()> {
@@ -593,6 +605,20 @@ done
         assert!(
             msg.contains("disabled"),
             "expected BridgeDisabled, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn is_running_reflects_spawn_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = install_fake(&dir, fake_helper_script());
+
+        let bridge = SwiftBridge::new(path);
+        assert!(!bridge.is_running(), "fresh bridge must not be running");
+        bridge.ensure_running().await.unwrap();
+        assert!(
+            bridge.is_running(),
+            "bridge must report running after ensure_running"
         );
     }
 }
