@@ -126,7 +126,7 @@ pub(super) fn JobEditor(
                         form_alert_after.set(
                             alert
                                 .get("after_n")
-                                .and_then(|v| v.as_u64())
+                                .and_then(serde_json::Value::as_u64)
                                 .map(|v| v.to_string())
                                 .unwrap_or_else(|| "2".to_string()),
                         );

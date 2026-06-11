@@ -207,7 +207,7 @@ pub fn Home() -> impl IntoView {
                 state.unsubscribe_events(id);
                 activity_sub_id.set_value(None);
             }
-            activity_buffer.update(|buf| buf.clear());
+            activity_buffer.update(std::collections::VecDeque::clear);
         }
     });
 
@@ -246,7 +246,7 @@ pub fn Home() -> impl IntoView {
                     Ok(result) => {
                         let count = result
                             .get("active_total")
-                            .and_then(|v| v.as_u64())
+                            .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0);
                         active_tasks.set(Some(count));
                     }

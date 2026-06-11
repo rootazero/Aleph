@@ -38,7 +38,7 @@ pub(super) fn parse_command_info(item: &serde_json::Value) -> Option<CommandInfo
         .unwrap_or("");
     let is_namespace = item
         .get("is_namespace")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     let param_hint = item
         .get("param_hint")

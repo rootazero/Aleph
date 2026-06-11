@@ -17,7 +17,7 @@ pub(super) fn format_schedule_summary(
         if let Some(k) = obj.get("kind").and_then(|v| v.as_str()) {
             match k {
                 "every" => {
-                    if let Some(ms) = obj.get("every_ms").and_then(|v| v.as_u64()) {
+                    if let Some(ms) = obj.get("every_ms").and_then(serde_json::Value::as_u64) {
                         return format_ms_interval(ms);
                     }
                 }
@@ -39,7 +39,7 @@ pub(super) fn format_schedule_summary(
                     if let Some(ts_ms) = obj
                         .get("at")
                         .or_else(|| obj.get("at_ms"))
-                        .and_then(|v| v.as_i64())
+                        .and_then(serde_json::Value::as_i64)
                     {
                         return format!("At {}", format_timestamp(ts_ms / 1000));
                     }
@@ -162,21 +162,21 @@ pub(super) fn extract_schedule_from_kind(
             let expr = obj.get("expr").and_then(|v| v.as_str()).unwrap_or("");
             let stagger = obj
                 .get("stagger_ms")
-                .and_then(|v| v.as_i64())
+                .and_then(serde_json::Value::as_i64)
                 .map(|v| v.to_string());
             (kind.to_string(), expr.to_string(), None, stagger)
         }
         "every" => {
-            let every_ms = obj.get("every_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+            let every_ms = obj.get("every_ms").and_then(serde_json::Value::as_i64).unwrap_or(0);
             let anchor = obj
                 .get("anchor_ms")
-                .and_then(|v| v.as_i64())
+                .and_then(serde_json::Value::as_i64)
                 .map(|v| v.to_string());
             (kind.to_string(), every_ms.to_string(), anchor, None)
         }
         "at" => {
             // Backend stores ms; convert to local datetime string for the form
-            let at_ms = obj.get("at").and_then(|v| v.as_i64()).unwrap_or(0);
+            let at_ms = obj.get("at").and_then(serde_json::Value::as_i64).unwrap_or(0);
             let dt_str = ms_to_datetime_local(at_ms);
             (kind.to_string(), dt_str, None, None)
         }

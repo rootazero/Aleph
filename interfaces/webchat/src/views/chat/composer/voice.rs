@@ -272,7 +272,7 @@ fn browser_start(
                 let mime = r
                     .recorder
                     .as_ref()
-                    .map(|rec| rec.mime_type())
+                    .map(web_sys::MediaRecorder::mime_type)
                     .unwrap_or_default();
                 let blob = web_sys::Blob::new_with_blob_sequence(arr.as_ref()).ok();
                 (blob, mime)

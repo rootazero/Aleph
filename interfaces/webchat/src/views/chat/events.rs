@@ -66,7 +66,7 @@ pub(crate) fn apply_trace_event(
                 .unwrap_or("");
             let duration = call
                 .and_then(|c| c.get("duration_ms"))
-                .and_then(|d| d.as_u64());
+                .and_then(serde_json::Value::as_u64);
             let result = trace_event
                 .get("result")
                 .unwrap_or(&serde_json::Value::Null);
@@ -90,7 +90,7 @@ pub(crate) fn apply_trace_event(
         "turn_started" => {
             let Some(iteration) = trace_event
                 .get("iteration")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .map(|v| v as usize)
             else {
                 return;
@@ -101,7 +101,7 @@ pub(crate) fn apply_trace_event(
         "text_emitted" => {
             let Some(iteration) = trace_event
                 .get("iteration")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .map(|v| v as usize)
             else {
                 return;
@@ -118,7 +118,7 @@ pub(crate) fn apply_trace_event(
         "reactive_compaction_attempted" => {
             let succeeded = trace_event
                 .get("succeeded")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
             let note = if succeeded {
                 "⚠️ 上下文超长：已压缩历史并成功重试"
@@ -262,10 +262,10 @@ pub fn subscribe_run_events(
                 let status = data
                     .get("result")
                     .and_then(|r| r.get("success"))
-                    .and_then(|s| s.as_bool())
+                    .and_then(serde_json::Value::as_bool)
                     .map(|ok| if ok { "completed" } else { "failed" })
                     .unwrap_or("completed");
-                let duration = data.get("duration_ms").and_then(|d| d.as_u64());
+                let duration = data.get("duration_ms").and_then(serde_json::Value::as_u64);
                 chat.update_tool(run_id, tool_id, "", status, duration);
             }
             "response_chunk" => {
@@ -278,7 +278,7 @@ pub fn subscribe_run_events(
                 // chunk is the only text source and must be kept.
                 let is_final = data
                     .get("is_final")
-                    .and_then(|v| v.as_bool())
+                    .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false);
                 if is_final && trace_enabled {
                     return;
@@ -308,10 +308,10 @@ pub fn subscribe_run_events(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let attempt = data.get("attempt").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let attempt = data.get("attempt").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32;
                 let max_attempts = data
                     .get("max_attempts")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0) as u32;
                 chat.set_provider_retry(ProviderRetryNotice {
                     provider,
@@ -343,11 +343,11 @@ pub fn subscribe_run_events(
                     let input = summary
                         .get("token_breakdown")
                         .and_then(|b| b.get("input"))
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0) as u32;
                     let total = summary
                         .get("total_tokens")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                     if input > 0 || total > 0 {
                         let model = chat.model_for_run(run_id).unwrap_or_default();

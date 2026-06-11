@@ -355,7 +355,7 @@ impl ChatState {
     /// Clear the retry notice once the provider responds or the run settles.
     /// Cheap no-op when nothing is set (called from the per-chunk hot path).
     pub fn clear_provider_retry(&self) {
-        if self.provider_retry.with_untracked(|n| n.is_some()) {
+        if self.provider_retry.with_untracked(std::option::Option::is_some) {
             self.provider_retry.set(None);
         }
     }

@@ -216,7 +216,7 @@ impl SecurityConfigApi {
         let result = state.rpc_call("security_config.update", params).await?;
         let needs_restart = result
             .get("needs_restart")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         Ok(needs_restart)
     }

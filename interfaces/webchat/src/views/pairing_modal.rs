@@ -172,7 +172,7 @@ fn PairingModalInner() -> impl IntoView {
                 }
                 Ok(resp) => {
                     // wizard.answer returns WizardNextResult; check for done + data.token
-                    let is_done = resp.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let is_done = resp.get("done").and_then(serde_json::Value::as_bool).unwrap_or(false);
                     if is_done {
                         if let Some(token) = resp
                             .get("data")

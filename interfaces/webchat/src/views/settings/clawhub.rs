@@ -73,7 +73,7 @@ fn load_browse(
                 has_more.set(
                     result
                         .get("hasMore")
-                        .and_then(|v| v.as_bool())
+                        .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false),
                 );
                 loading.set(false);

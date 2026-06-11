@@ -75,7 +75,7 @@ pub fn AgentTrace() -> impl IntoView {
                     .unwrap_or(event.data),
             ) {
                 let step = {
-                    let mut c = counter.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut c = counter.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     let s = *c;
                     *c += 1;
                     s
@@ -130,7 +130,7 @@ pub fn AgentTrace() -> impl IntoView {
         is_playing.set(false);
         current_step.set(0);
         let counter = step_counter.get_value();
-        let mut c = counter.lock().unwrap_or_else(|e| e.into_inner());
+        let mut c = counter.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *c = 0;
     };
 

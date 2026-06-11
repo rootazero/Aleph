@@ -150,7 +150,7 @@ impl AgentsApi {
         result
             .get("content")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .ok_or_else(|| "Missing content in response".to_string())
     }
 

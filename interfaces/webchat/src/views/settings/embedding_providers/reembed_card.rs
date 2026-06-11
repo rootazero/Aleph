@@ -38,13 +38,13 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                         if let Some(phase) = data.get("phase").and_then(|v| v.as_str()) {
                             set_progress_phase.set(phase.to_string());
                         }
-                        if let Some(total) = data.get("total").and_then(|v| v.as_u64()) {
+                        if let Some(total) = data.get("total").and_then(serde_json::Value::as_u64) {
                             set_progress_total.set(total as usize);
                         }
-                        if let Some(completed) = data.get("completed").and_then(|v| v.as_u64()) {
+                        if let Some(completed) = data.get("completed").and_then(serde_json::Value::as_u64) {
                             set_progress_completed.set(completed as usize);
                         }
-                        if let Some(failed) = data.get("failed").and_then(|v| v.as_u64()) {
+                        if let Some(failed) = data.get("failed").and_then(serde_json::Value::as_u64) {
                             set_progress_failed.set(failed as usize);
                         }
                     }
@@ -56,19 +56,19 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                         } else {
                             let facts_updated = data
                                 .get("facts_updated")
-                                .and_then(|v| v.as_u64())
+                                .and_then(serde_json::Value::as_u64)
                                 .unwrap_or(0);
                             let facts_total = data
                                 .get("facts_total")
-                                .and_then(|v| v.as_u64())
+                                .and_then(serde_json::Value::as_u64)
                                 .unwrap_or(0);
                             let memories_updated = data
                                 .get("memories_updated")
-                                .and_then(|v| v.as_u64())
+                                .and_then(serde_json::Value::as_u64)
                                 .unwrap_or(0);
                             let memories_total = data
                                 .get("memories_total")
-                                .and_then(|v| v.as_u64())
+                                .and_then(serde_json::Value::as_u64)
                                 .unwrap_or(0);
                             let error_list: Vec<String> = data
                                 .get("errors")

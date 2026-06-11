@@ -93,14 +93,14 @@ pub(super) fn RunHistory(runs: RwSignal<Vec<JobRunInfo>>) -> impl IntoView {
                                         (Some(reason), Some(err)) => {
                                             let reason_str = reason.get("message")
                                                 .and_then(|v| v.as_str())
-                                                .map(|s| s.to_string())
+                                                .map(std::string::ToString::to_string)
                                                 .unwrap_or_else(|| reason.to_string());
                                             format!("[{reason_str}] {err}")
                                         }
                                         (Some(reason), None) => {
                                             reason.get("message")
                                                 .and_then(|v| v.as_str())
-                                                .map(|s| s.to_string())
+                                                .map(std::string::ToString::to_string)
                                                 .unwrap_or_else(|| reason.to_string())
                                         }
                                         (None, Some(err)) => err.clone(),

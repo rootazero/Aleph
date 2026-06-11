@@ -184,8 +184,8 @@ impl WorkspaceState {
     /// expansions, focus, badge, drawer selection, and every captured
     /// payload. Layout mode (the user's pane preference) is preserved.
     pub fn reset(&self) {
-        self.tool_payloads.update(|m| m.clear());
-        self.expanded_events.update(|s| s.clear());
+        self.tool_payloads.update(std::collections::HashMap::clear);
+        self.expanded_events.update(std::collections::HashSet::clear);
         self.unseen_activity.set(0);
         self.files_drawer_open.set(false);
         self.selected_file.set(None);

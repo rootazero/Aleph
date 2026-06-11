@@ -73,7 +73,7 @@ impl FsApi {
         result
             .get("path")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .ok_or_else(|| "missing path in response".to_string())
     }
 
@@ -118,7 +118,7 @@ impl FsApi {
         result
             .get("path")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .ok_or_else(|| "missing path in response".to_string())
     }
 }

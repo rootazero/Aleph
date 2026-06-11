@@ -83,7 +83,7 @@ pub fn error_message(result: &Value) -> Option<String> {
         .get("Error")
         .and_then(|e| e.get("error"))
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
 }
 
 /// 行级 diff（带相等的上下文行），返回 (行, 新增数, 删除数)。
@@ -497,7 +497,7 @@ fn shell_body(p: &ToolPayload) -> AnyView {
     let exit = out
         .as_ref()
         .and_then(|o| o.get("exit_code"))
-        .and_then(|v| v.as_i64());
+        .and_then(serde_json::Value::as_i64);
     let exit_badge = exit.map(|c| {
         let cls = if c == 0 {
             "text-success"
@@ -524,7 +524,7 @@ fn read_body(p: &ToolPayload) -> AnyView {
         Some(ref other) => other
             .get("content")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .unwrap_or_else(|| other.to_string()),
         None => String::new(),
     };
@@ -541,7 +541,7 @@ fn search_body(p: &ToolPayload) -> AnyView {
         .as_ref()
         .and_then(|o| o.get("results"))
         .and_then(|v| v.as_array())
-        .map(|a| a.len());
+        .map(std::vec::Vec::len);
     view! {
         <div class="flex flex-col gap-1 text-xs">
             {count.map(|c| view! {

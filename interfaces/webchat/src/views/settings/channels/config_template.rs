@@ -155,7 +155,7 @@ pub fn ChannelConfigTemplate(
                     continue; // presence flag, never persisted
                 }
                 if secret_keys.contains(key.as_str())
-                    && value.as_str().map(|s| s.is_empty()).unwrap_or(false)
+                    && value.as_str().map(str::is_empty).unwrap_or(false)
                 {
                     continue; // empty secret = keep existing key
                 }
@@ -522,7 +522,7 @@ fn render_field(
                 field_values
                     .get()
                     .get(&format!("has_{key}"))
-                    .and_then(|v| v.as_bool())
+                    .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false)
             };
             // Editable value always starts empty; empty on save = keep existing.
@@ -573,7 +573,7 @@ fn render_field(
                 field_values
                     .get()
                     .get(key)
-                    .and_then(|v| v.as_i64())
+                    .and_then(serde_json::Value::as_i64)
                     .unwrap_or(default_num as i64) as i32
             };
             view! {
@@ -596,7 +596,7 @@ fn render_field(
                 field_values
                     .get()
                     .get(key)
-                    .and_then(|v| v.as_bool())
+                    .and_then(serde_json::Value::as_bool)
                     .unwrap_or(default_bool)
             };
             view! {
@@ -621,7 +621,7 @@ fn render_field(
                         arr.iter()
                             .filter_map(|v| {
                                 v.as_str()
-                                    .map(|s| s.to_string())
+                                    .map(std::string::ToString::to_string)
                                     .or_else(|| v.as_i64().map(|n| n.to_string()))
                             })
                             .collect()

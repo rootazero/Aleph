@@ -381,7 +381,7 @@ fn TokenSection(
                                         .get("id")
                                         .and_then(|v| v.as_str())
                                         .and_then(|s| s.parse::<u64>().ok())
-                                        .or_else(|| g.get("id").and_then(|v| v.as_u64()))
+                                        .or_else(|| g.get("id").and_then(serde_json::Value::as_u64))
                                         .unwrap_or(0),
                                     name: g
                                         .get("name")
@@ -397,7 +397,7 @@ fn TokenSection(
                                     }),
                                     member_count: g
                                         .get("approximate_member_count")
-                                        .and_then(|v| v.as_u64()),
+                                        .and_then(serde_json::Value::as_u64),
                                     checked: false,
                                 })
                                 .collect();
@@ -502,7 +502,7 @@ fn GuildSection(
                                 .get("id")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<u64>().ok())
-                                .or_else(|| g.get("id").and_then(|v| v.as_u64()))
+                                .or_else(|| g.get("id").and_then(serde_json::Value::as_u64))
                                 .unwrap_or(0),
                             name: g
                                 .get("name")
@@ -517,7 +517,7 @@ fn GuildSection(
                             }),
                             member_count: g
                                 .get("approximate_member_count")
-                                .and_then(|v| v.as_u64()),
+                                .and_then(serde_json::Value::as_u64),
                             checked: false,
                         })
                         .collect();
@@ -547,7 +547,7 @@ fn GuildSection(
                                 .get("id")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<u64>().ok())
-                                .or_else(|| c.get("id").and_then(|v| v.as_u64()))
+                                .or_else(|| c.get("id").and_then(serde_json::Value::as_u64))
                                 .unwrap_or(0),
                             name: c
                                 .get("name")
@@ -555,7 +555,7 @@ fn GuildSection(
                                 .unwrap_or("unknown")
                                 .to_string(),
                             kind: {
-                                let kind_val = c.get("type").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let kind_val = c.get("type").and_then(serde_json::Value::as_u64).unwrap_or(0);
                                 match kind_val {
                                     0 => "Text".to_string(),
                                     2 => "Voice".to_string(),

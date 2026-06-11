@@ -224,8 +224,8 @@ impl DashboardState {
     where
         F: Fn(GatewayEvent) + Send + Sync + 'static,
     {
-        let handlers = self.event_handlers.with_value(|h| h.clone());
-        let mut handlers = handlers.lock().unwrap_or_else(|e| e.into_inner());
+        let handlers = self.event_handlers.with_value(std::clone::Clone::clone);
+        let mut handlers = handlers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = handlers.len();
         handlers.push(Arc::new(handler));
         id
@@ -233,8 +233,8 @@ impl DashboardState {
 
     /// Unsubscribe from events
     pub fn unsubscribe_events(&self, id: usize) {
-        let handlers = self.event_handlers.with_value(|h| h.clone());
-        let mut handlers = handlers.lock().unwrap_or_else(|e| e.into_inner());
+        let handlers = self.event_handlers.with_value(std::clone::Clone::clone);
+        let mut handlers = handlers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if id < handlers.len() {
             // Replace with a no-op handler instead of removing to preserve indices
             handlers[id] = Arc::new(|_| {});
@@ -262,8 +262,8 @@ impl DashboardState {
 
     /// Dispatch event to all subscribers
     fn dispatch_event(&self, event: GatewayEvent) {
-        let handlers = self.event_handlers.with_value(|h| h.clone());
-        let handlers = handlers.lock().unwrap_or_else(|e| e.into_inner());
+        let handlers = self.event_handlers.with_value(std::clone::Clone::clone);
+        let handlers = handlers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for handler in handlers.iter() {
             handler(event.clone());
         }
@@ -297,8 +297,8 @@ impl DashboardState {
     pub async fn rpc_call(&self, method: &str, params: Value) -> Result<Value, String> {
         // Generate unique ID
         let id = {
-            let next_id = self.next_id.with_value(|n| n.clone());
-            let mut id_gen = next_id.lock().unwrap_or_else(|e| e.into_inner());
+            let next_id = self.next_id.with_value(std::clone::Clone::clone);
+            let mut id_gen = next_id.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let id = *id_gen;
             *id_gen += 1;
             id.to_string()
@@ -317,7 +317,7 @@ impl DashboardState {
 
         // Send request to message loop
         {
-            let rpc_tx = self.rpc_tx.with_value(|tx| tx.clone());
+            let rpc_tx = self.rpc_tx.with_value(std::clone::Clone::clone);
             if let Some(tx) = rpc_tx {
                 tx.unbounded_send(request)
                     .map_err(|_| "Failed to send RPC request".to_string())?;
@@ -777,14 +777,14 @@ impl DashboardState {
                     let count = event
                         .data
                         .get("count")
-                        .and_then(|c| c.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .map(|c| c as u32);
 
                     let message = event
                         .data
                         .get("message")
                         .and_then(|m| m.as_str())
-                        .map(|s| s.to_string());
+                        .map(std::string::ToString::to_string);
 
                     // Create SystemAlert with String key (no memory leak)
                     let alert = crate::components::sidebar::SystemAlert {
@@ -940,7 +940,7 @@ impl DashboardState {
                         let message = result
                             .get("message")
                             .and_then(|m| m.as_str())
-                            .map(|s| s.to_string());
+                            .map(std::string::ToString::to_string);
 
                         let alert = crate::components::sidebar::SystemAlert {
                             key: "system.health".to_string(),
@@ -964,7 +964,7 @@ impl DashboardState {
         // Fetch memory status
         match self.rpc_call("memory.stats", serde_json::json!({})).await {
             Ok(result) => {
-                if let Some(db_size) = result.get("databaseSizeMb").and_then(|s| s.as_f64()) {
+                if let Some(db_size) = result.get("databaseSizeMb").and_then(serde_json::Value::as_f64) {
                     // Warn if database is larger than 100MB
                     if db_size > 100.0 {
                         let alert = crate::components::sidebar::SystemAlert {

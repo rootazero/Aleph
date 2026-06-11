@@ -189,7 +189,7 @@ fn McpServerCard(
         format!("{} {}", server.command, server.args.join(" "))
     };
 
-    let env_count = server.env.as_ref().map(|e| e.len()).unwrap_or(0);
+    let env_count = server.env.as_ref().map(std::collections::HashMap::len).unwrap_or(0);
 
     view! {
         <div class="p-4 bg-surface-raised border border-border rounded">
@@ -328,7 +328,7 @@ fn EditMcpServerDialog(
         let server_args: Vec<String> = args
             .get()
             .split_whitespace()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
 
         let server_env = if env.get().trim().is_empty() {

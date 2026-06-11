@@ -314,7 +314,7 @@ pub(super) fn ProviderDetailPanel(
 
                 let sel = sel.unwrap();
                 let preset_name = if sel.starts_with("__preset__") {
-                    sel.strip_prefix("__preset__").map(|s| s.to_string())
+                    sel.strip_prefix("__preset__").map(std::string::ToString::to_string)
                 } else {
                     None
                 };

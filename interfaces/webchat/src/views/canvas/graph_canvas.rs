@@ -445,7 +445,7 @@ pub fn GraphCanvas(
                     // map can't grow unbounded across navigations (and labels for
                     // edges that no longer exist don't linger). The edge-label pass
                     // below repopulates it for the current edges in this same frame.
-                    edge_label_state_inner.update(|m| m.clear());
+                    edge_label_state_inner.update(std::collections::HashMap::clear);
                 }
 
                 // ---------------------------------------------------------------
@@ -765,7 +765,7 @@ pub fn GraphCanvas(
         let active_node = drag_state_for_mu
             .borrow()
             .active_node_id()
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
         if let Some(node_id) = active_node {
             let center_radius = if let Some(ref nav_rc) = nav_for_mu {
                 let n = nav_rc.borrow();

@@ -128,7 +128,7 @@ impl ChatApi {
         result
             .get("new_session_key")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .ok_or_else(|| "Missing new_session_key in response".to_string())
     }
 }

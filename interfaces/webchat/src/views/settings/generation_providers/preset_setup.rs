@@ -32,7 +32,7 @@ pub(super) fn PresetSetupPanel(
     let gen_type_str = preset
         .capabilities
         .first()
-        .map(|g| g.as_str())
+        .map(crate::generation::GenerationType::as_str)
         .unwrap_or("image")
         .to_string();
 

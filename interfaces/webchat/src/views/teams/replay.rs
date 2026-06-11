@@ -424,7 +424,7 @@ fn flatten_trace(v: &Value) -> Vec<TimelineRow> {
 
     if let Some(runs) = v.get("runs").and_then(|x| x.as_array()) {
         for r in runs {
-            let ts = r.get("started_at").and_then(|x| x.as_u64()).unwrap_or(0);
+            let ts = r.get("started_at").and_then(serde_json::Value::as_u64).unwrap_or(0);
             let agent = r
                 .get("agent_id")
                 .and_then(|x| x.as_str())
@@ -452,7 +452,7 @@ fn flatten_trace(v: &Value) -> Vec<TimelineRow> {
 
     if let Some(cs) = v.get("comments").and_then(|x| x.as_array()) {
         for c in cs {
-            let ts = c.get("created_at").and_then(|x| x.as_u64()).unwrap_or(0);
+            let ts = c.get("created_at").and_then(serde_json::Value::as_u64).unwrap_or(0);
             let author = c
                 .get("author")
                 .and_then(|x| x.as_str())
