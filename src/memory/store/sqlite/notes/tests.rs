@@ -370,4 +370,36 @@ mod tests {
             "typed relation must override plain wikilink for the same target"
         );
     }
+
+    #[tokio::test]
+    async fn add_link_with_relation_sets_relation_column() {
+        let backend = make_backend();
+        const AGENT: &str = "default";
+
+        // Index both notes so the paths exist in notes_index.
+        backend
+            .index_note(&make_note("a", "cat"), AGENT, "cat")
+            .await
+            .unwrap();
+        backend
+            .index_note(&make_note("b", "cat"), AGENT, "cat")
+            .await
+            .unwrap();
+
+        // Insert a typed link via the new method.
+        backend
+            .add_link_with_relation(AGENT, "cat/a", "cat/b", "shared-topic")
+            .await
+            .unwrap();
+
+        // get_typed_relations returns (to_note, relation) for rows with non-NULL relation.
+        let rels = backend
+            .get_typed_relations("cat/a", AGENT)
+            .await
+            .unwrap();
+        assert!(
+            rels.iter().any(|(to, rel)| to == "cat/b" && rel == "shared-topic"),
+            "expected typed relation cat/a -> cat/b with 'shared-topic', got: {rels:?}"
+        );
+    }
 }
