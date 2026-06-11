@@ -3,7 +3,7 @@
 //! This module provides a set of composable form components that follow
 //! a consistent design system across all settings pages.
 
-use crate::i18n::*;
+use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 
 // ============================================================================

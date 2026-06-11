@@ -15,7 +15,7 @@ use crate::api::{RerankConfig, RerankConfigApi};
 use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_row_card::{ProviderRowCard, RowDot};
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t, use_i18n, I18nLocaleTrait};
 
 use add_custom::AddCustomProviderPanel;
 use detail_panel::ProviderDetailPanel;

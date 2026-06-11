@@ -16,7 +16,7 @@ use crate::api::{
 use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_row_card::{ProviderRowCard, RowDot};
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 

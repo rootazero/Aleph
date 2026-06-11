@@ -51,7 +51,7 @@ pub use skills::SkillsView;
 // Settings default view (sidebar is provided by SettingsLayout)
 use crate::api::{MemoryApi, ProvidersApi};
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 use leptos_router::components::A;
 

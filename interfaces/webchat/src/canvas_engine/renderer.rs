@@ -1,7 +1,7 @@
 use wasm_bindgen::JsValue;
 use web_sys::CanvasRenderingContext2d;
 
-use super::types::*;
+use super::types::{Vec2, DepthAttrs, Neighborhood, CanvasNode, ClusterNode, CanvasEdge, Vec3};
 use super::viewport::Viewport;
 use crate::canvas_engine::drag::DragOverlay;
 use crate::canvas_engine::edge_curve::{edge_control_point, hop_style, HopLayer, DEFAULT_SAG};

@@ -4,7 +4,7 @@
 use crate::api::agents::{AgentSummary, AgentsApi};
 use crate::api::workspace::WorkspaceApi;
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t, t_string, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::use_location;

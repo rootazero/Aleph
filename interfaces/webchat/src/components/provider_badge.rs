@@ -3,7 +3,7 @@
 //! Renders the "Default" and "Verified" pills for a provider row/detail.
 //! Both badges can be shown simultaneously.
 
-use crate::i18n::*;
+use crate::i18n::{t, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 
 /// Pure, testable badge state for a provider.

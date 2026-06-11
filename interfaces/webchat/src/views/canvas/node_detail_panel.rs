@@ -6,7 +6,7 @@ use crate::api::graph::GraphApi;
 use crate::canvas_engine::category_color::category_color;
 use crate::canvas_engine::markdown_excerpt::render_excerpt;
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t, use_i18n, I18nLocaleTrait};
 use crate::state::memory::MemoryState;
 
 /// Pre-fetched body excerpt for a single node.

@@ -188,7 +188,7 @@ impl Default for NavController {
 // Provide Default for CanvasNode so the swap-out trick in tick() compiles.
 impl Default for crate::canvas_engine::types::CanvasNode {
     fn default() -> Self {
-        use crate::canvas_engine::types::*;
+        use crate::canvas_engine::types::{Color, Vec2};
         Self {
             id: String::new(),
             name: String::new(),

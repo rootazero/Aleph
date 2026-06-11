@@ -3,7 +3,7 @@
 //! Provides a tag input with add/remove functionality, duplicate prevention,
 //! and Enter key support. Tags render as colored chips with remove buttons.
 
-use crate::i18n::*;
+use crate::i18n::{t, t_string, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 
 /// A chip-based tag list editor with add/remove functionality.

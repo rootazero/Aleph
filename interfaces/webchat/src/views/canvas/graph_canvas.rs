@@ -16,9 +16,9 @@ use crate::canvas_engine::interaction::{CanvasEvent, InteractionState};
 use crate::canvas_engine::navigation::NavController;
 use crate::canvas_engine::renderer::draw_neighborhood;
 use crate::canvas_engine::tween::build_interpolated_neighborhood;
-use crate::canvas_engine::types::*;
+use crate::canvas_engine::types::{CanvasNode, CanvasEdge, Vec2, Neighborhood, NavState, note_radius};
 use crate::canvas_engine::viewport::Viewport;
-use crate::i18n::*;
+use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
 use crate::views::canvas::edge_label::EdgeLabel;
 use crate::views::canvas::node_card::NodeCard;
 

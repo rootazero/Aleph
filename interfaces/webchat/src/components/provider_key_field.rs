@@ -6,7 +6,7 @@
 //! line so the user can tell whether a key is already on file.
 
 use crate::components::ui::secret_input::SecretInput;
-use crate::i18n::*;
+use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 
 /// A provider API-key input that never pre-fills the stored secret.

@@ -1,6 +1,6 @@
 use crate::api::{ConfigApi, GeneralConfig, GeneralConfigApi};
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t_string, t, use_i18n, I18nLocaleTrait, Locale};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 

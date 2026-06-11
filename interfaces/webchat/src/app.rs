@@ -1,4 +1,4 @@
-use crate::i18n::*;
+use crate::i18n::{t_string, I18nContextProvider, use_i18n, I18nLocaleTrait};
 use crate::state::memory::MemoryState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -15,7 +15,7 @@ use crate::views::logs::Logs;
 use crate::views::memory::Memory;
 use crate::views::pairing_modal::PairingModal;
 use crate::views::runtimes::RuntimesView;
-use crate::views::settings::*;
+use crate::views::settings::{Settings, GeneralView, AppearanceView, BehaviorView, SearchView, ProvidersView, EmbeddingProvidersView, RerankingProvidersView, GenerationProvidersView, RouteView, MemoryView, BrowserView, NetworkView, RoutingRulesView, McpView, PluginsView, SkillsView, ClawHubView, AcpHarnessesView, SecurityView, AuthView, PoliciesView, ExecutionView, ChannelsOverview, ChannelPlatformPage};
 use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
 use crate::views::usage::UsageView;

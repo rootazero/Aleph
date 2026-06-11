@@ -13,7 +13,7 @@
 use crate::api::ExecApprovalApi;
 use crate::components::sidebar::AlertLevel;
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t_string, t, I18nLocaleTrait, use_i18n};
 use crate::state::notifications::{
     unread_count, visible_alerts, IncomingPairing, NotificationsState, PendingApprovalView,
 };

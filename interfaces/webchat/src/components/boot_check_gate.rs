@@ -16,7 +16,7 @@
 //! for this session — runtime drops are handled by [`ServiceBlockingGate`].
 
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
 use crate::state::connection::ConnectionPhase;
 use leptos::prelude::*;
 use leptos::task::spawn_local;

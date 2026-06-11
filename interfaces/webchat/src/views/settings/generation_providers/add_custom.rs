@@ -7,7 +7,7 @@ use crate::api::{GenerationProviderConfig, GenerationProvidersApi};
 use crate::components::provider_key_field::ProviderKeyField;
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
-use crate::i18n::*;
+use crate::i18n::{t_string, t, use_i18n, I18nLocaleTrait};
 
 use super::extract_base_url;
 

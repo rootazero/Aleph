@@ -5,7 +5,7 @@
 
 use crate::api::cron::{CronApi, CronJobInfo, JobRunInfo};
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t_string, t, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 use std::collections::HashMap;
 

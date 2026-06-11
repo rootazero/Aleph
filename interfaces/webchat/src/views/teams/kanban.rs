@@ -8,7 +8,7 @@ use super::components::task_drawer::TaskDetailDrawer;
 use super::TeamsTabState;
 use crate::api::teams::{CoordTaskDto, TaskFilter, TeamsApi};
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 

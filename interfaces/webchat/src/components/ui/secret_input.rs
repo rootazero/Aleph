@@ -3,7 +3,7 @@
 //! A password/secret input field with an eye/eye-off toggle button
 //! that switches between masked and plaintext display.
 
-use crate::i18n::*;
+use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 
 /// A styled secret input field with show/hide toggle

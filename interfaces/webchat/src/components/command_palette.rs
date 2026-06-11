@@ -10,7 +10,7 @@
 //! signal can be flipped from anywhere (currently only the ⌘K listener and
 //! the inner Esc handler).
 
-use crate::i18n::*;
+use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
 use crate::state::hotkey::HotkeyState;
 use leptos::ev::keydown;
 use leptos::prelude::*;

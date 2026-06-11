@@ -11,7 +11,7 @@ use crate::api::{RerankConfig, RerankConfigApi, RerankProviderType};
 use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_key_field::ProviderKeyField;
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t_string, t, use_i18n, I18nLocaleTrait};
 
 use super::RERANK_PRESETS;
 

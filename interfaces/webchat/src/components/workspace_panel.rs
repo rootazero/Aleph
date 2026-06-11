@@ -11,7 +11,7 @@ use crate::api::fs::{DirEntry, FsApi, ReadFileResult};
 use crate::components::markdown::MarkdownRenderer;
 use crate::components::tool_card::{summarize_tools, ToolCard, ToolKind};
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t, t_string, I18nLocaleTrait, use_i18n};
 use crate::state::layout::{FilePreview, LayoutMode, WorkspaceState};
 use crate::views::chat::state::ChatState;
 use leptos::prelude::*;

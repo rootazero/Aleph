@@ -1,6 +1,6 @@
 use crate::components::sidebar::AlertLevel;
 use leptos::prelude::*;
-use tailwind_fuse::*;
+use tailwind_fuse::{TwVariant, AsTailwindClass, IntoBuilder};
 
 #[derive(TwVariant, PartialEq, Eq)]
 pub enum BadgeVariant {

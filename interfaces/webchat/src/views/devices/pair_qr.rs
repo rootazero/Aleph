@@ -8,7 +8,7 @@
 //! Same-LAN only. For remote access (Tailscale, reverse proxy) the
 //! displayed URL also doubles as plain text the user can copy and edit.
 
-use crate::i18n::*;
+use crate::i18n::{t, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 
 /// Derive the gateway's same-origin base URL the QR points at. Reads

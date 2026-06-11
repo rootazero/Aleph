@@ -2,7 +2,7 @@ use leptos::prelude::*;
 use leptos_router::components::A;
 
 use super::channel_status::{ChannelStatus, ChannelStatusPill};
-use crate::i18n::*;
+use crate::i18n::{t, use_i18n, I18nLocaleTrait};
 
 /// Card component for the Channels Overview page grid.
 ///

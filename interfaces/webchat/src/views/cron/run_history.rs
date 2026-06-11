@@ -2,7 +2,7 @@
 
 use super::helpers::{format_duration, format_timestamp};
 use crate::api::cron::JobRunInfo;
-use crate::i18n::*;
+use crate::i18n::{t, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 
 #[component]

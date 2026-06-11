@@ -3,7 +3,7 @@
 //! Provides `SettingsTab` enum and `SETTINGS_GROUPS` for sidebar navigation.
 //! The sidebar component renders these directly (no separate `SettingsSidebar` component).
 
-use crate::i18n::*;
+use crate::i18n::{t_string, Locale, I18nLocaleTrait};
 use leptos_i18n::I18nContext;
 
 /// Settings tab identifier

@@ -2,7 +2,7 @@
 //! 仅桌面 Tauri shell 内可交互;纯浏览器内只读降级。
 
 use crate::api::tauri_bridge;
-use crate::i18n::*;
+use crate::i18n::{t, t_string, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 

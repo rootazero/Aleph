@@ -12,7 +12,7 @@ use super::dashboard_sidebar::DashboardSidebar;
 use super::nav_menu::NavMenu;
 use super::theme_toggle::ThemeToggle;
 use crate::components::settings_sidebar::SETTINGS_GROUPS;
-use crate::i18n::*;
+use crate::i18n::use_i18n;
 use crate::state::memory::MemoryState;
 use leptos::prelude::*;
 use leptos_router::components::A;

@@ -3,7 +3,7 @@
 //! pair reads as a single chrome cluster; placement is owned by
 //! `views/chat/view.rs` (this component just renders the affordance).
 
-use crate::i18n::*;
+use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
 use crate::state::layout::{LayoutMode, WorkspaceState};
 use leptos::prelude::*;
 

@@ -1,4 +1,4 @@
-use super::types::*;
+use super::types::{Neighborhood, CanvasNode, CanvasEdge, ClusterNode, Vec2, ORPHAN_HOP_SENTINEL, ORPHAN_Z, Vec3, NOTE_COLOR, note_radius};
 use serde::Deserialize;
 use std::collections::HashMap;
 

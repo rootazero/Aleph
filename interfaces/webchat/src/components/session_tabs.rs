@@ -20,7 +20,7 @@
 use leptos::ev::keydown;
 use leptos::prelude::*;
 
-use crate::i18n::*;
+use crate::i18n::{t_string, I18nLocaleTrait, use_i18n};
 use crate::state::sessions::SessionMap;
 use crate::views::chat::state::ChatState;
 

@@ -1,4 +1,4 @@
-use crate::canvas_engine::types::*;
+use crate::canvas_engine::types::{CanvasNode, ClusterNode, Vec2};
 use std::collections::HashMap;
 
 /// Fold a slice of nodes into one `ClusterNode` per distinct `CanvasNode::category`.

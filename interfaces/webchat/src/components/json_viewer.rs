@@ -27,7 +27,7 @@ use serde_json::Value;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::i18n::*;
+use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
 
 /// Max characters of a string preview before the "expand" toggle appears.
 /// 160 keeps a single line readable on a 340 px panel without wrap.

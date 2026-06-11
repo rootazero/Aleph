@@ -12,7 +12,7 @@ use leptos::task::spawn_local;
 
 use crate::api::{AcpApi, AcpHarnessInfo, AcpPresetMeta};
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t, t_string, I18nLocaleTrait, use_i18n};
 
 use add_panel::AddHarnessPanel;
 use detail_panel::HarnessDetailPanel;

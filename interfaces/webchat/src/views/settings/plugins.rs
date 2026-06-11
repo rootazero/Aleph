@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t_string, t, use_i18n, I18nLocaleTrait};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginInfo {

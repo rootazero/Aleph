@@ -16,7 +16,7 @@
 //! reasoning — mounted once at the tail of [`super::messages::MessageList`].
 
 use super::state::{ChatPhase, ChatState};
-use crate::i18n::*;
+use crate::i18n::{t_string, I18nLocaleTrait, use_i18n};
 use leptos::prelude::*;
 
 /// Number of trailing lines shown as a live preview while reasoning is active.

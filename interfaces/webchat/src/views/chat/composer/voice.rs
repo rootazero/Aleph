@@ -27,7 +27,7 @@ use wasm_bindgen_futures::JsFuture;
 use super::super::state::ChatState;
 use crate::api::chat::{ChatApi, ChatAttachment};
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t_string, I18nLocaleTrait, use_i18n};
 
 /// Recording lifecycle. `Idle ↔ Recording`, then a one-shot `Transcribing`
 /// while the audio round-trips through STT and the send.

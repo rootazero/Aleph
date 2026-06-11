@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use crate::components::ui::channel_status::ChannelStatus;
 use crate::components::ui::ChannelCard;
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t, use_i18n, I18nLocaleTrait};
 
 use super::definitions::ALL_CHANNELS;
 

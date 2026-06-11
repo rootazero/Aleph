@@ -4,7 +4,7 @@ use leptos::task::spawn_local;
 use crate::api::{AcpApi, AcpHarnessConfig, AcpHarnessInfo, AcpPresetMeta};
 use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t_string, t, use_i18n, I18nLocaleTrait};
 
 #[component]
 pub(super) fn HarnessDetailPanel(

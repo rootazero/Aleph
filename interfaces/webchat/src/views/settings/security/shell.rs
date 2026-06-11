@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 
 use crate::api::{CustomRiskPattern, SecurityConfig};
-use crate::i18n::*;
+use crate::i18n::{t, t_string, use_i18n, I18nLocaleTrait};
 
 use super::validate_regex;
 

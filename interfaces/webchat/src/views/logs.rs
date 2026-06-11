@@ -1,7 +1,7 @@
 use crate::api::{LogsApi, LogsResponse};
-use crate::components::ui::*;
+use crate::components::ui::{Button, ButtonVariant, Card};
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t, t_string, use_i18n, I18nLocaleTrait};
 use leptos::prelude::*;
 
 /// Return a Tailwind text color class based on the log level found in the line.

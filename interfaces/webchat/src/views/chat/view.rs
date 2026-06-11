@@ -11,7 +11,7 @@ use super::state::{ChatState, PendingAttachment};
 use crate::components::session_tabs::SessionTabs;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
-use crate::i18n::*;
+use crate::i18n::{t, I18nLocaleTrait, use_i18n};
 use crate::state::layout::WorkspaceState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
