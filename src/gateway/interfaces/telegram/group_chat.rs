@@ -80,6 +80,7 @@ impl GroupChatCommandParser for TelegramGroupChatCommandParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::group_chat::protocol::{ContentFormat, PersonaSource};
 
     fn test_persona() -> Persona {
         Persona {

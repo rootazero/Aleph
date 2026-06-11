@@ -121,6 +121,7 @@ impl MediaProvider for ImageMediaProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::media::types::AudioFormat;
     use crate::vision::types::{OcrResult, VisionCapabilities, VisionResult};
     use crate::vision::VisionProvider;
 

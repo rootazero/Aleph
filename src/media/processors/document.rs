@@ -117,6 +117,7 @@ impl MediaProvider for TextDocumentProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::media::types::MediaImageFormat;
     use std::io::Write;
 
     #[test]

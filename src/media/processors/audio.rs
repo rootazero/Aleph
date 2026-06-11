@@ -46,6 +46,7 @@ impl MediaProvider for AudioStubProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::media::types::MediaImageFormat;
 
     #[test]
     fn audio_stub_supports_audio() {

@@ -188,6 +188,9 @@ impl ArenaHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arena::types::{
+        ArenaManifest, ArtifactContent, ArtifactKind, CoordinationStrategy, Participant,
+    };
     use chrono::Utc;
     use std::collections::HashMap;
 

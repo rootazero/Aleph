@@ -297,6 +297,7 @@ mod tests {
 
     use crate::a2a::adapter::server::StreamHub;
     use crate::a2a::adapter::server::TaskStore;
+    use crate::a2a::domain::Part;
     use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
     use crate::gateway::event_emitter::EventEmitter;
     use crate::gateway::execution_engine::ExecutionError;

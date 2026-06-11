@@ -416,6 +416,10 @@ impl A2ARequestProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::a2a::domain::{
+        A2ATask, Artifact, ListTasksResult, SecurityScheme, TaskArtifactUpdateEvent, TaskState,
+        TaskStatusUpdateEvent, UpdateEvent,
+    };
 
     #[test]
     fn jsonrpc_response_success() {
