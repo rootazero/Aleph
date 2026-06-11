@@ -81,6 +81,27 @@ impl GoalStore {
             .map_err(|e| AlephError::other(format!("goal delete: {e}")))?;
         Ok(())
     }
+
+    /// Enumerate all stored goals (one row per session). Corrupt rows are
+    /// skipped (fail-safe, mirroring `get`). Used by the dream lessons-promotion
+    /// stage to sweep lessons into long-term memory.
+    pub fn list_all(&self) -> Result<Vec<Goal>> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare("SELECT json FROM goals")
+            .map_err(|e| AlephError::other(format!("goal list_all prepare: {e}")))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| AlephError::other(format!("goal list_all query: {e}")))?;
+        let mut goals = Vec::new();
+        for row in rows {
+            let json = row.map_err(|e| AlephError::other(format!("goal list_all row: {e}")))?;
+            if let Ok(goal) = serde_json::from_str::<Goal>(&json) {
+                goals.push(goal); // corrupt rows skipped, like `get`.
+            }
+        }
+        Ok(goals)
+    }
 }
 
 #[cfg(test)]
@@ -125,5 +146,23 @@ mod tests {
         store.put(&Goal::new("sess-1", "x", 0, 0)).unwrap();
         store.delete("sess-1").unwrap();
         assert!(store.get("sess-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn list_all_returns_every_session_goal() {
+        let (store, _d) = temp_store();
+        store.put(&Goal::new("sess-1", "a", 0, 0)).unwrap();
+        store.put(&Goal::new("sess-2", "b", 0, 0)).unwrap();
+        let all = store.list_all().unwrap();
+        assert_eq!(all.len(), 2);
+        let mut objs: Vec<&str> = all.iter().map(|g| g.objective.as_str()).collect();
+        objs.sort_unstable();
+        assert_eq!(objs, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn list_all_empty_when_no_goals() {
+        let (store, _d) = temp_store();
+        assert!(store.list_all().unwrap().is_empty());
     }
 }
