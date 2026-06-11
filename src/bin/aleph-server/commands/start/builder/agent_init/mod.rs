@@ -1008,6 +1008,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
             alephcore::thinker::memory_context_provider::register_session_end_mcp(mcp.clone());
 
+            // Real-time Memory Pillar 2 — register the CompressionService for the
+            // on-session-end flush. The session-end path reads this cell and
+            // spawns an immediate compress→link flush, guarded in a FlushRegistry
+            // so a back-to-back follow-on session can await consolidated memory.
+            if let Some(ref cs) = compression_out {
+                alephcore::thinker::memory_context_provider::register_session_end_compression(
+                    cs.clone(),
+                );
+            }
+
             // Spec B Task 9 — register SessionEndSummarizer for on-session-end
             // summary production. Requires an AiProvider for the synthesizer
             // fallback path; skip silently if none is configured.

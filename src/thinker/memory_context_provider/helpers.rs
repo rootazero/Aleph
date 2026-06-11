@@ -101,6 +101,30 @@ pub fn session_reflector() -> Option<Arc<crate::memory::session_reflection::Sess
     SESSION_REFLECTOR.get().cloned()
 }
 
+/// Process-wide handle for the real-time session-end flush (Real-time Memory
+/// Pillar 2). Registered once at startup by `agent_init` (only when a
+/// `CompressionService` is configured), consumed fire-and-forget at session-end
+/// in `emit_session_end_raw_with_registry` to drain pending raws into linked
+/// notes immediately. Kept separate from the cells above so the flush feature
+/// stays independently removable.
+static SESSION_END_COMPRESSION: tokio::sync::OnceCell<
+    Arc<crate::memory::compression::CompressionService>,
+> = tokio::sync::OnceCell::const_new();
+
+/// Register a `CompressionService` for the on-session-end real-time flush.
+/// Idempotent; subsequent calls are a no-op (first call wins).
+pub fn register_session_end_compression(
+    compression: Arc<crate::memory::compression::CompressionService>,
+) {
+    let _ = SESSION_END_COMPRESSION.set(compression);
+}
+
+/// Read the registered `CompressionService`, if any. Used by
+/// `emit_session_end_raw_with_registry` to spawn the session-end flush.
+pub fn session_end_compression() -> Option<Arc<crate::memory::compression::CompressionService>> {
+    SESSION_END_COMPRESSION.get().cloned()
+}
+
 /// Process-wide opt-in flag for injecting last session's open loops into the
 /// next session's curated context (Batch 2 — `[memory.reflection]
 /// open_loop_inject_prompt`). Mirrors the `OnceCell` idiom above to avoid
