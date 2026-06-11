@@ -632,6 +632,217 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
   }
 }
 
+/* ============================================================
+   Material: LIQUID GLASS — translucent lens surfaces, bright
+   specular edges, vivid accent-derived light field.
+   ============================================================ */
+html[data-material="liquid"] {
+  --mat-ink-raise: oklch(1 0 0);
+  --mat-ink-sink: oklch(0.42 0.04 300);
+  --mat-fill-bubble: 46%;
+  --mat-fill-inset: 8%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.55);
+  --mat-edge: oklch(1 0 0 / 0.55);
+  --mat-edge-top: oklch(1 0 0 / 0.92);
+  --mat-edge-sunken: oklch(0.40 0.03 300 / 0.14);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.55);
+  --mat-shadow: oklch(0.35 0.05 300 / 0.16);
+  --mat-code-header: oklch(0.45 0.03 300 / 0.10);
+  --mat-code-pre: oklch(0.45 0.03 300 / 0.06);
+  --mat-user-fill: 60%;
+  --mat-user-glow: 40%;
+  --mat-solid-ground: oklch(0.965 0.010 300);
+  --mat-canvas-base: oklch(0.955 0.012 300 / 0.82);
+  --mat-glow-a: 38%;
+  --mat-glow-b: 26%;
+  --mat-glow-top: 16%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.70 0.14 250) 26%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.85);
+  --mat-raised: oklch(1 0 0 / 0.42);
+  --mat-grain: 0.05;
+  --mat-fill-chrome: 58%;
+  --mat-chrome-topline: oklch(1 0 0 / 0.35);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.95);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.25);
+  --mat-pop-spec-lo: oklch(0.4 0.03 300 / 0.06);
+  --mat-pop-grain: 0.3;
+  --glass-blur: 34px;
+  --glass-saturate: 2.0;
+  --glass-blur-chrome: 24px;
+}
+html[data-material="liquid"].dark {
+  /* visionOS-style lens: WHITE ink at low fill over a vivid dark field. */
+  --mat-ink-raise: oklch(1 0 0);
+  --mat-ink-sink: oklch(1 0 0);
+  --mat-fill-bubble: 8%;
+  --mat-fill-inset: 5%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.10);
+  --mat-edge: oklch(1 0 0 / 0.13);
+  --mat-edge-top: oklch(1 0 0 / 0.32);
+  --mat-edge-sunken: oklch(1 0 0 / 0.08);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.16);
+  --mat-shadow: oklch(0 0 0 / 0.35);
+  --mat-code-header: oklch(0.16 0.03 305 / 0.85);
+  --mat-code-pre: oklch(0.13 0.03 305 / 0.8);
+  --mat-user-fill: 48%;
+  --mat-user-glow: 45%;
+  --mat-solid-ground: oklch(0.140 0.030 300);
+  --mat-canvas-base: oklch(0.150 0.030 300 / 0.78);
+  --mat-glow-a: 44%;
+  --mat-glow-b: 30%;
+  --mat-glow-top: 14%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.66 0.14 250) 26%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.08);
+  --mat-raised: oklch(0.25 0.020 300 / 0.38);
+  --mat-grain: 0.09;
+  --mat-fill-chrome: 55%;
+  --mat-chrome-topline: oklch(1 0 0 / 0.06);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.62);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.10);
+  --mat-pop-spec-lo: oklch(1 0 0 / 0.02);
+  --mat-pop-grain: 0.5;
+}
+
+/* ============================================================
+   Material: AURORA FROST — the canvas IS the show; surfaces are
+   thick milky frost the colour bleeds through.
+   ============================================================ */
+html[data-material="aurora"] {
+  --mat-ink-raise: oklch(1 0 0);
+  --mat-ink-sink: oklch(0.42 0.03 330);
+  --mat-fill-bubble: 58%;
+  --mat-fill-inset: 7%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.60);
+  --mat-edge: oklch(1 0 0 / 0.70);
+  --mat-edge-top: oklch(1 0 0 / 0.95);
+  --mat-edge-sunken: oklch(0.40 0.03 330 / 0.13);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.60);
+  --mat-shadow: oklch(0.45 0.06 330 / 0.13);
+  --mat-code-header: oklch(0.45 0.03 330 / 0.09);
+  --mat-code-pre: oklch(0.45 0.03 330 / 0.05);
+  --mat-user-fill: 62%;
+  --mat-user-glow: 32%;
+  --mat-solid-ground: oklch(0.965 0.015 330);
+  --mat-canvas-base: oklch(0.960 0.018 330 / 0.80);
+  --mat-glow-a: 48%;
+  --mat-glow-b: 36%;
+  --mat-glow-top: 26%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.72 0.12 200) 34%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.90);
+  --mat-raised: oklch(1 0 0 / 0.60);
+  --mat-grain: 0.02;
+  --mat-fill-chrome: 72%;
+  --mat-chrome-topline: oklch(1 0 0 / 0.25);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.95);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.30);
+  --mat-pop-spec-lo: oklch(0.4 0.03 330 / 0.05);
+  --mat-pop-grain: 0.18;
+  --glass-blur: 26px;
+  --glass-saturate: 1.5;
+  --glass-blur-chrome: 20px;
+}
+html[data-material="aurora"].dark {
+  --mat-ink-raise: oklch(0.22 0.05 315);
+  --mat-ink-sink: oklch(0.17 0.04 312);
+  --mat-fill-bubble: 50%;
+  --mat-fill-inset: 60%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.09);
+  --mat-edge: oklch(1 0 0 / 0.11);
+  --mat-edge-top: oklch(1 0 0 / 0.27);
+  --mat-edge-sunken: oklch(1 0 0 / 0.07);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.14);
+  --mat-shadow: oklch(0 0 0 / 0.38);
+  --mat-code-header: oklch(0.15 0.04 312 / 0.9);
+  --mat-code-pre: oklch(0.12 0.04 312 / 0.85);
+  --mat-user-fill: 55%;
+  --mat-user-glow: 38%;
+  --mat-solid-ground: oklch(0.160 0.040 310);
+  --mat-canvas-base: oklch(0.170 0.045 310 / 0.76);
+  --mat-glow-a: 40%;
+  --mat-glow-b: 32%;
+  --mat-glow-top: 18%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.62 0.13 230) 30%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.06);
+  --mat-raised: oklch(0.24 0.030 310 / 0.50);
+  --mat-grain: 0.035;
+  --mat-fill-chrome: 64%;
+  --mat-chrome-topline: oklch(1 0 0 / 0.05);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.50);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.08);
+  --mat-pop-spec-lo: oklch(1 0 0 / 0.01);
+  --mat-pop-grain: 0.35;
+}
+
+/* System mode + OS dark — mirrors of the two material `.dark` blocks above.
+   Edit the `.dark` blocks first, then copy every line here verbatim. Never
+   tune these independently; they exist only because the media query can't
+   reference the class-based selector. */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light)[data-material="liquid"] {
+    /* visionOS-style lens: WHITE ink at low fill over a vivid dark field. */
+    --mat-ink-raise: oklch(1 0 0);
+    --mat-ink-sink: oklch(1 0 0);
+    --mat-fill-bubble: 8%;
+    --mat-fill-inset: 5%;
+    --mat-bubble-sheen: oklch(1 0 0 / 0.10);
+    --mat-edge: oklch(1 0 0 / 0.13);
+    --mat-edge-top: oklch(1 0 0 / 0.32);
+    --mat-edge-sunken: oklch(1 0 0 / 0.08);
+    --mat-edge-sunken-top: oklch(1 0 0 / 0.16);
+    --mat-shadow: oklch(0 0 0 / 0.35);
+    --mat-code-header: oklch(0.16 0.03 305 / 0.85);
+    --mat-code-pre: oklch(0.13 0.03 305 / 0.8);
+    --mat-user-fill: 48%;
+    --mat-user-glow: 45%;
+    --mat-solid-ground: oklch(0.140 0.030 300);
+    --mat-canvas-base: oklch(0.150 0.030 300 / 0.78);
+    --mat-glow-a: 44%;
+    --mat-glow-b: 30%;
+    --mat-glow-top: 14%;
+    --mat-glow-counter: color-mix(in oklch, oklch(0.66 0.14 250) 26%, transparent);
+    --mat-sheen: oklch(1 0 0 / 0.08);
+    --mat-raised: oklch(0.25 0.020 300 / 0.38);
+    --mat-grain: 0.09;
+    --mat-fill-chrome: 55%;
+    --mat-chrome-topline: oklch(1 0 0 / 0.06);
+    --mat-pop-spec-hi: oklch(1 0 0 / 0.62);
+    --mat-pop-spec-mid: oklch(1 0 0 / 0.10);
+    --mat-pop-spec-lo: oklch(1 0 0 / 0.02);
+    --mat-pop-grain: 0.5;
+  }
+  :root:not(.light)[data-material="aurora"] {
+    --mat-ink-raise: oklch(0.22 0.05 315);
+    --mat-ink-sink: oklch(0.17 0.04 312);
+    --mat-fill-bubble: 50%;
+    --mat-fill-inset: 60%;
+    --mat-bubble-sheen: oklch(1 0 0 / 0.09);
+    --mat-edge: oklch(1 0 0 / 0.11);
+    --mat-edge-top: oklch(1 0 0 / 0.27);
+    --mat-edge-sunken: oklch(1 0 0 / 0.07);
+    --mat-edge-sunken-top: oklch(1 0 0 / 0.14);
+    --mat-shadow: oklch(0 0 0 / 0.38);
+    --mat-code-header: oklch(0.15 0.04 312 / 0.9);
+    --mat-code-pre: oklch(0.12 0.04 312 / 0.85);
+    --mat-user-fill: 55%;
+    --mat-user-glow: 38%;
+    --mat-solid-ground: oklch(0.160 0.040 310);
+    --mat-canvas-base: oklch(0.170 0.045 310 / 0.76);
+    --mat-glow-a: 40%;
+    --mat-glow-b: 32%;
+    --mat-glow-top: 18%;
+    --mat-glow-counter: color-mix(in oklch, oklch(0.62 0.13 230) 30%, transparent);
+    --mat-sheen: oklch(1 0 0 / 0.06);
+    --mat-raised: oklch(0.24 0.030 310 / 0.50);
+    --mat-grain: 0.035;
+    --mat-fill-chrome: 64%;
+    --mat-chrome-topline: oklch(1 0 0 / 0.05);
+    --mat-pop-spec-hi: oklch(1 0 0 / 0.50);
+    --mat-pop-spec-mid: oklch(1 0 0 / 0.08);
+    --mat-pop-spec-lo: oklch(1 0 0 / 0.01);
+    --mat-pop-grain: 0.35;
+  }
+}
+
 /* ── Derived surface tokens — defined ONCE; all themes/materials flow
       through the primitives above. All theme classes live on <html>, so
       single-element cascade resolution makes the var() substitution pick
