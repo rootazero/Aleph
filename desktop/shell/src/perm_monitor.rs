@@ -59,8 +59,12 @@ pub fn start_monitor(handle: AppHandle) {
         return;
     }
 
+    // Use Tauri's managed runtime: `start_monitor` is called from the setup
+    // closure on the main thread, which is not inside a Tokio reactor, so a
+    // bare `tokio::spawn` would panic ("no reactor running"). This mirrors the
+    // spawn idiom used everywhere else in the shell crate.
     #[cfg(target_os = "macos")]
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let mut state = PermissionState::default();
 
         loop {
