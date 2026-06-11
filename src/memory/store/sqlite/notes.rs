@@ -439,6 +439,36 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(links)
     }
 
+    async fn get_incoming_links_any(
+        &self,
+        path: &str,
+        filename: &str,
+        agent_id: &str,
+    ) -> Result<Vec<String>, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT from_note FROM notes_links \
+                 WHERE to_note IN (?1, ?2) AND agent_id = ?3",
+            )
+            .map_err(|e| AlephError::config(format!("get_incoming_links_any prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(params![path, filename, agent_id], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|e| AlephError::config(format!("get_incoming_links_any query: {e}")))?;
+
+        let mut links = Vec::new();
+        for row in rows {
+            links.push(
+                row.map_err(|e| AlephError::config(format!("get_incoming_links_any row: {e}")))?,
+            );
+        }
+        Ok(links)
+    }
+
     async fn add_link_with_relation(
         &self,
         agent_id: &str,

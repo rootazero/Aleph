@@ -149,9 +149,12 @@ impl DreamStage for NoteDecayStage {
                 continue;
             }
 
-            // --- Count incoming links (raw filename used as wikilink target) ---
-            // The notes_links table stores raw wikilink targets (filename without
-            // category), so we query by filename extracted from the path.
+            // --- Count incoming links ---
+            // `notes_links.to_note` is the resolved target: a full path when the
+            // wikilink filename uniquely resolved, otherwise the bare text. Match
+            // either. Querying by filename alone (the old code) never matched a
+            // full-path to_note, so this count was always 0 — silently disabling
+            // both the >=3-incoming protection and link_weight below.
             let filename = match note.path.split_once('/') {
                 Some((_, f)) => f,
                 None => {
@@ -163,7 +166,7 @@ impl DreamStage for NoteDecayStage {
             let incoming_count = ctx
                 .indexer
                 .store()
-                .get_incoming_links(filename, &ctx.agent_id)
+                .get_incoming_links_any(&note.path, filename, &ctx.agent_id)
                 .await
                 .map_or(0, |links| links.len());
 
@@ -656,6 +659,121 @@ mod tests {
         assert!(
             (new_conf - 0.1).abs() < 1e-6,
             "expected min_strength floor 0.1, got {new_conf}"
+        );
+    }
+
+    // --- stage-level fixture (mirrors note_weave.rs build_ctx) ---
+    use crate::memory::dreaming::{DreamReport, DreamStrategy, NoteEntry};
+    use crate::memory::embedding_provider::EmbeddingProvider;
+    use crate::memory::notes::{KnowledgeNote, NoteIndexer};
+    use crate::memory::store::SqliteMemoryBackend;
+    use crate::providers::mock::MockProvider;
+    use crate::sync_primitives::Arc;
+
+    struct DecayStubEmbedder;
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for DecayStubEmbedder {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> { Ok(Vec::new()) }
+        async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> { Ok(Vec::new()) }
+        fn dimensions(&self) -> usize { 0 }
+        fn model_name(&self) -> &str { "stub" }
+        fn provider_id(&self) -> &str { "stub" }
+    }
+
+    async fn build_decay_ctx() -> (DreamContext, Arc<SqliteMemoryBackend>) {
+        let temp = std::env::temp_dir().join(format!("aleph_decay_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+        let indexer = NoteIndexer::new(temp.clone(), store.clone());
+        let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
+            std::sync::Arc::new(MockProvider::new("{}"));
+        let embedder: std::sync::Arc<dyn EmbeddingProvider> = std::sync::Arc::new(DecayStubEmbedder);
+        let ctx = DreamContext {
+            notes: Vec::new(),
+            note_contents: std::collections::HashMap::new(),
+            agent_id: "default".into(),
+            database: store.clone(),
+            indexer,
+            provider,
+            embedder,
+            report: DreamReport::default(),
+            pipeline_type: "consolidate".into(),
+            activity_checker: std::sync::Arc::new(|| false),
+            strategy: DreamStrategy::Consolidate,
+            orientation: None,
+        };
+        (ctx, store)
+    }
+
+    fn decay_entry(path: &str, created_at: i64, updated_at: i64) -> NoteEntry {
+        let (category, _) = path.split_once('/').unwrap();
+        NoteEntry {
+            path: path.into(),
+            category: category.into(),
+            tags: vec![],
+            created_at,
+            updated_at,
+            content_hash: "h".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn note_with_three_incoming_fullpath_links_is_protected() {
+        // `hot` is referenced by 3 other notes via full-path to_note. With the
+        // old bare-filename query incoming_count was 0 and `hot` was archived;
+        // with get_incoming_links_any it reads 3 and is protected.
+        let (mut ctx, store) = build_decay_ctx().await;
+
+        // Old enough to clear the <7-day protection. `reference` is not a
+        // protected category, so only the >=3-incoming rule can protect it.
+        store
+            .index_note(
+                &KnowledgeNote {
+                    title: "hot".into(),
+                    category: "reference".into(),
+                    facts: vec!["core fact".into()],
+                    content_hash: "hhot".into(),
+                    created_at: 1,
+                    updated_at: 1,
+                    ..Default::default()
+                },
+                "default",
+                "reference",
+            )
+            .await
+            .unwrap();
+        for s in ["a", "b", "c"] {
+            store
+                .index_note(
+                    &KnowledgeNote {
+                        title: s.into(),
+                        category: "notes".into(),
+                        facts: vec![format!("see [[hot]] from {s}")],
+                        links: vec!["reference/hot".into()],
+                        content_hash: format!("h{s}"),
+                        created_at: 1,
+                        updated_at: 1,
+                        ..Default::default()
+                    },
+                    "default",
+                    "notes",
+                )
+                .await
+                .unwrap();
+        }
+        // Only `hot` is walked this cycle.
+        ctx.notes = vec![decay_entry("reference/hot", 1, 1)];
+
+        let out = NoteDecayStage::default().execute(ctx).await.unwrap();
+
+        assert_eq!(
+            out.report.notes_protected, 1,
+            "note with 3 full-path incoming links must be protected (was the >=3 rule reached?)"
+        );
+        assert_eq!(
+            out.report.notes_archived, 0,
+            "protected note must not be archived"
         );
     }
 }

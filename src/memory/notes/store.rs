@@ -112,6 +112,18 @@ pub trait NoteStore: Send + Sync {
         agent_id: &str,
     ) -> Result<Vec<String>, AlephError>;
 
+    /// Paths of notes that link to this note, matching either the resolved
+    /// full path or the bare filename. `notes_links.to_note` holds the resolved
+    /// target — a full path when `resolve_target` matched a unique filename,
+    /// otherwise the bare wikilink text. Dream stages walking `category/title`
+    /// notes pass both forms so resolved and legacy rows are counted alike.
+    async fn get_incoming_links_any(
+        &self,
+        path: &str,
+        filename: &str,
+        agent_id: &str,
+    ) -> Result<Vec<String>, AlephError>;
+
     /// Outgoing **typed** edges for a note: `(to_note, relation_type)` for every
     /// row whose `relation` column is non-NULL. Untyped body wikilinks are
     /// excluded. Used to surface entity-graph edge labels (Gap A).
