@@ -20,7 +20,7 @@ use tauri::WebviewWindow;
 /// Grant the Panel webview microphone access on platforms where wry does not.
 /// Best-effort: failures are logged, never fatal — a missing grant just means
 /// the voice button surfaces a permission error (visible in the Panel).
-pub const fn grant_microphone(window: &WebviewWindow) {
+pub fn grant_microphone(window: &WebviewWindow) {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
         if let Err(e) = window.with_webview(|pview| {
