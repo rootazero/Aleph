@@ -1,0 +1,312 @@
+<style>
+  .vd-card { border: 2px solid rgba(127,127,127,.18); border-radius: 18px; padding: 16px 16px 6px; cursor: pointer; margin-bottom: 26px; transition: border-color .15s, transform .15s, box-shadow .15s; }
+  .vd-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,.10); }
+  .vd-card.selected { border-color: #7c5cff; box-shadow: 0 0 0 3px rgba(124,92,255,.22), 0 8px 30px rgba(0,0,0,.10); }
+  .vd-head { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 12px; }
+  .vd-letter { font-weight: 800; font-size: 20px; color: #7c5cff; }
+  .vd-head h3 { margin: 0; }
+  .vd-sub { font-size: 12px; opacity: .6; }
+  .vd-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 980px) { .vd-pair { grid-template-columns: 1fr; } }
+  .vd-note { font-size: 12.5px; opacity: .75; line-height: 1.55; margin: 12px 4px 10px; }
+
+  /* ── mini app stage ───────────────────────────── */
+  .vd-stage { position: relative; height: 295px; border-radius: 14px; overflow: hidden; display: flex; padding: 12px; gap: 10px; font-family: -apple-system, "SF Pro Text", "Inter", "PingFang SC", sans-serif; }
+  .vd-stage::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: var(--grain, .3); background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E"); }
+  .vd-tag { position: absolute; top: 8px; right: 11px; font-size: 10px; letter-spacing: .12em; opacity: .5; z-index: 6; color: var(--txt); }
+
+  /* ornaments behind the glass — give the blur something visible to frost */
+  .vd-orn { position: absolute; border-radius: 999px; pointer-events: none; }
+
+  .vd-side { width: 96px; flex: none; border-radius: 12px; padding: 10px 7px; display: flex; flex-direction: column; gap: 4px; position: relative; z-index: 2;
+    background: var(--side-bg); backdrop-filter: blur(var(--blur)) saturate(var(--sat)); -webkit-backdrop-filter: blur(var(--blur)) saturate(var(--sat));
+    border: 1px solid var(--edge); border-top-color: var(--edge-top);
+    box-shadow: var(--side-shadow), inset 0 1px 0 var(--spec); }
+  .vd-logo { display: flex; align-items: center; gap: 6px; margin: 2px 2px 10px; }
+  .vd-logo i { width: 17px; height: 17px; border-radius: 6px; background: linear-gradient(145deg, var(--accent), var(--accent2)); box-shadow: 0 2px 8px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,.45); }
+  .vd-logo b { font-size: 10.5px; color: var(--txt); letter-spacing: .02em; }
+  .vd-nav { font-size: 9.5px; padding: 5px 7px; border-radius: 8px; color: var(--txt2); display: flex; align-items: center; gap: 6px; border: 1px solid transparent; }
+  .vd-nav i { width: 8px; height: 8px; border-radius: 3px; background: currentColor; opacity: .45; flex: none; }
+  .vd-nav.on { background: var(--nav-on-bg); color: var(--nav-on-txt); border-color: var(--nav-on-edge);
+    box-shadow: inset 0 1px 0 var(--spec), 0 2px 10px var(--nav-on-glow); font-weight: 600; }
+
+  .vd-main { flex: 1; display: flex; flex-direction: column; gap: 9px; position: relative; z-index: 2; min-width: 0; }
+  .vd-msgs { flex: 1; display: flex; flex-direction: column; gap: 8px; padding: 4px 2px 0; overflow: hidden; }
+  .vd-msg { max-width: 80%; font-size: 10.5px; line-height: 1.5; padding: 7px 11px; border-radius: 12px; color: var(--txt);
+    background-color: var(--bub-bg); background-image: var(--bub-sheen);
+    border: 1px solid var(--bub-edge); border-top-color: var(--bub-edge-top); box-shadow: var(--bub-shadow); }
+  .vd-msg.user { align-self: flex-end; color: #fff;
+    background-color: var(--user-bg); background-image: var(--user-sheen);
+    border-color: var(--user-edge); border-top-color: var(--user-edge-top); box-shadow: var(--user-shadow); }
+  .vd-composer { height: 40px; flex: none; border-radius: 12px; display: flex; align-items: center; padding: 0 8px 0 13px; gap: 8px;
+    background: var(--comp-bg); backdrop-filter: blur(var(--blur)) saturate(var(--sat)); -webkit-backdrop-filter: blur(var(--blur)) saturate(var(--sat));
+    border: 1px solid var(--edge); border-top-color: var(--edge-top);
+    box-shadow: var(--comp-shadow), inset 0 1px 0 var(--spec); }
+  .vd-composer span { flex: 1; font-size: 10px; color: var(--txt3); }
+  .vd-send { width: 25px; height: 25px; border-radius: 9px; flex: none; background: linear-gradient(145deg, var(--accent), var(--accent2)); box-shadow: 0 2px 9px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,.45); }
+
+  /* ════ A · Liquid Glass — 高透明 + 强镜面边缘 + 彩色光场 ════ */
+  .sa-l { --blur: 20px; --sat: 1.9; --grain: .25;
+    background:
+      radial-gradient(ellipse 60% 55% at 12% 110%, rgba(124,92,255,.42), transparent 65%),
+      radial-gradient(ellipse 55% 50% at 95% 115%, rgba(64,170,255,.38), transparent 64%),
+      radial-gradient(ellipse 45% 42% at 85% -10%, rgba(255,150,90,.28), transparent 62%),
+      radial-gradient(ellipse 70% 50% at 45% -15%, rgba(255,110,180,.20), transparent 70%),
+      linear-gradient(180deg, #f4f2fb, #eceaf6);
+    --txt: #211d33; --txt2: rgba(40,34,66,.62); --txt3: rgba(40,34,66,.45);
+    --accent: #7a5cff; --accent2: #b44cf0; --accent-glow: rgba(122,92,255,.45);
+    --edge: rgba(255,255,255,.55); --edge-top: rgba(255,255,255,.92); --spec: rgba(255,255,255,.95);
+    --side-bg: rgba(255,255,255,.32); --side-shadow: 0 10px 34px rgba(82,60,160,.18);
+    --nav-on-bg: rgba(255,255,255,.52); --nav-on-txt: #5b3df0; --nav-on-edge: rgba(255,255,255,.9); --nav-on-glow: rgba(122,92,255,.3);
+    --bub-bg: rgba(255,255,255,.44); --bub-edge: rgba(255,255,255,.55); --bub-edge-top: rgba(255,255,255,.95);
+    --bub-shadow: 0 6px 20px rgba(82,60,160,.14);
+    --bub-sheen: linear-gradient(165deg, rgba(255,255,255,.55), transparent 45%);
+    --user-bg: rgba(122,80,255,.60); --user-edge: rgba(170,130,255,.6); --user-edge-top: rgba(255,255,255,.78);
+    --user-shadow: 0 6px 22px rgba(110,70,255,.4);
+    --user-sheen: linear-gradient(165deg, rgba(255,255,255,.32), transparent 50%);
+    --comp-bg: rgba(255,255,255,.38); --comp-shadow: 0 10px 30px rgba(82,60,160,.22); }
+  .sa-d { --blur: 22px; --sat: 1.8; --grain: .4;
+    background:
+      radial-gradient(ellipse 60% 55% at 10% 112%, rgba(124,82,255,.5), transparent 66%),
+      radial-gradient(ellipse 50% 48% at 96% 118%, rgba(40,140,255,.42), transparent 64%),
+      radial-gradient(ellipse 45% 40% at 88% -12%, rgba(255,80,160,.28), transparent 62%),
+      radial-gradient(ellipse 75% 52% at 45% -18%, rgba(90,60,220,.30), transparent 72%),
+      linear-gradient(180deg, #16131f, #120f1a);
+    --txt: #f2eefc; --txt2: rgba(235,228,255,.6); --txt3: rgba(235,228,255,.38);
+    --accent: #9d7bff; --accent2: #d05df5; --accent-glow: rgba(140,95,255,.5);
+    --edge: rgba(255,255,255,.15); --edge-top: rgba(255,255,255,.36); --spec: rgba(255,255,255,.32);
+    --side-bg: rgba(255,255,255,.06); --side-shadow: 0 12px 40px rgba(0,0,0,.42);
+    --nav-on-bg: rgba(157,123,255,.20); --nav-on-txt: #cdb6ff; --nav-on-edge: rgba(170,135,255,.45); --nav-on-glow: rgba(140,95,255,.35);
+    --bub-bg: rgba(255,255,255,.07); --bub-edge: rgba(255,255,255,.13); --bub-edge-top: rgba(255,255,255,.32);
+    --bub-shadow: 0 8px 24px rgba(0,0,0,.35);
+    --bub-sheen: linear-gradient(165deg, rgba(255,255,255,.10), transparent 45%);
+    --user-bg: rgba(124,82,255,.45); --user-edge: rgba(165,120,255,.5); --user-edge-top: rgba(230,210,255,.62);
+    --user-shadow: 0 8px 26px rgba(110,60,255,.45);
+    --user-sheen: linear-gradient(165deg, rgba(255,255,255,.18), transparent 50%);
+    --comp-bg: rgba(255,255,255,.075); --comp-shadow: 0 12px 36px rgba(0,0,0,.5); }
+
+  /* ════ B · Aurora Frost — 背景是主角，表面是浓雾 ════ */
+  .sb-l { --blur: 26px; --sat: 1.5; --grain: .18;
+    background:
+      radial-gradient(ellipse 75% 70% at 8% 100%, rgba(255,128,170,.5), transparent 70%),
+      radial-gradient(ellipse 70% 65% at 92% 108%, rgba(108,140,255,.5), transparent 70%),
+      radial-gradient(ellipse 60% 55% at 90% -5%, rgba(255,180,90,.4), transparent 66%),
+      radial-gradient(ellipse 65% 60% at 18% -10%, rgba(120,220,200,.42), transparent 68%),
+      linear-gradient(160deg, #fdf3f6, #eef2ff);
+    --txt: #2a2440; --txt2: rgba(50,42,80,.62); --txt3: rgba(50,42,80,.42);
+    --accent: #ff6ba9; --accent2: #8c6bff; --accent-glow: rgba(255,107,169,.4);
+    --edge: rgba(255,255,255,.75); --edge-top: rgba(255,255,255,.98); --spec: rgba(255,255,255,.95);
+    --side-bg: rgba(255,255,255,.5); --side-shadow: 0 10px 36px rgba(140,80,160,.16);
+    --nav-on-bg: rgba(255,255,255,.72); --nav-on-txt: #c0408a; --nav-on-edge: rgba(255,255,255,.95); --nav-on-glow: rgba(255,107,169,.28);
+    --bub-bg: rgba(255,255,255,.58); --bub-edge: rgba(255,255,255,.7); --bub-edge-top: rgba(255,255,255,.98);
+    --bub-shadow: 0 6px 22px rgba(140,80,160,.13);
+    --bub-sheen: linear-gradient(165deg, rgba(255,255,255,.6), transparent 48%);
+    --user-bg: rgba(236,80,150,.6); --user-edge: rgba(255,150,195,.65); --user-edge-top: rgba(255,255,255,.8);
+    --user-shadow: 0 6px 22px rgba(236,80,150,.38);
+    --user-sheen: linear-gradient(165deg, rgba(255,255,255,.32), transparent 50%);
+    --comp-bg: rgba(255,255,255,.46); --comp-shadow: 0 10px 32px rgba(140,80,160,.2); }
+  .sb-d { --blur: 26px; --sat: 1.6; --grain: .35;
+    background:
+      radial-gradient(ellipse 80% 75% at 5% 105%, rgba(255,70,140,.4), transparent 72%),
+      radial-gradient(ellipse 75% 70% at 95% 110%, rgba(70,110,255,.46), transparent 72%),
+      radial-gradient(ellipse 65% 55% at 92% -8%, rgba(255,150,60,.28), transparent 66%),
+      radial-gradient(ellipse 70% 62% at 15% -12%, rgba(60,220,190,.28), transparent 68%),
+      linear-gradient(160deg, #1c1430, #140f22);
+    --txt: #f5f0fb; --txt2: rgba(240,230,255,.6); --txt3: rgba(240,230,255,.38);
+    --accent: #ff6ba9; --accent2: #8c6bff; --accent-glow: rgba(255,107,169,.42);
+    --edge: rgba(255,255,255,.13); --edge-top: rgba(255,255,255,.3); --spec: rgba(255,255,255,.26);
+    --side-bg: rgba(28,20,46,.46); --side-shadow: 0 12px 40px rgba(0,0,0,.45);
+    --nav-on-bg: rgba(255,107,169,.20); --nav-on-txt: #ffb3d4; --nav-on-edge: rgba(255,130,185,.42); --nav-on-glow: rgba(255,107,169,.32);
+    --bub-bg: rgba(30,22,50,.5); --bub-edge: rgba(255,255,255,.11); --bub-edge-top: rgba(255,255,255,.27);
+    --bub-shadow: 0 8px 26px rgba(0,0,0,.38);
+    --bub-sheen: linear-gradient(165deg, rgba(255,255,255,.09), transparent 45%);
+    --user-bg: rgba(225,60,135,.5); --user-edge: rgba(255,120,180,.5); --user-edge-top: rgba(255,200,225,.6);
+    --user-shadow: 0 8px 26px rgba(225,60,135,.42);
+    --user-sheen: linear-gradient(165deg, rgba(255,255,255,.16), transparent 50%);
+    --comp-bg: rgba(28,20,46,.52); --comp-shadow: 0 12px 36px rgba(0,0,0,.5); }
+
+  /* ════ C · Quiet Luxury Max — 克制背景 + 工艺细节拉满 ════ */
+  .sc-l { --blur: 16px; --sat: 1.4; --grain: .3;
+    background:
+      radial-gradient(ellipse 55% 45% at 12% 108%, rgba(150,120,220,.18), transparent 64%),
+      radial-gradient(ellipse 50% 42% at 92% 112%, rgba(120,150,230,.14), transparent 62%),
+      radial-gradient(ellipse 60% 45% at 50% -12%, rgba(170,150,230,.10), transparent 70%),
+      linear-gradient(180deg, #faf9fd, #f2f1f8);
+    --txt: #242031; --txt2: rgba(45,40,70,.6); --txt3: rgba(45,40,70,.42);
+    --accent: #8a6fd8; --accent2: #6f8ad8; --accent-glow: rgba(138,111,216,.38);
+    --edge: rgba(70,58,110,.13); --edge-top: rgba(255,255,255,.95); --spec: rgba(255,255,255,.92);
+    --side-bg: rgba(255,255,255,.62); --side-shadow: 0 1px 2px rgba(40,32,80,.05), 0 6px 16px rgba(40,32,80,.07), 0 14px 36px rgba(40,32,80,.08);
+    --nav-on-bg: rgba(138,111,216,.16); --nav-on-txt: #6a4fc4; --nav-on-edge: rgba(138,111,216,.34); --nav-on-glow: rgba(138,111,216,.2);
+    --bub-bg: rgba(255,255,255,.72); --bub-edge: rgba(70,58,110,.12); --bub-edge-top: rgba(255,255,255,.95);
+    --bub-shadow: 0 1px 2px rgba(40,32,80,.05), 0 5px 14px rgba(40,32,80,.07);
+    --bub-sheen: linear-gradient(165deg, rgba(255,255,255,.5), transparent 42%);
+    --user-bg: rgba(122,99,216,.9); --user-edge: rgba(122,99,216,.5); --user-edge-top: rgba(210,195,255,.95);
+    --user-shadow: 0 1px 2px rgba(80,55,190,.18), 0 6px 18px rgba(110,80,220,.28);
+    --user-sheen: linear-gradient(165deg, rgba(255,255,255,.24), transparent 50%);
+    --comp-bg: rgba(255,255,255,.66); --comp-shadow: 0 2px 4px rgba(40,32,80,.05), 0 10px 26px rgba(40,32,80,.1); }
+  .sc-d { --blur: 16px; --sat: 1.5; --grain: .45;
+    background:
+      radial-gradient(ellipse 55% 45% at 12% 108%, rgba(140,110,230,.2), transparent 64%),
+      radial-gradient(ellipse 50% 40% at 90% 112%, rgba(90,120,220,.15), transparent 62%),
+      radial-gradient(ellipse 60% 45% at 50% -12%, rgba(150,120,230,.1), transparent 70%),
+      linear-gradient(180deg, #1d1a26, #16141f);
+    --txt: #f0edf8; --txt2: rgba(230,225,248,.6); --txt3: rgba(230,225,248,.38);
+    --accent: #a88fee; --accent2: #8fa3ee; --accent-glow: rgba(150,120,235,.4);
+    --edge: rgba(255,255,255,.09); --edge-top: rgba(255,255,255,.22); --spec: rgba(255,255,255,.18);
+    --side-bg: rgba(44,40,60,.6); --side-shadow: 0 1px 2px rgba(0,0,0,.25), 0 8px 22px rgba(0,0,0,.32);
+    --nav-on-bg: rgba(168,143,238,.18); --nav-on-txt: #cdbcf8; --nav-on-edge: rgba(168,143,238,.36); --nav-on-glow: rgba(150,120,235,.26);
+    --bub-bg: rgba(48,44,66,.66); --bub-edge: rgba(255,255,255,.08); --bub-edge-top: rgba(255,255,255,.2);
+    --bub-shadow: 0 1px 2px rgba(0,0,0,.25), 0 6px 18px rgba(0,0,0,.3);
+    --bub-sheen: linear-gradient(165deg, rgba(255,255,255,.07), transparent 42%);
+    --user-bg: rgba(132,104,230,.78); --user-edge: rgba(160,130,245,.45); --user-edge-top: rgba(215,200,255,.55);
+    --user-shadow: 0 1px 2px rgba(0,0,0,.3), 0 7px 20px rgba(110,80,220,.35);
+    --user-sheen: linear-gradient(165deg, rgba(255,255,255,.14), transparent 50%);
+    --comp-bg: rgba(44,40,60,.64); --comp-shadow: 0 2px 4px rgba(0,0,0,.25), 0 12px 30px rgba(0,0,0,.4); }
+</style>
+
+<h2>三个「惊艳」方向 — 哪个最接近你心目中的样子？</h2>
+<p class="subtitle">每个方向给出 亮色 + 暗色 一对缩小版示意（结构沿用现有 Panel：侧栏 / 消息流 / 输入框）。点击卡片选择；也可以在终端描述混合方案，比如「A 的表面 + B 的背景」。</p>
+
+<!-- ═══════════ A · Liquid Glass ═══════════ -->
+<div class="vd-card" data-choice="a" onclick="toggleSelect(this)">
+  <div class="vd-head"><span class="vd-letter">A</span><h3>液态玻璃 Liquid Glass</h3><span class="vd-sub">高透明 · 强镜面边缘 · 彩色光场</span></div>
+  <div class="vd-pair">
+    <div class="vd-stage sa-l">
+      <span class="vd-tag">LIGHT</span>
+      <div class="vd-orn" style="left:70px;top:40px;width:60px;height:60px;background:radial-gradient(circle,rgba(255,140,200,.8),transparent 70%)"></div>
+      <div class="vd-orn" style="left:60px;bottom:30px;width:80px;height:80px;background:radial-gradient(circle,rgba(100,160,255,.7),transparent 70%)"></div>
+      <div class="vd-side">
+        <div class="vd-logo"><i></i><b>Aleph</b></div>
+        <div class="vd-nav on"><i></i>对话</div>
+        <div class="vd-nav"><i></i>记忆</div>
+        <div class="vd-nav"><i></i>技能</div>
+        <div class="vd-nav"><i></i>设置</div>
+      </div>
+      <div class="vd-main">
+        <div class="vd-msgs">
+          <div class="vd-msg">已经分析完日志，问题出在重试循环——给你整理了三种修复方案。</div>
+          <div class="vd-msg user">好，按方案二执行</div>
+          <div class="vd-msg">收到，开始执行 ✓ 预计两分钟完成。</div>
+        </div>
+        <div class="vd-composer"><span>输入消息…</span><div class="vd-send"></div></div>
+      </div>
+    </div>
+    <div class="vd-stage sa-d">
+      <span class="vd-tag">DARK</span>
+      <div class="vd-orn" style="left:70px;top:36px;width:70px;height:70px;background:radial-gradient(circle,rgba(255,90,180,.55),transparent 70%)"></div>
+      <div class="vd-orn" style="left:55px;bottom:26px;width:90px;height:90px;background:radial-gradient(circle,rgba(90,140,255,.5),transparent 70%)"></div>
+      <div class="vd-side">
+        <div class="vd-logo"><i></i><b>Aleph</b></div>
+        <div class="vd-nav on"><i></i>对话</div>
+        <div class="vd-nav"><i></i>记忆</div>
+        <div class="vd-nav"><i></i>技能</div>
+        <div class="vd-nav"><i></i>设置</div>
+      </div>
+      <div class="vd-main">
+        <div class="vd-msgs">
+          <div class="vd-msg">已经分析完日志，问题出在重试循环——给你整理了三种修复方案。</div>
+          <div class="vd-msg user">好，按方案二执行</div>
+          <div class="vd-msg">收到，开始执行 ✓ 预计两分钟完成。</div>
+        </div>
+        <div class="vd-composer"><span>输入消息…</span><div class="vd-send"></div></div>
+      </div>
+    </div>
+  </div>
+  <p class="vd-note">表面像真实玻璃透镜：更透、镜面边缘更亮、背景光场更鲜艳——透明「有东西可透」才显玻璃。资源与现状持平：真模糊仍只在侧栏/输入框/弹层，气泡保持仿玻璃配方。</p>
+</div>
+
+<!-- ═══════════ B · Aurora Frost ═══════════ -->
+<div class="vd-card" data-choice="b" onclick="toggleSelect(this)">
+  <div class="vd-head"><span class="vd-letter">B</span><h3>极光浓雾 Aurora Frost</h3><span class="vd-sub">背景是主角 · 表面是浓雾 · 色彩透出来</span></div>
+  <div class="vd-pair">
+    <div class="vd-stage sb-l">
+      <span class="vd-tag">LIGHT</span>
+      <div class="vd-orn" style="left:64px;top:50px;width:90px;height:90px;background:radial-gradient(circle,rgba(255,160,120,.7),transparent 70%)"></div>
+      <div class="vd-orn" style="right:40px;bottom:20px;width:110px;height:110px;background:radial-gradient(circle,rgba(140,107,255,.45),transparent 70%)"></div>
+      <div class="vd-side">
+        <div class="vd-logo"><i></i><b>Aleph</b></div>
+        <div class="vd-nav on"><i></i>对话</div>
+        <div class="vd-nav"><i></i>记忆</div>
+        <div class="vd-nav"><i></i>技能</div>
+        <div class="vd-nav"><i></i>设置</div>
+      </div>
+      <div class="vd-main">
+        <div class="vd-msgs">
+          <div class="vd-msg">已经分析完日志，问题出在重试循环——给你整理了三种修复方案。</div>
+          <div class="vd-msg user">好，按方案二执行</div>
+          <div class="vd-msg">收到，开始执行 ✓ 预计两分钟完成。</div>
+        </div>
+        <div class="vd-composer"><span>输入消息…</span><div class="vd-send"></div></div>
+      </div>
+    </div>
+    <div class="vd-stage sb-d">
+      <span class="vd-tag">DARK</span>
+      <div class="vd-orn" style="left:64px;top:44px;width:100px;height:100px;background:radial-gradient(circle,rgba(255,90,150,.5),transparent 70%)"></div>
+      <div class="vd-orn" style="right:36px;bottom:16px;width:120px;height:120px;background:radial-gradient(circle,rgba(100,120,255,.45),transparent 70%)"></div>
+      <div class="vd-side">
+        <div class="vd-logo"><i></i><b>Aleph</b></div>
+        <div class="vd-nav on"><i></i>对话</div>
+        <div class="vd-nav"><i></i>记忆</div>
+        <div class="vd-nav"><i></i>技能</div>
+        <div class="vd-nav"><i></i>设置</div>
+      </div>
+      <div class="vd-main">
+        <div class="vd-msgs">
+          <div class="vd-msg">已经分析完日志，问题出在重试循环——给你整理了三种修复方案。</div>
+          <div class="vd-msg user">好，按方案二执行</div>
+          <div class="vd-msg">收到，开始执行 ✓ 预计两分钟完成。</div>
+        </div>
+        <div class="vd-composer"><span>输入消息…</span><div class="vd-send"></div></div>
+      </div>
+    </div>
+  </div>
+  <p class="vd-note">惊艳来自色彩纵深：极光铺满画布，所有表面是浓奶雾，颜色从雾里渗出来。背景仍是静态单层（零新增动画），模糊面数量不变——增量成本最低的「大变样」。</p>
+</div>
+
+<!-- ═══════════ C · Quiet Luxury Max ═══════════ -->
+<div class="vd-card" data-choice="c" onclick="toggleSelect(this)">
+  <div class="vd-head"><span class="vd-letter">C</span><h3>奢华磨砂 Quiet Luxury Max</h3><span class="vd-sub">克制背景 · 工艺细节拉满 · 高级感路线</span></div>
+  <div class="vd-pair">
+    <div class="vd-stage sc-l">
+      <span class="vd-tag">LIGHT</span>
+      <div class="vd-orn" style="left:70px;top:60px;width:50px;height:50px;background:radial-gradient(circle,rgba(150,120,230,.4),transparent 70%)"></div>
+      <div class="vd-side">
+        <div class="vd-logo"><i></i><b>Aleph</b></div>
+        <div class="vd-nav on"><i></i>对话</div>
+        <div class="vd-nav"><i></i>记忆</div>
+        <div class="vd-nav"><i></i>技能</div>
+        <div class="vd-nav"><i></i>设置</div>
+      </div>
+      <div class="vd-main">
+        <div class="vd-msgs">
+          <div class="vd-msg">已经分析完日志，问题出在重试循环——给你整理了三种修复方案。</div>
+          <div class="vd-msg user">好，按方案二执行</div>
+          <div class="vd-msg">收到，开始执行 ✓ 预计两分钟完成。</div>
+        </div>
+        <div class="vd-composer"><span>输入消息…</span><div class="vd-send"></div></div>
+      </div>
+    </div>
+    <div class="vd-stage sc-d">
+      <span class="vd-tag">DARK</span>
+      <div class="vd-orn" style="left:70px;top:56px;width:55px;height:55px;background:radial-gradient(circle,rgba(160,130,240,.35),transparent 70%)"></div>
+      <div class="vd-side">
+        <div class="vd-logo"><i></i><b>Aleph</b></div>
+        <div class="vd-nav on"><i></i>对话</div>
+        <div class="vd-nav"><i></i>记忆</div>
+        <div class="vd-nav"><i></i>技能</div>
+        <div class="vd-nav"><i></i>设置</div>
+      </div>
+      <div class="vd-main">
+        <div class="vd-msgs">
+          <div class="vd-msg">已经分析完日志，问题出在重试循环——给你整理了三种修复方案。</div>
+          <div class="vd-msg user">好，按方案二执行</div>
+          <div class="vd-msg">收到，开始执行 ✓ 预计两分钟完成。</div>
+        </div>
+        <div class="vd-composer"><span>输入消息…</span><div class="vd-send"></div></div>
+      </div>
+    </div>
+  </div>
+  <p class="vd-note">延续现有「Quiet Luxury」基因但工艺拉满：更亮的镜面发丝线、三层阴影、细粒面、精确的 1px 边缘。背景保持克制——高级感而非炫技。资源成本最低。</p>
+</div>
+
+<p class="subtitle" style="margin-top:4px">三个方向都守住既定红线：背景静态零动画、消息气泡不用 backdrop-filter、模糊只在固定数量的 chrome 面上。</p>
