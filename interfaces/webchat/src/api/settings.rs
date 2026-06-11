@@ -51,7 +51,7 @@ pub fn load_canvas_radial_navigation() -> bool {
 }
 
 /// Persist the canvas radial navigation flag to localStorage.
-pub const fn save_canvas_radial_navigation(value: bool) {
+pub fn save_canvas_radial_navigation(value: bool) {
     #[cfg(target_arch = "wasm32")]
     {
         if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
