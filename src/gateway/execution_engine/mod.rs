@@ -30,6 +30,7 @@ mod steering;
 mod tool_refresh;
 mod tool_service_builder;
 mod trace_sink_adapter;
+mod unattended_redacting_sink;
 
 #[cfg(test)]
 mod tests;
@@ -48,6 +49,8 @@ pub use tool_service_builder::set_confirmation_requester;
 pub use tool_service_builder::set_mcp_tool_registry;
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use trace_sink_adapter::GatewayTraceSink;
+#[allow(unused_imports)] // wired into run_loop.rs in this commit
+pub(crate) use unattended_redacting_sink::UnattendedRedactingSink;
 
 use crate::gateway::media::PendingMedia;
 use crate::sync_primitives::{AtomicU32, AtomicU64, Ordering};
