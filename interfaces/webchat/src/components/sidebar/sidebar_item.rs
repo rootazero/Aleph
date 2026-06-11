@@ -37,7 +37,6 @@ pub fn SidebarItem(
                 "nav-tile relative group flex items-center gap-3 px-3 py-2 rounded-lg"
             }
         }>
-
             // Icon container (relative for badge positioning)
             <div class="relative flex-shrink-0">
                 <svg
