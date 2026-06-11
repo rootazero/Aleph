@@ -25,20 +25,20 @@ pub enum ToolKind {
 impl ToolKind {
     /// 由工具名（大小写不敏感）映射到大类。未知名 → `Default`。
     #[must_use]
-    pub fn from_name(name: &str) -> ToolKind {
+    pub fn from_name(name: &str) -> Self {
         let n = name.to_lowercase();
         match n.as_str() {
-            "file_edit" => ToolKind::FileEdit,
-            "file_write" => ToolKind::FileWrite,
-            "apply_patch" => ToolKind::ApplyPatch,
-            "file_read" => ToolKind::FileRead,
+            "file_edit" => Self::FileEdit,
+            "file_write" => Self::FileWrite,
+            "apply_patch" => Self::ApplyPatch,
+            "file_read" => Self::FileRead,
             _ => {
                 if n.starts_with("bash")
                     || n.starts_with("shell")
                     || n.starts_with("code_exec")
                     || n.contains("_exec")
                 {
-                    ToolKind::Bash
+                    Self::Bash
                 } else if n == "search"
                     || n == "web_search"
                     || n == "grep"
@@ -46,9 +46,9 @@ impl ToolKind {
                     || n.starts_with("search")
                     || n.ends_with("_search")
                 {
-                    ToolKind::Search
+                    Self::Search
                 } else {
-                    ToolKind::Default
+                    Self::Default
                 }
             }
         }
@@ -59,7 +59,7 @@ impl ToolKind {
     pub const fn default_open(self) -> bool {
         matches!(
             self,
-            ToolKind::FileEdit | ToolKind::FileWrite | ToolKind::ApplyPatch
+            Self::FileEdit | Self::FileWrite | Self::ApplyPatch
         )
     }
 }

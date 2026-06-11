@@ -77,30 +77,30 @@ pub struct DragOverlay {
 impl DragState {
     #[must_use]
     pub const fn new() -> Self {
-        DragState::Idle
+        Self::Idle
     }
 
     #[must_use]
     pub const fn is_active(&self) -> bool {
-        !matches!(self, DragState::Idle)
+        !matches!(self, Self::Idle)
     }
 
     #[must_use]
     pub fn active_node_id(&self) -> Option<&str> {
         match self {
-            DragState::Idle => None,
-            DragState::Pressed { node_id, .. }
-            | DragState::Dragging { node_id, .. }
-            | DragState::SpringBack { node_id, .. }
-            | DragState::Promoting { node_id, .. } => Some(node_id),
+            Self::Idle => None,
+            Self::Pressed { node_id, .. }
+            | Self::Dragging { node_id, .. }
+            | Self::SpringBack { node_id, .. }
+            | Self::Promoting { node_id, .. } => Some(node_id),
         }
     }
 
     pub fn press(&mut self, node_id: String, anchor_pos: Vec2, now_ms: f64) {
-        if !matches!(self, DragState::Idle) {
+        if !matches!(self, Self::Idle) {
             return;
         }
-        *self = DragState::Pressed {
+        *self = Self::Pressed {
             node_id,
             start_pos: anchor_pos,
             start_time_ms: now_ms,
@@ -109,14 +109,14 @@ impl DragState {
 
     pub fn pointer_move(&mut self, screen_pos: Vec2, now_ms: f64) {
         match self {
-            DragState::Pressed {
+            Self::Pressed {
                 node_id, start_pos, ..
             } => {
                 let displacement = screen_pos - *start_pos;
                 if displacement.length() > CLICK_THRESHOLD_PX {
                     let mut history = VecDeque::with_capacity(VELOCITY_HISTORY_LEN);
                     history.push_back((displacement, now_ms));
-                    *self = DragState::Dragging {
+                    *self = Self::Dragging {
                         node_id: std::mem::take(node_id),
                         anchor_pos: *start_pos,
                         offset: displacement,
@@ -124,7 +124,7 @@ impl DragState {
                     };
                 }
             }
-            DragState::Dragging {
+            Self::Dragging {
                 anchor_pos,
                 offset,
                 velocity_history,
@@ -152,12 +152,12 @@ impl DragState {
         now_ms: f64,
     ) -> ReleaseOutcome {
         let outcome = self.evaluate_release(center_pos, center_radius_px, now_ms);
-        let prev = std::mem::replace(self, DragState::Idle);
+        let prev = std::mem::replace(self, Self::Idle);
         match (&outcome, prev) {
             (ReleaseOutcome::Click, _) => {}
-            (ReleaseOutcome::SpringBack, DragState::Pressed { node_id, .. }) => {
+            (ReleaseOutcome::SpringBack, Self::Pressed { node_id, .. }) => {
                 // Long press without movement — no offset to spring back from.
-                *self = DragState::SpringBack {
+                *self = Self::SpringBack {
                     node_id,
                     spring: Spring2D::new(Vec2::zero(), Vec2::zero(), Vec2::zero()),
                     start_time_ms: now_ms,
@@ -165,7 +165,7 @@ impl DragState {
             }
             (
                 ReleaseOutcome::SpringBack,
-                DragState::Dragging {
+                Self::Dragging {
                     node_id,
                     offset,
                     velocity_history,
@@ -176,7 +176,7 @@ impl DragState {
                 // current displacement and the release velocity so the renderer
                 // sees an animated return rather than an instant snap.
                 let release_vel = average_recent_velocity(&velocity_history, VELOCITY_AVG_LAST_N);
-                *self = DragState::SpringBack {
+                *self = Self::SpringBack {
                     node_id,
                     spring: Spring2D::new(offset, release_vel, Vec2::zero()),
                     start_time_ms: now_ms,
@@ -184,7 +184,7 @@ impl DragState {
             }
             (
                 ReleaseOutcome::Promote { initial_velocity },
-                DragState::Dragging {
+                Self::Dragging {
                     node_id,
                     anchor_pos,
                     offset,
@@ -192,7 +192,7 @@ impl DragState {
                 },
             ) => {
                 let displacement = anchor_pos + offset - center_pos;
-                *self = DragState::Promoting {
+                *self = Self::Promoting {
                     node_id,
                     target_node_id: target_neighbor_id.to_string(),
                     spring: Spring2D::new(displacement, *initial_velocity, Vec2::zero()),
@@ -211,14 +211,14 @@ impl DragState {
         now_ms: f64,
     ) -> ReleaseOutcome {
         match self {
-            DragState::Pressed { start_time_ms, .. } => {
+            Self::Pressed { start_time_ms, .. } => {
                 if now_ms - *start_time_ms < CLICK_TIME_MS {
                     ReleaseOutcome::Click
                 } else {
                     ReleaseOutcome::SpringBack
                 }
             }
-            DragState::Dragging {
+            Self::Dragging {
                 offset,
                 anchor_pos,
                 velocity_history,
@@ -252,7 +252,7 @@ impl DragState {
 
     /// Cancel any active drag — used for `pointercancel` events. Snaps to Idle, no animation.
     pub fn cancel(&mut self) {
-        *self = DragState::Idle;
+        *self = Self::Idle;
     }
 
     /// Read-only snapshot of "what to draw on top of base canvas" this frame.
@@ -261,8 +261,8 @@ impl DragState {
     pub fn overlay_snapshot(&self, center_pos: Vec2, center_radius_px: f64) -> Option<DragOverlay> {
         let glow_radius = center_radius_px * GLOW_RADIUS_FACTOR;
         match self {
-            DragState::Idle | DragState::Pressed { .. } => None,
-            DragState::Dragging {
+            Self::Idle | Self::Pressed { .. } => None,
+            Self::Dragging {
                 node_id,
                 anchor_pos,
                 offset,
@@ -281,14 +281,14 @@ impl DragState {
                     glow_alpha,
                 })
             }
-            DragState::SpringBack {
+            Self::SpringBack {
                 node_id, spring, ..
             } => Some(DragOverlay {
                 node_id: node_id.clone(),
                 position: spring.position(),
                 glow_alpha: 0.0,
             }),
-            DragState::Promoting {
+            Self::Promoting {
                 node_id, spring, ..
             } => {
                 // Promote tween position is offset from center; renderer adds center.
@@ -309,14 +309,14 @@ impl DragState {
     /// `CanvasIntent::PromoteNode(id)` to drive navigation.
     pub fn tick(&mut self, dt_s: f64) -> Option<String> {
         match self {
-            DragState::SpringBack { spring, .. } => {
+            Self::SpringBack { spring, .. } => {
                 spring.tick(dt_s);
                 if spring.settled() {
-                    *self = DragState::Idle;
+                    *self = Self::Idle;
                 }
                 None
             }
-            DragState::Promoting {
+            Self::Promoting {
                 spring,
                 target_node_id,
                 start_time_ms,
@@ -328,7 +328,7 @@ impl DragState {
                 *start_time_ms += dt_s * 1000.0;
                 if spring.settled() || *start_time_ms > PROMOTE_TWEEN_MAX_MS {
                     let id = std::mem::take(target_node_id);
-                    *self = DragState::Idle;
+                    *self = Self::Idle;
                     return Some(id);
                 }
                 None

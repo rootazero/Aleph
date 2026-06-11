@@ -33,7 +33,7 @@ impl Vec2 {
         }
     }
     #[must_use]
-    pub fn distance_to(&self, other: &Vec2) -> f64 {
+    pub fn distance_to(&self, other: &Self) -> f64 {
         let dx = self.x - other.x;
         let dy = self.y - other.y;
         (dx * dx + dy * dy).sqrt()
@@ -41,28 +41,28 @@ impl Vec2 {
 }
 
 impl Add for Vec2 {
-    type Output = Vec2;
-    fn add(self, rhs: Vec2) -> Vec2 {
-        Vec2::new(self.x + rhs.x, self.y + rhs.y)
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        Self::new(self.x + rhs.x, self.y + rhs.y)
     }
 }
 
 impl Sub for Vec2 {
-    type Output = Vec2;
-    fn sub(self, rhs: Vec2) -> Vec2 {
-        Vec2::new(self.x - rhs.x, self.y - rhs.y)
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        Self::new(self.x - rhs.x, self.y - rhs.y)
     }
 }
 
 impl Mul<f64> for Vec2 {
-    type Output = Vec2;
-    fn mul(self, scalar: f64) -> Vec2 {
-        Vec2::new(self.x * scalar, self.y * scalar)
+    type Output = Self;
+    fn mul(self, scalar: f64) -> Self {
+        Self::new(self.x * scalar, self.y * scalar)
     }
 }
 
 impl AddAssign for Vec2 {
-    fn add_assign(&mut self, rhs: Vec2) {
+    fn add_assign(&mut self, rhs: Self) {
         self.x += rhs.x;
         self.y += rhs.y;
     }

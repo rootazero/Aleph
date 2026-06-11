@@ -21,7 +21,7 @@ pub struct TraceNode {
     /// Status
     pub status: TraceStatus,
     /// Child nodes
-    pub children: Vec<TraceNode>,
+    pub children: Vec<Self>,
 }
 
 /// Trace node type

@@ -19,33 +19,33 @@ impl GenerationType {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            GenerationType::Image => "image",
-            GenerationType::Video => "video",
-            GenerationType::Audio => "audio",
-            GenerationType::Speech => "speech",
-            GenerationType::Transcription => "transcription",
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Speech => "speech",
+            Self::Transcription => "transcription",
         }
     }
 
     #[must_use]
     pub const fn display_name(&self) -> &'static str {
         match self {
-            GenerationType::Image => "Image",
-            GenerationType::Video => "Video",
-            GenerationType::Audio => "Audio",
-            GenerationType::Speech => "Speech",
-            GenerationType::Transcription => "STT",
+            Self::Image => "Image",
+            Self::Video => "Video",
+            Self::Audio => "Audio",
+            Self::Speech => "Speech",
+            Self::Transcription => "STT",
         }
     }
 
     #[must_use]
     pub const fn icon(&self) -> &'static str {
         match self {
-            GenerationType::Image => "🖼️",
-            GenerationType::Video => "🎬",
-            GenerationType::Audio => "🎵",
-            GenerationType::Speech => "🗣️",
-            GenerationType::Transcription => "🎤",
+            Self::Image => "🖼️",
+            Self::Video => "🎬",
+            Self::Audio => "🎵",
+            Self::Speech => "🗣️",
+            Self::Transcription => "🎤",
         }
     }
 }

@@ -38,7 +38,7 @@ pub enum ThemeMode {
 }
 
 impl ThemeMode {
-    pub const ALL: [ThemeMode; 4] = [Self::System, Self::Light, Self::Dark, Self::Glass];
+    pub const ALL: [Self; 4] = [Self::System, Self::Light, Self::Dark, Self::Glass];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -91,7 +91,7 @@ pub enum Accent {
 }
 
 impl Accent {
-    pub const ALL: [Accent; 5] = [
+    pub const ALL: [Self; 5] = [
         Self::Mauve,
         Self::Ocean,
         Self::Forest,
@@ -161,7 +161,7 @@ pub enum FontScale {
 }
 
 impl FontScale {
-    pub const ALL: [FontScale; 5] = [
+    pub const ALL: [Self; 5] = [
         Self::Compact,
         Self::Default,
         Self::Cozy,
@@ -228,7 +228,7 @@ pub enum Roundness {
 }
 
 impl Roundness {
-    pub const ALL: [Roundness; 5] = [
+    pub const ALL: [Self; 5] = [
         Self::Sharp,
         Self::Slight,
         Self::Default,

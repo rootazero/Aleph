@@ -18,7 +18,7 @@ pub(super) struct CommandInfo {
     pub description: String,
     pub is_namespace: bool,
     pub param_hint: Option<String>,
-    pub children: Vec<CommandInfo>,
+    pub children: Vec<Self>,
 }
 
 /// Parse a single command from the JSON reply (recursive for children).
