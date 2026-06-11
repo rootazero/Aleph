@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
-use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
 use crate::views::chat::state::ChatState;

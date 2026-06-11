@@ -5,7 +5,7 @@
 //! 宿主机 `cargo test -p aleph-panel --lib` 下测试。
 
 use crate::components::json_viewer::JsonViewer;
-use crate::i18n::{t_string, I18nLocaleTrait, use_i18n};
+use crate::i18n::{t_string, use_i18n};
 use crate::state::layout::{ToolPayload, WorkspaceState};
 use crate::views::chat::state::ChatState;
 use leptos::prelude::*;

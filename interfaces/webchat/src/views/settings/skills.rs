@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, I18nLocaleTrait, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 
 // ---------------------------------------------------------------------------
 // Local types matching the JSON shape from `skills.status` RPC

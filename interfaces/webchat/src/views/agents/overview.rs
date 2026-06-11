@@ -3,7 +3,7 @@
 use crate::api::agents::AgentsApi;
 use crate::api::providers::{CatalogEntry, CatalogView, ProvidersApi};
 use crate::context::DashboardState;
-use crate::i18n::{t_string, t, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, t, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde_json::json;

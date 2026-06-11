@@ -24,7 +24,7 @@ pub mod workers;
 
 use crate::api::teams::{TeamSummary, TeamsApi};
 use crate::context::DashboardState;
-use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 

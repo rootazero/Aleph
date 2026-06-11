@@ -7,7 +7,7 @@
 use crate::api::teams::{TeamDetail, TeamSummary, TeamsApi, TemplateMeta};
 use crate::components::ui::{Button, ButtonVariant, Card, ConfirmButton};
 use crate::context::DashboardState;
-use crate::i18n::{t_string, t, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, t, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::JsCast;

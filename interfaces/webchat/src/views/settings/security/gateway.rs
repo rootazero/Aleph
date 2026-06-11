@@ -5,7 +5,7 @@ use leptos::task::spawn_local;
 
 use crate::api::{DeviceInfo, SecurityConfig, SecurityConfigApi};
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t, t_string, use_i18n};
 
 #[component]
 pub(super) fn GatewaySecuritySettings(config: RwSignal<Option<SecurityConfig>>) -> impl IntoView {

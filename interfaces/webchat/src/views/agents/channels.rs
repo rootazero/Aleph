@@ -1,7 +1,7 @@
 // Channels Tab — read-only binding display for an agent
 
 use crate::context::DashboardState;
-use crate::i18n::{t, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 

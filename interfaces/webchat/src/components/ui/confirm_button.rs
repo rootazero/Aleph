@@ -11,7 +11,7 @@
 
 use leptos::prelude::*;
 
-use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, use_i18n};
 
 #[component]
 pub fn ConfirmButton<F>(

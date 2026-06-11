@@ -9,7 +9,7 @@ use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState};
 use super::timeline::{self, TimelineRow};
 use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
 use crate::components::tool_card::ToolCard;
-use crate::i18n::{t_string, t, I18nLocaleTrait, use_i18n};
+use crate::i18n::{t_string, t, use_i18n};
 use crate::state::layout::WorkspaceState;
 use leptos::prelude::*;
 

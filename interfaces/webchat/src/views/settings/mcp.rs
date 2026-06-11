@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::api::{McpConfigApi, McpServerConfig, McpServerInfo};
 use crate::context::DashboardState;
-use crate::i18n::{t_string, t, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, t, use_i18n};
 
 /// Load MCP servers list from Gateway
 fn load_servers(

@@ -23,7 +23,7 @@ use super::project_menu::ProjectMenu;
 use super::state::{ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt};
 use crate::api::chat::{ChatApi, ChatAttachment};
 use crate::context::DashboardState;
-use crate::i18n::{t_string, I18nLocaleTrait, use_i18n};
+use crate::i18n::{t_string, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use shared_ui_logic::safety::{

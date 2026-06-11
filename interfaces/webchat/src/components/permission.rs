@@ -3,7 +3,7 @@
 //! —— 后端 2 层 tier 在前端的诚实投影。后端零改动。
 
 use crate::context::DashboardState;
-use crate::i18n::{t, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t, use_i18n};
 use leptos::prelude::*;
 
 /// 配置页闸门:operator 渲染整页 children;非 operator 渲染锁定卡。

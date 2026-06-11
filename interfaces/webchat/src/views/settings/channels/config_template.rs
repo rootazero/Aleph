@@ -20,7 +20,7 @@ use crate::components::ui::ConfirmButton;
 use crate::components::ui::SecretInput;
 use crate::components::ui::TagListInput;
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t, t_string, use_i18n};
 
 use super::definitions::{ChannelDefinition, FieldDef, FieldKind};
 

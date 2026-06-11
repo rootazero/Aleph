@@ -9,7 +9,7 @@ use leptos::task::spawn_local;
 
 use crate::api::trace::TraceApi;
 use crate::context::{DashboardState, GatewayEvent};
-use crate::i18n::{t_string, t, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, t, use_i18n};
 use crate::models::{TraceNode, TraceStatus};
 use crate::views::agent_trace_model::{
     trace_node_from_event, trace_nodes_from_replay, TraceLabels,

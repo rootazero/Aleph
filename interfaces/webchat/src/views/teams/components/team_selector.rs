@@ -1,6 +1,6 @@
 //! `TeamSelector` — small dropdown bound to `TeamsTabState.selected_team_id`.
 
-use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, use_i18n};
 use crate::views::teams::TeamsTabState;
 use leptos::prelude::*;
 

@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 
 use crate::api::{SecurityConfig, WindowConfigSchema};
-use crate::i18n::{t, t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t, t_string, use_i18n};
 
 #[component]
 pub(super) fn SandboxRateLimitSection(config: RwSignal<Option<SecurityConfig>>) -> impl IntoView {

@@ -1,4 +1,4 @@
-use crate::i18n::{t_string, I18nContextProvider, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, I18nContextProvider, use_i18n};
 use crate::state::memory::MemoryState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;

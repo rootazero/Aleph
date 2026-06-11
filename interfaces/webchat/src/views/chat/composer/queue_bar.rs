@@ -8,7 +8,7 @@
 
 use leptos::prelude::*;
 
-use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, use_i18n};
 use crate::views::chat::state::QueuedPrompt;
 
 /// One-line label for a queued chip: the trimmed prompt text, or an

@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use tailwind_fuse::{TwVariant, AsTailwindClass, IntoBuilder};
+use tailwind_fuse::{TwVariant, AsTailwindClass};
 
 #[derive(TwVariant, PartialEq, Eq)]
 pub enum ButtonVariant {

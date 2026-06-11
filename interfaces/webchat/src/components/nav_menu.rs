@@ -8,7 +8,7 @@
 // section's secondary menu and the main area to its content.
 //
 use super::mode_sidebar::PanelMode;
-use crate::i18n::{t_string, Locale, I18nLocaleTrait, use_i18n};
+use crate::i18n::{t_string, Locale, use_i18n};
 use leptos::prelude::*;
 use leptos_i18n::I18nContext;
 use leptos_router::hooks::{use_location, use_navigate};

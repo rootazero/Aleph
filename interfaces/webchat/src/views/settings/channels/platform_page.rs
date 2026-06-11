@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::components::ui::channel_status::ChannelStatus;
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t, t_string, use_i18n};
 
 use super::config_template::ChannelConfigTemplate;
 use super::definitions::{ChannelDefinition, ALL_CHANNELS};

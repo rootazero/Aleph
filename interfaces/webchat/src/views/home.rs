@@ -1,7 +1,7 @@
 use crate::api::{MemoryApi, MemoryStats, SystemApi, SystemInfo};
 use crate::components::ui::{Button, ButtonVariant, Card, BadgeVariant, Badge};
 use crate::context::{DashboardState, GatewayEvent};
-use crate::i18n::{t_string, I18nLocaleTrait, use_i18n};
+use crate::i18n::{t_string, use_i18n};
 use leptos::prelude::*;
 use std::collections::VecDeque;
 use wasm_bindgen::JsCast;

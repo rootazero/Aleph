@@ -12,7 +12,7 @@ use crate::api::system::{LaneOccupancy, SystemApi};
 use crate::api::teams::{TeamSummary, TeamUsageDto, TeamsApi};
 use crate::components::ui::Card;
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 
 fn format_thousands(n: u64) -> String {

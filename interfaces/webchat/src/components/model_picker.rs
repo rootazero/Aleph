@@ -24,7 +24,7 @@ use leptos::task::spawn_local;
 
 use crate::api::providers::{CatalogEntry, CatalogView, ModelOverride, ProvidersApi};
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, I18nLocaleTrait, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 use crate::views::chat::state::ChatState;
 
 /// Pill + dropdown for selecting the per-turn chat model.

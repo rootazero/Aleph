@@ -15,7 +15,7 @@ mod list;
 
 use crate::api::{ProviderInfo, ProvidersApi};
 use crate::context::DashboardState;
-use crate::i18n::{t, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t, use_i18n};
 use crate::preset_data::OAUTH_PRESETS;
 use leptos::prelude::*;
 use leptos::task::spawn_local;

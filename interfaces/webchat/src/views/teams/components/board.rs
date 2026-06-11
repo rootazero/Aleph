@@ -2,7 +2,7 @@
 
 use super::column::KanbanColumn;
 use crate::api::teams::CoordTaskDto;
-use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, use_i18n};
 use leptos::prelude::*;
 
 #[component]

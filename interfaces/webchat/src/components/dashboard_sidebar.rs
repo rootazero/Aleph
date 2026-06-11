@@ -3,7 +3,7 @@
 //
 use crate::components::connection_status::ConnectionStatus;
 use crate::components::sidebar::SidebarItem;
-use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, use_i18n};
 use leptos::prelude::*;
 
 #[component]

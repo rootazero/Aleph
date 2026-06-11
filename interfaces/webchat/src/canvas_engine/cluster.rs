@@ -61,6 +61,7 @@ pub fn cluster_radius(n: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::canvas_engine::types::Color;
 
     #[test]
     fn cluster_radius_log_scaling() {

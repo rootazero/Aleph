@@ -11,7 +11,7 @@
 //! a confusing flash to a blank shell while the user is mid-task.
 
 use crate::context::DashboardState;
-use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, use_i18n};
 use crate::state::connection::{ConnectionPhase, MAX_RECONNECT_ATTEMPTS};
 use leptos::prelude::*;
 use leptos::task::spawn_local;

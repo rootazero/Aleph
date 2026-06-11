@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 
 use crate::api::SearchConfig;
-use crate::i18n::{t, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t, use_i18n};
 
 #[component]
 pub(super) fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {

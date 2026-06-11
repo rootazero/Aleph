@@ -10,7 +10,7 @@
 use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
 
-use crate::i18n::{t_string, use_i18n, I18nLocaleTrait};
+use crate::i18n::{t_string, use_i18n};
 use crate::views::chat::state::PendingAttachment;
 
 /// Format a byte count as a human-readable label (`B` / `KB` / `MB`).
