@@ -140,6 +140,13 @@ mod tests {
 
     async fn build_ctx() -> (DreamContext, std::path::PathBuf) {
         let temp = std::env::temp_dir().join(format!("aleph_lessons_{}", uuid::Uuid::new_v4()));
+        // `temp` is the shared root for BOTH the SQLite backend and the note
+        // indexer. Create it as a directory first so `SqliteMemoryBackend::new`
+        // nests `memory.db` inside it (its `db_path.is_dir()` branch) and
+        // `append_to_note` can write notes under `temp/<agent>/<cat>/`. Without
+        // this, the backend treats `temp` as a DB *file*, and the note mkdir
+        // fails with "Not a directory" — silently zeroing `goal_lessons_promoted`.
+        std::fs::create_dir_all(&temp).unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
         let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
