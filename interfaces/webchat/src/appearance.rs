@@ -1,12 +1,13 @@
 //! Single source of truth for panel appearance preferences.
 //!
-//! Four orthogonal, client-side axes — all persisted to `localStorage` and
+//! Five orthogonal, client-side axes — all persisted to `localStorage` and
 //! replayed on boot by [`init_appearance`]:
 //!
-//!   • mode      — System / Light / Dark / Glass → `<html>` class list
+//!   • mode      — System / Light / Dark           → `<html>` class list
 //!   • accent    — colour palette                  → `data-accent` attribute
 //!   • font scale— accessibility text size         → `--control-ui-text-scale`
 //!   • roundness — corner radius density           → `--control-ui-radius-scale`
+//!   • material  — glass material family           → `data-material` attribute
 //!
 //! Each enum carries pure (web_sys-free) conversion logic so it unit-tests on
 //! the host; the `read_*` / `apply_*` helpers touch the DOM. Both the topbar
@@ -22,6 +23,7 @@ const KEY_MODE: &str = "aleph-theme";
 const KEY_ACCENT: &str = "aleph-accent";
 const KEY_FONT_SCALE: &str = "aleph-font-scale";
 const KEY_ROUNDNESS: &str = "aleph-roundness";
+const KEY_MATERIAL: &str = "aleph-material";
 
 // ---------------------------------------------------------------------------
 // Theme mode
@@ -141,6 +143,75 @@ impl Accent {
             Some("sunset") => Self::Sunset,
             Some("rose") => Self::Rose,
             _ => Self::Mauve,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Material (glass material family)
+// ---------------------------------------------------------------------------
+
+/// Glass material family. `Luxe` is the base look (clears `data-material`);
+/// `Liquid` / `Aurora` re-skin every glass surface via the `--mat-*` primitive
+/// blocks keyed off `<html data-material="…">`. Orthogonal to mode + accent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Material {
+    Luxe,
+    Liquid,
+    Aurora,
+}
+
+impl Material {
+    pub const ALL: [Self; 3] = [Self::Luxe, Self::Liquid, Self::Aurora];
+
+    /// Stable id used for both the `data-material` attribute and persistence.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Luxe => "luxe",
+            Self::Liquid => "liquid",
+            Self::Aurora => "aurora",
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Luxe => "奢华磨砂",
+            Self::Liquid => "液态玻璃",
+            Self::Aurora => "极光浓雾",
+        }
+    }
+
+    /// Preview swatch background (CSS) for picker chips.
+    #[must_use]
+    pub const fn preview(self) -> &'static str {
+        match self {
+            Self::Luxe => "linear-gradient(145deg, oklch(0.95 0.010 300), oklch(0.84 0.030 310))",
+            Self::Liquid => {
+                "linear-gradient(145deg, oklch(0.82 0.100 310 / 0.9), oklch(0.66 0.130 250 / 0.75))"
+            }
+            Self::Aurora => {
+                "linear-gradient(135deg, oklch(0.75 0.140 350 / 0.85), oklch(0.68 0.120 280 / 0.85), oklch(0.78 0.100 200 / 0.85))"
+            }
+        }
+    }
+
+    /// `localStorage` value, or `None` for `Luxe` (which clears the key).
+    #[must_use]
+    pub const fn storage_value(self) -> Option<&'static str> {
+        match self {
+            Self::Luxe => None,
+            Self::Liquid => Some("liquid"),
+            Self::Aurora => Some("aurora"),
+        }
+    }
+
+    fn from_storage(raw: Option<&str>) -> Self {
+        match raw {
+            Some("liquid") => Self::Liquid,
+            Some("aurora") => Self::Aurora,
+            _ => Self::Luxe,
         }
     }
 }
@@ -339,6 +410,11 @@ pub fn read_roundness() -> Roundness {
     Roundness::from_storage(read_key(KEY_ROUNDNESS).as_deref())
 }
 
+#[must_use]
+pub fn read_material() -> Material {
+    Material::from_storage(read_key(KEY_MATERIAL).as_deref())
+}
+
 // ---------------------------------------------------------------------------
 // Applies (mutate the DOM + persist)
 // ---------------------------------------------------------------------------
@@ -394,6 +470,18 @@ pub fn apply_roundness(roundness: Roundness) {
     persist(KEY_ROUNDNESS, roundness.storage_value());
 }
 
+pub fn apply_material(material: Material) {
+    if let Some(html) = root() {
+        if material == Material::Luxe {
+            let _ = html.remove_attribute("data-material");
+        } else {
+            let _ = html.set_attribute("data-material", material.id());
+        }
+    }
+    // Luxe is the base material → clear the key.
+    persist(KEY_MATERIAL, material.storage_value());
+}
+
 /// Replay every persisted appearance axis onto the DOM. Called once on boot
 /// (before the app mounts) so the first paint already reflects user choices.
 pub fn init_appearance() {
@@ -414,6 +502,10 @@ pub fn init_appearance() {
     let roundness = read_roundness();
     if roundness != Roundness::Default {
         apply_roundness(roundness);
+    }
+    let material = read_material();
+    if material != Material::Luxe {
+        apply_material(material);
     }
 }
 
@@ -487,5 +579,22 @@ mod tests {
     fn glass_storage_round_trips() {
         assert_eq!(ThemeMode::Glass.storage_value(), Some("glass"));
         assert_eq!(ThemeMode::from_storage(Some("glass")), ThemeMode::Glass);
+    }
+
+    #[test]
+    fn material_id_round_trips() {
+        for m in Material::ALL {
+            assert_eq!(Material::from_storage(Some(m.id())), m);
+        }
+        // Unknown / luxe both fall back to the default material.
+        assert_eq!(Material::from_storage(None), Material::Luxe);
+        assert_eq!(Material::from_storage(Some("nope")), Material::Luxe);
+    }
+
+    #[test]
+    fn material_default_clears_key() {
+        assert_eq!(Material::Luxe.storage_value(), None);
+        assert_eq!(Material::Liquid.storage_value(), Some("liquid"));
+        assert_eq!(Material::Aurora.storage_value(), Some("aurora"));
     }
 }
