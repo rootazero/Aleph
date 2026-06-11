@@ -17,7 +17,7 @@ pub enum GenerationType {
 
 impl GenerationType {
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             GenerationType::Image => "image",
             GenerationType::Video => "video",
@@ -28,7 +28,7 @@ impl GenerationType {
     }
 
     #[must_use]
-    pub fn display_name(&self) -> &'static str {
+    pub const fn display_name(&self) -> &'static str {
         match self {
             GenerationType::Image => "Image",
             GenerationType::Video => "Video",
@@ -39,7 +39,7 @@ impl GenerationType {
     }
 
     #[must_use]
-    pub fn icon(&self) -> &'static str {
+    pub const fn icon(&self) -> &'static str {
         match self {
             GenerationType::Image => "🖼️",
             GenerationType::Video => "🎬",

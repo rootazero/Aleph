@@ -149,7 +149,7 @@ fn color_for(provider_type: &str, modality: Option<GenerationType>) -> String {
     curated.to_string()
 }
 
-fn modality_color(modality: Option<GenerationType>) -> &'static str {
+const fn modality_color(modality: Option<GenerationType>) -> &'static str {
     match modality {
         Some(GenerationType::Image) => "#6366F1",
         Some(GenerationType::Video) => "#EC4899",

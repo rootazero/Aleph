@@ -80,7 +80,7 @@ impl ConnectionPhase {
     /// `pairing_required` path is excluded by the gate component itself so
     /// PairingModal can take over.
     #[must_use]
-    pub fn is_pre_ready(&self) -> bool {
+    pub const fn is_pre_ready(&self) -> bool {
         matches!(self, Self::Initial | Self::Connecting)
     }
 }

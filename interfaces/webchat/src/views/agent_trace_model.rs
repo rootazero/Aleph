@@ -32,7 +32,7 @@ impl Default for TraceLabels {
 // ---------------------------------------------------------------------------
 
 /// Map presentation status to the local `TraceStatus` enum.
-fn map_status(status: AgentTracePresentationStatus) -> TraceStatus {
+const fn map_status(status: AgentTracePresentationStatus) -> TraceStatus {
     match status {
         AgentTracePresentationStatus::InProgress => TraceStatus::InProgress,
         AgentTracePresentationStatus::Success => TraceStatus::Success,

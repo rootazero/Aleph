@@ -228,7 +228,7 @@ pub fn now_millis() -> i64 {
 /// Current wall-clock time in epoch milliseconds.
 #[cfg(not(target_arch = "wasm32"))]
 #[must_use]
-pub fn now_millis() -> i64 {
+pub const fn now_millis() -> i64 {
     0
 }
 
@@ -242,7 +242,7 @@ fn local_day_ordinal(ts_millis: i64) -> i64 {
     (((ts_millis as f64) - offset_ms) / 86_400_000.0).floor() as i64
 }
 #[cfg(not(target_arch = "wasm32"))]
-fn local_day_ordinal(_ts_millis: i64) -> i64 {
+const fn local_day_ordinal(_ts_millis: i64) -> i64 {
     0
 }
 
@@ -253,7 +253,7 @@ fn format_clock(ts_millis: i64) -> String {
     format!("{:02}:{:02}", d.get_hours(), d.get_minutes())
 }
 #[cfg(not(target_arch = "wasm32"))]
-fn format_clock(_ts_millis: i64) -> String {
+const fn format_clock(_ts_millis: i64) -> String {
     String::new()
 }
 
@@ -269,7 +269,7 @@ fn format_date(ts_millis: i64) -> String {
     )
 }
 #[cfg(not(target_arch = "wasm32"))]
-fn format_date(_ts_millis: i64) -> String {
+const fn format_date(_ts_millis: i64) -> String {
     String::new()
 }
 
@@ -299,7 +299,7 @@ pub fn parse_wire_timestamp(raw: &str) -> Option<i64> {
 /// Host stub — the hydration path that calls this is WASM-only.
 #[cfg(not(target_arch = "wasm32"))]
 #[must_use]
-pub fn parse_wire_timestamp(_raw: &str) -> Option<i64> {
+pub const fn parse_wire_timestamp(_raw: &str) -> Option<i64> {
     None
 }
 

@@ -73,7 +73,7 @@ pub(crate) enum HopLayer {
 }
 
 /// `(max_alpha, line_width)` tuple per layer.
-pub(crate) fn hop_style(layer: HopLayer) -> (f64, f64) {
+pub(crate) const fn hop_style(layer: HopLayer) -> (f64, f64) {
     match layer {
         // 1-hop stroke at 2.0px matches the code-call-graph-editor edge weight.
         HopLayer::One => (0.85, 2.0),

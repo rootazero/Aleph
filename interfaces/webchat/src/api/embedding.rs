@@ -48,13 +48,13 @@ pub struct EmbeddingProviderConfig {
     pub enabled: bool,
 }
 
-fn default_enabled() -> bool {
+const fn default_enabled() -> bool {
     true
 }
-fn default_batch_size() -> u32 {
+const fn default_batch_size() -> u32 {
     32
 }
-fn default_timeout_ms() -> u64 {
+const fn default_timeout_ms() -> u64 {
     10000
 }
 

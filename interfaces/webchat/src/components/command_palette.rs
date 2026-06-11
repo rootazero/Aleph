@@ -25,7 +25,7 @@ enum Group {
 }
 
 impl Group {
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Navigation => "Navigation",
             Self::Theme => "Theme",
@@ -34,7 +34,7 @@ impl Group {
     }
 
     /// Display order — Navigation first, Diagnostics last.
-    fn order(self) -> u8 {
+    const fn order(self) -> u8 {
         match self {
             Self::Navigation => 0,
             Self::Theme => 1,

@@ -75,13 +75,13 @@ pub struct WindowConfigSchema {
     pub burst_allow: u32,
 }
 
-fn default_max_requests() -> u32 {
+const fn default_max_requests() -> u32 {
     60
 }
-fn default_window_secs() -> u64 {
+const fn default_window_secs() -> u64 {
     60
 }
-fn default_burst_allow() -> u32 {
+const fn default_burst_allow() -> u32 {
     20
 }
 
@@ -99,31 +99,31 @@ pub struct SandboxRateLimitConfigSchema {
     pub admin: WindowConfigSchema,
 }
 
-fn default_rate_limit_enabled() -> bool {
+const fn default_rate_limit_enabled() -> bool {
     true
 }
-fn default_rate_limit_read() -> WindowConfigSchema {
+const fn default_rate_limit_read() -> WindowConfigSchema {
     WindowConfigSchema {
         max_requests: 60,
         window_secs: 60,
         burst_allow: 20,
     }
 }
-fn default_rate_limit_write() -> WindowConfigSchema {
+const fn default_rate_limit_write() -> WindowConfigSchema {
     WindowConfigSchema {
         max_requests: 30,
         window_secs: 60,
         burst_allow: 10,
     }
 }
-fn default_rate_limit_dangerous() -> WindowConfigSchema {
+const fn default_rate_limit_dangerous() -> WindowConfigSchema {
     WindowConfigSchema {
         max_requests: 10,
         window_secs: 60,
         burst_allow: 5,
     }
 }
-fn default_rate_limit_admin() -> WindowConfigSchema {
+const fn default_rate_limit_admin() -> WindowConfigSchema {
     WindowConfigSchema {
         max_requests: 5,
         window_secs: 60,
@@ -174,11 +174,11 @@ fn default_network_access() -> String {
     "localhost".to_string()
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_max_redirects() -> u8 {
+const fn default_max_redirects() -> u8 {
     5
 }
 

@@ -11,7 +11,7 @@ pub struct NavController {
 
 impl NavController {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             state: NavState::Idle,
             breadcrumb: Vec::new(),
@@ -120,7 +120,7 @@ impl NavController {
     /// Used by the canvas view to gate user input that would conflict with the
     /// tween (e.g. starting a node-drag while the focus is mid-flight).
     #[must_use]
-    pub fn is_animating(&self) -> bool {
+    pub const fn is_animating(&self) -> bool {
         matches!(self.state, NavState::Animating { .. })
     }
 

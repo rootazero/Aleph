@@ -16,7 +16,7 @@ pub struct BadgeState {
 impl BadgeState {
     /// True if any badge would render.
     #[must_use]
-    pub fn any(self) -> bool {
+    pub const fn any(self) -> bool {
         self.is_default || self.verified
     }
 }

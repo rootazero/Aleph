@@ -43,15 +43,15 @@ fn remove_local_storage(key: &str) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn get_local_storage(_key: &str) -> Option<String> {
+const fn get_local_storage(_key: &str) -> Option<String> {
     None
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn set_local_storage(_key: &str, _value: &str) {}
+const fn set_local_storage(_key: &str, _value: &str) {}
 
 #[cfg(not(target_arch = "wasm32"))]
-fn remove_local_storage(_key: &str) {}
+const fn remove_local_storage(_key: &str) {}
 
 /// State carried by the PairingModal while the wizard handshake is in flight.
 #[derive(Debug, Clone, Default)]

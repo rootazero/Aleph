@@ -56,7 +56,7 @@ impl ToolKind {
 
     /// 卡片默认是否展开内容：文件改动类默认展开，其余默认折叠。
     #[must_use]
-    pub fn default_open(self) -> bool {
+    pub const fn default_open(self) -> bool {
         matches!(
             self,
             ToolKind::FileEdit | ToolKind::FileWrite | ToolKind::ApplyPatch
@@ -153,7 +153,7 @@ pub fn file_path_of(payload: &Option<ToolPayload>) -> Option<String> {
 }
 
 /// 工具大类图标字形。
-fn kind_icon(kind: ToolKind) -> &'static str {
+const fn kind_icon(kind: ToolKind) -> &'static str {
     match kind {
         ToolKind::FileEdit => "✏️",
         ToolKind::FileWrite => "📝",

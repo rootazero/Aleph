@@ -81,7 +81,7 @@ impl NotificationsState {
 }
 
 /// Severity weight for sorting — higher means surfaced earlier.
-fn severity_weight(level: AlertLevel) -> u8 {
+const fn severity_weight(level: AlertLevel) -> u8 {
     match level {
         AlertLevel::Critical => 3,
         AlertLevel::Warning => 2,

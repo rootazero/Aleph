@@ -21,7 +21,7 @@ pub struct Spring2D {
 impl Spring2D {
     /// Create a spring at `initial_pos` moving with `initial_vel`, pulled toward `target`.
     #[must_use]
-    pub fn new(initial_pos: Vec2, initial_vel: Vec2, target: Vec2) -> Self {
+    pub const fn new(initial_pos: Vec2, initial_vel: Vec2, target: Vec2) -> Self {
         Self {
             pos: initial_pos,
             vel: initial_vel,
@@ -61,15 +61,15 @@ impl Spring2D {
     }
 
     #[must_use]
-    pub fn position(&self) -> Vec2 {
+    pub const fn position(&self) -> Vec2 {
         self.pos
     }
     #[must_use]
-    pub fn velocity(&self) -> Vec2 {
+    pub const fn velocity(&self) -> Vec2 {
         self.vel
     }
     #[must_use]
-    pub fn target(&self) -> Vec2 {
+    pub const fn target(&self) -> Vec2 {
         self.target
     }
 }

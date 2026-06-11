@@ -31,7 +31,7 @@ pub struct ProviderInfo {
 fn default_provider_color() -> String {
     "#808080".to_string()
 }
-fn default_timeout() -> u64 {
+const fn default_timeout() -> u64 {
     300
 }
 
@@ -117,7 +117,7 @@ pub enum CatalogView {
 
 impl CatalogView {
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Configured => "configured",
             Self::Available => "available",

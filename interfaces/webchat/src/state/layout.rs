@@ -258,7 +258,7 @@ fn read_persisted_layout_mode() -> Option<LayoutMode> {
 
 /// Non-wasm (test host): no localStorage, no web_sys (which panics off-wasm).
 #[cfg(not(target_arch = "wasm32"))]
-fn read_persisted_layout_mode() -> Option<LayoutMode> {
+const fn read_persisted_layout_mode() -> Option<LayoutMode> {
     None
 }
 
@@ -272,7 +272,7 @@ fn persist_layout_mode(mode: LayoutMode) {
 
 /// Non-wasm (test host): no-op — see `read_persisted_layout_mode`.
 #[cfg(not(target_arch = "wasm32"))]
-fn persist_layout_mode(_mode: LayoutMode) {}
+const fn persist_layout_mode(_mode: LayoutMode) {}
 
 #[cfg(test)]
 mod tests {

@@ -41,7 +41,7 @@ impl ThemeMode {
     pub const ALL: [ThemeMode; 4] = [Self::System, Self::Light, Self::Dark, Self::Glass];
 
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::System => "跟随系统",
             Self::Light => "明亮",
@@ -52,7 +52,7 @@ impl ThemeMode {
 
     /// `localStorage` value, or `None` for `System` (which clears the key).
     #[must_use]
-    pub fn storage_value(self) -> Option<&'static str> {
+    pub const fn storage_value(self) -> Option<&'static str> {
         match self {
             Self::System => None,
             Self::Light => Some("light"),
@@ -101,7 +101,7 @@ impl Accent {
 
     /// Stable id used for both the `data-accent` attribute and persistence.
     #[must_use]
-    pub fn id(self) -> &'static str {
+    pub const fn id(self) -> &'static str {
         match self {
             Self::Mauve => "mauve",
             Self::Ocean => "ocean",
@@ -112,7 +112,7 @@ impl Accent {
     }
 
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Mauve => "魅紫",
             Self::Ocean => "海蓝",
@@ -124,7 +124,7 @@ impl Accent {
 
     /// Representative swatch colour (oklch) for UI previews.
     #[must_use]
-    pub fn swatch(self) -> &'static str {
+    pub const fn swatch(self) -> &'static str {
         match self {
             Self::Mauve => "oklch(0.60 0.13 310)",
             Self::Ocean => "oklch(0.58 0.13 250)",
@@ -170,7 +170,7 @@ impl FontScale {
     ];
 
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Compact => "紧凑",
             Self::Default => "标准",
@@ -182,7 +182,7 @@ impl FontScale {
 
     /// CSS multiplier applied to the root font-size knob.
     #[must_use]
-    pub fn css_value(self) -> &'static str {
+    pub const fn css_value(self) -> &'static str {
         match self {
             Self::Compact => "0.9",
             Self::Default => "1",
@@ -237,7 +237,7 @@ impl Roundness {
     ];
 
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Sharp => "直角",
             Self::Slight => "微圆",
@@ -249,7 +249,7 @@ impl Roundness {
 
     /// CSS multiplier applied to the radius tokens.
     #[must_use]
-    pub fn css_value(self) -> &'static str {
+    pub const fn css_value(self) -> &'static str {
         match self {
             Self::Sharp => "0",
             Self::Slight => "0.5",

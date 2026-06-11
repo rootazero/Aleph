@@ -24,7 +24,7 @@ const ALL_MODES: [PanelMode; 6] = [
 ];
 
 /// Default route a section navigates to.
-fn route_of(mode: PanelMode) -> &'static str {
+const fn route_of(mode: PanelMode) -> &'static str {
     match mode {
         PanelMode::Chat => "/chat",
         PanelMode::Dashboard => "/dashboard",
@@ -48,7 +48,7 @@ fn label_of(mode: PanelMode, i18n: I18nContext<Locale>) -> String {
 }
 
 /// Inline SVG body for a section's icon (24×24 viewBox, stroked).
-fn icon_of(mode: PanelMode) -> &'static str {
+const fn icon_of(mode: PanelMode) -> &'static str {
     match mode {
         PanelMode::Chat => {
             r#"<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>"#

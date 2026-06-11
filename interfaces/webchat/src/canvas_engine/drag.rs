@@ -76,12 +76,12 @@ pub struct DragOverlay {
 
 impl DragState {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         DragState::Idle
     }
 
     #[must_use]
-    pub fn is_active(&self) -> bool {
+    pub const fn is_active(&self) -> bool {
         !matches!(self, DragState::Idle)
     }
 

@@ -80,13 +80,13 @@ enum BracketKind {
 }
 
 impl BracketKind {
-    fn open(self) -> &'static str {
+    const fn open(self) -> &'static str {
         match self {
             Self::Object => "{",
             Self::Array => "[",
         }
     }
-    fn close(self) -> &'static str {
+    const fn close(self) -> &'static str {
         match self {
             Self::Object => "}",
             Self::Array => "]",

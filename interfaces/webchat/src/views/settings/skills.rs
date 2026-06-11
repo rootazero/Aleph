@@ -68,7 +68,7 @@ enum SkillTab {
 // Helper: determine status label for a skill
 // ---------------------------------------------------------------------------
 
-fn skill_status(skill: &SkillStatusEntry) -> &'static str {
+const fn skill_status(skill: &SkillStatusEntry) -> &'static str {
     if skill.disabled {
         "Disabled"
     } else if !skill.eligible

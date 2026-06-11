@@ -20,7 +20,7 @@ pub struct PrefetchCache<T> {
 
 impl<T> PrefetchCache<T> {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             entries: VecDeque::new(),
             capacity: CACHE_CAPACITY,
@@ -98,7 +98,7 @@ impl Default for HoverDebouncer {
 
 impl HoverDebouncer {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             current_id: None,
             started_at_ms: 0.0,

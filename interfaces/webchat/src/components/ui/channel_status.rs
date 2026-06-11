@@ -27,7 +27,7 @@ impl ChannelStatus {
 
     /// Human-readable label for the status (non-reactive, for non-UI use).
     #[must_use]
-    pub fn label(&self) -> &'static str {
+    pub const fn label(&self) -> &'static str {
         match self {
             Self::Disconnected => "Disconnected",
             Self::Connecting => "Connecting",
@@ -39,7 +39,7 @@ impl ChannelStatus {
 
     /// Tailwind classes for the colored dot indicator.
     #[must_use]
-    pub fn dot_class(&self) -> &'static str {
+    pub const fn dot_class(&self) -> &'static str {
         match self {
             Self::Disconnected => "bg-text-tertiary",
             Self::Connecting => "bg-warning animate-pulse",
@@ -51,7 +51,7 @@ impl ChannelStatus {
 
     /// Tailwind classes for the status label text color.
     #[must_use]
-    pub fn text_class(&self) -> &'static str {
+    pub const fn text_class(&self) -> &'static str {
         match self {
             Self::Disconnected => "text-text-tertiary",
             Self::Connecting => "text-warning",
@@ -63,7 +63,7 @@ impl ChannelStatus {
 
     /// Tailwind classes for the pill background + text color.
     #[must_use]
-    pub fn pill_class(&self) -> &'static str {
+    pub const fn pill_class(&self) -> &'static str {
         match self {
             Self::Connected => "bg-success-subtle text-success",
             Self::Connecting => "bg-warning-subtle text-warning",

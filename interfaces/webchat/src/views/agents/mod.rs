@@ -46,7 +46,7 @@ impl AgentTab {
         }
     }
 
-    fn slug(&self) -> &'static str {
+    const fn slug(&self) -> &'static str {
         match self {
             Self::Overview => "overview",
             Self::Files => "files",

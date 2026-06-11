@@ -50,13 +50,13 @@ pub struct MemoryConfig {
     pub dedup_similarity_threshold: f32,
 }
 
-fn default_dedup_threshold() -> f32 {
+const fn default_dedup_threshold() -> f32 {
     0.95
 }
-fn default_rrf_k() -> u32 {
+const fn default_rrf_k() -> u32 {
     60
 }
-fn default_bm25_bonus() -> f32 {
+const fn default_bm25_bonus() -> f32 {
     0.15
 }
 
@@ -75,13 +75,13 @@ pub struct CompressionSettings {
     pub background_interval_seconds: u32,
 }
 
-fn default_compression_idle_timeout() -> u32 {
+const fn default_compression_idle_timeout() -> u32 {
     300
 }
-fn default_compression_turn_threshold() -> u32 {
+const fn default_compression_turn_threshold() -> u32 {
     20
 }
-fn default_compression_background_interval() -> u32 {
+const fn default_compression_background_interval() -> u32 {
     3600
 }
 
@@ -109,7 +109,7 @@ pub enum RerankProviderType {
 
 impl RerankProviderType {
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Jina => "jina",
             Self::SiliconFlow => "siliconflow",
@@ -159,10 +159,10 @@ pub struct RerankConfig {
 fn default_rerank_model() -> String {
     "jina-reranker-v2-base-multilingual".to_string()
 }
-fn default_rerank_timeout() -> u64 {
+const fn default_rerank_timeout() -> u64 {
     5000
 }
-fn default_rerank_weight() -> f32 {
+const fn default_rerank_weight() -> f32 {
     0.6
 }
 
@@ -199,13 +199,13 @@ pub struct ReflectionConfig {
     pub open_loop_inject_prompt: bool,
 }
 
-fn default_reflection_min_turns() -> u32 {
+const fn default_reflection_min_turns() -> u32 {
     5
 }
-fn default_reflection_min_chars() -> u32 {
+const fn default_reflection_min_chars() -> u32 {
     200
 }
-fn default_reflection_cooldown() -> u32 {
+const fn default_reflection_cooldown() -> u32 {
     30
 }
 
@@ -308,10 +308,10 @@ pub struct DreamingConfig {
     pub synthesis_max_insights: usize,
 }
 
-fn default_dreaming_enabled() -> bool {
+const fn default_dreaming_enabled() -> bool {
     true
 }
-fn default_dreaming_idle_threshold() -> u32 {
+const fn default_dreaming_idle_threshold() -> u32 {
     900
 }
 fn default_dreaming_window_start() -> String {
@@ -320,22 +320,22 @@ fn default_dreaming_window_start() -> String {
 fn default_dreaming_window_end() -> String {
     "05:00".to_string()
 }
-fn default_dreaming_max_duration() -> u32 {
+const fn default_dreaming_max_duration() -> u32 {
     600
 }
-fn default_weekly_enabled() -> bool {
+const fn default_weekly_enabled() -> bool {
     true
 }
-fn default_weekly_interval_days() -> u32 {
+const fn default_weekly_interval_days() -> u32 {
     7
 }
-fn default_drift_max_pairs_per_run() -> usize {
+const fn default_drift_max_pairs_per_run() -> usize {
     20
 }
-fn default_synthesis_min_cluster_size() -> usize {
+const fn default_synthesis_min_cluster_size() -> usize {
     3
 }
-fn default_synthesis_max_insights() -> usize {
+const fn default_synthesis_max_insights() -> usize {
     10
 }
 
@@ -351,13 +351,13 @@ pub struct MemoryDecayPolicy {
     pub protected_types: Vec<String>,
 }
 
-fn default_memory_half_life() -> f32 {
+const fn default_memory_half_life() -> f32 {
     30.0
 }
-fn default_memory_access_boost() -> f32 {
+const fn default_memory_access_boost() -> f32 {
     0.2
 }
-fn default_memory_min_strength() -> f32 {
+const fn default_memory_min_strength() -> f32 {
     0.1
 }
 
@@ -385,16 +385,16 @@ pub struct RetrievalScoringConfig {
     pub reinforcement_weight: f32,
 }
 
-fn default_recency_half_life_days() -> f32 {
+const fn default_recency_half_life_days() -> f32 {
     90.0
 }
-fn default_recency_weight() -> f32 {
+const fn default_recency_weight() -> f32 {
     0.3
 }
-fn default_mmr_lambda() -> f32 {
+const fn default_mmr_lambda() -> f32 {
     0.7
 }
-fn default_reinforcement_weight() -> f32 {
+const fn default_reinforcement_weight() -> f32 {
     0.3
 }
 
