@@ -13,6 +13,21 @@
 
 use crate::goal::{GateOutcome, Goal, GoalStatus, PursuitMode};
 
+/// Render accumulated lessons (the state file) for injection into a
+/// continuation prompt. Empty → empty string (regression-safe: no prompt change
+/// when there are no lessons). Newest last, matching their append order.
+fn render_lessons(goal: &Goal) -> String {
+    if goal.lessons.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from("\n\nLessons from earlier iterations (avoid repeating these):\n");
+    for lesson in &goal.lessons {
+        let trimmed: String = lesson.chars().take(300).collect();
+        s.push_str(&format!("- {trimmed}\n"));
+    }
+    s
+}
+
 /// Pure decision: should this goal get one more autonomous continuation?
 /// `tokens_now` is the session's current total-token count (pass 0 when a
 /// live counter isn't available — then only the iteration cap applies).
@@ -51,10 +66,11 @@ pub fn continuation_prompt(goal: &Goal) -> String {
         PursuitMode::Passive => (goal.continuations_used.saturating_add(1), 0),
     };
     let is_final = max_iter != 0 && this_iter >= max_iter;
+    let lessons = render_lessons(goal);
     if is_final {
         format!(
             "[Final autonomous iteration {this_iter}/{max_iter} toward your \
-             standing goal]\nGoal: {}\n\nThis is your LAST autonomous step — no \
+             standing goal]\nGoal: {}{lessons}\n\nThis is your LAST autonomous step — no \
              further continuations will run after it. Wrap up now: if the goal is \
              achieved, call goal(action='update', status='complete'); if work \
              remains, call goal(action='update', status='blocked') with a note on \
@@ -66,7 +82,7 @@ pub fn continuation_prompt(goal: &Goal) -> String {
         let remaining = max_iter.saturating_sub(this_iter);
         format!(
             "[Continuing toward your standing goal — autonomous iteration \
-             {this_iter}/{max_iter}]\nGoal: {}\n\nTake the next concrete step; \
+             {this_iter}/{max_iter}]\nGoal: {}{lessons}\n\nTake the next concrete step; \
              pace yourself against the {remaining} continuation(s) remaining after \
              this one. If you have achieved the goal, call goal(action='update', \
              status='complete') and stop. If you are blocked and need the user, \
@@ -133,12 +149,17 @@ pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, now_ms: u64) -> Goal
         PursuitMode::Active { max_iterations } => goal.continuations_used >= max_iterations,
         PursuitMode::Passive => true,
     };
+    let trimmed_lesson: String = format!("Objective gate vetoed: {}", reason)
+        .chars()
+        .take(300)
+        .collect();
     if cap_spent {
         let note = cap_reached_note(goal);
         goal.clone()
             .with_status(GoalStatus::Blocked, now_ms)
             .with_note(Some(note), now_ms)
             .with_gate_outcome(GateOutcome::Unchecked, now_ms)
+            .with_lesson_appended(trimmed_lesson, now_ms)
     } else {
         let trimmed: String = reason.chars().take(300).collect();
         let note = format!("Objective gate vetoed completion: {trimmed}");
@@ -146,6 +167,7 @@ pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, now_ms: u64) -> Goal
             .with_status(GoalStatus::Active, now_ms)
             .with_note(Some(note), now_ms)
             .with_gate_outcome(GateOutcome::Unchecked, now_ms)
+            .with_lesson_appended(trimmed_lesson, now_ms)
     }
 }
 
@@ -153,9 +175,10 @@ pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, now_ms: u64) -> Goal
 #[must_use]
 pub fn gate_failure_prompt(goal: &Goal, reason: &str) -> String {
     let trimmed: String = reason.chars().take(600).collect();
+    let lessons = render_lessons(goal);
     format!(
         "[Your standing goal is NOT done — the objective gate rejected your \
-         completion claim]\nGoal: {}\n\nThe automated gate (tests / build / \
+         completion claim]\nGoal: {}{lessons}\n\nThe automated gate (tests / build / \
          lint) failed with:\n{trimmed}\n\nThis is an objective signal, not an \
          opinion. Fix what the gate flagged, then call goal(action='update', \
          status='complete') again only when the work truly passes. If you \
@@ -316,5 +339,37 @@ mod tests {
         assert!(p.contains(&g.objective));
         assert!(p.contains("lint: 2 warnings"));
         assert!(p.contains("objective gate"));
+    }
+
+    #[test]
+    fn reopen_after_gate_failure_appends_lesson() {
+        let g = active_goal(5).with_status(GoalStatus::Complete, 1);
+        let r = reopen_after_gate_failure(&g, "tests failed: 3 errors", 9);
+        assert_eq!(r.lessons.len(), 1);
+        assert!(r.lessons[0].contains("tests failed: 3 errors"));
+        assert!(r.lessons[0].contains("Objective gate vetoed"));
+    }
+
+    #[test]
+    fn continuation_prompt_includes_prior_lessons() {
+        let g = active_goal(5)
+            .with_lesson_appended("forgot to run migrations".into(), 2);
+        let p = continuation_prompt(&g);
+        assert!(p.contains("Lessons from earlier iterations"), "got: {p}");
+        assert!(p.contains("forgot to run migrations"));
+    }
+
+    #[test]
+    fn continuation_prompt_unchanged_when_no_lessons() {
+        let g = active_goal(5);
+        assert!(!continuation_prompt(&g).contains("Lessons from earlier"));
+    }
+
+    #[test]
+    fn gate_failure_prompt_includes_prior_lessons() {
+        let g = active_goal(5).with_lesson_appended("missing index".into(), 2);
+        let p = gate_failure_prompt(&g, "still red");
+        assert!(p.contains("missing index"));
+        assert!(p.contains("still red"));
     }
 }
