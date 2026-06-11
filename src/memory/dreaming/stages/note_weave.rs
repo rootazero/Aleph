@@ -63,12 +63,15 @@ impl DreamStage for NoteWeaveStage {
                 .get_outgoing_links(&note.path, &ctx.agent_id)
                 .await
                 .unwrap_or_default();
-            // notes_links stores raw wikilink targets by filename — query by
-            // filename, mirroring NoteDecay's incoming-link count.
+            // `notes_links.to_note` is the resolved target — a full path when
+            // the wikilink filename uniquely resolved, otherwise the bare text.
+            // Match either so resolved and legacy rows both count; querying by
+            // filename alone (the old code) never matched a full-path to_note,
+            // so incoming-only notes were wrongly seen as orphans every cycle.
             let incoming = ctx
                 .indexer
                 .store()
-                .get_incoming_links(filename, &ctx.agent_id)
+                .get_incoming_links_any(&note.path, filename, &ctx.agent_id)
                 .await
                 .unwrap_or_default();
             if outgoing.is_empty() && incoming.is_empty() {
@@ -417,5 +420,120 @@ mod tests {
 
         let out = NoteWeaveStage::default().execute(ctx).await.unwrap();
         assert_eq!(out.report.notes_woven, 0);
+    }
+
+    #[tokio::test]
+    async fn incoming_only_note_is_not_orphan() {
+        let (mut ctx, store) = build_ctx("{\"links\": []}").await;
+        // `src` links to `target` (full-path to_note); target has no outgoing link.
+        store
+            .index_note(
+                &KnowledgeNote {
+                    title: "src".into(),
+                    category: "notes".into(),
+                    facts: vec!["see [[target]]".into()],
+                    links: vec!["reference/target".into()],
+                    content_hash: "hs".into(),
+                    ..Default::default()
+                },
+                "default",
+                "notes",
+            )
+            .await
+            .unwrap();
+        store
+            .index_note(
+                &KnowledgeNote {
+                    title: "target".into(),
+                    category: "reference".into(),
+                    facts: vec!["fact".into()],
+                    content_hash: "ht".into(),
+                    ..Default::default()
+                },
+                "default",
+                "reference",
+            )
+            .await
+            .unwrap();
+        // Only `target` is walked this cycle. It has an incoming link, so it must
+        // NOT be treated as an orphan -> nothing woven.
+        ctx.notes = vec![entry("reference/target")];
+
+        let out = NoteWeaveStage::default().execute(ctx).await.unwrap();
+        assert_eq!(
+            out.report.notes_woven, 0,
+            "incoming-only note must not be re-wove as an orphan"
+        );
+    }
+
+    #[tokio::test]
+    async fn incoming_only_note_excluded_even_with_overlap_partner() {
+        // LLM keyword extraction returns overlapping specific entities for the
+        // incoming-only `target` and a non-orphan `partner`. Under the old
+        // bare-filename incoming query, `target` was misclassed as an orphan and
+        // the pair was woven (notes_woven == 1). With the full-path-aware query,
+        // `target` is correctly non-orphan, `partner` is non-orphan, so there are
+        // no orphans and nothing is woven.
+        let llm = r#"{"notes":[
+            {"path":"reference/target","keywords":["shared-topic"]},
+            {"path":"personal/partner","keywords":["shared-topic"]}
+        ]}"#;
+        let (mut ctx, store) = build_ctx(llm).await;
+
+        // `src` gives `target` an incoming full-path link; `src` itself is not walked.
+        store
+            .index_note(
+                &KnowledgeNote {
+                    title: "src".into(),
+                    category: "notes".into(),
+                    facts: vec!["see [[target]]".into()],
+                    links: vec!["reference/target".into()],
+                    content_hash: "hs".into(),
+                    ..Default::default()
+                },
+                "default",
+                "notes",
+            )
+            .await
+            .unwrap();
+        // `target`: incoming-only (no outgoing link).
+        store
+            .index_note(
+                &KnowledgeNote {
+                    title: "target".into(),
+                    category: "reference".into(),
+                    facts: vec!["fact".into()],
+                    content_hash: "ht".into(),
+                    ..Default::default()
+                },
+                "default",
+                "reference",
+            )
+            .await
+            .unwrap();
+        // `partner`: non-orphan via its own outgoing link to a third note.
+        store
+            .index_note(
+                &KnowledgeNote {
+                    title: "partner".into(),
+                    category: "personal".into(),
+                    facts: vec!["see [[third]]".into()],
+                    links: vec!["notes/third".into()],
+                    content_hash: "hp".into(),
+                    ..Default::default()
+                },
+                "default",
+                "personal",
+            )
+            .await
+            .unwrap();
+
+        ctx.notes = vec![entry("reference/target"), entry("personal/partner")];
+
+        let out = NoteWeaveStage::default().execute(ctx).await.unwrap();
+        assert_eq!(
+            out.report.notes_woven, 0,
+            "incoming-only note with a non-orphan partner must not be woven"
+        );
     }
 }
