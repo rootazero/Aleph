@@ -35,12 +35,10 @@ pub enum ThemeMode {
     System,
     Light,
     Dark,
-    /// Dark-based, intensified-glass showcase theme (refined ex-Vibrant).
-    Glass,
 }
 
 impl ThemeMode {
-    pub const ALL: [Self; 4] = [Self::System, Self::Light, Self::Dark, Self::Glass];
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -48,7 +46,6 @@ impl ThemeMode {
             Self::System => "跟随系统",
             Self::Light => "明亮",
             Self::Dark => "暗黑",
-            Self::Glass => "玻璃",
         }
     }
 
@@ -59,20 +56,17 @@ impl ThemeMode {
             Self::System => None,
             Self::Light => Some("light"),
             Self::Dark => Some("dark"),
-            Self::Glass => Some("glass"),
         }
     }
 
     fn from_storage(raw: Option<&str>) -> Self {
         match raw {
             Some("light") => Self::Light,
-            Some("dark") => Self::Dark,
-            Some("glass") => Self::Glass,
-            // Legacy migration: the retired Vibrant mode persisted as
-            // "translucent". Glass is the re-introduced strong-glass successor
-            // to Vibrant, so a stored "translucent" must load as Glass
-            // (faithful restore of original intent).
-            Some("translucent") => Self::Glass,
+            // Legacy values: the retired Glass theme ("glass") and its
+            // Vibrant-era predecessor ("translucent") were dark-based —
+            // both load as Dark. `legacy_glass_migration` (run once on
+            // boot) rewrites storage to dark + liquid material.
+            Some("dark" | "glass" | "translucent") => Self::Dark,
             _ => Self::System,
         }
     }
@@ -430,9 +424,6 @@ pub fn apply_mode(mode: ThemeMode) {
             ThemeMode::Dark => {
                 let _ = classes.add_1("dark");
             }
-            ThemeMode::Glass => {
-                let _ = classes.add_1("glass");
-            }
             ThemeMode::System => {}
         }
     }
@@ -482,9 +473,22 @@ pub fn apply_material(material: Material) {
     persist(KEY_MATERIAL, material.storage_value());
 }
 
+/// Decide the legacy-Glass storage rewrite: a stored "glass"/"translucent"
+/// mode becomes dark + liquid material. Pure (host-testable); returns the
+/// `(aleph-theme, aleph-material)` values to write, or `None` when no
+/// migration applies.
+fn legacy_glass_migration(raw_mode: Option<&str>) -> Option<(&'static str, &'static str)> {
+    matches!(raw_mode, Some("glass" | "translucent")).then_some(("dark", "liquid"))
+}
+
 /// Replay every persisted appearance axis onto the DOM. Called once on boot
 /// (before the app mounts) so the first paint already reflects user choices.
 pub fn init_appearance() {
+    // One-shot legacy migration: Glass-theme users land on dark + liquid.
+    if let Some((mode_v, material_v)) = legacy_glass_migration(read_key(KEY_MODE).as_deref()) {
+        persist(KEY_MODE, Some(mode_v));
+        persist(KEY_MATERIAL, Some(material_v));
+    }
     // Mode + accent: only touch the DOM for non-default values so System /
     // Mauve keep relying on the CSS `@media` / base-palette fallbacks.
     let mode = read_mode();
@@ -565,20 +569,29 @@ mod tests {
     }
 
     #[test]
-    fn legacy_translucent_migrates_to_glass() {
-        // The retired Vibrant mode persisted as "translucent". Glass is the
-        // re-introduced strong-glass successor to Vibrant, so a stored
-        // "translucent" must load as Glass (faithful restore of original intent).
+    fn legacy_glass_values_load_as_dark() {
+        // The retired Glass theme (and its Vibrant-era "translucent"
+        // predecessor) must keep PARSING — they map to Dark; the material
+        // half of the migration is decided by `legacy_glass_migration`.
+        assert_eq!(ThemeMode::from_storage(Some("glass")), ThemeMode::Dark);
         assert_eq!(
             ThemeMode::from_storage(Some("translucent")),
-            ThemeMode::Glass
+            ThemeMode::Dark
         );
     }
 
     #[test]
-    fn glass_storage_round_trips() {
-        assert_eq!(ThemeMode::Glass.storage_value(), Some("glass"));
-        assert_eq!(ThemeMode::from_storage(Some("glass")), ThemeMode::Glass);
+    fn legacy_glass_migration_targets_liquid_dark() {
+        assert_eq!(
+            legacy_glass_migration(Some("glass")),
+            Some(("dark", "liquid"))
+        );
+        assert_eq!(
+            legacy_glass_migration(Some("translucent")),
+            Some(("dark", "liquid"))
+        );
+        assert_eq!(legacy_glass_migration(Some("dark")), None);
+        assert_eq!(legacy_glass_migration(None), None);
     }
 
     #[test]
