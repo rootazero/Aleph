@@ -115,6 +115,13 @@ pub enum LoopTraceEvent {
         token_gap: Option<usize>,
         succeeded: bool,
     },
+    /// Structural goal-loop watchdog vetoed the model's attempt to stop because
+    /// its scratchpad still lists unchecked `- [ ]` items; the harness forced
+    /// another iteration. `reason` is the pending-item list the verifier built.
+    /// Pure structural signal — no LLM judgment (R7/R10). Mirrors the synthetic
+    /// `[verifier veto]` message injected for the model, but surfaced to the
+    /// user stream so the interception reason is not a black box.
+    VerifierVeto { iteration: usize, reason: String },
 }
 
 /// Kind of text stream. Live incremental text travels through the
@@ -329,6 +336,9 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 token_gap,
                 succeeded,
             },
+            LoopTraceEvent::VerifierVeto { iteration, reason } => {
+                aleph_protocol::AgentTraceEvent::VerifierVeto { iteration, reason }
+            }
         }
     }
 }

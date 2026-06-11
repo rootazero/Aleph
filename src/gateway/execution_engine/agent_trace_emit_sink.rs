@@ -37,7 +37,11 @@ use crate::harness::TraceSink;
 
 /// True for the trace variants the WebChat Panel consumes as `agent_trace`
 /// (`views/chat/events.rs`): turn boundaries, authoritative per-step text, and
-/// tool lifecycle. Everything else is dropped — it carries no Panel meaning.
+/// tool lifecycle, plus the two recovery/watchdog moments that explain *why*
+/// the loop changed course — reactive context compaction (problem: context
+/// overflow → handled: history compacted → next: retried) and a structural
+/// goal-loop veto (problem: checklist incomplete → next: forced continue).
+/// Everything else is dropped — it carries no user-facing meaning.
 pub(crate) fn is_step_event(event: &LoopTraceEvent) -> bool {
     matches!(
         event,
@@ -45,6 +49,8 @@ pub(crate) fn is_step_event(event: &LoopTraceEvent) -> bool {
             | LoopTraceEvent::TextEmitted { .. }
             | LoopTraceEvent::ToolCallStarted { .. }
             | LoopTraceEvent::ToolCallCompleted { .. }
+            | LoopTraceEvent::ReactiveCompactionAttempted { .. }
+            | LoopTraceEvent::VerifierVeto { .. }
     )
 }
 
@@ -105,6 +111,21 @@ mod tests {
             text: "hi".into(),
         }));
         assert!(is_step_event(&LoopTraceEvent::TurnStarted { iteration: 2 }));
+    }
+
+    #[test]
+    fn forwards_recovery_and_watchdog_events() {
+        // The two "why did the loop change course" moments must reach the wire.
+        assert!(is_step_event(
+            &LoopTraceEvent::ReactiveCompactionAttempted {
+                token_gap: Some(1200),
+                succeeded: true,
+            }
+        ));
+        assert!(is_step_event(&LoopTraceEvent::VerifierVeto {
+            iteration: 3,
+            reason: "- [ ] ship auth".into(),
+        }));
     }
 
     #[test]

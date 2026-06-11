@@ -112,6 +112,33 @@ pub(crate) fn apply_trace_event(
                 .unwrap_or("");
             chat.set_step_text(run_id, iteration, text);
         }
+        // Recovery: context overflowed → history compacted → retried. Surface
+        // the "what problem / how handled / outcome" so a long run isn't a
+        // silent pause.
+        "reactive_compaction_attempted" => {
+            let succeeded = trace_event
+                .get("succeeded")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let note = if succeeded {
+                "⚠️ 上下文超长：已压缩历史并成功重试"
+            } else {
+                "⚠️ 上下文超长：压缩后重试仍失败"
+            };
+            append_reasoning(chat, note);
+            workspace.note_activity();
+        }
+        // Watchdog: the model tried to finish but its scratchpad checklist
+        // still has unchecked items, so the loop was forced to continue.
+        // Surface the interception reason (R5 — no black box).
+        "verifier_veto" => {
+            let reason = trace_event
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            append_reasoning(chat, &format!("🔁 收尾被拦截（清单仍有未完成项）：{reason}"));
+            workspace.note_activity();
+        }
         _ => {}
     }
 }

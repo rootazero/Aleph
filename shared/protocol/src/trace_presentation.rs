@@ -437,6 +437,16 @@ pub fn present_agent_trace_event(
                 duration_ms: None,
             })
         }
+
+        AgentTraceEvent::VerifierVeto { iteration, reason } => Some(AgentTracePresentation {
+            kind: event.kind().into(),
+            status: AgentTracePresentationStatus::Info,
+            content: format!(
+                "goal-loop veto (iteration {iteration}): checklist incomplete — {}",
+                truncate(reason, options.content_limit)
+            ),
+            duration_ms: None,
+        }),
     }
 }
 

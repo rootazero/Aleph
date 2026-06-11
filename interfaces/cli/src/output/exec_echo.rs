@@ -323,6 +323,79 @@ pub fn render_fallback_notice(model: &str, provider: &str, original: Option<&str
     )
 }
 
+/// Prominent block when the agent pauses to ask the user a question
+/// (`stream.ask_user`). Previously dropped on the CLI follow path, leaving an
+/// interactive run looking hung. Shows the question and any offered options so
+/// the user knows an answer is expected.
+pub fn render_ask_user(question: &str, options: &[String]) -> String {
+    let glyph = if use_unicode() { "❓" } else { "[?]" };
+    let head = paint(Style::Header, &format!("{glyph} {question}"));
+    if options.is_empty() {
+        format!("  {head}")
+    } else {
+        let opts = options
+            .iter()
+            .map(|o| format!("    • {}", paint(Style::Info, o)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("  {head}\n{opts}")
+    }
+}
+
+/// Dimmed line when the model signals it is uncertain about how to proceed
+/// (`stream.uncertainty_signal`). Surfaces the doubt so the user can step in
+/// rather than the run silently guessing.
+pub fn render_uncertainty(uncertainty: &str) -> Option<String> {
+    let txt = uncertainty.trim();
+    if txt.is_empty() {
+        return None;
+    }
+    let glyph = if use_unicode() { "⚠" } else { "[!]" };
+    Some(format!(
+        "  {} {}",
+        paint(Style::Warning, glyph),
+        paint(Style::Muted, &truncate(txt, REASONING_MAX))
+    ))
+}
+
+/// Status line for a reactive context-compaction rescue (`agent_trace`
+/// `reactive_compaction_attempted`): the prompt overflowed the model window,
+/// so the harness summarised history and retried. Tells the user *what
+/// problem* (context too long), *how it was handled* (compacted), and the
+/// *outcome* — instead of an unexplained pause mid-run.
+pub fn render_compaction_notice(token_gap: Option<usize>, succeeded: bool) -> String {
+    let glyph = if use_unicode() { "🗜" } else { "[~]" };
+    let gap = token_gap
+        .map(|g| format!(" (over by ~{g}t)"))
+        .unwrap_or_default();
+    let msg = if succeeded {
+        format!("{glyph} context full{gap}: compacted history and retried")
+    } else {
+        format!("{glyph} context full{gap}: compaction retry failed")
+    };
+    let style = if succeeded { Style::Warning } else { Style::Error };
+    format!("  {}", paint(style, &msg))
+}
+
+/// Status line for a structural goal-loop watchdog veto (`agent_trace`
+/// `verifier_veto`): the model tried to finish but its scratchpad checklist
+/// still has unchecked items, so the harness forced another iteration.
+/// Surfaces the interception reason so a CLI run shows *why* it kept going
+/// instead of looking like a silent extra turn.
+pub fn render_veto_notice(reason: &str) -> String {
+    let glyph = if use_unicode() { "↻" } else { "[!]" };
+    let head = paint(
+        Style::Warning,
+        &format!("{glyph} goal-loop: checklist incomplete, continuing"),
+    );
+    let detail = truncate(&reason.replace('\n', " "), ERROR_MAX);
+    if detail.is_empty() {
+        format!("  {head}")
+    } else {
+        format!("  {head}  {}", paint(Style::Muted, &detail))
+    }
+}
+
 /// Optional LLM-authored one-liner summarising a tool call.
 pub fn render_tool_summary(summary: &str) -> Option<String> {
     let txt = summary.trim();

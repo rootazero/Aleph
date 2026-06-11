@@ -1131,6 +1131,14 @@ impl AgentHarness {
             return Ok((TurnState::Done, 0, false, None));
         } else if let VerifierVerdict::Veto { reason, .. } = verdict {
             tracing::info!(?session_id, reason = %reason, "verifier vetoed; forcing continue");
+            // Surface the interception reason on the user-facing trace stream
+            // (Panel / CLI follow / channel push), not just the model-facing
+            // synthetic `[verifier veto]` message below. Pure observability —
+            // mirrors an already-computed reason, adds no loop cognition.
+            self.emit(|| crate::harness::trace::LoopTraceEvent::VerifierVeto {
+                iteration: iterations,
+                reason: reason.clone(),
+            });
             let new_turn = uuid::Uuid::new_v4();
             let block_event = SessionEvent::UserMessage {
                 turn_id: new_turn,

@@ -372,6 +372,13 @@ pub enum AgentTraceEvent {
         token_gap: Option<usize>,
         succeeded: bool,
     },
+    /// Structural goal-loop watchdog vetoed the model's attempt to stop: its
+    /// self-maintained scratchpad still has unchecked `- [ ]` items, so the
+    /// harness forced another iteration. `reason` lists the pending items.
+    /// Purely mechanical — no LLM judgment (R7/R10). Surfacing it lets the user
+    /// see *why* the run kept going instead of an unexplained extra turn. See
+    /// `verification::scratchpad_goal_verifier`.
+    VerifierVeto { iteration: usize, reason: String },
 }
 
 impl AgentTraceEvent {
@@ -392,6 +399,7 @@ impl AgentTraceEvent {
             Self::McpScopeCleaned { .. } => "mcp_scope_cleaned",
             Self::ProviderUsage { .. } => "provider_usage",
             Self::ReactiveCompactionAttempted { .. } => "reactive_compaction_attempted",
+            Self::VerifierVeto { .. } => "verifier_veto",
         }
     }
 }

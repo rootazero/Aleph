@@ -620,7 +620,11 @@ impl AppState {
             AgentTraceEvent::TurnStarted { .. }
             | AgentTraceEvent::TurnStateEntered { .. }
             | AgentTraceEvent::TurnCompleted { .. }
-            | AgentTraceEvent::SessionCompleted { .. } => {
+            | AgentTraceEvent::SessionCompleted { .. }
+            // Goal-loop watchdog veto: surface the interception reason (the
+            // presentation renders "checklist incomplete — …") so the user
+            // sees why the run was forced to continue.
+            | AgentTraceEvent::VerifierVeto { .. } => {
                 self.append_reasoning_entry(presentation.content.clone());
             }
             AgentTraceEvent::ToolCallStarted { .. } | AgentTraceEvent::ToolCallCompleted { .. } => {

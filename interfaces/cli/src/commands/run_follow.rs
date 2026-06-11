@@ -150,6 +150,20 @@ pub async fn follow_run(
                             eprintln!("{line}");
                         }
                     }
+                    // Recovery / watchdog moments — always shown (rare,
+                    // high-signal): they explain *why* the run changed course.
+                    AgentTraceEvent::ReactiveCompactionAttempted {
+                        token_gap,
+                        succeeded,
+                    } => {
+                        eprintln!(
+                            "{}",
+                            exec_echo::render_compaction_notice(token_gap, succeeded)
+                        );
+                    }
+                    AgentTraceEvent::VerifierVeto { reason, .. } => {
+                        eprintln!("{}", exec_echo::render_veto_notice(&reason));
+                    }
                     _ => {}
                 }
             }
@@ -228,6 +242,20 @@ pub async fn follow_run(
                     eprintln!("Error: {error}");
                 }
                 break;
+            }
+            StreamEvent::AskUser {
+                question, options, ..
+            } => {
+                if !opts.json {
+                    eprintln!("{}", exec_echo::render_ask_user(&question, &options));
+                }
+            }
+            StreamEvent::UncertaintySignal { uncertainty, .. } => {
+                if !opts.json {
+                    if let Some(line) = exec_echo::render_uncertainty(&uncertainty) {
+                        eprintln!("{line}");
+                    }
+                }
             }
             StreamEvent::Reasoning { content, .. } => {
                 if opts.verbose && !opts.json {
