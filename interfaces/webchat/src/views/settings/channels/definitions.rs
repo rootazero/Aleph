@@ -48,6 +48,7 @@ pub struct ChannelDefinition {
 
 impl ChannelDefinition {
     /// Look up a channel definition by its `id`.
+    #[must_use]
     pub fn find(id: &str) -> Option<&'static ChannelDefinition> {
         ALL_CHANNELS.iter().find(|ch| ch.id == id)
     }

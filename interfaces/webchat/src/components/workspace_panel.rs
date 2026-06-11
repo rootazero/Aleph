@@ -55,6 +55,7 @@ fn timeline_groups(chat: &ChatState) -> Vec<StepGroup> {
 
 /// Workspace pane root. Renders nothing when [`LayoutMode::ChatOnly`].
 #[component]
+#[must_use]
 pub fn WorkspacePanel() -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
 

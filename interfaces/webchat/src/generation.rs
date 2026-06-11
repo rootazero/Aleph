@@ -16,6 +16,7 @@ pub enum GenerationType {
 }
 
 impl GenerationType {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             GenerationType::Image => "image",
@@ -26,6 +27,7 @@ impl GenerationType {
         }
     }
 
+    #[must_use]
     pub fn display_name(&self) -> &'static str {
         match self {
             GenerationType::Image => "Image",
@@ -36,6 +38,7 @@ impl GenerationType {
         }
     }
 
+    #[must_use]
     pub fn icon(&self) -> &'static str {
         match self {
             GenerationType::Image => "🖼️",

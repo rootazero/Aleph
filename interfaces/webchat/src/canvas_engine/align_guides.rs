@@ -43,6 +43,7 @@ pub struct GuideLine {
 ///
 /// When multiple anchors qualify on the same axis, the closest one wins —
 /// stable on ties via insertion order (first hit kept).
+#[must_use]
 pub fn detect_guides(
     drag_pos: Vec2,
     candidates: &[(String, Vec2)],
@@ -92,6 +93,7 @@ pub fn detect_guides(
 /// At most one guide per axis is honoured (the same invariant
 /// [`detect_guides`] enforces). Position is returned unchanged when no guide
 /// targets the corresponding axis.
+#[must_use]
 pub fn snap_to_guides(pos: Vec2, guides: &[GuideLine]) -> Vec2 {
     let mut snapped = pos;
     for g in guides {

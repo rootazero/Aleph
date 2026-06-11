@@ -8,6 +8,7 @@ use leptos::prelude::*;
 const PAGE_SIZE: u32 = 50;
 
 #[component]
+#[must_use]
 pub fn Memory() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

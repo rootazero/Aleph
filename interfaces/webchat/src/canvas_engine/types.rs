@@ -8,15 +8,19 @@ pub struct Vec2 {
 }
 
 impl Vec2 {
+    #[must_use]
     pub fn new(x: f64, y: f64) -> Self {
         Self { x, y }
     }
+    #[must_use]
     pub fn zero() -> Self {
         Self { x: 0.0, y: 0.0 }
     }
+    #[must_use]
     pub fn length(&self) -> f64 {
         (self.x * self.x + self.y * self.y).sqrt()
     }
+    #[must_use]
     pub fn normalized(&self) -> Self {
         let len = self.length();
         if len < 1e-10 {
@@ -28,6 +32,7 @@ impl Vec2 {
             }
         }
     }
+    #[must_use]
     pub fn distance_to(&self, other: &Vec2) -> f64 {
         let dx = self.x - other.x;
         let dy = self.y - other.y;
@@ -71,12 +76,15 @@ pub struct Color {
 }
 
 impl Color {
+    #[must_use]
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
+    #[must_use]
     pub fn to_css(&self) -> String {
         format!("rgb({},{},{})", self.r, self.g, self.b)
     }
+    #[must_use]
     pub fn to_css_alpha(&self, alpha: f64) -> String {
         format!("rgba({},{},{},{})", self.r, self.g, self.b, alpha)
     }
@@ -86,6 +94,7 @@ impl Color {
 pub const NOTE_COLOR: Color = Color::new(167, 139, 250); // #a78bfa
 
 /// Compute node radius from link count.
+#[must_use]
 pub fn note_radius(link_count: usize) -> f64 {
     4.0 + (link_count as f64 + 1.0).ln() * 4.0
 }
@@ -145,6 +154,7 @@ pub struct Vec3 {
 }
 
 impl Vec3 {
+    #[must_use]
     pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Self { x, y, z }
     }

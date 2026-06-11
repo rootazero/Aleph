@@ -10,6 +10,7 @@ use leptos::task::spawn_local;
 use std::collections::HashMap;
 
 #[component]
+#[must_use]
 pub fn RuntimesView() -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<DashboardState>();

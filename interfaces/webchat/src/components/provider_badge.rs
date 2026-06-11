@@ -15,6 +15,7 @@ pub struct BadgeState {
 
 impl BadgeState {
     /// True if any badge would render.
+    #[must_use]
     pub fn any(self) -> bool {
         self.is_default || self.verified
     }
@@ -22,6 +23,7 @@ impl BadgeState {
 
 /// Renders provider status badges. Both "Default" and "Verified" may show at once.
 #[component]
+#[must_use]
 pub fn ProviderBadges(state: BadgeState) -> impl IntoView {
     let i18n = use_i18n();
     view! {

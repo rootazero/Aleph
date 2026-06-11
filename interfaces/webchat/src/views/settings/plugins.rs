@@ -45,6 +45,7 @@ fn load_plugins(
 }
 
 #[component]
+#[must_use]
 pub fn PluginsView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

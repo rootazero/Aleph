@@ -49,6 +49,7 @@ pub enum LayoutMode {
 
 impl LayoutMode {
     /// Token written to / read from `localStorage`.
+    #[must_use]
     pub const fn as_token(self) -> &'static str {
         match self {
             Self::ChatOnly => "chat_only",
@@ -57,6 +58,7 @@ impl LayoutMode {
     }
 
     /// Parse from a `localStorage` token. Unknown / missing → `ChatOnly`.
+    #[must_use]
     pub fn from_token(s: &str) -> Self {
         match s {
             "split" => Self::Split,
@@ -65,6 +67,7 @@ impl LayoutMode {
     }
 
     /// Cycle to the opposite mode (used by the toggle button).
+    #[must_use]
     pub const fn toggled(self) -> Self {
         match self {
             Self::ChatOnly => Self::Split,
@@ -117,6 +120,7 @@ impl Default for WorkspaceState {
 
 impl WorkspaceState {
     /// Construct with `localStorage`-hydrated layout mode (best-effort).
+    #[must_use]
     pub fn new() -> Self {
         let hydrated = read_persisted_layout_mode().unwrap_or_default();
         Self {
@@ -158,6 +162,7 @@ impl WorkspaceState {
     }
 
     /// True when the given tool row is expanded inline.
+    #[must_use]
     pub fn is_event_expanded(&self, tool_id: &str) -> bool {
         self.expanded_events.with(|set| set.contains(tool_id))
     }
@@ -212,6 +217,7 @@ impl WorkspaceState {
     }
 
     /// Lookup the payload for a tool call.
+    #[must_use]
     pub fn get_tool_payload(&self, run_id: &str, tool_id: &str) -> Option<ToolPayload> {
         let key = (run_id.to_string(), tool_id.to_string());
         self.tool_payloads.with(|m| m.get(&key).cloned())
@@ -234,6 +240,7 @@ impl WorkspaceState {
     }
 
     /// True when `(run_id, iteration)` is the focused step.
+    #[must_use]
     pub fn is_step_focused(&self, run_id: &str, iteration: usize) -> bool {
         self.focused_step.with(|f| {
             f.as_ref()

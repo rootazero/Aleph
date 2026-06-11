@@ -15,6 +15,7 @@ use crate::i18n::*;
 use crate::views::devices::PairQr;
 
 #[component]
+#[must_use]
 pub fn AuthView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

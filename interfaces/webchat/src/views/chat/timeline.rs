@@ -151,6 +151,7 @@ fn flush_strip(rows: &mut Vec<TimelineRow>, pending: &mut Vec<ChatMessage>) {
 ///
 /// Mirrors the composite key the flat list used (id + volatile fields) so a
 /// streaming bubble still re-renders per token; separators key on their day.
+#[must_use]
 pub fn row_key(row: &TimelineRow) -> String {
     match row {
         TimelineRow::DaySeparator { key, .. } => format!("sep:{key}"),
@@ -226,6 +227,7 @@ pub fn now_millis() -> i64 {
 
 /// Current wall-clock time in epoch milliseconds.
 #[cfg(not(target_arch = "wasm32"))]
+#[must_use]
 pub fn now_millis() -> i64 {
     0
 }
@@ -296,6 +298,7 @@ pub fn parse_wire_timestamp(raw: &str) -> Option<i64> {
 
 /// Host stub — the hydration path that calls this is WASM-only.
 #[cfg(not(target_arch = "wasm32"))]
+#[must_use]
 pub fn parse_wire_timestamp(_raw: &str) -> Option<i64> {
     None
 }

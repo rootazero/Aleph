@@ -23,6 +23,7 @@ use leptos::prelude::*;
 /// }
 /// ```
 #[component]
+#[must_use]
 pub fn SettingsSection(
     /// Section title
     title: String,
@@ -61,6 +62,7 @@ pub fn SettingsSection(
 /// }
 /// ```
 #[component]
+#[must_use]
 pub fn FormField(
     /// Field label
     label: String,
@@ -256,6 +258,7 @@ pub fn SwitchInput(
 
 /// An error message box
 #[component]
+#[must_use]
 pub fn ErrorMessage(
     /// Error message text
     message: &'static str,
@@ -269,6 +272,7 @@ pub fn ErrorMessage(
 
 /// A dynamic error message box
 #[component]
+#[must_use]
 pub fn ErrorMessageDynamic(
     /// Error message signal
     error: Signal<Option<String>>,
@@ -288,6 +292,7 @@ pub fn ErrorMessageDynamic(
 
 /// A success message box
 #[component]
+#[must_use]
 pub fn SuccessMessage(
     /// Success message text
     message: &'static str,

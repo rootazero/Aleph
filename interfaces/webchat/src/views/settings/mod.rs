@@ -65,6 +65,7 @@ struct SetupStep {
 }
 
 #[component]
+#[must_use]
 pub fn Settings() -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<DashboardState>();

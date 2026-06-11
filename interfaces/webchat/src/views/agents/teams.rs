@@ -7,6 +7,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 #[component]
+#[must_use]
 pub fn TeamsTab(agent_id: String) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

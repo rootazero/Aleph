@@ -41,6 +41,7 @@ fn LockedNotice() -> impl IntoView {
 
 /// Settings 区顶部常驻横幅:仅非 operator 显示,解释配置已锁定 + 如何提权。
 #[component]
+#[must_use]
 pub fn PermissionBanner() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
@@ -69,6 +70,7 @@ pub(crate) fn is_permission_denied(raw: &str) -> bool {
 
 /// 把 RPC 错误消息映射为面向用户的展示串。权限拒绝替换成可操作提示
 /// (指向「设置 → 安全」提权 / 重新配对选 Config);其余原样透传。
+#[must_use]
 pub fn friendly_error(raw: &str) -> String {
     if is_permission_denied(raw) {
         "This action requires Config-tier permission. Ask an operator to grant it in \

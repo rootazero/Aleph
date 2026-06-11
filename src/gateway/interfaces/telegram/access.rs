@@ -179,7 +179,7 @@ impl AccessController {
         let mut times = self.prompt_times.write().await;
         let should = times
             .get(&user_id)
-            .map_or(true, |t| t.elapsed().as_secs() > 300);
+            .is_none_or(|t| t.elapsed().as_secs() > 300);
         if should {
             times.insert(user_id, Instant::now());
         }

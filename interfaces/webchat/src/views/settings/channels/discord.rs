@@ -78,6 +78,7 @@ enum OverallHealth {
 // ============================================================================
 
 #[component]
+#[must_use]
 pub fn DiscordChannelView() -> impl IntoView {
     let i18n = use_i18n();
     let _state = expect_context::<DashboardState>();

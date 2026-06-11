@@ -74,6 +74,7 @@ use crate::canvas_engine::layout::compute_target_positions;
 ///
 /// Index convention (matches layout.rs expectations):
 ///   0 = center, 1..=one_hop.len() = one_hop nodes, then two_hop nodes.
+#[must_use]
 pub fn to_neighborhood(
     resp: &GraphNeighborsResponse,
     fetched_at_ms: f64,
@@ -288,6 +289,7 @@ fn resolve_idx(id: &str, center_id: &str, one_hop: &[CanvasNode], two_hop: &[Can
     0 // fallback to center; edge referencing an unknown node
 }
 
+#[must_use]
 pub fn adapt_graph_response(response: &GraphQueryResponse) -> (Vec<CanvasNode>, Vec<CanvasEdge>) {
     let total = response.nodes.len();
     let nodes: Vec<CanvasNode> = response

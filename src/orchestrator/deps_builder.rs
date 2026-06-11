@@ -555,7 +555,7 @@ fn derive_chain_min_budget(config: &Config, primary_provider_key: &str) -> Chain
         let budget = derive_token_budget(provider, model);
         let is_smaller = best
             .as_ref()
-            .map_or(true, |b| budget.usable < b.budget.usable);
+            .is_none_or(|b| budget.usable < b.budget.usable);
         if is_smaller {
             best = Some(ChainMinBudget {
                 budget,

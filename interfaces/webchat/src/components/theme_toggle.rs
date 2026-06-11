@@ -85,6 +85,7 @@ fn animated_apply(client_x: f64, client_y: f64, apply: impl FnOnce() + 'static) 
 }
 
 #[component]
+#[must_use]
 pub fn ThemeToggle() -> impl IntoView {
     let mode = RwSignal::new(read_mode());
     let accent = RwSignal::new(read_accent());

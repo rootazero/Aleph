@@ -186,6 +186,7 @@ fn append_reasoning(chat: ChatState, summary: &str) {
 /// are mirrored into [`WorkspaceState::tool_payloads`] so the workspace
 /// pane can render real invocation details without an extra round-trip.
 /// Returns the subscription ID for cleanup.
+#[must_use]
 pub fn subscribe_run_events(
     dashboard: &DashboardState,
     chat: ChatState,

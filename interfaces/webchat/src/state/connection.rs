@@ -35,6 +35,7 @@ impl ConnectionPhase {
     /// Pure derivation from the four DashboardState booleans. Kept free of
     /// signal access so tests can exercise every transition without a Leptos
     /// runtime.
+    #[must_use]
     pub fn derive(
         is_connected: bool,
         is_reconnecting: bool,
@@ -78,6 +79,7 @@ impl ConnectionPhase {
     /// True when the app shell should be hidden behind the boot gate. The
     /// `pairing_required` path is excluded by the gate component itself so
     /// PairingModal can take over.
+    #[must_use]
     pub fn is_pre_ready(&self) -> bool {
         matches!(self, Self::Initial | Self::Connecting)
     }

@@ -23,6 +23,7 @@ use leptos::task::spawn_local;
 use serde_json::json;
 
 #[component]
+#[must_use]
 pub fn NotificationCenter() -> impl IntoView {
     let dashboard = use_context::<DashboardState>().expect("DashboardState not provided");
     let notif = use_context::<NotificationsState>().expect("NotificationsState not provided");

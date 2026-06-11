@@ -134,7 +134,7 @@ impl ScopedToolService {
         // runs (cron/internal) all pass.
         if crate::gateway::method_authz::tool_requires_operator(name) {
             let is_operator = crate::tools::turn_context::current_turn_context()
-                .map_or(true, |t| t.caller_is_operator());
+                .is_none_or(|t| t.caller_is_operator());
             if !is_operator {
                 // Phase 2b: suspend for live operator approval instead of an
                 // outright reject. Routes through the operator-targeted requester

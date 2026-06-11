@@ -71,6 +71,7 @@ impl Default for NotificationsState {
 }
 
 impl NotificationsState {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             is_open: RwSignal::new(false),
@@ -97,6 +98,7 @@ fn severity_weight(level: AlertLevel) -> u8 {
 ///
 /// Order: severity desc, then key asc — so Critical floats to the top and
 /// equal-severity rows have a stable lexicographic order.
+#[must_use]
 pub fn visible_alerts(
     alerts: &HashMap<String, SystemAlert>,
     dismissed: &HashSet<String>,
@@ -118,6 +120,7 @@ pub fn visible_alerts(
 /// Count of alerts the bell badge should display. Same filter as
 /// [`visible_alerts`] but returns a count to avoid an unnecessary clone in
 /// the hot reactive path (the badge re-renders on every alert update).
+#[must_use]
 pub fn unread_count(alerts: &HashMap<String, SystemAlert>, dismissed: &HashSet<String>) -> usize {
     alerts
         .values()

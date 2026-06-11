@@ -450,7 +450,7 @@ pub async fn handle_oauth_status(
         .read()
         .await
         .as_ref()
-        .map_or(true, |c| c.is_expired());
+        .is_none_or(|c| c.is_expired());
 
     if is_expired {
         debug!("OAuth token expired, attempting refresh");

@@ -72,6 +72,7 @@ fn icon_of(mode: PanelMode) -> &'static str {
 }
 
 #[component]
+#[must_use]
 pub fn NavMenu() -> impl IntoView {
     let location = use_location();
     let navigate = use_navigate();

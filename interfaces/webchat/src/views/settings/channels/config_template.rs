@@ -34,6 +34,7 @@ use super::definitions::{ChannelDefinition, FieldDef, FieldKind};
 /// through the `render_field` dispatcher, and provides Save / Connect /
 /// Disconnect / Delete actions.
 #[component]
+#[must_use]
 pub fn ChannelConfigTemplate(
     definition: &'static ChannelDefinition,
     instance_id: String,

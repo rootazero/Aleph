@@ -15,6 +15,7 @@ const MAX_VISIBLE_JOBS: usize = 8;
 /// Render up to [`MAX_VISIBLE_JOBS`] cron jobs, each followed by a 12-cell
 /// success/fail history sparkline (newest on the right).
 #[component]
+#[must_use]
 pub fn CronSparklines() -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<DashboardState>();

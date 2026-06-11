@@ -18,6 +18,7 @@ fn log_line_color(line: &str) -> &'static str {
 }
 
 #[component]
+#[must_use]
 pub fn Logs() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

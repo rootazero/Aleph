@@ -46,6 +46,7 @@ pub struct PresetProviderDto {
 impl PresetProviderDto {
     /// Convert a server DTO into a UI-ready preset, synthesising icon/color
     /// from `provider_type` (curated brand colors) with modality fallback.
+    #[must_use]
     pub fn into_preset(self) -> PresetProvider {
         let capabilities = self
             .modalities
@@ -85,10 +86,12 @@ impl PresetCatalog {
         }
     }
 
+    #[must_use]
     pub fn all(&self) -> &[PresetProvider] {
         &self.presets
     }
 
+    #[must_use]
     pub fn by_category(&self, category: GenerationType) -> Vec<PresetProvider> {
         self.presets
             .iter()
@@ -97,10 +100,12 @@ impl PresetCatalog {
             .collect()
     }
 
+    #[must_use]
     pub fn find(&self, id: &str) -> Option<PresetProvider> {
         self.presets.iter().find(|p| p.id == id).cloned()
     }
 
+    #[must_use]
     pub fn is_preset(&self, id: &str) -> bool {
         self.presets.iter().any(|p| p.id == id)
     }

@@ -11,6 +11,7 @@ use leptos_router::hooks::use_location;
 use std::collections::HashMap;
 
 #[component]
+#[must_use]
 pub fn AgentsSidebar() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let location = use_location();

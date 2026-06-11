@@ -18,6 +18,7 @@ use leptos::task::spawn_local;
 /// Modal overlay that is conditionally rendered whenever `DashboardState.pairing_required`
 /// is `Some(_)`.  Mount this at the App root level so it overlays everything.
 #[component]
+#[must_use]
 pub fn PairingModal() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let pairing = state.pairing_required;

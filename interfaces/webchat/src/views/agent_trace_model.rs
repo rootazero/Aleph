@@ -56,6 +56,7 @@ fn map_node_type(kind: &str) -> TraceNodeType {
 /// Convert a single `AgentTraceEvent` into a `TraceNode`.
 ///
 /// Returns `None` when the presentation layer filters out the event.
+#[must_use]
 pub fn trace_node_from_event(
     event: &AgentTraceEvent,
     step: u64,
@@ -79,6 +80,7 @@ pub fn trace_node_from_event(
 }
 
 /// Convert a full replay entry list into `TraceNode`s.
+#[must_use]
 pub fn trace_nodes_from_replay(
     entries: &[(u64, AgentTraceEvent)],
     labels: &TraceLabels,

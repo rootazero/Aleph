@@ -58,6 +58,7 @@ pub(super) fn extract_base_url(url: &str) -> String {
 }
 
 #[component]
+#[must_use]
 pub fn GenerationProvidersView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

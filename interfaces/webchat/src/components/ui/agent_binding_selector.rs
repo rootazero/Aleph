@@ -11,6 +11,7 @@ use crate::context::DashboardState;
 use crate::i18n::*;
 
 #[component]
+#[must_use]
 pub fn AgentBindingSelector(
     /// The channel ID this selector manages (e.g., "discord-default", "telegram-main")
     channel_id: String,

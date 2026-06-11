@@ -45,6 +45,7 @@ const DEFAULT_EXPANDED_DEPTH: usize = 1;
 /// since `serde_json::Value` cloning is structural-sharing-free but
 /// payloads here are bounded (per-tool-call args / results).
 #[component]
+#[must_use]
 pub fn JsonViewer(#[prop(into)] value: Value) -> impl IntoView {
     view! {
         <div class="font-mono text-xs leading-relaxed text-text-secondary overflow-x-auto">

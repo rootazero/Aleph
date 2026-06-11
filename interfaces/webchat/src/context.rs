@@ -176,6 +176,7 @@ impl Default for DashboardState {
 }
 
 impl DashboardState {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             is_connected: RwSignal::new(false),
@@ -206,6 +207,7 @@ impl DashboardState {
     /// (config tier)? Consults the `role` captured from the `connect` response.
     /// Returns false before the first successful authenticate. Used by
     /// operator-only settings surfaces to gate UI up front.
+    #[must_use]
     pub fn is_operator(&self) -> bool {
         role_is_operator(self.role.get().as_deref())
     }
@@ -249,6 +251,7 @@ impl DashboardState {
     }
 
     /// Get alert state
+    #[must_use]
     pub fn get_alert(&self, key: &str) -> Option<SystemAlert> {
         self.alerts.with(|map| map.get(key).cloned())
     }
@@ -1003,6 +1006,7 @@ impl DashboardState {
 }
 
 #[component]
+#[must_use]
 pub fn DashboardContext(children: Children) -> impl IntoView {
     let state = DashboardState::new();
     provide_context(state);

@@ -10,6 +10,7 @@ use connection::ConnectionSection;
 use leptos::prelude::*;
 
 #[component]
+#[must_use]
 pub fn NetworkView() -> impl IntoView {
     view! {
         <div class="px-8 pb-8 aleph-content-top max-w-5xl mx-auto space-y-10">

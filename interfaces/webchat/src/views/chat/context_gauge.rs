@@ -19,6 +19,7 @@ use leptos::prelude::*;
 /// approximation — correctness never depends on this value, so an unknown model
 /// falls back to a conservative 128k rather than failing. Order matters:
 /// most-specific families first.
+#[must_use]
 pub fn context_window_for(model: &str) -> u32 {
     let m = model.to_ascii_lowercase();
     if m.contains("gpt-3.5") {
@@ -62,6 +63,7 @@ fn gauge_color(frac: f64) -> &'static str {
 
 /// SVG ring + percentage label. Renders nothing until `context_usage` is set.
 #[component]
+#[must_use]
 pub fn ContextGauge() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     view! {

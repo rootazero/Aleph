@@ -13,6 +13,7 @@ use crate::appearance::{
 use leptos::prelude::*;
 
 #[component]
+#[must_use]
 pub fn AppearanceView() -> impl IntoView {
     let mode = RwSignal::new(read_mode());
     let accent = RwSignal::new(read_accent());

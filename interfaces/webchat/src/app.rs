@@ -34,6 +34,7 @@ use crate::state::sessions::SessionMap;
 use crate::views::chat::ChatState;
 
 #[component]
+#[must_use]
 pub fn App() -> impl IntoView {
     view! {
         <I18nContextProvider>

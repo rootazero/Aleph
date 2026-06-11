@@ -14,6 +14,7 @@ use crate::context::DashboardState;
 use crate::i18n::*;
 
 #[component]
+#[must_use]
 pub fn MemoryView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

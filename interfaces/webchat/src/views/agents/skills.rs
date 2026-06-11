@@ -26,6 +26,7 @@ struct SkillEntry {
 }
 
 #[component]
+#[must_use]
 pub fn SkillsTab(agent_id: String) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

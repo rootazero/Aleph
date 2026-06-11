@@ -75,14 +75,17 @@ pub struct DragOverlay {
 }
 
 impl DragState {
+    #[must_use]
     pub fn new() -> Self {
         DragState::Idle
     }
 
+    #[must_use]
     pub fn is_active(&self) -> bool {
         !matches!(self, DragState::Idle)
     }
 
+    #[must_use]
     pub fn active_node_id(&self) -> Option<&str> {
         match self {
             DragState::Idle => None,
@@ -254,6 +257,7 @@ impl DragState {
 
     /// Read-only snapshot of "what to draw on top of base canvas" this frame.
     /// Returns `None` when there's nothing to render (Idle / pre-threshold Pressed).
+    #[must_use]
     pub fn overlay_snapshot(&self, center_pos: Vec2, center_radius_px: f64) -> Option<DragOverlay> {
         let glow_radius = center_radius_px * GLOW_RADIUS_FACTOR;
         match self {

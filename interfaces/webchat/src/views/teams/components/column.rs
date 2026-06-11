@@ -5,6 +5,7 @@ use crate::api::teams::CoordTaskDto;
 use leptos::prelude::*;
 
 #[component]
+#[must_use]
 pub fn KanbanColumn(
     /// Column title — already localized by the caller.
     #[prop(into)]

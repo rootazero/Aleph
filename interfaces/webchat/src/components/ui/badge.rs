@@ -17,6 +17,7 @@ pub enum BadgeVariant {
 }
 
 #[component]
+#[must_use]
 pub fn Badge(
     #[prop(into, optional)] variant: BadgeVariant,
     #[prop(into, optional)] class: String,
@@ -32,6 +33,7 @@ pub fn Badge(
 }
 
 #[component]
+#[must_use]
 pub fn StatusBadge(level: AlertLevel, #[prop(optional)] count: Option<u32>) -> impl IntoView {
     let (bg_class, animation_class) = match level {
         AlertLevel::None => {

@@ -29,6 +29,7 @@ use crate::views::chat::state::ChatState;
 
 /// Pill + dropdown for selecting the per-turn chat model.
 #[component]
+#[must_use]
 pub fn ModelPicker() -> impl IntoView {
     let i18n = use_i18n();
     let dashboard = expect_context::<DashboardState>();

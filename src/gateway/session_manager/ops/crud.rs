@@ -155,7 +155,7 @@ impl SessionManager {
                     |row| {
                         let state_str: Option<String> = row.get(0)?;
                         Ok(state_str
-                            .map_or(true, |s| s != "stopped" && s != "error"))
+                            .is_none_or(|s| s != "stopped" && s != "error"))
                     },
                 )
                 .unwrap_or(true);

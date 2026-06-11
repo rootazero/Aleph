@@ -15,6 +15,7 @@ use super::state::ChatMessage;
 /// the host target. Intermediate "scratch step" bubbles and empty streaming
 /// placeholders are skipped — the export captures the *conversation*, not the
 /// agent's internal step trace (that lives in the workspace pane).
+#[must_use]
 pub fn transcript_markdown(messages: &[ChatMessage]) -> String {
     let mut out = String::from("# Aleph 对话记录\n\n");
     for msg in messages {

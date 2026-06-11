@@ -15,6 +15,7 @@ pub(crate) fn fnv1a_32(bytes: &[u8]) -> u32 {
 }
 
 /// Map a relation name to a stable angle in [0, 2π).
+#[must_use]
 pub fn sector_center_angle(relation: &str) -> f32 {
     let h = fnv1a_32(relation.as_bytes());
     ((h as f64 / u32::MAX as f64) * std::f64::consts::TAU) as f32
@@ -25,6 +26,7 @@ pub fn sector_center_angle(relation: &str) -> f32 {
 /// spatial memory is consistent across renders. The assigned angles are
 /// `i * TAU / K` for `i in 0..K`; on the circle the gap between the last and
 /// first wraps naturally.
+#[must_use]
 pub fn assign_sectors(relations: &[String]) -> HashMap<String, f32> {
     let mut sorted: Vec<&String> = relations.iter().collect();
     sorted.sort_by(|a, b| {
@@ -57,10 +59,12 @@ fn r_for_hop(hop_factor: f32, n: usize, viewport_w_px: f32) -> f32 {
     base * count_factor * vw_factor * hop_factor
 }
 
+#[must_use]
 pub fn r_one_hop(n: usize, viewport_w_px: f32) -> f32 {
     r_for_hop(1.0, n, viewport_w_px)
 }
 
+#[must_use]
 pub fn r_two_hop(n: usize, viewport_w_px: f32) -> f32 {
     r_for_hop(2.0, n, viewport_w_px)
 }
@@ -101,6 +105,7 @@ pub(crate) fn place_perturbed_ring(ids: &[&str], base_r: f64, out: &mut HashMap<
 ///
 /// Both rings use `place_perturbed_ring` for deterministic per-id jitter.
 /// Orphan positions are NOT computed here; call `adapter::populate_orphans` separately.
+#[must_use]
 pub fn compute_target_positions(
     active: &CanvasNode,
     one_hop: &[CanvasNode],

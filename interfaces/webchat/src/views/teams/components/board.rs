@@ -6,6 +6,7 @@ use crate::i18n::*;
 use leptos::prelude::*;
 
 #[component]
+#[must_use]
 pub fn KanbanBoard(
     tasks: Signal<Vec<CoordTaskDto>>,
     #[prop(into)] on_card_click: Callback<String>,

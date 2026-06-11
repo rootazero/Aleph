@@ -24,6 +24,7 @@ use leptos::task::spawn_local;
 // ============================================================================
 
 #[component]
+#[must_use]
 pub fn CronView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

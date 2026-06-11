@@ -48,6 +48,7 @@ pub struct TeamsTabState {
 }
 
 #[component]
+#[must_use]
 pub fn TeamsView() -> impl IntoView {
     let dash = expect_context::<DashboardState>();
     let tab_state = TeamsTabState {
@@ -93,6 +94,7 @@ pub fn TeamsView() -> impl IntoView {
 
 /// Sidebar for the Teams tab — sub-tab selector + team dropdown.
 #[component]
+#[must_use]
 pub fn TeamsSidebar() -> impl IntoView {
     let i18n = use_i18n();
     let tab_state = expect_context::<TeamsTabState>();

@@ -32,6 +32,7 @@ const REPLAY_BASE_INTERVAL_MS: u32 = 600;
 /// - **Live**: subscribes to gateway `run.agent_trace` events in real time.
 /// - **Replay**: loads a persisted trace by task ID.
 #[component]
+#[must_use]
 pub fn AgentTrace() -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<DashboardState>();

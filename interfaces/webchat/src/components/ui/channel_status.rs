@@ -14,6 +14,7 @@ pub enum ChannelStatus {
 
 impl ChannelStatus {
     /// Parse a status string (case-insensitive).
+    #[must_use]
     pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "connected" => Self::Connected,
@@ -25,6 +26,7 @@ impl ChannelStatus {
     }
 
     /// Human-readable label for the status (non-reactive, for non-UI use).
+    #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
             Self::Disconnected => "Disconnected",
@@ -36,6 +38,7 @@ impl ChannelStatus {
     }
 
     /// Tailwind classes for the colored dot indicator.
+    #[must_use]
     pub fn dot_class(&self) -> &'static str {
         match self {
             Self::Disconnected => "bg-text-tertiary",
@@ -47,6 +50,7 @@ impl ChannelStatus {
     }
 
     /// Tailwind classes for the status label text color.
+    #[must_use]
     pub fn text_class(&self) -> &'static str {
         match self {
             Self::Disconnected => "text-text-tertiary",
@@ -58,6 +62,7 @@ impl ChannelStatus {
     }
 
     /// Tailwind classes for the pill background + text color.
+    #[must_use]
     pub fn pill_class(&self) -> &'static str {
         match self {
             Self::Connected => "bg-success-subtle text-success",
@@ -72,6 +77,7 @@ impl ChannelStatus {
 ///
 /// Renders a small colored dot followed by the status label text.
 #[component]
+#[must_use]
 pub fn ChannelStatusBadge(status: Signal<ChannelStatus>) -> impl IntoView {
     let i18n = use_i18n();
     let label = move || match status.get() {
@@ -99,6 +105,7 @@ pub fn ChannelStatusBadge(status: Signal<ChannelStatus>) -> impl IntoView {
 ///
 /// Renders a rounded pill with status-colored background and label.
 #[component]
+#[must_use]
 pub fn ChannelStatusPill(status: Signal<ChannelStatus>) -> impl IntoView {
     let i18n = use_i18n();
     let label = move || match status.get() {

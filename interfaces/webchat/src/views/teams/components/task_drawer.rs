@@ -13,6 +13,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 #[component]
+#[must_use]
 pub fn TaskDetailDrawer(
     open_for: RwSignal<Option<CoordTaskDto>>,
     #[prop(into)] on_changed: Callback<()>,

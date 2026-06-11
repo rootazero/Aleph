@@ -10,6 +10,7 @@ pub mod team_selector;
 /// Format a unix-epoch (seconds) timestamp as a coarse human delta
 /// (e.g. "just now", "5 min ago", "3 h ago", "2 d ago"). Shared by the
 /// task card and the detail drawer.
+#[must_use]
 pub fn format_relative_time(epoch_secs: u64) -> String {
     let now = (js_sys::Date::now() / 1000.0) as u64;
     let delta = now.saturating_sub(epoch_secs);

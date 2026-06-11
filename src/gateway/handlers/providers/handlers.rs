@@ -631,7 +631,7 @@ async fn set_default_provider_inner(
         provider_config_for_swap = if multi_registry.is_some() {
             cfg.providers.get(&name).map(|pc| {
                 let mut pc = pc.clone();
-                if pc.api_key.as_ref().map_or(true, |k| k.is_empty()) {
+                if pc.api_key.as_ref().is_none_or(|k| k.is_empty()) {
                     if let Some(v) = vault {
                         pc.api_key = resolve_api_key(&name, v);
                     }

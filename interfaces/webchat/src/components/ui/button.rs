@@ -28,6 +28,7 @@ pub enum ButtonSize {
 }
 
 #[component]
+#[must_use]
 pub fn Button(
     #[prop(into, optional)] variant: ButtonVariant,
     #[prop(into, optional)] size: ButtonSize,

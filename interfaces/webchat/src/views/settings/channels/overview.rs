@@ -20,6 +20,7 @@ use super::definitions::ALL_CHANNELS;
 /// Layout: 1 column on mobile, 2 on `sm`, 3 on `lg`.
 /// Each card links to `/settings/channels/{id}` for configuration.
 #[component]
+#[must_use]
 pub fn ChannelsOverview() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

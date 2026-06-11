@@ -202,6 +202,7 @@ fn render_streaming(content: &str) -> String {
 /// Tracks code fences and escapes HTML, but does not process Markdown syntax.
 /// Switches to MarkdownRenderer on completion for full formatting.
 #[component]
+#[must_use]
 pub fn StreamingRenderer(content: String) -> impl IntoView {
     let html = render_streaming(&content);
 
@@ -212,6 +213,7 @@ pub fn StreamingRenderer(content: String) -> impl IntoView {
 
 /// A Leptos component that renders Markdown content with syntax-highlighted code blocks.
 #[component]
+#[must_use]
 pub fn MarkdownRenderer(content: String) -> impl IntoView {
     let html = render_markdown(&content);
 

@@ -21,6 +21,7 @@ use leptos_router::NavigateOptions;
 /// Overlay-only — mounted as a sibling of the shell. Visibility is fully
 /// signal-driven via the `show_overlay` Memo.
 #[component]
+#[must_use]
 pub fn ServiceBlockingGate() -> impl IntoView {
     let state = use_context::<DashboardState>().expect("DashboardState not provided");
     let i18n = use_i18n();

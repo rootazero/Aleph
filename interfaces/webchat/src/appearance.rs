@@ -40,6 +40,7 @@ pub enum ThemeMode {
 impl ThemeMode {
     pub const ALL: [ThemeMode; 4] = [Self::System, Self::Light, Self::Dark, Self::Glass];
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::System => "跟随系统",
@@ -50,6 +51,7 @@ impl ThemeMode {
     }
 
     /// `localStorage` value, or `None` for `System` (which clears the key).
+    #[must_use]
     pub fn storage_value(self) -> Option<&'static str> {
         match self {
             Self::System => None,
@@ -98,6 +100,7 @@ impl Accent {
     ];
 
     /// Stable id used for both the `data-accent` attribute and persistence.
+    #[must_use]
     pub fn id(self) -> &'static str {
         match self {
             Self::Mauve => "mauve",
@@ -108,6 +111,7 @@ impl Accent {
         }
     }
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Mauve => "魅紫",
@@ -119,6 +123,7 @@ impl Accent {
     }
 
     /// Representative swatch colour (oklch) for UI previews.
+    #[must_use]
     pub fn swatch(self) -> &'static str {
         match self {
             Self::Mauve => "oklch(0.60 0.13 310)",
@@ -164,6 +169,7 @@ impl FontScale {
         Self::Largest,
     ];
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Compact => "紧凑",
@@ -175,6 +181,7 @@ impl FontScale {
     }
 
     /// CSS multiplier applied to the root font-size knob.
+    #[must_use]
     pub fn css_value(self) -> &'static str {
         match self {
             Self::Compact => "0.9",
@@ -186,6 +193,7 @@ impl FontScale {
     }
 
     /// `localStorage` value, or `None` for the default (clears the key).
+    #[must_use]
     pub fn storage_value(self) -> Option<&'static str> {
         match self {
             Self::Default => None,
@@ -228,6 +236,7 @@ impl Roundness {
         Self::Extra,
     ];
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Sharp => "直角",
@@ -239,6 +248,7 @@ impl Roundness {
     }
 
     /// CSS multiplier applied to the radius tokens.
+    #[must_use]
     pub fn css_value(self) -> &'static str {
         match self {
             Self::Sharp => "0",
@@ -250,6 +260,7 @@ impl Roundness {
     }
 
     /// `localStorage` value, or `None` for the default (clears the key).
+    #[must_use]
     pub fn storage_value(self) -> Option<&'static str> {
         match self {
             Self::Default => None,
@@ -308,18 +319,22 @@ fn read_key(key: &str) -> Option<String> {
     storage().and_then(|s| s.get_item(key).ok().flatten())
 }
 
+#[must_use]
 pub fn read_mode() -> ThemeMode {
     ThemeMode::from_storage(read_key(KEY_MODE).as_deref())
 }
 
+#[must_use]
 pub fn read_accent() -> Accent {
     Accent::from_storage(read_key(KEY_ACCENT).as_deref())
 }
 
+#[must_use]
 pub fn read_font_scale() -> FontScale {
     FontScale::from_storage(read_key(KEY_FONT_SCALE).as_deref())
 }
 
+#[must_use]
 pub fn read_roundness() -> Roundness {
     Roundness::from_storage(read_key(KEY_ROUNDNESS).as_deref())
 }

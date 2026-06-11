@@ -46,6 +46,7 @@ pub(crate) fn drift_offset(t_ms: f64, node_id: &str, amplitude_px: f32, period_m
 
 /// Compute per-layer visual modifiers based on Z depth.
 /// Z=0 → full brightness (active layer); Z=200 → maximum dimming.
+#[must_use]
 pub fn depth_attrs(z: f32) -> DepthAttrs {
     let t = (z / 200.0).clamp(0.0, 1.0);
     DepthAttrs {

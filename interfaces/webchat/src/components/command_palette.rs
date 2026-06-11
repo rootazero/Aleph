@@ -294,6 +294,7 @@ fn run_by_id(id: &'static str) {
 }
 
 #[component]
+#[must_use]
 pub fn CommandPalette() -> impl IntoView {
     let hotkey = expect_context::<HotkeyState>();
     let open = hotkey.palette_open;

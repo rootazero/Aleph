@@ -32,6 +32,7 @@ fn tail_lines(text: &str, n: usize) -> String {
 
 /// Collapsible panel that surfaces [`ChatState::reasoning_text`].
 #[component]
+#[must_use]
 pub(super) fn ReasoningPanel() -> impl IntoView {
     let i18n = use_i18n();
     let chat = expect_context::<ChatState>();
