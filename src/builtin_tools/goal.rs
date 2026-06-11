@@ -271,6 +271,8 @@ mod tests {
             note: None,
             token_budget: Some(5000),
             pursuit_max_iterations: None,
+            gate_command: None,
+            lesson: None,
         })
         .await
         .unwrap();

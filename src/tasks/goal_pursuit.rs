@@ -149,7 +149,7 @@ pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, now_ms: u64) -> Goal
         PursuitMode::Active { max_iterations } => goal.continuations_used >= max_iterations,
         PursuitMode::Passive => true,
     };
-    let trimmed_lesson: String = format!("Objective gate vetoed: {}", reason)
+    let trimmed_lesson: String = format!("Objective gate vetoed: {reason}")
         .chars()
         .take(300)
         .collect();
