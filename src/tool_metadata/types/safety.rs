@@ -36,7 +36,7 @@ impl ToolSafetyLevel {
     pub const fn requires_confirmation(&self) -> bool {
         matches!(
             self,
-            ToolSafetyLevel::IrreversibleLowRisk | ToolSafetyLevel::IrreversibleHighRisk
+            Self::IrreversibleLowRisk | Self::IrreversibleHighRisk
         )
     }
 
@@ -44,10 +44,10 @@ impl ToolSafetyLevel {
     #[must_use]
     pub const fn label(&self) -> &'static str {
         match self {
-            ToolSafetyLevel::ReadOnly => "Read Only",
-            ToolSafetyLevel::Reversible => "Reversible",
-            ToolSafetyLevel::IrreversibleLowRisk => "Low Risk",
-            ToolSafetyLevel::IrreversibleHighRisk => "High Risk",
+            Self::ReadOnly => "Read Only",
+            Self::Reversible => "Reversible",
+            Self::IrreversibleLowRisk => "Low Risk",
+            Self::IrreversibleHighRisk => "High Risk",
         }
     }
 
@@ -55,10 +55,10 @@ impl ToolSafetyLevel {
     #[must_use]
     pub const fn color_hint(&self) -> &'static str {
         match self {
-            ToolSafetyLevel::ReadOnly => "green",
-            ToolSafetyLevel::Reversible => "blue",
-            ToolSafetyLevel::IrreversibleLowRisk => "yellow",
-            ToolSafetyLevel::IrreversibleHighRisk => "red",
+            Self::ReadOnly => "green",
+            Self::Reversible => "blue",
+            Self::IrreversibleLowRisk => "yellow",
+            Self::IrreversibleHighRisk => "red",
         }
     }
 }

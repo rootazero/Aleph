@@ -21,8 +21,8 @@ impl AdapterMode {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            AdapterMode::NativeAcp => "native_acp",
-            AdapterMode::Oneshot => "oneshot",
+            Self::NativeAcp => "native_acp",
+            Self::Oneshot => "oneshot",
         }
     }
 
@@ -30,8 +30,8 @@ impl AdapterMode {
     #[must_use]
     pub const fn to_serde(&self) -> crate::config::types::acp::AdapterModeSerde {
         match self {
-            AdapterMode::NativeAcp => crate::config::types::acp::AdapterModeSerde::NativeAcp,
-            AdapterMode::Oneshot => crate::config::types::acp::AdapterModeSerde::Oneshot,
+            Self::NativeAcp => crate::config::types::acp::AdapterModeSerde::NativeAcp,
+            Self::Oneshot => crate::config::types::acp::AdapterModeSerde::Oneshot,
         }
     }
 
@@ -39,8 +39,8 @@ impl AdapterMode {
     #[must_use]
     pub const fn from_serde(s: &crate::config::types::acp::AdapterModeSerde) -> Self {
         match s {
-            crate::config::types::acp::AdapterModeSerde::NativeAcp => AdapterMode::NativeAcp,
-            crate::config::types::acp::AdapterModeSerde::Oneshot => AdapterMode::Oneshot,
+            crate::config::types::acp::AdapterModeSerde::NativeAcp => Self::NativeAcp,
+            crate::config::types::acp::AdapterModeSerde::Oneshot => Self::Oneshot,
         }
     }
 }

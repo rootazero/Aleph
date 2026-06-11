@@ -29,11 +29,11 @@ pub enum LockError {
 impl std::fmt::Display for LockError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LockError::ReadLockFailed => write!(f, "Failed to acquire read lock"),
-            LockError::WriteLockFailed { hint } => {
+            Self::ReadLockFailed => write!(f, "Failed to acquire read lock"),
+            Self::WriteLockFailed { hint } => {
                 write!(f, "Failed to acquire write lock: {hint}")
             }
-            LockError::IoError(e) => write!(f, "IO error: {e}"),
+            Self::IoError(e) => write!(f, "IO error: {e}"),
         }
     }
 }
@@ -42,7 +42,7 @@ impl std::error::Error for LockError {}
 
 impl From<std::io::Error> for LockError {
     fn from(err: std::io::Error) -> Self {
-        LockError::IoError(err)
+        Self::IoError(err)
     }
 }
 

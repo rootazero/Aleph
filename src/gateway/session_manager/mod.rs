@@ -78,12 +78,12 @@ pub enum SessionState {
 impl std::fmt::Display for SessionState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SessionState::Created => write!(f, "created"),
-            SessionState::Active => write!(f, "active"),
-            SessionState::Idle => write!(f, "idle"),
-            SessionState::Running => write!(f, "running"),
-            SessionState::Error => write!(f, "error"),
-            SessionState::Stopped => write!(f, "stopped"),
+            Self::Created => write!(f, "created"),
+            Self::Active => write!(f, "active"),
+            Self::Idle => write!(f, "idle"),
+            Self::Running => write!(f, "running"),
+            Self::Error => write!(f, "error"),
+            Self::Stopped => write!(f, "stopped"),
         }
     }
 }

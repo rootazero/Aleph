@@ -25,10 +25,10 @@ impl PageSize {
     #[must_use]
     pub const fn dimensions_mm(&self) -> (f32, f32) {
         match self {
-            PageSize::A4 => (210.0, 297.0),
-            PageSize::Letter => (215.9, 279.4),
-            PageSize::A3 => (297.0, 420.0),
-            PageSize::Custom {
+            Self::A4 => (210.0, 297.0),
+            Self::Letter => (215.9, 279.4),
+            Self::A3 => (297.0, 420.0),
+            Self::Custom {
                 width_mm,
                 height_mm,
             } => (*width_mm, *height_mm),
@@ -116,9 +116,9 @@ impl ContentFormat {
 
         // Threshold: 3+ points → likely markdown
         if score >= 3 {
-            ContentFormat::Markdown
+            Self::Markdown
         } else {
-            ContentFormat::Text
+            Self::Text
         }
     }
 }

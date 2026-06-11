@@ -29,10 +29,10 @@ impl SurfaceKind {
     #[must_use]
     pub fn from_opt_str(s: Option<&str>) -> Self {
         match s.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
-            Some("desktop") => SurfaceKind::Desktop,
-            Some("browser") => SurfaceKind::Browser,
-            Some("cli") => SurfaceKind::Cli,
-            _ => SurfaceKind::Unknown,
+            Some("desktop") => Self::Desktop,
+            Some("browser") => Self::Browser,
+            Some("cli") => Self::Cli,
+            _ => Self::Unknown,
         }
     }
 
@@ -40,10 +40,10 @@ impl SurfaceKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            SurfaceKind::Desktop => "desktop",
-            SurfaceKind::Browser => "browser",
-            SurfaceKind::Cli => "cli",
-            SurfaceKind::Unknown => "unknown",
+            Self::Desktop => "desktop",
+            Self::Browser => "browser",
+            Self::Cli => "cli",
+            Self::Unknown => "unknown",
         }
     }
 }

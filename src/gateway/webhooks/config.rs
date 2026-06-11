@@ -25,10 +25,10 @@ impl SignatureFormat {
     #[must_use]
     pub const fn header_name(&self) -> Option<&'static str> {
         match self {
-            SignatureFormat::Github => Some("X-Hub-Signature-256"),
-            SignatureFormat::Stripe => Some("Stripe-Signature"),
-            SignatureFormat::Generic => Some("X-Webhook-Signature"),
-            SignatureFormat::None => None,
+            Self::Github => Some("X-Hub-Signature-256"),
+            Self::Stripe => Some("Stripe-Signature"),
+            Self::Generic => Some("X-Webhook-Signature"),
+            Self::None => None,
         }
     }
 }

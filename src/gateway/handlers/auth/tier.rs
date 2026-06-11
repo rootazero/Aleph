@@ -26,16 +26,16 @@ impl Tier {
     /// Parse the `level` pairing param. Unknown / missing → `Chat` (safe default).
     pub const fn from_level(level: Option<&str>) -> Self {
         match level {
-            Some(s) if s.eq_ignore_ascii_case("config") => Tier::Config,
-            _ => Tier::Chat,
+            Some(s) if s.eq_ignore_ascii_case("config") => Self::Config,
+            _ => Self::Chat,
         }
     }
 
     /// The permission set persisted for a device approved at this tier.
     pub fn permissions(self) -> Vec<String> {
         match self {
-            Tier::Config => vec![WILDCARD.to_string()],
-            Tier::Chat => CHAT_PERMISSIONS.iter().map(|s| s.to_string()).collect(),
+            Self::Config => vec![WILDCARD.to_string()],
+            Self::Chat => CHAT_PERMISSIONS.iter().map(|s| s.to_string()).collect(),
         }
     }
 }

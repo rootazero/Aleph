@@ -29,11 +29,11 @@ impl LogLevel {
     #[must_use]
     pub const fn to_tracing_level(&self) -> Level {
         match self {
-            LogLevel::Error => Level::ERROR,
-            LogLevel::Warn => Level::WARN,
-            LogLevel::Info => Level::INFO,
-            LogLevel::Debug => Level::DEBUG,
-            LogLevel::Trace => Level::TRACE,
+            Self::Error => Level::ERROR,
+            Self::Warn => Level::WARN,
+            Self::Info => Level::INFO,
+            Self::Debug => Level::DEBUG,
+            Self::Trace => Level::TRACE,
         }
     }
 
@@ -41,11 +41,11 @@ impl LogLevel {
     #[must_use]
     pub const fn to_filter_string(&self) -> &'static str {
         match self {
-            LogLevel::Error => "error",
-            LogLevel::Warn => "warn",
-            LogLevel::Info => "info",
-            LogLevel::Debug => "debug",
-            LogLevel::Trace => "trace",
+            Self::Error => "error",
+            Self::Warn => "warn",
+            Self::Info => "info",
+            Self::Debug => "debug",
+            Self::Trace => "trace",
         }
     }
 
@@ -53,15 +53,15 @@ impl LogLevel {
     #[must_use]
     pub const fn parse(s: &str) -> Option<Self> {
         if s.eq_ignore_ascii_case("error") {
-            Some(LogLevel::Error)
+            Some(Self::Error)
         } else if s.eq_ignore_ascii_case("warn") || s.eq_ignore_ascii_case("warning") {
-            Some(LogLevel::Warn)
+            Some(Self::Warn)
         } else if s.eq_ignore_ascii_case("info") {
-            Some(LogLevel::Info)
+            Some(Self::Info)
         } else if s.eq_ignore_ascii_case("debug") {
-            Some(LogLevel::Debug)
+            Some(Self::Debug)
         } else if s.eq_ignore_ascii_case("trace") {
-            Some(LogLevel::Trace)
+            Some(Self::Trace)
         } else {
             None
         }
@@ -70,25 +70,25 @@ impl LogLevel {
     /// Convert to u8 for atomic storage
     const fn to_u8(self) -> u8 {
         match self {
-            LogLevel::Error => 0,
-            LogLevel::Warn => 1,
-            LogLevel::Info => 2,
-            LogLevel::Debug => 3,
-            LogLevel::Trace => 4,
+            Self::Error => 0,
+            Self::Warn => 1,
+            Self::Info => 2,
+            Self::Debug => 3,
+            Self::Trace => 4,
         }
     }
 
     /// Convert from u8
     fn from_u8(value: u8) -> Self {
         match value {
-            0 => LogLevel::Error,
-            1 => LogLevel::Warn,
-            2 => LogLevel::Info,
-            3 => LogLevel::Debug,
-            4 => LogLevel::Trace,
+            0 => Self::Error,
+            1 => Self::Warn,
+            2 => Self::Info,
+            3 => Self::Debug,
+            4 => Self::Trace,
             _ => {
                 debug_assert!(false, "Invalid LogLevel u8 value: {value}");
-                LogLevel::Info // Default fallback
+                Self::Info // Default fallback
             }
         }
     }

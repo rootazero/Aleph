@@ -71,10 +71,10 @@ impl AgentEnvFilter {
     #[must_use]
     pub fn to_sql_filter(&self) -> String {
         match self {
-            AgentEnvFilter::Single(id) => {
+            Self::Single(id) => {
                 format!("agent = '{}'", id.replace('\'', "''"))
             }
-            AgentEnvFilter::Multiple(ids) => {
+            Self::Multiple(ids) => {
                 if ids.is_empty() {
                     return "1=0".to_string(); // match nothing
                 }
@@ -84,7 +84,7 @@ impl AgentEnvFilter {
                     .collect();
                 format!("agent IN ({})", escaped.join(", "))
             }
-            AgentEnvFilter::All => "1=1".to_string(),
+            Self::All => "1=1".to_string(),
         }
     }
 }
@@ -302,13 +302,13 @@ impl CacheState {
     #[must_use]
     pub fn is_active(&self) -> bool {
         match self {
-            CacheState::None => false,
-            CacheState::Ephemeral {
+            Self::None => false,
+            Self::Ephemeral {
                 cache_breakpoint_index,
                 ..
             } => cache_breakpoint_index.is_some(),
-            CacheState::Persistent { expires_at, .. } => *expires_at > Utc::now(),
-            CacheState::Transparent => true,
+            Self::Persistent { expires_at, .. } => *expires_at > Utc::now(),
+            Self::Transparent => true,
         }
     }
 
@@ -316,10 +316,10 @@ impl CacheState {
     #[must_use]
     pub const fn tokens_cached(&self) -> Option<u64> {
         match self {
-            CacheState::None => None,
-            CacheState::Ephemeral { tokens_cached, .. } => *tokens_cached,
-            CacheState::Persistent { tokens_cached, .. } => Some(*tokens_cached),
-            CacheState::Transparent => None,
+            Self::None => None,
+            Self::Ephemeral { tokens_cached, .. } => *tokens_cached,
+            Self::Persistent { tokens_cached, .. } => Some(*tokens_cached),
+            Self::Transparent => None,
         }
     }
 }

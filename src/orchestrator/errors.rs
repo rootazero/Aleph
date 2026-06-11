@@ -44,7 +44,7 @@ impl FlowError {
     /// provider and dispatch again. Currently only `Transient` qualifies.
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
-        matches!(self, FlowError::Transient { .. })
+        matches!(self, Self::Transient { .. })
     }
 }
 

@@ -404,25 +404,25 @@ impl ExecutionAdapter for SimpleExecutionEngine {
         // Wrap the dyn trait object in DynEventEmitter to make it Sized,
         // then delegate to the existing generic execute method
         let wrapper = Arc::new(DynEventEmitter::new(emitter));
-        SimpleExecutionEngine::execute(self, request, agent, wrapper).await
+        Self::execute(self, request, agent, wrapper).await
     }
 
     async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
-        SimpleExecutionEngine::cancel(self, run_id).await
+        Self::cancel(self, run_id).await
     }
 
     async fn cancel_session(
         &self,
         session_key: &crate::routing::session_key::SessionKey,
     ) -> Result<Option<String>, ExecutionError> {
-        SimpleExecutionEngine::cancel_session(self, session_key).await
+        Self::cancel_session(self, session_key).await
     }
 
     async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
-        SimpleExecutionEngine::get_status(self, run_id).await
+        Self::get_status(self, run_id).await
     }
 
     async fn active_run_count(&self) -> usize {
-        SimpleExecutionEngine::active_run_count(self).await
+        Self::active_run_count(self).await
     }
 }

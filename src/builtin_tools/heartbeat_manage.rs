@@ -93,13 +93,13 @@ pub enum TriggerConditionInput {
 impl From<TriggerConditionInput> for TriggerCondition {
     fn from(input: TriggerConditionInput) -> Self {
         match input {
-            TriggerConditionInput::Always => TriggerCondition::Always,
-            TriggerConditionInput::NonEmpty => TriggerCondition::NonEmpty,
-            TriggerConditionInput::Changed => TriggerCondition::Changed,
+            TriggerConditionInput::Always => Self::Always,
+            TriggerConditionInput::NonEmpty => Self::NonEmpty,
+            TriggerConditionInput::Changed => Self::Changed,
             TriggerConditionInput::GreaterThan { threshold } => {
-                TriggerCondition::GreaterThan(threshold)
+                Self::GreaterThan(threshold)
             }
-            TriggerConditionInput::Contains { text } => TriggerCondition::Contains(text),
+            TriggerConditionInput::Contains { text } => Self::Contains(text),
         }
     }
 }

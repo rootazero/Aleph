@@ -29,10 +29,10 @@ impl MessageRole {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            MessageRole::System => "system",
-            MessageRole::User => "user",
-            MessageRole::Assistant => "assistant",
-            MessageRole::Tool => "tool",
+            Self::System => "system",
+            Self::User => "user",
+            Self::Assistant => "assistant",
+            Self::Tool => "tool",
         }
     }
 }

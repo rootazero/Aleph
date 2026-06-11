@@ -150,7 +150,7 @@ impl GenerationError {
 
     /// Create an authentication error
     pub fn authentication<S: Into<String>, P: Into<String>>(message: S, provider: P) -> Self {
-        GenerationError::AuthenticationError {
+        Self::AuthenticationError {
             message: message.into(),
             provider: provider.into(),
         }
@@ -158,7 +158,7 @@ impl GenerationError {
 
     /// Create a rate limit error
     pub fn rate_limit<S: Into<String>>(message: S, retry_after: Option<Duration>) -> Self {
-        GenerationError::RateLimitError {
+        Self::RateLimitError {
             message: message.into(),
             retry_after,
         }
@@ -166,7 +166,7 @@ impl GenerationError {
 
     /// Create a quota exceeded error
     pub fn quota_exceeded<S: Into<String>>(message: S, resets_at: Option<String>) -> Self {
-        GenerationError::QuotaExceededError {
+        Self::QuotaExceededError {
             message: message.into(),
             resets_at,
         }
@@ -175,19 +175,19 @@ impl GenerationError {
     /// Create a timeout error
     #[must_use]
     pub const fn timeout(duration: Duration) -> Self {
-        GenerationError::TimeoutError { duration }
+        Self::TimeoutError { duration }
     }
 
     /// Create a network error
     pub fn network<S: Into<String>>(message: S) -> Self {
-        GenerationError::NetworkError {
+        Self::NetworkError {
             message: message.into(),
         }
     }
 
     /// Create an invalid parameters error
     pub fn invalid_parameters<S: Into<String>>(message: S, parameter: Option<String>) -> Self {
-        GenerationError::InvalidParametersError {
+        Self::InvalidParametersError {
             message: message.into(),
             parameter,
         }
@@ -195,7 +195,7 @@ impl GenerationError {
 
     /// Create a content filtered error
     pub fn content_filtered<S: Into<String>>(message: S, category: Option<String>) -> Self {
-        GenerationError::ContentFilteredError {
+        Self::ContentFilteredError {
             message: message.into(),
             category,
         }
@@ -207,7 +207,7 @@ impl GenerationError {
         feature: F,
         provider: P,
     ) -> Self {
-        GenerationError::UnsupportedFeatureError {
+        Self::UnsupportedFeatureError {
             message: message.into(),
             feature: feature.into(),
             provider: provider.into(),
@@ -220,7 +220,7 @@ impl GenerationError {
         status_code: Option<u16>,
         provider: P,
     ) -> Self {
-        GenerationError::ProviderError {
+        Self::ProviderError {
             message: message.into(),
             status_code,
             provider: provider.into(),
@@ -230,19 +230,19 @@ impl GenerationError {
     /// Create a cancelled error
     #[must_use]
     pub const fn cancelled() -> Self {
-        GenerationError::Cancelled
+        Self::Cancelled
     }
 
     /// Create an internal error
     pub fn internal<S: Into<String>>(message: S) -> Self {
-        GenerationError::InternalError {
+        Self::InternalError {
             message: message.into(),
         }
     }
 
     /// Create a model not found error
     pub fn model_not_found<M: Into<String>, P: Into<String>>(model: M, provider: P) -> Self {
-        GenerationError::ModelNotFoundError {
+        Self::ModelNotFoundError {
             model: model.into(),
             provider: provider.into(),
         }
@@ -253,7 +253,7 @@ impl GenerationError {
         generation_type: G,
         provider: P,
     ) -> Self {
-        GenerationError::UnsupportedGenerationTypeError {
+        Self::UnsupportedGenerationTypeError {
             generation_type: generation_type.into(),
             provider: provider.into(),
         }
@@ -261,7 +261,7 @@ impl GenerationError {
 
     /// Create an unsupported format error
     pub fn unsupported_format<F: Into<String>>(format: F, supported: Vec<String>) -> Self {
-        GenerationError::UnsupportedFormatError {
+        Self::UnsupportedFormatError {
             format: format.into(),
             supported,
         }
@@ -269,7 +269,7 @@ impl GenerationError {
 
     /// Create an unsupported dimension error
     pub fn unsupported_dimension<S: Into<String>>(message: S, suggested: Option<String>) -> Self {
-        GenerationError::UnsupportedDimensionError {
+        Self::UnsupportedDimensionError {
             message: message.into(),
             suggested,
         }
@@ -277,7 +277,7 @@ impl GenerationError {
 
     /// Create a job failed error
     pub fn job_failed<S: Into<String>>(message: S, job_id: Option<String>) -> Self {
-        GenerationError::JobFailedError {
+        Self::JobFailedError {
             message: message.into(),
             job_id,
         }
@@ -285,7 +285,7 @@ impl GenerationError {
 
     /// Create a download error
     pub fn download<S: Into<String>>(message: S, url: Option<String>) -> Self {
-        GenerationError::DownloadError {
+        Self::DownloadError {
             message: message.into(),
             url,
         }
@@ -293,7 +293,7 @@ impl GenerationError {
 
     /// Create a serialization error
     pub fn serialization<S: Into<String>>(message: S) -> Self {
-        GenerationError::SerializationError {
+        Self::SerializationError {
             message: message.into(),
         }
     }
@@ -321,18 +321,18 @@ impl GenerationError {
     pub const fn is_retryable(&self) -> bool {
         matches!(
             self,
-            GenerationError::RateLimitError { .. }
-                | GenerationError::TimeoutError { .. }
-                | GenerationError::NetworkError { .. }
-                | GenerationError::ProviderError {
+            Self::RateLimitError { .. }
+                | Self::TimeoutError { .. }
+                | Self::NetworkError { .. }
+                | Self::ProviderError {
                     status_code: Some(500..=599),
                     ..
                 }
-                | GenerationError::ProviderError {
+                | Self::ProviderError {
                     status_code: Some(429),
                     ..
                 }
-                | GenerationError::DownloadError { .. }
+                | Self::DownloadError { .. }
         )
     }
 
@@ -356,11 +356,11 @@ impl GenerationError {
     pub const fn needs_user_action(&self) -> bool {
         matches!(
             self,
-            GenerationError::AuthenticationError { .. }
-                | GenerationError::QuotaExceededError { .. }
-                | GenerationError::InvalidParametersError { .. }
-                | GenerationError::ContentFilteredError { .. }
-                | GenerationError::ModelNotFoundError { .. }
+            Self::AuthenticationError { .. }
+                | Self::QuotaExceededError { .. }
+                | Self::InvalidParametersError { .. }
+                | Self::ContentFilteredError { .. }
+                | Self::ModelNotFoundError { .. }
         )
     }
 
@@ -388,11 +388,11 @@ impl GenerationError {
     pub const fn should_fallback(&self) -> bool {
         matches!(
             self,
-            GenerationError::UnsupportedFeatureError { .. }
-                | GenerationError::UnsupportedGenerationTypeError { .. }
-                | GenerationError::UnsupportedFormatError { .. }
-                | GenerationError::UnsupportedDimensionError { .. }
-                | GenerationError::ModelNotFoundError { .. }
+            Self::UnsupportedFeatureError { .. }
+                | Self::UnsupportedGenerationTypeError { .. }
+                | Self::UnsupportedFormatError { .. }
+                | Self::UnsupportedDimensionError { .. }
+                | Self::ModelNotFoundError { .. }
         )
     }
 
@@ -417,7 +417,7 @@ impl GenerationError {
     #[must_use]
     pub const fn retry_after(&self) -> Option<Duration> {
         match self {
-            GenerationError::RateLimitError { retry_after, .. } => *retry_after,
+            Self::RateLimitError { retry_after, .. } => *retry_after,
             _ => None,
         }
     }
@@ -426,11 +426,11 @@ impl GenerationError {
     #[must_use]
     pub fn provider_name(&self) -> Option<&str> {
         match self {
-            GenerationError::AuthenticationError { provider, .. } => Some(provider),
-            GenerationError::UnsupportedFeatureError { provider, .. } => Some(provider),
-            GenerationError::ProviderError { provider, .. } => Some(provider),
-            GenerationError::ModelNotFoundError { provider, .. } => Some(provider),
-            GenerationError::UnsupportedGenerationTypeError { provider, .. } => Some(provider),
+            Self::AuthenticationError { provider, .. } => Some(provider),
+            Self::UnsupportedFeatureError { provider, .. } => Some(provider),
+            Self::ProviderError { provider, .. } => Some(provider),
+            Self::ModelNotFoundError { provider, .. } => Some(provider),
+            Self::UnsupportedGenerationTypeError { provider, .. } => Some(provider),
             _ => None,
         }
     }
@@ -442,12 +442,12 @@ impl GenerationError {
     #[must_use]
     pub fn user_friendly_message(&self) -> String {
         match self {
-            GenerationError::AuthenticationError { provider, .. } => {
+            Self::AuthenticationError { provider, .. } => {
                 format!(
                     "Authentication failed for {provider}. Please check your API key in settings."
                 )
             }
-            GenerationError::RateLimitError { retry_after, .. } => {
+            Self::RateLimitError { retry_after, .. } => {
                 if let Some(duration) = retry_after {
                     format!(
                         "Rate limit exceeded. Please wait {} seconds before trying again.",
@@ -457,7 +457,7 @@ impl GenerationError {
                     "Rate limit exceeded. Please wait a moment before trying again.".to_string()
                 }
             }
-            GenerationError::QuotaExceededError { resets_at, .. } => {
+            Self::QuotaExceededError { resets_at, .. } => {
                 if let Some(reset) = resets_at {
                     format!(
                         "Usage quota exceeded. Your quota resets at {reset}. Consider upgrading your plan."
@@ -467,16 +467,16 @@ impl GenerationError {
                         .to_string()
                 }
             }
-            GenerationError::TimeoutError { duration } => {
+            Self::TimeoutError { duration } => {
                 format!(
                     "Generation timed out after {} seconds. Try a simpler prompt or smaller output.",
                     duration.as_secs()
                 )
             }
-            GenerationError::NetworkError { .. } => {
+            Self::NetworkError { .. } => {
                 "Network error. Please check your internet connection and try again.".to_string()
             }
-            GenerationError::InvalidParametersError { parameter, message } => {
+            Self::InvalidParametersError { parameter, message } => {
                 if let Some(param) = parameter {
                     format!(
                         "Invalid parameter '{param}': {message}. Please adjust your settings."
@@ -487,7 +487,7 @@ impl GenerationError {
                     )
                 }
             }
-            GenerationError::ContentFilteredError { category, .. } => {
+            Self::ContentFilteredError { category, .. } => {
                 if let Some(cat) = category {
                     format!(
                         "Content was filtered for '{cat}' category. Please modify your prompt."
@@ -496,14 +496,14 @@ impl GenerationError {
                     "Content was filtered by safety systems. Please modify your prompt.".to_string()
                 }
             }
-            GenerationError::UnsupportedFeatureError {
+            Self::UnsupportedFeatureError {
                 feature, provider, ..
             } => {
                 format!(
                     "The feature '{feature}' is not supported by {provider}. Try a different provider."
                 )
             }
-            GenerationError::ProviderError {
+            Self::ProviderError {
                 message,
                 status_code,
                 provider,
@@ -514,16 +514,16 @@ impl GenerationError {
                     format!("{provider} error: {message}")
                 }
             }
-            GenerationError::Cancelled => "Generation was cancelled.".to_string(),
-            GenerationError::InternalError { message } => {
+            Self::Cancelled => "Generation was cancelled.".to_string(),
+            Self::InternalError { message } => {
                 format!("Internal error: {message}. Please try again.")
             }
-            GenerationError::ModelNotFoundError { model, provider } => {
+            Self::ModelNotFoundError { model, provider } => {
                 format!(
                     "Model '{model}' not found on {provider}. Check the model name or try a different model."
                 )
             }
-            GenerationError::UnsupportedGenerationTypeError {
+            Self::UnsupportedGenerationTypeError {
                 generation_type,
                 provider,
             } => {
@@ -531,35 +531,35 @@ impl GenerationError {
                     "{provider} does not support {generation_type} generation. Try a different provider."
                 )
             }
-            GenerationError::UnsupportedFormatError { format, supported } => {
+            Self::UnsupportedFormatError { format, supported } => {
                 format!(
                     "Output format '{}' is not supported. Supported formats: {}",
                     format,
                     supported.join(", ")
                 )
             }
-            GenerationError::UnsupportedDimensionError { message, suggested } => {
+            Self::UnsupportedDimensionError { message, suggested } => {
                 if let Some(sug) = suggested {
                     format!("{message}. Suggested: {sug}")
                 } else {
                     message.clone()
                 }
             }
-            GenerationError::JobFailedError { message, job_id } => {
+            Self::JobFailedError { message, job_id } => {
                 if let Some(id) = job_id {
                     format!("Generation job {id} failed: {message}")
                 } else {
                     format!("Generation job failed: {message}")
                 }
             }
-            GenerationError::DownloadError { message, url } => {
+            Self::DownloadError { message, url } => {
                 if let Some(u) = url {
                     format!("Failed to download from {u}: {message}")
                 } else {
                     format!("Download failed: {message}")
                 }
             }
-            GenerationError::SerializationError { message } => {
+            Self::SerializationError { message } => {
                 format!("Data processing error: {message}. Please try again.")
             }
         }
@@ -571,49 +571,49 @@ impl From<GenerationError> for AlephError {
     fn from(err: GenerationError) -> Self {
         match err {
             GenerationError::AuthenticationError { message, provider } => {
-                AlephError::authentication(provider, message)
+                Self::authentication(provider, message)
             }
-            GenerationError::RateLimitError { message, .. } => AlephError::rate_limit(message),
+            GenerationError::RateLimitError { message, .. } => Self::rate_limit(message),
             GenerationError::QuotaExceededError { message, .. } => {
-                AlephError::rate_limit(format!("Quota exceeded: {message}"))
+                Self::rate_limit(format!("Quota exceeded: {message}"))
             }
-            GenerationError::TimeoutError { duration } => AlephError::Timeout {
+            GenerationError::TimeoutError { duration } => Self::Timeout {
                 suggestion: Some(format!(
                     "Generation timed out after {} seconds. Try a simpler request.",
                     duration.as_secs()
                 )),
             },
-            GenerationError::NetworkError { message } => AlephError::network(message),
+            GenerationError::NetworkError { message } => Self::network(message),
             GenerationError::InvalidParametersError { message, .. } => {
-                AlephError::invalid_config(message)
+                Self::invalid_config(message)
             }
             GenerationError::ContentFilteredError { message, .. } => {
-                AlephError::provider(format!("Content filtered: {message}"))
+                Self::provider(format!("Content filtered: {message}"))
             }
             GenerationError::UnsupportedFeatureError { message, .. } => {
-                AlephError::provider(message)
+                Self::provider(message)
             }
-            GenerationError::ProviderError { message, .. } => AlephError::provider(message),
-            GenerationError::Cancelled => AlephError::cancelled(),
-            GenerationError::InternalError { message } => AlephError::other(message),
+            GenerationError::ProviderError { message, .. } => Self::provider(message),
+            GenerationError::Cancelled => Self::cancelled(),
+            GenerationError::InternalError { message } => Self::other(message),
             GenerationError::ModelNotFoundError { model, provider } => {
-                AlephError::invalid_config(format!("Model '{model}' not found on {provider}"))
+                Self::invalid_config(format!("Model '{model}' not found on {provider}"))
             }
             GenerationError::UnsupportedGenerationTypeError {
                 generation_type,
                 provider,
-            } => AlephError::provider(format!(
+            } => Self::provider(format!(
                 "{provider} does not support {generation_type} generation"
             )),
             GenerationError::UnsupportedFormatError { format, .. } => {
-                AlephError::invalid_config(format!("Unsupported format: {format}"))
+                Self::invalid_config(format!("Unsupported format: {format}"))
             }
             GenerationError::UnsupportedDimensionError { message, .. } => {
-                AlephError::invalid_config(message)
+                Self::invalid_config(message)
             }
-            GenerationError::JobFailedError { message, .. } => AlephError::provider(message),
-            GenerationError::DownloadError { message, .. } => AlephError::network(message),
-            GenerationError::SerializationError { message } => AlephError::IoError(message),
+            GenerationError::JobFailedError { message, .. } => Self::provider(message),
+            GenerationError::DownloadError { message, .. } => Self::network(message),
+            GenerationError::SerializationError { message } => Self::IoError(message),
         }
     }
 }

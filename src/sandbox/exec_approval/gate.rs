@@ -30,7 +30,7 @@ impl ApprovalOutcome {
     pub const fn is_approved(&self) -> bool {
         matches!(
             self,
-            ApprovalOutcome::Approved | ApprovalOutcome::ApprovedForSession
+            Self::Approved | Self::ApprovedForSession
         )
     }
 
@@ -38,7 +38,7 @@ impl ApprovalOutcome {
     /// subsequent calls to the same tool skip the prompt.
     #[must_use]
     pub const fn is_session_grant(&self) -> bool {
-        matches!(self, ApprovalOutcome::ApprovedForSession)
+        matches!(self, Self::ApprovedForSession)
     }
 }
 

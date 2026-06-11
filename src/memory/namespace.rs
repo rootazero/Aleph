@@ -26,12 +26,12 @@ impl NamespaceScope {
     #[must_use]
     pub fn to_sql_filter(&self) -> (String, Vec<String>) {
         match self {
-            NamespaceScope::Owner => ("1=1".to_string(), vec![]),
-            NamespaceScope::Guest(guest_id) => (
+            Self::Owner => ("1=1".to_string(), vec![]),
+            Self::Guest(guest_id) => (
                 "namespace = ?".to_string(),
                 vec![format!("guest:{}", guest_id)],
             ),
-            NamespaceScope::Shared => ("namespace = ?".to_string(), vec!["shared".to_string()]),
+            Self::Shared => ("namespace = ?".to_string(), vec!["shared".to_string()]),
         }
     }
 
@@ -41,9 +41,9 @@ impl NamespaceScope {
     #[must_use]
     pub fn to_namespace_value(&self) -> String {
         match self {
-            NamespaceScope::Owner => "owner".to_string(),
-            NamespaceScope::Guest(guest_id) => format!("guest:{guest_id}"),
-            NamespaceScope::Shared => "shared".to_string(),
+            Self::Owner => "owner".to_string(),
+            Self::Guest(guest_id) => format!("guest:{guest_id}"),
+            Self::Shared => "shared".to_string(),
         }
     }
 
@@ -57,10 +57,10 @@ impl NamespaceScope {
     /// Returns error if Node role is used without guest_id
     pub fn from_auth_context(role: &DeviceRole, guest_id: Option<&str>) -> Result<Self, String> {
         match role {
-            DeviceRole::Operator => Ok(NamespaceScope::Owner),
+            DeviceRole::Operator => Ok(Self::Owner),
             DeviceRole::Node => {
                 if let Some(id) = guest_id {
-                    Ok(NamespaceScope::Guest(id.to_string()))
+                    Ok(Self::Guest(id.to_string()))
                 } else {
                     Err("guest_id required for Node role".to_string())
                 }

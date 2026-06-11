@@ -188,7 +188,7 @@ impl ProfilesConfig {
     /// Load configuration from a specific path
     pub fn load(path: &Path) -> ProfileConfigResult<Self> {
         let content = std::fs::read_to_string(path)?;
-        let config: ProfilesConfig = toml::from_str(&content)?;
+        let config: Self = toml::from_str(&content)?;
         debug!(
             path = %path.display(),
             profile_count = config.profiles.len(),

@@ -93,37 +93,37 @@ impl PairingState {
     #[must_use]
     pub const fn to_channel_status(&self) -> ChannelStatus {
         match self {
-            PairingState::Idle => ChannelStatus::Disconnected,
-            PairingState::Initializing
-            | PairingState::WaitingQr { .. }
-            | PairingState::QrExpired
-            | PairingState::Scanned
-            | PairingState::Syncing { .. } => ChannelStatus::Connecting,
-            PairingState::Connected { .. } => ChannelStatus::Connected,
-            PairingState::Disconnected { .. } => ChannelStatus::Disconnected,
-            PairingState::Failed { .. } => ChannelStatus::Error,
+            Self::Idle => ChannelStatus::Disconnected,
+            Self::Initializing
+            | Self::WaitingQr { .. }
+            | Self::QrExpired
+            | Self::Scanned
+            | Self::Syncing { .. } => ChannelStatus::Connecting,
+            Self::Connected { .. } => ChannelStatus::Connected,
+            Self::Disconnected { .. } => ChannelStatus::Disconnected,
+            Self::Failed { .. } => ChannelStatus::Error,
         }
     }
 
     /// Whether the pairing has completed successfully and the channel is usable.
     #[must_use]
     pub const fn is_connected(&self) -> bool {
-        matches!(self, PairingState::Connected { .. })
+        matches!(self, Self::Connected { .. })
     }
 
     /// Human-readable description of the current state.
     #[must_use]
     pub const fn description(&self) -> &str {
         match self {
-            PairingState::Idle => "Bridge not started",
-            PairingState::Initializing => "Bridge process starting",
-            PairingState::WaitingQr { .. } => "QR code ready for scanning",
-            PairingState::QrExpired => "QR code expired, waiting for refresh",
-            PairingState::Scanned => "QR scanned, waiting for phone confirmation",
-            PairingState::Syncing { .. } => "Syncing encryption keys",
-            PairingState::Connected { .. } => "Connected",
-            PairingState::Disconnected { .. } => "Disconnected",
-            PairingState::Failed { .. } => "Pairing failed",
+            Self::Idle => "Bridge not started",
+            Self::Initializing => "Bridge process starting",
+            Self::WaitingQr { .. } => "QR code ready for scanning",
+            Self::QrExpired => "QR code expired, waiting for refresh",
+            Self::Scanned => "QR scanned, waiting for phone confirmation",
+            Self::Syncing { .. } => "Syncing encryption keys",
+            Self::Connected { .. } => "Connected",
+            Self::Disconnected { .. } => "Disconnected",
+            Self::Failed { .. } => "Pairing failed",
         }
     }
 }

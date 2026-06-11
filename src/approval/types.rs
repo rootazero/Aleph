@@ -30,16 +30,16 @@ pub enum ActionType {
 impl fmt::Display for ActionType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            ActionType::BrowserNavigate => "browser navigate",
-            ActionType::BrowserClick => "browser click",
-            ActionType::BrowserType => "browser type",
-            ActionType::BrowserFill => "browser fill",
-            ActionType::BrowserEvaluate => "browser evaluate",
-            ActionType::DesktopClick => "desktop click",
-            ActionType::DesktopType => "desktop type",
-            ActionType::DesktopKeyCombo => "desktop key combo",
-            ActionType::DesktopLaunchApp => "desktop launch app",
-            ActionType::ShellExec => "shell exec",
+            Self::BrowserNavigate => "browser navigate",
+            Self::BrowserClick => "browser click",
+            Self::BrowserType => "browser type",
+            Self::BrowserFill => "browser fill",
+            Self::BrowserEvaluate => "browser evaluate",
+            Self::DesktopClick => "desktop click",
+            Self::DesktopType => "desktop type",
+            Self::DesktopKeyCombo => "desktop key combo",
+            Self::DesktopLaunchApp => "desktop launch app",
+            Self::ShellExec => "shell exec",
         };
         write!(f, "{s}")
     }

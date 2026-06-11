@@ -81,7 +81,7 @@ impl ToolResult {
 
 impl From<crate::error::AlephError> for ToolResult {
     fn from(err: crate::error::AlephError) -> Self {
-        ToolResult::error(err.to_string())
+        Self::error(err.to_string())
     }
 }
 

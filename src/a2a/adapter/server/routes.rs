@@ -352,7 +352,7 @@ where
             .extensions
             .get::<ConnectInfo<SocketAddr>>()
             .map_or_else(fallback_addr, |ci| ci.0);
-        Ok(PeerAddr(addr))
+        Ok(Self(addr))
     }
 }
 

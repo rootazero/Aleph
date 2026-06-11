@@ -224,7 +224,7 @@ impl GlobalBus {
     ///
     /// This is the preferred way to access the GlobalBus.
     #[must_use]
-    pub fn global() -> &'static GlobalBus {
+    pub fn global() -> &'static Self {
         &GLOBAL_BUS
     }
 

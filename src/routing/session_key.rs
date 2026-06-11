@@ -72,7 +72,7 @@ pub enum SessionKey {
 
     /// Subagent session (nested under parent)
     Subagent {
-        parent_key: Box<SessionKey>,
+        parent_key: Box<Self>,
         subagent_id: String,
     },
 
@@ -231,7 +231,7 @@ impl SessionKey {
 
     /// Get the main session key for this agent
     #[must_use]
-    pub fn main_session_key(&self) -> SessionKey {
+    pub fn main_session_key(&self) -> Self {
         Self::Main {
             agent_id: self.agent_id().to_string(),
             main_key: DEFAULT_MAIN_KEY.to_string(),

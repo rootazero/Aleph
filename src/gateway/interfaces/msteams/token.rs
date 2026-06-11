@@ -258,7 +258,7 @@ impl GraphTokenManager {
 #[async_trait]
 impl GraphTokenSource for GraphTokenManager {
     async fn get_token(&self) -> Result<String, ChannelError> {
-        GraphTokenManager::get_token(self).await
+        Self::get_token(self).await
     }
 }
 

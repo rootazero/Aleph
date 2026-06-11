@@ -51,7 +51,7 @@ impl WorkflowStepKind {
     /// Whether this is the default agent kind (used to skip serialisation).
     #[must_use]
     pub const fn is_agent(&self) -> bool {
-        matches!(self, WorkflowStepKind::Agent)
+        matches!(self, Self::Agent)
     }
 }
 

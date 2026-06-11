@@ -32,7 +32,7 @@ impl VerificationResult {
     pub const fn is_ok(&self) -> bool {
         matches!(
             self,
-            VerificationResult::Valid | VerificationResult::Disabled
+            Self::Valid | Self::Disabled
         )
     }
 

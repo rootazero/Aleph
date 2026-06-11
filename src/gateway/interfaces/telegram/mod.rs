@@ -934,7 +934,7 @@ impl Channel for TelegramChannel {
         };
         Some(Arc::new(
             crate::gateway::interfaces::telegram::approval::TelegramChannelApprovalCapability::new(
-                Arc::new(TelegramChannel {
+                Arc::new(Self {
                     info: self.info.clone(),
                     config_v2: self.config_v2.clone(),
                     channel_state: ChannelState::new(100),

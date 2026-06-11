@@ -133,7 +133,7 @@ impl HookKind {
     /// Parse from string with fallback to Observer
     #[must_use]
     pub fn from_str_or_default(s: &str) -> Self {
-        s.parse().unwrap_or(HookKind::Observer)
+        s.parse().unwrap_or(Self::Observer)
     }
 }
 
@@ -142,9 +142,9 @@ impl std::str::FromStr for HookKind {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "observer" => Ok(HookKind::Observer),
-            "interceptor" => Ok(HookKind::Interceptor),
-            "resolver" => Ok(HookKind::Resolver),
+            "observer" => Ok(Self::Observer),
+            "interceptor" => Ok(Self::Interceptor),
+            "resolver" => Ok(Self::Resolver),
             _ => Err(format!("Unknown hook kind: {s}")),
         }
     }
@@ -170,16 +170,16 @@ impl HookPriority {
     /// Parse from string with fallback to Normal
     #[must_use]
     pub fn from_str_or_default(s: &str) -> Self {
-        s.parse().unwrap_or(HookPriority::Normal)
+        s.parse().unwrap_or(Self::Normal)
     }
 
     #[must_use]
     pub const fn as_i32(&self) -> i32 {
         match self {
-            HookPriority::System => -1000,
-            HookPriority::High => -100,
-            HookPriority::Normal => 0,
-            HookPriority::Low => 100,
+            Self::System => -1000,
+            Self::High => -100,
+            Self::Normal => 0,
+            Self::Low => 100,
         }
     }
 }
@@ -189,10 +189,10 @@ impl std::str::FromStr for HookPriority {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "system" => Ok(HookPriority::System),
-            "high" => Ok(HookPriority::High),
-            "normal" => Ok(HookPriority::Normal),
-            "low" => Ok(HookPriority::Low),
+            "system" => Ok(Self::System),
+            "high" => Ok(Self::High),
+            "normal" => Ok(Self::Normal),
+            "low" => Ok(Self::Low),
             _ => Err(format!("Unknown hook priority: {s}")),
         }
     }
@@ -222,7 +222,7 @@ impl PromptScope {
     /// Parse from string with fallback to System
     #[must_use]
     pub fn from_str_or_default(s: &str) -> Self {
-        s.parse().unwrap_or(PromptScope::System)
+        s.parse().unwrap_or(Self::System)
     }
 }
 
@@ -231,10 +231,10 @@ impl std::str::FromStr for PromptScope {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "system" => Ok(PromptScope::System),
-            "tool" => Ok(PromptScope::Tool),
-            "standalone" => Ok(PromptScope::Standalone),
-            "disabled" => Ok(PromptScope::Disabled),
+            "system" => Ok(Self::System),
+            "tool" => Ok(Self::Tool),
+            "standalone" => Ok(Self::Standalone),
+            "disabled" => Ok(Self::Disabled),
             _ => Err(format!("Unknown prompt scope: {s}")),
         }
     }

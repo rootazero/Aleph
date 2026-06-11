@@ -69,11 +69,11 @@ impl ConcurrencyClaim {
             .filter_map(|p| normalize_path(p.as_ref()))
             .collect();
         if set.is_empty() {
-            ConcurrencyClaim::Exclusive {
+            Self::Exclusive {
                 scope: ExclusiveScope::Global,
             }
         } else {
-            ConcurrencyClaim::Exclusive {
+            Self::Exclusive {
                 scope: ExclusiveScope::Paths(set),
             }
         }
@@ -82,7 +82,7 @@ impl ConcurrencyClaim {
     /// The whole-world exclusive claim. Conflicts with everything.
     #[must_use]
     pub const fn global() -> Self {
-        ConcurrencyClaim::Exclusive {
+        Self::Exclusive {
             scope: ExclusiveScope::Global,
         }
     }

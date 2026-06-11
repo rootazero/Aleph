@@ -22,11 +22,11 @@ impl DeviceType {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            DeviceType::MacOS => "macos",
-            DeviceType::IOS => "ios",
-            DeviceType::Android => "android",
-            DeviceType::CLI => "cli",
-            DeviceType::Web => "web",
+            Self::MacOS => "macos",
+            Self::IOS => "ios",
+            Self::Android => "android",
+            Self::CLI => "cli",
+            Self::Web => "web",
         }
     }
 
@@ -42,11 +42,11 @@ impl std::str::FromStr for DeviceType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "macos" => Ok(DeviceType::MacOS),
-            "ios" => Ok(DeviceType::IOS),
-            "android" => Ok(DeviceType::Android),
-            "cli" => Ok(DeviceType::CLI),
-            "web" => Ok(DeviceType::Web),
+            "macos" => Ok(Self::MacOS),
+            "ios" => Ok(Self::IOS),
+            "android" => Ok(Self::Android),
+            "cli" => Ok(Self::CLI),
+            "web" => Ok(Self::Web),
             _ => Err(format!("Unknown device type: {s}")),
         }
     }
@@ -68,8 +68,8 @@ impl DeviceRole {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            DeviceRole::Operator => "operator",
-            DeviceRole::Node => "node",
+            Self::Operator => "operator",
+            Self::Node => "node",
         }
     }
 
@@ -85,8 +85,8 @@ impl std::str::FromStr for DeviceRole {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "operator" => Ok(DeviceRole::Operator),
-            "node" => Ok(DeviceRole::Node),
+            "operator" => Ok(Self::Operator),
+            "node" => Ok(Self::Node),
             _ => Err(format!("Unknown device role: {s}")),
         }
     }
@@ -124,7 +124,7 @@ impl Device {
 
 impl From<DeviceRow> for Device {
     fn from(row: DeviceRow) -> Self {
-        Device {
+        Self {
             device_id: row.device_id,
             device_name: row.device_name,
             device_type: row.device_type.and_then(|s| DeviceType::from_str_opt(&s)),

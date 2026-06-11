@@ -49,34 +49,34 @@ pub enum ContentSource {
 impl ContentSource {
     fn as_label(&self) -> String {
         match self {
-            ContentSource::WebFetch { url } => {
+            Self::WebFetch { url } => {
                 format!("web_fetch url=\"{}\"", url.replace('\"', "&quot;"))
             }
-            ContentSource::McpTool { server, tool } => {
+            Self::McpTool { server, tool } => {
                 format!(
                     "mcp_tool server=\"{}\" tool=\"{}\"",
                     server.replace('\"', "&quot;"),
                     tool.replace('\"', "&quot;")
                 )
             }
-            ContentSource::Webhook { sender } => {
+            Self::Webhook { sender } => {
                 format!("webhook sender=\"{}\"", sender.replace('\"', "&quot;"))
             }
-            ContentSource::Email { from, subject } => {
+            Self::Email { from, subject } => {
                 format!(
                     "email from=\"{}\" subject=\"{}\"",
                     from.replace('\"', "&quot;"),
                     subject.replace('\"', "&quot;")
                 )
             }
-            ContentSource::BrowserContent => "browser_content".to_string(),
-            ContentSource::UserUpload { filename } => {
+            Self::BrowserContent => "browser_content".to_string(),
+            Self::UserUpload { filename } => {
                 format!(
                     "user_upload filename=\"{}\"",
                     filename.replace('\"', "&quot;")
                 )
             }
-            ContentSource::ToolError { tool } => {
+            Self::ToolError { tool } => {
                 format!("tool_error tool=\"{}\"", tool.replace('\"', "&quot;"))
             }
         }

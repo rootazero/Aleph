@@ -541,7 +541,7 @@ fn aleph_home() -> PathBuf {
 // caller sees one error variant per failure surface.
 impl From<AlephError> for TeamTemplateError {
     fn from(e: AlephError) -> Self {
-        TeamTemplateError::Materialize(e.to_string())
+        Self::Materialize(e.to_string())
     }
 }
 

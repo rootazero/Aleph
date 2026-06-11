@@ -60,10 +60,10 @@ pub enum ClawHubSortOrder {
 impl From<ClawHubSortOrder> for SortOrder {
     fn from(s: ClawHubSortOrder) -> Self {
         match s {
-            ClawHubSortOrder::Downloads => SortOrder::Downloads,
-            ClawHubSortOrder::Stars => SortOrder::Stars,
-            ClawHubSortOrder::Updated => SortOrder::Updated,
-            ClawHubSortOrder::Trending => SortOrder::Trending,
+            ClawHubSortOrder::Downloads => Self::Downloads,
+            ClawHubSortOrder::Stars => Self::Stars,
+            ClawHubSortOrder::Updated => Self::Updated,
+            ClawHubSortOrder::Trending => Self::Trending,
         }
     }
 }

@@ -140,8 +140,8 @@ pub enum TopicSelector {
 impl TopicSelector {
     fn into_subscription(self) -> TopicSubscription {
         match self {
-            TopicSelector::Pattern(p) => TopicSubscription::pattern_only(p),
-            TopicSelector::Filtered {
+            Self::Pattern(p) => TopicSubscription::pattern_only(p),
+            Self::Filtered {
                 topic,
                 where_clause,
             } => TopicSubscription {

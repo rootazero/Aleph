@@ -79,19 +79,19 @@ pub enum PolicyViolation {
 impl fmt::Display for PolicyViolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PolicyViolation::PrivateNetwork(host) => {
+            Self::PrivateNetwork(host) => {
                 write!(f, "blocked: host '{host}' resolves to a private network")
             }
-            PolicyViolation::BlockedDomain(domain) => {
+            Self::BlockedDomain(domain) => {
                 write!(f, "blocked: domain '{domain}' matches a block pattern")
             }
-            PolicyViolation::NotInAllowlist(domain) => {
+            Self::NotInAllowlist(domain) => {
                 write!(f, "blocked: domain '{domain}' is not in the allowlist")
             }
-            PolicyViolation::InvalidUrl(reason) => {
+            Self::InvalidUrl(reason) => {
                 write!(f, "invalid URL: {reason}")
             }
-            PolicyViolation::SecretInUrl(rule) => {
+            Self::SecretInUrl(rule) => {
                 write!(
                     f,
                     "blocked: URL embeds a secret ({rule}) — refusing to exfiltrate a credential via navigation"
@@ -107,22 +107,22 @@ impl From<ssrf::SsrfError> for PolicyViolation {
     fn from(err: ssrf::SsrfError) -> Self {
         match &err {
             ssrf::SsrfError::InvalidUrl(_) | ssrf::SsrfError::NoHost => {
-                PolicyViolation::InvalidUrl(err.to_string())
+                Self::InvalidUrl(err.to_string())
             }
             ssrf::SsrfError::BlockedAddress(addr) => {
                 // Distinguish private-network blocks from domain blocks.
                 // The core engine prefixes blocklist hits with "host in blocklist: ".
                 if let Some(domain) = addr.strip_prefix("host in blocklist: ") {
-                    PolicyViolation::BlockedDomain(domain.to_string())
+                    Self::BlockedDomain(domain.to_string())
                 } else {
-                    PolicyViolation::PrivateNetwork(addr.clone())
+                    Self::PrivateNetwork(addr.clone())
                 }
             }
             ssrf::SsrfError::DnsResolutionFailed { host, .. } => {
-                PolicyViolation::InvalidUrl(format!("DNS resolution failed for host: {host}"))
+                Self::InvalidUrl(format!("DNS resolution failed for host: {host}"))
             }
             ssrf::SsrfError::TooManyRedirects(_) | ssrf::SsrfError::FetchFailed(_) => {
-                PolicyViolation::InvalidUrl(err.to_string())
+                Self::InvalidUrl(err.to_string())
             }
         }
     }

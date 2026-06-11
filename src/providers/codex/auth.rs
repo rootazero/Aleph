@@ -364,7 +364,7 @@ impl CodexAuth {
             "Codex authentication successful"
         );
 
-        Ok(CodexAuth {
+        Ok(Self {
             access_token: token_resp.access_token,
             refresh_token: token_resp.refresh_token,
             expires_at,

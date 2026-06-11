@@ -78,7 +78,7 @@ impl BatchKey {
         let mut cc = req.cc.clone();
         cc.sort();
         cc.dedup();
-        BatchKey {
+        Self {
             team_id: req.team_id.clone(),
             from_agent: req.from_agent.clone(),
             to_sorted: to,

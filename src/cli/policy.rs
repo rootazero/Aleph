@@ -44,10 +44,10 @@ impl HttpMethod {
     #[must_use]
     pub const fn as_reqwest(&self) -> reqwest::Method {
         match self {
-            HttpMethod::Get => reqwest::Method::GET,
-            HttpMethod::Post => reqwest::Method::POST,
-            HttpMethod::Patch => reqwest::Method::PATCH,
-            HttpMethod::Delete => reqwest::Method::DELETE,
+            Self::Get => reqwest::Method::GET,
+            Self::Post => reqwest::Method::POST,
+            Self::Patch => reqwest::Method::PATCH,
+            Self::Delete => reqwest::Method::DELETE,
         }
     }
 }

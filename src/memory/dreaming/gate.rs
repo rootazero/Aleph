@@ -63,7 +63,7 @@ impl GateResult {
     /// Returns `true` when the result is `Pass`.
     #[must_use]
     pub const fn is_pass(&self) -> bool {
-        matches!(self, GateResult::Pass)
+        matches!(self, Self::Pass)
     }
 }
 

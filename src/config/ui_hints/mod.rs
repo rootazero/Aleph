@@ -134,7 +134,7 @@ impl ConfigUiHints {
     /// Merge another set of UI hints into this one.
     ///
     /// Fields and groups from `other` will override those in `self`.
-    pub fn merge(&mut self, other: ConfigUiHints) {
+    pub fn merge(&mut self, other: Self) {
         self.groups.extend(other.groups);
         self.fields.extend(other.fields);
     }

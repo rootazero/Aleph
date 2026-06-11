@@ -26,14 +26,14 @@ impl IdleState {
     #[must_use]
     pub fn classify(idle_seconds: Option<f64>) -> Self {
         match idle_seconds {
-            None => IdleState::Unknown,
+            None => Self::Unknown,
             // A non-finite reading (NaN/Inf from a glitched idle probe) compares
             // false against every threshold and would otherwise fall through to
             // the maximally-idle `Away` bucket — report it as `Unknown` instead.
-            Some(s) if !s.is_finite() => IdleState::Unknown,
-            Some(s) if s < 60.0 => IdleState::Active,
-            Some(s) if s < 300.0 => IdleState::Idle,
-            Some(_) => IdleState::Away,
+            Some(s) if !s.is_finite() => Self::Unknown,
+            Some(s) if s < 60.0 => Self::Active,
+            Some(s) if s < 300.0 => Self::Idle,
+            Some(_) => Self::Away,
         }
     }
 }

@@ -257,7 +257,7 @@ pub trait GraphTokenSource: Send + Sync {
 #[async_trait]
 impl GraphTokenSource for GraphTokenCache {
     async fn get_token(&self) -> Result<String, ChannelError> {
-        GraphTokenCache::get_token(self).await
+        Self::get_token(self).await
     }
 }
 

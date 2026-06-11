@@ -20,20 +20,20 @@ use crate::generation::GenerationError;
 impl From<GenerationError> for ToolError {
     fn from(err: GenerationError) -> Self {
         match &err {
-            GenerationError::NetworkError { message } => ToolError::Network(message.clone()),
+            GenerationError::NetworkError { message } => Self::Network(message.clone()),
             GenerationError::InvalidParametersError { message, .. } => {
-                ToolError::InvalidArgs(message.clone())
+                Self::InvalidArgs(message.clone())
             }
             GenerationError::AuthenticationError { message, .. } => {
-                ToolError::InvalidArgs(format!("Authentication failed: {message}"))
+                Self::InvalidArgs(format!("Authentication failed: {message}"))
             }
             GenerationError::RateLimitError { message, .. } => {
-                ToolError::Execution(format!("Rate limited: {message}"))
+                Self::Execution(format!("Rate limited: {message}"))
             }
             GenerationError::ContentFilteredError { message, .. } => {
-                ToolError::Execution(format!("Content filtered: {message}"))
+                Self::Execution(format!("Content filtered: {message}"))
             }
-            _ => ToolError::Execution(err.to_string()),
+            _ => Self::Execution(err.to_string()),
         }
     }
 }

@@ -89,8 +89,8 @@ pub enum TurnPhase {
 impl std::fmt::Display for TurnPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TurnPhase::Think => write!(f, "Think"),
-            TurnPhase::Act { tool_name } => write!(f, "Act({tool_name})"),
+            Self::Think => write!(f, "Think"),
+            Self::Act { tool_name } => write!(f, "Act({tool_name})"),
         }
     }
 }
@@ -156,11 +156,11 @@ impl HarnessError {
     pub fn class(&self) -> crate::error::ErrorClass {
         use crate::error::ErrorClass;
         match self {
-            HarnessError::Llm(inner) => inner.class(),
-            HarnessError::Tool(_) => ErrorClass::Fixable,
-            HarnessError::Session(_) => ErrorClass::Unexpected,
-            HarnessError::Cancelled => ErrorClass::Recoverable,
-            HarnessError::StalledTurn { .. } => ErrorClass::Transient,
+            Self::Llm(inner) => inner.class(),
+            Self::Tool(_) => ErrorClass::Fixable,
+            Self::Session(_) => ErrorClass::Unexpected,
+            Self::Cancelled => ErrorClass::Recoverable,
+            Self::StalledTurn { .. } => ErrorClass::Transient,
         }
     }
 }

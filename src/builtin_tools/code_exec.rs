@@ -60,17 +60,17 @@ pub enum Language {
 impl Language {
     const fn runtime(&self) -> &'static str {
         match self {
-            Language::Python => "python3",
-            Language::JavaScript => "node",
-            Language::Shell => "bash",
+            Self::Python => "python3",
+            Self::JavaScript => "node",
+            Self::Shell => "bash",
         }
     }
 
     const fn code_flag(&self) -> &'static str {
         match self {
-            Language::Python => "-c",
-            Language::JavaScript => "-e",
-            Language::Shell => "-c",
+            Self::Python => "-c",
+            Self::JavaScript => "-e",
+            Self::Shell => "-c",
         }
     }
 }

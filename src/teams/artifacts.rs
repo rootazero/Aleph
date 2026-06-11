@@ -99,7 +99,7 @@ impl TaskStatus {
 
     /// Whether self can transition to new_status.
     #[must_use]
-    pub fn can_transition_to(&self, new_status: &TaskStatus) -> bool {
+    pub fn can_transition_to(&self, new_status: &Self) -> bool {
         match (self, new_status) {
             (a, b) if a == b => true,
             (Self::Pending, Self::InProgress) => true,

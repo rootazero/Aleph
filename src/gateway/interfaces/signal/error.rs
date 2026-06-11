@@ -157,33 +157,33 @@ impl From<SignalError> for crate::gateway::channel::ChannelError {
     fn from(err: SignalError) -> Self {
         use crate::gateway::channel::ChannelError;
         match err {
-            SignalError::HttpRequest(e) => ChannelError::ReceiveFailed(e.to_string()),
+            SignalError::HttpRequest(e) => Self::ReceiveFailed(e.to_string()),
             SignalError::ApiError { status, message } => {
-                ChannelError::ReceiveFailed(format!("({status}): {message}"))
+                Self::ReceiveFailed(format!("({status}): {message}"))
             }
             SignalError::RateLimited { retry_after_secs } => {
-                ChannelError::RateLimited { retry_after_secs }
+                Self::RateLimited { retry_after_secs }
             }
             SignalError::MessageTooLarge { size, max_size } => {
-                ChannelError::MessageTooLarge { size, max_size }
+                Self::MessageTooLarge { size, max_size }
             }
-            SignalError::SendFailed(msg) => ChannelError::SendFailed(msg),
-            SignalError::NotConnected => ChannelError::NotConnected("Signal".to_string()),
-            SignalError::InvalidPhoneNumber(msg) => ChannelError::ConfigError(msg),
-            SignalError::InvalidApiUrl(msg) => ChannelError::ConfigError(msg),
+            SignalError::SendFailed(msg) => Self::SendFailed(msg),
+            SignalError::NotConnected => Self::NotConnected("Signal".to_string()),
+            SignalError::InvalidPhoneNumber(msg) => Self::ConfigError(msg),
+            SignalError::InvalidApiUrl(msg) => Self::ConfigError(msg),
             SignalError::ChannelClosed => {
-                ChannelError::Internal("Signal channel closed".to_string())
+                Self::Internal("Signal channel closed".to_string())
             }
             // SSE, JSON, envelope errors map to ReceiveFailed
-            SignalError::SseConnection(e) => ChannelError::ReceiveFailed(e.to_string()),
-            SignalError::SseStream(e) => ChannelError::ReceiveFailed(e.to_string()),
-            SignalError::SseConnectionLost(e) => ChannelError::ReceiveFailed(e),
+            SignalError::SseConnection(e) => Self::ReceiveFailed(e.to_string()),
+            SignalError::SseStream(e) => Self::ReceiveFailed(e.to_string()),
+            SignalError::SseConnectionLost(e) => Self::ReceiveFailed(e),
             SignalError::SseMaxRetries { last_error, .. } => {
-                ChannelError::ReceiveFailed(format!("SSE max retries exceeded: {last_error}"))
+                Self::ReceiveFailed(format!("SSE max retries exceeded: {last_error}"))
             }
-            SignalError::JsonParse(e) => ChannelError::ReceiveFailed(e.to_string()),
-            SignalError::InvalidEnvelope(e) => ChannelError::ReceiveFailed(e),
-            SignalError::EmptyMessage => ChannelError::ReceiveFailed("Empty message".to_string()),
+            SignalError::JsonParse(e) => Self::ReceiveFailed(e.to_string()),
+            SignalError::InvalidEnvelope(e) => Self::ReceiveFailed(e),
+            SignalError::EmptyMessage => Self::ReceiveFailed("Empty message".to_string()),
         }
     }
 }

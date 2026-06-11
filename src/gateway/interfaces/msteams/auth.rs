@@ -613,7 +613,7 @@ pub enum AuthFlow {
 impl AuthFlow {
     #[must_use]
     pub const fn is_federated(&self) -> bool {
-        matches!(self, AuthFlow::Federated(_))
+        matches!(self, Self::Federated(_))
     }
 }
 

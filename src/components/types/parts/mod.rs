@@ -64,20 +64,20 @@ impl SessionPart {
     #[must_use]
     pub const fn type_name(&self) -> &'static str {
         match self {
-            SessionPart::UserInput(_) => "user_input",
-            SessionPart::AiResponse(_) => "ai_response",
-            SessionPart::ToolCall(_) => "tool_call",
-            SessionPart::Reasoning(_) => "reasoning",
-            SessionPart::PlanCreated(_) => "plan_created",
-            SessionPart::SubAgentCall(_) => "sub_agent_call",
-            SessionPart::Summary(_) => "summary",
-            SessionPart::CompactionMarker(_) => "compaction_marker",
-            SessionPart::SystemReminder(_) => "system_reminder",
-            SessionPart::StepStart(_) => "step_start",
-            SessionPart::StepFinish(_) => "step_finish",
-            SessionPart::Snapshot(_) => "snapshot",
-            SessionPart::Patch(_) => "patch",
-            SessionPart::StreamingText(_) => "streaming_text",
+            Self::UserInput(_) => "user_input",
+            Self::AiResponse(_) => "ai_response",
+            Self::ToolCall(_) => "tool_call",
+            Self::Reasoning(_) => "reasoning",
+            Self::PlanCreated(_) => "plan_created",
+            Self::SubAgentCall(_) => "sub_agent_call",
+            Self::Summary(_) => "summary",
+            Self::CompactionMarker(_) => "compaction_marker",
+            Self::SystemReminder(_) => "system_reminder",
+            Self::StepStart(_) => "step_start",
+            Self::StepFinish(_) => "step_finish",
+            Self::Snapshot(_) => "snapshot",
+            Self::Patch(_) => "patch",
+            Self::StreamingText(_) => "streaming_text",
         }
     }
 }

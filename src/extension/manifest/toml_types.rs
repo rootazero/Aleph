@@ -108,7 +108,7 @@ pub struct PluginAuthorToml {
 
 impl From<PluginAuthorToml> for AuthorInfo {
     fn from(author: PluginAuthorToml) -> Self {
-        AuthorInfo {
+        Self {
             name: author.name,
             email: author.email,
             url: author.url,
@@ -142,7 +142,7 @@ pub enum FilesystemPermission {
 
 impl Default for FilesystemPermission {
     fn default() -> Self {
-        FilesystemPermission::Bool(false)
+        Self::Bool(false)
     }
 }
 
@@ -150,18 +150,18 @@ impl FilesystemPermission {
     #[must_use]
     pub fn can_read(&self) -> bool {
         match self {
-            FilesystemPermission::Bool(true) => true,
-            FilesystemPermission::Bool(false) => false,
-            FilesystemPermission::Level(s) => matches!(s.as_str(), "read" | "write" | "full"),
+            Self::Bool(true) => true,
+            Self::Bool(false) => false,
+            Self::Level(s) => matches!(s.as_str(), "read" | "write" | "full"),
         }
     }
 
     #[must_use]
     pub fn can_write(&self) -> bool {
         match self {
-            FilesystemPermission::Bool(true) => true,
-            FilesystemPermission::Bool(false) => false,
-            FilesystemPermission::Level(s) => matches!(s.as_str(), "write" | "full"),
+            Self::Bool(true) => true,
+            Self::Bool(false) => false,
+            Self::Level(s) => matches!(s.as_str(), "write" | "full"),
         }
     }
 }

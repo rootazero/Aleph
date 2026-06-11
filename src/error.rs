@@ -219,7 +219,7 @@ pub enum AlephError {
 impl AlephError {
     /// Create a hotkey error with a message
     pub fn hotkey<S: Into<String>>(msg: S) -> Self {
-        AlephError::HotkeyError {
+        Self::HotkeyError {
             message: msg.into(),
             suggestion: Some("Please check Accessibility permissions in System Settings → Privacy & Security → Accessibility".to_string()),
         }
@@ -227,7 +227,7 @@ impl AlephError {
 
     /// Create a clipboard error with a message
     pub fn clipboard<S: Into<String>>(msg: S) -> Self {
-        AlephError::ClipboardError {
+        Self::ClipboardError {
             message: msg.into(),
             suggestion: Some(
                 "Ensure you have copied text or an image before pressing Cmd+~".to_string(),
@@ -237,7 +237,7 @@ impl AlephError {
 
     /// Create an input simulation error with a message
     pub fn input_simulation<S: Into<String>>(msg: S) -> Self {
-        AlephError::InputSimulationError {
+        Self::InputSimulationError {
             message: msg.into(),
             suggestion: Some("Grant Accessibility permission in System Settings → Privacy & Security → Accessibility".to_string()),
         }
@@ -245,7 +245,7 @@ impl AlephError {
 
     /// Create a callback error with a message
     pub fn callback<S: Into<String>>(msg: S) -> Self {
-        AlephError::CallbackError {
+        Self::CallbackError {
             message: msg.into(),
             suggestion: Some("This is an internal error. Please restart Aleph.".to_string()),
         }
@@ -253,7 +253,7 @@ impl AlephError {
 
     /// Create a config/database error with a message
     pub fn config<S: Into<String>>(msg: S) -> Self {
-        AlephError::ConfigError {
+        Self::ConfigError {
             message: msg.into(),
             suggestion: Some("Check your configuration file at ~/.aleph/config.toml".to_string()),
         }
@@ -261,7 +261,7 @@ impl AlephError {
 
     /// Create a network error with a message
     pub fn network<S: Into<String>>(msg: S) -> Self {
-        AlephError::NetworkError {
+        Self::NetworkError {
             message: msg.into(),
             suggestion: Some("Check your internet connection and try again".to_string()),
         }
@@ -273,7 +273,7 @@ impl AlephError {
         let suggestion = format!(
             "Verify your {provider_name} API key in Settings → Providers → {provider_name}"
         );
-        AlephError::AuthenticationError {
+        Self::AuthenticationError {
             message: msg.into(),
             provider: provider_name,
             suggestion: Some(suggestion),
@@ -282,7 +282,7 @@ impl AlephError {
 
     /// Create a rate limit error with a message
     pub fn rate_limit<S: Into<String>>(msg: S) -> Self {
-        AlephError::RateLimitError {
+        Self::RateLimitError {
             message: msg.into(),
             suggestion: Some("Wait 60 seconds or upgrade your API plan".to_string()),
         }
@@ -290,7 +290,7 @@ impl AlephError {
 
     /// Create a provider error with a message
     pub fn provider<S: Into<String>>(msg: S) -> Self {
-        AlephError::ProviderError {
+        Self::ProviderError {
             message: msg.into(),
             suggestion: Some(
                 "Try switching to a different AI provider in Settings → Providers".to_string(),
@@ -300,7 +300,7 @@ impl AlephError {
 
     /// Create an invalid config error with a message
     pub fn invalid_config<S: Into<String>>(msg: S) -> Self {
-        AlephError::InvalidConfig {
+        Self::InvalidConfig {
             message: msg.into(),
             suggestion: Some(
                 "Edit your configuration in Settings or check ~/.aleph/config.toml".to_string(),
@@ -310,7 +310,7 @@ impl AlephError {
 
     /// Create a keychain error with a message
     pub fn keychain<S: Into<String>>(msg: S) -> Self {
-        AlephError::KeychainError {
+        Self::KeychainError {
             message: msg.into(),
             suggestion: Some("Check Keychain Access permissions in System Settings".to_string()),
         }
@@ -318,7 +318,7 @@ impl AlephError {
 
     /// Create a generic error with a message
     pub fn other<S: Into<String>>(msg: S) -> Self {
-        AlephError::Other {
+        Self::Other {
             message: msg.into(),
             suggestion: None,
         }
@@ -326,7 +326,7 @@ impl AlephError {
 
     /// Create a permission denied error with a message
     pub fn permission_denied<S: Into<String>>(msg: S) -> Self {
-        AlephError::PermissionDenied {
+        Self::PermissionDenied {
             message: msg.into(),
             suggestion: Some("Grant required permissions in System Settings → Privacy & Security → Accessibility and Input Monitoring".to_string()),
         }
@@ -334,7 +334,7 @@ impl AlephError {
 
     /// Create a video transcript extraction error with a message
     pub fn video<S: Into<String>>(msg: S) -> Self {
-        AlephError::VideoError {
+        Self::VideoError {
             message: msg.into(),
             suggestion: Some("Check if the video has captions available. Try a different video or ensure you have internet connectivity.".to_string()),
         }
@@ -342,7 +342,7 @@ impl AlephError {
 
     /// Create a video transcript extraction error with a custom suggestion
     pub fn video_with_suggestion<S: Into<String>, T: Into<String>>(msg: S, suggestion: T) -> Self {
-        AlephError::VideoError {
+        Self::VideoError {
             message: msg.into(),
             suggestion: Some(suggestion.into()),
         }
@@ -354,38 +354,38 @@ impl AlephError {
     #[must_use]
     pub fn suggestion(&self) -> Option<&str> {
         match self {
-            AlephError::HotkeyError { suggestion, .. }
-            | AlephError::ClipboardError { suggestion, .. }
-            | AlephError::InputSimulationError { suggestion, .. }
-            | AlephError::CallbackError { suggestion, .. }
-            | AlephError::ConfigError { suggestion, .. }
-            | AlephError::NetworkError { suggestion, .. }
-            | AlephError::AuthenticationError { suggestion, .. }
-            | AlephError::RateLimitError { suggestion, .. }
-            | AlephError::ProviderError { suggestion, .. }
-            | AlephError::Timeout { suggestion }
-            | AlephError::NoProviderAvailable { suggestion }
-            | AlephError::InvalidConfig { suggestion, .. }
-            | AlephError::KeychainError { suggestion, .. }
-            | AlephError::Other { suggestion, .. }
-            | AlephError::PermissionDenied { suggestion, .. }
-            | AlephError::VideoError { suggestion, .. }
-            | AlephError::ToolNotFound { suggestion, .. }
-            | AlephError::RuntimeError { suggestion, .. } => suggestion.as_deref(),
+            Self::HotkeyError { suggestion, .. }
+            | Self::ClipboardError { suggestion, .. }
+            | Self::InputSimulationError { suggestion, .. }
+            | Self::CallbackError { suggestion, .. }
+            | Self::ConfigError { suggestion, .. }
+            | Self::NetworkError { suggestion, .. }
+            | Self::AuthenticationError { suggestion, .. }
+            | Self::RateLimitError { suggestion, .. }
+            | Self::ProviderError { suggestion, .. }
+            | Self::Timeout { suggestion }
+            | Self::NoProviderAvailable { suggestion }
+            | Self::InvalidConfig { suggestion, .. }
+            | Self::KeychainError { suggestion, .. }
+            | Self::Other { suggestion, .. }
+            | Self::PermissionDenied { suggestion, .. }
+            | Self::VideoError { suggestion, .. }
+            | Self::ToolNotFound { suggestion, .. }
+            | Self::RuntimeError { suggestion, .. } => suggestion.as_deref(),
             // Simple error types without suggestion field
-            AlephError::NotFound(_)
-            | AlephError::IoError(_)
-            | AlephError::GitError(_)
-            | AlephError::McpToolNotFound(_)
-            | AlephError::McpTimeout
-            | AlephError::Cancelled
-            | AlephError::MissingInput { .. }
-            | AlephError::CorruptData(_)
-            | AlephError::ChannelClosed(_)
-            | AlephError::SandboxUnavailable { .. }
-            | AlephError::ExecutionTimeout { .. }
-            | AlephError::Validation(_)
-            | AlephError::AcpError { .. } => None,
+            Self::NotFound(_)
+            | Self::IoError(_)
+            | Self::GitError(_)
+            | Self::McpToolNotFound(_)
+            | Self::McpTimeout
+            | Self::Cancelled
+            | Self::MissingInput { .. }
+            | Self::CorruptData(_)
+            | Self::ChannelClosed(_)
+            | Self::SandboxUnavailable { .. }
+            | Self::ExecutionTimeout { .. }
+            | Self::Validation(_)
+            | Self::AcpError { .. } => None,
         }
     }
 
@@ -408,98 +408,98 @@ impl AlephError {
     #[must_use]
     pub fn user_friendly_message(&self) -> String {
         match self {
-            AlephError::AuthenticationError { .. } => {
+            Self::AuthenticationError { .. } => {
                 "Authentication failed. Please check your API key in settings.".to_string()
             }
-            AlephError::RateLimitError { .. } => {
+            Self::RateLimitError { .. } => {
                 "Rate limit exceeded. Please try again in a few moments.".to_string()
             }
-            AlephError::NetworkError { .. } => {
+            Self::NetworkError { .. } => {
                 "Network connection failed. Please check your internet connection.".to_string()
             }
-            AlephError::Timeout { .. } => {
+            Self::Timeout { .. } => {
                 "Request timed out. The AI service is taking too long to respond. Please try again."
                     .to_string()
             }
-            AlephError::NoProviderAvailable { .. } => {
+            Self::NoProviderAvailable { .. } => {
                 "No AI provider is configured. Please configure at least one provider in settings."
                     .to_string()
             }
-            AlephError::InvalidConfig { message, .. } => {
+            Self::InvalidConfig { message, .. } => {
                 format!(
                     "Configuration error: {message}. Please check your settings."
                 )
             }
-            AlephError::ProviderError { message, .. } => {
+            Self::ProviderError { message, .. } => {
                 // Show the actual error message for debugging
                 // Previously we hid 5xx errors, but users need to see what went wrong
                 format!("AI service error: {message}. Please try again.")
             }
-            AlephError::HotkeyError { message, .. } => {
+            Self::HotkeyError { message, .. } => {
                 format!(
                     "Hotkey error: {message}. Please check your system permissions."
                 )
             }
-            AlephError::ClipboardError { message, .. } => {
+            Self::ClipboardError { message, .. } => {
                 format!(
                     "Clipboard error: {message}. Please check your system permissions."
                 )
             }
-            AlephError::InputSimulationError { message, .. } => {
+            Self::InputSimulationError { message, .. } => {
                 format!(
                     "Input simulation error: {message}. Please check accessibility permissions."
                 )
             }
-            AlephError::ConfigError { message, .. } => {
+            Self::ConfigError { message, .. } => {
                 format!(
                     "Configuration error: {message}. Please check your settings file."
                 )
             }
-            AlephError::KeychainError { message, .. } => {
+            Self::KeychainError { message, .. } => {
                 format!(
                     "Keychain access error: {message}. Please check your system permissions."
                 )
             }
-            AlephError::CallbackError { message, .. } => {
+            Self::CallbackError { message, .. } => {
                 format!(
                     "Internal error: {message}. Please restart the application."
                 )
             }
-            AlephError::Other { message, .. } => {
+            Self::Other { message, .. } => {
                 format!("An error occurred: {message}. Please try again.")
             }
-            AlephError::PermissionDenied { message, .. } => {
+            Self::PermissionDenied { message, .. } => {
                 format!(
                     "Permission denied: {message}. Please grant required permissions in System Settings."
                 )
             }
-            AlephError::VideoError { message, .. } => {
+            Self::VideoError { message, .. } => {
                 format!(
                     "Video processing error: {message}. Check if the video has captions available."
                 )
             }
-            AlephError::NotFound(path) => {
+            Self::NotFound(path) => {
                 format!("File or resource not found: {path}")
             }
-            AlephError::IoError(msg) => {
+            Self::IoError(msg) => {
                 format!("I/O error: {msg}")
             }
-            AlephError::GitError(msg) => {
+            Self::GitError(msg) => {
                 format!("Git operation failed: {msg}")
             }
-            AlephError::McpToolNotFound(tool) => {
+            Self::McpToolNotFound(tool) => {
                 format!("MCP tool '{tool}' not found")
             }
-            AlephError::McpTimeout => "MCP request timed out. Please try again.".to_string(),
-            AlephError::ToolNotFound { name, suggestion } => {
+            Self::McpTimeout => "MCP request timed out. Please try again.".to_string(),
+            Self::ToolNotFound { name, suggestion } => {
                 if let Some(sug) = suggestion {
                     format!("Tool '{name}' not found. {sug}")
                 } else {
                     format!("Tool '{name}' not found")
                 }
             }
-            AlephError::Cancelled => "Operation cancelled.".to_string(),
-            AlephError::RuntimeError {
+            Self::Cancelled => "Operation cancelled.".to_string(),
+            Self::RuntimeError {
                 message,
                 runtime_id,
                 ..
@@ -508,7 +508,7 @@ impl AlephError {
                     "Runtime '{runtime_id}' error: {message}. Check Settings → Runtimes for details."
                 )
             }
-            AlephError::MissingInput {
+            Self::MissingInput {
                 task_name, message, ..
             } => {
                 format!(
@@ -518,30 +518,30 @@ impl AlephError {
                     truncate_str(message, 100)
                 )
             }
-            AlephError::CorruptData(msg) => {
+            Self::CorruptData(msg) => {
                 format!(
                     "Data corruption detected: {msg}. Please try again or restore from backup."
                 )
             }
-            AlephError::ChannelClosed(msg) => {
+            Self::ChannelClosed(msg) => {
                 format!(
                     "Internal communication failed: {msg}. Please restart the application."
                 )
             }
-            AlephError::SandboxUnavailable { reason } => {
+            Self::SandboxUnavailable { reason } => {
                 format!(
                     "Sandbox unavailable: {reason}. Please check your system configuration."
                 )
             }
-            AlephError::ExecutionTimeout { timeout_secs } => {
+            Self::ExecutionTimeout { timeout_secs } => {
                 format!(
                     "Execution timed out after {timeout_secs} seconds. The command took too long to complete."
                 )
             }
-            AlephError::Validation(msg) => {
+            Self::Validation(msg) => {
                 format!("Validation failed: {msg}")
             }
-            AlephError::AcpError {
+            Self::AcpError {
                 code,
                 message,
                 retryable,
@@ -559,7 +559,7 @@ impl AlephError {
 
     /// Create a generic tool error
     pub fn tool<S: Into<String>>(msg: S) -> Self {
-        AlephError::Other {
+        Self::Other {
             message: msg.into(),
             suggestion: None,
         }
@@ -567,7 +567,7 @@ impl AlephError {
 
     /// Create a tool not found error
     pub fn tool_not_found<S: Into<String>>(name: S) -> Self {
-        AlephError::ToolNotFound {
+        Self::ToolNotFound {
             name: name.into(),
             suggestion: None,
         }
@@ -578,7 +578,7 @@ impl AlephError {
         name: S,
         suggestion: T,
     ) -> Self {
-        AlephError::ToolNotFound {
+        Self::ToolNotFound {
             name: name.into(),
             suggestion: Some(suggestion.into()),
         }
@@ -588,7 +588,7 @@ impl AlephError {
     ///
     /// Used when user input (IDs, parameters, etc.) fails validation.
     pub fn invalid_input<S: Into<String>>(msg: S) -> Self {
-        AlephError::InvalidConfig {
+        Self::InvalidConfig {
             message: msg.into(),
             suggestion: Some("Please check the input values and try again".to_string()),
         }
@@ -599,12 +599,12 @@ impl AlephError {
     /// Used when an operation is cancelled by the user via CancellationToken.
     #[must_use]
     pub const fn cancelled() -> Self {
-        AlephError::Cancelled
+        Self::Cancelled
     }
 
     /// Create a runtime error with a message
     pub fn runtime<S: Into<String>, M: Into<String>>(runtime_id: S, msg: M) -> Self {
-        AlephError::RuntimeError {
+        Self::RuntimeError {
             message: msg.into(),
             runtime_id: runtime_id.into(),
             suggestion: Some("Check your network connection and try again. If the problem persists, try manually installing the runtime.".to_string()),
@@ -617,7 +617,7 @@ impl AlephError {
         msg: M,
         suggestion: T,
     ) -> Self {
-        AlephError::RuntimeError {
+        Self::RuntimeError {
             message: msg.into(),
             runtime_id: runtime_id.into(),
             suggestion: Some(suggestion.into()),
@@ -628,7 +628,7 @@ impl AlephError {
     ///
     /// Used when an internal communication channel is unexpectedly closed.
     pub fn channel_closed<S: Into<String>>(msg: S) -> Self {
-        AlephError::ChannelClosed(msg.into())
+        Self::ChannelClosed(msg.into())
     }
 
     /// Map this error to a stable [`ErrorClass`] for cross-cutting decisions.
@@ -645,44 +645,44 @@ impl AlephError {
     pub const fn class(&self) -> ErrorClass {
         match self {
             // Transient — retry typically resolves
-            AlephError::NetworkError { .. } => ErrorClass::Transient,
-            AlephError::RateLimitError { .. } => ErrorClass::Transient,
-            AlephError::ProviderError { .. } => ErrorClass::Transient,
-            AlephError::Timeout { .. } => ErrorClass::Transient,
-            AlephError::McpTimeout => ErrorClass::Transient,
-            AlephError::ExecutionTimeout { .. } => ErrorClass::Transient,
+            Self::NetworkError { .. } => ErrorClass::Transient,
+            Self::RateLimitError { .. } => ErrorClass::Transient,
+            Self::ProviderError { .. } => ErrorClass::Transient,
+            Self::Timeout { .. } => ErrorClass::Transient,
+            Self::McpTimeout => ErrorClass::Transient,
+            Self::ExecutionTimeout { .. } => ErrorClass::Transient,
             // Fixable — model can self-correct on next turn
-            AlephError::AuthenticationError { .. } => ErrorClass::Fixable,
-            AlephError::ToolNotFound { .. } => ErrorClass::Fixable,
-            AlephError::MissingInput { .. } => ErrorClass::Fixable,
-            AlephError::Validation(_) => ErrorClass::Fixable,
+            Self::AuthenticationError { .. } => ErrorClass::Fixable,
+            Self::ToolNotFound { .. } => ErrorClass::Fixable,
+            Self::MissingInput { .. } => ErrorClass::Fixable,
+            Self::Validation(_) => ErrorClass::Fixable,
             // Recoverable — outer loop or fallback path can recover
-            AlephError::NoProviderAvailable { .. } => ErrorClass::Recoverable,
-            AlephError::Cancelled => ErrorClass::Recoverable,
+            Self::NoProviderAvailable { .. } => ErrorClass::Recoverable,
+            Self::Cancelled => ErrorClass::Recoverable,
             // Unexpected — genuine system/data/config error; treat as terminal
-            AlephError::HotkeyError { .. } => ErrorClass::Unexpected,
-            AlephError::ClipboardError { .. } => ErrorClass::Unexpected,
-            AlephError::InputSimulationError { .. } => ErrorClass::Unexpected,
-            AlephError::CallbackError { .. } => ErrorClass::Unexpected,
-            AlephError::ConfigError { .. } => ErrorClass::Unexpected,
-            AlephError::InvalidConfig { .. } => ErrorClass::Unexpected,
-            AlephError::KeychainError { .. } => ErrorClass::Unexpected,
-            AlephError::Other { .. } => ErrorClass::Unexpected,
-            AlephError::PermissionDenied { .. } => ErrorClass::Unexpected,
-            AlephError::VideoError { .. } => ErrorClass::Unexpected,
-            AlephError::NotFound(_) => ErrorClass::Unexpected,
-            AlephError::IoError(_) => ErrorClass::Unexpected,
-            AlephError::GitError(_) => ErrorClass::Unexpected,
-            AlephError::McpToolNotFound(_) => ErrorClass::Unexpected,
-            AlephError::RuntimeError { .. } => ErrorClass::Unexpected,
-            AlephError::CorruptData(_) => ErrorClass::Unexpected,
-            AlephError::ChannelClosed(_) => ErrorClass::Unexpected,
-            AlephError::SandboxUnavailable { .. } => ErrorClass::Unexpected,
+            Self::HotkeyError { .. } => ErrorClass::Unexpected,
+            Self::ClipboardError { .. } => ErrorClass::Unexpected,
+            Self::InputSimulationError { .. } => ErrorClass::Unexpected,
+            Self::CallbackError { .. } => ErrorClass::Unexpected,
+            Self::ConfigError { .. } => ErrorClass::Unexpected,
+            Self::InvalidConfig { .. } => ErrorClass::Unexpected,
+            Self::KeychainError { .. } => ErrorClass::Unexpected,
+            Self::Other { .. } => ErrorClass::Unexpected,
+            Self::PermissionDenied { .. } => ErrorClass::Unexpected,
+            Self::VideoError { .. } => ErrorClass::Unexpected,
+            Self::NotFound(_) => ErrorClass::Unexpected,
+            Self::IoError(_) => ErrorClass::Unexpected,
+            Self::GitError(_) => ErrorClass::Unexpected,
+            Self::McpToolNotFound(_) => ErrorClass::Unexpected,
+            Self::RuntimeError { .. } => ErrorClass::Unexpected,
+            Self::CorruptData(_) => ErrorClass::Unexpected,
+            Self::ChannelClosed(_) => ErrorClass::Unexpected,
+            Self::SandboxUnavailable { .. } => ErrorClass::Unexpected,
             // ACP harness errors — split by retryable flag. Retryable
             // (timeout/session_dead/spawn_failed) are Transient; the rest
             // are Fixable (model can switch harness, request creds, etc.)
             // mirroring acpx's `NormalizedOutputError.retryable` policy.
-            AlephError::AcpError { retryable, .. } => {
+            Self::AcpError { retryable, .. } => {
                 if *retryable {
                     ErrorClass::Transient
                 } else {
@@ -703,10 +703,10 @@ impl AlephError {
     pub const fn is_transient(&self) -> bool {
         matches!(
             self,
-            AlephError::RateLimitError { .. }
-                | AlephError::Timeout { .. }
-                | AlephError::NetworkError { .. }
-                | AlephError::ExecutionTimeout { .. }
+            Self::RateLimitError { .. }
+                | Self::Timeout { .. }
+                | Self::NetworkError { .. }
+                | Self::ExecutionTimeout { .. }
         )
     }
 }
@@ -716,13 +716,13 @@ pub type Result<T> = std::result::Result<T, AlephError>;
 
 impl From<serde_json::Error> for AlephError {
     fn from(err: serde_json::Error) -> Self {
-        AlephError::IoError(format!("JSON serialization error: {err}"))
+        Self::IoError(format!("JSON serialization error: {err}"))
     }
 }
 
 impl From<std::io::Error> for AlephError {
     fn from(err: std::io::Error) -> Self {
-        AlephError::IoError(err.to_string())
+        Self::IoError(err.to_string())
     }
 }
 
@@ -740,19 +740,19 @@ impl From<AlephError> for AlephException {
     fn from(_error: AlephError) -> Self {
         // Note: Error details should be sent via callback before converting
         // Callers should use the pattern: handler.on_error(msg, suggestion); Err(AlephException::Error)?
-        AlephException::Error
+        Self::Error
     }
 }
 
 impl From<String> for AlephException {
     fn from(_message: String) -> Self {
-        AlephException::Error
+        Self::Error
     }
 }
 
 impl From<&str> for AlephException {
     fn from(_message: &str) -> Self {
-        AlephException::Error
+        Self::Error
     }
 }
 

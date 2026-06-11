@@ -90,28 +90,28 @@ impl LineMessage {
     #[must_use]
     pub fn id(&self) -> &str {
         match self {
-            LineMessage::Text(m) => &m.id,
-            LineMessage::Image(m) => &m.id,
-            LineMessage::Video(m) => &m.id,
-            LineMessage::Audio(m) => &m.id,
-            LineMessage::File(m) => &m.id,
-            LineMessage::Location(m) => &m.id,
-            LineMessage::Sticker(m) => &m.id,
-            LineMessage::Unknown => "",
+            Self::Text(m) => &m.id,
+            Self::Image(m) => &m.id,
+            Self::Video(m) => &m.id,
+            Self::Audio(m) => &m.id,
+            Self::File(m) => &m.id,
+            Self::Location(m) => &m.id,
+            Self::Sticker(m) => &m.id,
+            Self::Unknown => "",
         }
     }
 
     #[must_use]
     pub fn text(&self) -> Option<&str> {
         match self {
-            LineMessage::Text(m) => Some(&m.text),
+            Self::Text(m) => Some(&m.text),
             _ => None,
         }
     }
 
     #[must_use]
     pub const fn is_image(&self) -> bool {
-        matches!(self, LineMessage::Image(_))
+        matches!(self, Self::Image(_))
     }
 }
 

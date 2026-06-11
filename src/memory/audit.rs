@@ -22,10 +22,10 @@ pub enum AuditActor {
 impl std::fmt::Display for AuditActor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AuditActor::Agent => write!(f, "agent"),
-            AuditActor::User => write!(f, "user"),
-            AuditActor::System => write!(f, "system"),
-            AuditActor::Decay => write!(f, "decay"),
+            Self::Agent => write!(f, "agent"),
+            Self::User => write!(f, "user"),
+            Self::System => write!(f, "system"),
+            Self::Decay => write!(f, "decay"),
         }
     }
 }
@@ -35,10 +35,10 @@ impl std::str::FromStr for AuditActor {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "agent" => Ok(AuditActor::Agent),
-            "user" => Ok(AuditActor::User),
-            "system" => Ok(AuditActor::System),
-            "decay" => Ok(AuditActor::Decay),
+            "agent" => Ok(Self::Agent),
+            "user" => Ok(Self::User),
+            "system" => Ok(Self::System),
+            "decay" => Ok(Self::Decay),
             _ => Err(format!("Unknown actor: {s}")),
         }
     }
@@ -64,12 +64,12 @@ pub enum AuditAction {
 impl std::fmt::Display for AuditAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AuditAction::Created => write!(f, "created"),
-            AuditAction::Accessed => write!(f, "accessed"),
-            AuditAction::Updated => write!(f, "updated"),
-            AuditAction::Invalidated => write!(f, "invalidated"),
-            AuditAction::Restored => write!(f, "restored"),
-            AuditAction::Deleted => write!(f, "deleted"),
+            Self::Created => write!(f, "created"),
+            Self::Accessed => write!(f, "accessed"),
+            Self::Updated => write!(f, "updated"),
+            Self::Invalidated => write!(f, "invalidated"),
+            Self::Restored => write!(f, "restored"),
+            Self::Deleted => write!(f, "deleted"),
         }
     }
 }
@@ -79,12 +79,12 @@ impl std::str::FromStr for AuditAction {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "created" => Ok(AuditAction::Created),
-            "accessed" => Ok(AuditAction::Accessed),
-            "updated" => Ok(AuditAction::Updated),
-            "invalidated" => Ok(AuditAction::Invalidated),
-            "restored" => Ok(AuditAction::Restored),
-            "deleted" => Ok(AuditAction::Deleted),
+            "created" => Ok(Self::Created),
+            "accessed" => Ok(Self::Accessed),
+            "updated" => Ok(Self::Updated),
+            "invalidated" => Ok(Self::Invalidated),
+            "restored" => Ok(Self::Restored),
+            "deleted" => Ok(Self::Deleted),
             _ => Err(format!("Unknown action: {s}")),
         }
     }

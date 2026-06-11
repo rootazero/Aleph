@@ -78,15 +78,15 @@ impl ProviderHealth {
     #[must_use]
     pub fn is_usable(&self) -> bool {
         match self {
-            ProviderHealth::Healthy => true,
-            ProviderHealth::Degraded { cooldown_until, .. } => Instant::now() >= *cooldown_until,
-            ProviderHealth::Unavailable { .. } => false,
+            Self::Healthy => true,
+            Self::Degraded { cooldown_until, .. } => Instant::now() >= *cooldown_until,
+            Self::Unavailable { .. } => false,
         }
     }
 
     /// Record a successful request, resetting health to Healthy.
     pub fn record_success(&mut self) {
-        *self = ProviderHealth::Healthy;
+        *self = Self::Healthy;
     }
 
     /// Record a failed request and update health state accordingly.
@@ -99,7 +99,7 @@ impl ProviderHealth {
         match error {
             ProviderError::Transient(transient) => {
                 let (consecutive_failures, old_since) = match self {
-                    ProviderHealth::Degraded {
+                    Self::Degraded {
                         consecutive_failures,
                         since,
                         ..
@@ -108,7 +108,7 @@ impl ProviderHealth {
                 };
 
                 let cooldown = calculate_cooldown(consecutive_failures, transient);
-                *self = ProviderHealth::Degraded {
+                *self = Self::Degraded {
                     since: old_since.unwrap_or(now),
                     cooldown_until: now + cooldown,
                     consecutive_failures,
@@ -119,14 +119,14 @@ impl ProviderHealth {
                     PermanentError::AuthFailed => "Authentication failed".to_string(),
                     PermanentError::ModelNotFound => "Model not found".to_string(),
                 };
-                *self = ProviderHealth::Unavailable { since: now, reason };
+                *self = Self::Unavailable { since: now, reason };
             }
         }
     }
 
     /// Reset health to Healthy (e.g., after user reconfigures credentials).
     pub fn reset(&mut self) {
-        *self = ProviderHealth::Healthy;
+        *self = Self::Healthy;
     }
 }
 

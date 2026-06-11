@@ -94,14 +94,14 @@ pub enum PluginPermission {
 impl std::fmt::Display for PluginPermission {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PluginPermission::Network => write!(f, "network"),
-            PluginPermission::Filesystem(FilesystemAccess::Read) => write!(f, "filesystem:read"),
-            PluginPermission::Filesystem(FilesystemAccess::Write) => write!(f, "filesystem:write"),
-            PluginPermission::Filesystem(FilesystemAccess::Full) => write!(f, "filesystem"),
-            PluginPermission::Env => write!(f, "env"),
-            PluginPermission::Shell => write!(f, "shell"),
-            PluginPermission::Background => write!(f, "background"),
-            PluginPermission::Custom(s) => write!(f, "{s}"),
+            Self::Network => write!(f, "network"),
+            Self::Filesystem(FilesystemAccess::Read) => write!(f, "filesystem:read"),
+            Self::Filesystem(FilesystemAccess::Write) => write!(f, "filesystem:write"),
+            Self::Filesystem(FilesystemAccess::Full) => write!(f, "filesystem"),
+            Self::Env => write!(f, "env"),
+            Self::Shell => write!(f, "shell"),
+            Self::Background => write!(f, "background"),
+            Self::Custom(s) => write!(f, "{s}"),
         }
     }
 }
@@ -118,7 +118,7 @@ impl Serialize for PluginPermission {
 impl<'de> Deserialize<'de> for PluginPermission {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        Ok(PluginPermission::from_str(&s))
+        Ok(Self::from_str(&s))
     }
 }
 
@@ -129,14 +129,14 @@ impl PluginPermission {
     /// fails on an unknown name.
     fn from_str(s: &str) -> Self {
         match s {
-            "network" => PluginPermission::Network,
-            "filesystem:read" => PluginPermission::Filesystem(FilesystemAccess::Read),
-            "filesystem:write" => PluginPermission::Filesystem(FilesystemAccess::Write),
-            "filesystem" => PluginPermission::Filesystem(FilesystemAccess::Full),
-            "env" => PluginPermission::Env,
-            "shell" => PluginPermission::Shell,
-            "background" => PluginPermission::Background,
-            other => PluginPermission::Custom(other.to_string()),
+            "network" => Self::Network,
+            "filesystem:read" => Self::Filesystem(FilesystemAccess::Read),
+            "filesystem:write" => Self::Filesystem(FilesystemAccess::Write),
+            "filesystem" => Self::Filesystem(FilesystemAccess::Full),
+            "env" => Self::Env,
+            "shell" => Self::Shell,
+            "background" => Self::Background,
+            other => Self::Custom(other.to_string()),
         }
     }
 }
@@ -175,7 +175,7 @@ impl AuthorInfo {
 impl From<&str> for AuthorInfo {
     fn from(s: &str) -> Self {
         // Parse npm author string: "Name <email> (url)"
-        let mut info = AuthorInfo::default();
+        let mut info = Self::default();
         let mut remaining = s.trim();
 
         // Extract URL (last)

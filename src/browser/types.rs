@@ -100,9 +100,9 @@ impl ColorScheme {
     #[must_use]
     pub const fn as_mcp(self) -> &'static str {
         match self {
-            ColorScheme::Dark => "dark",
-            ColorScheme::Light => "light",
-            ColorScheme::Auto => "auto",
+            Self::Dark => "dark",
+            Self::Light => "light",
+            Self::Auto => "auto",
         }
     }
 }
@@ -129,12 +129,12 @@ impl NetworkCondition {
     #[must_use]
     pub const fn as_mcp(self) -> Option<&'static str> {
         match self {
-            NetworkCondition::Offline => Some("Offline"),
-            NetworkCondition::Slow3g => Some("Slow 3G"),
-            NetworkCondition::Fast3g => Some("Fast 3G"),
-            NetworkCondition::Slow4g => Some("Slow 4G"),
-            NetworkCondition::Fast4g => Some("Fast 4G"),
-            NetworkCondition::Online => None,
+            Self::Offline => Some("Offline"),
+            Self::Slow3g => Some("Slow 3G"),
+            Self::Fast3g => Some("Fast 3G"),
+            Self::Slow4g => Some("Slow 4G"),
+            Self::Fast4g => Some("Fast 4G"),
+            Self::Online => None,
         }
     }
 
@@ -143,8 +143,8 @@ impl NetworkCondition {
     #[must_use]
     pub const fn as_playwright_state(self) -> Option<&'static str> {
         match self {
-            NetworkCondition::Offline => Some("offline"),
-            NetworkCondition::Online => Some("online"),
+            Self::Offline => Some("offline"),
+            Self::Online => Some("online"),
             _ => None,
         }
     }
@@ -240,9 +240,9 @@ impl SameSite {
     #[must_use]
     pub const fn as_cli(self) -> &'static str {
         match self {
-            SameSite::Strict => "Strict",
-            SameSite::Lax => "Lax",
-            SameSite::None => "None",
+            Self::Strict => "Strict",
+            Self::Lax => "Lax",
+            Self::None => "None",
         }
     }
 }

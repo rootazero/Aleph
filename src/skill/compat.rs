@@ -27,7 +27,7 @@ impl From<SkillManifest> for SkillInfo {
 
 impl From<&SkillManifest> for SkillInfo {
     fn from(manifest: &SkillManifest) -> Self {
-        SkillInfo::from(manifest.clone())
+        Self::from(manifest.clone())
     }
 }
 

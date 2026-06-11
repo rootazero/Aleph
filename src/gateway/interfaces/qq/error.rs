@@ -21,15 +21,15 @@ pub enum QQError {
 impl From<QQError> for ChannelError {
     fn from(e: QQError) -> Self {
         match e {
-            QQError::AuthFailed(msg) => ChannelError::AuthFailed(msg),
+            QQError::AuthFailed(msg) => Self::AuthFailed(msg),
             QQError::RateLimited { retry_after_secs } => {
-                ChannelError::RateLimited { retry_after_secs }
+                Self::RateLimited { retry_after_secs }
             }
             QQError::HttpError { status, body } => {
-                ChannelError::SendFailed(format!("HTTP {status}: {body}"))
+                Self::SendFailed(format!("HTTP {status}: {body}"))
             }
-            QQError::SendFailed(msg) => ChannelError::SendFailed(msg),
-            QQError::GatewayError(msg) => ChannelError::NotConnected(msg),
+            QQError::SendFailed(msg) => Self::SendFailed(msg),
+            QQError::GatewayError(msg) => Self::NotConnected(msg),
         }
     }
 }

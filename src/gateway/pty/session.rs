@@ -73,7 +73,7 @@ impl PtySession {
         id: String,
         opts: &SpawnOptions,
         bus: Option<Arc<GatewayEventBus>>,
-    ) -> Result<Arc<PtySession>, String> {
+    ) -> Result<Arc<Self>, String> {
         let rows = if opts.rows == 0 { 24 } else { opts.rows };
         let cols = if opts.cols == 0 { 80 } else { opts.cols };
         let size = PtySize {
@@ -121,7 +121,7 @@ impl PtySession {
             .take_writer()
             .map_err(|e| format!("take_writer failed: {e}"))?;
 
-        let session = Arc::new(PtySession {
+        let session = Arc::new(Self {
             id: id.clone(),
             shell: label,
             created_at: chrono::Utc::now().timestamp(),

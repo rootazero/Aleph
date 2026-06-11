@@ -48,7 +48,7 @@ impl TaskState {
     /// Returns true if transitioning from this state to `target` is valid.
     /// Terminal states (Completed, Canceled, Failed, Rejected) cannot transition further.
     #[must_use]
-    pub fn can_transition_to(&self, target: &TaskState) -> bool {
+    pub fn can_transition_to(&self, target: &Self) -> bool {
         if self.is_terminal() {
             return false;
         }

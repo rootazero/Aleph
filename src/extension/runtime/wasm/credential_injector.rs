@@ -25,10 +25,10 @@ pub enum CredentialError {
 impl std::fmt::Display for CredentialError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CredentialError::SecretNotFound(name) => {
+            Self::SecretNotFound(name) => {
                 write!(f, "secret not found: {name}")
             }
-            CredentialError::InvalidUrl(reason) => {
+            Self::InvalidUrl(reason) => {
                 write!(f, "invalid URL: {reason}")
             }
         }

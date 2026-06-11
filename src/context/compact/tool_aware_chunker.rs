@@ -42,9 +42,9 @@ impl SemanticUnit {
     #[must_use]
     pub fn message_indices(&self) -> Vec<usize> {
         match self {
-            SemanticUnit::UserMessage { index } => vec![*index],
-            SemanticUnit::AssistantText { index } => vec![*index],
-            SemanticUnit::ToolRound {
+            Self::UserMessage { index } => vec![*index],
+            Self::AssistantText { index } => vec![*index],
+            Self::ToolRound {
                 tool_use_index,
                 tool_result_index,
                 follow_up_index,
@@ -79,9 +79,9 @@ impl SemanticUnit {
     #[must_use]
     pub const fn first_index(&self) -> usize {
         match self {
-            SemanticUnit::UserMessage { index } => *index,
-            SemanticUnit::AssistantText { index } => *index,
-            SemanticUnit::ToolRound { tool_use_index, .. } => *tool_use_index,
+            Self::UserMessage { index } => *index,
+            Self::AssistantText { index } => *index,
+            Self::ToolRound { tool_use_index, .. } => *tool_use_index,
         }
     }
 
@@ -93,9 +93,9 @@ impl SemanticUnit {
     #[must_use]
     pub fn last_index(&self) -> usize {
         match self {
-            SemanticUnit::UserMessage { index } => *index,
-            SemanticUnit::AssistantText { index } => *index,
-            SemanticUnit::ToolRound {
+            Self::UserMessage { index } => *index,
+            Self::AssistantText { index } => *index,
+            Self::ToolRound {
                 tool_use_index,
                 tool_result_index,
                 follow_up_index,

@@ -16,7 +16,7 @@ pub enum PermissionResult {
 impl PermissionResult {
     #[must_use]
     pub const fn is_allowed(&self) -> bool {
-        matches!(self, PermissionResult::Allowed)
+        matches!(self, Self::Allowed)
     }
 }
 

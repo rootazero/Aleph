@@ -216,11 +216,11 @@ pub trait JsonRpcErrorExt {
 
 impl JsonRpcErrorExt for JsonRpcError {
     fn auth_required() -> JsonRpcError {
-        JsonRpcError::new(AUTH_REQUIRED, "Authentication required")
+        Self::new(AUTH_REQUIRED, "Authentication required")
     }
 
     fn auth_failed(reason: impl Into<String>) -> JsonRpcError {
-        JsonRpcError::new(
+        Self::new(
             AUTH_FAILED,
             format!("Authentication failed: {}", reason.into()),
         )

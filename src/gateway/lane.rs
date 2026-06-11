@@ -67,48 +67,48 @@ impl Lane {
             match suffix {
                 "get" | "list" | "search" | "status" | "describe" | "history" | "effective"
                 | "catalog" | "neighbors" | "subscribe" | "unsubscribe" | "stats" => {
-                    return Lane::Query
+                    return Self::Query
                 }
-                "install" | "uninstall" => return Lane::System,
-                "run" | "send" | "invoke" | "execute" => return Lane::Execute,
+                "install" | "uninstall" => return Self::System,
+                "run" | "send" | "invoke" | "execute" => return Self::Execute,
                 _ => {}
             }
         }
-        Lane::Mutate
+        Self::Mutate
     }
 
     /// Explicit overrides for methods whose name doesn't match the
     /// suffix heuristic or whose family puts them in a non-default lane.
-    fn override_for(method: &str) -> Option<Lane> {
+    fn override_for(method: &str) -> Option<Self> {
         match method {
             // Read-only ops with no dot-suffix (or whose suffix doesn't
             // match the Query rule).
-            "health" | "echo" | "version" | "system.info" | "request.state" => Some(Lane::Query),
+            "health" | "echo" | "version" | "system.info" | "request.state" => Some(Self::Query),
             // gateway.identity.get matches the .get suffix; listed
             // defensively in case it's ever renamed.
-            "gateway.identity.get" => Some(Lane::Query),
+            "gateway.identity.get" => Some(Self::Query),
             // gateway.metrics.lanes is a read-only diagnostics gauge.
             // The `.lanes` suffix doesn't match the Query heuristic.
-            "gateway.metrics.lanes" => Some(Lane::Query),
+            "gateway.metrics.lanes" => Some(Self::Query),
             // gateway.credentials returns a read-only auth-surface snapshot.
             // No `.get`/`.list` suffix to trip the heuristic, so list explicitly.
-            "gateway.credentials" => Some(Lane::Query),
+            "gateway.credentials" => Some(Self::Query),
             // teams.usage is a read-only token aggregation over task_traces.
             // The `.usage` suffix isn't in the Query heuristic; keep it out of
             // Mutate so it isn't idempotency-guarded for nothing.
-            "teams.usage" => Some(Lane::Query),
+            "teams.usage" => Some(Self::Query),
             // connect.challenge issues a nonce — read-only, idempotent.
             // The `.challenge` suffix doesn't match the Query heuristic;
             // putting it on Query keeps it out of the Mutate lane that
             // would otherwise idempotency-guard a side-effect-free call.
-            "connect.challenge" => Some(Lane::Query),
+            "connect.challenge" => Some(Self::Query),
             // skills.remove is package management, not a data delete →
             // System lane. memory.delete / session.delete / session.truncate
             // are data ops that fall through to default Mutate.
-            "skills.remove" => Some(Lane::System),
+            "skills.remove" => Some(Self::System),
             // logs.setLevel changes process-wide runtime config →
             // System lane (preserves pre-G1 hardcode behavior).
-            "logs.setLevel" => Some(Lane::System),
+            "logs.setLevel" => Some(Self::System),
             _ => None,
         }
     }
@@ -117,17 +117,17 @@ impl Lane {
     /// Query lane is read-only and doesn't need protection.
     #[must_use]
     pub const fn needs_idempotency(&self) -> bool {
-        !matches!(self, Lane::Query)
+        !matches!(self, Self::Query)
     }
 }
 
 impl fmt::Display for Lane {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Lane::Query => write!(f, "Query"),
-            Lane::Execute => write!(f, "Execute"),
-            Lane::Mutate => write!(f, "Mutate"),
-            Lane::System => write!(f, "System"),
+            Self::Query => write!(f, "Query"),
+            Self::Execute => write!(f, "Execute"),
+            Self::Mutate => write!(f, "Mutate"),
+            Self::System => write!(f, "System"),
         }
     }
 }
@@ -156,7 +156,7 @@ impl ChannelClass {
     /// Whether requests of this class may draw from the reserved desktop
     /// pool before falling back to the shared pool.
     const fn uses_desktop_pool(self) -> bool {
-        matches!(self, ChannelClass::Desktop)
+        matches!(self, Self::Desktop)
     }
 }
 
@@ -220,7 +220,7 @@ pub enum LaneError {
 impl fmt::Display for LaneError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LaneError::Congested(lane) => {
+            Self::Congested(lane) => {
                 write!(f, "lane {lane} is congested, could not acquire permit")
             }
         }

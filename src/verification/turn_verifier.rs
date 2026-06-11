@@ -85,15 +85,15 @@ pub enum VerifierVerdict {
 impl VerifierVerdict {
     #[must_use]
     pub const fn is_continue(&self) -> bool {
-        matches!(self, VerifierVerdict::Continue)
+        matches!(self, Self::Continue)
     }
     #[must_use]
     pub const fn is_veto(&self) -> bool {
-        matches!(self, VerifierVerdict::Veto { .. })
+        matches!(self, Self::Veto { .. })
     }
     #[must_use]
     pub const fn is_halt(&self) -> bool {
-        matches!(self, VerifierVerdict::Halt { .. })
+        matches!(self, Self::Halt { .. })
     }
 }
 

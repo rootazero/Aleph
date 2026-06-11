@@ -30,8 +30,8 @@ trait NonEmptyOr<T> {
     fn non_empty_or(self, fallback: T) -> T;
 }
 
-impl NonEmptyOr<String> for String {
-    fn non_empty_or(self, fallback: String) -> String {
+impl NonEmptyOr<Self> for String {
+    fn non_empty_or(self, fallback: Self) -> Self {
         if self.is_empty() {
             fallback
         } else {
@@ -40,8 +40,8 @@ impl NonEmptyOr<String> for String {
     }
 }
 
-impl<T> NonEmptyOr<Vec<T>> for Vec<T> {
-    fn non_empty_or(self, fallback: Vec<T>) -> Vec<T> {
+impl<T> NonEmptyOr<Self> for Vec<T> {
+    fn non_empty_or(self, fallback: Self) -> Self {
         if self.is_empty() {
             fallback
         } else {
@@ -243,11 +243,11 @@ impl SoulManifest {
         let (frontmatter, body) = Self::split_frontmatter(content)?;
 
         // Start with frontmatter values
-        let mut manifest: SoulManifest = if !frontmatter.is_empty() {
+        let mut manifest: Self = if !frontmatter.is_empty() {
             serde_yaml::from_str(&frontmatter)
                 .map_err(|e| SoulLoadError::Parse(format!("YAML frontmatter error: {e}")))?
         } else {
-            SoulManifest::default()
+            Self::default()
         };
 
         // Parse markdown body sections
@@ -287,7 +287,7 @@ impl SoulManifest {
     }
 
     /// Parse markdown body sections into manifest
-    fn parse_markdown_body(manifest: &mut SoulManifest, body: &str) -> Result<(), SoulLoadError> {
+    fn parse_markdown_body(manifest: &mut Self, body: &str) -> Result<(), SoulLoadError> {
         let mut current_section: Option<String> = None;
         let mut current_content = String::new();
 
@@ -345,7 +345,7 @@ impl SoulManifest {
     }
 
     /// Apply parsed section content to manifest
-    fn apply_section(manifest: &mut SoulManifest, section: &str, content: &str) {
+    fn apply_section(manifest: &mut Self, section: &str, content: &str) {
         let content = content.trim();
 
         match section {
@@ -437,8 +437,8 @@ impl SoulManifest {
     /// - If self has a non-empty/non-default value, use it
     /// - Otherwise, fall back to base's value
     #[must_use]
-    pub fn merge_with(&self, base: &SoulManifest) -> SoulManifest {
-        SoulManifest {
+    pub fn merge_with(&self, base: &Self) -> Self {
+        Self {
             identity: self.identity.clone().non_empty_or(base.identity.clone()),
             voice: SoulVoice {
                 tone: self

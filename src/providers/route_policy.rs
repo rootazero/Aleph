@@ -168,8 +168,8 @@ pub enum EndpointTier {
 impl From<EndpointKind> for EndpointTier {
     fn from(k: EndpointKind) -> Self {
         match k {
-            EndpointKind::Local => EndpointTier::Local,
-            EndpointKind::Cloud => EndpointTier::Cloud,
+            EndpointKind::Local => Self::Local,
+            EndpointKind::Cloud => Self::Cloud,
         }
     }
 }

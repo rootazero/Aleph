@@ -56,11 +56,11 @@ pub enum EventActor {
 impl std::fmt::Display for EventActor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EventActor::Agent => write!(f, "agent"),
-            EventActor::User => write!(f, "user"),
-            EventActor::System => write!(f, "system"),
-            EventActor::Decay => write!(f, "decay"),
-            EventActor::Migration => write!(f, "migration"),
+            Self::Agent => write!(f, "agent"),
+            Self::User => write!(f, "user"),
+            Self::System => write!(f, "system"),
+            Self::Decay => write!(f, "decay"),
+            Self::Migration => write!(f, "migration"),
         }
     }
 }
@@ -70,11 +70,11 @@ impl std::str::FromStr for EventActor {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "agent" => Ok(EventActor::Agent),
-            "user" => Ok(EventActor::User),
-            "system" => Ok(EventActor::System),
-            "decay" => Ok(EventActor::Decay),
-            "migration" => Ok(EventActor::Migration),
+            "agent" => Ok(Self::Agent),
+            "user" => Ok(Self::User),
+            "system" => Ok(Self::System),
+            "decay" => Ok(Self::Decay),
+            "migration" => Ok(Self::Migration),
             _ => Err(format!("Unknown event actor: {s}")),
         }
     }
@@ -204,15 +204,15 @@ impl MemoryEvent {
     #[must_use]
     pub fn fact_id(&self) -> &str {
         match self {
-            MemoryEvent::NoteCreated { note_path, .. }
-            | MemoryEvent::NoteContentUpdated { note_path, .. }
-            | MemoryEvent::NoteMetadataUpdated { note_path, .. }
-            | MemoryEvent::NoteAccessed { note_path, .. }
-            | MemoryEvent::NoteInvalidated { note_path, .. }
-            | MemoryEvent::NoteRestored { note_path, .. }
-            | MemoryEvent::NoteDeleted { note_path, .. }
-            | MemoryEvent::NoteConsolidated { note_path, .. }
-            | MemoryEvent::NoteMigrated { note_path, .. } => note_path,
+            Self::NoteCreated { note_path, .. }
+            | Self::NoteContentUpdated { note_path, .. }
+            | Self::NoteMetadataUpdated { note_path, .. }
+            | Self::NoteAccessed { note_path, .. }
+            | Self::NoteInvalidated { note_path, .. }
+            | Self::NoteRestored { note_path, .. }
+            | Self::NoteDeleted { note_path, .. }
+            | Self::NoteConsolidated { note_path, .. }
+            | Self::NoteMigrated { note_path, .. } => note_path,
         }
     }
 
@@ -223,15 +223,15 @@ impl MemoryEvent {
     #[must_use]
     pub const fn event_type_tag(&self) -> &'static str {
         match self {
-            MemoryEvent::NoteCreated { .. } => "NoteCreated",
-            MemoryEvent::NoteContentUpdated { .. } => "NoteContentUpdated",
-            MemoryEvent::NoteMetadataUpdated { .. } => "NoteMetadataUpdated",
-            MemoryEvent::NoteAccessed { .. } => "NoteAccessed",
-            MemoryEvent::NoteInvalidated { .. } => "NoteInvalidated",
-            MemoryEvent::NoteRestored { .. } => "NoteRestored",
-            MemoryEvent::NoteDeleted { .. } => "NoteDeleted",
-            MemoryEvent::NoteConsolidated { .. } => "NoteConsolidated",
-            MemoryEvent::NoteMigrated { .. } => "NoteMigrated",
+            Self::NoteCreated { .. } => "NoteCreated",
+            Self::NoteContentUpdated { .. } => "NoteContentUpdated",
+            Self::NoteMetadataUpdated { .. } => "NoteMetadataUpdated",
+            Self::NoteAccessed { .. } => "NoteAccessed",
+            Self::NoteInvalidated { .. } => "NoteInvalidated",
+            Self::NoteRestored { .. } => "NoteRestored",
+            Self::NoteDeleted { .. } => "NoteDeleted",
+            Self::NoteConsolidated { .. } => "NoteConsolidated",
+            Self::NoteMigrated { .. } => "NoteMigrated",
         }
     }
 
@@ -241,7 +241,7 @@ impl MemoryEvent {
     /// All other variants are Skeleton.
     #[must_use]
     pub const fn is_skeleton(&self) -> bool {
-        !matches!(self, MemoryEvent::NoteAccessed { .. })
+        !matches!(self, Self::NoteAccessed { .. })
     }
 }
 

@@ -21,8 +21,8 @@ impl ResolvedUrl {
     #[must_use]
     pub fn primary_endpoint(&self, gen_type: GenerationType) -> String {
         match self {
-            ResolvedUrl::Custom(url) => url.clone(),
-            ResolvedUrl::Standard(base) => {
+            Self::Custom(url) => url.clone(),
+            Self::Standard(base) => {
                 let suffix = match gen_type {
                     GenerationType::Image => "/v1/images/generations",
                     GenerationType::Video => "/v1/videos/generations",
@@ -40,8 +40,8 @@ impl ResolvedUrl {
     #[must_use]
     pub fn secondary_endpoint(&self, gen_type: GenerationType) -> Option<String> {
         match self {
-            ResolvedUrl::Custom(_) => None,
-            ResolvedUrl::Standard(base) => {
+            Self::Custom(_) => None,
+            Self::Standard(base) => {
                 let suffix = match gen_type {
                     GenerationType::Image => Some("/v1/images/edits"),
                     _ => None,

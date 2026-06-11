@@ -98,10 +98,10 @@ pub enum CustomPiiSeverity {
 impl From<CustomPiiSeverity> for crate::pii::engine::PiiSeverity {
     fn from(sev: CustomPiiSeverity) -> Self {
         match sev {
-            CustomPiiSeverity::Low => crate::pii::engine::PiiSeverity::Low,
-            CustomPiiSeverity::Medium => crate::pii::engine::PiiSeverity::Medium,
-            CustomPiiSeverity::High => crate::pii::engine::PiiSeverity::High,
-            CustomPiiSeverity::Critical => crate::pii::engine::PiiSeverity::Critical,
+            CustomPiiSeverity::Low => Self::Low,
+            CustomPiiSeverity::Medium => Self::Medium,
+            CustomPiiSeverity::High => Self::High,
+            CustomPiiSeverity::Critical => Self::Critical,
         }
     }
 }

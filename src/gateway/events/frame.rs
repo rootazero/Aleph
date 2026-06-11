@@ -238,7 +238,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 run_id,
                 session_key,
                 accepted_at,
-            } => GatewayEventFrame::RunAccepted {
+            } => Self::RunAccepted {
                 run_id,
                 session_key,
                 accepted_at,
@@ -248,7 +248,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 seq,
                 content,
                 is_complete,
-            } => GatewayEventFrame::Reasoning {
+            } => Self::Reasoning {
                 run_id,
                 seq,
                 content,
@@ -260,7 +260,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 tool_name,
                 tool_id,
                 params,
-            } => GatewayEventFrame::ToolStart {
+            } => Self::ToolStart {
                 run_id,
                 seq,
                 tool_name,
@@ -272,7 +272,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 seq,
                 tool_id,
                 progress,
-            } => GatewayEventFrame::ToolUpdate {
+            } => Self::ToolUpdate {
                 run_id,
                 seq,
                 tool_id,
@@ -284,7 +284,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 tool_id,
                 result,
                 duration_ms,
-            } => GatewayEventFrame::ToolEnd {
+            } => Self::ToolEnd {
                 run_id,
                 seq,
                 tool_id,
@@ -292,7 +292,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 duration_ms,
             },
             StreamEvent::AgentTrace { run_id, seq, event } => {
-                GatewayEventFrame::AgentTrace { run_id, seq, event }
+                Self::AgentTrace { run_id, seq, event }
             }
             StreamEvent::ResponseChunk {
                 run_id,
@@ -303,7 +303,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 chunk_index,
                 is_final,
                 is_intermediate,
-            } => GatewayEventFrame::ResponseChunk {
+            } => Self::ResponseChunk {
                 run_id,
                 seq,
                 delta,
@@ -318,7 +318,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 seq,
                 summary,
                 total_duration_ms,
-            } => GatewayEventFrame::RunComplete {
+            } => Self::RunComplete {
                 run_id,
                 seq,
                 summary,
@@ -329,7 +329,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 seq,
                 error,
                 error_code,
-            } => GatewayEventFrame::RunError {
+            } => Self::RunError {
                 run_id,
                 seq,
                 error,
@@ -340,7 +340,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 seq,
                 question,
                 options,
-            } => GatewayEventFrame::AskUser {
+            } => Self::AskUser {
                 run_id,
                 seq,
                 question,
@@ -354,7 +354,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 content,
                 confidence,
                 is_final,
-            } => GatewayEventFrame::ReasoningBlock {
+            } => Self::ReasoningBlock {
                 run_id,
                 seq,
                 step_type,
@@ -368,14 +368,14 @@ impl From<StreamEvent> for GatewayEventFrame {
                 seq,
                 uncertainty,
                 suggested_action,
-            } => GatewayEventFrame::UncertaintySignal {
+            } => Self::UncertaintySignal {
                 run_id,
                 seq,
                 uncertainty,
                 suggested_action,
             },
             StreamEvent::ModelResolved { run_id, model_info } => {
-                GatewayEventFrame::ModelResolved { run_id, model_info }
+                Self::ModelResolved { run_id, model_info }
             }
             StreamEvent::RunRetrying {
                 run_id,
@@ -384,7 +384,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 attempt,
                 max_attempts,
                 reason,
-            } => GatewayEventFrame::RunRetrying {
+            } => Self::RunRetrying {
                 run_id,
                 seq,
                 provider,
@@ -400,37 +400,37 @@ impl GatewayEventFrame {
     #[must_use]
     pub fn topic_name(&self) -> String {
         match self {
-            GatewayEventFrame::RunAccepted { .. } => "run.accepted",
-            GatewayEventFrame::Reasoning { .. } => "agent.reasoning",
-            GatewayEventFrame::ToolStart { .. } => "agent.tool.start",
-            GatewayEventFrame::ToolUpdate { .. } => "agent.tool.update",
-            GatewayEventFrame::ToolEnd { .. } => "agent.tool.end",
-            GatewayEventFrame::AgentTrace { .. } => "agent.trace",
-            GatewayEventFrame::ResponseChunk { .. } => "agent.response.chunk",
-            GatewayEventFrame::RunComplete { .. } => "agent.run.complete",
-            GatewayEventFrame::RunError { .. } => "agent.run.error",
-            GatewayEventFrame::AskUser { .. } => "agent.ask.user",
-            GatewayEventFrame::ReasoningBlock { .. } => "agent.reasoning.block",
-            GatewayEventFrame::UncertaintySignal { .. } => "agent.uncertainty",
-            GatewayEventFrame::ModelResolved { .. } => "agent.model.resolved",
-            GatewayEventFrame::RunRetrying { .. } => "agent.run.retrying",
-            GatewayEventFrame::SessionUpdated { .. } => "session.updated",
-            GatewayEventFrame::ChannelMessage { .. } => "channel.message",
-            GatewayEventFrame::ChannelTyping { .. } => "channel.typing",
-            GatewayEventFrame::ChannelStatusChanged { .. } => "channel.status",
-            GatewayEventFrame::ChannelError { .. } => "channel.error",
-            GatewayEventFrame::ConfigChanged { .. } => "config.changed",
-            GatewayEventFrame::PairingRequested { .. } => "pairing.requested",
-            GatewayEventFrame::PairingCompleted { .. } => "pairing.completed",
-            GatewayEventFrame::ApprovalRequested { .. } => "approval.requested",
-            GatewayEventFrame::ApprovalResolved { .. } => "approval.resolved",
-            GatewayEventFrame::ApprovalExpired { .. } => "approval.expired",
-            GatewayEventFrame::SessionLifecycleChanged { .. } => "session.lifecycle.changed",
-            GatewayEventFrame::AcpSessionsChanged => "acp.sessions.changed",
-            GatewayEventFrame::CronJobChanged { .. } => "cron.job.changed",
-            GatewayEventFrame::HeartbeatTaskChanged { .. } => "heartbeat.task.changed",
-            GatewayEventFrame::SurfaceNotify { .. } => "surface.notify",
-            GatewayEventFrame::SurfaceApproval { .. } => "surface.approval",
+            Self::RunAccepted { .. } => "run.accepted",
+            Self::Reasoning { .. } => "agent.reasoning",
+            Self::ToolStart { .. } => "agent.tool.start",
+            Self::ToolUpdate { .. } => "agent.tool.update",
+            Self::ToolEnd { .. } => "agent.tool.end",
+            Self::AgentTrace { .. } => "agent.trace",
+            Self::ResponseChunk { .. } => "agent.response.chunk",
+            Self::RunComplete { .. } => "agent.run.complete",
+            Self::RunError { .. } => "agent.run.error",
+            Self::AskUser { .. } => "agent.ask.user",
+            Self::ReasoningBlock { .. } => "agent.reasoning.block",
+            Self::UncertaintySignal { .. } => "agent.uncertainty",
+            Self::ModelResolved { .. } => "agent.model.resolved",
+            Self::RunRetrying { .. } => "agent.run.retrying",
+            Self::SessionUpdated { .. } => "session.updated",
+            Self::ChannelMessage { .. } => "channel.message",
+            Self::ChannelTyping { .. } => "channel.typing",
+            Self::ChannelStatusChanged { .. } => "channel.status",
+            Self::ChannelError { .. } => "channel.error",
+            Self::ConfigChanged { .. } => "config.changed",
+            Self::PairingRequested { .. } => "pairing.requested",
+            Self::PairingCompleted { .. } => "pairing.completed",
+            Self::ApprovalRequested { .. } => "approval.requested",
+            Self::ApprovalResolved { .. } => "approval.resolved",
+            Self::ApprovalExpired { .. } => "approval.expired",
+            Self::SessionLifecycleChanged { .. } => "session.lifecycle.changed",
+            Self::AcpSessionsChanged => "acp.sessions.changed",
+            Self::CronJobChanged { .. } => "cron.job.changed",
+            Self::HeartbeatTaskChanged { .. } => "heartbeat.task.changed",
+            Self::SurfaceNotify { .. } => "surface.notify",
+            Self::SurfaceApproval { .. } => "surface.approval",
         }
         .to_string()
     }
@@ -446,21 +446,21 @@ impl GatewayEventFrame {
     #[must_use]
     pub const fn stream_method(&self) -> Option<&'static str> {
         match self {
-            GatewayEventFrame::RunAccepted { .. } => Some("stream.run_accepted"),
-            GatewayEventFrame::Reasoning { .. } => Some("stream.reasoning"),
-            GatewayEventFrame::ToolStart { .. } => Some("stream.tool_start"),
-            GatewayEventFrame::ToolUpdate { .. } => Some("stream.tool_update"),
-            GatewayEventFrame::ToolEnd { .. } => Some("stream.tool_end"),
-            GatewayEventFrame::AgentTrace { .. } => Some("stream.agent_trace"),
-            GatewayEventFrame::ResponseChunk { .. } => Some("stream.response_chunk"),
-            GatewayEventFrame::RunComplete { .. } => Some("stream.run_complete"),
-            GatewayEventFrame::RunError { .. } => Some("stream.run_error"),
-            GatewayEventFrame::AskUser { .. } => Some("stream.ask_user"),
-            GatewayEventFrame::ReasoningBlock { .. } => Some("stream.reasoning_block"),
-            GatewayEventFrame::UncertaintySignal { .. } => Some("stream.uncertainty_signal"),
-            GatewayEventFrame::ModelResolved { .. } => Some("stream.model_resolved"),
-            GatewayEventFrame::RunRetrying { .. } => Some("stream.run_retrying"),
-            GatewayEventFrame::SessionUpdated { .. } => Some("stream.session_updated"),
+            Self::RunAccepted { .. } => Some("stream.run_accepted"),
+            Self::Reasoning { .. } => Some("stream.reasoning"),
+            Self::ToolStart { .. } => Some("stream.tool_start"),
+            Self::ToolUpdate { .. } => Some("stream.tool_update"),
+            Self::ToolEnd { .. } => Some("stream.tool_end"),
+            Self::AgentTrace { .. } => Some("stream.agent_trace"),
+            Self::ResponseChunk { .. } => Some("stream.response_chunk"),
+            Self::RunComplete { .. } => Some("stream.run_complete"),
+            Self::RunError { .. } => Some("stream.run_error"),
+            Self::AskUser { .. } => Some("stream.ask_user"),
+            Self::ReasoningBlock { .. } => Some("stream.reasoning_block"),
+            Self::UncertaintySignal { .. } => Some("stream.uncertainty_signal"),
+            Self::ModelResolved { .. } => Some("stream.model_resolved"),
+            Self::RunRetrying { .. } => Some("stream.run_retrying"),
+            Self::SessionUpdated { .. } => Some("stream.session_updated"),
             _ => None,
         }
     }

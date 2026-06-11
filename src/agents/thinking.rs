@@ -64,27 +64,27 @@ pub enum ThinkLevel {
 
 impl ThinkLevel {
     /// All available thinking levels in order (lowest to highest)
-    pub const ALL: &'static [ThinkLevel] = &[
-        ThinkLevel::Off,
-        ThinkLevel::Minimal,
-        ThinkLevel::Low,
-        ThinkLevel::Medium,
-        ThinkLevel::High,
-        ThinkLevel::XHigh,
+    pub const ALL: &'static [Self] = &[
+        Self::Off,
+        Self::Minimal,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+        Self::XHigh,
     ];
 
     /// Get the next lower thinking level for fallback
     ///
     /// Returns `None` if already at the lowest level (Off).
     #[must_use]
-    pub const fn fallback(&self) -> Option<ThinkLevel> {
+    pub const fn fallback(&self) -> Option<Self> {
         match self {
-            ThinkLevel::XHigh => Some(ThinkLevel::High),
-            ThinkLevel::High => Some(ThinkLevel::Medium),
-            ThinkLevel::Medium => Some(ThinkLevel::Low),
-            ThinkLevel::Low => Some(ThinkLevel::Minimal),
-            ThinkLevel::Minimal => Some(ThinkLevel::Off),
-            ThinkLevel::Off => None,
+            Self::XHigh => Some(Self::High),
+            Self::High => Some(Self::Medium),
+            Self::Medium => Some(Self::Low),
+            Self::Low => Some(Self::Minimal),
+            Self::Minimal => Some(Self::Off),
+            Self::Off => None,
         }
     }
 
@@ -92,24 +92,24 @@ impl ThinkLevel {
     #[must_use]
     pub const fn weight(&self) -> u8 {
         match self {
-            ThinkLevel::Off => 0,
-            ThinkLevel::Minimal => 1,
-            ThinkLevel::Low => 2,
-            ThinkLevel::Medium => 3,
-            ThinkLevel::High => 4,
-            ThinkLevel::XHigh => 5,
+            Self::Off => 0,
+            Self::Minimal => 1,
+            Self::Low => 2,
+            Self::Medium => 3,
+            Self::High => 4,
+            Self::XHigh => 5,
         }
     }
 
     /// Check if this level is higher than another
     #[must_use]
-    pub fn is_higher_than(&self, other: &ThinkLevel) -> bool {
+    pub fn is_higher_than(&self, other: &Self) -> bool {
         self.weight() > other.weight()
     }
 
     /// Check if this level is lower than another
     #[must_use]
-    pub fn is_lower_than(&self, other: &ThinkLevel) -> bool {
+    pub fn is_lower_than(&self, other: &Self) -> bool {
         self.weight() < other.weight()
     }
 
@@ -117,12 +117,12 @@ impl ThinkLevel {
     #[must_use]
     pub const fn display_name(&self) -> &'static str {
         match self {
-            ThinkLevel::Off => "Off",
-            ThinkLevel::Minimal => "Minimal",
-            ThinkLevel::Low => "Low",
-            ThinkLevel::Medium => "Medium",
-            ThinkLevel::High => "High",
-            ThinkLevel::XHigh => "Extended",
+            Self::Off => "Off",
+            Self::Minimal => "Minimal",
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+            Self::XHigh => "Extended",
         }
     }
 
@@ -130,12 +130,12 @@ impl ThinkLevel {
     #[must_use]
     pub const fn description(&self) -> &'static str {
         match self {
-            ThinkLevel::Off => "No extended thinking, fastest responses",
-            ThinkLevel::Minimal => "Brief internal reasoning",
-            ThinkLevel::Low => "Basic thinking process",
-            ThinkLevel::Medium => "Balanced thinking depth",
-            ThinkLevel::High => "Detailed reasoning and analysis",
-            ThinkLevel::XHigh => "Deep extended thinking (model-specific)",
+            Self::Off => "No extended thinking, fastest responses",
+            Self::Minimal => "Brief internal reasoning",
+            Self::Low => "Basic thinking process",
+            Self::Medium => "Balanced thinking depth",
+            Self::High => "Detailed reasoning and analysis",
+            Self::XHigh => "Deep extended thinking (model-specific)",
         }
     }
 
@@ -145,12 +145,12 @@ impl ThinkLevel {
     #[must_use]
     pub const fn token_budget(&self) -> u32 {
         match self {
-            ThinkLevel::Off => 0,
-            ThinkLevel::Minimal => 1024,
-            ThinkLevel::Low => 2048,
-            ThinkLevel::Medium => 4096,
-            ThinkLevel::High => 8192,
-            ThinkLevel::XHigh => 16384,
+            Self::Off => 0,
+            Self::Minimal => 1024,
+            Self::Low => 2048,
+            Self::Medium => 4096,
+            Self::High => 8192,
+            Self::XHigh => 16384,
         }
     }
 }

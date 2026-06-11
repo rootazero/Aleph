@@ -50,8 +50,8 @@ pub(super) enum TargetHost {
 impl TargetHost {
     fn as_lookup_str(&self) -> String {
         match self {
-            TargetHost::Ip(ip) => ip.to_string(),
-            TargetHost::Domain(d) => d.clone(),
+            Self::Ip(ip) => ip.to_string(),
+            Self::Domain(d) => d.clone(),
         }
     }
 }

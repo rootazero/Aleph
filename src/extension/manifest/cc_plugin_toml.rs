@@ -96,8 +96,8 @@ pub enum CcPluginAuthorToml {
 impl From<CcPluginAuthorToml> for AuthorInfo {
     fn from(author: CcPluginAuthorToml) -> Self {
         match author {
-            CcPluginAuthorToml::String(s) => AuthorInfo::from(s.as_str()),
-            CcPluginAuthorToml::Object { name, email, url } => AuthorInfo { name, email, url },
+            CcPluginAuthorToml::String(s) => Self::from(s.as_str()),
+            CcPluginAuthorToml::Object { name, email, url } => Self { name, email, url },
         }
     }
 }

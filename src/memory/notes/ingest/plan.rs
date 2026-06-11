@@ -68,12 +68,12 @@ impl PageOp {
     #[must_use]
     pub fn primary_path(&self) -> &str {
         match self {
-            PageOp::Create { note_path, .. }
-            | PageOp::Append { note_path, .. }
-            | PageOp::Update { note_path, .. }
-            | PageOp::Contradict { note_path, .. } => note_path,
-            PageOp::Link { from, .. } => from,
-            PageOp::Supersede { old_path, .. } => old_path,
+            Self::Create { note_path, .. }
+            | Self::Append { note_path, .. }
+            | Self::Update { note_path, .. }
+            | Self::Contradict { note_path, .. } => note_path,
+            Self::Link { from, .. } => from,
+            Self::Supersede { old_path, .. } => old_path,
         }
     }
 }

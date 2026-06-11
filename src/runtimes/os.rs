@@ -42,7 +42,7 @@ impl TargetOs {
 
     /// Check whether this (possibly wildcard) target matches a concrete OS.
     #[must_use]
-    pub fn matches(&self, current: TargetOs) -> bool {
+    pub fn matches(&self, current: Self) -> bool {
         match (*self, current) {
             (Self::AnyOs, _) => true,
             (Self::AnyUnix, Self::MacOs | Self::Linux) => true,

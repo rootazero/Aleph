@@ -52,10 +52,10 @@ impl PluginOrigin {
     #[must_use]
     pub const fn priority(&self) -> u8 {
         match self {
-            PluginOrigin::Config => 4,
-            PluginOrigin::Workspace => 3,
-            PluginOrigin::Global => 2,
-            PluginOrigin::Bundled => 1,
+            Self::Config => 4,
+            Self::Workspace => 3,
+            Self::Global => 2,
+            Self::Bundled => 1,
         }
     }
 }
@@ -83,11 +83,11 @@ impl PluginKind {
         let ext = path.extension().and_then(|e| e.to_str());
 
         match (filename, ext) {
-            (_, Some("wasm")) => Some(PluginKind::Wasm),
-            (".mcp.json", _) => Some(PluginKind::Mcp),
-            ("aleph.plugin.json", _) => Some(PluginKind::Wasm),
-            ("SKILL.md" | "COMMAND.md" | "AGENT.md", _) => Some(PluginKind::Static),
-            (_, Some("md")) => Some(PluginKind::Static),
+            (_, Some("wasm")) => Some(Self::Wasm),
+            (".mcp.json", _) => Some(Self::Mcp),
+            ("aleph.plugin.json", _) => Some(Self::Wasm),
+            ("SKILL.md" | "COMMAND.md" | "AGENT.md", _) => Some(Self::Static),
+            (_, Some("md")) => Some(Self::Static),
             _ => None,
         }
     }
@@ -111,17 +111,17 @@ impl PluginStatus {
     /// Check if this plugin is actively running
     #[must_use]
     pub const fn is_active(&self) -> bool {
-        matches!(self, PluginStatus::Loaded)
+        matches!(self, Self::Loaded)
     }
 
     /// Stable lowercase label for client display / serialization.
     #[must_use]
     pub const fn label(&self) -> &'static str {
         match self {
-            PluginStatus::Loaded => "loaded",
-            PluginStatus::Disabled => "disabled",
-            PluginStatus::Overridden => "overridden",
-            PluginStatus::Error(_) => "error",
+            Self::Loaded => "loaded",
+            Self::Disabled => "disabled",
+            Self::Overridden => "overridden",
+            Self::Error(_) => "error",
         }
     }
 }

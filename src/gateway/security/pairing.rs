@@ -92,10 +92,10 @@ impl PairingRequest {
     #[must_use]
     pub fn code(&self) -> &str {
         match self {
-            PairingRequest::Device { code, .. } => code,
-            PairingRequest::Channel { code, .. } => code,
-            PairingRequest::Browser { code, .. } => code,
-            PairingRequest::Node { code, .. } => code,
+            Self::Device { code, .. } => code,
+            Self::Channel { code, .. } => code,
+            Self::Browser { code, .. } => code,
+            Self::Node { code, .. } => code,
         }
     }
 
@@ -103,10 +103,10 @@ impl PairingRequest {
     #[must_use]
     pub const fn expires_at(&self) -> i64 {
         match self {
-            PairingRequest::Device { expires_at, .. } => *expires_at,
-            PairingRequest::Channel { expires_at, .. } => *expires_at,
-            PairingRequest::Browser { expires_at, .. } => *expires_at,
-            PairingRequest::Node { expires_at, .. } => *expires_at,
+            Self::Device { expires_at, .. } => *expires_at,
+            Self::Channel { expires_at, .. } => *expires_at,
+            Self::Browser { expires_at, .. } => *expires_at,
+            Self::Node { expires_at, .. } => *expires_at,
         }
     }
 
@@ -129,7 +129,7 @@ impl From<PairingRequestRow> for PairingRequest {
             "device" => {
                 let public_key = row.public_key.unwrap_or_default();
                 let fingerprint = DeviceFingerprint::from_public_key(&public_key);
-                PairingRequest::Device {
+                Self::Device {
                     request_id: row.request_id,
                     code: row.code,
                     device_name: row.device_name.unwrap_or_else(|| "Unknown".into()),
@@ -141,7 +141,7 @@ impl From<PairingRequestRow> for PairingRequest {
                     expires_at: row.expires_at,
                 }
             }
-            "browser" => PairingRequest::Browser {
+            "browser" => Self::Browser {
                 request_id: row.request_id,
                 code: row.code,
                 // origin_label / user_agent / peer_ip are required for the
@@ -154,14 +154,14 @@ impl From<PairingRequestRow> for PairingRequest {
                 created_at: row.created_at,
                 expires_at: row.expires_at,
             },
-            "node" => PairingRequest::Node {
+            "node" => Self::Node {
                 request_id: row.request_id,
                 code: row.code,
                 node_name: row.device_name.unwrap_or_else(|| "aleph-node".into()),
                 created_at: row.created_at,
                 expires_at: row.expires_at,
             },
-            _ => PairingRequest::Channel {
+            _ => Self::Channel {
                 request_id: row.request_id,
                 code: row.code,
                 channel: row.channel.unwrap_or_default(),

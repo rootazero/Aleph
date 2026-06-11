@@ -93,7 +93,7 @@ impl RequestState {
 
     /// Check if transition from current state to target is valid.
     #[must_use]
-    pub const fn can_transition_to(self, target: RequestState) -> bool {
+    pub const fn can_transition_to(self, target: Self) -> bool {
         use RequestState::*;
         match self {
             // From Pending

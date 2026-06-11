@@ -45,11 +45,11 @@ impl RetryCategory {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            RetryCategory::RateLimit => "rate_limit",
-            RetryCategory::Overloaded => "overloaded",
-            RetryCategory::Network => "network",
-            RetryCategory::Timeout => "timeout",
-            RetryCategory::ServerError => "server_error",
+            Self::RateLimit => "rate_limit",
+            Self::Overloaded => "overloaded",
+            Self::Network => "network",
+            Self::Timeout => "timeout",
+            Self::ServerError => "server_error",
         }
     }
 
@@ -59,11 +59,11 @@ impl RetryCategory {
     #[must_use]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
-            "rate_limit" => Some(RetryCategory::RateLimit),
-            "overloaded" => Some(RetryCategory::Overloaded),
-            "network" => Some(RetryCategory::Network),
-            "timeout" => Some(RetryCategory::Timeout),
-            "server_error" => Some(RetryCategory::ServerError),
+            "rate_limit" => Some(Self::RateLimit),
+            "overloaded" => Some(Self::Overloaded),
+            "network" => Some(Self::Network),
+            "timeout" => Some(Self::Timeout),
+            "server_error" => Some(Self::ServerError),
             _ => None,
         }
     }
@@ -84,7 +84,7 @@ pub struct RetryHint {
 impl RetryHint {
     #[must_use]
     pub const fn permanent() -> Self {
-        RetryHint {
+        Self {
             retryable: false,
             category: None,
         }
@@ -92,7 +92,7 @@ impl RetryHint {
 
     #[must_use]
     pub const fn transient(category: RetryCategory) -> Self {
-        RetryHint {
+        Self {
             retryable: true,
             category: Some(category),
         }

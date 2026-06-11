@@ -33,11 +33,11 @@ impl ToolCategory {
     #[must_use]
     pub const fn display_name(&self) -> &'static str {
         match self {
-            ToolCategory::Builtin => "Builtin",
-            ToolCategory::Skills => "Skills",
-            ToolCategory::Mcp => "MCP",
-            ToolCategory::Custom => "Custom",
-            ToolCategory::GeneratedSkill => "Generated",
+            Self::Builtin => "Builtin",
+            Self::Skills => "Skills",
+            Self::Mcp => "MCP",
+            Self::Custom => "Custom",
+            Self::GeneratedSkill => "Generated",
         }
     }
 
@@ -45,11 +45,11 @@ impl ToolCategory {
     #[must_use]
     pub const fn icon(&self) -> &'static str {
         match self {
-            ToolCategory::Builtin => "command.square.fill",
-            ToolCategory::Skills => "sparkles",
-            ToolCategory::Mcp => "server.rack",
-            ToolCategory::Custom => "slider.horizontal.3",
-            ToolCategory::GeneratedSkill => "gearshape.2.fill",
+            Self::Builtin => "command.square.fill",
+            Self::Skills => "sparkles",
+            Self::Mcp => "server.rack",
+            Self::Custom => "slider.horizontal.3",
+            Self::GeneratedSkill => "gearshape.2.fill",
         }
     }
 }

@@ -99,7 +99,7 @@ impl PiiEngine {
     }
 
     /// Get the global PII engine (returns None if not initialized)
-    pub fn global() -> Option<Arc<RwLock<PiiEngine>>> {
+    pub fn global() -> Option<Arc<RwLock<Self>>> {
         PII_ENGINE.get().cloned()
     }
 

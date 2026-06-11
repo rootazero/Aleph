@@ -69,9 +69,9 @@ impl ToolPermissionsConfig {
     /// Overrides are merged: if both layers specify a tool, the most
     /// restrictive level is used.
     pub fn merge(
-        global: &ToolPermissionsConfig,
-        agent: &ToolPermissionsConfig,
-    ) -> ToolPermissionsConfig {
+        global: &Self,
+        agent: &Self,
+    ) -> Self {
         let default = restrictive_min(global.default, agent.default);
 
         let mut overrides = HashMap::new();
@@ -93,7 +93,7 @@ impl ToolPermissionsConfig {
             }
         }
 
-        ToolPermissionsConfig { default, overrides }
+        Self { default, overrides }
     }
 }
 

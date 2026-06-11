@@ -124,7 +124,7 @@ impl CapabilityLedger {
 
         if persist_path.exists() {
             match std::fs::read_to_string(&persist_path) {
-                Ok(content) => match serde_json::from_str::<CapabilityLedger>(&content) {
+                Ok(content) => match serde_json::from_str::<Self>(&content) {
                     Ok(mut ledger) => {
                         ledger.persist_path = persist_path;
                         debug!(

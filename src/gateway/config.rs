@@ -259,7 +259,7 @@ impl AuthMode {
     /// Whether this mode requires authentication
     #[must_use]
     pub const fn is_auth_required(&self) -> bool {
-        matches!(self, AuthMode::Token)
+        matches!(self, Self::Token)
     }
 }
 
@@ -485,7 +485,7 @@ impl GatewayConfig {
 
     /// Parse configuration from TOML string
     pub fn from_toml(content: &str) -> Result<Self, ConfigError> {
-        let config: GatewayConfig =
+        let config: Self =
             toml::from_str(content).map_err(|e| ConfigError::ParseFailed(e.to_string()))?;
 
         // Validate configuration

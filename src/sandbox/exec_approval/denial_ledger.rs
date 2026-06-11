@@ -68,16 +68,16 @@ impl DenialReason {
     #[must_use]
     pub const fn agent_hint(self) -> &'static str {
         match self {
-            DenialReason::UserRejected => {
+            Self::UserRejected => {
                 "The user already declined this exact action this session; do not re-request it — try a different approach or ask the user directly."
             }
-            DenialReason::Timeout => {
+            Self::Timeout => {
                 "A prior approval request for this exact action timed out; do not silently retry it — surface the blocker to the user."
             }
-            DenialReason::RepeatedSameIntent => {
+            Self::RepeatedSameIntent => {
                 "This exact intent was denied earlier this session and is now auto-refused. Change the plan rather than repeating the request."
             }
-            DenialReason::ThresholdExceeded => {
+            Self::ThresholdExceeded => {
                 "Too many actions were denied this session, so autonomous escalation is paused. Stop and let the user decide how to proceed."
             }
         }

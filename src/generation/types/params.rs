@@ -125,7 +125,7 @@ impl GenerationParams {
     /// assert_eq!(base.quality, Some("standard".to_string())); // Kept
     /// assert_eq!(base.style, Some("vivid".to_string())); // Added
     /// ```
-    pub fn merge(&mut self, other: GenerationParams) {
+    pub fn merge(&mut self, other: Self) {
         if other.width.is_some() {
             self.width = other.width;
         }
@@ -205,7 +205,7 @@ impl GenerationParams {
     /// assert_eq!(merged.height, Some(512));
     /// ```
     #[must_use]
-    pub fn merged_with(&self, other: GenerationParams) -> GenerationParams {
+    pub fn merged_with(&self, other: Self) -> Self {
         let mut result = self.clone();
         result.merge(other);
         result

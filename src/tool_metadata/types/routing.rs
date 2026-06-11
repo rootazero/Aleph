@@ -33,10 +33,10 @@ impl RoutingLayer {
     #[must_use]
     pub const fn latency_hint(&self) -> &'static str {
         match self {
-            RoutingLayer::L1Rule => "<10ms",
-            RoutingLayer::L2Semantic => "200-500ms",
-            RoutingLayer::L3Inference => ">1s",
-            RoutingLayer::Default => "0ms",
+            Self::L1Rule => "<10ms",
+            Self::L2Semantic => "200-500ms",
+            Self::L3Inference => ">1s",
+            Self::Default => "0ms",
         }
     }
 
@@ -44,10 +44,10 @@ impl RoutingLayer {
     #[must_use]
     pub const fn default_confidence(&self) -> f32 {
         match self {
-            RoutingLayer::L1Rule => 1.0,
-            RoutingLayer::L2Semantic => 0.7,
-            RoutingLayer::L3Inference => 0.5,
-            RoutingLayer::Default => 0.0,
+            Self::L1Rule => 1.0,
+            Self::L2Semantic => 0.7,
+            Self::L3Inference => 0.5,
+            Self::Default => 0.0,
         }
     }
 }

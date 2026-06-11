@@ -28,7 +28,7 @@ impl Posture {
     /// Whether checks may mutate state on this run.
     #[must_use]
     pub const fn allows_repair(self) -> bool {
-        matches!(self, Posture::Fix)
+        matches!(self, Self::Fix)
     }
 }
 

@@ -43,14 +43,14 @@ impl Modality {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Modality::Chat => "chat",
-            Modality::Image => "image",
-            Modality::Video => "video",
-            Modality::Music => "music",
-            Modality::Speech => "speech",
-            Modality::Transcription => "transcription",
-            Modality::Embedding => "embedding",
-            Modality::Rerank => "rerank",
+            Self::Chat => "chat",
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Music => "music",
+            Self::Speech => "speech",
+            Self::Transcription => "transcription",
+            Self::Embedding => "embedding",
+            Self::Rerank => "rerank",
         }
     }
 }

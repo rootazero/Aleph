@@ -23,10 +23,10 @@ pub enum ScrollDir {
 impl From<ScrollDir> for ScrollDirection {
     fn from(d: ScrollDir) -> Self {
         match d {
-            ScrollDir::Up => ScrollDirection::Up,
-            ScrollDir::Down => ScrollDirection::Down,
-            ScrollDir::Left => ScrollDirection::Left,
-            ScrollDir::Right => ScrollDirection::Right,
+            ScrollDir::Up => Self::Up,
+            ScrollDir::Down => Self::Down,
+            ScrollDir::Left => Self::Left,
+            ScrollDir::Right => Self::Right,
         }
     }
 }

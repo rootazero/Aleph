@@ -91,8 +91,8 @@ pub enum CcPluginAuthor {
 impl From<CcPluginAuthor> for AuthorInfo {
     fn from(author: CcPluginAuthor) -> Self {
         match author {
-            CcPluginAuthor::String(s) => AuthorInfo::from(s.as_str()),
-            CcPluginAuthor::Object { name, email, url } => AuthorInfo { name, email, url },
+            CcPluginAuthor::String(s) => Self::from(s.as_str()),
+            CcPluginAuthor::Object { name, email, url } => Self { name, email, url },
         }
     }
 }
@@ -113,8 +113,8 @@ pub enum CcPluginRepository {
 impl CcPluginRepository {
     fn into_url(self) -> Option<String> {
         match self {
-            CcPluginRepository::Url(url) => Some(url),
-            CcPluginRepository::Object { url } => url,
+            Self::Url(url) => Some(url),
+            Self::Object { url } => url,
         }
     }
 }

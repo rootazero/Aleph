@@ -495,7 +495,7 @@ impl Clone for ApplyPatchTool {
 #[async_trait]
 impl AlephTool for ApplyPatchTool {
     const NAME: &'static str = "apply_patch";
-    const DESCRIPTION: &'static str = ApplyPatchTool::DESCRIPTION;
+    const DESCRIPTION: &'static str = Self::DESCRIPTION;
     type Args = ApplyPatchArgs;
     type Output = ApplyPatchOutput;
 

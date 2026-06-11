@@ -188,7 +188,7 @@ pub enum ScheduleKind {
 
 impl Default for ScheduleKind {
     fn default() -> Self {
-        ScheduleKind::Cron {
+        Self::Cron {
             expr: "0 0 * * * *".to_string(),
             tz: None,
             stagger_ms: None,
@@ -211,10 +211,10 @@ pub enum RunStatus {
 impl std::fmt::Display for RunStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RunStatus::Ok => write!(f, "ok"),
-            RunStatus::Error => write!(f, "error"),
-            RunStatus::Skipped => write!(f, "skipped"),
-            RunStatus::Timeout => write!(f, "timeout"),
+            Self::Ok => write!(f, "ok"),
+            Self::Error => write!(f, "error"),
+            Self::Skipped => write!(f, "skipped"),
+            Self::Timeout => write!(f, "timeout"),
         }
     }
 }

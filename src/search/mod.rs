@@ -97,14 +97,14 @@ impl SearchProviderType {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            SearchProviderType::Tavily => "tavily",
-            SearchProviderType::Brave => "brave",
-            SearchProviderType::Searxng => "searxng",
-            SearchProviderType::Google => "google",
-            SearchProviderType::Bing => "bing",
-            SearchProviderType::Exa => "exa",
-            SearchProviderType::Jina => "jina",
-            SearchProviderType::DuckDuckGo => "duckduckgo",
+            Self::Tavily => "tavily",
+            Self::Brave => "brave",
+            Self::Searxng => "searxng",
+            Self::Google => "google",
+            Self::Bing => "bing",
+            Self::Exa => "exa",
+            Self::Jina => "jina",
+            Self::DuckDuckGo => "duckduckgo",
         }
     }
 }
@@ -120,14 +120,14 @@ impl std::str::FromStr for SearchProviderType {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "tavily" => Ok(SearchProviderType::Tavily),
-            "brave" => Ok(SearchProviderType::Brave),
-            "searxng" => Ok(SearchProviderType::Searxng),
-            "google" => Ok(SearchProviderType::Google),
-            "bing" => Ok(SearchProviderType::Bing),
-            "exa" => Ok(SearchProviderType::Exa),
-            "jina" => Ok(SearchProviderType::Jina),
-            "duckduckgo" => Ok(SearchProviderType::DuckDuckGo),
+            "tavily" => Ok(Self::Tavily),
+            "brave" => Ok(Self::Brave),
+            "searxng" => Ok(Self::Searxng),
+            "google" => Ok(Self::Google),
+            "bing" => Ok(Self::Bing),
+            "exa" => Ok(Self::Exa),
+            "jina" => Ok(Self::Jina),
+            "duckduckgo" => Ok(Self::DuckDuckGo),
             _ => Err(format!("Unknown provider type: {s}")),
         }
     }

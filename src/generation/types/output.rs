@@ -26,42 +26,42 @@ impl GenerationData {
     /// Create a Bytes variant
     #[must_use]
     pub const fn bytes(data: Vec<u8>) -> Self {
-        GenerationData::Bytes(data)
+        Self::Bytes(data)
     }
 
     /// Create a URL variant
     pub fn url<S: Into<String>>(url: S) -> Self {
-        GenerationData::Url(url.into())
+        Self::Url(url.into())
     }
 
     /// Create a LocalPath variant
     pub fn local_path<S: Into<String>>(path: S) -> Self {
-        GenerationData::LocalPath(path.into())
+        Self::LocalPath(path.into())
     }
 
     /// Check if this is raw bytes
     #[must_use]
     pub const fn is_bytes(&self) -> bool {
-        matches!(self, GenerationData::Bytes(_))
+        matches!(self, Self::Bytes(_))
     }
 
     /// Check if this is a URL
     #[must_use]
     pub const fn is_url(&self) -> bool {
-        matches!(self, GenerationData::Url(_))
+        matches!(self, Self::Url(_))
     }
 
     /// Check if this is a local path
     #[must_use]
     pub const fn is_local_path(&self) -> bool {
-        matches!(self, GenerationData::LocalPath(_))
+        matches!(self, Self::LocalPath(_))
     }
 
     /// Get the URL if this is a URL variant
     #[must_use]
     pub fn as_url(&self) -> Option<&str> {
         match self {
-            GenerationData::Url(url) => Some(url),
+            Self::Url(url) => Some(url),
             _ => None,
         }
     }
@@ -70,7 +70,7 @@ impl GenerationData {
     #[must_use]
     pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
-            GenerationData::Bytes(bytes) => Some(bytes),
+            Self::Bytes(bytes) => Some(bytes),
             _ => None,
         }
     }
@@ -79,7 +79,7 @@ impl GenerationData {
     #[must_use]
     pub fn as_local_path(&self) -> Option<&str> {
         match self {
-            GenerationData::LocalPath(path) => Some(path),
+            Self::LocalPath(path) => Some(path),
             _ => None,
         }
     }

@@ -23,9 +23,9 @@ impl Severity {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Severity::Info => "info",
-            Severity::Warning => "warning",
-            Severity::Error => "error",
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Error => "error",
         }
     }
 }

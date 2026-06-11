@@ -47,10 +47,10 @@ impl PolicyTier {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            PolicyTier::ReadOnly => "read-only",
-            PolicyTier::WorkspaceWrite => "workspace-write",
-            PolicyTier::Isolated => "isolated",
-            PolicyTier::DangerFullAccess => "danger-full-access",
+            Self::ReadOnly => "read-only",
+            Self::WorkspaceWrite => "workspace-write",
+            Self::Isolated => "isolated",
+            Self::DangerFullAccess => "danger-full-access",
         }
     }
 
@@ -61,10 +61,10 @@ impl PolicyTier {
     #[must_use]
     pub fn from_tag(tag: &str) -> Self {
         match tag {
-            "read-only" => PolicyTier::ReadOnly,
-            "workspace-write" => PolicyTier::WorkspaceWrite,
-            "isolated" => PolicyTier::Isolated,
-            _ => PolicyTier::DangerFullAccess,
+            "read-only" => Self::ReadOnly,
+            "workspace-write" => Self::WorkspaceWrite,
+            "isolated" => Self::Isolated,
+            _ => Self::DangerFullAccess,
         }
     }
 
@@ -73,7 +73,7 @@ impl PolicyTier {
     /// actions.
     #[must_use]
     pub const fn is_danger(self) -> bool {
-        matches!(self, PolicyTier::DangerFullAccess)
+        matches!(self, Self::DangerFullAccess)
     }
 }
 

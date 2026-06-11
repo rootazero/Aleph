@@ -64,11 +64,11 @@ impl ChainContext {
     /// Returns `None` if the current depth has reached max_depth,
     /// preventing infinite recursion.
     #[must_use]
-    pub fn child(&self) -> Option<ChainContext> {
+    pub fn child(&self) -> Option<Self> {
         if self.depth >= self.max_depth {
             return None;
         }
-        Some(ChainContext {
+        Some(Self {
             chain_id: self.chain_id.clone(),
             depth: self.depth + 1,
             max_depth: self.max_depth,

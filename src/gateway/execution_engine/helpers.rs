@@ -103,8 +103,8 @@ impl std::fmt::Display for DispatchFailure {
 impl From<DispatchFailure> for ExecutionError {
     fn from(err: DispatchFailure) -> Self {
         match err {
-            DispatchFailure::Cancelled => ExecutionError::Cancelled,
-            other => ExecutionError::Orchestrator(other.to_string()),
+            DispatchFailure::Cancelled => Self::Cancelled,
+            other => Self::Orchestrator(other.to_string()),
         }
     }
 }

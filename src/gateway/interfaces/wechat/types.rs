@@ -107,19 +107,19 @@ impl<'de> Deserialize<'de> for MessageItem {
     {
         let helper = MessageItemHelper::deserialize(deserializer)?;
         match helper.type_num {
-            1 => Ok(MessageItem::Text(helper.text_item.ok_or_else(|| {
+            1 => Ok(Self::Text(helper.text_item.ok_or_else(|| {
                 serde::de::Error::custom("missing text_item for Text variant")
             })?)),
-            2 => Ok(MessageItem::Image(helper.image_item.ok_or_else(|| {
+            2 => Ok(Self::Image(helper.image_item.ok_or_else(|| {
                 serde::de::Error::custom("missing image_item for Image variant")
             })?)),
-            3 => Ok(MessageItem::Voice(helper.voice_item.ok_or_else(|| {
+            3 => Ok(Self::Voice(helper.voice_item.ok_or_else(|| {
                 serde::de::Error::custom("missing voice_item for Voice variant")
             })?)),
-            4 => Ok(MessageItem::File(helper.file_item.ok_or_else(|| {
+            4 => Ok(Self::File(helper.file_item.ok_or_else(|| {
                 serde::de::Error::custom("missing file_item for File variant")
             })?)),
-            5 => Ok(MessageItem::Video(helper.video_item.ok_or_else(|| {
+            5 => Ok(Self::Video(helper.video_item.ok_or_else(|| {
                 serde::de::Error::custom("missing video_item for Video variant")
             })?)),
             _ => Err(serde::de::Error::custom(format!(

@@ -209,13 +209,13 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 iteration,
                 stream,
                 text,
-            } => aleph_protocol::AgentTraceEvent::TextEmitted {
+            } => Self::TextEmitted {
                 iteration,
                 stream: stream.into(),
                 text,
             },
             LoopTraceEvent::ToolCallStarted { iteration, call } => {
-                aleph_protocol::AgentTraceEvent::ToolCallStarted {
+                Self::ToolCallStarted {
                     iteration,
                     call: aleph_protocol::AgentTraceToolCallStart {
                         tool_id: call.tool_id,
@@ -228,7 +228,7 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 iteration,
                 call,
                 result,
-            } => aleph_protocol::AgentTraceEvent::ToolCallCompleted {
+            } => Self::ToolCallCompleted {
                 iteration,
                 call: aleph_protocol::AgentTraceToolCallEnd {
                     tool_id: call.tool_id,
@@ -246,10 +246,10 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 },
             },
             LoopTraceEvent::TurnStarted { iteration } => {
-                aleph_protocol::AgentTraceEvent::TurnStarted { iteration }
+                Self::TurnStarted { iteration }
             }
             LoopTraceEvent::TurnStateEntered { iteration, state } => {
-                aleph_protocol::AgentTraceEvent::TurnStateEntered {
+                Self::TurnStateEntered {
                     iteration,
                     state: state.into(),
                 }
@@ -258,7 +258,7 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 iteration,
                 outcome,
                 metrics,
-            } => aleph_protocol::AgentTraceEvent::TurnCompleted {
+            } => Self::TurnCompleted {
                 iteration,
                 outcome: outcome.into(),
                 metrics: metrics.into(),
@@ -274,7 +274,7 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 duration_ms,
                 token_breakdown,
                 tool_timeline,
-            } => aleph_protocol::AgentTraceEvent::SessionCompleted {
+            } => Self::SessionCompleted {
                 outcome: outcome.into(),
                 iterations,
                 tool_calls_made,
@@ -297,22 +297,22 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                     .collect(),
             },
             LoopTraceEvent::WorktreeCreated { path } => {
-                aleph_protocol::AgentTraceEvent::WorktreeCreated { path }
+                Self::WorktreeCreated { path }
             }
             LoopTraceEvent::WorktreeCleanedUp { path, leaked } => {
-                aleph_protocol::AgentTraceEvent::WorktreeCleanedUp { path, leaked }
+                Self::WorktreeCleanedUp { path, leaked }
             }
             LoopTraceEvent::McpScopeAttached {
                 agent_id,
                 references,
                 inline_count,
-            } => aleph_protocol::AgentTraceEvent::McpScopeAttached {
+            } => Self::McpScopeAttached {
                 agent_id,
                 references,
                 inline_count,
             },
             LoopTraceEvent::McpScopeCleaned { agent_id, leaked } => {
-                aleph_protocol::AgentTraceEvent::McpScopeCleaned { agent_id, leaked }
+                Self::McpScopeCleaned { agent_id, leaked }
             }
             LoopTraceEvent::ProviderUsage {
                 agent_id,
@@ -321,7 +321,7 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 cache_read_tokens,
                 cache_creation_tokens,
                 thinking_tokens,
-            } => aleph_protocol::AgentTraceEvent::ProviderUsage {
+            } => Self::ProviderUsage {
                 agent_id,
                 input_tokens,
                 output_tokens,
@@ -332,12 +332,12 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
             LoopTraceEvent::ReactiveCompactionAttempted {
                 token_gap,
                 succeeded,
-            } => aleph_protocol::AgentTraceEvent::ReactiveCompactionAttempted {
+            } => Self::ReactiveCompactionAttempted {
                 token_gap,
                 succeeded,
             },
             LoopTraceEvent::VerifierVeto { iteration, reason } => {
-                aleph_protocol::AgentTraceEvent::VerifierVeto { iteration, reason }
+                Self::VerifierVeto { iteration, reason }
             }
         }
     }
@@ -346,7 +346,7 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
 impl From<LoopTraceTextKind> for aleph_protocol::AgentTraceTextKind {
     fn from(kind: LoopTraceTextKind) -> Self {
         match kind {
-            LoopTraceTextKind::Final => aleph_protocol::AgentTraceTextKind::Final,
+            LoopTraceTextKind::Final => Self::Final,
         }
     }
 }
@@ -354,8 +354,8 @@ impl From<LoopTraceTextKind> for aleph_protocol::AgentTraceTextKind {
 impl From<LoopTraceState> for aleph_protocol::AgentTraceState {
     fn from(state: LoopTraceState) -> Self {
         match state {
-            LoopTraceState::Think => aleph_protocol::AgentTraceState::Think,
-            LoopTraceState::Act => aleph_protocol::AgentTraceState::Act,
+            LoopTraceState::Think => Self::Think,
+            LoopTraceState::Act => Self::Act,
         }
     }
 }
@@ -363,10 +363,10 @@ impl From<LoopTraceState> for aleph_protocol::AgentTraceState {
 impl From<LoopTraceTurnOutcome> for aleph_protocol::AgentTraceTurnOutcome {
     fn from(outcome: LoopTraceTurnOutcome) -> Self {
         match outcome {
-            LoopTraceTurnOutcome::Continue => aleph_protocol::AgentTraceTurnOutcome::Continue,
-            LoopTraceTurnOutcome::Stop => aleph_protocol::AgentTraceTurnOutcome::Stop,
-            LoopTraceTurnOutcome::HitLimit => aleph_protocol::AgentTraceTurnOutcome::HitLimit,
-            LoopTraceTurnOutcome::Cancelled => aleph_protocol::AgentTraceTurnOutcome::Cancelled,
+            LoopTraceTurnOutcome::Continue => Self::Continue,
+            LoopTraceTurnOutcome::Stop => Self::Stop,
+            LoopTraceTurnOutcome::HitLimit => Self::HitLimit,
+            LoopTraceTurnOutcome::Cancelled => Self::Cancelled,
         }
     }
 }
@@ -375,11 +375,11 @@ impl From<LoopTraceSessionOutcome> for aleph_protocol::AgentTraceSessionOutcome 
     fn from(outcome: LoopTraceSessionOutcome) -> Self {
         match outcome {
             LoopTraceSessionOutcome::Completed => {
-                aleph_protocol::AgentTraceSessionOutcome::Completed
+                Self::Completed
             }
-            LoopTraceSessionOutcome::HitLimit => aleph_protocol::AgentTraceSessionOutcome::HitLimit,
+            LoopTraceSessionOutcome::HitLimit => Self::HitLimit,
             LoopTraceSessionOutcome::Cancelled => {
-                aleph_protocol::AgentTraceSessionOutcome::Cancelled
+                Self::Cancelled
             }
         }
     }
@@ -387,7 +387,7 @@ impl From<LoopTraceSessionOutcome> for aleph_protocol::AgentTraceSessionOutcome 
 
 impl From<LoopTraceTurnMetrics> for aleph_protocol::AgentTraceTurnMetrics {
     fn from(metrics: LoopTraceTurnMetrics) -> Self {
-        aleph_protocol::AgentTraceTurnMetrics {
+        Self {
             requested_tool_calls: metrics.requested_tool_calls,
             executed_tool_calls: metrics.executed_tool_calls,
             productive: metrics.productive,

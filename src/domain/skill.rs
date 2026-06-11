@@ -211,11 +211,11 @@ impl FromStr for Os {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.eq_ignore_ascii_case("darwin") || s.eq_ignore_ascii_case("macos") {
-            Ok(Os::Darwin)
+            Ok(Self::Darwin)
         } else if s.eq_ignore_ascii_case("linux") {
-            Ok(Os::Linux)
+            Ok(Self::Linux)
         } else if s.eq_ignore_ascii_case("windows") || s.eq_ignore_ascii_case("win") {
-            Ok(Os::Windows)
+            Ok(Self::Windows)
         } else {
             Err(ParseOsError(s.to_string()))
         }

@@ -28,7 +28,7 @@ impl RuntimeCapability {
     ///
     /// Generates a markdown-formatted section describing available runtimes.
     #[must_use]
-    pub fn format_for_prompt(capabilities: &[RuntimeCapability]) -> String {
+    pub fn format_for_prompt(capabilities: &[Self]) -> String {
         if capabilities.is_empty() {
             return String::new();
         }

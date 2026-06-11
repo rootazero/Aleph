@@ -36,13 +36,13 @@ pub enum TaskStatus {
 impl fmt::Display for TaskStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TaskStatus::Pending => write!(f, "pending"),
-            TaskStatus::Running => write!(f, "running"),
-            TaskStatus::Completed => write!(f, "completed"),
-            TaskStatus::Failed => write!(f, "failed"),
-            TaskStatus::Interrupted => write!(f, "interrupted"),
-            TaskStatus::Idle => write!(f, "idle"),
-            TaskStatus::Swapped => write!(f, "swapped"),
+            Self::Pending => write!(f, "pending"),
+            Self::Running => write!(f, "running"),
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+            Self::Interrupted => write!(f, "interrupted"),
+            Self::Idle => write!(f, "idle"),
+            Self::Swapped => write!(f, "swapped"),
         }
     }
 }
@@ -54,7 +54,7 @@ impl TaskStatus {
             Ok(status) => status,
             Err(e) => {
                 tracing::warn!(input = %s, error = %e, "Unknown task status, defaulting to Pending");
-                TaskStatus::Pending
+                Self::Pending
             }
         }
     }
@@ -62,7 +62,7 @@ impl TaskStatus {
     /// Check if task can be auto-resumed on restart
     #[must_use]
     pub const fn is_recoverable(&self) -> bool {
-        matches!(self, TaskStatus::Running | TaskStatus::Interrupted)
+        matches!(self, Self::Running | Self::Interrupted)
     }
 }
 
@@ -71,13 +71,13 @@ impl std::str::FromStr for TaskStatus {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "pending" => Ok(TaskStatus::Pending),
-            "running" => Ok(TaskStatus::Running),
-            "completed" => Ok(TaskStatus::Completed),
-            "failed" => Ok(TaskStatus::Failed),
-            "interrupted" => Ok(TaskStatus::Interrupted),
-            "idle" => Ok(TaskStatus::Idle),
-            "swapped" => Ok(TaskStatus::Swapped),
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "interrupted" => Ok(Self::Interrupted),
+            "idle" => Ok(Self::Idle),
+            "swapped" => Ok(Self::Swapped),
             _ => Err(format!("Unknown task status: {s}")),
         }
     }
@@ -96,8 +96,8 @@ pub enum RiskLevel {
 impl fmt::Display for RiskLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RiskLevel::Low => write!(f, "low"),
-            RiskLevel::High => write!(f, "high"),
+            Self::Low => write!(f, "low"),
+            Self::High => write!(f, "high"),
         }
     }
 }
@@ -109,7 +109,7 @@ impl RiskLevel {
             Ok(level) => level,
             Err(e) => {
                 tracing::warn!(input = %s, error = %e, "Unknown risk level, defaulting to Low");
-                RiskLevel::Low
+                Self::Low
             }
         }
     }
@@ -120,8 +120,8 @@ impl std::str::FromStr for RiskLevel {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "low" => Ok(RiskLevel::Low),
-            "high" => Ok(RiskLevel::High),
+            "low" => Ok(Self::Low),
+            "high" => Ok(Self::High),
             _ => Err(format!("Unknown risk level: {s}")),
         }
     }
@@ -140,8 +140,8 @@ pub enum Lane {
 impl fmt::Display for Lane {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Lane::Main => write!(f, "main"),
-            Lane::Subagent => write!(f, "subagent"),
+            Self::Main => write!(f, "main"),
+            Self::Subagent => write!(f, "subagent"),
         }
     }
 }
@@ -153,7 +153,7 @@ impl Lane {
             Ok(lane) => lane,
             Err(e) => {
                 tracing::warn!(input = %s, error = %e, "Unknown lane, defaulting to Subagent");
-                Lane::Subagent
+                Self::Subagent
             }
         }
     }
@@ -164,8 +164,8 @@ impl std::str::FromStr for Lane {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "main" => Ok(Lane::Main),
-            "subagent" => Ok(Lane::Subagent),
+            "main" => Ok(Self::Main),
+            "subagent" => Ok(Self::Subagent),
             _ => Err(format!("Unknown lane: {s}")),
         }
     }

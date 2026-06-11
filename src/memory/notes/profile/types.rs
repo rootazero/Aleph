@@ -15,24 +15,24 @@ pub enum ProfileSection {
 }
 
 impl ProfileSection {
-    pub const ALL: &'static [ProfileSection] = &[
-        ProfileSection::Identity,
-        ProfileSection::CommunicationStyle,
-        ProfileSection::Motivations,
-        ProfileSection::CurrentFocus,
-        ProfileSection::StanceShifts,
-        ProfileSection::OpenQuestions,
+    pub const ALL: &'static [Self] = &[
+        Self::Identity,
+        Self::CommunicationStyle,
+        Self::Motivations,
+        Self::CurrentFocus,
+        Self::StanceShifts,
+        Self::OpenQuestions,
     ];
 
     #[must_use]
     pub const fn heading(&self) -> &'static str {
         match self {
-            ProfileSection::Identity => "Identity",
-            ProfileSection::CommunicationStyle => "Communication Style",
-            ProfileSection::Motivations => "Motivations",
-            ProfileSection::CurrentFocus => "Current Focus",
-            ProfileSection::StanceShifts => "Stance Shifts",
-            ProfileSection::OpenQuestions => "Open Questions",
+            Self::Identity => "Identity",
+            Self::CommunicationStyle => "Communication Style",
+            Self::Motivations => "Motivations",
+            Self::CurrentFocus => "Current Focus",
+            Self::StanceShifts => "Stance Shifts",
+            Self::OpenQuestions => "Open Questions",
         }
     }
 }

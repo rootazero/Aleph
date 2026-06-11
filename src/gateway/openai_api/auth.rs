@@ -40,14 +40,14 @@ impl ApiError {
     #[must_use]
     pub const fn status_code(&self) -> u16 {
         match self {
-            ApiError::Unauthorized(_) => 401,
-            ApiError::BadRequest(_) => 400,
-            ApiError::NotFound(_) => 404,
-            ApiError::Conflict(_) => 409,
-            ApiError::InternalError(_) => 500,
-            ApiError::BadGateway(_) => 502,
-            ApiError::GatewayTimeout(_) => 504,
-            ApiError::ServiceUnavailable(_) => 503,
+            Self::Unauthorized(_) => 401,
+            Self::BadRequest(_) => 400,
+            Self::NotFound(_) => 404,
+            Self::Conflict(_) => 409,
+            Self::InternalError(_) => 500,
+            Self::BadGateway(_) => 502,
+            Self::GatewayTimeout(_) => 504,
+            Self::ServiceUnavailable(_) => 503,
         }
     }
 
@@ -55,14 +55,14 @@ impl ApiError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
-            ApiError::Unauthorized(_) => "invalid_api_key",
-            ApiError::BadRequest(_) => "invalid_request_error",
-            ApiError::NotFound(_) => "model_not_found",
-            ApiError::Conflict(_) => "agent_busy",
-            ApiError::InternalError(_) => "internal_error",
-            ApiError::BadGateway(_) => "provider_error",
-            ApiError::GatewayTimeout(_) => "timeout",
-            ApiError::ServiceUnavailable(_) => "service_unavailable",
+            Self::Unauthorized(_) => "invalid_api_key",
+            Self::BadRequest(_) => "invalid_request_error",
+            Self::NotFound(_) => "model_not_found",
+            Self::Conflict(_) => "agent_busy",
+            Self::InternalError(_) => "internal_error",
+            Self::BadGateway(_) => "provider_error",
+            Self::GatewayTimeout(_) => "timeout",
+            Self::ServiceUnavailable(_) => "service_unavailable",
         }
     }
 
@@ -70,14 +70,14 @@ impl ApiError {
     #[must_use]
     pub fn to_json(&self) -> serde_json::Value {
         let (message, error_type) = match self {
-            ApiError::Unauthorized(msg) => (msg.as_str(), "authentication_error"),
-            ApiError::BadRequest(msg) => (msg.as_str(), "invalid_request_error"),
-            ApiError::NotFound(msg) => (msg.as_str(), "invalid_request_error"),
-            ApiError::Conflict(msg) => (msg.as_str(), "conflict_error"),
-            ApiError::InternalError(msg) => (msg.as_str(), "internal_error"),
-            ApiError::BadGateway(msg) => (msg.as_str(), "upstream_error"),
-            ApiError::GatewayTimeout(msg) => (msg.as_str(), "upstream_error"),
-            ApiError::ServiceUnavailable(msg) => (msg.as_str(), "service_unavailable"),
+            Self::Unauthorized(msg) => (msg.as_str(), "authentication_error"),
+            Self::BadRequest(msg) => (msg.as_str(), "invalid_request_error"),
+            Self::NotFound(msg) => (msg.as_str(), "invalid_request_error"),
+            Self::Conflict(msg) => (msg.as_str(), "conflict_error"),
+            Self::InternalError(msg) => (msg.as_str(), "internal_error"),
+            Self::BadGateway(msg) => (msg.as_str(), "upstream_error"),
+            Self::GatewayTimeout(msg) => (msg.as_str(), "upstream_error"),
+            Self::ServiceUnavailable(msg) => (msg.as_str(), "service_unavailable"),
         };
 
         json!({

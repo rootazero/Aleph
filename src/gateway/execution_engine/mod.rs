@@ -147,9 +147,9 @@ impl BusyInputMode {
     #[must_use]
     pub const fn as_wire(self) -> &'static str {
         match self {
-            BusyInputMode::Steer => "steer",
-            BusyInputMode::Interrupt => "interrupt",
-            BusyInputMode::Queue => "queue",
+            Self::Steer => "steer",
+            Self::Interrupt => "interrupt",
+            Self::Queue => "queue",
         }
     }
 
@@ -158,9 +158,9 @@ impl BusyInputMode {
     #[must_use]
     pub fn from_wire(s: Option<&str>) -> Self {
         match s {
-            Some("interrupt") => BusyInputMode::Interrupt,
-            Some("queue") => BusyInputMode::Queue,
-            _ => BusyInputMode::Steer,
+            Some("interrupt") => Self::Interrupt,
+            Some("queue") => Self::Queue,
+            _ => Self::Steer,
         }
     }
 

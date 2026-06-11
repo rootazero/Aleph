@@ -18,11 +18,11 @@ impl TrustLevel {
     pub fn infer_from_addr(addr: &std::net::SocketAddr) -> Self {
         let ip = addr.ip();
         if ip.is_loopback() {
-            TrustLevel::Local
+            Self::Local
         } else if is_private_ip(&ip) {
-            TrustLevel::Trusted
+            Self::Trusted
         } else {
-            TrustLevel::Public
+            Self::Public
         }
     }
 
@@ -32,11 +32,11 @@ impl TrustLevel {
         if let Ok(parsed) = url::Url::parse(url) {
             // Use host() to handle IPv6 addresses correctly (host_str includes brackets)
             match parsed.host() {
-                Some(url::Host::Domain("localhost")) => TrustLevel::Local,
-                Some(url::Host::Ipv4(ip)) if ip.is_loopback() => TrustLevel::Local,
-                Some(url::Host::Ipv6(ip)) if ip.is_loopback() => TrustLevel::Local,
+                Some(url::Host::Domain("localhost")) => Self::Local,
+                Some(url::Host::Ipv4(ip)) if ip.is_loopback() => Self::Local,
+                Some(url::Host::Ipv6(ip)) if ip.is_loopback() => Self::Local,
                 Some(url::Host::Ipv4(ip)) if ip.is_private() || ip.is_link_local() => {
-                    TrustLevel::Trusted
+                    Self::Trusted
                 }
                 // Mirror the IPv4 arm and the `infer_from_addr` path: a private
                 // (ULA fc00::/7) or link-local (fe80::/10) IPv6 host is a LAN
@@ -44,13 +44,13 @@ impl TrustLevel {
                 // `_ => Public`, over-gating legitimate LAN IPv6 agents and
                 // diverging from `infer_from_addr`.
                 Some(url::Host::Ipv6(ip)) if is_private_ip(&std::net::IpAddr::V6(ip)) => {
-                    TrustLevel::Trusted
+                    Self::Trusted
                 }
-                Some(url::Host::Domain(host)) if is_private_hostname(host) => TrustLevel::Trusted,
-                _ => TrustLevel::Public,
+                Some(url::Host::Domain(host)) if is_private_hostname(host) => Self::Trusted,
+                _ => Self::Public,
             }
         } else {
-            TrustLevel::Public
+            Self::Public
         }
     }
 }

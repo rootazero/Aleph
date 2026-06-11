@@ -56,8 +56,8 @@ pub enum ResolveError {
 impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ResolveError::NotFound => write!(f, "no online node matches"),
-            ResolveError::Ambiguous(c) => write!(f, "ambiguous — matches: {}", c.join(", ")),
+            Self::NotFound => write!(f, "no online node matches"),
+            Self::Ambiguous(c) => write!(f, "ambiguous — matches: {}", c.join(", ")),
         }
     }
 }

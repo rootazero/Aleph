@@ -51,10 +51,10 @@ impl SseEvent {
     #[must_use]
     pub fn parse(event_type: &str, data: &str) -> Self {
         match event_type {
-            "endpoint" => SseEvent::Endpoint {
+            "endpoint" => Self::Endpoint {
                 url: data.trim().to_string(),
             },
-            "ping" => SseEvent::Ping,
+            "ping" => Self::Ping,
             "message" | "" => {
                 // Try to parse as JSON-RPC
                 if let Ok(value) = serde_json::from_str::<Value>(data) {
@@ -63,20 +63,20 @@ impl SseEvent {
                         && value.get("method").is_some()
                     {
                         if let Ok(req) = serde_json::from_value(value) {
-                            return SseEvent::Request(req);
+                            return Self::Request(req);
                         }
                     } else if value.get("method").is_some() {
                         if let Ok(notif) = serde_json::from_value(value) {
-                            return SseEvent::Notification(notif);
+                            return Self::Notification(notif);
                         }
                     }
                 }
-                SseEvent::Unknown {
+                Self::Unknown {
                     event_type: event_type.to_string(),
                     data: data.to_string(),
                 }
             }
-            _ => SseEvent::Unknown {
+            _ => Self::Unknown {
                 event_type: event_type.to_string(),
                 data: data.to_string(),
             },

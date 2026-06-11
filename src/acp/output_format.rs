@@ -20,8 +20,8 @@ impl OutputFormat {
     pub fn parse(&self, stdout: &str) -> String {
         let trimmed = stdout.trim();
         match self {
-            OutputFormat::PlainText => trimmed.to_string(),
-            OutputFormat::JsonField { field } => {
+            Self::PlainText => trimmed.to_string(),
+            Self::JsonField { field } => {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
                     if let Some(field_value) = json.get(field) {
                         if let Some(text) = field_value.as_str() {
@@ -41,8 +41,8 @@ impl OutputFormat {
 impl From<&OutputFormatSerde> for OutputFormat {
     fn from(fmt: &OutputFormatSerde) -> Self {
         match fmt {
-            OutputFormatSerde::PlainText => OutputFormat::PlainText,
-            OutputFormatSerde::Json { field } => OutputFormat::JsonField {
+            OutputFormatSerde::PlainText => Self::PlainText,
+            OutputFormatSerde::Json { field } => Self::JsonField {
                 field: field.clone(),
             },
         }

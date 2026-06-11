@@ -14,9 +14,9 @@ impl MediaPlaceholderType {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            MediaPlaceholderType::Image => "image",
-            MediaPlaceholderType::Audio => "audio",
-            MediaPlaceholderType::File => "file",
+            Self::Image => "image",
+            Self::Audio => "audio",
+            Self::File => "file",
         }
     }
 }

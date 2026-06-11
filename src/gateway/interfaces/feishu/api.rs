@@ -20,7 +20,7 @@ pub enum FeishuSendError {
 
 impl From<String> for FeishuSendError {
     fn from(s: String) -> Self {
-        FeishuSendError::Other(s)
+        Self::Other(s)
     }
 }
 

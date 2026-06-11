@@ -42,20 +42,20 @@ impl ChatType {
     #[must_use]
     pub fn from_chat(ch: &teloxide::types::Chat) -> Self {
         if ch.is_private() {
-            ChatType::Private
+            Self::Private
         } else if ch.is_channel() {
-            ChatType::Channel
+            Self::Channel
         } else if ch.is_supergroup() {
-            ChatType::Supergroup
+            Self::Supergroup
         } else {
-            ChatType::Group
+            Self::Group
         }
     }
 
     /// Returns `true` for supergroup or group (any chat that supports group policies).
     #[must_use]
     pub const fn is_group(self) -> bool {
-        matches!(self, ChatType::Group | ChatType::Supergroup)
+        matches!(self, Self::Group | Self::Supergroup)
     }
 }
 
@@ -89,13 +89,13 @@ impl AccessLevel {
         is_in_chat: bool,
     ) -> Self {
         if is_creator {
-            AccessLevel::Owner
+            Self::Owner
         } else if is_administrator {
-            AccessLevel::Admin
+            Self::Admin
         } else if is_in_chat {
-            AccessLevel::Member
+            Self::Member
         } else {
-            AccessLevel::Stranger
+            Self::Stranger
         }
     }
 }

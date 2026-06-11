@@ -429,13 +429,13 @@ pub enum ExecutorError {
 impl std::fmt::Display for ExecutorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ExecutorError::ExecutionFailed(msg) => write!(f, "Execution failed: {msg}"),
-            ExecutorError::ToolError(msg) => write!(f, "Tool error: {msg}"),
-            ExecutorError::TaskFailed { task_id, error } => {
+            Self::ExecutionFailed(msg) => write!(f, "Execution failed: {msg}"),
+            Self::ToolError(msg) => write!(f, "Tool error: {msg}"),
+            Self::TaskFailed { task_id, error } => {
                 write!(f, "Task {task_id} failed: {error}")
             }
-            ExecutorError::Timeout => write!(f, "Execution timed out"),
-            ExecutorError::Cancelled => write!(f, "Execution was cancelled"),
+            Self::Timeout => write!(f, "Execution timed out"),
+            Self::Cancelled => write!(f, "Execution was cancelled"),
         }
     }
 }
@@ -446,17 +446,17 @@ impl std::error::Error for ExecutorError {}
 impl ExecutorError {
     /// Create an execution failed error
     pub fn execution_failed(msg: impl Into<String>) -> Self {
-        ExecutorError::ExecutionFailed(msg.into())
+        Self::ExecutionFailed(msg.into())
     }
 
     /// Create a tool error
     pub fn tool_error(msg: impl Into<String>) -> Self {
-        ExecutorError::ToolError(msg.into())
+        Self::ToolError(msg.into())
     }
 
     /// Create a task failed error
     pub fn task_failed(task_id: impl Into<String>, error: impl Into<String>) -> Self {
-        ExecutorError::TaskFailed {
+        Self::TaskFailed {
             task_id: task_id.into(),
             error: error.into(),
         }
@@ -467,22 +467,22 @@ impl ExecutorError {
     /// Recoverable errors may be worth retrying.
     pub const fn is_recoverable(&self) -> bool {
         match self {
-            ExecutorError::ExecutionFailed(_) => true, // May be transient
-            ExecutorError::ToolError(_) => true,       // Tool may work on retry
-            ExecutorError::TaskFailed { .. } => true,  // Task may succeed on retry
-            ExecutorError::Timeout => true,            // Can retry with longer timeout
-            ExecutorError::Cancelled => false,         // User cancelled, don't retry
+            Self::ExecutionFailed(_) => true, // May be transient
+            Self::ToolError(_) => true,       // Tool may work on retry
+            Self::TaskFailed { .. } => true,  // Task may succeed on retry
+            Self::Timeout => true,            // Can retry with longer timeout
+            Self::Cancelled => false,         // User cancelled, don't retry
         }
     }
 
     /// Check if this error is due to timeout
     pub const fn is_timeout(&self) -> bool {
-        matches!(self, ExecutorError::Timeout)
+        matches!(self, Self::Timeout)
     }
 
     /// Check if this error is due to cancellation
     pub const fn is_cancelled(&self) -> bool {
-        matches!(self, ExecutorError::Cancelled)
+        matches!(self, Self::Cancelled)
     }
 }
 

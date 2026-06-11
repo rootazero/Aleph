@@ -58,22 +58,22 @@ impl NoteType {
     #[must_use]
     pub const fn as_str(&self) -> &str {
         match self {
-            NoteType::Preference => "preference",
-            NoteType::Plan => "plan",
-            NoteType::Learning => "learning",
-            NoteType::Project => "project",
-            NoteType::Personal => "personal",
-            NoteType::Tool => "tool",
-            NoteType::Lesson => "lesson",
-            NoteType::Skill => "skill",
-            NoteType::Reference => "reference",
-            NoteType::Feedback => "feedback",
-            NoteType::Transcript => "transcript",
-            NoteType::Other => "other",
-            NoteType::SubagentRun => "subagent_run",
-            NoteType::SubagentSession => "subagent_session",
-            NoteType::SubagentCheckpoint => "subagent_checkpoint",
-            NoteType::SubagentTranscript => "subagent_transcript",
+            Self::Preference => "preference",
+            Self::Plan => "plan",
+            Self::Learning => "learning",
+            Self::Project => "project",
+            Self::Personal => "personal",
+            Self::Tool => "tool",
+            Self::Lesson => "lesson",
+            Self::Skill => "skill",
+            Self::Reference => "reference",
+            Self::Feedback => "feedback",
+            Self::Transcript => "transcript",
+            Self::Other => "other",
+            Self::SubagentRun => "subagent_run",
+            Self::SubagentSession => "subagent_session",
+            Self::SubagentCheckpoint => "subagent_checkpoint",
+            Self::SubagentTranscript => "subagent_transcript",
         }
     }
 
@@ -84,51 +84,51 @@ impl NoteType {
     #[must_use]
     pub const fn to_category_dir(&self) -> &'static str {
         match self {
-            NoteType::Preference => "preference",
-            NoteType::Plan => "plan",
-            NoteType::Learning => "learning",
-            NoteType::Project => "project",
-            NoteType::Personal => "personal",
-            NoteType::Tool => "tool",
-            NoteType::Lesson => "lesson",
-            NoteType::Skill => "skill",
-            NoteType::Reference => "reference",
-            NoteType::Feedback => "feedback",
-            NoteType::Transcript => "transcript",
-            NoteType::Other => "other",
-            NoteType::SubagentRun => "subagent-run",
-            NoteType::SubagentSession => "subagent-session",
-            NoteType::SubagentCheckpoint => "subagent-checkpoint",
-            NoteType::SubagentTranscript => "subagent-transcript",
+            Self::Preference => "preference",
+            Self::Plan => "plan",
+            Self::Learning => "learning",
+            Self::Project => "project",
+            Self::Personal => "personal",
+            Self::Tool => "tool",
+            Self::Lesson => "lesson",
+            Self::Skill => "skill",
+            Self::Reference => "reference",
+            Self::Feedback => "feedback",
+            Self::Transcript => "transcript",
+            Self::Other => "other",
+            Self::SubagentRun => "subagent-run",
+            Self::SubagentSession => "subagent-session",
+            Self::SubagentCheckpoint => "subagent-checkpoint",
+            Self::SubagentTranscript => "subagent-transcript",
         }
     }
 
     /// Parse from string with fallback to Other
     #[must_use]
     pub fn from_str_or_other(s: &str) -> Self {
-        s.parse().unwrap_or(NoteType::Other)
+        s.parse().unwrap_or(Self::Other)
     }
 
     /// Get default aleph:// path for this fact type
     #[must_use]
     pub const fn default_path(&self) -> &str {
         match self {
-            NoteType::Preference => "aleph://user/preferences/",
-            NoteType::Personal => "aleph://user/personal/",
-            NoteType::Plan => "aleph://user/plans/",
-            NoteType::Learning => "aleph://knowledge/learning/",
-            NoteType::Project => "aleph://knowledge/projects/",
-            NoteType::Tool => "aleph://agent/tools/",
-            NoteType::Lesson => "aleph://knowledge/lessons/",
-            NoteType::Skill => "aleph://skills/",
-            NoteType::Reference => "aleph://reference/",
-            NoteType::Feedback => "aleph://feedback/",
-            NoteType::Transcript => "aleph://transcript/",
-            NoteType::Other => "aleph://knowledge/",
-            NoteType::SubagentRun
-            | NoteType::SubagentSession
-            | NoteType::SubagentCheckpoint
-            | NoteType::SubagentTranscript => "aleph://agent/experiences/",
+            Self::Preference => "aleph://user/preferences/",
+            Self::Personal => "aleph://user/personal/",
+            Self::Plan => "aleph://user/plans/",
+            Self::Learning => "aleph://knowledge/learning/",
+            Self::Project => "aleph://knowledge/projects/",
+            Self::Tool => "aleph://agent/tools/",
+            Self::Lesson => "aleph://knowledge/lessons/",
+            Self::Skill => "aleph://skills/",
+            Self::Reference => "aleph://reference/",
+            Self::Feedback => "aleph://feedback/",
+            Self::Transcript => "aleph://transcript/",
+            Self::Other => "aleph://knowledge/",
+            Self::SubagentRun
+            | Self::SubagentSession
+            | Self::SubagentCheckpoint
+            | Self::SubagentTranscript => "aleph://agent/experiences/",
         }
     }
 
@@ -136,17 +136,17 @@ impl NoteType {
     #[must_use]
     pub const fn default_category(&self) -> MemoryCategory {
         match self {
-            NoteType::Preference => MemoryCategory::Preferences,
-            NoteType::Plan | NoteType::Personal => MemoryCategory::Profile,
-            NoteType::Learning | NoteType::Project | NoteType::Other => MemoryCategory::Entities,
-            NoteType::Tool | NoteType::Skill | NoteType::Reference | NoteType::Feedback => {
+            Self::Preference => MemoryCategory::Preferences,
+            Self::Plan | Self::Personal => MemoryCategory::Profile,
+            Self::Learning | Self::Project | Self::Other => MemoryCategory::Entities,
+            Self::Tool | Self::Skill | Self::Reference | Self::Feedback => {
                 MemoryCategory::Patterns
             }
-            NoteType::Lesson => MemoryCategory::Cases,
-            NoteType::SubagentRun | NoteType::SubagentSession | NoteType::SubagentCheckpoint => {
+            Self::Lesson => MemoryCategory::Cases,
+            Self::SubagentRun | Self::SubagentSession | Self::SubagentCheckpoint => {
                 MemoryCategory::Cases
             }
-            NoteType::SubagentTranscript | NoteType::Transcript => MemoryCategory::Events,
+            Self::SubagentTranscript | Self::Transcript => MemoryCategory::Events,
         }
     }
 }
@@ -156,22 +156,22 @@ impl std::str::FromStr for NoteType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "preference" => Ok(NoteType::Preference),
-            "plan" => Ok(NoteType::Plan),
-            "learning" => Ok(NoteType::Learning),
-            "project" => Ok(NoteType::Project),
-            "personal" => Ok(NoteType::Personal),
-            "tool" => Ok(NoteType::Tool),
-            "lesson" => Ok(NoteType::Lesson),
-            "skill" => Ok(NoteType::Skill),
-            "reference" => Ok(NoteType::Reference),
-            "feedback" => Ok(NoteType::Feedback),
-            "subagent_run" => Ok(NoteType::SubagentRun),
-            "subagent_session" => Ok(NoteType::SubagentSession),
-            "subagent_checkpoint" => Ok(NoteType::SubagentCheckpoint),
-            "subagent_transcript" => Ok(NoteType::SubagentTranscript),
-            "transcript" => Ok(NoteType::Transcript),
-            "other" => Ok(NoteType::Other),
+            "preference" => Ok(Self::Preference),
+            "plan" => Ok(Self::Plan),
+            "learning" => Ok(Self::Learning),
+            "project" => Ok(Self::Project),
+            "personal" => Ok(Self::Personal),
+            "tool" => Ok(Self::Tool),
+            "lesson" => Ok(Self::Lesson),
+            "skill" => Ok(Self::Skill),
+            "reference" => Ok(Self::Reference),
+            "feedback" => Ok(Self::Feedback),
+            "subagent_run" => Ok(Self::SubagentRun),
+            "subagent_session" => Ok(Self::SubagentSession),
+            "subagent_checkpoint" => Ok(Self::SubagentCheckpoint),
+            "subagent_transcript" => Ok(Self::SubagentTranscript),
+            "transcript" => Ok(Self::Transcript),
+            "other" => Ok(Self::Other),
             _ => Err(format!("Unknown fact type: {s}")),
         }
     }

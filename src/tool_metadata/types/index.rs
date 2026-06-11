@@ -120,12 +120,12 @@ impl ToolIndexCategory {
     #[must_use]
     pub const fn display_name(&self) -> &'static str {
         match self {
-            ToolIndexCategory::Core => "Core",
-            ToolIndexCategory::Builtin => "Builtin",
-            ToolIndexCategory::Mcp => "MCP",
-            ToolIndexCategory::Skill => "Skill",
-            ToolIndexCategory::Custom => "Custom",
-            ToolIndexCategory::Plugin => "Plugin",
+            Self::Core => "Core",
+            Self::Builtin => "Builtin",
+            Self::Mcp => "MCP",
+            Self::Skill => "Skill",
+            Self::Custom => "Custom",
+            Self::Plugin => "Plugin",
         }
     }
 }
@@ -139,12 +139,12 @@ impl fmt::Display for ToolIndexCategory {
 impl From<&ToolSource> for ToolIndexCategory {
     fn from(source: &ToolSource) -> Self {
         match source {
-            ToolSource::Builtin => ToolIndexCategory::Builtin,
-            ToolSource::Native => ToolIndexCategory::Builtin, // Treat native as builtin
-            ToolSource::Mcp { .. } => ToolIndexCategory::Mcp,
-            ToolSource::Skill { .. } => ToolIndexCategory::Skill,
-            ToolSource::Custom { .. } => ToolIndexCategory::Custom,
-            ToolSource::Plugin { .. } => ToolIndexCategory::Plugin,
+            ToolSource::Builtin => Self::Builtin,
+            ToolSource::Native => Self::Builtin, // Treat native as builtin
+            ToolSource::Mcp { .. } => Self::Mcp,
+            ToolSource::Skill { .. } => Self::Skill,
+            ToolSource::Custom { .. } => Self::Custom,
+            ToolSource::Plugin { .. } => Self::Plugin,
         }
     }
 }

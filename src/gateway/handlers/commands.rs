@@ -313,11 +313,11 @@ pub enum ResolvedCommandContext {
 impl From<CommandContext> for ResolvedCommandContext {
     fn from(ctx: CommandContext) -> Self {
         match ctx {
-            CommandContext::Builtin { tool_name } => ResolvedCommandContext::Builtin { tool_name },
+            CommandContext::Builtin { tool_name } => Self::Builtin { tool_name },
             CommandContext::Mcp {
                 server_name,
                 tool_name,
-            } => ResolvedCommandContext::Mcp {
+            } => Self::Mcp {
                 server_name,
                 tool_name,
             },
@@ -325,12 +325,12 @@ impl From<CommandContext> for ResolvedCommandContext {
                 skill_id,
                 display_name,
                 ..
-            } => ResolvedCommandContext::Skill {
+            } => Self::Skill {
                 skill_id,
                 display_name,
             },
-            CommandContext::Custom { pattern, .. } => ResolvedCommandContext::Custom { pattern },
-            CommandContext::None => ResolvedCommandContext::None,
+            CommandContext::Custom { pattern, .. } => Self::Custom { pattern },
+            CommandContext::None => Self::None,
         }
     }
 }

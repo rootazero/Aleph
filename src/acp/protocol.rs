@@ -442,7 +442,7 @@ impl std::error::Error for AcpOperationError {}
 
 impl From<AcpOperationError> for crate::error::AlephError {
     fn from(e: AcpOperationError) -> Self {
-        crate::error::AlephError::AcpError {
+        Self::AcpError {
             code: e.code.as_str().to_string(),
             message: e.message,
             retryable: e.code.is_retryable(),

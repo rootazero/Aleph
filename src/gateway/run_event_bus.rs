@@ -77,11 +77,11 @@ pub enum RunStatus {
 impl std::fmt::Display for RunStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RunStatus::Queued => write!(f, "queued"),
-            RunStatus::Running => write!(f, "running"),
-            RunStatus::Completed => write!(f, "completed"),
-            RunStatus::Failed => write!(f, "failed"),
-            RunStatus::Cancelled => write!(f, "cancelled"),
+            Self::Queued => write!(f, "queued"),
+            Self::Running => write!(f, "running"),
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+            Self::Cancelled => write!(f, "cancelled"),
         }
     }
 }
@@ -195,16 +195,16 @@ impl RunEvent {
     #[must_use]
     pub fn run_id(&self) -> &str {
         match self {
-            RunEvent::StatusChanged { run_id, .. } => run_id,
-            RunEvent::TokenDelta { run_id, .. } => run_id,
-            RunEvent::ReasoningDelta { run_id, .. } => run_id,
-            RunEvent::ToolStart { run_id, .. } => run_id,
-            RunEvent::ToolEnd { run_id, .. } => run_id,
-            RunEvent::RunCompleted { run_id, .. } => run_id,
-            RunEvent::RunFailed { run_id, .. } => run_id,
-            RunEvent::RunCancelled { run_id, .. } => run_id,
-            RunEvent::InputRequested { run_id, .. } => run_id,
-            RunEvent::InputReceived { run_id, .. } => run_id,
+            Self::StatusChanged { run_id, .. } => run_id,
+            Self::TokenDelta { run_id, .. } => run_id,
+            Self::ReasoningDelta { run_id, .. } => run_id,
+            Self::ToolStart { run_id, .. } => run_id,
+            Self::ToolEnd { run_id, .. } => run_id,
+            Self::RunCompleted { run_id, .. } => run_id,
+            Self::RunFailed { run_id, .. } => run_id,
+            Self::RunCancelled { run_id, .. } => run_id,
+            Self::InputRequested { run_id, .. } => run_id,
+            Self::InputReceived { run_id, .. } => run_id,
         }
     }
 
@@ -213,9 +213,9 @@ impl RunEvent {
     pub const fn is_terminal(&self) -> bool {
         matches!(
             self,
-            RunEvent::RunCompleted { .. }
-                | RunEvent::RunFailed { .. }
-                | RunEvent::RunCancelled { .. }
+            Self::RunCompleted { .. }
+                | Self::RunFailed { .. }
+                | Self::RunCancelled { .. }
         )
     }
 }
@@ -250,14 +250,14 @@ impl RunEndResult {
     /// Check if the result is successful
     #[must_use]
     pub const fn is_success(&self) -> bool {
-        matches!(self, RunEndResult::Completed { .. })
+        matches!(self, Self::Completed { .. })
     }
 
     /// Get error message if failed
     #[must_use]
     pub fn error(&self) -> Option<&str> {
         match self {
-            RunEndResult::Failed { error, .. } => Some(error),
+            Self::Failed { error, .. } => Some(error),
             _ => None,
         }
     }

@@ -128,15 +128,15 @@ impl From<ScheduleInput> for ScheduleKind {
             ScheduleInput::At {
                 at_ms,
                 delete_after_run,
-            } => ScheduleKind::At {
+            } => Self::At {
                 at: at_ms,
                 delete_after_run,
             },
-            ScheduleInput::Every { every_ms } => ScheduleKind::Every {
+            ScheduleInput::Every { every_ms } => Self::Every {
                 every_ms,
                 anchor_ms: None,
             },
-            ScheduleInput::Cron { expr, timezone } => ScheduleKind::Cron {
+            ScheduleInput::Cron { expr, timezone } => Self::Cron {
                 expr,
                 tz: timezone,
                 stagger_ms: None,

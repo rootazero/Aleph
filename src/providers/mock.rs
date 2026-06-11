@@ -24,17 +24,17 @@ pub enum MockError {
 impl From<MockError> for AlephError {
     fn from(err: MockError) -> Self {
         match err {
-            MockError::Network(msg) => AlephError::network(msg),
-            MockError::Authentication(msg) => AlephError::authentication("Mock".to_string(), msg),
-            MockError::RateLimit(msg) => AlephError::rate_limit(msg),
-            MockError::Provider(msg) => AlephError::provider(msg),
-            MockError::Timeout => AlephError::Timeout {
+            MockError::Network(msg) => Self::network(msg),
+            MockError::Authentication(msg) => Self::authentication("Mock".to_string(), msg),
+            MockError::RateLimit(msg) => Self::rate_limit(msg),
+            MockError::Provider(msg) => Self::provider(msg),
+            MockError::Timeout => Self::Timeout {
                 suggestion: Some("Try again in a few moments".to_string()),
             },
-            MockError::NoProviderAvailable => AlephError::NoProviderAvailable {
+            MockError::NoProviderAvailable => Self::NoProviderAvailable {
                 suggestion: Some("Configure a provider".to_string()),
             },
-            MockError::InvalidConfig(msg) => AlephError::invalid_config(msg),
+            MockError::InvalidConfig(msg) => Self::invalid_config(msg),
         }
     }
 }

@@ -25,9 +25,9 @@ impl CommandType {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            CommandType::Action => "action",
-            CommandType::Prompt => "prompt",
-            CommandType::Namespace => "namespace",
+            Self::Action => "action",
+            Self::Prompt => "prompt",
+            Self::Namespace => "namespace",
         }
     }
 
@@ -36,11 +36,11 @@ impl CommandType {
     pub fn parse(s: &str) -> Option<Self> {
         let trimmed = s.trim();
         if trimmed.eq_ignore_ascii_case("action") {
-            Some(CommandType::Action)
+            Some(Self::Action)
         } else if trimmed.eq_ignore_ascii_case("prompt") {
-            Some(CommandType::Prompt)
+            Some(Self::Prompt)
         } else if trimmed.eq_ignore_ascii_case("namespace") {
-            Some(CommandType::Namespace)
+            Some(Self::Namespace)
         } else {
             None
         }
@@ -50,9 +50,9 @@ impl CommandType {
     #[must_use]
     pub const fn default_icon(&self) -> &'static str {
         match self {
-            CommandType::Action => "bolt",
-            CommandType::Prompt => "text.quote",
-            CommandType::Namespace => "folder",
+            Self::Action => "bolt",
+            Self::Prompt => "text.quote",
+            Self::Namespace => "folder",
         }
     }
 }

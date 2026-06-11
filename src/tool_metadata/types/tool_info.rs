@@ -36,12 +36,12 @@ pub enum ToolSourceType {
 impl From<&ToolSource> for ToolSourceType {
     fn from(source: &ToolSource) -> Self {
         match source {
-            ToolSource::Native => ToolSourceType::Native,
-            ToolSource::Builtin => ToolSourceType::Builtin,
-            ToolSource::Mcp { .. } => ToolSourceType::Mcp,
-            ToolSource::Skill { .. } => ToolSourceType::Skill,
-            ToolSource::Custom { .. } => ToolSourceType::Custom,
-            ToolSource::Plugin { .. } => ToolSourceType::Plugin,
+            ToolSource::Native => Self::Native,
+            ToolSource::Builtin => Self::Builtin,
+            ToolSource::Mcp { .. } => Self::Mcp,
+            ToolSource::Skill { .. } => Self::Skill,
+            ToolSource::Custom { .. } => Self::Custom,
+            ToolSource::Plugin { .. } => Self::Plugin,
         }
     }
 }
@@ -53,11 +53,11 @@ impl ToolSourceType {
     #[must_use]
     pub const fn default_icon(&self) -> &'static str {
         match self {
-            ToolSourceType::Native | ToolSourceType::Builtin => "command.circle.fill",
-            ToolSourceType::Mcp => "bolt.fill",
-            ToolSourceType::Skill => "lightbulb.fill",
-            ToolSourceType::Custom => "command",
-            ToolSourceType::Plugin => "puzzlepiece.extension",
+            Self::Native | Self::Builtin => "command.circle.fill",
+            Self::Mcp => "bolt.fill",
+            Self::Skill => "lightbulb.fill",
+            Self::Custom => "command",
+            Self::Plugin => "puzzlepiece.extension",
         }
     }
 
@@ -65,11 +65,11 @@ impl ToolSourceType {
     #[must_use]
     pub const fn badge_label(&self) -> &'static str {
         match self {
-            ToolSourceType::Native | ToolSourceType::Builtin => "System",
-            ToolSourceType::Mcp => "MCP",
-            ToolSourceType::Skill => "Skill",
-            ToolSourceType::Custom => "Custom",
-            ToolSourceType::Plugin => "Plugin",
+            Self::Native | Self::Builtin => "System",
+            Self::Mcp => "MCP",
+            Self::Skill => "Skill",
+            Self::Custom => "Custom",
+            Self::Plugin => "Plugin",
         }
     }
 }
@@ -164,7 +164,7 @@ impl From<&UnifiedTool> for UnifiedToolInfo {
 
 impl From<UnifiedTool> for UnifiedToolInfo {
     fn from(tool: UnifiedTool) -> Self {
-        UnifiedToolInfo::from(&tool)
+        Self::from(&tool)
     }
 }
 

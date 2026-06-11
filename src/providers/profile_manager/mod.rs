@@ -201,7 +201,7 @@ impl AgentState {
             return Ok(Self::default());
         }
         let content = std::fs::read_to_string(path)?;
-        let state: AgentState = serde_json::from_str(&content)?;
+        let state: Self = serde_json::from_str(&content)?;
         Ok(state)
     }
 

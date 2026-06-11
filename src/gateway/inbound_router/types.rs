@@ -62,8 +62,8 @@ impl ChannelPermissionLevel {
     #[must_use]
     pub const fn caller_role_str(self) -> &'static str {
         match self {
-            ChannelPermissionLevel::Config => "operator",
-            ChannelPermissionLevel::Chat => "guest",
+            Self::Config => "operator",
+            Self::Chat => "guest",
         }
     }
 }

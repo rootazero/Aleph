@@ -110,7 +110,7 @@ impl FileOpKind {
     /// the same path. Both `Write` and `Edit` are state-mutating from the
     /// LLM's perspective.
     const fn is_mutating(self) -> bool {
-        matches!(self, FileOpKind::Write | FileOpKind::Edit)
+        matches!(self, Self::Write | Self::Edit)
     }
 }
 

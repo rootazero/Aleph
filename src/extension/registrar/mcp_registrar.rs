@@ -215,7 +215,7 @@ impl McpScope {
         let inline_handles: Vec<InlineMcpHandle> =
             futures::future::try_join_all(spawn_futures).await?;
 
-        let scope = McpScope {
+        let scope = Self {
             references,
             inline_handles,
             trace_sink,

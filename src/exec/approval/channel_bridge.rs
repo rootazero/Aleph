@@ -647,8 +647,8 @@ impl ChannelApprovalBridge {
 impl From<ApprovalAction> for ApprovalDecisionType {
     fn from(action: ApprovalAction) -> Self {
         match action {
-            ApprovalAction::Approve => ApprovalDecisionType::AllowOnce,
-            ApprovalAction::Deny => ApprovalDecisionType::Deny,
+            ApprovalAction::Approve => Self::AllowOnce,
+            ApprovalAction::Deny => Self::Deny,
         }
     }
 }

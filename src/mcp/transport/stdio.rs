@@ -501,7 +501,7 @@ impl McpTransport for StdioTransport {
     }
 
     async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
-        StdioTransport::send_notification(self, notification).await
+        Self::send_notification(self, notification).await
     }
 
     async fn is_alive(&self) -> bool {
@@ -509,7 +509,7 @@ impl McpTransport for StdioTransport {
     }
 
     async fn close(&self) -> Result<()> {
-        StdioTransport::close(self).await
+        Self::close(self).await
     }
 
     fn server_name(&self) -> &str {

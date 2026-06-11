@@ -60,10 +60,10 @@ impl HealthReason {
     #[must_use]
     pub fn short_label(&self) -> &str {
         match self {
-            HealthReason::DependencyDown(s)
-            | HealthReason::AuthMissing(s)
-            | HealthReason::Custom(s) => s,
-            HealthReason::RateLimited { .. } => "rate limited",
+            Self::DependencyDown(s)
+            | Self::AuthMissing(s)
+            | Self::Custom(s) => s,
+            Self::RateLimited { .. } => "rate limited",
         }
     }
 }

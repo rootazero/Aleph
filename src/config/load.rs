@@ -83,7 +83,7 @@ impl Config {
         let contents = migrated_contents;
 
         // Parse TOML
-        let mut config: Config = toml::from_str(&contents).map_err(|e| {
+        let mut config: Self = toml::from_str(&contents).map_err(|e| {
             error!(path = %path.display(), error = %e, "Failed to parse config TOML");
             AlephError::invalid_config(format!(
                 "Failed to parse config file {}: {}",
@@ -238,7 +238,7 @@ impl Config {
     /// because the strongly-typed `SecurityConfig` schema lives in the
     /// gateway layer and we do not want a reverse dep from `config` →
     /// `gateway`.
-    fn apply_security_ssrf_overrides(config: &mut Config, raw_toml: &str) {
+    fn apply_security_ssrf_overrides(config: &mut Self, raw_toml: &str) {
         let Ok(table) = raw_toml.parse::<toml::Table>() else {
             return;
         };

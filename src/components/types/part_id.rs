@@ -21,24 +21,24 @@ pub trait PartId {
 impl PartId for SessionPart {
     fn part_id(&self) -> String {
         match self {
-            SessionPart::UserInput(p) => {
+            Self::UserInput(p) => {
                 format!("user_input_{}_{:x}", p.timestamp, hash_suffix(&p.text))
             }
-            SessionPart::AiResponse(p) => {
+            Self::AiResponse(p) => {
                 format!("ai_response_{}_{:x}", p.timestamp, hash_suffix(&p.content))
             }
-            SessionPart::ToolCall(p) => p.id.clone(),
-            SessionPart::Reasoning(p) => {
+            Self::ToolCall(p) => p.id.clone(),
+            Self::Reasoning(p) => {
                 format!("reasoning_{}_{:x}", p.timestamp, hash_suffix(&p.content))
             }
-            SessionPart::PlanCreated(p) => p.plan_id.clone(),
-            SessionPart::SubAgentCall(p) => {
+            Self::PlanCreated(p) => p.plan_id.clone(),
+            Self::SubAgentCall(p) => {
                 format!("subagent_{}_{:x}", p.agent_id, hash_suffix(&p.prompt))
             }
-            SessionPart::Summary(p) => {
+            Self::Summary(p) => {
                 format!("summary_{}_{:x}", p.compacted_at, hash_suffix(&p.content))
             }
-            SessionPart::CompactionMarker(p) => {
+            Self::CompactionMarker(p) => {
                 let trigger = if p.auto { "auto" } else { "manual" };
                 format!(
                     "compaction_marker_{}_{:x}",
@@ -46,14 +46,14 @@ impl PartId for SessionPart {
                     hash_suffix(trigger)
                 )
             }
-            SessionPart::SystemReminder(p) => {
+            Self::SystemReminder(p) => {
                 format!("reminder_{}_{:x}", p.timestamp, hash_suffix(&p.content))
             }
-            SessionPart::StepStart(p) => format!("step_start_{}", p.step_id),
-            SessionPart::StepFinish(p) => format!("step_finish_{}", p.step_id),
-            SessionPart::Snapshot(p) => p.snapshot_id.clone(),
-            SessionPart::Patch(p) => p.patch_id.clone(),
-            SessionPart::StreamingText(p) => p.part_id.clone(),
+            Self::StepStart(p) => format!("step_start_{}", p.step_id),
+            Self::StepFinish(p) => format!("step_finish_{}", p.step_id),
+            Self::Snapshot(p) => p.snapshot_id.clone(),
+            Self::Patch(p) => p.patch_id.clone(),
+            Self::StreamingText(p) => p.part_id.clone(),
         }
     }
 }
@@ -72,9 +72,9 @@ pub enum PartEventType {
 impl std::fmt::Display for PartEventType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PartEventType::Added => write!(f, "added"),
-            PartEventType::Updated => write!(f, "updated"),
-            PartEventType::Removed => write!(f, "removed"),
+            Self::Added => write!(f, "added"),
+            Self::Updated => write!(f, "updated"),
+            Self::Removed => write!(f, "removed"),
         }
     }
 }

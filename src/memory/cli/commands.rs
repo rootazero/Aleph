@@ -64,9 +64,9 @@ impl std::str::FromStr for OutputFormat {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "table" => Ok(OutputFormat::Table),
-            "json" => Ok(OutputFormat::Json),
-            "csv" => Ok(OutputFormat::Csv),
+            "table" => Ok(Self::Table),
+            "json" => Ok(Self::Json),
+            "csv" => Ok(Self::Csv),
             _ => Err(format!("Unknown format: {s}. Use: table, json, csv")),
         }
     }

@@ -139,12 +139,12 @@ impl ToolSource {
     #[must_use]
     pub const fn label(&self) -> &'static str {
         match self {
-            ToolSource::Native => "Native",
-            ToolSource::Builtin => "Builtin",
-            ToolSource::Mcp { .. } => "MCP",
-            ToolSource::Skill { .. } => "Skill",
-            ToolSource::Custom { .. } => "Custom",
-            ToolSource::Plugin { .. } => "Plugin",
+            Self::Native => "Native",
+            Self::Builtin => "Builtin",
+            Self::Mcp { .. } => "MCP",
+            Self::Skill { .. } => "Skill",
+            Self::Custom { .. } => "Custom",
+            Self::Plugin { .. } => "Plugin",
         }
     }
 
@@ -152,12 +152,12 @@ impl ToolSource {
     #[must_use]
     pub const fn icon_hint(&self) -> &'static str {
         match self {
-            ToolSource::Native => "star.fill",
-            ToolSource::Builtin => "command.circle.fill",
-            ToolSource::Mcp { .. } => "bolt.fill",
-            ToolSource::Skill { .. } => "lightbulb.fill",
-            ToolSource::Custom { .. } => "command",
-            ToolSource::Plugin { .. } => "puzzlepiece.extension",
+            Self::Native => "star.fill",
+            Self::Builtin => "command.circle.fill",
+            Self::Mcp { .. } => "bolt.fill",
+            Self::Skill { .. } => "lightbulb.fill",
+            Self::Custom { .. } => "command",
+            Self::Plugin { .. } => "puzzlepiece.extension",
         }
     }
 
@@ -168,12 +168,12 @@ impl ToolSource {
     #[must_use]
     pub const fn priority(&self) -> ToolPriority {
         match self {
-            ToolSource::Builtin => ToolPriority::Builtin,
-            ToolSource::Native => ToolPriority::Native,
-            ToolSource::Custom { .. } => ToolPriority::Custom,
-            ToolSource::Mcp { .. } => ToolPriority::Mcp,
-            ToolSource::Plugin { .. } => ToolPriority::Plugin,
-            ToolSource::Skill { .. } => ToolPriority::Skill,
+            Self::Builtin => ToolPriority::Builtin,
+            Self::Native => ToolPriority::Native,
+            Self::Custom { .. } => ToolPriority::Custom,
+            Self::Mcp { .. } => ToolPriority::Mcp,
+            Self::Plugin { .. } => ToolPriority::Plugin,
+            Self::Skill { .. } => ToolPriority::Skill,
         }
     }
 
@@ -184,37 +184,37 @@ impl ToolSource {
     #[must_use]
     pub const fn suffix(&self) -> &'static str {
         match self {
-            ToolSource::Builtin => "system",
-            ToolSource::Native => "native",
-            ToolSource::Custom { .. } => "custom",
-            ToolSource::Mcp { .. } => "mcp",
-            ToolSource::Plugin { .. } => "plugin",
-            ToolSource::Skill { .. } => "skill",
+            Self::Builtin => "system",
+            Self::Native => "native",
+            Self::Custom { .. } => "custom",
+            Self::Mcp { .. } => "mcp",
+            Self::Plugin { .. } => "plugin",
+            Self::Skill { .. } => "skill",
         }
     }
 
     /// Check if this source is a builtin command
     #[must_use]
     pub const fn is_builtin(&self) -> bool {
-        matches!(self, ToolSource::Builtin)
+        matches!(self, Self::Builtin)
     }
 
     /// Check if this source is an MCP tool
     #[must_use]
     pub const fn is_mcp(&self) -> bool {
-        matches!(self, ToolSource::Mcp { .. })
+        matches!(self, Self::Mcp { .. })
     }
 
     /// Check if this source is a skill
     #[must_use]
     pub const fn is_skill(&self) -> bool {
-        matches!(self, ToolSource::Skill { .. })
+        matches!(self, Self::Skill { .. })
     }
 
     /// Check if this source is a plugin tool
     #[must_use]
     pub const fn is_plugin(&self) -> bool {
-        matches!(self, ToolSource::Plugin { .. })
+        matches!(self, Self::Plugin { .. })
     }
 
     /// Display priority for UI sorting (lower = first).
@@ -223,12 +223,12 @@ impl ToolSource {
     #[must_use]
     pub const fn display_priority(&self) -> u8 {
         match self {
-            ToolSource::Builtin => 0,
-            ToolSource::Native => 1,
-            ToolSource::Custom { .. } => 2,
-            ToolSource::Mcp { .. } => 3,
-            ToolSource::Plugin { .. } => 4,
-            ToolSource::Skill { .. } => 5,
+            Self::Builtin => 0,
+            Self::Native => 1,
+            Self::Custom { .. } => 2,
+            Self::Mcp { .. } => 3,
+            Self::Plugin { .. } => 4,
+            Self::Skill { .. } => 5,
         }
     }
 
@@ -238,12 +238,12 @@ impl ToolSource {
     #[must_use]
     pub fn format_tool_id(&self, name: &str) -> String {
         match self {
-            ToolSource::Native => format!("native:{name}"),
-            ToolSource::Builtin => format!("builtin:{name}"),
-            ToolSource::Mcp { server } => format!("mcp:{server}:{name}"),
-            ToolSource::Skill { id } => format!("skill:{id}"),
-            ToolSource::Custom { rule_index } => format!("custom:{rule_index}:{name}"),
-            ToolSource::Plugin { plugin_id } => format!("plugin:{plugin_id}:{name}"),
+            Self::Native => format!("native:{name}"),
+            Self::Builtin => format!("builtin:{name}"),
+            Self::Mcp { server } => format!("mcp:{server}:{name}"),
+            Self::Skill { id } => format!("skill:{id}"),
+            Self::Custom { rule_index } => format!("custom:{rule_index}:{name}"),
+            Self::Plugin { plugin_id } => format!("plugin:{plugin_id}:{name}"),
         }
     }
 }

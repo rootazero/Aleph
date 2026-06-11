@@ -26,9 +26,9 @@ pub enum Service {
 impl fmt::Display for Service {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Service::Auto => write!(f, "auto"),
-            Service::IMessage => write!(f, "iMessage"),
-            Service::Sms => write!(f, "SMS"),
+            Self::Auto => write!(f, "auto"),
+            Self::IMessage => write!(f, "iMessage"),
+            Self::Sms => write!(f, "SMS"),
         }
     }
 }
@@ -65,10 +65,10 @@ impl IMessageTarget {
     #[must_use]
     pub fn to_target_string(&self) -> String {
         match self {
-            IMessageTarget::Phone { number, .. } => number.clone(),
-            IMessageTarget::Email { email } => email.clone(),
-            IMessageTarget::ChatId { id } => format!("chat_id:{id}"),
-            IMessageTarget::ChatGuid { guid } => guid.clone(),
+            Self::Phone { number, .. } => number.clone(),
+            Self::Email { email } => email.clone(),
+            Self::ChatId { id } => format!("chat_id:{id}"),
+            Self::ChatGuid { guid } => guid.clone(),
         }
     }
 }

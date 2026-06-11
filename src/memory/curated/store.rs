@@ -60,7 +60,7 @@ pub enum CuratedError {
 
 impl From<CuratedError> for AlephError {
     fn from(e: CuratedError) -> Self {
-        AlephError::tool(e.to_string())
+        Self::tool(e.to_string())
     }
 }
 

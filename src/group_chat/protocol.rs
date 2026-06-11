@@ -37,9 +37,9 @@ impl Speaker {
     #[must_use]
     pub const fn name(&self) -> &str {
         match self {
-            Speaker::Coordinator => "Coordinator",
-            Speaker::Persona { name, .. } => name.as_str(),
-            Speaker::System => "System",
+            Self::Coordinator => "Coordinator",
+            Self::Persona { name, .. } => name.as_str(),
+            Self::System => "System",
         }
     }
 }
@@ -200,9 +200,9 @@ impl GroupChatStatus {
     #[must_use]
     pub const fn as_str(&self) -> &str {
         match self {
-            GroupChatStatus::Active => "active",
-            GroupChatStatus::Paused => "paused",
-            GroupChatStatus::Ended => "ended",
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Ended => "ended",
         }
     }
 }
@@ -218,9 +218,9 @@ impl FromStr for GroupChatStatus {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            s if s.eq_ignore_ascii_case("active") => Ok(GroupChatStatus::Active),
-            s if s.eq_ignore_ascii_case("paused") => Ok(GroupChatStatus::Paused),
-            s if s.eq_ignore_ascii_case("ended") => Ok(GroupChatStatus::Ended),
+            s if s.eq_ignore_ascii_case("active") => Ok(Self::Active),
+            s if s.eq_ignore_ascii_case("paused") => Ok(Self::Paused),
+            s if s.eq_ignore_ascii_case("ended") => Ok(Self::Ended),
             _ => Err(format!("unknown group chat status: '{s}'")),
         }
     }

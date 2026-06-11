@@ -48,8 +48,8 @@ impl MidjourneyMode {
     #[must_use]
     pub const fn as_path(&self) -> &'static str {
         match self {
-            MidjourneyMode::Fast => "mj-fast",
-            MidjourneyMode::Relax => "mj-relax",
+            Self::Fast => "mj-fast",
+            Self::Relax => "mj-relax",
         }
     }
 }
@@ -57,8 +57,8 @@ impl MidjourneyMode {
 impl std::fmt::Display for MidjourneyMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MidjourneyMode::Fast => write!(f, "fast"),
-            MidjourneyMode::Relax => write!(f, "relax"),
+            Self::Fast => write!(f, "fast"),
+            Self::Relax => write!(f, "relax"),
         }
     }
 }

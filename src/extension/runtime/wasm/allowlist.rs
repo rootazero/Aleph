@@ -27,12 +27,12 @@ pub enum AllowlistError {
 impl fmt::Display for AllowlistError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AllowlistError::HttpsRequired => write!(f, "HTTPS is required; HTTP is not allowed"),
-            AllowlistError::InvalidUrl(reason) => write!(f, "Invalid URL: {reason}"),
-            AllowlistError::PathTraversal => {
+            Self::HttpsRequired => write!(f, "HTTPS is required; HTTP is not allowed"),
+            Self::InvalidUrl(reason) => write!(f, "Invalid URL: {reason}"),
+            Self::PathTraversal => {
                 write!(f, "Path traversal detected: URL path contains '..'")
             }
-            AllowlistError::NotAllowed(detail) => {
+            Self::NotAllowed(detail) => {
                 write!(f, "Request not allowed by allowlist: {detail}")
             }
         }

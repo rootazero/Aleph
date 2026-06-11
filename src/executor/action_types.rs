@@ -69,18 +69,18 @@ impl Action {
     #[must_use]
     pub fn action_type(&self) -> &str {
         match self {
-            Action::ToolCalls { calls } => {
+            Self::ToolCalls { calls } => {
                 if let Some(req) = calls.first() {
                     // Return tool name for single tool call
                     return &req.tool_name;
                 }
                 "tool_calls"
             }
-            Action::UserInteraction { .. } => "ask_user",
-            Action::UserInteractionMultigroup { .. } => "ask_user_multigroup",
-            Action::UserInteractionRich { .. } => "ask_user_rich",
-            Action::Completion { .. } => "completion",
-            Action::Failure { .. } => "failure",
+            Self::UserInteraction { .. } => "ask_user",
+            Self::UserInteractionMultigroup { .. } => "ask_user_multigroup",
+            Self::UserInteractionRich { .. } => "ask_user_rich",
+            Self::Completion { .. } => "completion",
+            Self::Failure { .. } => "failure",
         }
     }
 
@@ -88,7 +88,7 @@ impl Action {
     #[must_use]
     pub fn args_summary(&self) -> String {
         match self {
-            Action::ToolCalls { calls } => {
+            Self::ToolCalls { calls } => {
                 if let Some(req) = calls.first() {
                     serde_json::to_string(&req.arguments)
                         .unwrap_or_else(|_| "<unserializable arguments>".to_string())
@@ -138,12 +138,12 @@ impl ActionResult {
     #[must_use]
     pub fn is_success(&self) -> bool {
         match self {
-            ActionResult::ToolResults { results } => results
+            Self::ToolResults { results } => results
                 .iter()
                 .all(|r| matches!(r.result, SingleToolResult::Success { .. })),
-            ActionResult::UserResponse { .. } | ActionResult::UserResponseRich { .. } => true,
-            ActionResult::Completed => true,
-            ActionResult::Failed => false,
+            Self::UserResponse { .. } | Self::UserResponseRich { .. } => true,
+            Self::Completed => true,
+            Self::Failed => false,
         }
     }
 
@@ -151,7 +151,7 @@ impl ActionResult {
     #[must_use]
     pub fn is_non_retryable_error(&self) -> bool {
         match self {
-            ActionResult::ToolResults { results } => results.iter().any(|r| {
+            Self::ToolResults { results } => results.iter().any(|r| {
                 matches!(
                     r.result,
                     SingleToolResult::Error {
@@ -160,7 +160,7 @@ impl ActionResult {
                     }
                 )
             }),
-            ActionResult::Failed => true,
+            Self::Failed => true,
             _ => false,
         }
     }
@@ -169,7 +169,7 @@ impl ActionResult {
     #[must_use]
     pub fn first_tool_output(&self) -> Option<Value> {
         match self {
-            ActionResult::ToolResults { results } => {
+            Self::ToolResults { results } => {
                 results.first().and_then(|r| match &r.result {
                     SingleToolResult::Success { output, .. } => Some(output.clone()),
                     _ => None,
@@ -183,7 +183,7 @@ impl ActionResult {
     #[must_use]
     pub fn first_tool_error(&self) -> Option<String> {
         match self {
-            ActionResult::ToolResults { results } => {
+            Self::ToolResults { results } => {
                 results.first().and_then(|r| match &r.result {
                     SingleToolResult::Error { error, .. } => Some(error.clone()),
                     _ => None,
@@ -197,7 +197,7 @@ impl ActionResult {
     #[must_use]
     pub fn summary(&self) -> String {
         match self {
-            ActionResult::ToolResults { results } => {
+            Self::ToolResults { results } => {
                 if let Some(r) = results.first() {
                     match &r.result {
                         SingleToolResult::Success { output, .. } => {
@@ -209,10 +209,10 @@ impl ActionResult {
                     "No results".to_string()
                 }
             }
-            ActionResult::UserResponse { response } => response.clone(),
-            ActionResult::UserResponseRich { response } => response.to_llm_feedback(),
-            ActionResult::Completed => "Completed".to_string(),
-            ActionResult::Failed => "Failed".to_string(),
+            Self::UserResponse { response } => response.clone(),
+            Self::UserResponseRich { response } => response.to_llm_feedback(),
+            Self::Completed => "Completed".to_string(),
+            Self::Failed => "Failed".to_string(),
         }
     }
 }

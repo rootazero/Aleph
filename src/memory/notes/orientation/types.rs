@@ -19,13 +19,13 @@ impl LogAction {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            LogAction::Ingest => "ingest",
-            LogAction::Query => "query",
-            LogAction::Lint => "lint",
-            LogAction::Schema => "schema",
-            LogAction::Profile => "profile",
-            LogAction::SessionEnd => "session_end",
-            LogAction::Bootstrap => "bootstrap",
+            Self::Ingest => "ingest",
+            Self::Query => "query",
+            Self::Lint => "lint",
+            Self::Schema => "schema",
+            Self::Profile => "profile",
+            Self::SessionEnd => "session_end",
+            Self::Bootstrap => "bootstrap",
         }
     }
 }

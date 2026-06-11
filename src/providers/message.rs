@@ -174,7 +174,7 @@ impl UnifiedMessage {
                 thought_signature: tc.thought_signature.clone(),
             });
         }
-        UnifiedMessage::Assistant { content }
+        Self::Assistant { content }
     }
 
     /// Get mutable access to content blocks (for PII filtering)
@@ -198,7 +198,7 @@ impl UnifiedMessage {
 
     /// Extract concatenated text from a slice of messages (for leak detection)
     #[must_use]
-    pub fn extract_all_text(messages: &[UnifiedMessage]) -> String {
+    pub fn extract_all_text(messages: &[Self]) -> String {
         let mut parts = Vec::new();
         for msg in messages {
             for block in msg.content_blocks() {

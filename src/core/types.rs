@@ -27,10 +27,10 @@ pub enum MediaType {
 impl fmt::Display for MediaType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MediaType::Image => write!(f, "image"),
-            MediaType::Document => write!(f, "document"),
-            MediaType::Video => write!(f, "video"),
-            MediaType::File => write!(f, "file"),
+            Self::Image => write!(f, "image"),
+            Self::Document => write!(f, "document"),
+            Self::Video => write!(f, "video"),
+            Self::File => write!(f, "file"),
         }
     }
 }
@@ -48,8 +48,8 @@ pub enum ContentEncoding {
 impl fmt::Display for ContentEncoding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ContentEncoding::Base64 => write!(f, "base64"),
-            ContentEncoding::Utf8 => write!(f, "utf8"),
+            Self::Base64 => write!(f, "base64"),
+            Self::Utf8 => write!(f, "utf8"),
         }
     }
 }

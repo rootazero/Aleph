@@ -85,9 +85,9 @@ impl From<crate::routing::session_key::DmScope> for DmScope {
     fn from(scope: crate::routing::session_key::DmScope) -> Self {
         use crate::routing::session_key::DmScope as S;
         match scope {
-            S::Main => DmScope::Main,
-            S::PerPeer => DmScope::PerPeer,
-            S::PerChannelPeer => DmScope::PerChannelPeer,
+            S::Main => Self::Main,
+            S::PerPeer => Self::PerPeer,
+            S::PerChannelPeer => Self::PerChannelPeer,
         }
     }
 }

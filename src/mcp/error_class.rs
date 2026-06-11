@@ -34,10 +34,10 @@ impl McpErrorKind {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            McpErrorKind::AuthExpired => "auth_expired",
-            McpErrorKind::SessionExpired => "session_expired",
-            McpErrorKind::Transient => "transient",
-            McpErrorKind::Unknown => "unknown",
+            Self::AuthExpired => "auth_expired",
+            Self::SessionExpired => "session_expired",
+            Self::Transient => "transient",
+            Self::Unknown => "unknown",
         }
     }
 
@@ -47,14 +47,14 @@ impl McpErrorKind {
     #[must_use]
     pub const fn guidance(&self) -> Option<&'static str> {
         match self {
-            McpErrorKind::AuthExpired => Some(
+            Self::AuthExpired => Some(
                 "the MCP server rejected credentials — re-authenticate with the mcp_login tool",
             ),
-            McpErrorKind::SessionExpired => {
+            Self::SessionExpired => {
                 Some("the MCP session expired — it will reconnect on the next health probe")
             }
-            McpErrorKind::Transient => Some("a transient transport error — retry the call"),
-            McpErrorKind::Unknown => None,
+            Self::Transient => Some("a transient transport error — retry the call"),
+            Self::Unknown => None,
         }
     }
 

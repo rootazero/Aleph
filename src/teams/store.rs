@@ -21,7 +21,7 @@ use crate::error::AlephError;
 impl rusqlite::types::FromSql for TeamStatus {
     fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = value.as_str()?;
-        s.parse::<TeamStatus>().map_err(|e| {
+        s.parse::<Self>().map_err(|e| {
             rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 e,
@@ -33,7 +33,7 @@ impl rusqlite::types::FromSql for TeamStatus {
 impl rusqlite::types::FromSql for TeamMemberKind {
     fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = value.as_str()?;
-        s.parse::<TeamMemberKind>().map_err(|e| {
+        s.parse::<Self>().map_err(|e| {
             rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 e,
