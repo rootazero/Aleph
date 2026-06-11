@@ -800,6 +800,7 @@ impl MsTeamsChannel {
 #[allow(deprecated)]
 mod tests {
     use super::*;
+    use super::types::{ChannelAccount, ConversationAccount};
 
     #[test]
     fn test_new_channel() {

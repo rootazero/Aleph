@@ -182,6 +182,7 @@ impl A2ATaskManager for TaskStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::a2a::domain::{A2ARole, Part};
 
     #[tokio::test]
     async fn create_and_get_task() {

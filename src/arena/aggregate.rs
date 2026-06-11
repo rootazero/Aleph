@@ -266,6 +266,10 @@ impl SharedArena {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arena::types::{
+        ArenaPermissions, ArtifactContent, ArtifactId, ArtifactKind, CoordinationStrategy,
+        Participant, ParticipantRole,
+    };
 
     /// Helper to create a test manifest with the given participant agent IDs.
     fn test_manifest(agent_ids: &[&str]) -> ArenaManifest {

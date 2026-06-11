@@ -16,6 +16,9 @@ use crate::memory::notes::governance::gate::{
 };
 use crate::memory::notes::indexer::NoteIndexer;
 use crate::memory::notes::ingest::plan::{IngestPlan, PageOp, SchemaProposal};
+use crate::memory::notes::keyword_linker::{
+    extract_keywords, pair_by_overlap, NoteForExtraction,
+};
 use crate::memory::notes::ingest::prompts::{build_compound_system_prompt, PROMPT_LINK_REPAIR};
 use crate::memory::notes::ingest::ref_table::{RefTable, ResolveStats};
 use crate::memory::notes::ingest::retrieve::{RelatedBudget, RelatedPage};
@@ -371,7 +374,9 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
         // Link-contract harmony gate: repair linkless Creates (or accept an
         // explicit isolation) before governance gating. Runs after dedup so a
         // Create already redirected into an Append is not re-examined.
-        plan.ops = self.enforce_link_contract(plan.ops, &related).await;
+        plan.ops = self
+            .enforce_link_contract(agent_id, plan.ops, &related)
+            .await;
 
         // Governance gate: scoped to PageOp::Create in this commit. Other
         // PageOp variants (Append/Update/Contradict/Link/Supersede) pass
@@ -405,7 +410,9 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
                 plan2.ops = self
                     .dedup_redirect_creates(agent_id, plan2.ops, &related)
                     .await;
-                plan2.ops = self.enforce_link_contract(plan2.ops, &related).await;
+                plan2.ops = self
+                    .enforce_link_contract(agent_id, plan2.ops, &related)
+                    .await;
                 if self.gate.is_some() {
                     plan2.ops = self.filter_ops_through_gate(agent_id, plan2.ops).await?;
                     if plan2.ops.is_empty() {
@@ -673,11 +680,15 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
     /// linking is an enhancement and must never block memory persistence.
     async fn enforce_link_contract(
         &self,
+        agent_id: &str,
         ops: Vec<PageOp>,
         related: &[RelatedPage],
     ) -> Vec<PageOp> {
         if related.is_empty() {
-            return ops;
+            // Embedding-derived related set is empty (sparse wiki or embedding
+            // down): fall back to keyword-overlap linking via FTS candidates
+            // instead of leaving every create an orphan.
+            return self.keyword_link_creates(agent_id, ops).await;
         }
         let violating: Vec<usize> = ops
             .iter()
@@ -791,6 +802,138 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         }
         if repaired > 0 {
             info!(repaired, "link contract: repaired linkless creates");
+        }
+        ops
+    }
+
+    /// Keyword-overlap linking for `Create` ops left unlinked by the embedding
+    /// `related` path. Pulls FTS candidates, extracts keyword sets, pairs, and
+    /// merges links into the creates. Degrades to pass-through on any failure
+    /// (linking is an enhancement, never block memory persistence — P7).
+    ///
+    /// Invoked only when the embedding-derived `related` set is empty (sparse
+    /// wiki or embedding endpoint down), so without it every fresh note becomes
+    /// an orphan island. FTS needs no embedding, so it links notes the vector
+    /// path could not reach.
+    async fn keyword_link_creates(&self, agent_id: &str, mut ops: Vec<PageOp>) -> Vec<PageOp> {
+        use std::collections::{HashMap, HashSet};
+
+        // 1. Collect linkless + relationless Create ops as extraction inputs,
+        //    remembering each one's op index so links can be merged back.
+        let mut targets: Vec<(usize, String)> = Vec::new(); // (op_index, path)
+        let mut union: Vec<NoteForExtraction> = Vec::new();
+        let mut batch_paths: HashSet<String> = HashSet::new();
+        for (i, op) in ops.iter().enumerate() {
+            if let PageOp::Create {
+                note_path,
+                title,
+                summary,
+                facts,
+                links,
+                relations,
+                ..
+            } = op
+            {
+                batch_paths.insert(note_path.clone());
+                if !links.is_empty() || !relations.is_empty() {
+                    continue;
+                }
+                targets.push((i, note_path.clone()));
+                union.push(NoteForExtraction {
+                    path: note_path.clone(),
+                    title: title.clone(),
+                    summary: summary.clone(),
+                    facts: facts.clone(),
+                });
+            }
+        }
+        if targets.is_empty() {
+            return ops;
+        }
+
+        // 2. Gather FTS candidates for each target. `search_notes_fts` treats
+        //    its whole query as ONE FTS5 phrase, so search per significant
+        //    keyword (mirroring the note_manage create path) and merge by path.
+        //    Skip paths already in this batch and paths already collected.
+        let mut seen_candidates: HashSet<String> = batch_paths.clone();
+        for (_, target_path) in &targets {
+            // Build the keyword query from the target's own extraction text.
+            let Some(nfe) = union.iter().find(|n| &n.path == target_path) else {
+                continue;
+            };
+            let mut query_text = format!("{} {}", nfe.title, nfe.summary);
+            for f in &nfe.facts {
+                query_text.push(' ');
+                query_text.push_str(f);
+            }
+            for kw in keyword_query_terms(&query_text) {
+                // FTS candidates are scoped to the ingesting agent so each
+                // agent's notes link only within its own wiki.
+                match self.store.search_notes_fts(&kw, agent_id, 3).await {
+                    Ok(hits) => {
+                        for hit in hits {
+                            if seen_candidates.contains(&hit.path) {
+                                continue;
+                            }
+                            seen_candidates.insert(hit.path.clone());
+                            // FTS hits carry no title/summary/facts; the path
+                            // (and filename) is enough for keyword extraction.
+                            union.push(NoteForExtraction {
+                                path: hit.path.clone(),
+                                title: hit.filename,
+                                summary: String::new(),
+                                facts: Vec::new(),
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, keyword = %kw, "keyword link: FTS search failed");
+                    }
+                }
+            }
+        }
+        // No FTS candidates beyond the batch itself → nothing to link to.
+        if union.len() == targets.len() {
+            return ops;
+        }
+
+        // 3. Extract keyword sets for the union (one batched LLM call).
+        let kw = match extract_keywords(&*self.provider, &union).await {
+            Ok(k) if !k.is_empty() => k,
+            Ok(_) => return ops,
+            Err(e) => {
+                warn!(error = %e, "keyword link: extraction failed (pass-through)");
+                return ops;
+            }
+        };
+
+        // 4. Pair by overlap; for each target Create, merge the OTHER side of
+        //    every link triple it participates in into its `links` (dedup).
+        let triples = pair_by_overlap(&kw);
+        if triples.is_empty() {
+            return ops;
+        }
+        let target_index: HashMap<&str, usize> = targets
+            .iter()
+            .map(|(op_i, path)| (path.as_str(), *op_i))
+            .collect();
+        let mut linked = 0usize;
+        for t in &triples {
+            // A triple links `from`↔`to`. Merge into whichever side is one of
+            // our linkless creates (both sides may be, on a multi-create batch).
+            for (this, other) in [(&t.from, &t.to), (&t.to, &t.from)] {
+                if let Some(&op_i) = target_index.get(this.as_str()) {
+                    if let PageOp::Create { links, .. } = &mut ops[op_i] {
+                        if !links.iter().any(|l| l == other) {
+                            links.push(other.clone());
+                            linked += 1;
+                        }
+                    }
+                }
+            }
+        }
+        if linked > 0 {
+            info!(linked, "keyword link: merged FTS-overlap links into creates");
         }
         ops
     }
@@ -1002,6 +1145,28 @@ fn candidate_dedup_text(title: &str, summary: &str, facts: &[String]) -> String 
         s.push('\n');
     }
     s
+}
+
+/// Split free text into a handful of significant lowercase keyword terms for
+/// per-keyword FTS probing. Mirrors `note_manage::related_keywords`: skip short
+/// words (<4 chars), dedup, cap at a few terms. `search_notes_fts` treats its
+/// whole query as one FTS5 phrase, so a multi-word blob would require an exact
+/// phrase hit and never match — probe per significant keyword instead.
+fn keyword_query_terms(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for word in text.split(|c: char| !c.is_alphanumeric()) {
+        if word.chars().count() < 4 {
+            continue;
+        }
+        let lower = word.to_lowercase();
+        if !out.contains(&lower) {
+            out.push(lower);
+            if out.len() >= 4 {
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// Cosine similarity in `[-1, 1]`. Returns `0.0` for mismatched-length,
@@ -2120,7 +2285,7 @@ mod link_contract_tests {
             mk_ingestor(r#"{"repairs":[{"note_index":0,"links":["[P1]"],"isolated":false}]}"#);
         let related = vec![related_page("learning/a"), related_page("learning/b")];
         let ops = ing
-            .enforce_link_contract(vec![linkless_create("learning/new")], &related)
+            .enforce_link_contract("default", vec![linkless_create("learning/new")], &related)
             .await;
         match &ops[0] {
             PageOp::Create { links, .. } => assert_eq!(links, &vec!["learning/b".to_string()]),
@@ -2134,7 +2299,7 @@ mod link_contract_tests {
             mk_ingestor(r#"{"repairs":[{"note_index":0,"links":["[P9]"],"isolated":false}]}"#);
         let related = vec![related_page("learning/a")];
         let ops = ing
-            .enforce_link_contract(vec![linkless_create("learning/new")], &related)
+            .enforce_link_contract("default", vec![linkless_create("learning/new")], &related)
             .await;
         match &ops[0] {
             PageOp::Create { links, .. } => assert!(links.is_empty()),
@@ -2147,7 +2312,7 @@ mod link_contract_tests {
         let (_d, ing) = mk_ingestor(r#"{"repairs":[{"note_index":0,"links":[],"isolated":true}]}"#);
         let related = vec![related_page("learning/a")];
         let ops = ing
-            .enforce_link_contract(vec![linkless_create("learning/new")], &related)
+            .enforce_link_contract("default", vec![linkless_create("learning/new")], &related)
             .await;
         match &ops[0] {
             PageOp::Create { links, .. } => assert!(links.is_empty()),
@@ -2162,7 +2327,7 @@ mod link_contract_tests {
         let (_d, ing) =
             mk_ingestor(r#"{"repairs":[{"note_index":0,"links":["[P0]"],"isolated":false}]}"#);
         let ops = ing
-            .enforce_link_contract(vec![linkless_create("learning/new")], &[])
+            .enforce_link_contract("default", vec![linkless_create("learning/new")], &[])
             .await;
         match &ops[0] {
             PageOp::Create { links, .. } => assert!(links.is_empty()),
@@ -2175,12 +2340,110 @@ mod link_contract_tests {
         let (_d, ing) = mk_ingestor("not json at all");
         let related = vec![related_page("learning/a")];
         let ops = ing
-            .enforce_link_contract(vec![linkless_create("learning/new")], &related)
+            .enforce_link_contract("default", vec![linkless_create("learning/new")], &related)
             .await;
         assert_eq!(ops.len(), 1);
         match &ops[0] {
             PageOp::Create { links, .. } => assert!(links.is_empty()),
             _ => panic!("expected create"),
+        }
+    }
+
+    /// When the embedding-derived `related` set is EMPTY (sparse wiki or
+    /// embedding down), `enforce_link_contract` must fall back to keyword-
+    /// overlap linking via FTS candidates instead of leaving the create an
+    /// orphan. Here an existing note (`personal/news-monitoring`) is indexed
+    /// into FTS under the non-default agent `main`; the provider returns
+    /// keyword sets whose specific entity (`us-iran-conflict`) overlaps the new
+    /// note, so the create gains a link. Using `main` (not `default`) proves
+    /// the fallback is scoped to the ingesting agent, where the live orphan
+    /// problem was observed.
+    #[tokio::test]
+    async fn enforce_link_contract_links_via_keywords_when_related_empty() {
+        use crate::memory::notes::store::NoteStore;
+
+        const AGENT: &str = "main";
+
+        let dir = tempfile::tempdir().unwrap();
+        let memory_dir = dir.path().join("note");
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), backend.clone()));
+
+        // Seed an existing note so FTS has a candidate. Its body mentions the
+        // shared entity so a per-keyword FTS probe ("monitoring") finds it.
+        let cat_dir = memory_dir.join(AGENT).join("personal");
+        tokio::fs::create_dir_all(&cat_dir).await.unwrap();
+        let seed_path = cat_dir.join("news-monitoring.md");
+        tokio::fs::write(
+            &seed_path,
+            "---\ncategory: personal\ntags: [news]\n---\n\n- US-Iran conflict monitoring via cron\n",
+        )
+        .await
+        .unwrap();
+        indexer
+            .index_file(AGENT, "personal", &seed_path)
+            .await
+            .unwrap();
+        // Sanity: the seed must be FTS-queryable under `main`, else the test
+        // proves nothing.
+        let hits = backend
+            .search_notes_fts("monitoring", AGENT, 3)
+            .await
+            .unwrap();
+        assert!(
+            hits.iter().any(|h| h.path == "personal/news-monitoring"),
+            "seed note must be FTS-indexed under the ingesting agent before the test body"
+        );
+        // Negative control: the same note must NOT be visible under `default`,
+        // proving FTS candidates are agent-scoped.
+        let default_hits = backend
+            .search_notes_fts("monitoring", "default", 3)
+            .await
+            .unwrap();
+        assert!(
+            default_hits.is_empty(),
+            "seed note must not leak into the default agent's FTS scope"
+        );
+
+        // Provider returns keyword sets with an overlapping specific entity for
+        // both notes (the extraction call in the empty-related branch).
+        let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new(
+            r#"{"notes":[
+                {"path":"entity/us-iran-conflict-2026","keywords":["us-iran-conflict","monitoring"]},
+                {"path":"personal/news-monitoring","keywords":["us-iran-conflict","cron"]}
+            ]}"#
+            .into(),
+        ));
+        let ing = DefaultCompoundIngestor {
+            store: backend.clone(),
+            indexer,
+            provider,
+            embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+            orientation: None,
+            memory_dir: memory_dir.clone(),
+            budget: RelatedBudget::default(),
+            embedding_manager: None,
+            gate: None,
+        };
+        let ops = vec![PageOp::Create {
+            note_path: "entity/us-iran-conflict-2026".into(),
+            title: "US-Iran Conflict".into(),
+            summary: "tensions monitored".into(),
+            facts: vec!["US-Iran conflict monitoring".into()],
+            links: vec![],
+            tags: vec![],
+            relations: vec![],
+        }];
+        // related is EMPTY → fallback path, scoped to AGENT ("main").
+        let out = ing.enforce_link_contract(AGENT, ops, &[]).await;
+        match &out[0] {
+            PageOp::Create { links, .. } => {
+                assert!(
+                    links.iter().any(|l| l == "personal/news-monitoring"),
+                    "keyword overlap must link the create even with empty related; got {links:?}"
+                );
+            }
+            other => panic!("expected create, got {other:?}"),
         }
     }
 
@@ -2193,7 +2456,9 @@ mod link_contract_tests {
         if let PageOp::Create { links, .. } = &mut op {
             links.push("learning/existing".into());
         }
-        let ops = ing.enforce_link_contract(vec![op], &related).await;
+        let ops = ing
+            .enforce_link_contract("default", vec![op], &related)
+            .await;
         match &ops[0] {
             PageOp::Create { links, .. } => {
                 assert_eq!(links, &vec!["learning/existing".to_string()])

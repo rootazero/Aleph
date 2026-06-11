@@ -1,0 +1,124 @@
+//! LLM keyword/entity extraction for note linking. One batched call.
+
+use crate::error::AlephError;
+use crate::memory::notes::keyword_linker::overlap::NoteKeywords;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::AiProvider;
+use crate::utils::json_extract::extract_json_robust;
+use tracing::warn;
+
+/// One note's salient text for keyword extraction.
+pub struct NoteForExtraction {
+    pub path: String,
+    pub title: String,
+    pub summary: String,
+    pub facts: Vec<String>,
+}
+
+const SYSTEM: &str = "You extract a compact keyword/entity set for each note so \
+related notes can be linked. For every note return 3-6 keywords: prefer specific \
+named entities (people, orgs, projects, events — e.g. \"us-iran-conflict\") as \
+lowercase kebab-case; include a few generic topic words too. Output JSON only: \
+{\"notes\":[{\"path\":\"<path>\",\"keywords\":[\"...\"]}]}. Use the exact path given.";
+
+/// Extract keyword sets for a batch of notes. Returns one `NoteKeywords` per
+/// note the LLM returned; degrades to empty on malformed output (P7 — linking
+/// is an enhancement, never block).
+pub async fn extract_keywords(
+    provider: &dyn AiProvider,
+    notes: &[NoteForExtraction],
+) -> Result<Vec<NoteKeywords>, AlephError> {
+    if notes.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut user = String::from("## Notes\n\n");
+    for n in notes {
+        user.push_str(&format!(
+            "### path={}\ntitle: {}\nsummary: {}\n",
+            n.path, n.title, n.summary
+        ));
+        for f in n.facts.iter().take(6) {
+            user.push_str(&format!("- {f}\n"));
+        }
+        user.push('\n');
+    }
+    let msgs = [UnifiedMessage::user(&user)];
+    let resp = provider
+        .process(RequestPayload::new(&msgs).with_system(Some(SYSTEM)))
+        .await
+        .map_err(|e| AlephError::other(format!("keyword extract LLM: {e}")))?;
+    let Some(json) = extract_json_robust(&resp.text_content()) else {
+        warn!("keyword extract: no JSON in response; returning empty");
+        return Ok(vec![]);
+    };
+    let out = json
+        .get("notes")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|n| {
+                    let path = n.get("path")?.as_str()?.to_string();
+                    let keywords = n
+                        .get("keywords")?
+                        .as_array()?
+                        .iter()
+                        .filter_map(|k| k.as_str().map(str::to_string))
+                        .collect();
+                    Some(NoteKeywords { path, keywords })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::providers::recording_mock::RecordingMockProvider;
+    use crate::sync_primitives::Arc;
+
+    #[tokio::test]
+    async fn extracts_keyword_sets_per_note() {
+        let provider: Arc<dyn crate::providers::AiProvider> =
+            Arc::new(RecordingMockProvider::new(
+                r#"{"notes":[
+                    {"path":"entity/us-iran-conflict-2026","keywords":["us-iran-conflict","ceasefire","monitoring"]},
+                    {"path":"personal/news-monitoring","keywords":["us-iran-conflict","cron","news"]}
+                ]}"#
+                .into(),
+            ));
+        let inputs = vec![
+            NoteForExtraction {
+                path: "entity/us-iran-conflict-2026".into(),
+                title: "US-Iran".into(),
+                summary: "tensions".into(),
+                facts: vec![],
+            },
+            NoteForExtraction {
+                path: "personal/news-monitoring".into(),
+                title: "News".into(),
+                summary: "cron".into(),
+                facts: vec![],
+            },
+        ];
+        let out = extract_keywords(&*provider, &inputs).await.unwrap();
+        assert_eq!(out.len(), 2);
+        assert!(out[0].keywords.contains(&"us-iran-conflict".to_string()));
+    }
+
+    #[tokio::test]
+    async fn malformed_json_yields_empty() {
+        let provider: Arc<dyn crate::providers::AiProvider> =
+            Arc::new(RecordingMockProvider::new("not json".into()));
+        let inputs = vec![NoteForExtraction {
+            path: "a/x".into(),
+            title: "X".into(),
+            summary: String::new(),
+            facts: vec![],
+        }];
+        let out = extract_keywords(&*provider, &inputs).await.unwrap();
+        assert!(out.is_empty());
+    }
+}

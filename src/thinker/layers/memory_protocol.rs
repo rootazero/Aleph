@@ -77,7 +77,13 @@ impl PromptLayer for MemoryProtocolLayer {
              `<CuratedMemory>` and retrieved `<memory>` blocks are auto-injected — don't \
              search for facts you can already read. A soft rejection from `remember` \
              (duplicate, over-budget, no-match) returns `message: \"rejected: …\"`; \
-             recover by rephrasing or switching action, not by aborting the turn.\n",
+             recover by rephrasing or switching action, not by aborting the turn.\n\
+             \n\
+             When you recognize a mistake — your own or one the user corrected — \
+             record the lesson immediately with `note_manage` (create a \
+             `feedback/lessons` note): state the cause (why it happened) and how to \
+             avoid it next time. Don't wait for the session to end; a durable lesson \
+             written now is recalled (and linked) for the next session.\n",
         );
     }
 }
@@ -170,5 +176,19 @@ mod tests {
         );
         assert!(!out_no_session.is_empty());
         assert_eq!(out_no_session, out_with_session, "text must not vary");
+    }
+
+    #[test]
+    fn injects_lesson_capture_nudge() {
+        let layer = MemoryProtocolLayer;
+        let config = PromptConfig::default();
+        let input = LayerInput::basic(&config, &[]);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+        assert!(
+            out.contains("feedback/lessons"),
+            "must teach immediate lesson capture on error"
+        );
+        assert!(out.contains("note_manage"));
     }
 }

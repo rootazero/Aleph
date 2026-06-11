@@ -353,6 +353,7 @@ pub(crate) fn parse_sse_data(data: &str) -> Option<StreamEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::responses::types::ContentPart;
     use crate::providers::message::UnifiedMessage;
 
     // ─── convert_messages tests ─────────────────────────────────────

@@ -240,6 +240,13 @@ impl WorkingMemoryAssembler for HybridAssembler {
     ) -> Result<MemoryEnvelope, AlephError> {
         let start = std::time::Instant::now();
 
+        // Readiness gate (Pillar 2): if a prior session's end-flush is still
+        // consolidating this agent's memory, briefly wait so this session sees
+        // the linked notes. Returns immediately when no flush is in progress.
+        crate::memory::flush::global_registry()
+            .await_ready(agent_id, std::time::Duration::from_secs(2))
+            .await;
+
         if !self.config.enabled {
             let env = self.pack_envelope(
                 query,

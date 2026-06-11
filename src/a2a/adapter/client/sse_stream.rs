@@ -291,7 +291,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::a2a::domain::message::{Artifact, Part};
+    use crate::a2a::domain::message::{A2AMessage, A2ARole, Artifact, Part};
     use crate::a2a::domain::task::{TaskState, TaskStatus};
     use chrono::Utc;
 

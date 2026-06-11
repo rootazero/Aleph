@@ -85,6 +85,19 @@ pub trait NoteStore: Send + Sync {
     /// List all indexed notes for an agent, ordered by most recently updated first.
     async fn list_notes(&self, agent_id: &str) -> Result<Vec<NoteIndexEntry>, AlephError>;
 
+    /// Upsert a directed link `from_note -> to_note` and set its `relation` label.
+    ///
+    /// Used by keyword linking after the body `[[ ]]` link is written, so the
+    /// connecting keyword is recorded on the edge. The plain-link path leaves
+    /// `relation` NULL; this method sets it explicitly.
+    async fn add_link_with_relation(
+        &self,
+        agent_id: &str,
+        from_note: &str,
+        to_note: &str,
+        relation: &str,
+    ) -> Result<(), AlephError>;
+
     /// Paths of notes that this note links to.
     async fn get_outgoing_links(
         &self,

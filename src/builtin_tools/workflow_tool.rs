@@ -318,9 +318,70 @@ impl WorkflowTool {
                  the latest run"
             ))
         })?;
-        tasks.sort_by_key(|t| t.created_at);
+        // Deterministic step order for status output. `created_at` is epoch
+        // *seconds*, so steps materialised within the same second tie; the
+        // backing `list_tasks` query has no final tiebreaker, so SQLite would
+        // otherwise return tied rows in arbitrary order. Break ties by
+        // topological rank (a step appears after every step it depends on),
+        // which reproduces the workflow-definition order, then by task id so
+        // independent same-rank steps stay stable.
+        let ranks = topological_ranks(&tasks);
+        tasks.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| ranks[&a.id].cmp(&ranks[&b.id]))
+                .then_with(|| a.id.cmp(&b.id))
+        });
         Ok((selected, tasks))
     }
+}
+
+/// Assign each task a topological rank within `tasks`: a task's rank is one
+/// greater than the maximum rank of any task it depends on (roots are 0).
+/// Dependencies pointing outside this set are ignored. Pure, deterministic, and
+/// cycle-safe (a task already on the visiting stack contributes rank 0).
+fn topological_ranks(
+    tasks: &[CoordTask],
+) -> std::collections::HashMap<crate::agents::swarm::tasks::CoordTaskId, usize> {
+    use std::collections::HashMap;
+
+    let by_id: HashMap<_, &CoordTask> = tasks.iter().map(|t| (t.id.clone(), t)).collect();
+    let mut ranks: HashMap<_, usize> = HashMap::new();
+
+    fn rank_of(
+        id: &crate::agents::swarm::tasks::CoordTaskId,
+        by_id: &HashMap<crate::agents::swarm::tasks::CoordTaskId, &CoordTask>,
+        ranks: &mut HashMap<crate::agents::swarm::tasks::CoordTaskId, usize>,
+        visiting: &mut std::collections::HashSet<crate::agents::swarm::tasks::CoordTaskId>,
+    ) -> usize {
+        if let Some(r) = ranks.get(id) {
+            return *r;
+        }
+        if !visiting.insert(id.clone()) {
+            // Cycle guard: treat the re-entrant node as a root for this path.
+            return 0;
+        }
+        let task = by_id.get(id);
+        let rank = task
+            .map(|t| {
+                t.dependencies
+                    .iter()
+                    .filter(|dep| by_id.contains_key(*dep))
+                    .map(|dep| rank_of(dep, by_id, ranks, visiting) + 1)
+                    .max()
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        visiting.remove(id);
+        ranks.insert(id.clone(), rank);
+        rank
+    }
+
+    let mut visiting = std::collections::HashSet::new();
+    for t in tasks {
+        rank_of(&t.id, &by_id, &mut ranks, &mut visiting);
+    }
+    ranks
 }
 
 /// Project one backing task into its `status` row (pure).

@@ -214,6 +214,7 @@ impl Default for ArenaManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arena::types::{ArenaPermissions, CoordinationStrategy, Participant, ParticipantRole};
     use chrono::Utc;
 
     fn test_manifest(agent_ids: &[&str]) -> ArenaManifest {

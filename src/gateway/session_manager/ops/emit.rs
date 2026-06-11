@@ -108,6 +108,17 @@ pub(crate) fn emit_session_end_raw_with_registry(
             });
         }
 
+        // Real-time session-end flush (Pillar 2): drain pending raws into
+        // linked notes immediately so a back-to-back follow-on session recalls
+        // consolidated memory. Guarded in the process-global FlushRegistry so a
+        // fast follow-on session can `await_ready`; a normal session never waits.
+        // Fire-and-forget — best-effort consolidation, never gates close_session.
+        if let Some(cs) = crate::thinker::memory_context_provider::session_end_compression() {
+            let reg = crate::memory::flush::global_registry();
+            let flush_agent = agent_id.clone();
+            rt.spawn(crate::memory::flush::session_end_flush(reg, flush_agent, cs));
+        }
+
         rt.spawn(async move {
             if let Some(reg) = registry {
                 let ctx = crate::memory::extensions::types::CaptureCtx {

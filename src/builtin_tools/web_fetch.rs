@@ -688,6 +688,13 @@ mod tests {
     use crate::tools::AlephTool;
     // Note: validate_url is still used by SSRF unit tests below (test_ssrf_*)
 
+    /// Serialises tests that touch the process-global `URL_CACHE`. They each
+    /// call `cache_clear()`, so without this guard a parallel sweep lets one
+    /// test wipe another's just-stored entry, producing intermittent failures.
+    /// Uses `std::sync::Mutex` (not the crate alias) so the `const` initialiser
+    /// holds regardless of the `loom` feature.
+    static CACHE_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_web_fetch_args() {
         let args: WebFetchArgs = serde_json::from_str(r#"{"url": "https://example.com"}"#).unwrap();
@@ -1057,6 +1064,7 @@ mod tests {
 
     #[test]
     fn cache_lookup_returns_stored_entry() {
+        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         cache_clear();
         let key = cache_key("https://cache-test.invalid/a", &ExtractMode::Markdown);
         assert!(cache_lookup(&key).is_none(), "fresh cache should miss");
@@ -1071,6 +1079,7 @@ mod tests {
 
     #[test]
     fn cache_lookup_returns_none_for_expired_entry() {
+        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         cache_clear();
         let key = cache_key("https://cache-test.invalid/b", &ExtractMode::Markdown);
         // Direct insert with an `inserted_at` in the past — bypass
@@ -1099,6 +1108,7 @@ mod tests {
 
     #[test]
     fn cache_key_normalises_url_for_hit() {
+        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         cache_clear();
         let stored = cache_key("HTTPS://Example.com:443/path", &ExtractMode::Markdown);
         cache_store(stored, dummy_result("https://example.com/path", "ok"));

@@ -439,6 +439,25 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(links)
     }
 
+    async fn add_link_with_relation(
+        &self,
+        agent_id: &str,
+        from_note: &str,
+        to_note: &str,
+        relation: &str,
+    ) -> Result<(), AlephError> {
+        let conn = lock_conn!(self)?;
+        conn.execute(
+            "INSERT INTO notes_links (agent_id, from_note, to_note, to_raw, relation) \
+             VALUES (?1, ?2, ?3, ?3, ?4) \
+             ON CONFLICT(agent_id, from_note, to_note) \
+             DO UPDATE SET relation = excluded.relation",
+            params![agent_id, from_note, to_note, relation],
+        )
+        .map_err(|e| AlephError::config(format!("add_link_with_relation: {e}")))?;
+        Ok(())
+    }
+
     async fn get_typed_relations(
         &self,
         path: &str,
