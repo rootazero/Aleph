@@ -203,6 +203,9 @@ impl Material {
 
     fn from_storage(raw: Option<&str>) -> Self {
         match raw {
+            // "luxe" is never persisted (storage_value → None), but a stray
+            // stored value must still resolve to the default explicitly.
+            Some("luxe") => Self::Luxe,
             Some("liquid") => Self::Liquid,
             Some("aurora") => Self::Aurora,
             _ => Self::Luxe,
@@ -487,6 +490,8 @@ pub fn init_appearance() {
     // One-shot legacy migration: Glass-theme users land on dark + liquid.
     if let Some((mode_v, material_v)) = legacy_glass_migration(read_key(KEY_MODE).as_deref()) {
         persist(KEY_MODE, Some(mode_v));
+        // Safe to overwrite material unconditionally: the key didn't exist
+        // before the Material axis was introduced.
         persist(KEY_MATERIAL, Some(material_v));
     }
     // Mode + accent: only touch the DOM for non-default values so System /
@@ -566,6 +571,8 @@ mod tests {
         assert!(FontScale::Largest.storage_value().is_some());
         assert!(Roundness::Sharp.storage_value().is_some());
         assert!(ThemeMode::Dark.storage_value().is_some());
+        assert!(Material::Liquid.storage_value().is_some());
+        assert!(Material::Aurora.storage_value().is_some());
     }
 
     #[test]
