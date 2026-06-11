@@ -35,6 +35,9 @@ pub struct DreamReport {
     /// Orphan notes successfully woven into the link graph by `NoteWeave`.
     #[serde(default)]
     pub notes_woven: u32,
+    /// Goal lessons promoted into long-term notes by `GoalLessonsPromoteStage`.
+    #[serde(default)]
+    pub goal_lessons_promoted: u32,
     pub errors: Option<String>,
     /// Per-action provenance produced by the `SkillDistill` and
     /// `FeedbackDistill` stages. Preserves which `DistillAction` variant

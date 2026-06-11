@@ -190,6 +190,11 @@ impl DreamPipeline {
                 Box::new(stages::SkillLifecycleStage {
                     stale_after_days: dreaming_cfg.skill_stale_after_days,
                 }),
+                // Graduate goal lessons (Round 2 state file) into durable notes
+                // so insights survive the ring buffer and goal deletion. Cheap
+                // no-op when no goal has new lessons. Global-only (goals are not
+                // project-namespaced).
+                Box::new(stages::GoalLessonsPromoteStage::default()),
             ],
             DreamStrategy::Synthesize => vec![
                 Box::new(stages::NoteLintStage),
@@ -240,6 +245,7 @@ impl DreamPipeline {
         "skill_lifecycle",
         "daily_digest",
         "workflow_proposal",
+        "goal_lessons_promote",
     ];
 
     /// Drop the global-only stages, leaving the note-maintenance subset that is
@@ -1163,6 +1169,7 @@ mod tests {
                 "note_weave",
                 "note_decay",
                 "skill_lifecycle",
+                "goal_lessons_promote",
             ]
         );
     }

@@ -860,6 +860,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     run_id.to_string(),
                 ));
 
+            // Unattended security-tax (observability side): when no human is
+            // watching, redact model-authored text before it reaches
+            // persistence / the channel push / the WebSocket. Outermost wrap so
+            // it sees every event first; attended runs are never wrapped.
+            let trace_sink: Arc<dyn crate::harness::TraceSink> = if unattended {
+                Arc::new(super::UnattendedRedactingSink::new(trace_sink))
+            } else {
+                trace_sink
+            };
+
             // SubagentTool construction
             let subagent_tool = {
                 use crate::agents::subagent_tool::SubagentTool;
