@@ -113,7 +113,6 @@ fn test_inbound_context_hashes_session_identifiers() {
             attachment_types: vec![],
             reply_to: Some("msg:secret:789".to_string()),
         },
-        voice_mode_active: false,
         redact_ids: true,
     };
 
@@ -173,7 +172,6 @@ fn test_inbound_context_preserves_identifiers_when_redact_disabled() {
             attachment_types: vec![],
             reply_to: Some("msg:secret:789".to_string()),
         },
-        voice_mode_active: false,
         redact_ids: false,
     };
 

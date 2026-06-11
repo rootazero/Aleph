@@ -231,6 +231,13 @@ pub struct ResolvedContext {
     /// the harness bridge; `None` (no active goal) emits nothing.
     #[serde(skip, default)]
     pub standing_goal: Option<String>,
+    /// Whether voice mode is active for this session, rendered by
+    /// `VoiceModeLayer` (priority 1710) as the spoken-reply guidelines.
+    /// Populated in the harness bridge from `voice::session_mode` (written by
+    /// the gateway inbound router). `false` keeps the section absent — the
+    /// prompt is byte-identical for non-voice turns.
+    #[serde(skip, default)]
+    pub voice_mode_active: bool,
 }
 
 /// Context Aggregator for reconciling interaction and security layers
@@ -307,6 +314,7 @@ impl ContextAggregator {
             sandbox_summary: None,
             execution_plan: None,
             standing_goal: None,
+            voice_mode_active: false,
         }
     }
 

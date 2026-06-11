@@ -1185,6 +1185,13 @@ impl AgentHarnessRunner {
         // `ExecutionPlanLayer` @1755 renders it as `<execution_plan>`.
         resolved_context.execution_plan = active_execution_plan(&session_key_str).await;
         resolved_context.standing_goal = active_standing_goal(&session_key_str).await;
+        // Voice mode: read the session-keyed flag the gateway inbound router set
+        // for this turn so `VoiceModeLayer` (priority 1710) injects the
+        // spoken-reply guidelines. Mirrors `execution_plan` / `standing_goal` —
+        // a mechanical session-keyed lookup, no judgment. `false` (no voice)
+        // leaves the prompt byte-identical.
+        resolved_context.voice_mode_active =
+            crate::gateway::voice::session_mode::is_active(&session_key_str);
         builder = builder.with_resolved_context(resolved_context);
         // Phase 3: thread the provider's wire-protocol family so
         // `ProviderGuidanceLayer` can pick the right per-family

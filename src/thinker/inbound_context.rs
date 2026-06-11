@@ -59,7 +59,6 @@ pub struct InboundContext {
     pub channel: ChannelContext,
     pub session: SessionContext,
     pub message: MessageMetadata,
-    pub voice_mode_active: bool,
     /// When true, session identifiers are hashed before prompt injection.
     pub redact_ids: bool,
 }
@@ -71,7 +70,6 @@ impl Default for InboundContext {
             channel: ChannelContext::default(),
             session: SessionContext::default(),
             message: MessageMetadata::default(),
-            voice_mode_active: false,
             redact_ids: true,
         }
     }
@@ -166,11 +164,6 @@ impl InboundContext {
             lines.push(format!("Reply To: {reply_val}"));
         }
 
-        // Voice mode
-        if self.voice_mode_active {
-            lines.push("Voice Mode: active".to_string());
-        }
-
         lines.join("\n")
     }
 }
@@ -254,7 +247,6 @@ mod tests {
             },
             message: MessageMetadata::default(),
             redact_ids: false,
-            voice_mode_active: false,
         };
 
         let output = ctx.format_for_prompt();
@@ -296,23 +288,6 @@ mod tests {
         assert!(output.contains("Attachments: image (1)"));
         assert!(!output.contains("Reply To: msg_789"));
         assert!(output.contains("Reply To: ctx:"));
-    }
-
-    #[test]
-    fn voice_mode_active_included_in_prompt() {
-        let ctx = InboundContext {
-            voice_mode_active: true,
-            ..Default::default()
-        };
-        let output = ctx.format_for_prompt();
-        assert!(output.contains("Voice Mode: active"));
-    }
-
-    #[test]
-    fn voice_mode_inactive_not_in_prompt() {
-        let ctx = InboundContext::default();
-        let output = ctx.format_for_prompt();
-        assert!(!output.contains("Voice Mode"));
     }
 
     #[test]
