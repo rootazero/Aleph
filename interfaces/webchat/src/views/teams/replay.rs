@@ -1,4 +1,4 @@
-//! ReplayView — R3 unified audit timeline.
+//! `ReplayView` — R3 unified audit timeline.
 //!
 //! Left pane: task list for the active team (status dot + journal chip).
 //! Right pane: when a task is selected, fetches `teams.task.trace` and

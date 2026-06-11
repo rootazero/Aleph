@@ -2,14 +2,14 @@ use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Raw memory entry (Layer 1 — user_input + ai_output conversation records)
+/// Raw memory entry (Layer 1 — `user_input` + `ai_output` conversation records)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawMemory {
     pub id: String,
     /// Agent that produced this memory
     #[serde(default)]
     pub agent_id: String,
-    /// Combined display content (mapped from user_input + ai_output)
+    /// Combined display content (mapped from `user_input` + `ai_output`)
     pub content: String,
     #[serde(default)]
     pub created_at: Option<String>,
@@ -28,14 +28,14 @@ pub struct CompressedFact {
     pub path: String,
 }
 
-/// Backend list_facts response wrapper
+/// Backend `list_facts` response wrapper
 #[derive(Debug, Clone, Deserialize)]
 struct BackendListFactsResponse {
     #[serde(default)]
     facts: Vec<CompressedFact>,
 }
 
-/// Backend memory search result entry (matches handler MemoryEntry)
+/// Backend memory search result entry (matches handler `MemoryEntry`)
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct BackendMemoryEntry {

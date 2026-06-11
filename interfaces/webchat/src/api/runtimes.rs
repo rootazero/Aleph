@@ -31,7 +31,7 @@ pub struct RuntimesListResponse {
 }
 
 /// Topic carrying live `runtimes.install` progress. Must match
-/// `RUNTIME_INSTALL_PROGRESS_TOPIC` in the core (src/gateway/event_bus.rs).
+/// `RUNTIME_INSTALL_PROGRESS_TOPIC` in the core (`src/gateway/event_bus.rs`).
 pub const RUNTIME_INSTALL_PROGRESS_TOPIC: &str = "runtimes.install.progress";
 
 /// One progress event streamed during an install. The Panel subscribes to

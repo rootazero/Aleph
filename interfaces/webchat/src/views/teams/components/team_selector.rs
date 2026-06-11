@@ -1,4 +1,4 @@
-//! TeamSelector — small dropdown bound to TeamsTabState.selected_team_id.
+//! `TeamSelector` — small dropdown bound to `TeamsTabState.selected_team_id`.
 
 use crate::i18n::*;
 use crate::views::teams::TeamsTabState;

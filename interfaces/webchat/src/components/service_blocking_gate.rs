@@ -1,10 +1,10 @@
-//! ServiceBlockingGate — runtime-recovery overlay shown when the panel had
+//! `ServiceBlockingGate` — runtime-recovery overlay shown when the panel had
 //! been live but lost the Gateway connection and exhausted its automatic
 //! reconnect budget.
 //!
 //! Distinct from [`BootCheckGate`]:
-//!   * BootCheckGate engages BEFORE the first successful auth.
-//!   * ServiceBlockingGate engages AFTER, when reconnect() gives up.
+//!   * `BootCheckGate` engages BEFORE the first successful auth.
+//!   * `ServiceBlockingGate` engages AFTER, when `reconnect()` gives up.
 //!
 //! Both render children behind the overlay (vs. instead of) so the user's
 //! place in the app is preserved — matches openhuman's behaviour and avoids

@@ -1,6 +1,6 @@
 //! Dashboard Cron sparkline — live 12-cell success/fail history per scheduled
 //! job. Pulls `cron.list` once when the gateway connects, then `cron.runs`
-//! per job (limit = SPARK_CELLS). No subscription churn: a fresh list reads
+//! per job (limit = `SPARK_CELLS`). No subscription churn: a fresh list reads
 //! on every reconnect.
 
 use crate::api::cron::{CronApi, CronJobInfo, JobRunInfo};

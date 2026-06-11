@@ -1,4 +1,4 @@
-//! KanbanCreateForm — modal dialog for creating a task on the active board.
+//! `KanbanCreateForm` — modal dialog for creating a task on the active board.
 //!
 //! The store emits a `team.<id>.task.created` topic on success, so the board
 //! refreshes itself; `on_created` is still invoked for an immediate refresh in

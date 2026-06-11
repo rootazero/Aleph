@@ -1,4 +1,4 @@
-//! Top-of-chat tab strip — one tab per opened agent_id.
+//! Top-of-chat tab strip — one tab per opened `agent_id`.
 //!
 //! Sits above `MessageList` inside `ChatView` so it scrolls with neither
 //! the sidebar nor the workspace pane. Tabs are populated by

@@ -1,4 +1,4 @@
-//! KanbanColumn — a single status column rendering a vertical list of task cards.
+//! `KanbanColumn` — a single status column rendering a vertical list of task cards.
 
 use super::task_card::TaskCard;
 use crate::api::teams::CoordTaskDto;

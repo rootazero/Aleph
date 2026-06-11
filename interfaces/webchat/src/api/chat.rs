@@ -40,7 +40,7 @@ impl ChatApi {
     /// Send a message and start an agent run.
     ///
     /// `agent_id` — explicit target agent (bypasses channel binding resolution).
-    /// Extracted from the current session_key when available.
+    /// Extracted from the current `session_key` when available.
     ///
     /// `project_root` — absolute path of the active project folder when
     /// the user has entered project mode via "进入项目工作". Forwarded as

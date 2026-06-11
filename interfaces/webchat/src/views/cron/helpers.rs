@@ -82,7 +82,7 @@ pub(super) fn format_ms_interval(ms: u64) -> String {
 }
 
 /// Format a UNIX timestamp (seconds) as a relative time string.
-/// e.g. "5min", "2h", "3d", or the provided overdue_label.
+/// e.g. "5min", "2h", "3d", or the provided `overdue_label`.
 pub(super) fn format_relative_time(ts: i64, overdue_label: &str) -> String {
     let now_ms = js_sys::Date::now();
     let now_s = (now_ms / 1000.0) as i64;
@@ -149,7 +149,7 @@ pub(super) fn parse_optional_i64(s: &str) -> Option<i64> {
 ///   `{"kind":"every","every_ms":3600000,"anchor_ms":null}`
 ///   `{"kind":"at","at":1711944000000,"delete_after_run":true}`
 ///
-/// Returns (kind_str, schedule_str, anchor_ms_str, stagger_ms_str).
+/// Returns (`kind_str`, `schedule_str`, `anchor_ms_str`, `stagger_ms_str`).
 pub(super) fn extract_schedule_from_kind(
     schedule_kind: &Option<serde_json::Value>,
 ) -> (String, String, Option<String>, Option<String>) {

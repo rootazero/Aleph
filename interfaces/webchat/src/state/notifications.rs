@@ -1,4 +1,4 @@
-//! NotificationsState — UI-only projection over `DashboardState.alerts`.
+//! `NotificationsState` — UI-only projection over `DashboardState.alerts`.
 //!
 //! The data layer already aggregates server-side alerts in
 //! [`DashboardState::alerts`] via the `alerts.**` topic subscription. What's
@@ -38,7 +38,7 @@ pub struct IncomingPairing {
     pub created_at_ms: i64,
 }
 
-/// A pending operator-approval request rendered by the NotificationCenter with
+/// A pending operator-approval request rendered by the `NotificationCenter` with
 /// inline allow-once / allow-session / deny buttons. Sourced from the
 /// `exec.approvals.pending` RPC (the `approval.**` events are sparse — they only
 /// trigger a refetch). Display-only.

@@ -73,7 +73,7 @@ use crate::canvas_engine::layout::compute_target_positions;
 /// Build a `Neighborhood` from a `GraphNeighborsResponse`.
 ///
 /// Index convention (matches layout.rs expectations):
-///   0 = center, 1..=one_hop.len() = one_hop nodes, then two_hop nodes.
+///   0 = center, `1..=one_hop.len()` = `one_hop` nodes, then `two_hop` nodes.
 #[must_use]
 pub fn to_neighborhood(
     resp: &GraphNeighborsResponse,
@@ -188,7 +188,7 @@ pub fn to_neighborhood(
 }
 
 /// Populate `nbhd.orphans` with all nodes from `all_dtos` that are not already
-/// present in the neighborhood (centre, one_hop, two_hop, or cluster members).
+/// present in the neighborhood (centre, `one_hop`, `two_hop`, or cluster members).
 ///
 /// Orphan positions are determined by `scatter::place_scattered`, which avoids
 /// the central exclusion rect and maintains minimum pairwise distances.

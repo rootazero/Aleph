@@ -2,7 +2,7 @@
 //!
 //! Three modes driven by `selected`:
 //! - `__new__` → blank custom form
-//! - `__preset__<name>` → preset hydration (read-only protocol, editable api_key etc.)
+//! - `__preset__<name>` → preset hydration (read-only protocol, editable `api_key` etc.)
 //! - any other → existing provider edit (full form, including OAuth section for
 //!   `auth_type == "oauth"` presets such as Codex/ChatGPT)
 

@@ -4,7 +4,7 @@ use crate::preset_providers::PresetProviderDto;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Default parameters for generation requests (mirrors server-side GenerationDefaults)
+/// Default parameters for generation requests (mirrors server-side `GenerationDefaults`)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GenerationDefaults {
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,4 +1,4 @@
-//! NotificationCenter — aggregate alert surface.
+//! `NotificationCenter` — aggregate alert surface.
 //!
 //! A bell button anchored to the top-right of the window, with a popover
 //! listing every active alert from [`crate::context::DashboardState::alerts`].

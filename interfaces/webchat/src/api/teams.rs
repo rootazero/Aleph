@@ -13,10 +13,10 @@ pub struct TeamSummary {
     pub description: String,
     pub leader_id: String,
     pub status: String,
-    /// Present in list responses (TeamSummary), absent in get responses (Team).
+    /// Present in list responses (`TeamSummary`), absent in get responses (Team).
     #[serde(default)]
     pub member_count: usize,
-    /// Present in list responses (TeamSummary), absent in get responses (Team).
+    /// Present in list responses (`TeamSummary`), absent in get responses (Team).
     #[serde(default)]
     pub task_count: usize,
     pub created_at: i64,
@@ -154,7 +154,7 @@ pub struct CoordTaskDto {
     pub subject: String,
     #[serde(default)]
     pub description: String,
-    /// "pending" | "blocked" | "in_progress" | "completed" | "failed" | "cancelled"
+    /// "pending" | "blocked" | "`in_progress`" | "completed" | "failed" | "cancelled"
     pub status: String,
     #[serde(default)]
     pub owner: Option<String>,
@@ -506,7 +506,7 @@ pub struct TaskCommentDto {
 pub struct TaskEventDto {
     pub id: String,
     pub team_id: String,
-    /// Snake-case (e.g. "task_created", "task_completed").
+    /// Snake-case (e.g. "`task_created`", "`task_completed`").
     pub event_type: String,
     pub agent_id: String,
     #[serde(default)]

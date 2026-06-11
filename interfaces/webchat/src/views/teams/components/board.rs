@@ -1,4 +1,4 @@
-//! KanbanBoard — five-column responsive layout grouping tasks by derived status.
+//! `KanbanBoard` — five-column responsive layout grouping tasks by derived status.
 
 use super::column::KanbanColumn;
 use crate::api::teams::CoordTaskDto;

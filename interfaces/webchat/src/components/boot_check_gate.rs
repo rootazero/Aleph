@@ -1,4 +1,4 @@
-//! BootCheckGate — pre-app-shell overlay that blocks rendering of the main
+//! `BootCheckGate` — pre-app-shell overlay that blocks rendering of the main
 //! UI until the panel has authenticated to the Gateway at least once.
 //!
 //! Aleph's desktop App is a single-core single-window Tauri build, so this
@@ -7,9 +7,9 @@
 //!   * A "Connecting…" overlay while the first probe is in flight, so the
 //!     user doesn't see an empty/broken shell that hasn't loaded data yet.
 //!   * A "Cannot reach core" trouble screen with a Retry button when the
-//!     probe fails — the existing connect() path on app.rs only logs to the
+//!     probe fails — the existing `connect()` path on app.rs only logs to the
 //!     console, leaving the user with no recovery affordance.
-//!   * Auto-passthrough when `pairing_required` is set, so PairingModal can
+//!   * Auto-passthrough when `pairing_required` is set, so `PairingModal` can
 //!     own that flow (single source of UI truth).
 //!
 //! Once `has_connected_once` latches true, the gate disengages permanently

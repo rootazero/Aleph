@@ -1,14 +1,14 @@
-//! PairingModal — auto-triggered modal that drives the `wizard.*` RPC handshake
+//! `PairingModal` — auto-triggered modal that drives the `wizard.*` RPC handshake
 //! when `auth.connect` returns `pairing_required`.
 //!
 //! Flow:
-//!   1. DashboardState.pairing_required becomes Some(_)
-//!   2. Modal appears; calls wizard.start { wizard_type: "pairing" }
-//!   3. First wizard.next returns the welcome note  (auto-advanced by PairingFlow)
+//!   1. `DashboardState.pairing_required` becomes Some(_)
+//!   2. Modal appears; calls wizard.start { `wizard_type`: "pairing" }
+//!   3. First wizard.next returns the welcome note  (auto-advanced by `PairingFlow`)
 //!   4. Second wizard.next returns the confirm step with the pairing code
-//!   5. User clicks "Approve" → wizard.answer { step_id, value: true }
+//!   5. User clicks "Approve" → wizard.answer { `step_id`, value: true }
 //!   6. wizard.next returns done=true with data.token
-//!   7. set_pairing_token saves to localStorage; reconnect() re-authenticates
+//!   7. `set_pairing_token` saves to localStorage; `reconnect()` re-authenticates
 
 use crate::context::DashboardState;
 use crate::i18n::*;

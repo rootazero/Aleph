@@ -1,7 +1,7 @@
 //! Browser Settings View
 //!
 //! Provides UI for managing browser configuration: driver mode, engine,
-//! headless, DevTools profile, and security settings.
+//! headless, `DevTools` profile, and security settings.
 
 use crate::api::{BrowserConfig, BrowserConfigApi};
 use crate::context::DashboardState;

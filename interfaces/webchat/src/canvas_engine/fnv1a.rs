@@ -1,5 +1,5 @@
 //! Tiny FNV-1a 32-bit hash for deterministic node-position jitter.
-//! Standard reference: http://www.isthe.com/chongo/tech/comp/fnv/.
+//! Standard reference: <http://www.isthe.com/chongo/tech/comp/fnv>/.
 
 const FNV_OFFSET: u32 = 2_166_136_261;
 const FNV_PRIME: u32 = 16_777_619;

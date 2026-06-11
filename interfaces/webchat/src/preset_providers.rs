@@ -126,7 +126,7 @@ fn modality_to_generation_type(s: &str) -> Option<GenerationType> {
 }
 
 /// Brand-color lookup with modality fallback. Add new providers here as they
-/// land in the backend catalogue; unknown provider_types fall back to a
+/// land in the backend catalogue; unknown `provider_types` fall back to a
 /// modality-tinted neutral.
 fn color_for(provider_type: &str, modality: Option<GenerationType>) -> String {
     let curated = match provider_type {
@@ -161,7 +161,7 @@ const fn modality_color(modality: Option<GenerationType>) -> &'static str {
 }
 
 /// Icon lookup: prefer brand-specific where it's distinct, else fall back
-/// to the modality emoji (matches the existing GenerationType::icon()).
+/// to the modality emoji (matches the existing `GenerationType::icon()`).
 fn icon_for(provider_type: &str, modality: Option<GenerationType>) -> String {
     let curated = match provider_type {
         "openai" | "openai_image" | "dalle" => "🎨",

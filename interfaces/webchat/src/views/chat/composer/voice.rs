@@ -7,8 +7,8 @@
 //! playback are endpoint I/O (R1/R6); STT/LLM/TTS live in the core.
 //!
 //! Two capture backends, picked transparently:
-//!   - **native** (macOS): the unsigned WKWebView cannot reach `getUserMedia`,
-//!     so we drive the Swift bridge's AVFoundation recorder via
+//!   - **native** (macOS): the unsigned `WKWebView` cannot reach `getUserMedia`,
+//!     so we drive the Swift bridge's `AVFoundation` recorder via
 //!     `voice.record_start` / `voice.record_stop`, which hands back base64 audio.
 //!   - **browser** (Windows/Linux, signed builds): the Web `MediaRecorder` API.
 //!     We try the native RPC first; the `NATIVE_AUDIO_UNAVAILABLE` sentinel is

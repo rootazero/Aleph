@@ -1,6 +1,6 @@
 //! UI Domain Models
 //!
-//! These models mirror the structures in shared_ui_logic to ensure
+//! These models mirror the structures in `shared_ui_logic` to ensure
 //! seamless integration when we replace mock data with real SDK calls.
 
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 pub struct TraceNode {
     /// Unique identifier
     pub id: String,
-    /// Node type (thinking, tool_call, observation, etc.)
+    /// Node type (thinking, `tool_call`, observation, etc.)
     pub node_type: TraceNodeType,
     /// Timestamp
     pub timestamp: f64,

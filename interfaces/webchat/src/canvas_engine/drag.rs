@@ -142,8 +142,8 @@ impl DragState {
     }
 
     /// Pointer release. Returns the gesture outcome and transitions internal state
-    /// to either SpringBack, Promoting, or Idle (in the Click case). Caller applies
-    /// the corresponding emit (e.g. SetActive on Click, PromoteNode on Promote-success).
+    /// to either `SpringBack`, Promoting, or Idle (in the Click case). Caller applies
+    /// the corresponding emit (e.g. `SetActive` on Click, `PromoteNode` on Promote-success).
     pub fn release(
         &mut self,
         center_pos: Vec2,

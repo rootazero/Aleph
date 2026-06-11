@@ -1,5 +1,5 @@
 //! Workspace pane toggle — sits at the chat-surface top-right, beside the
-//! NotificationCenter bell. Dimensions and palette mirror the bell so the
+//! `NotificationCenter` bell. Dimensions and palette mirror the bell so the
 //! pair reads as a single chrome cluster; placement is owned by
 //! `views/chat/view.rs` (this component just renders the affordance).
 

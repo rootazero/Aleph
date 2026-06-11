@@ -28,7 +28,7 @@ const LAYOUT_MODE_KEY: &str = "aleph.panel.layout_mode";
 /// Populated incrementally — `args` lands on `tool_call_started`, `result`
 /// on `tool_call_completed`. Stored under `(run_id, tool_id)` so the
 /// workspace pane can look it up by reference from a chip click without
-/// the events stream having to round-trip through ChatState.
+/// the events stream having to round-trip through `ChatState`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ToolPayload {
     pub args: Option<serde_json::Value>,
@@ -256,7 +256,7 @@ fn read_persisted_layout_mode() -> Option<LayoutMode> {
     Some(LayoutMode::from_token(&token))
 }
 
-/// Non-wasm (test host): no localStorage, no web_sys (which panics off-wasm).
+/// Non-wasm (test host): no localStorage, no `web_sys` (which panics off-wasm).
 #[cfg(not(target_arch = "wasm32"))]
 const fn read_persisted_layout_mode() -> Option<LayoutMode> {
     None

@@ -119,9 +119,9 @@ pub struct CanvasNode {
 pub struct CanvasEdge {
     pub from_idx: usize,
     pub to_idx: usize,
-    /// Node id for the source node (mirrors from_idx for direct id lookups).
+    /// Node id for the source node (mirrors `from_idx` for direct id lookups).
     pub from_id: String,
-    /// Node id for the target node (mirrors to_idx for direct id lookups).
+    /// Node id for the target node (mirrors `to_idx` for direct id lookups).
     pub to_id: String,
     pub relation: String,
     /// Human-readable label for this edge (e.g. "refers to"), if provided by the server.
@@ -203,7 +203,7 @@ pub struct Neighborhood {
 /// connected component). The radial layers use 0/1/2; 3+ is reserved for ghosts.
 pub const ORPHAN_HOP_SENTINEL: u8 = 3;
 
-/// Z-depth assigned to orphans — beyond two_hop's 140 so they get maximum dim.
+/// Z-depth assigned to orphans — beyond `two_hop`'s 140 so they get maximum dim.
 pub const ORPHAN_Z: f32 = 200.0;
 
 #[derive(Debug, Clone)]

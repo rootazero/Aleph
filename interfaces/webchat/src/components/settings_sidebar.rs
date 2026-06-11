@@ -1,7 +1,7 @@
 //! Settings tab definitions and group constants
 //!
 //! Provides `SettingsTab` enum and `SETTINGS_GROUPS` for sidebar navigation.
-//! The sidebar component renders these directly (no separate SettingsSidebar component).
+//! The sidebar component renders these directly (no separate `SettingsSidebar` component).
 
 use crate::i18n::*;
 use leptos_i18n::I18nContext;

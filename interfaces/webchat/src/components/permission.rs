@@ -1,5 +1,5 @@
-//! 权限分层 UI:配置页闸门 (ConfigGate)、全局身份横幅 (PermissionBanner)、
-//! 以及 RPC 权限拒绝错误的友好映射。复用 DashboardState::is_operator()
+//! 权限分层 UI:配置页闸门 (ConfigGate)、全局身份横幅 (`PermissionBanner`)、
+//! 以及 RPC 权限拒绝错误的友好映射。复用 `DashboardState::is_operator()`
 //! —— 后端 2 层 tier 在前端的诚实投影。后端零改动。
 
 use crate::context::DashboardState;

@@ -2,7 +2,7 @@
 //!
 //! The preview chips above the textarea live here so the composer
 //! orchestrator only has to wire a signal and a callback. The reader
-//! helper centralises the FileReader → data-URL → base64 dance so the
+//! helper centralises the `FileReader` → data-URL → base64 dance so the
 //! same logic is reachable from both the paperclip click and the
 //! chat-surface drop zone (the latter not yet wired through here, but
 //! the API is shaped for it).
@@ -27,7 +27,7 @@ pub(super) fn format_size(bytes: u64) -> String {
 }
 
 /// Push every entry of `file_list` onto `attachments` as a base64
-/// `PendingAttachment`. Browser FileReader is async, so each entry is
+/// `PendingAttachment`. Browser `FileReader` is async, so each entry is
 /// appended independently when its `load` event fires.
 ///
 /// Errors are silent (the chip simply never appears) — the previous

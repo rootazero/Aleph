@@ -27,7 +27,7 @@ struct SessionEntry {
     topic: Option<String>,
     #[serde(default)]
     message_count: u32,
-    /// Backend sends updated_at as Unix epoch seconds (Option<i64>)
+    /// Backend sends `updated_at` as Unix epoch seconds (Option<i64>)
     #[serde(default)]
     updated_at: Option<i64>,
 }

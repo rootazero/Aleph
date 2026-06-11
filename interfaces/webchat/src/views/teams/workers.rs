@@ -1,4 +1,4 @@
-//! WorkersView — live ACP harness session pool.
+//! `WorkersView` — live ACP harness session pool.
 //!
 //! Surfaces every active ACP session (Claude Code, Codex, Gemini, custom)
 //! as a card with: harness, cwd, optional session name, liveness, state

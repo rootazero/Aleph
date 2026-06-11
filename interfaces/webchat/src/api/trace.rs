@@ -20,8 +20,8 @@ impl TraceApi {
         serde_json::from_value(result).map_err(|e| format!("Failed to parse trace: {e}"))
     }
 
-    /// Fetch persisted agent-trace events for the given run_ids, grouped by
-    /// run_id (= task_id). Used to rehydrate the chat step strip + workspace
+    /// Fetch persisted agent-trace events for the given `run_ids`, grouped by
+    /// `run_id` (= `task_id`). Used to rehydrate the chat step strip + workspace
     /// panel after reload / session switch. Unknown runs map to empty vecs.
     pub async fn by_runs(
         state: &DashboardState,

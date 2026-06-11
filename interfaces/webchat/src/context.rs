@@ -53,10 +53,10 @@ const fn set_local_storage(_key: &str, _value: &str) {}
 #[cfg(not(target_arch = "wasm32"))]
 const fn remove_local_storage(_key: &str) {}
 
-/// State carried by the PairingModal while the wizard handshake is in flight.
+/// State carried by the `PairingModal` while the wizard handshake is in flight.
 #[derive(Debug, Clone, Default)]
 pub struct PairingPrompt {
-    /// wizard.start session_id (set after wizard.start returns)
+    /// wizard.start `session_id` (set after wizard.start returns)
     pub session_id: Option<String>,
     /// Pairing code extracted from the wizard confirm step message
     pub pairing_code: Option<String>,
@@ -117,7 +117,7 @@ pub struct DashboardState {
     /// Alert subscription ID for cleanup
     alert_subscription_id: StoredValue<Option<usize>>,
 
-    /// Pending browser-pairing requests rendered by the NotificationCenter
+    /// Pending browser-pairing requests rendered by the `NotificationCenter`
     /// with inline Approve / Reject buttons. Sourced from `pairing.**`
     /// gateway events (see `setup_pairing_subscriptions`).
     pub incoming_pairings: RwSignal<Vec<IncomingPairing>>,
@@ -125,7 +125,7 @@ pub struct DashboardState {
     /// Pairing subscription ID for cleanup
     pairing_subscription_id: StoredValue<Option<usize>>,
 
-    /// Pending operator-approval requests rendered by the NotificationCenter
+    /// Pending operator-approval requests rendered by the `NotificationCenter`
     /// with inline allow-once / allow-session / deny buttons. Sourced from the
     /// `exec.approvals.pending` RPC; `approval.**` events trigger a refetch
     /// (see `setup_approval_subscriptions`).
@@ -138,7 +138,7 @@ pub struct DashboardState {
     /// Initialized from localStorage; mutated by the Settings panel toggle.
     pub canvas_radial_navigation: RwSignal<bool>,
 
-    /// Set to Some(_) when auth.connect returns pairing_required.
+    /// Set to Some(_) when auth.connect returns `pairing_required`.
     /// Cleared automatically after a successful reconnect.
     pub pairing_required: RwSignal<Option<PairingPrompt>>,
 
@@ -429,7 +429,7 @@ impl DashboardState {
 
     /// Persist a device token and trigger reconnect after successful pairing.
     ///
-    /// Called by PairingModal once `wizard.next` returns `done` with a token.
+    /// Called by `PairingModal` once `wizard.next` returns `done` with a token.
     pub fn set_pairing_token(&self, token: String) {
         set_local_storage("aleph_device_token", &token);
         // Clear the modal
@@ -735,7 +735,7 @@ impl DashboardState {
     /// Setup alert subscriptions
     ///
     /// This method subscribes to alert-related events from the Gateway and
-    /// updates the DashboardState.alerts HashMap when events arrive.
+    /// updates the DashboardState.alerts `HashMap` when events arrive.
     /// It also fetches initial alert states on mount.
     pub async fn setup_alert_subscriptions(&self) -> Result<(), String> {
         // Subscribe to alert events on the Gateway
@@ -815,7 +815,7 @@ impl DashboardState {
         Ok(())
     }
 
-    /// Subscribe to `pairing.**` events so the NotificationCenter can
+    /// Subscribe to `pairing.**` events so the `NotificationCenter` can
     /// render inline Approve / Reject cards for cold-browser pairings.
     ///
     /// Mirrors `setup_alert_subscriptions` — wildcard topic subscribe,
@@ -881,8 +881,8 @@ impl DashboardState {
         Ok(())
     }
 
-    /// Subscribe to `approval.**` events so the NotificationCenter can render
-    /// inline operator approval cards. The ApprovalRequested event is sparse
+    /// Subscribe to `approval.**` events so the `NotificationCenter` can render
+    /// inline operator approval cards. The `ApprovalRequested` event is sparse
     /// (ids only), so `exec.approvals.pending` is the source of truth: any
     /// approval event simply triggers a refetch.
     pub async fn setup_approval_subscriptions(&self) -> Result<(), String> {
@@ -919,12 +919,12 @@ impl DashboardState {
     ///
     /// # Implementation Note
     ///
-    /// Currently uses direct `rpc_call()` methods instead of `AlertsApi` from shared_ui_logic.
+    /// Currently uses direct `rpc_call()` methods instead of `AlertsApi` from `shared_ui_logic`.
     /// This is because the `AlertsApi` in `/Volumes/TBU4/Workspace/Aleph/shared_ui_logic/` uses
     /// a different `RpcClient` implementation that is incompatible with the current architecture.
     ///
     /// **TODO**: Refactor to use `AlertsApi::get_system_health()` and `AlertsApi::get_memory_status()`
-    /// once the shared_ui_logic crate is unified and the RpcClient implementations are aligned.
+    /// once the `shared_ui_logic` crate is unified and the `RpcClient` implementations are aligned.
     async fn load_initial_alerts(&self) -> Result<(), String> {
         web_sys::console::log_1(&"Loading initial alert states...".into());
 

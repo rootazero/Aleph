@@ -63,7 +63,7 @@ impl<T> PrefetchCache<T> {
     }
 
     /// Drop the cache entry for `id`, if present. Used by the event-driven
-    /// invalidation path (memory.note.changed / NoteDeleted) so the next
+    /// invalidation path (memory.note.changed / `NoteDeleted`) so the next
     /// navigation refetches instead of serving a stale neighborhood.
     pub fn invalidate(&mut self, id: &str) -> bool {
         let before = self.entries.len();

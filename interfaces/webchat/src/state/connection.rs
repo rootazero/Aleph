@@ -1,13 +1,13 @@
-//! Connection phase — a pure projection over DashboardState signals.
+//! Connection phase — a pure projection over `DashboardState` signals.
 //!
-//! `DashboardState` exposes four orthogonal connection signals (is_connected,
-//! is_reconnecting, reconnect_count, connection_error) that historically led
+//! `DashboardState` exposes four orthogonal connection signals (`is_connected`,
+//! `is_reconnecting`, `reconnect_count`, `connection_error`) that historically led
 //! every consumer to roll its own ad-hoc boolean. This module collapses them
-//! into a single enum so UI copy stays consistent across ConnectionStatus,
-//! BootCheckGate, ServiceBlockingGate, and any future surface.
+//! into a single enum so UI copy stays consistent across `ConnectionStatus`,
+//! `BootCheckGate`, `ServiceBlockingGate`, and any future surface.
 
-/// Maximum reconnect attempts before DashboardState::reconnect() gives up.
-/// Mirrors the hard-coded `max_attempts` in context.rs::reconnect(); kept here
+/// Maximum reconnect attempts before `DashboardState::reconnect()` gives up.
+/// Mirrors the hard-coded `max_attempts` in `context.rs::reconnect()`; kept here
 /// so UI gates can show "X/MAX" without duplicating the literal.
 pub const MAX_RECONNECT_ATTEMPTS: u32 = 5;
 
@@ -20,7 +20,7 @@ pub const MAX_RECONNECT_ATTEMPTS: u32 = 5;
 pub enum ConnectionPhase {
     /// Never tried to connect yet — only reachable from app boot.
     Initial,
-    /// First connect attempt in flight (reconnect_count == 0).
+    /// First connect attempt in flight (`reconnect_count` == 0).
     Connecting,
     /// Lost a previously-good connection and is retrying. `attempt` is 1-based
     /// for display (the underlying counter is 0-based).
@@ -32,7 +32,7 @@ pub enum ConnectionPhase {
 }
 
 impl ConnectionPhase {
-    /// Pure derivation from the four DashboardState booleans. Kept free of
+    /// Pure derivation from the four `DashboardState` booleans. Kept free of
     /// signal access so tests can exercise every transition without a Leptos
     /// runtime.
     #[must_use]
@@ -78,7 +78,7 @@ impl ConnectionPhase {
 
     /// True when the app shell should be hidden behind the boot gate. The
     /// `pairing_required` path is excluded by the gate component itself so
-    /// PairingModal can take over.
+    /// `PairingModal` can take over.
     #[must_use]
     pub const fn is_pre_ready(&self) -> bool {
         matches!(self, Self::Initial | Self::Connecting)

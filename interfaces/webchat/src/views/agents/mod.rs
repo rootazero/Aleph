@@ -15,7 +15,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::{use_location, use_navigate};
 
-/// Parse agent_id and tab from a path like /agents/{id}/{tab}
+/// Parse `agent_id` and tab from a path like /agents/{id}/{tab}
 fn parse_agents_path(path: &str) -> (Option<String>, String) {
     let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     match parts.as_slice() {

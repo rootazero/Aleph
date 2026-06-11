@@ -1,4 +1,4 @@
-//! PlanDagView — read-only DAG visualization of a team's CoordTask
+//! `PlanDagView` — read-only DAG visualization of a team's `CoordTask`
 //! dependencies. Sibling sub-tab of Kanban / Workers / Overview, shares
 //! `TeamsTabState::selected_team_id`.
 //!
@@ -106,7 +106,7 @@ pub fn PlanDagView() -> impl IntoView {
 
 /// Compute one BFS-style depth per task. Iterative pass converges in
 /// O(V) on a DAG; an unresolved cycle would diverge — we guard with a
-/// per-pass change counter and bail after N == tasks.len() passes,
+/// per-pass change counter and bail after N == `tasks.len()` passes,
 /// which is the maximum acyclic depth.
 fn compute_depths(tasks: &[CoordTaskDto]) -> HashMap<String, usize> {
     let mut depths: HashMap<String, usize> = HashMap::new();

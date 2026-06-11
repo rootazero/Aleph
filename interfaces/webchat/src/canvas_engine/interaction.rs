@@ -64,7 +64,7 @@ pub enum CanvasIntent {
     None,
     SetActive(String),
     /// Emitted when a drag-promote-on-drag gesture completes; the view layer
-    /// should navigate to this node (currently routed identically to SetActive).
+    /// should navigate to this node (currently routed identically to `SetActive`).
     PromoteNode(String),
     PrefetchNeighbor(String),
     ExpandCluster(String),

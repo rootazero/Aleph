@@ -214,7 +214,7 @@ impl AcpApi {
 /// Live snapshot of a single pooled ACP session.
 ///
 /// Mirrors `alephcore::acp::manager::SessionSnapshot`. The `state` field is
-/// the lowercased AcpSessionState (`idle` | `busy` | `error`).
+/// the lowercased `AcpSessionState` (`idle` | `busy` | `error`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AcpSessionSnapshot {
     pub harness_id: String,

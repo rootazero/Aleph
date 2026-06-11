@@ -2,8 +2,8 @@
 //!
 //! Houses five sub-views:
 //! - Overview: existing collapsible team-cards list (migrated from /dashboard/teams)
-//! - Kanban: 5-column task board over CoordTask
-//! - Plan: read-only layered DAG of CoordTask dependencies — visualises
+//! - Kanban: 5-column task board over `CoordTask`
+//! - Plan: read-only layered DAG of `CoordTask` dependencies — visualises
 //!   the same tasks the Kanban edits, ordered by `dependencies` depth.
 //! - Replay: R3 unified audit timeline (runs + comments + events + artifacts
 //!   + exit journal) per task — the read-side surface of the `task_exit_journal`

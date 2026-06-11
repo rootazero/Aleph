@@ -250,7 +250,7 @@ pub struct ScoreSnapshot {
     pub rank: usize,
 }
 
-/// Response from memory.retrieve_with_trace RPC
+/// Response from `memory.retrieve_with_trace` RPC
 #[derive(Debug, Clone, Deserialize)]
 pub struct RetrieveWithTraceResponse {
     #[serde(default)]
@@ -271,7 +271,7 @@ pub struct TracedResult {
     pub score: f32,
 }
 
-/// Response from memory.test_rerank_connection RPC
+/// Response from `memory.test_rerank_connection` RPC
 #[derive(Debug, Clone, Deserialize)]
 pub struct TestRerankResponse {
     #[serde(default)]

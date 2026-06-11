@@ -24,7 +24,7 @@ use crate::views::canvas::node_card::NodeCard;
 
 /// Per-edge label state kept in the overlay signal map.
 struct EdgeLabelEntry {
-    /// The label text to display (never None — entries only exist when label.is_some()).
+    /// The label text to display (never None — entries only exist when `label.is_some()`).
     label: String,
     /// Screen-space midpoint of the Bézier curve, updated each rAF frame.
     pos_sig: RwSignal<(f32, f32)>,

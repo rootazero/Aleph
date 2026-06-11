@@ -153,7 +153,7 @@ fn html_escape(s: &str) -> String {
 /// Lightweight streaming renderer — escapes HTML, tracks code fences, no Markdown parse.
 ///
 /// Much cheaper than full Markdown: O(n) string scan with HTML escape only.
-/// Used during streaming; replaced by full MarkdownRenderer on completion.
+/// Used during streaming; replaced by full `MarkdownRenderer` on completion.
 fn render_streaming(content: &str) -> String {
     let mut html = String::with_capacity(content.len() * 2);
     let mut in_fence = false;

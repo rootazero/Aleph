@@ -3,7 +3,7 @@
 //! The Gateway already streams `reasoning` events (and `tool_summary` lines)
 //! into [`ChatState::reasoning_text`] via [`super::events::subscribe_run_events`],
 //! but until now that signal was captured and never shown. This component
-//! closes that broken data-flow, porting the collapsible ReasoningCard UX from
+//! closes that broken data-flow, porting the collapsible `ReasoningCard` UX from
 //! DeepSeek-Reasonix to the web panel:
 //!
 //! - A pulsing header while the model is actively reasoning (`ChatPhase::Thinking`).

@@ -59,11 +59,11 @@ pub struct CronJobInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateCronJob {
     pub name: String,
-    /// Legacy fallback: cron expression string (used if schedule_kind is None)
+    /// Legacy fallback: cron expression string (used if `schedule_kind` is None)
     #[serde(skip_serializing_if = "String::is_empty")]
     pub schedule: String,
-    /// Structured schedule: tagged JSON matching backend ScheduleKind enum
-    /// e.g. {"kind":"cron","expr":"0 0 11 * * *"} or {"kind":"every","every_ms":60000}
+    /// Structured schedule: tagged JSON matching backend `ScheduleKind` enum
+    /// e.g. {"kind":"cron","expr":"0 0 11 * * *"} or {"`kind":"every","every_ms":60000`}
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule_kind: Option<Value>,
     pub agent_id: String,
@@ -79,13 +79,13 @@ pub struct CreateCronJob {
     pub failure_alert: Option<Value>,
 }
 
-/// Request payload for updating a cron job (all fields optional except job_id)
+/// Request payload for updating a cron job (all fields optional except `job_id`)
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdateCronJob {
     pub job_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Structured schedule: tagged JSON matching backend ScheduleKind enum
+    /// Structured schedule: tagged JSON matching backend `ScheduleKind` enum
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule_kind: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]

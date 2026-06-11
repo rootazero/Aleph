@@ -1,6 +1,6 @@
 //! WASM → Tauri v2 invoke 桥(panel 唯一的 shell-command 出口)。
 //! 仅在桌面 Tauri shell 内可用(withGlobalTauri=true 暴露
-//! window.__TAURI__.core.invoke);纯浏览器内 is_shell()=false,调用方需降级。
+//! window.__TAURI__.core.invoke);纯浏览器内 `is_shell()=false,调用方需降级`。
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;

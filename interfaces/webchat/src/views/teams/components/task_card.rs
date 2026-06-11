@@ -1,4 +1,4 @@
-//! TaskCard — compact card rendered inside a KanbanColumn.
+//! `TaskCard` — compact card rendered inside a `KanbanColumn`.
 
 use super::format_relative_time;
 use crate::api::teams::CoordTaskDto;

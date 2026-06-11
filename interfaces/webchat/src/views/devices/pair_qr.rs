@@ -3,7 +3,7 @@
 //! Renders an SVG QR code holding `http://<self-host>/pair`. The viewing
 //! device (phone, tablet, second laptop) scans the QR with its camera and
 //! lands on `/pair` where the gateway issues a 6-digit code. The operator
-//! then approves the code from this Panel via the NotificationCenter bell.
+//! then approves the code from this Panel via the `NotificationCenter` bell.
 //!
 //! Same-LAN only. For remote access (Tailscale, reverse proxy) the
 //! displayed URL also doubles as plain text the user can copy and edit.

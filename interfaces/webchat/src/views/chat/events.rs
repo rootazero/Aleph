@@ -1,4 +1,4 @@
-//! Maps Gateway streaming events (run.*) to ChatState mutations.
+//! Maps Gateway streaming events (run.*) to `ChatState` mutations.
 
 use super::state::{ChatState, ContextUsage, ModelInfo, ProviderRetryNotice};
 use crate::context::{DashboardState, GatewayEvent};
@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 /// Project one persisted/live `AgentTraceEvent` (tagged `kind` or `type`)
-/// onto ChatState (step bubbles, tool status, narration) + WorkspaceState
+/// onto `ChatState` (step bubbles, tool status, narration) + `WorkspaceState`
 /// (tool args/result payloads, current iteration). The single projection
 /// shared by the live WS stream and `trace.by_runs` replay so the two paths
 /// can never drift.
@@ -182,7 +182,7 @@ fn append_reasoning(chat: ChatState, summary: &str) {
     });
 }
 
-/// Subscribe to `run.*` events and dispatch to ChatState. Tool args/results
+/// Subscribe to `run.*` events and dispatch to `ChatState`. Tool args/results
 /// are mirrored into [`WorkspaceState::tool_payloads`] so the workspace
 /// pane can render real invocation details without an extra round-trip.
 /// Returns the subscription ID for cleanup.

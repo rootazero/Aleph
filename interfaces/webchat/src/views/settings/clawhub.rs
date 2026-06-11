@@ -31,7 +31,7 @@ fn format_count(n: u64) -> String {
     }
 }
 
-/// Load browse results from ClawHub
+/// Load browse results from `ClawHub`
 fn load_browse(
     state: DashboardState,
     skills: RwSignal<Vec<ClawHubSkill>>,
@@ -86,7 +86,7 @@ fn load_browse(
     });
 }
 
-/// Load search results from ClawHub
+/// Load search results from `ClawHub`
 fn load_search(
     state: DashboardState,
     skills: RwSignal<Vec<ClawHubSkill>>,

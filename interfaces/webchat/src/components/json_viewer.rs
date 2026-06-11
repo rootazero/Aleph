@@ -6,7 +6,7 @@
 //! `<pre>{pretty_json(...)}</pre>` flat dump used by
 //! `components/workspace_panel.rs::PayloadBlock`.
 //!
-//! Single landing consumer: PayloadBlock. Kept narrow on purpose —
+//! Single landing consumer: `PayloadBlock`. Kept narrow on purpose —
 //! per R10/YAGNI, this is not a general-purpose tree widget; it
 //! handles `serde_json::Value` and nothing else.
 //!

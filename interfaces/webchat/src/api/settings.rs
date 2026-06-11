@@ -181,7 +181,7 @@ pub struct RateLimit {
 /// `route_config.get` response: current mode plus the tier-classified providers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteConfigView {
-    /// "auto" | "always_local" | "always_cloud".
+    /// "auto" | "`always_local`" | "`always_cloud`".
     pub mode: String,
     #[serde(default)]
     pub allow_cloud_escalation: bool,
@@ -194,8 +194,8 @@ pub struct RouteConfigView {
     pub cloud_provider: Option<String>,
     #[serde(default)]
     pub providers: Vec<RouteProviderInfo>,
-    /// Active load-balancing strategy: "ordered" | "round_robin" | "least_busy"
-    /// | "latency_aware" | "usage_based". `None` from an older daemon → treated
+    /// Active load-balancing strategy: "ordered" | "`round_robin`" | "`least_busy`"
+    /// | "`latency_aware`" | "`usage_based`". `None` from an older daemon → treated
     /// as "ordered" by the view.
     #[serde(default)]
     pub load_balance: Option<String>,

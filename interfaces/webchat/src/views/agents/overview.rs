@@ -8,7 +8,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde_json::json;
 
-/// 取 catalog entry 的有效 model 列表:有 models 用 models,否则回退到 [default_model]。
+/// 取 catalog entry 的有效 model 列表:有 models 用 models,否则回退到 [`default_model`]。
 fn effective_models(e: &CatalogEntry) -> Vec<String> {
     if e.models.is_empty() {
         vec![e.default_model.clone()]

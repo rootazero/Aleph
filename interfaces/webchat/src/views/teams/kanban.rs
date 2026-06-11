@@ -1,4 +1,4 @@
-//! KanbanView — sub-view that mounts a board for the currently selected team,
+//! `KanbanView` — sub-view that mounts a board for the currently selected team,
 //! a toolbar (search + create), and subscribes to `team.*.task.*` topic events
 //! for live refresh.
 

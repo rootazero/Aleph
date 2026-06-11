@@ -1,7 +1,7 @@
 use crate::canvas_engine::types::*;
 use std::collections::HashMap;
 
-/// Fold a slice of nodes into one ClusterNode per distinct `CanvasNode::category`.
+/// Fold a slice of nodes into one `ClusterNode` per distinct `CanvasNode::category`.
 /// Each cluster's `representative_names` is the top 3 by descending weight.
 ///
 /// `relation` is set to "_default" since the underlying graph edges no longer
@@ -51,7 +51,7 @@ pub fn group_by_category_into_clusters(
     clusters
 }
 
-/// Compute ClusterNode display radius: 24 + 6 * log2(N), capped at 60.
+/// Compute `ClusterNode` display radius: 24 + 6 * log2(N), capped at 60.
 #[must_use]
 pub fn cluster_radius(n: usize) -> f32 {
     let r = 24.0 + 6.0 * (n.max(2) as f32).log2();

@@ -165,7 +165,7 @@ const fn kind_icon(kind: ToolKind) -> &'static str {
     }
 }
 
-/// 行内图标 —— 先按工具名给几个常见工具更贴切的字形（web_fetch 🌐 /
+/// 行内图标 —— `先按工具名给几个常见工具更贴切的字形（web_fetch` 🌐 /
 /// skill 📖 / memory 🧠），否则回落到大类图标。图标即代表动作，让聊天里
 /// 一行 `🌐 https://…` 自解释，无需再写工具名。
 #[must_use]

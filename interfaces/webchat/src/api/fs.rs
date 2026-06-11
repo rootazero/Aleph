@@ -93,7 +93,7 @@ impl FsApi {
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
-    /// Read a file's text content (server-side, scoped to allowed_roots).
+    /// Read a file's text content (server-side, scoped to `allowed_roots`).
     pub async fn read_file(state: &DashboardState, path: &str) -> Result<ReadFileResult, String> {
         let result = state
             .rpc_call("fs.read_file", serde_json::json!({ "path": path }))

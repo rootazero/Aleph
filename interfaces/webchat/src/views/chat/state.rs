@@ -151,7 +151,7 @@ pub struct ContextUsage {
     pub total_tokens: u64,
 }
 
-/// Model resolution info (mirrors core ModelInfo).
+/// Model resolution info (mirrors core `ModelInfo`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ModelInfo {
     pub model: String,
@@ -236,7 +236,7 @@ pub struct ChatState {
     pub messages: RwSignal<Vec<ChatMessage>>,
     /// Current phase of the UI.
     pub phase: RwSignal<ChatPhase>,
-    /// Active run_id (Some while agent is running).
+    /// Active `run_id` (Some while agent is running).
     pub active_run_id: RwSignal<Option<String>>,
     /// Resolved session key from first chat.send response.
     pub session_key: RwSignal<Option<String>>,
@@ -244,7 +244,7 @@ pub struct ChatState {
     pub agent_id: RwSignal<Option<String>>,
     /// Accumulated reasoning text for the current run.
     pub reasoning_text: RwSignal<String>,
-    /// Error message (set when run_error arrives).
+    /// Error message (set when `run_error` arrives).
     ///
     /// Kept as a bare string for backward compatibility with sidebar /
     /// boot-gate readers; new UI code should read `send_error` for the
@@ -278,7 +278,7 @@ pub struct ChatState {
     /// content, so it rides along in [`SessionSnapshot`] across tab swaps.
     pub prompt_queue: RwSignal<Vec<QueuedPrompt>>,
     /// Pulse signal that asks the composer to retry the last user message:
-    /// each bump increments by 1. Used by MessageBubble's retry button so
+    /// each bump increments by 1. Used by `MessageBubble`'s retry button so
     /// the composer (which owns the send pipeline) actually fires the send
     /// without prop drilling a callback through every bubble.
     pub retry_pulse: RwSignal<u32>,
@@ -725,7 +725,7 @@ impl ChatState {
         self.prompt_queue.set(Vec::new());
     }
 
-    /// Clear session state but keep agent_id (for new chat within same agent).
+    /// Clear session state but keep `agent_id` (for new chat within same agent).
     pub fn clear_session(&self) {
         self.messages.set(Vec::new());
         self.phase.set(ChatPhase::Idle);

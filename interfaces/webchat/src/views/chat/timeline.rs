@@ -132,7 +132,7 @@ fn is_step(m: &ChatMessage) -> bool {
     m.role == "assistant" && m.iteration.is_some() && !is_final_answer(m)
 }
 
-/// Flush accumulated intermediate steps into one StepStrip row. No-op when
+/// Flush accumulated intermediate steps into one `StepStrip` row. No-op when
 /// empty. `completed` is true when no step is still streaming.
 fn flush_strip(rows: &mut Vec<TimelineRow>, pending: &mut Vec<ChatMessage>) {
     if pending.is_empty() {

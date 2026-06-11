@@ -1,4 +1,4 @@
-//! TaskDetailDrawer — slide-out detail panel with status-transition actions
+//! `TaskDetailDrawer` — slide-out detail panel with status-transition actions
 //! and 3 collapsible read-only sections (Runs / Comments / Events) that
 //! surface the audit history wired in `coord_task_runs`, `coord_task_comments`,
 //! and `team_events`.
@@ -312,7 +312,7 @@ fn ActionButton(
 // =============================================================================
 
 /// Status pill colour for a run record. Mirrors the kanban-column palette so
-/// the eye matches "in_progress"/"completed"/"failed" hues across the panel.
+/// the eye matches "`in_progress"/"completed"/"failed`" hues across the panel.
 fn run_status_class(status: &str) -> &'static str {
     match status {
         "running" => "bg-info/10 text-info",

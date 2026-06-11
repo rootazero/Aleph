@@ -747,7 +747,7 @@ fn seed_graph_state(
     gs.viewport.fit_to_content(&gs.nodes, 0.10);
 }
 
-/// Refresh GraphState's node/edge buffers from a freshly folded `Neighborhood`
+/// Refresh `GraphState`'s node/edge buffers from a freshly folded `Neighborhood`
 /// without resetting viewport, scale, drag offset, selected node, or layout.
 /// Used by the slider re-fold path so the user's pan/zoom/drag survives a slider tick.
 fn update_graph_state_nodes_only(

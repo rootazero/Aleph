@@ -1,10 +1,10 @@
 //! Multi-tab session map for the chat surface — UI-TARS / VS Code parity.
 //!
-//! Each "tab" corresponds to one agent_id. The currently visible tab's
+//! Each "tab" corresponds to one `agent_id`. The currently visible tab's
 //! state lives in the singleton [`ChatState`]; the other tabs are
 //! snapshotted via [`SessionSnapshot`] and parked in this map.
 //!
-//! ## Why snapshot/restore instead of multiple ChatStates?
+//! ## Why snapshot/restore instead of multiple `ChatStates`?
 //!
 //! Replacing the `ChatState` context with one-per-tab would force every
 //! consumer to either remount on tab switch (losing scroll/DOM state) or
@@ -15,7 +15,7 @@
 //! ## Lifecycle
 //!
 //! - `activate(chat, agent_id)` — open or focus a tab. Snapshots the
-//!   current ChatState, restores the target snapshot (or default for
+//!   current `ChatState`, restores the target snapshot (or default for
 //!   first-time activation), and updates the active pointer.
 //! - `close(chat, agent_id)` — discard a tab's snapshot. If the closed
 //!   tab was active, advances to the next neighbour (or clears state if
@@ -35,12 +35,12 @@ pub type AgentId = String;
 #[derive(Clone, Copy)]
 pub struct SessionMap {
     /// Parked snapshots for non-active tabs. The active tab's data lives
-    /// in `ChatState` itself, so the entry for the active agent_id is
+    /// in `ChatState` itself, so the entry for the active `agent_id` is
     /// intentionally absent (added on the next activate-away).
     snapshots: RwSignal<HashMap<AgentId, SessionSnapshot>>,
     /// Visible tab order — drives the rendered tab strip and Cmd+N keying.
-    /// Invariant: contains every agent_id that has an entry in snapshots,
-    /// plus the currently active agent_id if any.
+    /// Invariant: contains every `agent_id` that has an entry in snapshots,
+    /// plus the currently active `agent_id` if any.
     pub tab_order: RwSignal<Vec<AgentId>>,
     /// Currently focused tab. `None` means no tabs are open (boot state).
     pub active: RwSignal<Option<AgentId>>,
