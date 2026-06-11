@@ -624,7 +624,11 @@ mod tests {
     /// `.dark, .dark[data-material] {`. Lines come back trimmed (the system
     /// mirrors sit one nesting level deeper than the `.dark` blocks they
     /// copy) with empties dropped; brace depth is tracked so a nested rule
-    /// added later won't truncate the body.
+    /// added later won't truncate the body. Callers pass the
+    /// material-primitives SECTION of the stylesheet, not the whole file —
+    /// the color-token layer above the banner reuses the same `.dark {` /
+    /// `:root:not(.light) {` selector lines, so the exactly-once assertion
+    /// only holds within that slice.
     fn css_block_body<'a>(css: &'a str, selector: &str) -> Vec<&'a str> {
         let lines: Vec<&str> = css.lines().collect();
         let starts: Vec<usize> = lines
@@ -636,7 +640,8 @@ mod tests {
         assert_eq!(
             starts.len(),
             1,
-            "selector line {selector:?} must appear exactly once in tailwind.css"
+            "selector line {selector:?} must appear exactly once in the \
+             material-primitives section of tailwind.css"
         );
         let mut depth: i64 = 1;
         let mut body = Vec::new();
@@ -664,6 +669,9 @@ mod tests {
         // discipline here. Comment lines participate on purpose: mirrors
         // are verbatim copies, comments included.
         let css = include_str!("../styles/tailwind.css");
+        let (_, material_section) = css
+            .split_once("Material primitives")
+            .expect("material primitives banner present in tailwind.css");
         let pairs = [
             (".dark {", ":root:not(.light) {"),
             (
@@ -676,8 +684,8 @@ mod tests {
             ),
         ];
         for (dark, mirror) in pairs {
-            let dark_body = css_block_body(css, dark);
-            let mirror_body = css_block_body(css, mirror);
+            let dark_body = css_block_body(material_section, dark);
+            let mirror_body = css_block_body(material_section, mirror);
             for (i, (d, m)) in dark_body.iter().zip(mirror_body.iter()).enumerate() {
                 assert_eq!(
                     d,
