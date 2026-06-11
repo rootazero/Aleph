@@ -713,7 +713,9 @@ where
                                             }
                                         }
                                     }
-                                } else if crate::tasks::goal_pursuit::should_continue(&goal, 0) {
+                                } else if crate::tasks::goal_pursuit::should_continue(
+                                    &goal, 0, now_ms,
+                                ) {
                                     let bumped = goal.clone().spent_continuation(now_ms);
                                     if let Err(e) = store.put(&bumped) {
                                         warn!(error = %e, session = %session_key_str,
@@ -733,9 +735,19 @@ where
                                             "goal pursuit: enqueued autonomous continuation");
                                     }
                                 } else if crate::tasks::goal_pursuit::exhausted_while_active(
-                                    &goal, 0,
+                                    &goal, 0, now_ms,
                                 ) {
-                                    let note = crate::tasks::goal_pursuit::cap_reached_note(&goal);
+                                    // Distinguish wall-clock exhaustion from the
+                                    // iteration cap so the user sees the real
+                                    // stop reason on their next turn.
+                                    let note = if goal
+                                        .deadline_ms
+                                        .is_some_and(|d| now_ms != 0 && now_ms > d)
+                                    {
+                                        crate::tasks::goal_pursuit::deadline_reached_note(&goal)
+                                    } else {
+                                        crate::tasks::goal_pursuit::cap_reached_note(&goal)
+                                    };
                                     let blocked = goal
                                         .clone()
                                         .with_status(crate::goal::GoalStatus::Blocked, now_ms)
