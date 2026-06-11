@@ -157,13 +157,9 @@
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left:   env(safe-area-inset-left, 0px);
 
-  /* Tiered blur strengths. Transient popovers (`--glass-blur`) may be lush;
-     the always-on sidebar (`--glass-blur-chrome`) stays disciplined; small
-     in-content frosts and the full-viewport scrim are deliberately light.
-     `html.glass` intensifies the transient + chrome tiers only. */
-  --glass-blur: 20px;
-  --glass-saturate: 1.6;
-  --glass-blur-chrome: 16px;
+  /* Tiered blur strengths. Small in-content frosts and the full-viewport
+     scrim are deliberately light and stay global here.
+     Per-material values live in the material primitive blocks below; the subtle + scrim tiers stay global. */
   --glass-blur-subtle: 8px;
   --scrim-blur: 2px;
 }
@@ -232,7 +228,6 @@ h1, h2, h3, h4, h5, h6 {
 
 .dark, html.glass {
   --color-surface:          oklch(0.15 0.020 310);
-  --color-surface-raised:   oklch(0.20 0.018 310);
   --color-surface-sunken:   oklch(0.12 0.015 310);
   --color-surface-overlay:  oklch(0.18 0.020 310);
 
@@ -271,7 +266,6 @@ h1, h2, h3, h4, h5, h6 {
 @media (prefers-color-scheme: dark) {
   :root:not(.light):not(.glass) {
     --color-surface:          oklch(0.15 0.020 310);
-    --color-surface-raised:   oklch(0.20 0.018 310);
     --color-surface-sunken:   oklch(0.12 0.015 310);
     --color-surface-overlay:  oklch(0.18 0.020 310);
 
@@ -452,7 +446,8 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
   }
 }
 /* Gradient specular edge — bright at the top, fading down. Painted once,
-   composited; ~0 per-frame cost. */
+   composited; ~0 per-frame cost. Light/dark variance flows through the
+   mat-pop-spec-* primitives. */
 .glass::before {
   content: "";
   position: absolute;
@@ -460,7 +455,7 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
   border-radius: inherit;
   padding: 1px;
   background: linear-gradient(180deg,
-    oklch(1 0 0 / 0.40), oklch(1 0 0 / 0.04) 42%, oklch(1 0 0 / 0));
+    var(--mat-pop-spec-hi), var(--mat-pop-spec-mid) 45%, var(--mat-pop-spec-lo));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
           mask-composite: exclude;
@@ -473,24 +468,11 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
-  opacity: 0.4;
+  opacity: var(--mat-pop-grain);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
 }
 /* The popover's own children must sit above the ::before/::after overlays. */
 .glass > * { position: relative; z-index: 1; }
-
-/* Glass theme: intensify the specular edge + grain on chrome glass. */
-html.glass .glass::before {
-  background: linear-gradient(180deg,
-    oklch(1 0 0 / 0.62), oklch(1 0 0 / 0.10) 50%, oklch(1 0 0 / 0.02));
-}
-html.glass .glass::after { opacity: 0.5; }
-
-:root:not(.dark):not(.glass) .glass::before {
-  background: linear-gradient(180deg,
-    oklch(1 0 0 / 0.9), oklch(1 0 0 / 0.2) 45%, oklch(0.4 0.02 295 / 0.06));
-}
-:root:not(.dark):not(.glass) .glass::after { opacity: 0.25; }
 
 /* ============================================================
    Shared blur helpers — drive the full-viewport modal scrim and the
@@ -549,6 +531,30 @@ html.glass .glass::after { opacity: 0.5; }
   /* user bubble accent recipe */
   --mat-user-fill: 68%;
   --mat-user-glow: 25%;
+  /* blur tiers (vary by MATERIAL only, not brightness) */
+  --glass-blur: 20px;
+  --glass-saturate: 1.6;
+  --glass-blur-chrome: 16px;
+  /* canvas field — opaque ground for non-macOS; semi-opaque aurora base
+     (on macOS the always-on vibrancy faintly shows through it). */
+  --mat-solid-ground: oklch(0.988 0.004 295);
+  --mat-canvas-base: oklch(0.972 0.005 295 / 0.86);
+  --mat-glow-a: 20%;
+  --mat-glow-b: 13%;
+  --mat-glow-top: 7%;
+  /* Cool counter-hue — a second light source so the wash reads as a mesh. */
+  --mat-glow-counter: color-mix(in oklch, oklch(0.62 0.13 250) 10%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.72);
+  /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
+  --mat-raised: oklch(1.00 0 0 / 0.55);
+  --mat-grain: 0.10;
+  --mat-fill-chrome: 78%;
+  --mat-chrome-topline: oklch(1 0 0 / 0);
+  /* popover (.glass) specular edge + grain */
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.9);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.2);
+  --mat-pop-spec-lo: oklch(0.4 0.02 295 / 0.06);
+  --mat-pop-grain: 0.25;
 }
 .dark {
   --mat-ink-raise: oklch(0.24 0.02 310);
@@ -567,6 +573,21 @@ html.glass .glass::after { opacity: 0.5; }
      listed anyway — every primitive block stays a complete set. */
   --mat-user-fill: 68%;
   --mat-user-glow: 25%;
+  --mat-solid-ground: oklch(0.155 0.022 300);
+  --mat-canvas-base: oklch(0.175 0.022 300 / 0.84);
+  --mat-glow-a: 24%;
+  --mat-glow-b: 15%;
+  --mat-glow-top: 8%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.05);
+  --mat-raised: oklch(0.26 0.018 300 / 0.45);
+  --mat-grain: 0.16;
+  --mat-fill-chrome: 78%;
+  --mat-chrome-topline: oklch(1 0 0 / 0);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.40);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.04);
+  --mat-pop-spec-lo: oklch(1 0 0 / 0);
+  --mat-pop-grain: 0.4;
 }
 /* System mode (no explicit class) + OS dark — exact mirror of `.dark`.
    Edit `.dark` first, then copy every property here. Never tune this block
@@ -590,6 +611,21 @@ html.glass .glass::after { opacity: 0.5; }
        listed anyway — every primitive block stays a complete set. */
     --mat-user-fill: 68%;
     --mat-user-glow: 25%;
+    --mat-solid-ground: oklch(0.155 0.022 300);
+    --mat-canvas-base: oklch(0.175 0.022 300 / 0.84);
+    --mat-glow-a: 24%;
+    --mat-glow-b: 15%;
+    --mat-glow-top: 8%;
+    --mat-glow-counter: color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
+    --mat-sheen: oklch(1 0 0 / 0.05);
+    --mat-raised: oklch(0.26 0.018 300 / 0.45);
+    --mat-grain: 0.16;
+    --mat-fill-chrome: 78%;
+    --mat-chrome-topline: oklch(1 0 0 / 0);
+    --mat-pop-spec-hi: oklch(1 0 0 / 0.40);
+    --mat-pop-spec-mid: oklch(1 0 0 / 0.04);
+    --mat-pop-spec-lo: oklch(1 0 0 / 0);
+    --mat-pop-grain: 0.4;
   }
 }
 
@@ -687,25 +723,26 @@ html.glass .glass::after { opacity: 0.5; }
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
   }
-  .glass::before, .glass::after, .aleph-sidebar::before { display: none !important; }
+  .glass::before, .glass::after, .aleph-sidebar::before,
+  .aleph-shell::after { display: none !important; }
   .aleph-scrim, .aleph-blur-subtle {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
   }
   .aleph-sidebar { background-color: var(--color-sidebar) !important; }
-  :root {
+  /* Kill the primitives at the source: every material collapses to solid.
+     `:root, :root[data-material]` matches the material blocks' specificity;
+     this media block stays LAST in the theme cascade so it wins. */
+  :root, :root[data-material] {
     --aleph-canvas-base: var(--aleph-solid-ground) !important;
-    --color-surface-raised: oklch(1.00 0 0) !important;
+    --mat-raised: oklch(1.00 0 0) !important;
+    --mat-grain: 0 !important;
     --scrim-blur: 0px !important;
+    --glass-blur: 0px !important;
     --glass-blur-subtle: 0px !important;
     --glass-blur-chrome: 0px !important;
   }
-  .dark { --color-surface-raised: oklch(0.20 0.018 310) !important; }
-  html.glass {
-    --glass-blur: 0px;
-    --aleph-canvas-base: var(--aleph-solid-ground) !important;
-    --color-surface-raised: oklch(0.25 0.020 300) !important;
-  }
+  .dark, .dark[data-material] { --mat-raised: oklch(0.20 0.018 310) !important; }
   /* Message-flow faux glass → opaque solids. */
   .msg-glass {
     background-color: var(--color-surface-raised) !important;
@@ -722,14 +759,15 @@ html.glass .glass::after { opacity: 0.5; }
     background-image: none !important;
   }
   .glass-inset { background-color: var(--color-surface-sunken) !important; }
-  /* Sidebar nav tile → opaque solid; drop the faux-glass highlight. */
   .nav-tile-active {
     background-color: var(--color-sidebar-active) !important;
     box-shadow: none !important;
   }
 }
 @media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
-  :root:not(.light):not(.glass) { --color-surface-raised: oklch(0.20 0.018 310) !important; }
+  :root:not(.light), :root:not(.light)[data-material] {
+    --mat-raised: oklch(0.20 0.018 310) !important;
+  }
 }
 
 /* Soft entrance for popovers / menus. */
@@ -950,71 +988,16 @@ html.theme-switching::view-transition-new(root) {
    surface while glossy materials float on top.
    ════════════════════════════════════════════════════════════ */
 
-/* --- Atmosphere tokens — light (the default look) --- */
+/* --- Atmosphere tokens — derived once from the material primitives --- */
 :root {
-  /* Opaque ground for non-macOS (browser): the semi-opaque aurora composites
-     over this so there's never see-through-to-nothing. */
-  --aleph-solid-ground: oklch(0.988 0.004 295);
-  /* Semi-opaque controlled aurora base. On macOS the always-on vibrancy faintly
-     shows through it (保留通透感); the alpha keeps it wallpaper-independent. */
-  --aleph-canvas-base: oklch(0.972 0.005 295 / 0.86);
-  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 20%, transparent);
-  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 13%, transparent);
-  --aleph-glow-top: color-mix(in oklch, var(--color-primary)  7%, transparent);
-  /* Cool counter-hue — a second light source in a different hue turns the
-     flat single-colour wash into a subtle mesh-gradient field. */
-  --aleph-glow-c:   color-mix(in oklch, oklch(0.62 0.13 250) 10%, transparent);
-  --aleph-sheen:    oklch(1 0 0 / 0.72);
-  /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
-  --color-surface-raised: oklch(1.00 0 0 / 0.55);
-}
-
-/* --- Atmosphere tokens — dark --- */
-.dark {
-  --aleph-solid-ground: oklch(0.155 0.022 300);
-  --aleph-canvas-base:  oklch(0.175 0.022 300 / 0.84);
-  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 24%, transparent);
-  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 15%, transparent);
-  --aleph-glow-top: color-mix(in oklch, var(--color-primary)  8%, transparent);
-  --aleph-glow-c:   color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
-  --aleph-sheen:    oklch(1 0 0 / 0.05);
-  /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
-  --color-surface-raised: oklch(0.26 0.018 300 / 0.45);
-}
-/* --- Atmosphere tokens — Glass (dark-based, intensified, controlled) ---
-   Strong-glass showcase theme. Reuses the dramatic dark mood (stronger glow
-   than the calmed Dark), with a slightly lower canvas alpha so the controlled
-   aurora reads deeper — but NEVER transparent: the macOS vibrancy only faintly
-   shows behind this controlled colour, raw wallpaper is never exposed. */
-html.glass {
-  --aleph-solid-ground: oklch(0.150 0.024 300);
-  --aleph-canvas-base:  oklch(0.165 0.024 300 / 0.80);
-  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 34%, transparent);
-  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 22%, transparent);
-  --aleph-glow-top: color-mix(in oklch, var(--color-primary) 12%, transparent);
-  --aleph-glow-c:   color-mix(in oklch, oklch(0.66 0.14 250) 18%, transparent);
-  --aleph-sheen:    oklch(1 0 0 / 0.07);
-  /* Cards: a touch more transparent than Dark so they read glassier on aurora. */
-  --color-surface-raised: oklch(0.25 0.020 300 / 0.40);
-  /* Intensified glass material — pushed past the restrained default.
-     Transient popovers go lush (34px); the always-on sidebar tier
-     (--glass-blur-chrome) stays at 24px to cap idle GPU cost. */
-  --glass-blur: 34px;
-  --glass-saturate: 2.0;
-  --glass-blur-chrome: 24px;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not(.light):not(.glass) {
-    --aleph-solid-ground: oklch(0.155 0.022 300);
-    --aleph-canvas-base:  oklch(0.175 0.022 300 / 0.84);
-    --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 24%, transparent);
-    --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 15%, transparent);
-    --aleph-glow-top: color-mix(in oklch, var(--color-primary)  8%, transparent);
-    --aleph-glow-c:   color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
-    --aleph-sheen:    oklch(1 0 0 / 0.05);
-    /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
-    --color-surface-raised: oklch(0.26 0.018 300 / 0.45);
-  }
+  --aleph-solid-ground: var(--mat-solid-ground);
+  --aleph-canvas-base: var(--mat-canvas-base);
+  --aleph-glow-a: color-mix(in oklch, var(--color-primary) var(--mat-glow-a), transparent);
+  --aleph-glow-b: color-mix(in oklch, var(--color-primary) var(--mat-glow-b), transparent);
+  --aleph-glow-top: color-mix(in oklch, var(--color-primary) var(--mat-glow-top), transparent);
+  --aleph-glow-c: var(--mat-glow-counter);
+  --aleph-sheen: var(--mat-sheen);
+  --color-surface-raised: var(--mat-raised);
 }
 
 /* macOS: let the always-on vibrancy show behind our semi-opaque aurora in every
@@ -1047,6 +1030,19 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
    * imperceptible. Static gradient is the same look without the cost.
    */
 }
+/* Static fine grain over the canvas — painted once, zero per-frame cost.
+   Two jobs: (1) gives the chrome backdrop-blur visible structure to frost
+   (the grain gets iced flat under sidebar/composer — the frosted-vs-clear
+   differential finally shows), (2) dithers gradient banding on the aurora. */
+.aleph-shell::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: var(--mat-grain);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+}
 
 /* --- Glossy sidebar — a soft, accent-tinted column (Codex) --- */
 .aleph-sidebar {
@@ -1058,7 +1054,7 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
      and paint in the shell's root stacking context, or clicks in the main
      area won't close them. */
   position: relative;
-  background-color: color-mix(in oklch, var(--color-sidebar) 78%, transparent);
+  background-color: color-mix(in oklch, var(--color-sidebar) var(--mat-fill-chrome), transparent);
   background-image: linear-gradient(
     180deg,
     color-mix(in oklch, var(--color-primary) 9%, var(--color-sidebar)) 0%,
@@ -1066,7 +1062,8 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
     color-mix(in oklch, var(--color-primary) 8%, var(--color-sidebar)) 100%
   );
   box-shadow: inset -1px 0 0 var(--color-border-subtle),
-              inset  1px 0 0 var(--aleph-sheen);
+              inset  1px 0 0 var(--aleph-sheen),
+              inset  0 1px 0 var(--mat-chrome-topline);
 }
 /* The frosted blur lives on a z-index:-1 layer behind the sidebar content,
    so the .aleph-sidebar element itself stays free of backdrop-filter (and
@@ -1079,12 +1076,6 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
   pointer-events: none;
   backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
   -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
-}
-/* Glass theme: deepen the sidebar's frosted layer to match the stronger chrome. */
-html.glass .aleph-sidebar {
-  box-shadow: inset -1px 0 0 var(--color-border-subtle),
-              inset  1px 0 0 var(--aleph-sheen),
-              inset  0 1px 0 oklch(1 0 0 / 0.06);
 }
 
 /* Brand row — hugs the top of the sidebar by default. On macOS the row
@@ -1675,26 +1666,8 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
 }
 *::-webkit-scrollbar-corner   { background: transparent; }
 
-/* ════════════════════════════════════════════════════════════
-   Grain — a fixed, ultra-faint fractal-noise overlay behind the
-   shell. Pure flat vector surfaces read as sterile; a whisper of
-   grain breaks the digital flatness and gives the light-field a
-   filmic, physical quality. It paints once and never animates, so
-   (like the static light-field above) it carries zero idle cost.
-   Sits on top of `::before` (the gradient) but below all content.
-   ════════════════════════════════════════════════════════════ */
-.aleph-shell::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  opacity: 0.025;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-.dark .aleph-shell::after,
-html.glass .aleph-shell::after,
-:root:not(.light):not(.glass) .aleph-shell::after { opacity: 0.05; }
+/* (Grain rule merged into .aleph-shell::after near .aleph-shell::before above;
+   opacity is now driven by --mat-grain from the material primitive block.) */
 
 /* ════════════════════════════════════════════════════════════
    Chat message entrance — a one-shot rise+fade as each bubble
