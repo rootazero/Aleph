@@ -31,8 +31,11 @@ fn render_lessons(goal: &Goal) -> String {
 /// Pure decision: should this goal get one more autonomous continuation?
 /// `tokens_now` is the session's current total-token count (pass 0 when a
 /// live counter isn't available — then only the iteration cap applies).
+/// `now_ms` is the current wall-clock (Unix epoch ms); pass 0 when no clock is
+/// available — a set deadline is then NOT enforced (the iteration cap remains
+/// the backstop), keeping clock-less callers behavior-identical.
 #[must_use]
-pub fn should_continue(goal: &Goal, tokens_now: u64) -> bool {
+pub fn should_continue(goal: &Goal, tokens_now: u64, now_ms: u64) -> bool {
     let PursuitMode::Active { max_iterations } = goal.pursuit else {
         return false; // Passive goals never self-continue.
     };
@@ -44,6 +47,11 @@ pub fn should_continue(goal: &Goal, tokens_now: u64) -> bool {
     }
     if goal.over_budget(tokens_now) {
         return false; // soft budget becomes a hard stop for autonomous runs.
+    }
+    if let Some(deadline) = goal.deadline_ms {
+        if now_ms != 0 && now_ms > deadline {
+            return false; // wall-clock budget exhausted.
+        }
     }
     true
 }
@@ -101,10 +109,10 @@ pub fn continuation_prompt(goal: &Goal) -> String {
 /// This is a structural backstop, not a judgment about the work (R7): it fires
 /// purely on the same caps `should_continue` enforces.
 #[must_use]
-pub fn exhausted_while_active(goal: &Goal, tokens_now: u64) -> bool {
+pub fn exhausted_while_active(goal: &Goal, tokens_now: u64, now_ms: u64) -> bool {
     matches!(goal.pursuit, PursuitMode::Active { .. })
         && goal.status == GoalStatus::Active
-        && !should_continue(goal, tokens_now)
+        && !should_continue(goal, tokens_now, now_ms)
 }
 
 /// Human-readable note stamped on a goal when autonomous pursuit is cut off by
@@ -119,6 +127,17 @@ pub fn cap_reached_note(goal: &Goal) -> String {
         ),
         PursuitMode::Passive => "Autonomous pursuit ended.".to_string(),
     }
+}
+
+/// Note stamped when autonomous pursuit is cut off specifically by the
+/// wall-clock deadline (distinct from the iteration cap). The continuation hook
+/// picks this over `cap_reached_note` when the deadline was the binding stop.
+#[must_use]
+pub fn deadline_reached_note(_goal: &Goal) -> String {
+    "Autonomous pursuit reached its wall-clock budget without completing. \
+     Blocked for your guidance — review progress, then clear or re-set the \
+     goal to continue."
+        .to_string()
 }
 
 /// 模型在 `Active` 续跑下自报 `Complete`，但客观闸门尚未确认。
@@ -202,33 +221,33 @@ mod tests {
     #[test]
     fn passive_goal_never_continues() {
         let g = Goal::new("s", "obj", 0, 0); // Passive
-        assert!(!should_continue(&g, 0));
+        assert!(!should_continue(&g, 0, 0));
     }
 
     #[test]
     fn active_within_caps_continues() {
         let g = active_goal(5); // continuations_used = 0
-        assert!(should_continue(&g, 0));
+        assert!(should_continue(&g, 0, 0));
     }
 
     #[test]
     fn stops_at_iteration_cap() {
         let mut g = active_goal(3);
         g.continuations_used = 3;
-        assert!(!should_continue(&g, 0));
+        assert!(!should_continue(&g, 0, 0));
     }
 
     #[test]
     fn stops_when_complete() {
         let g = active_goal(5).with_status(GoalStatus::Complete, 0);
-        assert!(!should_continue(&g, 0));
+        assert!(!should_continue(&g, 0, 0));
     }
 
     #[test]
     fn stops_when_over_budget() {
         let g = active_goal(5).with_budget(Some(100));
         // tokens_at_start=0, so tokens_used(250)=250 > 100 → over budget.
-        assert!(!should_continue(&g, 250));
+        assert!(!should_continue(&g, 250, 0));
     }
 
     #[test]
@@ -262,20 +281,20 @@ mod tests {
     fn exhausted_while_active_true_only_at_cap() {
         let mut g = active_goal(3);
         assert!(
-            !exhausted_while_active(&g, 0),
+            !exhausted_while_active(&g, 0, 0),
             "fresh goal can still continue"
         );
         g.continuations_used = 3;
-        assert!(exhausted_while_active(&g, 0), "at cap while still active");
+        assert!(exhausted_while_active(&g, 0, 0), "at cap while still active");
     }
 
     #[test]
     fn exhausted_while_active_false_for_passive_or_terminal() {
         let passive = Goal::new("s", "obj", 0, 0); // Passive
-        assert!(!exhausted_while_active(&passive, 0));
+        assert!(!exhausted_while_active(&passive, 0, 0));
         let done = active_goal(3).with_status(GoalStatus::Complete, 0);
         assert!(
-            !exhausted_while_active(&done, 0),
+            !exhausted_while_active(&done, 0, 0),
             "completed is not 'exhausted'"
         );
     }
@@ -371,5 +390,33 @@ mod tests {
         let p = gate_failure_prompt(&g, "still red");
         assert!(p.contains("missing index"));
         assert!(p.contains("still red"));
+    }
+
+    #[test]
+    fn stops_when_past_deadline() {
+        let g = active_goal(5).with_deadline_ms(Some(1_000));
+        assert!(should_continue(&g, 0, 999), "before deadline → continue");
+        assert!(!should_continue(&g, 0, 1_001), "past deadline → stop");
+    }
+
+    #[test]
+    fn deadline_ignored_without_clock() {
+        // now_ms == 0 means "no clock" — a set deadline must NOT fire, so
+        // clock-less callers keep iteration-cap-only behavior.
+        let g = active_goal(5).with_deadline_ms(Some(1_000));
+        assert!(should_continue(&g, 0, 0));
+    }
+
+    #[test]
+    fn exhausted_when_past_deadline_even_with_iterations_left() {
+        let g = active_goal(5).with_deadline_ms(Some(1_000));
+        // iterations remain (0/5) but the wall-clock budget is spent.
+        assert!(exhausted_while_active(&g, 0, 2_000));
+    }
+
+    #[test]
+    fn deadline_reached_note_mentions_wall_clock() {
+        let g = active_goal(5);
+        assert!(deadline_reached_note(&g).to_lowercase().contains("wall-clock"));
     }
 }
