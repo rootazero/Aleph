@@ -86,11 +86,11 @@ pub fn NavMenu() -> impl IntoView {
             <button
                 on:click=move |_| open.update(|v| *v = !*v)
                 class=move || {
-                    let base = "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors";
+                    let base = "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm";
                     if open.get() {
-                        format!("{base} bg-sidebar-active text-text-primary")
+                        format!("{base} nav-tile-active")
                     } else {
-                        format!("{base} text-text-secondary hover:text-text-primary hover:bg-sidebar-active/60")
+                        format!("{base} nav-tile")
                     }
                 }
             >
@@ -136,11 +136,11 @@ pub fn NavMenu() -> impl IntoView {
                                     nav(route, Default::default());
                                 }
                                 class=move || {
-                                    let base = "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors";
+                                    let base = "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm";
                                     if is_active() {
-                                        format!("{base} bg-primary/12 text-primary font-medium")
+                                        format!("{base} nav-tile-active")
                                     } else {
-                                        format!("{base} text-text-secondary hover:bg-sidebar-active/70 hover:text-text-primary")
+                                        format!("{base} nav-tile")
                                     }
                                 }
                             >
