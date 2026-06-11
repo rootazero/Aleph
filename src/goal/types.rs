@@ -23,6 +23,21 @@ pub enum PursuitMode {
     Active { max_iterations: u32 },
 }
 
+/// Maker/checker 分离的类型态：模型调用 `goal(complete)` 是一个 *claim*；
+/// 客观闸门（config.toml `[[stop_hooks]]` 退出码）通过才是 *confirmation*。
+/// 只有自主续跑（`PursuitMode::Active`）的 goal 会被闸门守护；交互/被动
+/// goal 的 complete 立即终止，不经闸门。`#[serde(default)]` → 旧持久化
+/// 反序列化为 `Unchecked`。
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GateOutcome {
+    /// 尚无闸门确认完成（默认；也是 Active/Paused/Blocked 的静息态）。
+    #[default]
+    Unchecked,
+    /// 客观闸门确认了模型的 `Complete` 主张 → 循环真正终止。
+    Passed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Goal {
     pub id: String,
@@ -40,6 +55,10 @@ pub struct Goal {
     /// before this field deserialize as 0.
     #[serde(default)]
     pub continuations_used: u32,
+    /// 模型自报的 `Complete` 是否已被客观闸门确认（见 [`GateOutcome`]）。
+    /// `#[serde(default)]` → 旧持久化读为 `Unchecked`。
+    #[serde(default)]
+    pub gate_outcome: GateOutcome,
 }
 
 impl Goal {
@@ -61,6 +80,7 @@ impl Goal {
             updated_at_ms: now_ms,
             note: None,
             continuations_used: 0,
+            gate_outcome: GateOutcome::Unchecked,
         }
     }
 
@@ -83,6 +103,15 @@ impl Goal {
     #[must_use]
     pub fn with_note(mut self, note: Option<String>, now_ms: u64) -> Self {
         self.note = note;
+        self.updated_at_ms = now_ms;
+        self
+    }
+
+    /// Lifecycle transition（闸门确认/复位）——bump `updated_at_ms`，
+    /// 与 `with_status`/`with_note` 同型。返回新 `Goal`（§不可变性）。
+    #[must_use]
+    pub fn with_gate_outcome(mut self, outcome: GateOutcome, now_ms: u64) -> Self {
+        self.gate_outcome = outcome;
         self.updated_at_ms = now_ms;
         self
     }
@@ -200,5 +229,33 @@ mod tests {
             PursuitMode::Active { max_iterations } => assert_eq!(max_iterations, 8),
             _ => panic!("expected Active pursuit"),
         }
+    }
+
+    #[test]
+    fn new_goal_gate_outcome_is_unchecked() {
+        assert_eq!(sample().gate_outcome, GateOutcome::Unchecked);
+    }
+
+    #[test]
+    fn with_gate_outcome_returns_new_goal_and_bumps_updated_at() {
+        let g = sample();
+        let after = g.clone().with_gate_outcome(GateOutcome::Passed, 9_000);
+        assert_eq!(after.gate_outcome, GateOutcome::Passed);
+        assert_eq!(after.updated_at_ms, 9_000);
+        assert_eq!(g.gate_outcome, GateOutcome::Unchecked, "original unchanged");
+        // 其它字段不受影响
+        assert_eq!(after.status, g.status);
+        assert_eq!(after.objective, g.objective);
+    }
+
+    #[test]
+    fn old_payload_without_gate_outcome_deserializes_unchecked() {
+        // 模拟本字段引入前持久化的 JSON（无 gate_outcome 键）。
+        let json = r#"{"id":"goal-1","session_id":"s","objective":"o",
+            "status":"active","token_budget":null,"tokens_at_start":0,
+            "pursuit":{"mode":"passive"},"created_at_ms":1,"updated_at_ms":1,
+            "note":null,"continuations_used":0}"#;
+        let g: Goal = serde_json::from_str(json).expect("deserialize old payload");
+        assert_eq!(g.gate_outcome, GateOutcome::Unchecked);
     }
 }
