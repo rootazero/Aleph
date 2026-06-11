@@ -635,11 +635,17 @@ where
                                 // 但客观闸门（stop_hooks 退出码）尚未确认。
                                 // 在接受 complete 为终止前先跑闸门（Ralph
                                 // Wiggum 营救）。结构化退出码，零 LLM 调用（R7）。
+                                let gate_configured = cont_deps.gate.is_some()
+                                    || goal.gate_command.is_some();
                                 if crate::tasks::goal_pursuit::awaiting_gate(
                                     &goal,
-                                    cont_deps.gate.is_some(),
+                                    gate_configured,
                                 ) {
-                                    let gate = cont_deps.gate.clone().expect("is_some checked");
+                                    let gate = crate::verification::stop_hooks::effective_gate(
+                                        cont_deps.gate.as_ref(),
+                                        goal.gate_command.as_deref(),
+                                    )
+                                    .expect("gate_configured implies effective_gate is Some");
                                     let hctx = StopHookContext {
                                         final_text: Some(goal.objective.clone()),
                                         iterations: goal.continuations_used as usize,

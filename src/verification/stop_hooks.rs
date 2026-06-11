@@ -95,6 +95,30 @@ pub fn build_from_config(cfgs: &[StopHookConfig]) -> Option<Arc<Vec<Arc<dyn Stop
     Some(Arc::new(hooks))
 }
 
+/// Assemble the effective objective gate for a goal: the global config hooks
+/// (if any) PLUS a per-goal ad-hoc [`ShellStopHook`] built from
+/// `goal_gate_command` (if any). Returns `None` only when neither source is
+/// present (caller then treats a `complete` claim as terminal — Round 1
+/// behavior). AND semantics: the combined vector runs through
+/// `execute_stop_hooks_arc`, which vetoes on the first block, so either source
+/// can veto completion.
+#[must_use]
+pub fn effective_gate(
+    global: Option<&Arc<Vec<Arc<dyn StopHookHandler>>>>,
+    goal_gate_command: Option<&str>,
+) -> Option<Arc<Vec<Arc<dyn StopHookHandler>>>> {
+    match (global, goal_gate_command) {
+        (None, None) => None,
+        (Some(g), None) => Some(g.clone()),
+        (g, Some(cmd)) => {
+            let mut hooks: Vec<Arc<dyn StopHookHandler>> =
+                g.map(|v| v.as_ref().clone()).unwrap_or_default();
+            hooks.push(Arc::new(ShellStopHook::new("goal_gate", cmd)) as Arc<dyn StopHookHandler>);
+            Some(Arc::new(hooks))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Context & Verdict types
 // ---------------------------------------------------------------------------
@@ -498,6 +522,23 @@ mod tests {
         let errors = result.errors();
         assert_eq!(errors.len(), 1);
         assert!(errors[0].1.contains("cancelled"));
+    }
+
+    #[test]
+    fn effective_gate_combines_sources() {
+        // Neither → None (Round 1 terminal behavior).
+        assert!(effective_gate(None, None).is_none());
+        // Global only → the global vector (length preserved).
+        let global: Arc<Vec<Arc<dyn StopHookHandler>>> =
+            Arc::new(vec![Arc::new(ShellStopHook::new("g", "true")) as Arc<dyn StopHookHandler>]);
+        assert_eq!(effective_gate(Some(&global), None).unwrap().len(), 1);
+        // Per-goal only → one hook.
+        assert_eq!(effective_gate(None, Some("cargo test")).unwrap().len(), 1);
+        // Both → global ⧺ per-goal.
+        assert_eq!(
+            effective_gate(Some(&global), Some("cargo test")).unwrap().len(),
+            2
+        );
     }
 
     #[test]
