@@ -7,6 +7,7 @@
 pub mod dedup;
 pub mod governance;
 pub mod keyword_frontmatter;
+pub mod keyword_linker;
 pub mod indexer;
 mod note;
 pub mod orientation;
