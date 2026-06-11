@@ -37,7 +37,7 @@ fn load_plugins(
                 loading.set(false);
             }
             Err(e) => {
-                error.set(Some(format!("Failed to load plugins: {}", e)));
+                error.set(Some(format!("Failed to load plugins: {e}")));
                 loading.set(false);
             }
         }
@@ -263,7 +263,7 @@ fn PluginCard(
                                                     load_plugins(state, plugins, loading, error);
                                                 }
                                                 Err(e) => {
-                                                    error.set(Some(format!("Failed to delete plugin: {}", e)));
+                                                    error.set(Some(format!("Failed to delete plugin: {e}")));
                                                     deleting.set(false);
                                                 }
                                             }
@@ -299,7 +299,7 @@ fn PluginCard(
                                                         toggling.set(false);
                                                     }
                                                     Err(e) => {
-                                                        error.set(Some(format!("Failed to toggle plugin: {}", e)));
+                                                        error.set(Some(format!("Failed to toggle plugin: {e}")));
                                                         enabled.set(!new_val);
                                                         toggling.set(false);
                                                     }
@@ -355,7 +355,7 @@ fn InstallPluginDialog(
                     on_close();
                 }
                 Err(e) => {
-                    dialog_error.set(Some(format!("Failed to install: {}", e)));
+                    dialog_error.set(Some(format!("Failed to install: {e}")));
                     installing.set(false);
                 }
             }

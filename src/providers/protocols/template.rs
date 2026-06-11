@@ -174,7 +174,7 @@ impl TemplateRenderer {
     pub fn render(&self, template: &str, context: &Value) -> Result<String> {
         self.handlebars
             .render_template(template, context)
-            .map_err(|e| AlephError::provider(format!("Template rendering failed: {}", e)))
+            .map_err(|e| AlephError::provider(format!("Template rendering failed: {e}")))
     }
 
     /// Render a template and parse the result as JSON
@@ -193,8 +193,7 @@ impl TemplateRenderer {
         let rendered = self.render(template, context)?;
         serde_json::from_str(&rendered).map_err(|e| {
             AlephError::provider(format!(
-                "Failed to parse rendered template as JSON: {}. Rendered output: {}",
-                e, rendered
+                "Failed to parse rendered template as JSON: {e}. Rendered output: {rendered}"
             ))
         })
     }

@@ -267,7 +267,7 @@ impl ToolRegistrar {
         conflict_resolver: &ConflictResolver,
     ) {
         for (plugin_id, tool_name, tool_desc) in tools {
-            let id = format!("plugin:{}:{}", plugin_id, tool_name);
+            let id = format!("plugin:{plugin_id}:{tool_name}");
 
             let tool = UnifiedTool::new(
                 &id,
@@ -279,7 +279,7 @@ impl ToolRegistrar {
             )
             .with_display_name(tool_name)
             .with_icon("puzzlepiece.extension")
-            .with_usage(format!("/{} [input]", tool_name))
+            .with_usage(format!("/{tool_name} [input]"))
             .with_routing_regex(format!(r"^/{}\s*", regex::escape(tool_name)))
             .with_routing_strip_prefix(true);
 
@@ -324,14 +324,14 @@ impl ToolRegistrar {
                 continue;
             }
 
-            let id = format!("custom:{}", command_name);
+            let id = format!("custom:{command_name}");
 
             // Use system_prompt as description if available, otherwise generic
             let description = rule
                 .system_prompt
                 .as_ref()
                 .map(|s| truncate_description(s, 100))
-                .unwrap_or_else(|| format!("Custom command /{}", command_name));
+                .unwrap_or_else(|| format!("Custom command /{command_name}"));
 
             let mut tool = UnifiedTool::new(
                 &id,
@@ -339,7 +339,7 @@ impl ToolRegistrar {
                 description,
                 ToolSource::Custom { rule_index: index },
             )
-            .with_display_name(format!("/{}", command_name))
+            .with_display_name(format!("/{command_name}"))
             .with_routing_regex(rule.regex.clone());
 
             if let Some(ref prompt) = rule.system_prompt {

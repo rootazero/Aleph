@@ -365,13 +365,13 @@ async fn drain_once(registry: &ChannelRegistry, store: &DeliveryStore) {
                     // `as_secs()`, which would reschedule the record as
                     // immediately-due and hot-retry a still-down channel.
                     let next = now + backoff_delay(cfg, attempts).as_secs().max(1) as i64;
-                    let _ = store.reschedule(rec.id, attempts, next, &format!("{:?}", e));
+                    let _ = store.reschedule(rec.id, attempts, next, &format!("{e:?}"));
                 }
             }
             // Ambiguous (may already be on the wire) or permanent — drop rather
             // than risk a duplicate.
             Err(e) => {
-                let _ = store.drop_record(rec.id, &format!("non-retryable: {:?}", e));
+                let _ = store.drop_record(rec.id, &format!("non-retryable: {e:?}"));
             }
         }
     }

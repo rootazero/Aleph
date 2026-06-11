@@ -233,7 +233,7 @@ impl ChannelFactory for SignalChannelFactory {
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let config: SignalConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid Signal config: {}", e)))?;
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid Signal config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 

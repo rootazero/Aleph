@@ -252,8 +252,7 @@ impl SecurityContext {
         if self.denied_tools.contains(tool_name) {
             return ToolPermission::Denied {
                 reason: format!(
-                    "Tool '{}' is explicitly denied by security policy",
-                    tool_name
+                    "Tool '{tool_name}' is explicitly denied by security policy"
                 ),
             };
         }
@@ -262,7 +261,7 @@ impl SecurityContext {
         if let Some(ref allowed) = self.allowed_tools {
             if !allowed.contains(tool_name) {
                 return ToolPermission::Denied {
-                    reason: format!("Tool '{}' is not in the allowed tools list", tool_name),
+                    reason: format!("Tool '{tool_name}' is not in the allowed tools list"),
                 };
             }
         }
@@ -276,8 +275,7 @@ impl SecurityContext {
         if !self.network_allowed && is_network_tool(tool_name) {
             return ToolPermission::Denied {
                 reason: format!(
-                    "Tool '{}' requires network access which is not allowed",
-                    tool_name
+                    "Tool '{tool_name}' requires network access which is not allowed"
                 ),
             };
         }
@@ -291,14 +289,12 @@ impl SecurityContext {
         match &self.elevated_policy {
             ElevatedPolicy::Off => ToolPermission::Denied {
                 reason: format!(
-                    "Tool '{}' requires elevated permissions which are disabled",
-                    tool_name
+                    "Tool '{tool_name}' requires elevated permissions which are disabled"
                 ),
             },
             ElevatedPolicy::Ask => ToolPermission::RequiresApproval {
                 prompt: format!(
-                    "Tool '{}' requires elevated permissions. Allow execution?",
-                    tool_name
+                    "Tool '{tool_name}' requires elevated permissions. Allow execution?"
                 ),
             },
             ElevatedPolicy::AllowList(allowed) => {
@@ -309,8 +305,7 @@ impl SecurityContext {
                 } else {
                     ToolPermission::RequiresApproval {
                         prompt: format!(
-                            "Tool '{}' is not in the elevated allowlist. Allow execution?",
-                            tool_name
+                            "Tool '{tool_name}' is not in the elevated allowlist. Allow execution?"
                         ),
                     }
                 }

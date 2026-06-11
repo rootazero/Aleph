@@ -165,7 +165,7 @@ impl ProvidersApi {
             .ok_or_else(|| "Invalid response: missing providers".to_string())
             .and_then(|providers| {
                 serde_json::from_value(providers.clone())
-                    .map_err(|e| format!("Failed to parse providers: {}", e))
+                    .map_err(|e| format!("Failed to parse providers: {e}"))
             })
     }
 
@@ -181,7 +181,7 @@ impl ProvidersApi {
             .ok_or_else(|| "Invalid response: missing items".to_string())
             .and_then(|items| {
                 serde_json::from_value(items.clone())
-                    .map_err(|e| format!("Failed to parse catalog: {}", e))
+                    .map_err(|e| format!("Failed to parse catalog: {e}"))
             })
     }
 
@@ -199,7 +199,7 @@ impl ProvidersApi {
             .ok_or_else(|| "Invalid response: missing provider".to_string())
             .and_then(|provider| {
                 serde_json::from_value(provider.clone())
-                    .map_err(|e| format!("Failed to parse provider: {}", e))
+                    .map_err(|e| format!("Failed to parse provider: {e}"))
             })
     }
 
@@ -210,7 +210,7 @@ impl ProvidersApi {
         config: ProviderConfig,
     ) -> Result<(), String> {
         let config_value = serde_json::to_value(&config)
-            .map_err(|e| format!("Failed to serialize config: {}", e))?;
+            .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
         let params = serde_json::json!({
             "name": name,
@@ -228,7 +228,7 @@ impl ProvidersApi {
         config: ProviderConfig,
     ) -> Result<(), String> {
         let config_value = serde_json::to_value(&config)
-            .map_err(|e| format!("Failed to serialize config: {}", e))?;
+            .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
         let params = serde_json::json!({
             "name": name,
@@ -272,7 +272,7 @@ impl ProvidersApi {
 
         let result = state.rpc_call("providers.test", params).await?;
 
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse test result: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse test result: {e}"))
     }
 
     /// Trigger OAuth browser login for a subscription provider
@@ -282,7 +282,7 @@ impl ProvidersApi {
     ) -> Result<OAuthStatus, String> {
         let params = serde_json::json!({ "provider": provider });
         let result = state.rpc_call("providers.oauthLogin", params).await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse OAuth status: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse OAuth status: {e}"))
     }
 
     /// Clear OAuth token for a subscription provider
@@ -299,6 +299,6 @@ impl ProvidersApi {
     ) -> Result<OAuthStatus, String> {
         let params = serde_json::json!({ "provider": provider });
         let result = state.rpc_call("providers.oauthStatus", params).await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse OAuth status: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse OAuth status: {e}"))
     }
 }

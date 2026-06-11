@@ -51,7 +51,7 @@ impl FileSessionStore {
 impl FileSessionStore {
     pub fn new(config: FileSessionStoreConfig) -> Result<Self, SessionStoreError> {
         std::fs::create_dir_all(&config.base_dir).map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to create sessions dir: {}", e))
+            SessionStoreError::DatabaseError(format!("Failed to create sessions dir: {e}"))
         })?;
         info!("FileSessionStore initialized: {:?}", config.base_dir);
         Ok(Self {
@@ -127,7 +127,7 @@ impl FileSessionStore {
 
     fn checkpoint_path(&self, key: &str, checkpoint_id: &str) -> PathBuf {
         self.checkpoint_dir(key)
-            .join(format!("{}.jsonl", checkpoint_id))
+            .join(format!("{checkpoint_id}.jsonl"))
     }
 
     pub(crate) async fn read_metadata(
@@ -139,10 +139,10 @@ impl FileSessionStore {
             return Ok(None);
         }
         let contents = tokio::fs::read_to_string(&path).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to read metadata: {}", e))
+            SessionStoreError::DatabaseError(format!("Failed to read metadata: {e}"))
         })?;
         let meta: SessionMetadata = serde_json::from_str(&contents).map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to parse metadata: {}", e))
+            SessionStoreError::DatabaseError(format!("Failed to parse metadata: {e}"))
         })?;
         Ok(Some(meta))
     }
@@ -154,14 +154,14 @@ impl FileSessionStore {
     ) -> Result<(), SessionStoreError> {
         let dir = self.session_dir(key);
         tokio::fs::create_dir_all(&dir).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to create session dir: {}", e))
+            SessionStoreError::DatabaseError(format!("Failed to create session dir: {e}"))
         })?;
         let path = dir.join("metadata.json");
         let contents = serde_json::to_string_pretty(meta).map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to serialize metadata: {}", e))
+            SessionStoreError::DatabaseError(format!("Failed to serialize metadata: {e}"))
         })?;
         tokio::fs::write(&path, contents).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to write metadata: {}", e))
+            SessionStoreError::DatabaseError(format!("Failed to write metadata: {e}"))
         })?;
         Ok(())
     }
@@ -174,19 +174,19 @@ impl FileSessionStore {
     ) -> Result<(), SessionStoreError> {
         let dir = self.checkpoint_dir(key);
         tokio::fs::create_dir_all(&dir).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to create checkpoint dir: {}", e))
+            SessionStoreError::DatabaseError(format!("Failed to create checkpoint dir: {e}"))
         })?;
-        let path = dir.join(format!("{}.jsonl", checkpoint_id));
+        let path = dir.join(format!("{checkpoint_id}.jsonl"));
         let mut contents = String::new();
         for msg in messages {
             let line = serde_json::to_string(msg).map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Serialize checkpoint failed: {}", e))
+                SessionStoreError::DatabaseError(format!("Serialize checkpoint failed: {e}"))
             })?;
             contents.push_str(&line);
             contents.push('\n');
         }
         tokio::fs::write(&path, contents).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Write checkpoint failed: {}", e))
+            SessionStoreError::DatabaseError(format!("Write checkpoint failed: {e}"))
         })?;
         Ok(())
     }
@@ -201,7 +201,7 @@ impl FileSessionStore {
             return Ok(Vec::new());
         }
         let contents = tokio::fs::read_to_string(&path).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Read checkpoint failed: {}", e))
+            SessionStoreError::DatabaseError(format!("Read checkpoint failed: {e}"))
         })?;
         let mut messages: Vec<MessageRecord> = Vec::new();
         for line in contents.lines() {
@@ -222,25 +222,25 @@ impl FileSessionStore {
     ) -> Result<(), SessionStoreError> {
         let dir = self.session_dir(key);
         tokio::fs::create_dir_all(&dir).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to create session dir: {}", e))
+            SessionStoreError::DatabaseError(format!("Failed to create session dir: {e}"))
         })?;
         let path = dir.join("transcript.jsonl");
         let line = serde_json::to_string(msg).map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to serialize message: {}", e))
+            SessionStoreError::DatabaseError(format!("Failed to serialize message: {e}"))
         })?;
-        let line = format!("{}\n", line);
+        let line = format!("{line}\n");
         tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
             .await
             .map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Open transcript failed: {}", e))
+                SessionStoreError::DatabaseError(format!("Open transcript failed: {e}"))
             })?
             .write_all(line.as_bytes())
             .await
             .map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Write transcript failed: {}", e))
+                SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
             })?;
         Ok(())
     }
@@ -255,7 +255,7 @@ impl FileSessionStore {
             return Ok(Vec::new());
         }
         let contents = tokio::fs::read_to_string(&path).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Read transcript failed: {}", e))
+            SessionStoreError::DatabaseError(format!("Read transcript failed: {e}"))
         })?;
         let mut messages: Vec<MessageRecord> = Vec::new();
         for line in contents.lines() {
@@ -342,12 +342,12 @@ impl SessionStore for FileSessionStore {
     ) -> Result<Vec<SessionMetadata>, SessionStoreError> {
         let mut entries = tokio::fs::read_dir(&self.config.base_dir)
             .await
-            .map_err(|e| SessionStoreError::DatabaseError(format!("Read dir failed: {}", e)))?;
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Read dir failed: {e}")))?;
         let mut sessions = Vec::new();
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|e| SessionStoreError::DatabaseError(format!("Dir entry failed: {}", e)))?
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Dir entry failed: {e}")))?
         {
             let path = entry.path();
             if !path.is_dir() {
@@ -400,11 +400,11 @@ impl SessionStore for FileSessionStore {
             .join(&key_str);
         if let Some(parent) = archive_dir.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Create archive dir failed: {}", e))
+                SessionStoreError::DatabaseError(format!("Create archive dir failed: {e}"))
             })?;
         }
         tokio::fs::rename(&dir, &archive_dir).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Archive session failed: {}", e))
+            SessionStoreError::DatabaseError(format!("Archive session failed: {e}"))
         })?;
         self.emit_session_changed(&key_str, "delete", None);
         Ok(DeleteResult { deleted: true })
@@ -536,13 +536,13 @@ impl SessionStore for FileSessionStore {
                 let mut contents = String::new();
                 for msg in &messages {
                     let line = serde_json::to_string(msg).map_err(|e| {
-                        SessionStoreError::DatabaseError(format!("Serialize failed: {}", e))
+                        SessionStoreError::DatabaseError(format!("Serialize failed: {e}"))
                     })?;
                     contents.push_str(&line);
                     contents.push('\n');
                 }
                 tokio::fs::write(&path, contents).await.map_err(|e| {
-                    SessionStoreError::DatabaseError(format!("Write transcript failed: {}", e))
+                    SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
                 })?;
                 if let Some(mut meta) = self.read_metadata(&key_str).await? {
                     meta.message_count = messages.len() as i64;
@@ -585,13 +585,13 @@ impl SessionStore for FileSessionStore {
         let mut contents = String::new();
         for msg in &messages {
             let line = serde_json::to_string(msg).map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Serialize failed: {}", e))
+                SessionStoreError::DatabaseError(format!("Serialize failed: {e}"))
             })?;
             contents.push_str(&line);
             contents.push('\n');
         }
         tokio::fs::write(&path, contents).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Write transcript failed: {}", e))
+            SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
         })?;
 
         if let Some(mut meta) = self.read_metadata(&key_str).await? {
@@ -624,8 +624,7 @@ impl SessionStore for FileSessionStore {
         let checkpoint_messages = self.read_checkpoint(&key_str, checkpoint_id).await?;
         if checkpoint_messages.is_empty() {
             return Err(SessionStoreError::NotFound(format!(
-                "Checkpoint {} not found or empty",
-                checkpoint_id
+                "Checkpoint {checkpoint_id} not found or empty"
             )));
         }
         let now = chrono::Utc::now().timestamp();
@@ -666,16 +665,16 @@ impl SessionStore for FileSessionStore {
             meta.input_tokens += msg.input_tokens;
             meta.output_tokens += msg.output_tokens;
             let line = serde_json::to_string(msg).map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Serialize failed: {}", e))
+                SessionStoreError::DatabaseError(format!("Serialize failed: {e}"))
             })?;
             contents.push_str(&line);
             contents.push('\n');
         }
         tokio::fs::create_dir_all(self.session_dir(&new_key_str))
             .await
-            .map_err(|e| SessionStoreError::DatabaseError(format!("Create dir failed: {}", e)))?;
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Create dir failed: {e}")))?;
         tokio::fs::write(&path, contents).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Write transcript failed: {}", e))
+            SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
         })?;
         self.write_metadata(&new_key_str, &meta).await?;
         self.emit_session_changed(&new_key_str, "checkpoint-branch", Some(&meta));
@@ -691,26 +690,25 @@ impl SessionStore for FileSessionStore {
         let checkpoint_messages = self.read_checkpoint(&key_str, checkpoint_id).await?;
         if checkpoint_messages.is_empty() {
             return Err(SessionStoreError::NotFound(format!(
-                "Checkpoint {} not found or empty",
-                checkpoint_id
+                "Checkpoint {checkpoint_id} not found or empty"
             )));
         }
         let path = self.transcript_path(&key_str);
         let mut contents = String::new();
         for msg in &checkpoint_messages {
             let line = serde_json::to_string(msg).map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Serialize failed: {}", e))
+                SessionStoreError::DatabaseError(format!("Serialize failed: {e}"))
             })?;
             contents.push_str(&line);
             contents.push('\n');
         }
         tokio::fs::write(&path, contents).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Write transcript failed: {}", e))
+            SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
         })?;
         let mut meta = self
             .read_metadata(&key_str)
             .await?
-            .ok_or_else(|| SessionStoreError::NotFound(format!("Session {} not found", key_str)))?;
+            .ok_or_else(|| SessionStoreError::NotFound(format!("Session {key_str} not found")))?;
         meta.message_count = checkpoint_messages.len() as i64;
         meta.last_active_at = chrono::Utc::now().timestamp();
         self.write_metadata(&key_str, &meta).await?;
@@ -807,11 +805,11 @@ impl SessionStore for FileSessionStore {
         let mut max_epoch = 0u32;
         let mut entries = tokio::fs::read_dir(&self.config.base_dir)
             .await
-            .map_err(|e| SessionStoreError::DatabaseError(format!("Read dir failed: {}", e)))?;
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Read dir failed: {e}")))?;
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|e| SessionStoreError::DatabaseError(format!("Dir entry failed: {}", e)))?
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Dir entry failed: {e}")))?
         {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with(base_key_pattern) {

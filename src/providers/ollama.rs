@@ -167,7 +167,7 @@ impl OllamaProvider {
             .timeout(Duration::from_secs(config.timeout_seconds))
             .build()
             .map_err(|e| {
-                AlephError::invalid_config(format!("Failed to build HTTP client: {}", e))
+                AlephError::invalid_config(format!("Failed to build HTTP client: {e}"))
             })?;
 
         // Build API endpoint
@@ -176,7 +176,7 @@ impl OllamaProvider {
             .as_ref()
             .map(|s| s.trim_end_matches('/').to_string())
             .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string());
-        let endpoint = format!("{}/api/chat", base_url);
+        let endpoint = format!("{base_url}/api/chat");
 
         info!(
             model = %config.default_model(),
@@ -375,7 +375,7 @@ impl OllamaProvider {
             .into_iter()
             .enumerate()
             .map(|(i, tc)| NativeToolCall {
-                id: format!("ollama_call_{}", i),
+                id: format!("ollama_call_{i}"),
                 name: tc.function.name,
                 arguments: tc.function.arguments,
                 thought_signature: None,
@@ -431,12 +431,12 @@ impl OllamaProvider {
             }
 
             error!(status = %status, error = %error_msg, "Ollama API error");
-            return AlephError::provider(format!("Ollama error: {}", error_msg));
+            return AlephError::provider(format!("Ollama error: {error_msg}"));
         }
 
         // Fallback error
         error!(status = %status, "Ollama request failed");
-        AlephError::provider(format!("Ollama request failed: {}", status))
+        AlephError::provider(format!("Ollama request failed: {status}"))
     }
 }
 
@@ -489,7 +489,7 @@ impl AiProvider for OllamaProvider {
 
             let chat_response: ChatResponse = response.json().await.map_err(|e| {
                 error!(error = %e, "Failed to parse Ollama response");
-                AlephError::provider(format!("Failed to parse Ollama response: {}", e))
+                AlephError::provider(format!("Failed to parse Ollama response: {e}"))
             })?;
 
             let provider_response = self.build_provider_response(chat_response);
@@ -537,7 +537,7 @@ impl crate::providers::model_discovery::ModelDiscovery for OllamaProvider {
 
         // Derive base URL from the /api/chat endpoint
         let base_url = self.endpoint.trim_end_matches("/api/chat");
-        let url = format!("{}/api/tags", base_url);
+        let url = format!("{base_url}/api/tags");
 
         let resp: TagsResponse = self.client.get(&url).send().await?.json().await?;
 

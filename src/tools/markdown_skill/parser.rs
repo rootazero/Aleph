@@ -89,7 +89,7 @@ fn validate_spec(spec: &AlephSkillSpec) -> Result<()> {
 
 /// Extract specific sections from markdown (e.g., ## Examples)
 pub fn extract_markdown_section(content: &str, heading: &str) -> Option<String> {
-    let search = format!("## {}", heading);
+    let search = format!("## {heading}");
 
     if let Some(start) = content.find(&search) {
         let after_heading = &content[start + search.len()..];

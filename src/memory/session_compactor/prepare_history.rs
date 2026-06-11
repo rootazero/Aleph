@@ -60,7 +60,7 @@ impl SessionCompactor {
             self.project_scoped,
             crate::projects::current_project_root().as_deref(),
         );
-        let path_prefix = format!("aleph://session/{}/", session_id);
+        let path_prefix = format!("aleph://session/{session_id}/");
 
         let mut summaries = match self
             .database

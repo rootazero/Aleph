@@ -156,8 +156,7 @@ impl StdioTransport {
 
         let mut child = cmd.spawn().map_err(|e| {
             AlephError::IoError(format!(
-                "Failed to spawn MCP server '{}' ({}): {}",
-                name, command_str, e
+                "Failed to spawn MCP server '{name}' ({command_str}): {e}"
             ))
         })?;
 
@@ -170,10 +169,10 @@ impl StdioTransport {
         // Take the pipes out of the child: stdin is owned by this transport
         // for the lifetime of the connection, stdout is owned by the reader.
         let stdin = child.stdin.take().ok_or_else(|| {
-            AlephError::IoError(format!("MCP server '{}' stdin not available", name))
+            AlephError::IoError(format!("MCP server '{name}' stdin not available"))
         })?;
         let stdout = child.stdout.take().ok_or_else(|| {
-            AlephError::IoError(format!("MCP server '{}' stdout not available", name))
+            AlephError::IoError(format!("MCP server '{name}' stdout not available"))
         })?;
 
         // Drain stderr in the background so server diagnostics are not lost.
@@ -229,7 +228,7 @@ impl StdioTransport {
 
         let request_json = request
             .to_json_line()
-            .map_err(|e| AlephError::IoError(format!("Failed to serialize request: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize request: {e}")))?;
 
         // Register the response slot before writing so a fast server cannot
         // answer before the reader knows where to route the response.
@@ -281,7 +280,7 @@ impl StdioTransport {
 
         let json = notification
             .to_json_line()
-            .map_err(|e| AlephError::IoError(format!("Failed to serialize notification: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize notification: {e}")))?;
         self.write_line(&json).await
     }
 

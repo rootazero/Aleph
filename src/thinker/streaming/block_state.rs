@@ -180,8 +180,8 @@ impl ThinkingTagParser {
     /// Find opening thinking tag
     fn find_opening_tag(&self) -> Option<(String, String, String)> {
         for tag in THINKING_TAGS {
-            let open = format!("<{}>", tag);
-            let open_with_attrs = format!("<{} ", tag);
+            let open = format!("<{tag}>");
+            let open_with_attrs = format!("<{tag} ");
 
             if let Some(pos) = self.buffer.find(&open) {
                 let pre = self.buffer.get(..pos).unwrap_or_default().to_string();
@@ -212,7 +212,7 @@ impl ThinkingTagParser {
     /// Find closing thinking tag
     fn find_closing_tag(&self) -> Option<(String, String)> {
         for tag in THINKING_TAGS {
-            let close = format!("</{}>", tag);
+            let close = format!("</{tag}>");
             if let Some(pos) = self.buffer.find(&close) {
                 let pre = self.buffer.get(..pos).unwrap_or_default().to_string();
                 let post = self

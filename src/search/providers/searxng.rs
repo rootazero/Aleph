@@ -219,8 +219,7 @@ impl crate::search::ProviderFactory for SearxngFactory {
     {
         let Some(base) = backend.base_url.as_deref().filter(|s| !s.is_empty()) else {
             log::warn!(
-                "search backend '{name}' ({}) skipped: base_url missing",
-                NAME
+                "search backend '{name}' ({NAME}) skipped: base_url missing"
             );
             return Ok(None);
         };
@@ -231,7 +230,7 @@ impl crate::search::ProviderFactory for SearxngFactory {
         ) {
             Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
             Err(e) => {
-                log::warn!("search backend '{name}' ({}) construct failed: {e}", NAME);
+                log::warn!("search backend '{name}' ({NAME}) construct failed: {e}");
                 Ok(None)
             }
         }

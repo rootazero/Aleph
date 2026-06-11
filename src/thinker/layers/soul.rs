@@ -55,7 +55,7 @@ impl PromptLayer for SoulLayer {
             let tone = sanitize_for_prompt(&soul.voice.tone, SanitizeLevel::Moderate);
             let tone = sanitize_for_prompt(&tone, SanitizeLevel::Light);
             output.push_str("## Communication Style\n\n");
-            output.push_str(&format!("- **Tone**: {}\n", tone));
+            output.push_str(&format!("- **Tone**: {tone}\n"));
             output.push_str(&format!("- **Verbosity**: {:?}\n", soul.voice.verbosity));
             output.push_str(&format!(
                 "- **Formatting**: {:?}\n",
@@ -64,7 +64,7 @@ impl PromptLayer for SoulLayer {
             if let Some(ref notes) = soul.voice.language_notes {
                 let notes = sanitize_for_prompt(notes, SanitizeLevel::Moderate);
                 let notes = sanitize_for_prompt(&notes, SanitizeLevel::Light);
-                output.push_str(&format!("- **Language Notes**: {}\n", notes));
+                output.push_str(&format!("- **Language Notes**: {notes}\n"));
             }
             output.push('\n');
         }
@@ -80,7 +80,7 @@ impl PromptLayer for SoulLayer {
             for domain in &soul.expertise {
                 let domain = sanitize_for_prompt(domain, SanitizeLevel::Moderate);
                 let domain = sanitize_for_prompt(&domain, SanitizeLevel::Light);
-                output.push_str(&format!("- {}\n", domain));
+                output.push_str(&format!("- {domain}\n"));
             }
             output.push('\n');
         }
@@ -91,7 +91,7 @@ impl PromptLayer for SoulLayer {
             for directive in &soul.directives {
                 let directive = sanitize_for_prompt(directive, SanitizeLevel::Moderate);
                 let directive = sanitize_for_prompt(&directive, SanitizeLevel::Light);
-                output.push_str(&format!("- {}\n", directive));
+                output.push_str(&format!("- {directive}\n"));
             }
             output.push('\n');
         }
@@ -102,7 +102,7 @@ impl PromptLayer for SoulLayer {
             for anti in &soul.anti_patterns {
                 let anti = sanitize_for_prompt(anti, SanitizeLevel::Moderate);
                 let anti = sanitize_for_prompt(&anti, SanitizeLevel::Light);
-                output.push_str(&format!("- {}\n", anti));
+                output.push_str(&format!("- {anti}\n"));
             }
             output.push('\n');
         }

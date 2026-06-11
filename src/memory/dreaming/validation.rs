@@ -86,7 +86,7 @@ pub fn validate_frontmatter(content: &str, note_path: &str) -> Vec<ValidationIss
             issues.push(ValidationIssue {
                 tier: tier.clone(),
                 note_path: note_path.to_string(),
-                message: format!("invalid category '{}' not in CATEGORY_DIRS", cat),
+                message: format!("invalid category '{cat}' not in CATEGORY_DIRS"),
             });
         }
     }
@@ -105,7 +105,7 @@ pub fn validate_frontmatter(content: &str, note_path: &str) -> Vec<ValidationIss
 
 /// Simple YAML value extractor for `key: value` lines.
 fn extract_yaml_value(yaml: &str, key: &str) -> Option<String> {
-    let prefix = format!("{}:", key);
+    let prefix = format!("{key}:");
     yaml.lines()
         .find(|line| line.trim_start().starts_with(&prefix))
         .map(|line| {

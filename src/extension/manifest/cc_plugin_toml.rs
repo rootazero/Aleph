@@ -171,7 +171,7 @@ pub fn parse_cc_plugin_toml_content(
     let manifest_path = plugin_dir.join(CC_PLUGIN_TOML);
 
     let toml: CcPluginToml = toml::from_str(content).map_err(|e| {
-        ExtensionError::invalid_manifest(&manifest_path, format!("TOML parse error: {}", e))
+        ExtensionError::invalid_manifest(&manifest_path, format!("TOML parse error: {e}"))
     })?;
 
     // `name` is required
@@ -305,7 +305,7 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
 
     fn parse(&self, plugin_dir: &Path) -> anyhow::Result<AdapterOutput> {
         let manifest = parse_cc_plugin_toml_sync(plugin_dir)
-            .map_err(|e| anyhow::anyhow!("CC TOML parse error: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("CC TOML parse error: {e}"))?;
 
         let plugin_id = manifest.id.clone();
         let mut capabilities = Vec::new();
@@ -314,7 +314,7 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
         let toml_path = plugin_dir.join(CC_PLUGIN_TOML);
         let content = std::fs::read_to_string(&toml_path)?;
         let raw: CcPluginToml =
-            toml::from_str(&content).map_err(|e| anyhow::anyhow!("TOML re-parse error: {}", e))?;
+            toml::from_str(&content).map_err(|e| anyhow::anyhow!("TOML re-parse error: {e}"))?;
 
         // Parse skills
         let skills_rel = raw.skills.as_deref().unwrap_or("skills");

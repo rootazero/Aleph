@@ -46,7 +46,7 @@ pub fn CronView() -> impl IntoView {
                     loading.set(false);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to load jobs: {}", e)));
+                    error.set(Some(format!("Failed to load jobs: {e}")));
                     loading.set(false);
                 }
             }

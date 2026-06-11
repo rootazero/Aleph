@@ -66,7 +66,7 @@ impl ImageData {
         };
 
         let encoded = general_purpose::STANDARD.encode(&self.data);
-        format!("data:{};base64,{}", mime_type, encoded)
+        format!("data:{mime_type};base64,{encoded}")
     }
 
     /// Parse image from Base64 data URI
@@ -88,8 +88,7 @@ impl ImageData {
 
         if !header.starts_with("data:") {
             return Err(AlephError::other(format!(
-                "Invalid Base64 data URI format: expected 'data:' prefix, got: {}",
-                header
+                "Invalid Base64 data URI format: expected 'data:' prefix, got: {header}"
             )));
         }
 
@@ -101,8 +100,7 @@ impl ImageData {
 
         if !has_base64_param {
             return Err(AlephError::other(format!(
-                "Invalid Base64 data URI format: expected 'base64' encoding in header: {}",
-                header
+                "Invalid Base64 data URI format: expected 'base64' encoding in header: {header}"
             )));
         }
 
@@ -120,8 +118,7 @@ impl ImageData {
             "image/webp" => ImageFormat::WebP,
             _ => {
                 return Err(AlephError::other(format!(
-                    "Unsupported image MIME type: {}",
-                    mime_type
+                    "Unsupported image MIME type: {mime_type}"
                 )));
             }
         };
@@ -140,7 +137,7 @@ impl ImageData {
         } else {
             general_purpose::STANDARD.decode(base64_data)
         }
-        .map_err(|e| AlephError::other(format!("Base64 decoding failed: {}", e)))?;
+        .map_err(|e| AlephError::other(format!("Base64 decoding failed: {e}")))?;
 
         if decoded.len() > MAX_IMAGE_SIZE_BYTES {
             return Err(AlephError::other(format!(

@@ -32,12 +32,11 @@ pub fn build_stream_header(domain: &str) -> String {
 #[must_use]
 pub fn build_auth_stanza(jid: &str, password: &str) -> String {
     let local = jid.split('@').next().unwrap_or(jid);
-    let plain = format!("\0{}\0{}", local, password);
+    let plain = format!("\0{local}\0{password}");
     let encoded = base64_encode(plain.as_bytes());
 
     format!(
-        "<auth xmlns='urn:ietf:params:xml:ns:xmpp-sasl' mechanism='PLAIN'>{}</auth>",
-        encoded
+        "<auth xmlns='urn:ietf:params:xml:ns:xmpp-sasl' mechanism='PLAIN'>{encoded}</auth>"
     )
 }
 
@@ -275,7 +274,7 @@ pub fn extract_stanza(buffer: &str) -> Option<(String, String)> {
     }
 
     // Look for the closing tag
-    let close_tag = format!("</{}>", tag_name);
+    let close_tag = format!("</{tag_name}>");
     if let Some(close_pos) = trimmed.find(&close_tag) {
         let end = close_pos + close_tag.len();
         let stanza = trimmed[..end].to_string();

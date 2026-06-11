@@ -356,10 +356,10 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
             return match default_decision {
                 DefaultDecision::Allow => ApprovalDecision::Allow,
                 DefaultDecision::Deny => ApprovalDecision::Deny {
-                    reason: format!("Denied by default policy for {}", action),
+                    reason: format!("Denied by default policy for {action}"),
                 },
                 DefaultDecision::Ask => ApprovalDecision::Ask {
-                    prompt: format!("Action {} on target '{}' requires approval", action, target),
+                    prompt: format!("Action {action} on target '{target}' requires approval"),
                 },
             };
         }
@@ -367,8 +367,7 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
         // 4. No default → Ask
         ApprovalDecision::Ask {
             prompt: format!(
-                "No policy configured for {} on '{}'. Please approve or deny.",
-                action, target
+                "No policy configured for {action} on '{target}'. Please approve or deny."
             ),
         }
     }

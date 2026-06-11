@@ -115,7 +115,7 @@ pub(super) fn AddHarnessPanel(
                     selected_id.set(Some(new_id));
                 }
                 Err(e) => {
-                    set_action_error.set(Some(format!("Create failed: {}", e)));
+                    set_action_error.set(Some(format!("Create failed: {e}")));
                 }
             }
             set_saving.set(false);

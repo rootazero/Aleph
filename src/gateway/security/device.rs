@@ -47,7 +47,7 @@ impl std::str::FromStr for DeviceType {
             "android" => Ok(DeviceType::Android),
             "cli" => Ok(DeviceType::CLI),
             "web" => Ok(DeviceType::Web),
-            _ => Err(format!("Unknown device type: {}", s)),
+            _ => Err(format!("Unknown device type: {s}")),
         }
     }
 }
@@ -87,7 +87,7 @@ impl std::str::FromStr for DeviceRole {
         match s.to_lowercase().as_str() {
             "operator" => Ok(DeviceRole::Operator),
             "node" => Ok(DeviceRole::Node),
-            _ => Err(format!("Unknown device role: {}", s)),
+            _ => Err(format!("Unknown device role: {s}")),
         }
     }
 }

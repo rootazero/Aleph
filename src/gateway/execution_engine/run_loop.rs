@@ -496,7 +496,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             .map(|c| format!("<system-reminder>\n{}\n</system-reminder>", c.trim()))
                             .collect::<Vec<_>>()
                             .join("\n");
-                        effective_user_input = format!("{reminders}\n\n{}", effective_user_input);
+                        effective_user_input = format!("{reminders}\n\n{effective_user_input}");
                     }
                 }
                 Err(e) => warn!(run_id = run_id, error = %e, "UserPromptSubmit hook failed"),
@@ -524,7 +524,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .map(|b| format!("<system-reminder>\n{}\n</system-reminder>", b.trim()))
                     .collect::<Vec<_>>()
                     .join("\n");
-                effective_user_input = format!("{joined}\n\n{}", effective_user_input);
+                effective_user_input = format!("{joined}\n\n{effective_user_input}");
             }
         }
 

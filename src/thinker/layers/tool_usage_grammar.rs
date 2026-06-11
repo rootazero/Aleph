@@ -47,12 +47,11 @@ impl PromptLayer for ToolUsageGrammarLayer {
             if !hint.prefer_over.is_empty() {
                 let alternatives = hint.prefer_over.join(", ");
                 if hint.prefer_for.is_empty() {
-                    output.push_str(&format!("- Use `{}` instead of {}\n", name, alternatives));
+                    output.push_str(&format!("- Use `{name}` instead of {alternatives}\n"));
                 } else {
                     for scenario in &hint.prefer_for {
                         output.push_str(&format!(
-                            "- For {}, use `{}` instead of {}\n",
-                            scenario, name, alternatives
+                            "- For {scenario}, use `{name}` instead of {alternatives}\n"
                         ));
                     }
                 }

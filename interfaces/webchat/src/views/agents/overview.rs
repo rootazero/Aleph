@@ -198,8 +198,8 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                                 let models = effective_models(&entry);
                                 let dn = entry.display_name;
                                 models.into_iter().map(move |m| {
-                                    let val = format!("{}\u{1f}{}", provider_id, m);
-                                    let label = format!("{} / {}", dn, m);
+                                    let val = format!("{provider_id}\u{1f}{m}");
+                                    let label = format!("{dn} / {m}");
                                     view! { <option value=val>{label}</option> }
                                 }).collect::<Vec<_>>()
                             }).collect::<Vec<_>>()

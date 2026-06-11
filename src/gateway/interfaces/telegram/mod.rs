@@ -324,10 +324,10 @@ impl Channel for TelegramChannel {
                                         reachable += 1;
                                     }
                                     Ok(Err(e)) => {
-                                        warnings.push(format!("Group {} unreachable: {}", gid, e));
+                                        warnings.push(format!("Group {gid} unreachable: {e}"));
                                     }
                                     Err(_) => {
-                                        warnings.push(format!("Group {} check timed out", gid));
+                                        warnings.push(format!("Group {gid} check timed out"));
                                     }
                                 }
                             }
@@ -398,7 +398,7 @@ impl Channel for TelegramChannel {
                         }
                         let desc_truncated = if desc.chars().count() > 256 {
                             let truncated: String = desc.chars().take(253).collect();
-                            format!("{}...", truncated)
+                            format!("{truncated}...")
                         } else {
                             desc.clone()
                         };
@@ -599,7 +599,7 @@ impl Channel for TelegramChannel {
                             .unwrap_or((0, None));
 
                         let conv_id_str = if let Some(tid) = thread_id_val {
-                            format!("{}:topic:{}", raw_chat_id, tid)
+                            format!("{raw_chat_id}:topic:{tid}")
                         } else {
                             raw_chat_id.to_string()
                         };
@@ -802,9 +802,8 @@ impl Channel for TelegramChannel {
             })
             .ok_or_else(|| {
                 ChannelError::ConfigError(format!(
-                    "No Telegram account configured for chat {} (thread: {:?}). \
-                     Ensure the chat_id is covered by allowed_groups or account config",
-                    chat_id_i64, thread_id
+                    "No Telegram account configured for chat {chat_id_i64} (thread: {thread_id:?}). \
+                     Ensure the chat_id is covered by allowed_groups or account config"
                 ))
             })?;
         delivery::send_message(
@@ -830,9 +829,8 @@ impl Channel for TelegramChannel {
             })
             .ok_or_else(|| {
                 ChannelError::ConfigError(format!(
-                    "No Telegram account configured for chat {} (thread: {:?}). \
-                     Ensure the chat_id is covered by allowed_groups or account config",
-                    chat_id_i64, thread_id
+                    "No Telegram account configured for chat {chat_id_i64} (thread: {thread_id:?}). \
+                     Ensure the chat_id is covered by allowed_groups or account config"
                 ))
             })?;
         delivery::send_typing(
@@ -863,9 +861,8 @@ impl Channel for TelegramChannel {
             })
             .ok_or_else(|| {
                 ChannelError::ConfigError(format!(
-                    "No Telegram account configured for chat {} (thread: {:?}). \
-                     Ensure the chat_id is covered by allowed_groups or account config",
-                    chat_id_i64, thread_id
+                    "No Telegram account configured for chat {chat_id_i64} (thread: {thread_id:?}). \
+                     Ensure the chat_id is covered by allowed_groups or account config"
                 ))
             })?;
         delivery::send_reaction(
@@ -896,9 +893,8 @@ impl Channel for TelegramChannel {
             })
             .ok_or_else(|| {
                 ChannelError::ConfigError(format!(
-                    "No Telegram account configured for chat {} (thread: {:?}). \
-                     Ensure the chat_id is covered by allowed_groups or account config",
-                    chat_id_i64, thread_id
+                    "No Telegram account configured for chat {chat_id_i64} (thread: {thread_id:?}). \
+                     Ensure the chat_id is covered by allowed_groups or account config"
                 ))
             })?;
         delivery::edit_message(
@@ -977,7 +973,7 @@ impl ChannelFactory for TelegramChannelFactory {
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let config = config::parse_telegram_channel_config(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid Telegram config: {}", e)))?;
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid Telegram config: {e}")))?;
 
         Ok(Box::new(TelegramChannel::new("telegram", config)))
     }

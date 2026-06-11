@@ -216,7 +216,7 @@ impl SearchRegistry {
                     "Default provider '{}' is not available (missing configuration)",
                     self.default_provider
                 );
-                log::warn!("{}", msg);
+                log::warn!("{msg}");
                 errors.push(msg);
             } else {
                 match provider.search(query, options).await {
@@ -240,7 +240,7 @@ impl SearchRegistry {
             }
         } else {
             let msg = format!("Default provider '{}' not found", self.default_provider);
-            log::warn!("{}", msg);
+            log::warn!("{msg}");
             errors.push(msg);
         }
 
@@ -249,30 +249,25 @@ impl SearchRegistry {
             if let Some(provider) = self.providers.get(provider_name) {
                 if !provider.is_available() {
                     let msg = format!(
-                        "Fallback provider '{}' is not available (missing configuration)",
-                        provider_name
+                        "Fallback provider '{provider_name}' is not available (missing configuration)"
                     );
-                    log::warn!("{}", msg);
+                    log::warn!("{msg}");
                     errors.push(msg);
                     continue;
                 }
                 match provider.search(query, options).await {
                     Ok(results) => {
                         log::info!(
-                            "Search succeeded with fallback provider '{}'",
-                            provider_name
+                            "Search succeeded with fallback provider '{provider_name}'"
                         );
                         return Ok(results);
                     }
                     Err(e) => {
                         let kind = classify_search_error(&e);
-                        let msg = format!("Provider '{}' [{}] failed: {}", provider_name, kind, e);
+                        let msg = format!("Provider '{provider_name}' [{kind}] failed: {e}");
                         log::warn!(
                             target: "search",
-                            "provider={} kind={} {}",
-                            provider_name,
-                            kind,
-                            e
+                            "provider={provider_name} kind={kind} {e}"
                         );
                         errors.push(msg);
                     }
@@ -295,7 +290,7 @@ impl SearchRegistry {
                 Ok(results) => return Ok(results),
                 Err(e) => {
                     let kind = classify_search_error(&e);
-                    errors.push(format!("web-fetch-fallback [{}] {}", kind, e));
+                    errors.push(format!("web-fetch-fallback [{kind}] {e}"));
                 }
             }
         }
@@ -322,7 +317,7 @@ impl SearchRegistry {
             let cache = self.test_cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some((result, timestamp)) = cache.get(name) {
                 if timestamp.elapsed() < CACHE_TTL {
-                    log::debug!("Returning cached test result for provider '{}'", name);
+                    log::debug!("Returning cached test result for provider '{name}'");
                     return result.clone();
                 }
             }
@@ -335,7 +330,7 @@ impl SearchRegistry {
                 let result = ProviderTestResult {
                     success: false,
                     latency_ms: 0,
-                    error_message: format!("Provider '{}' not found in registry", name),
+                    error_message: format!("Provider '{name}' not found in registry"),
                     error_type: "config".to_string(),
                 };
                 return result;
@@ -347,7 +342,7 @@ impl SearchRegistry {
             return ProviderTestResult {
                 success: false,
                 latency_ms: 0,
-                error_message: format!("Provider '{}' is not configured (missing API key)", name),
+                error_message: format!("Provider '{name}' is not configured (missing API key)"),
                 error_type: "config".to_string(),
             };
         }

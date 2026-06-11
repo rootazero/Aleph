@@ -33,7 +33,7 @@ impl whatsapp_rust::http::HttpClient for ReqwestHttpClient {
             "GET" => reqwest::Method::GET,
             "POST" => reqwest::Method::POST,
             m => reqwest::Method::from_bytes(m.as_bytes())
-                .map_err(|e| anyhow::anyhow!("Invalid HTTP method: {}", e))?,
+                .map_err(|e| anyhow::anyhow!("Invalid HTTP method: {e}"))?,
         };
 
         let mut builder = self.client.request(method, &request.url);
@@ -49,13 +49,13 @@ impl whatsapp_rust::http::HttpClient for ReqwestHttpClient {
         let response = builder
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("HTTP request failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("HTTP request failed: {e}"))?;
 
         let status_code = response.status().as_u16();
         let body = response
             .bytes()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to read response body: {}", e))?
+            .map_err(|e| anyhow::anyhow!("Failed to read response body: {e}"))?
             .to_vec();
 
         Ok(whatsapp_rust::http::HttpResponse { status_code, body })

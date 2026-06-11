@@ -159,7 +159,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Invalid params: {}", e),
+                format!("Invalid params: {e}"),
             );
         }
     };
@@ -189,8 +189,7 @@ pub async fn handle_update(
                     request.id,
                     INVALID_PARAMS,
                     format!(
-                        "load_balance must be one of ordered|round_robin|least_busy|latency_aware|usage_based, got '{}'",
-                        raw
+                        "load_balance must be one of ordered|round_robin|least_busy|latency_aware|usage_based, got '{raw}'"
                     ),
                 );
             }
@@ -213,7 +212,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }

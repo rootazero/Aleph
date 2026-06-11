@@ -203,7 +203,7 @@ impl SecurityConfigApi {
             .await?;
 
         serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse security config: {}", e))
+            .map_err(|e| format!("Failed to parse security config: {e}"))
     }
 
     /// Update security configuration. Returns `true` when the daemon reports
@@ -211,7 +211,7 @@ impl SecurityConfigApi {
     /// secrets / sandbox-rate-limit are all captured at boot).
     pub async fn update(state: &DashboardState, config: SecurityConfig) -> Result<bool, String> {
         let params = serde_json::to_value(&config)
-            .map_err(|e| format!("Failed to serialize config: {}", e))?;
+            .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
         let result = state.rpc_call("security_config.update", params).await?;
         let needs_restart = result
@@ -227,7 +227,7 @@ impl SecurityConfigApi {
             .rpc_call("security_config.list_devices", serde_json::Value::Null)
             .await?;
 
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse devices: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse devices: {e}"))
     }
 
     /// Revoke a device's access
@@ -289,19 +289,19 @@ impl AuthTokenApi {
     /// Show current shared token
     pub async fn show_token(state: &DashboardState) -> Result<AuthTokenInfo, String> {
         let result = state.rpc_call("auth.show_token", Value::Null).await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse token info: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse token info: {e}"))
     }
 
     /// Regenerate shared token
     pub async fn reset_token(state: &DashboardState) -> Result<AuthTokenInfo, String> {
         let result = state.rpc_call("auth.reset_token", Value::Null).await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse token info: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse token info: {e}"))
     }
 
     /// List active HTTP sessions
     pub async fn list_sessions(state: &DashboardState) -> Result<SessionListResponse, String> {
         let result = state.rpc_call("auth.list_sessions", Value::Null).await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse sessions: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse sessions: {e}"))
     }
 
     /// Revoke a specific HTTP session

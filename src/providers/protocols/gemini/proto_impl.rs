@@ -40,7 +40,7 @@ impl GeminiProtocol {
         let model = model_override.unwrap_or_else(|| config.default_model());
 
         // Always use the streaming endpoint
-        format!("{}/v1beta/models/{}:streamGenerateContent", base_url, model)
+        format!("{base_url}/v1beta/models/{model}:streamGenerateContent")
     }
 
     /// Convert UnifiedMessages to Gemini Contents

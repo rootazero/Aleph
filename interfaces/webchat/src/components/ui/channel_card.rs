@@ -21,10 +21,10 @@ pub fn ChannelCard(
     count: Option<Signal<usize>>,
 ) -> impl IntoView {
     let i18n = use_i18n();
-    let href = format!("/settings/channels/{}", id);
+    let href = format!("/settings/channels/{id}");
 
     // Build the icon container background with 15% opacity hex suffix
-    let icon_bg = format!("background-color: {}15", brand_color);
+    let icon_bg = format!("background-color: {brand_color}15");
 
     view! {
         <A

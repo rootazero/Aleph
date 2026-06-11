@@ -186,7 +186,7 @@ impl SharedTokenManager {
         let crypto = self.crypto()?;
         let encrypted = crypto
             .encrypt(value)
-            .map_err(|e| SharedTokenError::Storage(format!("Encryption failed: {}", e)))?;
+            .map_err(|e| SharedTokenError::Storage(format!("Encryption failed: {e}")))?;
         let now = chrono::Utc::now().timestamp();
         let entry = EncryptedEntry {
             ciphertext: encrypted.ciphertext,
@@ -195,7 +195,7 @@ impl SharedTokenManager {
             created_at: now,
             updated_at: now,
             metadata: EntryMetadata {
-                description: Some(format!("API key for {}", name)),
+                description: Some(format!("API key for {name}")),
                 provider: Some(name.to_string()),
             },
         };
@@ -213,7 +213,7 @@ impl SharedTokenManager {
             Ok(entry) => {
                 let decrypted = crypto
                     .decrypt(&entry.ciphertext, &entry.nonce, &entry.salt)
-                    .map_err(|e| SharedTokenError::Storage(format!("Decryption failed: {}", e)))?;
+                    .map_err(|e| SharedTokenError::Storage(format!("Decryption failed: {e}")))?;
                 Ok(Some(DecryptedSecret::new(decrypted)))
             }
             Err(SecretError::NotFound(_)) => Ok(None),
@@ -254,7 +254,7 @@ impl SharedTokenManager {
             let decrypted = old_crypto
                 .decrypt(&entry.ciphertext, &entry.nonce, &entry.salt)
                 .map_err(|e| {
-                    SharedTokenError::Storage(format!("Decrypt failed for '{}': {}", name, e))
+                    SharedTokenError::Storage(format!("Decrypt failed for '{name}': {e}"))
                 })?;
             plaintext_entries.push((name.clone(), decrypted, entry.clone()));
         }
@@ -268,7 +268,7 @@ impl SharedTokenManager {
         let mut new_entries = HashMap::new();
         for (name, plaintext, old_entry) in plaintext_entries {
             let encrypted = new_crypto.encrypt(&plaintext).map_err(|e| {
-                SharedTokenError::Storage(format!("Re-encrypt failed for '{}': {}", name, e))
+                SharedTokenError::Storage(format!("Re-encrypt failed for '{name}': {e}"))
             })?;
             new_entries.insert(
                 name,

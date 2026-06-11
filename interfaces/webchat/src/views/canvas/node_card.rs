@@ -117,8 +117,7 @@ pub fn NodeCard(
             };
 
             let stripe_bar_style = format!(
-                "height: 3px; background-color: {}; border-radius: 6px 6px 0 0;",
-                stripe
+                "height: 3px; background-color: {stripe}; border-radius: 6px 6px 0 0;"
             );
 
             view! {
@@ -178,8 +177,7 @@ pub fn NodeCard(
             };
 
             let stripe_sq_style = format!(
-                "width: 8px; height: 8px; flex-shrink: 0; border-radius: 2px; background-color: {};",
-                stripe
+                "width: 8px; height: 8px; flex-shrink: 0; border-radius: 2px; background-color: {stripe};"
             );
 
             view! {

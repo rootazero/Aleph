@@ -518,7 +518,7 @@ impl ProtocolAdapter for AnthropicProtocol {
 
         // Serialize to JSON value so we can add tool_choice if needed
         let mut body = serde_json::to_value(&request_body)
-            .map_err(|e| AlephError::provider(format!("Failed to serialize request: {}", e)))?;
+            .map_err(|e| AlephError::provider(format!("Failed to serialize request: {e}")))?;
 
         // Add tool_choice if specified
         if let Some(ref choice) = payload.tool_choice {
@@ -650,7 +650,7 @@ impl ProtocolAdapter for AnthropicProtocol {
 
         let byte_stream = response
             .bytes_stream()
-            .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
+            .map_err(|e| AlephError::network(format!("Stream error: {e}")))
             .boxed();
         let idle_secs = self
             .stream_idle_timeout_secs

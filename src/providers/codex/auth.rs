@@ -149,7 +149,7 @@ impl CodexAuth {
     /// Build the OAuth authorization URL with PKCE
     fn build_authorize_url(port: u16, state: &str, pkce: &PkceCodes) -> String {
         let encode = |s: &str| utf8_percent_encode(s, QUERY_ENCODE_SET).to_string();
-        let redirect_uri = encode(&format!("http://localhost:{}{}", port, CALLBACK_PATH));
+        let redirect_uri = encode(&format!("http://localhost:{port}{CALLBACK_PATH}"));
         let scope = encode("openid profile email offline_access");
 
         format!(
@@ -175,12 +175,11 @@ impl CodexAuth {
         let pkce = generate_pkce();
 
         // Bind the fixed callback port (OpenAI only accepts localhost:1455)
-        let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", CALLBACK_PORT))
+        let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{CALLBACK_PORT}"))
             .await
             .map_err(|e| {
                 AlephError::network(format!(
-                    "Failed to bind localhost:{} — is another login in progress? Error: {}",
-                    CALLBACK_PORT, e
+                    "Failed to bind localhost:{CALLBACK_PORT} — is another login in progress? Error: {e}"
                 ))
             })?;
         let port = CALLBACK_PORT;
@@ -210,7 +209,7 @@ impl CodexAuth {
                             .unwrap_or("Unknown error");
                         error!(error = err, description = desc, "OAuth callback error");
                         if let Some(tx) = tx {
-                            let _ = tx.send(Err(format!("{}: {}", err, desc)));
+                            let _ = tx.send(Err(format!("{err}: {desc}")));
                         }
                         return axum::response::Html(
                             "<html><body><h1>Authentication Failed</h1><p>You can close this window.</p></body></html>"
@@ -272,7 +271,7 @@ impl CodexAuth {
         let server_handle = tokio::spawn(async move {
             axum::serve(listener, app)
                 .await
-                .map_err(|e| AlephError::network(format!("OAuth callback server error: {}", e)))
+                .map_err(|e| AlephError::network(format!("OAuth callback server error: {e}")))
         });
 
         // Open the browser
@@ -284,8 +283,7 @@ impl CodexAuth {
             // login attempt fails to bind.
             server_handle.abort();
             return Err(AlephError::provider(format!(
-                "Failed to open browser for authentication: {}. Please open this URL manually: {}",
-                e, authorize_url
+                "Failed to open browser for authentication: {e}. Please open this URL manually: {authorize_url}"
             )));
         }
 
@@ -322,8 +320,8 @@ impl CodexAuth {
     /// Exchange an authorization code + PKCE verifier for access and refresh tokens
     async fn exchange_code_for_token(code: &str, port: u16, pkce: &PkceCodes) -> Result<Self> {
         let client = Client::new();
-        let redirect_uri = format!("http://localhost:{}{}", port, CALLBACK_PATH);
-        let token_url = format!("{}/oauth/token", ISSUER);
+        let redirect_uri = format!("http://localhost:{port}{CALLBACK_PATH}");
+        let token_url = format!("{ISSUER}/oauth/token");
 
         // Use form-encoded body (matching Codex CLI)
         let enc = |s: &str| utf8_percent_encode(s, QUERY_ENCODE_SET).to_string();
@@ -341,21 +339,21 @@ impl CodexAuth {
             .body(body)
             .send()
             .await
-            .map_err(|e| AlephError::network(format!("Token exchange request failed: {}", e)))?;
+            .map_err(|e| AlephError::network(format!("Token exchange request failed: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(AlephError::authentication(
                 "chatgpt",
-                format!("Token exchange failed ({}): {}", status, body),
+                format!("Token exchange failed ({status}): {body}"),
             ));
         }
 
         let token_resp: TokenResponse = response
             .json()
             .await
-            .map_err(|e| AlephError::provider(format!("Failed to parse token response: {}", e)))?;
+            .map_err(|e| AlephError::provider(format!("Failed to parse token response: {e}")))?;
 
         let expires_in = token_resp.expires_in.unwrap_or(3600);
         let expires_at = SystemTime::now() + Duration::from_secs(expires_in);
@@ -381,7 +379,7 @@ impl CodexAuth {
         })?;
 
         let client = Client::new();
-        let token_url = format!("{}/oauth/token", ISSUER);
+        let token_url = format!("{ISSUER}/oauth/token");
 
         let enc = |s: &str| utf8_percent_encode(s, QUERY_ENCODE_SET).to_string();
         let body = format!(
@@ -396,7 +394,7 @@ impl CodexAuth {
             .body(body)
             .send()
             .await
-            .map_err(|e| AlephError::network(format!("Token refresh request failed: {}", e)))?;
+            .map_err(|e| AlephError::network(format!("Token refresh request failed: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -404,14 +402,13 @@ impl CodexAuth {
             return Err(AlephError::authentication(
                 "chatgpt",
                 format!(
-                    "Token refresh failed ({}): {}. Re-authentication may be required.",
-                    status, body_text
+                    "Token refresh failed ({status}): {body_text}. Re-authentication may be required."
                 ),
             ));
         }
 
         let token_resp: TokenResponse = response.json().await.map_err(|e| {
-            AlephError::provider(format!("Failed to parse refresh response: {}", e))
+            AlephError::provider(format!("Failed to parse refresh response: {e}"))
         })?;
 
         self.access_token = token_resp.access_token;

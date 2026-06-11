@@ -219,7 +219,7 @@ impl HttpProvider {
                     "Blocked outbound request: secret leak detected"
                 );
                 return Err(crate::error::AlephError::PermissionDenied {
-                    message: format!("Secret leak blocked: {}", reason),
+                    message: format!("Secret leak blocked: {reason}"),
                     suggestion: Some("Remove secret values from the input before sending.".into()),
                 });
             }
@@ -426,7 +426,7 @@ impl HttpProvider {
                     "Blocked inbound response: secret leak detected"
                 );
                 return Err(crate::error::AlephError::PermissionDenied {
-                    message: format!("Secret leak in response blocked: {}", reason),
+                    message: format!("Secret leak in response blocked: {reason}"),
                     suggestion: Some("The AI provider response contained a secret value.".into()),
                 });
             }
@@ -465,7 +465,7 @@ impl HttpProvider {
     > {
         let filtered_messages = self
             .apply_outbound_safety(payload.messages)
-            .map_err(|reason| anyhow::anyhow!("Secret leak blocked: {}", reason))?;
+            .map_err(|reason| anyhow::anyhow!("Secret leak blocked: {reason}"))?;
 
         let final_payload = RequestPayload {
             messages: &filtered_messages,
@@ -493,22 +493,22 @@ impl HttpProvider {
         let request = self
             .adapter
             .build_request(&final_payload, &self.config)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         // Cheap clone for body-on-rejection diagnostics (see path above).
         let diag_request = request.try_clone();
         let response = request
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("Network error: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Network error: {e}"))?;
         let stream = match self.adapter.stream_deltas(response).await {
             Ok(s) => s,
             Err(e) => {
                 log_rejected_request_body(&self.name, &e, diag_request);
-                return Err(anyhow::anyhow!("{}", e));
+                return Err(anyhow::anyhow!("{e}"));
             }
         };
         let inner = stream
-            .map(|r| r.map_err(|e| anyhow::anyhow!("{}", e)))
+            .map(|r| r.map_err(|e| anyhow::anyhow!("{e}")))
             .boxed();
 
         // Wrap the delta stream so `PostApiRequest` fires once — with the
@@ -540,7 +540,7 @@ impl HttpProvider {
                 append_usage_env(&mut env, u);
             }
             if let Some(ref sr) = stop_reason {
-                env.push(("STOP_REASON", format!("{:?}", sr)));
+                env.push(("STOP_REASON", format!("{sr:?}")));
             }
             crate::extension::hooks::fire_global_observer(
                 crate::extension::HookEvent::PostApiRequest,

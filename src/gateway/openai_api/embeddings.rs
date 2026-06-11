@@ -62,8 +62,7 @@ pub async fn handle(
     for (i, text) in texts.iter().enumerate() {
         if text.chars().count() > MAX_INPUT_CHARS {
             return Err(ApiError::BadRequest(format!(
-                "Input {} exceeds maximum length of {} characters",
-                i, MAX_INPUT_CHARS
+                "Input {i} exceeds maximum length of {MAX_INPUT_CHARS} characters"
             )));
         }
     }

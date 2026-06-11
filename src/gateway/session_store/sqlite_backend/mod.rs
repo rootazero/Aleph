@@ -37,7 +37,7 @@ fn map_session_metadata(
 ) -> Result<crate::gateway::session_store::types::SessionMetadata, rusqlite::Error> {
     let state_str: Option<String> = row.get(8)?;
     let state = state_str
-        .and_then(|s| serde_json::from_str(&format!("\"{}\"", s)).ok())
+        .and_then(|s| serde_json::from_str(&format!("\"{s}\"")).ok())
         .unwrap_or_default();
     let metadata_json: Option<String> = row.get(9)?;
     let (topic, status, identity_meta) =
@@ -86,7 +86,7 @@ impl SessionStore for SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {e}")))?;
 
         let meta = conn
             .query_row(
@@ -201,7 +201,7 @@ impl SessionStore for SessionManager {
                 let conn = self
                     .conn
                     .lock()
-                    .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {}", e)))?;
+                    .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {e}")))?;
 
                 let threshold_id: Option<i64> = conn
                     .query_row(
@@ -264,7 +264,7 @@ impl SessionStore for SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {e}")))?;
 
         let total: i64 = conn
             .query_row(

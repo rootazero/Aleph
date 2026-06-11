@@ -81,7 +81,7 @@ pub async fn handle_create(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to create workspace: {}", e),
+            format!("Failed to create workspace: {e}"),
         ),
     }
 }
@@ -106,7 +106,7 @@ pub async fn handle_list(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to list workspaces: {}", e),
+            format!("Failed to list workspaces: {e}"),
         ),
     }
 }
@@ -148,7 +148,7 @@ pub async fn handle_get(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to get workspace: {}", e),
+            format!("Failed to get workspace: {e}"),
         ),
     }
 }
@@ -213,7 +213,7 @@ pub async fn handle_update(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to update workspace: {}", e),
+            format!("Failed to update workspace: {e}"),
         ),
     }
 }
@@ -248,7 +248,7 @@ pub async fn handle_archive(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to archive workspace: {}", e),
+            format!("Failed to archive workspace: {e}"),
         ),
     }
 }

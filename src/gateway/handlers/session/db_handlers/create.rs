@@ -23,7 +23,7 @@ pub async fn handle_create_db(
 
     // Generate a unique session key based on timestamp
     let ts = chrono::Utc::now().timestamp_millis();
-    let session_key_str = format!("session_{}", ts);
+    let session_key_str = format!("session_{ts}");
     let session_key = SessionKey::Main {
         agent_id: name.clone().unwrap_or_else(|| "main".to_string()),
         main_key: session_key_str.clone(),
@@ -41,7 +41,7 @@ pub async fn handle_create_db(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to create session: {}", e),
+            format!("Failed to create session: {e}"),
         ),
     }
 }
@@ -96,7 +96,7 @@ pub async fn handle_new_session_db(
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to close session: {}", e),
+            format!("Failed to close session: {e}"),
         );
     }
 
@@ -129,7 +129,7 @@ pub async fn handle_new_session_db(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to create new session: {}", e),
+            format!("Failed to create new session: {e}"),
         ),
     }
 }

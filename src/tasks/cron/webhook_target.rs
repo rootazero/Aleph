@@ -108,7 +108,7 @@ impl DeliveryTarget for WebhookTarget {
                 "HTTP {} from {}",
                 resp.status, url
             ))),
-            Err(e) => Err(DeliveryError::Failed(format!("Request failed: {}", e))),
+            Err(e) => Err(DeliveryError::Failed(format!("Request failed: {e}"))),
         }
     }
 }

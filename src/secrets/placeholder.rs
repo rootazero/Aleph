@@ -44,8 +44,7 @@ pub fn extract_secret_refs(input: &str) -> Result<Vec<SecretRef>, SecretError> {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'));
         if !valid {
             return Err(SecretError::InvalidPlaceholder(format!(
-                "invalid secret name '{}'",
-                name
+                "invalid secret name '{name}'"
             )));
         }
 

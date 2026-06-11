@@ -284,7 +284,7 @@ pub use crate::core::{
 /// daily log file rotation, and automatic PII scrubbing.
 pub fn init_logging() {
     if let Err(e) = crate::logging::init_file_logging() {
-        eprintln!("Warning: Failed to initialize file logging: {}", e);
+        eprintln!("Warning: Failed to initialize file logging: {e}");
         eprintln!("Falling back to console-only logging");
 
         use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};

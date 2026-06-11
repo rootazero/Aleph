@@ -44,8 +44,7 @@ impl ConfigurableProtocol {
                 .get(extends)
                 .ok_or_else(|| {
                     AlephError::provider(format!(
-                        "Base protocol '{}' not found in registry",
-                        extends
+                        "Base protocol '{extends}' not found in registry"
                     ))
                 })?
                 .into()
@@ -90,12 +89,11 @@ impl ConfigurableProtocol {
         let body = response
             .text()
             .await
-            .map_err(|e| AlephError::provider(format!("Failed to read response body: {}", e)))?;
+            .map_err(|e| AlephError::provider(format!("Failed to read response body: {e}")))?;
 
         let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
             AlephError::provider(format!(
-                "Failed to parse response as JSON: {}. Body: {}",
-                e, body
+                "Failed to parse response as JSON: {e}. Body: {body}"
             ))
         })?;
 
@@ -104,8 +102,7 @@ impl ConfigurableProtocol {
             if let Ok(error_msg) = extract_value(&json, error_path) {
                 if !error_msg.is_empty() && error_msg != "null" {
                     return Err(AlephError::provider(format!(
-                        "Provider returned error: {}",
-                        error_msg
+                        "Provider returned error: {error_msg}"
                     )));
                 }
             }
@@ -150,7 +147,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
 
                     // Build auth value: prefix + api_key (or just api_key if no prefix)
                     let auth_value = if let Some(ref prefix) = auth.prefix {
-                        format!("{}{}", prefix, api_key)
+                        format!("{prefix}{api_key}")
                     } else {
                         api_key.to_string()
                     };
@@ -189,7 +186,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
                 .unwrap_or(&custom.endpoints.chat);
 
             // Build full URL
-            let url = format!("{}{}", base_url, endpoint);
+            let url = format!("{base_url}{endpoint}");
 
             debug!(
                 url = %url,
@@ -232,7 +229,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
                 // Template is already a JSON object, render it as string first
                 let template_str =
                     serde_json::to_string(&custom.request_template).map_err(|e| {
-                        AlephError::provider(format!("Failed to serialize request_template: {}", e))
+                        AlephError::provider(format!("Failed to serialize request_template: {e}"))
                     })?;
                 self.renderer.render_json(&template_str, &context)?
             };
@@ -270,7 +267,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
-                let auth_value = format!("{}{}", prefix, api_key);
+                let auth_value = format!("{prefix}{api_key}");
 
                 debug!(
                     header = %header,

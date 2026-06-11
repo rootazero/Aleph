@@ -80,8 +80,7 @@ fn validate_scheme(url: &Url) -> Result<(), SsrfError> {
     match url.scheme() {
         "http" | "https" => Ok(()),
         other => Err(SsrfError::InvalidUrl(format!(
-            "unsupported scheme: {}",
-            other
+            "unsupported scheme: {other}"
         ))),
     }
 }
@@ -110,8 +109,7 @@ async fn validate_url_full(
     // Legacy IP literal detection (hex, octal, decimal, short-form)
     if is_legacy_ip_literal(host) {
         return Err(SsrfError::BlockedAddress(format!(
-            "legacy IP literal: {}",
-            host
+            "legacy IP literal: {host}"
         )));
     }
 
@@ -137,8 +135,7 @@ async fn validate_url_full(
     // User-configured blocklist
     if is_blocklisted(host, &policy.blocked_hosts) {
         return Err(SsrfError::BlockedAddress(format!(
-            "host in blocklist: {}",
-            host
+            "host in blocklist: {host}"
         )));
     }
 

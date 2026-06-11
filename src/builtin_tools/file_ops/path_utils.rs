@@ -172,13 +172,13 @@ pub fn check_and_resolve_path(
     let canonical = if expanded.exists() {
         expanded
             .canonicalize()
-            .map_err(|e| ToolError::Execution(format!("Failed to resolve path: {}", e)))?
+            .map_err(|e| ToolError::Execution(format!("Failed to resolve path: {e}")))?
     } else {
         // For non-existent paths, canonicalize the longest existing ancestor
         // then append remaining components. This prevents symlink-based traversal
         // that pure component normalization would miss.
         safe_normalize(&expanded).map_err(|e| {
-            ToolError::Execution(format!("Failed to normalize non-existent path: {}", e))
+            ToolError::Execution(format!("Failed to normalize non-existent path: {e}"))
         })?
     };
 
@@ -200,7 +200,7 @@ pub fn check_and_resolve_path(
             // may sit behind a symlinked tmpdir) — keeps `path_locks` keys
             // consistent across spellings of the same file.
             safe_normalize(&rebased).map_err(|e| {
-                ToolError::Execution(format!("Failed to normalize rebased path: {}", e))
+                ToolError::Execution(format!("Failed to normalize rebased path: {e}"))
             })?
         }
         None => canonical,

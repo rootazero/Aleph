@@ -387,7 +387,7 @@ impl ExecutionContext {
     #[must_use]
     pub fn app_description(&self) -> Option<String> {
         match (&self.app_context, &self.window_title) {
-            (Some(app), Some(title)) => Some(format!("{} - {}", app, title)),
+            (Some(app), Some(title)) => Some(format!("{app} - {title}")),
             (Some(app), None) => Some(app.clone()),
             (None, Some(title)) => Some(title.clone()),
             (None, None) => None,
@@ -429,10 +429,10 @@ pub enum ExecutorError {
 impl std::fmt::Display for ExecutorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ExecutorError::ExecutionFailed(msg) => write!(f, "Execution failed: {}", msg),
-            ExecutorError::ToolError(msg) => write!(f, "Tool error: {}", msg),
+            ExecutorError::ExecutionFailed(msg) => write!(f, "Execution failed: {msg}"),
+            ExecutorError::ToolError(msg) => write!(f, "Tool error: {msg}"),
             ExecutorError::TaskFailed { task_id, error } => {
-                write!(f, "Task {} failed: {}", task_id, error)
+                write!(f, "Task {task_id} failed: {error}")
             }
             ExecutorError::Timeout => write!(f, "Execution timed out"),
             ExecutorError::Cancelled => write!(f, "Execution was cancelled"),

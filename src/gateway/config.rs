@@ -355,7 +355,7 @@ impl AgentConfig {
             tool_blacklist: self.tool_blacklist.clone(),
             agent_dir: dirs::home_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-                .join(format!(".aleph/agents/{}", agent_id)),
+                .join(format!(".aleph/agents/{agent_id}")),
             allowed_links: None,
             tool_permissions: None,
             timeout_secs: None,
@@ -526,8 +526,7 @@ impl GatewayConfig {
         for (pattern, agent_id) in &self.bindings {
             if !self.agents.contains_key(agent_id) {
                 return Err(ConfigError::Invalid(format!(
-                    "Binding '{}' references unknown agent '{}'",
-                    pattern, agent_id
+                    "Binding '{pattern}' references unknown agent '{agent_id}'"
                 )));
             }
         }

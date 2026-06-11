@@ -288,7 +288,7 @@ pub async fn handle_history(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to get history: {}", e),
+            format!("Failed to get history: {e}"),
         ),
     }
 }
@@ -338,7 +338,7 @@ pub async fn handle_clear(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to clear history: {}", e),
+            format!("Failed to clear history: {e}"),
         ),
     }
 }

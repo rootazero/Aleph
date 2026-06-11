@@ -227,7 +227,7 @@ impl UnifiedMessage {
                 ContentBlock::ToolCall {
                     name, arguments, ..
                 } => {
-                    parts.push(format!("{} {}", name, arguments));
+                    parts.push(format!("{name} {arguments}"));
                 }
                 ContentBlock::Image { .. } => {}
             }

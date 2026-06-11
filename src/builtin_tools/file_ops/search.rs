@@ -37,7 +37,7 @@ pub async fn execute_search(
     let mut files = Vec::new();
 
     for entry in glob::glob(&pattern_str)
-        .map_err(|e| ToolError::InvalidArgs(format!("Invalid glob pattern: {}", e)))?
+        .map_err(|e| ToolError::InvalidArgs(format!("Invalid glob pattern: {e}")))?
     {
         match entry {
             Ok(path) => {

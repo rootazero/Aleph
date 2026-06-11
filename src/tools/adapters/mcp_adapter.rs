@@ -115,7 +115,7 @@ impl LoopTool for McpRegistryTool {
                     Ok(s) => s,
                     Err(e) => {
                         tracing::warn!(error = %e, "Failed to serialize MCP tool output");
-                        format!("<serialization error: {}>", e)
+                        format!("<serialization error: {e}>")
                     }
                 };
                 let wrapped = wrap_external_content(

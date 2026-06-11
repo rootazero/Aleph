@@ -26,10 +26,10 @@ impl std::fmt::Display for CredentialError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CredentialError::SecretNotFound(name) => {
-                write!(f, "secret not found: {}", name)
+                write!(f, "secret not found: {name}")
             }
             CredentialError::InvalidUrl(reason) => {
-                write!(f, "invalid URL: {}", reason)
+                write!(f, "invalid URL: {reason}")
             }
         }
     }
@@ -58,7 +58,7 @@ pub fn inject_credential(
     secrets: &[(String, String)],
 ) -> Result<Option<String>, CredentialError> {
     // 1. Parse URL to extract host.
-    let parsed = Url::parse(url).map_err(|e| CredentialError::InvalidUrl(format!("{}", e)))?;
+    let parsed = Url::parse(url).map_err(|e| CredentialError::InvalidUrl(format!("{e}")))?;
 
     let host = parsed
         .host_str()
@@ -87,7 +87,7 @@ pub fn inject_credential(
         CredentialInject::Bearer => {
             headers.push((
                 "Authorization".to_string(),
-                format!("Bearer {}", secret_value),
+                format!("Bearer {secret_value}"),
             ));
             Ok(None)
         }
@@ -95,14 +95,14 @@ pub fn inject_credential(
         CredentialInject::Basic { username } => {
             use base64::{engine::general_purpose, Engine as _};
             let encoded =
-                general_purpose::STANDARD.encode(format!("{}:{}", username, secret_value));
-            headers.push(("Authorization".to_string(), format!("Basic {}", encoded)));
+                general_purpose::STANDARD.encode(format!("{username}:{secret_value}"));
+            headers.push(("Authorization".to_string(), format!("Basic {encoded}")));
             Ok(None)
         }
 
         CredentialInject::Header { name, prefix } => {
             let value = match prefix {
-                Some(p) => format!("{}{}", p, secret_value),
+                Some(p) => format!("{p}{secret_value}"),
                 None => secret_value.to_string(),
             };
             headers.push((name.clone(), value));

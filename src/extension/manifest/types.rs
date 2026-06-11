@@ -101,7 +101,7 @@ impl std::fmt::Display for PluginPermission {
             PluginPermission::Env => write!(f, "env"),
             PluginPermission::Shell => write!(f, "shell"),
             PluginPermission::Background => write!(f, "background"),
-            PluginPermission::Custom(s) => write!(f, "{}", s),
+            PluginPermission::Custom(s) => write!(f, "{s}"),
         }
     }
 }
@@ -375,8 +375,7 @@ impl PluginManifest {
         let entry_str = self.entry.to_string_lossy();
         if entry_str.contains("..") {
             return Err(ExtensionError::Runtime(format!(
-                "Path traversal (..) not allowed in plugin entry: {}",
-                entry_str
+                "Path traversal (..) not allowed in plugin entry: {entry_str}"
             )));
         }
 
@@ -393,8 +392,7 @@ impl PluginManifest {
             {
                 if !canonical_entry.starts_with(&canonical_root) {
                     return Err(ExtensionError::Runtime(format!(
-                        "Plugin entry path escapes root directory: {:?} is not within {:?}",
-                        canonical_entry, canonical_root
+                        "Plugin entry path escapes root directory: {canonical_entry:?} is not within {canonical_root:?}"
                     )));
                 }
             }

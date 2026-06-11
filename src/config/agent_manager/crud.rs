@@ -191,7 +191,7 @@ impl AgentManager {
             .list
             .into_iter()
             .find(|a| a.id == id)
-            .ok_or_else(|| AlephError::invalid_config(format!("Agent '{}' not found", id)))
+            .ok_or_else(|| AlephError::invalid_config(format!("Agent '{id}' not found")))
     }
 
     /// Create a new agent definition
@@ -267,7 +267,7 @@ impl AgentManager {
             .ok_or_else(|| AlephError::invalid_config("[[agents.list]] not found"))?;
 
         let agent_table = list.get_mut(idx).ok_or_else(|| {
-            AlephError::invalid_config(format!("Agent at index {} not found", idx))
+            AlephError::invalid_config(format!("Agent at index {idx} not found"))
         })?;
 
         // Apply patch fields
@@ -375,8 +375,7 @@ impl AgentManager {
             }
         } else {
             return Err(AlephError::invalid_config(format!(
-                "Agent '{}' not found",
-                id
+                "Agent '{id}' not found"
             )));
         }
 
@@ -401,12 +400,12 @@ impl AgentManager {
         let ws_dir = self.workspace_root.join(id);
         if ws_dir.exists() {
             let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-            let trash_name = format!("{}_{}", id, timestamp);
+            let trash_name = format!("{id}_{timestamp}");
             let trash_dir = self.trash_root.join(trash_name);
             fs::create_dir_all(&self.trash_root)
-                .map_err(|e| AlephError::IoError(format!("Failed to create trash dir: {}", e)))?;
+                .map_err(|e| AlephError::IoError(format!("Failed to create trash dir: {e}")))?;
             fs::rename(&ws_dir, &trash_dir).map_err(|e| {
-                AlephError::IoError(format!("Failed to move workspace to trash: {}", e))
+                AlephError::IoError(format!("Failed to move workspace to trash: {e}"))
             })?;
             info!("Moved workspace to trash: {}", trash_dir.display());
         }
@@ -415,12 +414,12 @@ impl AgentManager {
         let agent_state_dir = self.agents_root.join(id);
         if agent_state_dir.exists() {
             let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-            let trash_name = format!("{}_agent_{}", id, timestamp);
+            let trash_name = format!("{id}_agent_{timestamp}");
             let trash_dir = self.trash_root.join(trash_name);
             fs::create_dir_all(&self.trash_root)
-                .map_err(|e| AlephError::IoError(format!("Failed to create trash dir: {}", e)))?;
+                .map_err(|e| AlephError::IoError(format!("Failed to create trash dir: {e}")))?;
             fs::rename(&agent_state_dir, &trash_dir).map_err(|e| {
-                AlephError::IoError(format!("Failed to move agent state dir to trash: {}", e))
+                AlephError::IoError(format!("Failed to move agent state dir to trash: {e}"))
             })?;
             info!("Moved agent state to trash: {}", trash_dir.display());
         }
@@ -477,8 +476,7 @@ impl AgentManager {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         {
             return Err(AlephError::invalid_config(format!(
-                "Agent ID '{}' contains invalid characters. Only alphanumeric, hyphens, and underscores are allowed.",
-                id
+                "Agent ID '{id}' contains invalid characters. Only alphanumeric, hyphens, and underscores are allowed."
             )));
         }
 
@@ -498,8 +496,7 @@ impl AgentManager {
             // would REPLACE the base path entirely (path traversal); it also
             // blocks NTFS alternate data stream names.
             return Err(AlephError::invalid_config(format!(
-                "Invalid filename '{}': must not contain '/', '\\', ':', or '..'",
-                filename
+                "Invalid filename '{filename}': must not contain '/', '\\', ':', or '..'"
             )));
         }
         Ok(())

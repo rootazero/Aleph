@@ -191,7 +191,7 @@ impl Channel for LineChannel {
                     })?;
                 let contents: message_ops::FlexBubbleContents = serde_json::from_str(contents_json)
                     .map_err(|e| {
-                        ChannelError::ConfigError(format!("Invalid flex_contents: {}", e))
+                        ChannelError::ConfigError(format!("Invalid flex_contents: {e}"))
                     })?;
                 api.push_flex(chat_id, &alt_text, contents)
                     .await
@@ -207,7 +207,7 @@ impl Channel for LineChannel {
                     ChannelError::ConfigError("template required for template messages".to_string())
                 })?;
                 let template: message_ops::TemplatePayload = serde_json::from_str(template_json)
-                    .map_err(|e| ChannelError::ConfigError(format!("Invalid template: {}", e)))?;
+                    .map_err(|e| ChannelError::ConfigError(format!("Invalid template: {e}")))?;
                 api.push_template(chat_id, &alt_text, template)
                     .await
                     .map_err(ChannelError::SendFailed)?
@@ -277,7 +277,7 @@ impl Channel for LineChannel {
                         )
                     })?
                     .parse::<u64>()
-                    .map_err(|e| ChannelError::ConfigError(format!("Invalid duration: {}", e)))?;
+                    .map_err(|e| ChannelError::ConfigError(format!("Invalid duration: {e}")))?;
                 api.push_audio(chat_id, &audio_url, duration)
                     .await
                     .map_err(ChannelError::SendFailed)?
@@ -306,7 +306,7 @@ impl Channel for LineChannel {
                         )
                     })?
                     .parse()
-                    .map_err(|e| ChannelError::ConfigError(format!("Invalid latitude: {}", e)))?;
+                    .map_err(|e| ChannelError::ConfigError(format!("Invalid latitude: {e}")))?;
                 let longitude: f64 = message
                     .metadata
                     .get("line::longitude")
@@ -316,7 +316,7 @@ impl Channel for LineChannel {
                         )
                     })?
                     .parse()
-                    .map_err(|e| ChannelError::ConfigError(format!("Invalid longitude: {}", e)))?;
+                    .map_err(|e| ChannelError::ConfigError(format!("Invalid longitude: {e}")))?;
                 api.push_location(chat_id, &title, &address, latitude, longitude)
                     .await
                     .map_err(ChannelError::SendFailed)?
@@ -325,7 +325,7 @@ impl Channel for LineChannel {
                 if let Some(quick_reply_json) = message.metadata.get("line::quick_reply_actions") {
                     let actions: Vec<message_ops::QuickReplyAction> =
                         serde_json::from_str(quick_reply_json).map_err(|e| {
-                            ChannelError::ConfigError(format!("Invalid quick_reply_actions: {}", e))
+                            ChannelError::ConfigError(format!("Invalid quick_reply_actions: {e}"))
                         })?;
                     api.push_quick_reply(chat_id, &message.text, actions)
                         .await
@@ -398,7 +398,7 @@ impl ChannelFactory for LineChannelFactory {
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let config: LineConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid LINE config: {}", e)))?;
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid LINE config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 

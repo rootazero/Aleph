@@ -55,7 +55,7 @@ pub fn build_heartbeat_prompt(
         serde_json::to_string_pretty(&probe_result.raw_value).unwrap_or_default()
     );
     if let Some(reason) = wake_reason {
-        prompt.push_str(&format!("\nWake reason: {}", reason));
+        prompt.push_str(&format!("\nWake reason: {reason}"));
     }
     prompt.push_str(
         "\n\nCheck HEARTBEAT.md for your assigned tasks. \
@@ -120,15 +120,14 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
             Some(a) => a,
             None => self.agent_registry.get("main").await.ok_or_else(|| {
                 format!(
-                    "Agent '{}' not found and fallback 'main' unavailable",
-                    agent_id
+                    "Agent '{agent_id}' not found and fallback 'main' unavailable"
                 )
             })?,
         };
 
         // Build request following cron executor pattern
         let run_id = Uuid::new_v4().to_string();
-        let task_id = format!("hb-{}", run_id);
+        let task_id = format!("hb-{run_id}");
         let session_key = SessionKey::task(agent_id, "heartbeat", &task_id);
 
         let mut metadata = HashMap::new();
@@ -184,7 +183,7 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
                 let duration_ms = start.elapsed().as_millis() as i64;
                 warn!(agent_id, %msg, "heartbeat L2 skipped: agent busy");
                 Ok(HeartbeatL2Result {
-                    status: HeartbeatL2Status::Error(format!("Agent busy: {}", msg)),
+                    status: HeartbeatL2Status::Error(format!("Agent busy: {msg}")),
                     duration_ms,
                 })
             }
@@ -192,7 +191,7 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
                 let duration_ms = start.elapsed().as_millis() as i64;
                 error!(agent_id, error = %e, "heartbeat L2 failed");
                 Ok(HeartbeatL2Result {
-                    status: HeartbeatL2Status::Error(format!("{}", e)),
+                    status: HeartbeatL2Status::Error(format!("{e}")),
                     duration_ms,
                 })
             }

@@ -67,8 +67,7 @@ impl PromptLayer for SessionBudgetLayer {
 
         output.push_str("## Session Budget\n\n");
         output.push_str(&format!(
-            "- **Iteration cap**: {} — the Think→Act loop is forced to wrap up after this many turns.\n",
-            cap
+            "- **Iteration cap**: {cap} — the Think→Act loop is forced to wrap up after this many turns.\n"
         ));
         output.push_str(
             "- Front-load the most decisive action — at the cap the harness emits a final reply regardless of progress.\n",

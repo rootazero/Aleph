@@ -178,16 +178,16 @@ fn install_from_git(
         }
     } else {
         std::fs::create_dir_all(clone_path.parent().unwrap_or(skills_dir))
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
+            .map_err(|e| format!("Failed to create directory: {e}"))?;
         info!(url = %source, dest = %clone_path.display(), "Cloning skills repository");
         git2::Repository::clone(source, &clone_path)
-            .map_err(|e| format!("Failed to clone repository: {}", e))?;
+            .map_err(|e| format!("Failed to clone repository: {e}"))?;
     }
 
     if flatten {
         // Copy contents (excluding .git and .git-cache) into skills_dir
         copy_dir_contents(&clone_path, skills_dir)
-            .map_err(|e| format!("Failed to copy skills: {}", e))?;
+            .map_err(|e| format!("Failed to copy skills: {e}"))?;
         Ok(skills_dir.to_path_buf())
     } else {
         Ok(clone_path)
@@ -222,18 +222,18 @@ async fn install_from_zip(source: &str, skills_dir: &std::path::Path) -> Result<
         info!(url = %source, "Downloading skills ZIP archive");
         let resp = reqwest::get(source)
             .await
-            .map_err(|e| format!("Failed to download ZIP: {}", e))?;
+            .map_err(|e| format!("Failed to download ZIP: {e}"))?;
         if !resp.status().is_success() {
             return Err(format!("Download failed with status: {}", resp.status()));
         }
         resp.bytes()
             .await
-            .map_err(|e| format!("Failed to read ZIP data: {}", e))?
+            .map_err(|e| format!("Failed to read ZIP data: {e}"))?
             .to_vec()
     } else {
         // Read local ZIP file
         info!(path = %source, "Reading local ZIP archive");
-        std::fs::read(source).map_err(|e| format!("Failed to read ZIP file: {}", e))?
+        std::fs::read(source).map_err(|e| format!("Failed to read ZIP file: {e}"))?
     };
 
     // Derive folder name from filename (strip .zip)
@@ -246,18 +246,18 @@ async fn install_from_zip(source: &str, skills_dir: &std::path::Path) -> Result<
     // Extract ZIP
     let cursor = std::io::Cursor::new(zip_data);
     let mut archive =
-        zip::ZipArchive::new(cursor).map_err(|e| format!("Invalid ZIP archive: {}", e))?;
+        zip::ZipArchive::new(cursor).map_err(|e| format!("Invalid ZIP archive: {e}"))?;
 
     // Clean existing and extract fresh
     if dest_path.exists() {
         let _ = std::fs::remove_dir_all(&dest_path);
     }
     std::fs::create_dir_all(&dest_path)
-        .map_err(|e| format!("Failed to create directory: {}", e))?;
+        .map_err(|e| format!("Failed to create directory: {e}"))?;
 
     archive
         .extract(&dest_path)
-        .map_err(|e| format!("Failed to extract ZIP: {}", e))?;
+        .map_err(|e| format!("Failed to extract ZIP: {e}"))?;
 
     info!(dest = %dest_path.display(), entries = archive.len(), "Extracted ZIP archive");
     Ok(dest_path)
@@ -278,7 +278,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to create skills directory: {}", e),
+            format!("Failed to create skills directory: {e}"),
         );
     }
 

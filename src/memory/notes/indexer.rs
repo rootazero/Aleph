@@ -70,11 +70,11 @@ async fn index_one_file<S: NoteStore + Send + Sync + 'static>(
 ) -> Result<IndexOutcome, AlephError> {
     let content = fs::read_to_string(path)
         .await
-        .map_err(|e| AlephError::config(format!("index_one_file read {:?}: {e}", path)))?;
+        .map_err(|e| AlephError::config(format!("index_one_file read {path:?}: {e}")))?;
     let title = path
         .file_stem()
         .and_then(|s| s.to_str())
-        .ok_or_else(|| AlephError::config(format!("invalid filename {:?}", path)))?;
+        .ok_or_else(|| AlephError::config(format!("invalid filename {path:?}")))?;
     let hash = sha2_hash(&content);
     let key_path = format!("{category}/{title}");
 
@@ -279,7 +279,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         let content = fs::read_to_string(path)
             .await
             .map_err(|e| AlephError::ConfigError {
-                message: format!("Failed to read {:?}: {e}", path),
+                message: format!("Failed to read {path:?}: {e}"),
                 suggestion: None,
             })?;
 
@@ -287,7 +287,7 @@ impl<S: NoteStore> NoteIndexer<S> {
             path.file_stem()
                 .and_then(|s| s.to_str())
                 .ok_or_else(|| AlephError::ConfigError {
-                    message: format!("Invalid filename: {:?}", path),
+                    message: format!("Invalid filename: {path:?}"),
                     suggestion: None,
                 })?;
 
@@ -442,7 +442,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                 fs::read_to_string(&file_path)
                     .await
                     .map_err(|e| AlephError::ConfigError {
-                        message: format!("Failed to read {:?}: {e}", file_path),
+                        message: format!("Failed to read {file_path:?}: {e}"),
                         suggestion: None,
                     })?;
             KnowledgeNote::from_markdown(filename, &content)?
@@ -529,7 +529,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         fs::rename(&old_path, &new_path)
             .await
             .map_err(|e| AlephError::ConfigError {
-                message: format!("Failed to rename {:?} → {:?}: {e}", old_path, new_path),
+                message: format!("Failed to rename {old_path:?} → {new_path:?}: {e}"),
                 suggestion: None,
             })?;
 

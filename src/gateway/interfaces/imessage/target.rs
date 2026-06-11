@@ -67,7 +67,7 @@ impl IMessageTarget {
         match self {
             IMessageTarget::Phone { number, .. } => number.clone(),
             IMessageTarget::Email { email } => email.clone(),
-            IMessageTarget::ChatId { id } => format!("chat_id:{}", id),
+            IMessageTarget::ChatId { id } => format!("chat_id:{id}"),
             IMessageTarget::ChatGuid { guid } => guid.clone(),
         }
     }
@@ -190,16 +190,16 @@ pub fn normalize_phone(phone: &str) -> String {
 
     // Add country code if needed
     if has_plus {
-        format!("+{}", digits)
+        format!("+{digits}")
     } else if digits.len() == 10 {
         // Assume US number, add +1
-        format!("+1{}", digits)
+        format!("+1{digits}")
     } else if digits.len() == 11 && digits.starts_with('1') {
         // US number with 1 prefix
-        format!("+{}", digits)
+        format!("+{digits}")
     } else {
         // Unknown format, just add +
-        format!("+{}", digits)
+        format!("+{digits}")
     }
 }
 

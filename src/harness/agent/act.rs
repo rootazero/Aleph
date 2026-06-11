@@ -1084,7 +1084,7 @@ impl AgentHarness {
         } else {
             String::new()
         };
-        let error_msg = format!("{}{}{}", e, hint, did_you_mean);
+        let error_msg = format!("{e}{hint}{did_you_mean}");
         let error_event = SessionEvent::ToolError {
             turn_id,
             call_id: call.id.clone(),

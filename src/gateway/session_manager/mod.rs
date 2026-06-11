@@ -249,12 +249,12 @@ impl SessionManager {
         // Ensure parent directory exists
         if let Some(parent) = config.db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                SessionManagerError::DatabaseError(format!("Failed to create db directory: {}", e))
+                SessionManagerError::DatabaseError(format!("Failed to create db directory: {e}"))
             })?;
         }
 
         let conn = crate::utils::sqlite_open::open_sqlite_safe(&config.db_path).map_err(|e| {
-            SessionManagerError::DatabaseError(format!("Failed to open database: {}", e))
+            SessionManagerError::DatabaseError(format!("Failed to open database: {e}"))
         })?;
 
         // Initialize schema
@@ -353,7 +353,7 @@ impl SessionManager {
             );
             "#,
         )
-        .map_err(|e| SessionManagerError::DatabaseError(format!("Schema init failed: {}", e)))?;
+        .map_err(|e| SessionManagerError::DatabaseError(format!("Schema init failed: {e}")))?;
 
         // Backfill FTS5 index for any existing messages not yet indexed.
         let backfill_count: i64 = conn
@@ -370,7 +370,7 @@ impl SessionManager {
                  WHERE id NOT IN (SELECT rowid FROM messages_fts)",
             )
             .map_err(|e| {
-                SessionManagerError::DatabaseError(format!("FTS5 backfill failed: {}", e))
+                SessionManagerError::DatabaseError(format!("FTS5 backfill failed: {e}"))
             })?;
             tracing::info!(
                 count = backfill_count,
@@ -402,8 +402,7 @@ impl SessionManager {
         for (table, column, def) in migrations {
             let has_col: Result<bool, _> = conn.query_row(
                 &format!(
-                    "SELECT COUNT(*) > 0 FROM pragma_table_info('{}') WHERE name='{}'",
-                    table, column
+                    "SELECT COUNT(*) > 0 FROM pragma_table_info('{table}') WHERE name='{column}'"
                 ),
                 [],
                 |row| row.get(0),
@@ -425,13 +424,12 @@ impl SessionManager {
 
             if needs_add {
                 conn.execute(
-                    &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, def),
+                    &format!("ALTER TABLE {table} ADD COLUMN {column} {def}"),
                     [],
                 )
                 .map_err(|e| {
                     SessionManagerError::DatabaseError(format!(
-                        "Failed to add column {} to {}: {}",
-                        column, table, e
+                        "Failed to add column {column} to {table}: {e}"
                     ))
                 })?;
                 tracing::info!(table = %table, column = %column, "Migrated database schema");

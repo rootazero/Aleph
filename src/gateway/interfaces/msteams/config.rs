@@ -162,7 +162,7 @@ impl MsTeamsConfig {
         }
         if let Some(ref fed) = self.federated_identity {
             if let Err(e) = fed.validate() {
-                return Err(format!("federated_identity validation failed: {}", e));
+                return Err(format!("federated_identity validation failed: {e}"));
             }
         }
         if !self.webhook_path.starts_with('/') {

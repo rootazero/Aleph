@@ -58,12 +58,12 @@ pub fn parse_error_response(status: reqwest::StatusCode, body: &str) -> Generati
         429 => GenerationError::rate_limit("Rate limit exceeded", None),
         404 => GenerationError::model_not_found(DEFAULT_MODEL, "google-veo"),
         500..=599 => GenerationError::provider(
-            format!("Google API server error: {}", body),
+            format!("Google API server error: {body}"),
             Some(status.as_u16()),
             "google-veo",
         ),
         _ => GenerationError::provider(
-            format!("Unexpected error: {}", body),
+            format!("Unexpected error: {body}"),
             Some(status.as_u16()),
             "google-veo",
         ),

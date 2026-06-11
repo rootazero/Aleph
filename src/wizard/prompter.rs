@@ -96,7 +96,7 @@ impl RpcPrompter {
     /// Generate next step ID
     fn next_id(&self) -> String {
         let id = self.step_counter.fetch_add(1, Ordering::Relaxed) + 1;
-        format!("step-{}", id)
+        format!("step-{id}")
     }
 
     /// Send a step and wait for answer

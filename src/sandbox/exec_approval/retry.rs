@@ -42,8 +42,7 @@ impl RetryHandler {
         drain_last_assistant_round(messages);
 
         let system_message = format!(
-            "[SYSTEM] Your previous tool call was blocked. Reason: {}. Please generate an alternative approach.",
-            reason
+            "[SYSTEM] Your previous tool call was blocked. Reason: {reason}. Please generate an alternative approach."
         );
         messages.push(UnifiedMessage::user(system_message));
 

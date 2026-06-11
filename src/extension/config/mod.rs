@@ -111,7 +111,7 @@ impl ConfigManager {
     /// Merge a JSON string
     fn merge_json_str(&mut self, content: &str) -> Result<(), ExtensionError> {
         let parsed: AlephConfig = serde_json::from_str(content)
-            .map_err(|e| ExtensionError::ConfigMerge(format!("JSON parse error: {}", e)))?;
+            .map_err(|e| ExtensionError::ConfigMerge(format!("JSON parse error: {e}")))?;
 
         self.merge(parsed);
         Ok(())
@@ -219,7 +219,7 @@ fn parse_jsonc(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError
     let result = trailing_comma_re.replace_all(&stripped, "$1").to_string();
 
     serde_json::from_str(&result)
-        .map_err(|e| ExtensionError::config_parse(path, format!("JSONC parse error: {}", e)))
+        .map_err(|e| ExtensionError::config_parse(path, format!("JSONC parse error: {e}")))
 }
 
 #[cfg(test)]

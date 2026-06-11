@@ -67,13 +67,13 @@ fn format_relative_time_hb(ts_ms: i64) -> String {
     let days = diff_s / 86400;
 
     if minutes < 1 {
-        format!("{}s", diff_s)
+        format!("{diff_s}s")
     } else if hours < 1 {
-        format!("{}min", minutes)
+        format!("{minutes}min")
     } else if days < 1 {
-        format!("{}h", hours)
+        format!("{hours}h")
     } else {
-        format!("{}d", days)
+        format!("{days}d")
     }
 }
 
@@ -87,7 +87,7 @@ fn format_timestamp_ms(ts_ms: i64) -> String {
     let hours = date.get_hours();
     let minutes = date.get_minutes();
 
-    format!("{:02}/{:02} {:02}:{:02}", month, day, hours, minutes)
+    format!("{month:02}/{day:02} {hours:02}:{minutes:02}")
 }
 
 // ============================================================================
@@ -169,7 +169,7 @@ fn HeartbeatView() -> impl IntoView {
                     loading.set(false);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to load tasks: {}", e)));
+                    error.set(Some(format!("Failed to load tasks: {e}")));
                     loading.set(false);
                 }
             }
@@ -352,7 +352,7 @@ fn HeartbeatListItem(
                     let next_prefix = t_string!(i18n, heartbeat.next).to_string();
                     view! {
                         <div class="ml-4 mt-1 text-xs text-text-tertiary">
-                            {format!("{}{}", next_prefix, relative)}
+                            {format!("{next_prefix}{relative}")}
                         </div>
                     }.into_any()
                 } else {
@@ -503,7 +503,7 @@ fn HeartbeatEditor(
                         saving.set(false);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to create task: {}", e)));
+                        error.set(Some(format!("Failed to create task: {e}")));
                         saving.set(false);
                     }
                 }
@@ -530,7 +530,7 @@ fn HeartbeatEditor(
                         saving.set(false);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to update task: {}", e)));
+                        error.set(Some(format!("Failed to update task: {e}")));
                         saving.set(false);
                     }
                 }
@@ -563,7 +563,7 @@ fn HeartbeatEditor(
                     form_enabled.set(new_enabled);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to toggle task: {}", e)));
+                    error.set(Some(format!("Failed to toggle task: {e}")));
                 }
             }
         });
@@ -584,7 +584,7 @@ fn HeartbeatEditor(
         let task_id = task.id.clone();
         spawn_local(async move {
             if let Err(e) = HeartbeatApi::wake(&state, &task_id).await {
-                error.set(Some(format!("Failed to wake task: {}", e)));
+                error.set(Some(format!("Failed to wake task: {e}")));
             }
         });
     };
@@ -619,7 +619,7 @@ fn HeartbeatEditor(
                     confirm_delete.set(false);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to delete task: {}", e)));
+                    error.set(Some(format!("Failed to delete task: {e}")));
                     confirm_delete.set(false);
                 }
             }

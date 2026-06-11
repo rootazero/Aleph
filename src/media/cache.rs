@@ -344,7 +344,7 @@ impl MediaCache {
         let bytes = if header.contains("base64") {
             BASE64
                 .decode(data)
-                .map_err(|e| CacheError::Download(format!("Base64 decode failed: {}", e)))?
+                .map_err(|e| CacheError::Download(format!("Base64 decode failed: {e}")))?
         } else {
             // Non-base64 data URLs carry percent-encoded text per RFC 2397.
             // Decode the `%XX` escapes rather than storing them as literal bytes.

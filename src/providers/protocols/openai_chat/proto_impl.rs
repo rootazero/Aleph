@@ -48,9 +48,9 @@ impl OpenAiProtocol {
 
         // Build endpoint with appropriate API version
         if is_v3_api {
-            format!("{}/v3/chat/completions", base_url)
+            format!("{base_url}/v3/chat/completions")
         } else {
-            format!("{}/v1/chat/completions", base_url)
+            format!("{base_url}/v1/chat/completions")
         }
     }
 
@@ -81,7 +81,7 @@ impl OpenAiProtocol {
                                 }
                                 UCB::Image { data, mime_type } => Some(OaiContentBlock::ImageUrl {
                                     image_url: ImageUrl {
-                                        url: format!("data:{};base64,{}", mime_type, data),
+                                        url: format!("data:{mime_type};base64,{data}"),
                                         detail: Some("auto".to_string()),
                                     },
                                 }),

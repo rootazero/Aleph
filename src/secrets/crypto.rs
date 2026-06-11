@@ -53,7 +53,7 @@ impl SecretsCrypto {
         let hkdf = Hkdf::<Sha256>::new(Some(salt), self.master_key.expose_secret().as_bytes());
         let mut key = Zeroizing::new([0u8; 32]);
         hkdf.expand(HKDF_INFO, key.as_mut_slice())
-            .map_err(|e| SecretError::EncryptionFailed(format!("HKDF expand failed: {}", e)))?;
+            .map_err(|e| SecretError::EncryptionFailed(format!("HKDF expand failed: {e}")))?;
         Ok(key)
     }
 
@@ -72,12 +72,12 @@ impl SecretsCrypto {
 
         let key = self.derive_key(&salt)?;
         let cipher = Aes256Gcm::new_from_slice(key.as_slice())
-            .map_err(|e| SecretError::EncryptionFailed(format!("AES init failed: {}", e)))?;
+            .map_err(|e| SecretError::EncryptionFailed(format!("AES init failed: {e}")))?;
 
         let nonce = Nonce::from_slice(&nonce_bytes);
         let ciphertext = cipher
             .encrypt(nonce, plaintext.as_bytes())
-            .map_err(|e| SecretError::EncryptionFailed(format!("AES encrypt failed: {}", e)))?;
+            .map_err(|e| SecretError::EncryptionFailed(format!("AES encrypt failed: {e}")))?;
 
         // `key` is `Zeroizing`, so it is wiped on drop here — including the
         // early returns above, which the previous manual zeroize missed.

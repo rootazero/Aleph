@@ -130,7 +130,7 @@ pub async fn handle_create_invitation(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Invalid parameters: {}", e),
+                format!("Invalid parameters: {e}"),
             );
         }
     };
@@ -157,14 +157,14 @@ pub async fn handle_create_invitation(
                 Err(e) => JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to serialize response: {}", e),
+                    format!("Failed to serialize response: {e}"),
                 ),
             }
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to create invitation: {}", e),
+            format!("Failed to create invitation: {e}"),
         ),
     }
 }
@@ -210,7 +210,7 @@ pub async fn handle_list_guests(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to serialize response: {}", e),
+            format!("Failed to serialize response: {e}"),
         ),
     }
 }
@@ -265,7 +265,7 @@ pub async fn handle_revoke_invitation(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Invalid parameters: {}", e),
+                format!("Invalid parameters: {e}"),
             );
         }
     };
@@ -292,14 +292,14 @@ pub async fn handle_revoke_invitation(
                 Err(e) => JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to serialize response: {}", e),
+                    format!("Failed to serialize response: {e}"),
                 ),
             }
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to revoke invitation: {}", e),
+            format!("Failed to revoke invitation: {e}"),
         ),
     }
 }
@@ -405,7 +405,7 @@ pub async fn handle_list_sessions(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to serialize response: {}", e),
+            format!("Failed to serialize response: {e}"),
         ),
     }
 }
@@ -460,7 +460,7 @@ pub async fn handle_terminate_session(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Invalid parameters: {}", e),
+                format!("Invalid parameters: {e}"),
             );
         }
     };
@@ -488,14 +488,14 @@ pub async fn handle_terminate_session(
                 Err(e) => JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to serialize response: {}", e),
+                    format!("Failed to serialize response: {e}"),
                 ),
             }
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to terminate session: {}", e),
+            format!("Failed to terminate session: {e}"),
         ),
     }
 }
@@ -576,7 +576,7 @@ pub async fn handle_get_activity_logs(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Invalid parameters: {}", e),
+                format!("Invalid parameters: {e}"),
             );
         }
     };
@@ -609,7 +609,7 @@ pub async fn handle_get_activity_logs(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to serialize response: {}", e),
+            format!("Failed to serialize response: {e}"),
         ),
     }
 }

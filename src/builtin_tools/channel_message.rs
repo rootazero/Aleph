@@ -107,8 +107,7 @@ impl ChannelMessageTool {
             .filter(|s| !s.trim().is_empty())
             .ok_or_else(|| {
                 AlephError::tool(format!(
-                    "`{}` is required for the `{}` action",
-                    field, action
+                    "`{field}` is required for the `{action}` action"
                 ))
             })
     }
@@ -154,8 +153,7 @@ impl AlephTool for ChannelMessageTool {
                     .await
                     .map_err(|e| {
                         AlephError::tool(format!(
-                            "Failed to send message on channel '{}': {}",
-                            channel_id, e
+                            "Failed to send message on channel '{channel_id}': {e}"
                         ))
                     })?;
 
@@ -189,16 +187,14 @@ impl AlephTool for ChannelMessageTool {
                     .await
                     .map_err(|e| {
                         AlephError::tool(format!(
-                            "Failed to react on channel '{}': {}",
-                            channel_id, e
+                            "Failed to react on channel '{channel_id}': {e}"
                         ))
                     })?;
 
                 info!(tool = "channel_message", channel = %channel_id, "reaction applied");
                 Ok(ChannelMessageOutput {
                     message: format!(
-                        "Reaction '{}' applied on channel '{}'.",
-                        reaction, channel_id
+                        "Reaction '{reaction}' applied on channel '{channel_id}'."
                     ),
                     delivered: true,
                     message_id: None,
@@ -218,14 +214,13 @@ impl AlephTool for ChannelMessageTool {
                     .await
                     .map_err(|e| {
                         AlephError::tool(format!(
-                            "Failed to edit message on channel '{}': {}",
-                            channel_id, e
+                            "Failed to edit message on channel '{channel_id}': {e}"
                         ))
                     })?;
 
                 info!(tool = "channel_message", channel = %channel_id, "message edited");
                 Ok(ChannelMessageOutput {
-                    message: format!("Message edited on channel '{}'.", channel_id),
+                    message: format!("Message edited on channel '{channel_id}'."),
                     delivered: true,
                     message_id: None,
                 })
@@ -237,8 +232,7 @@ impl AlephTool for ChannelMessageTool {
                     .await
                     .map_err(|e| {
                         AlephError::tool(format!(
-                            "Failed to send typing indicator on channel '{}': {}",
-                            channel_id, e
+                            "Failed to send typing indicator on channel '{channel_id}': {e}"
                         ))
                     })?;
 

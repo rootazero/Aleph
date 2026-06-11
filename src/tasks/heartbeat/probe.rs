@@ -54,7 +54,7 @@ impl ProbeExecutor for DefaultProbeExecutor {
         let arguments = params.cloned().unwrap_or(serde_json::json!({}));
         let result: crate::error::Result<Value> =
             self.registry.execute_tool(tool_name, arguments).await;
-        result.map_err(|e| format!("Probe tool '{}' failed: {}", tool_name, e))
+        result.map_err(|e| format!("Probe tool '{tool_name}' failed: {e}"))
     }
 }
 

@@ -167,9 +167,6 @@ fn mount_overlay(message: &str, stack: &str, crash_count: usize) {
                           font-weight:500;cursor:pointer;\">Reload Panel</button>\
            </div>\
          </div>",
-        OVERLAY_ID = OVERLAY_ID,
-        details = details,
-        note = note,
     ));
 
     let _ = body.append_child(&overlay);

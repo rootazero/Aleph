@@ -75,7 +75,7 @@ impl std::str::FromStr for EventActor {
             "system" => Ok(EventActor::System),
             "decay" => Ok(EventActor::Decay),
             "migration" => Ok(EventActor::Migration),
-            _ => Err(format!("Unknown event actor: {}", s)),
+            _ => Err(format!("Unknown event actor: {s}")),
         }
     }
 }

@@ -302,7 +302,7 @@ pub(super) fn InputArea() -> impl IntoView {
             }
 
             let query = if let Some(ref ns_key) = ns {
-                let prefix = format!("{} ", ns_key);
+                let prefix = format!("{ns_key} ");
                 if after_slash.starts_with(&prefix) {
                     &after_slash[prefix.len()..]
                 } else if after_slash == ns_key.as_str() {

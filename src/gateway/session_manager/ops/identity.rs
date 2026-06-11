@@ -18,7 +18,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let identity_meta: SessionIdentityMeta = {
             let mut stmt = conn
@@ -101,9 +101,9 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
-        let like_pattern = format!("{}%", base_key_pattern);
+        let like_pattern = format!("{base_key_pattern}%");
         let latest_key: Option<String> = conn
             .query_row(
                 "SELECT key FROM sessions WHERE key LIKE ? ORDER BY created_at DESC LIMIT 1",
@@ -137,7 +137,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let metadata_json: Option<String> = conn
             .query_row(
@@ -169,7 +169,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let keys: Vec<String> = {
             let mut stmt = conn

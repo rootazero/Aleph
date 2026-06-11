@@ -131,10 +131,10 @@ impl UnifiedTool {
         let source_badge = match &self.source {
             ToolSource::Native => " [Native - Preferred]".to_string(),
             ToolSource::Builtin => " [Builtin - Preferred]".to_string(),
-            ToolSource::Mcp { server } => format!(" [MCP:{}]", server),
-            ToolSource::Skill { id } => format!(" [Skill:{}]", id),
+            ToolSource::Mcp { server } => format!(" [MCP:{server}]"),
+            ToolSource::Skill { id } => format!(" [Skill:{id}]"),
             ToolSource::Custom { .. } => " [Custom]".to_string(),
-            ToolSource::Plugin { plugin_id } => format!(" [Plugin:{}]", plugin_id),
+            ToolSource::Plugin { plugin_id } => format!(" [Plugin:{plugin_id}]"),
         };
 
         let params = match &self.parameters_schema {

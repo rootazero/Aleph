@@ -88,7 +88,7 @@ impl ConfigBackup {
         // patcher creates one snapshot per patch); second-resolution names
         // would otherwise overwrite each other and silently lose restore points.
         let timestamp = chrono::Local::now().format("%Y%m%dT%H%M%S%3f").to_string();
-        let backup_filename = format!("config.toml.{}", timestamp);
+        let backup_filename = format!("config.toml.{timestamp}");
         let backup_path = self.backup_dir.join(&backup_filename);
 
         // Copy config file to backup location
@@ -173,8 +173,7 @@ impl ConfigBackup {
                 .find(|e| e.timestamp == ts)
                 .ok_or_else(|| {
                     AlephError::invalid_config(format!(
-                        "No config backup found with timestamp '{}'",
-                        ts
+                        "No config backup found with timestamp '{ts}'"
                     ))
                 }),
             // Newest snapshot is last in the ascending list.

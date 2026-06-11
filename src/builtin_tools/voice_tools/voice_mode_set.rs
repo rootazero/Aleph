@@ -109,7 +109,7 @@ impl VoiceModeSetTool {
             .await;
 
         let action = if enabled { "enabled" } else { "disabled" };
-        let message = format!("Voice mode {} for channel '{}'.", action, channel_id);
+        let message = format!("Voice mode {action} for channel '{channel_id}'.");
 
         info!(channel_id = %channel_id, enabled = enabled, "Voice mode set via tool");
 

@@ -41,9 +41,9 @@ impl VllmRerankProvider {
         let base = if base.ends_with("/v1") {
             base.to_string()
         } else {
-            format!("{}/v1", base)
+            format!("{base}/v1")
         };
-        format!("{}/rerank", base)
+        format!("{base}/rerank")
     }
 }
 

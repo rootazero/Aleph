@@ -144,7 +144,7 @@ pub async fn handle_update(
                 return JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to store API key: {}", e),
+                    format!("Failed to store API key: {e}"),
                 );
             }
         }
@@ -160,7 +160,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -228,7 +228,7 @@ pub async fn handle_create(
                 return JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to store API key: {}", e),
+                    format!("Failed to store API key: {e}"),
                 );
             }
         }
@@ -243,7 +243,7 @@ pub async fn handle_create(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -320,7 +320,7 @@ pub async fn handle_delete(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -611,7 +611,7 @@ async fn set_default_provider_inner(
                 return JsonRpcResponse::error(
                     request.id.clone(),
                     INVALID_PARAMS,
-                    format!("Provider not found: {}", name),
+                    format!("Provider not found: {name}"),
                 );
             }
             Some(provider) if !provider.verified => {
@@ -619,8 +619,7 @@ async fn set_default_provider_inner(
                     request.id.clone(),
                     INVALID_PARAMS,
                     format!(
-                        "Provider '{}' must pass a connection test before being set as default",
-                        name
+                        "Provider '{name}' must pass a connection test before being set as default"
                     ),
                 );
             }
@@ -648,7 +647,7 @@ async fn set_default_provider_inner(
             return JsonRpcResponse::error(
                 request.id.clone(),
                 INVALID_PARAMS,
-                format!("Failed to set default provider: {}", e),
+                format!("Failed to set default provider: {e}"),
             );
         }
 
@@ -658,7 +657,7 @@ async fn set_default_provider_inner(
             return JsonRpcResponse::error(
                 request.id.clone(),
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }

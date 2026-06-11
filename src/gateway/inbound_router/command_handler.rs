@@ -28,7 +28,7 @@ pub(super) fn strip_bot_mention(input: &str) -> String {
         None => cmd_part,
     };
     match rest {
-        Some(args) => format!("{} {}", clean_cmd, args),
+        Some(args) => format!("{clean_cmd} {args}"),
         None => clean_cmd.to_string(),
     }
 }
@@ -143,7 +143,7 @@ impl InboundMessageRouter {
             .suggest_commands(unknown_cmd, 3)
             .await
             .into_iter()
-            .map(|n| format!("/{}", n))
+            .map(|n| format!("/{n}"))
             .collect();
 
         if suggestions.is_empty() {

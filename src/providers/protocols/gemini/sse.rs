@@ -20,8 +20,7 @@ pub(crate) fn parse_gemini_sse_chunk(
         Ok(v) => v,
         Err(e) => {
             out.push_back(Err(AlephError::provider(format!(
-                "Gemini SSE parse error: {}",
-                e
+                "Gemini SSE parse error: {e}"
             ))));
             return;
         }
@@ -36,8 +35,7 @@ pub(crate) fn parse_gemini_sse_chunk(
             .unwrap_or("unknown error");
         let status = err.get("status").and_then(|s| s.as_str()).unwrap_or("");
         out.push_back(Err(AlephError::provider(format!(
-            "Gemini stream error: {} ({})",
-            message, status
+            "Gemini stream error: {message} ({status})"
         ))));
         return;
     }
@@ -51,8 +49,7 @@ pub(crate) fn parse_gemini_sse_chunk(
         .filter(|r| !r.is_empty())
     {
         out.push_back(Err(AlephError::provider(format!(
-            "Gemini blocked the prompt (blockReason={})",
-            block_reason
+            "Gemini blocked the prompt (blockReason={block_reason})"
         ))));
         return;
     }

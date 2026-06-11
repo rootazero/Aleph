@@ -251,7 +251,7 @@ impl ChannelRegistry {
     /// Start a channel
     pub async fn start_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
 
         let mut channel = channel_arc.write().await;
@@ -268,7 +268,7 @@ impl ChannelRegistry {
     /// Stop a channel
     pub async fn stop_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
 
         let mut channel = channel_arc.write().await;
@@ -347,7 +347,7 @@ impl ChannelRegistry {
         }
         let next =
             super::delivery_queue::now_secs() + store.config().initial_backoff.as_secs() as i64;
-        match store.enqueue(channel_id.as_str(), message, &format!("{:?}", err), next) {
+        match store.enqueue(channel_id.as_str(), message, &format!("{err:?}"), next) {
             Ok(_) => info!(
                 channel = %channel_id,
                 "outbound send failed transiently; queued for durable retry"
@@ -370,15 +370,14 @@ impl ChannelRegistry {
         message: OutboundMessage,
     ) -> ChannelResult<SendResult> {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
 
         {
             let channel = channel_arc.read().await;
             if channel.status() == ChannelStatus::Disabled {
                 return Err(ChannelError::NotConnected(format!(
-                    "Channel {} is disabled",
-                    channel_id
+                    "Channel {channel_id} is disabled"
                 )));
             }
         }
@@ -455,7 +454,7 @@ impl ChannelRegistry {
         new_text: &str,
     ) -> ChannelResult<()> {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
 
         let channel = channel_arc.read().await;
@@ -471,7 +470,7 @@ impl ChannelRegistry {
         reaction: &str,
     ) -> ChannelResult<()> {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
 
         let channel = channel_arc.read().await;
@@ -485,7 +484,7 @@ impl ChannelRegistry {
         conversation_id: &ConversationId,
     ) -> ChannelResult<()> {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
         let channel = channel_arc.read().await;
         channel.send_typing(conversation_id).await
@@ -687,7 +686,7 @@ impl ChannelRegistry {
     /// the recovery primitive used by the health monitor for wedged channels.
     pub async fn restart_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
 
         let mut channel = channel_arc.write().await;

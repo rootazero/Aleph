@@ -105,7 +105,7 @@ impl AcpAdapterManager {
             Arc::clone(adapters.get(harness_id).ok_or_else(|| {
                 AcpOperationError::new(
                     AcpErrorCode::HarnessNotFound,
-                    format!("Unknown ACP harness: '{}'", harness_id),
+                    format!("Unknown ACP harness: '{harness_id}'"),
                 )
             })?)
         };
@@ -176,7 +176,7 @@ impl AcpAdapterManager {
             let harness = adapters.get(harness_id).ok_or_else(|| {
                 AcpOperationError::new(
                     AcpErrorCode::HarnessNotFound,
-                    format!("Unknown ACP harness: '{}'", harness_id),
+                    format!("Unknown ACP harness: '{harness_id}'"),
                 )
             })?;
 
@@ -187,8 +187,7 @@ impl AcpAdapterManager {
                 return Err(AcpOperationError::new(
                     AcpErrorCode::ModeUnsupported,
                     format!(
-                        "Harness '{}' does not support {:?} mode",
-                        harness_id, effective
+                        "Harness '{harness_id}' does not support {effective:?} mode"
                     ),
                 )
                 .into());
@@ -291,7 +290,7 @@ impl AcpAdapterManager {
                     Arc::clone(adapters.get(harness_id).ok_or_else(|| {
                         AcpOperationError::new(
                             AcpErrorCode::HarnessNotFound,
-                            format!("Unknown ACP harness: '{}'", harness_id),
+                            format!("Unknown ACP harness: '{harness_id}'"),
                         )
                     })?)
                 };
@@ -418,7 +417,7 @@ impl AcpAdapterManager {
             let harness = adapters.get(harness_id).ok_or_else(|| {
                 AcpOperationError::new(
                     AcpErrorCode::HarnessNotFound,
-                    format!("Unknown ACP harness: '{}'", harness_id),
+                    format!("Unknown ACP harness: '{harness_id}'"),
                 )
             })?;
             harness.build_config(Some(cwd)).timeout

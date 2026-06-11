@@ -124,7 +124,7 @@ impl ProtocolAdapter for GeminiProtocol {
 
         // Serialize to JSON value so we can add tool_config if needed
         let mut body = serde_json::to_value(&request_body)
-            .map_err(|e| AlephError::provider(format!("Failed to serialize request: {}", e)))?;
+            .map_err(|e| AlephError::provider(format!("Failed to serialize request: {e}")))?;
 
         // Add tool_config if tool_choice is specified
         if let Some(ref choice) = payload.tool_choice {
@@ -195,19 +195,18 @@ impl ProtocolAdapter for GeminiProtocol {
                         "Rate limited. Wait before retrying or upgrade your API plan.".to_string()
                     });
                 return Err(AlephError::RateLimitError {
-                    message: format!("Gemini API rate limited (429): {}", detail),
+                    message: format!("Gemini API rate limited (429): {detail}"),
                     suggestion: Some(suggestion),
                 });
             }
             return Err(AlephError::provider(format!(
-                "Gemini API error ({}): {}",
-                status, detail
+                "Gemini API error ({status}): {detail}"
             )));
         }
 
         let byte_stream = response
             .bytes_stream()
-            .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
+            .map_err(|e| AlephError::network(format!("Stream error: {e}")))
             .boxed();
         let idle_secs = self
             .stream_idle_timeout_secs
@@ -353,8 +352,8 @@ impl ProtocolAdapter for GeminiProtocol {
                 if is_family && is_version {
                     let tail = parts.next();
                     let canonical = match tail {
-                        Some(t) => format!("gemini-{}-{}-{}", b, a, t),
-                        None => format!("gemini-{}-{}", b, a),
+                        Some(t) => format!("gemini-{b}-{a}-{t}"),
+                        None => format!("gemini-{b}-{a}"),
                     };
                     return std::borrow::Cow::Owned(canonical);
                 }

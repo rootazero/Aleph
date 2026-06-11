@@ -197,7 +197,7 @@ pub(crate) fn parse_params<T: serde::de::DeserializeOwned>(
             JsonRpcResponse::error(
                 request.id.clone(),
                 INVALID_PARAMS,
-                format!("Invalid params: {}", e),
+                format!("Invalid params: {e}"),
             )
         }),
         None => Err(JsonRpcResponse::error(

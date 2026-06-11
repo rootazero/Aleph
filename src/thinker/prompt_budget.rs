@@ -107,7 +107,7 @@ pub fn truncate_with_head_tail(
         .count()
         .saturating_sub(head_chars)
         .saturating_sub(tail_chars);
-    let marker = format!("\n\n[... {} chars truncated ...]\n\n", truncated_count);
+    let marker = format!("\n\n[... {truncated_count} chars truncated ...]\n\n");
 
     // UTF-8 safe boundary finding
     let head_end = content.floor_char_boundary(head_chars);

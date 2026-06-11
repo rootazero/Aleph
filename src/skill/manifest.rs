@@ -25,9 +25,9 @@ pub enum SkillParseError {
 impl std::fmt::Display for SkillParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Io(e) => write!(f, "I/O error: {}", e),
+            Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::NoFrontmatter => write!(f, "no YAML frontmatter found"),
-            Self::Yaml(e) => write!(f, "YAML parse error: {}", e),
+            Self::Yaml(e) => write!(f, "YAML parse error: {e}"),
         }
     }
 }

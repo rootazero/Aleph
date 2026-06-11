@@ -39,7 +39,7 @@ impl std::str::FromStr for AuditActor {
             "user" => Ok(AuditActor::User),
             "system" => Ok(AuditActor::System),
             "decay" => Ok(AuditActor::Decay),
-            _ => Err(format!("Unknown actor: {}", s)),
+            _ => Err(format!("Unknown actor: {s}")),
         }
     }
 }
@@ -85,7 +85,7 @@ impl std::str::FromStr for AuditAction {
             "invalidated" => Ok(AuditAction::Invalidated),
             "restored" => Ok(AuditAction::Restored),
             "deleted" => Ok(AuditAction::Deleted),
-            _ => Err(format!("Unknown action: {}", s)),
+            _ => Err(format!("Unknown action: {s}")),
         }
     }
 }

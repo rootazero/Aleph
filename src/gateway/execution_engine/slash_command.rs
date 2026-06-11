@@ -103,7 +103,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         }
 
         let mode: serde_json::Value = serde_json::from_str(mode_json).map_err(|e| {
-            ExecutionError::Failed(format!("Invalid slash command metadata: {}", e))
+            ExecutionError::Failed(format!("Invalid slash command metadata: {e}"))
         })?;
 
         let mode_type = mode["type"].as_str().unwrap_or("");
@@ -124,7 +124,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 let skill_name = mode["display_name"].as_str().unwrap_or("skill");
                 // Skills need LLM processing with injected instructions — fall through
                 Err(ExecutionError::Fallthrough {
-                    reason: format!("skill '{}'", skill_name),
+                    reason: format!("skill '{skill_name}'"),
                 })
             }
 
@@ -145,7 +145,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // never reached the loop that could serve it.)
                 let server = mode["server_name"].as_str().unwrap_or("mcp");
                 Err(ExecutionError::Fallthrough {
-                    reason: format!("mcp command '{}'", server),
+                    reason: format!("mcp command '{server}'"),
                 })
             }
 
@@ -157,8 +157,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
 
             _ => Err(ExecutionError::Failed(format!(
-                "Unknown slash command type: {}",
-                mode_type
+                "Unknown slash command type: {mode_type}"
             ))),
         }
     }
@@ -185,7 +184,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .emit(StreamEvent::Reasoning {
                 run_id: run_id.to_string(),
                 seq: 0,
-                content: format!("Executing /{} ...", tool_id),
+                content: format!("Executing /{tool_id} ..."),
                 is_complete: true,
             })
             .await;
@@ -232,8 +231,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Ok(response)
             }
             Err(e) => Err(ExecutionError::Failed(format!(
-                "Tool '{}' execution failed: {}",
-                tool_id, e
+                "Tool '{tool_id}' execution failed: {e}"
             ))),
         }
     }

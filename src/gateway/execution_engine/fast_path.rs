@@ -109,7 +109,7 @@ where
             self.persist_run_task_status(run_id, TaskStatus::Failed)
                 .await;
         }
-        let error_response = format!("❌ {}", error_msg);
+        let error_response = format!("❌ {error_msg}");
 
         agent
             .add_message_with_run_id(

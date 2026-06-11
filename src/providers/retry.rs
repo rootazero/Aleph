@@ -113,7 +113,7 @@ fn is_overloaded_message(message: &str) -> bool {
 pub fn retryable_reason(error: &AlephError) -> Option<String> {
     let default_policy = RetryPolicy::default();
     if is_retryable_with_policy(error, &default_policy) {
-        Some(format!("{}", error))
+        Some(format!("{error}"))
     } else {
         None
     }

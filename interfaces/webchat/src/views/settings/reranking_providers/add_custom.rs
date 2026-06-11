@@ -81,7 +81,7 @@ pub(super) fn AddCustomProviderPanel(
                     }
                 }
                 Err(e) => {
-                    set_test_result.set(Some((false, format!("RPC error: {}", e))));
+                    set_test_result.set(Some((false, format!("RPC error: {e}"))));
                 }
             }
             set_testing.set(false);
@@ -121,7 +121,7 @@ pub(super) fn AddCustomProviderPanel(
                     on_saved();
                 }
                 Err(e) => {
-                    set_action_error.set(Some(format!("Save failed: {}", e)));
+                    set_action_error.set(Some(format!("Save failed: {e}")));
                     set_saving.set(false);
                 }
             }

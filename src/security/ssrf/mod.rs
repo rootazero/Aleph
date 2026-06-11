@@ -60,8 +60,7 @@ fn validate_url_common(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfEr
 
     if is_legacy_ip_literal(host) {
         return Err(SsrfError::BlockedAddress(format!(
-            "legacy IP literal: {}",
-            host
+            "legacy IP literal: {host}"
         )));
     }
 
@@ -81,8 +80,7 @@ fn validate_url_common(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfEr
 
     if is_blocklisted(host, &policy.blocked_hosts) {
         return Err(SsrfError::BlockedAddress(format!(
-            "host in blocklist: {}",
-            host
+            "host in blocklist: {host}"
         )));
     }
 

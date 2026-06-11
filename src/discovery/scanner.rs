@@ -170,14 +170,12 @@ impl DirectoryScanner {
         }
         if component_name.contains('/') || component_name.contains('\\') {
             return Err(DiscoveryError::InvalidPath(format!(
-                "component name cannot contain path separators: {}",
-                component_name
+                "component name cannot contain path separators: {component_name}"
             )));
         }
         if component_name.contains("..") {
             return Err(DiscoveryError::InvalidPath(format!(
-                "component name cannot contain parent directory references: {}",
-                component_name
+                "component name cannot contain parent directory references: {component_name}"
             )));
         }
 

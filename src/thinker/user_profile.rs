@@ -102,12 +102,12 @@ impl UserProfile {
 
         // Timezone
         if let Some(ref tz) = self.timezone {
-            section.push_str(&format!("Timezone: {}\n", tz));
+            section.push_str(&format!("Timezone: {tz}\n"));
         }
 
         // Language preference
         if let Some(ref lang) = self.language {
-            section.push_str(&format!("Language preference: {}\n", lang));
+            section.push_str(&format!("Language preference: {lang}\n"));
         }
 
         // Interaction style
@@ -120,7 +120,7 @@ impl UserProfile {
         if !self.context_notes.is_empty() {
             section.push_str("\nContext:\n");
             for note in &self.context_notes {
-                section.push_str(&format!("- {}\n", note));
+                section.push_str(&format!("- {note}\n"));
             }
         }
 
@@ -152,7 +152,7 @@ impl UserProfile {
         }
 
         let yaml = serde_yaml::to_string(self).map_err(std::io::Error::other)?;
-        let content = format!("---\n{}---\n", yaml);
+        let content = format!("---\n{yaml}---\n");
         std::fs::write(path, content)
     }
 }

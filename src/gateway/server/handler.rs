@@ -448,7 +448,7 @@ async fn handle_connection(
     ctx: ConnectionContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut write, mut read) = socket.split();
-    let conn_id = format!("{}", peer_addr);
+    let conn_id = format!("{peer_addr}");
 
     info!("New WebSocket connection: {}", conn_id);
 
@@ -1303,7 +1303,7 @@ async fn handle_connection(
                                 serde_json::to_string(&JsonRpcResponse::error(
                                     None,
                                     PARSE_ERROR,
-                                    format!("Parse error: {}", e),
+                                    format!("Parse error: {e}"),
                                 ))
                                 .unwrap_or_default()
                             }
@@ -1620,7 +1620,7 @@ pub(super) async fn process_request(text: &str, middleware_chain: &MiddlewareCha
             return serde_json::to_string(&JsonRpcResponse::error(
                 None,
                 PARSE_ERROR,
-                format!("Parse error: {}", e),
+                format!("Parse error: {e}"),
             ))
             .unwrap_or_default();
         }

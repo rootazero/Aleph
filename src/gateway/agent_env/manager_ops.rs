@@ -46,7 +46,7 @@ impl AgentEnvStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
 
         conn.execute(
             "INSERT INTO agent_envs (id, profile, created_at, last_active_at, description, name)
@@ -64,7 +64,7 @@ impl AgentEnvStore {
             if e.to_string().contains("UNIQUE constraint") {
                 AgentEnvError::AlreadyExists(id.to_string())
             } else {
-                AgentEnvError::Database(format!("Insert failed: {}", e))
+                AgentEnvError::Database(format!("Insert failed: {e}"))
             }
         })?;
 
@@ -78,7 +78,7 @@ impl AgentEnvStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
 
         let result = conn.query_row(
             "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
@@ -101,7 +101,7 @@ impl AgentEnvStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
 
         let query = if include_archived {
             "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
@@ -149,7 +149,7 @@ impl AgentEnvStore {
             let conn = self
                 .conn
                 .lock()
-                .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
+                .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
 
             let now = Utc::now().timestamp();
             let name_owned = name.map(|s| s.to_string());
@@ -165,7 +165,7 @@ impl AgentEnvStore {
                  WHERE id = ?5",
                 params![name_owned, desc_owned, icon_owned, now, id],
             )
-            .map_err(|e| AgentEnvError::Database(format!("Update failed: {}", e)))?
+            .map_err(|e| AgentEnvError::Database(format!("Update failed: {e}")))?
         };
 
         if affected == 0 {
@@ -181,7 +181,7 @@ impl AgentEnvStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
 
         conn.execute(
             "UPDATE agent_envs SET last_active_at = ? WHERE id = ?",
@@ -201,10 +201,10 @@ impl AgentEnvStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
 
         let cache_json = serde_json::to_string(cache_state)
-            .map_err(|e| AgentEnvError::Database(format!("Serialize error: {}", e)))?;
+            .map_err(|e| AgentEnvError::Database(format!("Serialize error: {e}")))?;
 
         conn.execute(
             "UPDATE agent_envs SET cache_state = ?, last_active_at = ? WHERE id = ?",
@@ -226,7 +226,7 @@ impl AgentEnvStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
 
         let affected = conn
             .execute(
@@ -251,7 +251,7 @@ impl AgentEnvStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
 
         // Remove any channel_active_agent references pointing to this agent (agent_id = agent_id in 1:1 model)
         conn.execute(
@@ -383,7 +383,7 @@ impl AgentEnvStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
 
         let affected = conn
             .execute(

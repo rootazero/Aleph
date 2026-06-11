@@ -58,7 +58,7 @@ pub async fn handle_list(request: JsonRpcRequest, store: Arc<dyn PairingStore>) 
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to list pairing requests: {}", e),
+            format!("Failed to list pairing requests: {e}"),
         ),
     }
 }
@@ -107,7 +107,7 @@ pub async fn handle_approve(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to approve pairing: {}", e),
+            format!("Failed to approve pairing: {e}"),
         ),
     }
 }
@@ -154,7 +154,7 @@ pub async fn handle_reject(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to reject pairing: {}", e),
+            format!("Failed to reject pairing: {e}"),
         ),
     }
 }
@@ -192,7 +192,7 @@ pub async fn handle_approved_list(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to list approved senders: {}", e),
+            format!("Failed to list approved senders: {e}"),
         ),
     }
 }
@@ -239,7 +239,7 @@ pub async fn handle_revoke(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to revoke approval: {}", e),
+            format!("Failed to revoke approval: {e}"),
         ),
     }
 }

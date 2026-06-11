@@ -72,7 +72,7 @@ impl ClawHubClient {
             .timeout(REQUEST_TIMEOUT)
             .user_agent(ua)
             .build()
-            .map_err(|e| AlephError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| AlephError::network(format!("Failed to build HTTP client: {e}")))?;
 
         Ok(Self {
             base_url: url.trim_end_matches('/').to_string(),
@@ -99,13 +99,13 @@ impl ClawHubClient {
             .query(query)
             .send()
             .await
-            .map_err(|e| AlephError::network(format!("ClawHub {} failed: {}", context, e)))?;
+            .map_err(|e| AlephError::network(format!("ClawHub {context} failed: {e}")))?;
 
         let resp = Self::check_status(resp, context).await?;
 
         resp.json()
             .await
-            .map_err(|e| AlephError::network(format!("ClawHub {} parse error: {}", context, e)))
+            .map_err(|e| AlephError::network(format!("ClawHub {context} parse error: {e}")))
     }
 
     /// Search skills by keyword
@@ -234,7 +234,7 @@ impl ClawHubClient {
             .query(&params)
             .send()
             .await
-            .map_err(|e| AlephError::network(format!("ClawHub download failed: {}", e)))?;
+            .map_err(|e| AlephError::network(format!("ClawHub download failed: {e}")))?;
 
         let resp = Self::check_status(resp, "download").await?;
 
@@ -243,8 +243,7 @@ impl ClawHubClient {
         if let Some(len) = resp.content_length() {
             if len > MAX_DOWNLOAD_BYTES as u64 {
                 return Err(AlephError::network(format!(
-                    "ClawHub download exceeds maximum size ({} > {} bytes)",
-                    len, MAX_DOWNLOAD_BYTES
+                    "ClawHub download exceeds maximum size ({len} > {MAX_DOWNLOAD_BYTES} bytes)"
                 )));
             }
         }
@@ -255,11 +254,10 @@ impl ClawHubClient {
         let mut bytes: Vec<u8> = Vec::new();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk
-                .map_err(|e| AlephError::network(format!("ClawHub download read error: {}", e)))?;
+                .map_err(|e| AlephError::network(format!("ClawHub download read error: {e}")))?;
             if bytes.len() + chunk.len() > MAX_DOWNLOAD_BYTES {
                 return Err(AlephError::network(format!(
-                    "ClawHub download exceeds maximum size (> {} bytes)",
-                    MAX_DOWNLOAD_BYTES
+                    "ClawHub download exceeds maximum size (> {MAX_DOWNLOAD_BYTES} bytes)"
                 )));
             }
             bytes.extend_from_slice(&chunk);
@@ -280,7 +278,7 @@ impl ClawHubClient {
 
         tokio::fs::write(&temp_path, &bytes)
             .await
-            .map_err(|e| AlephError::config(format!("Failed to write temp ZIP: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to write temp ZIP: {e}")))?;
 
         Ok(temp_path)
     }
@@ -312,7 +310,7 @@ impl ClawHubClient {
         }
 
         let err_msg = match status.as_u16() {
-            404 => format!("Skill not found on ClawHub ({})", context),
+            404 => format!("Skill not found on ClawHub ({context})"),
             403 => "Skill blocked by ClawHub (malware detected)".to_string(),
             423 => "Skill is pending security review, try again later".to_string(),
             429 => {
@@ -322,8 +320,7 @@ impl ClawHubClient {
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("60");
                 format!(
-                    "ClawHub rate limit exceeded. Retry after {} seconds",
-                    retry_after
+                    "ClawHub rate limit exceeded. Retry after {retry_after} seconds"
                 )
             }
             _ => {
@@ -337,7 +334,7 @@ impl ClawHubClient {
                 } else {
                     format!(": {}", body.chars().take(200).collect::<String>())
                 };
-                format!("ClawHub API error: HTTP {} ({}){}", status, context, detail)
+                format!("ClawHub API error: HTTP {status} ({context}){detail}")
             }
         };
 

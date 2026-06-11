@@ -30,7 +30,7 @@ impl SlackDebouncer {
             msg.sender_id.as_str()
         );
         match thread_ts {
-            Some(ts) => format!("{}:{}", base, ts),
+            Some(ts) => format!("{base}:{ts}"),
             None => base,
         }
     }

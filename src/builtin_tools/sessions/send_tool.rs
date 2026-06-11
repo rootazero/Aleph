@@ -263,7 +263,7 @@ impl SessionsSendTool {
                 Err(e) => {
                     return SessionsSendOutput::error(
                         run_id,
-                        format!("Invalid session key: {}", e),
+                        format!("Invalid session key: {e}"),
                     );
                 }
             },
@@ -309,7 +309,7 @@ impl SessionsSendTool {
             None => {
                 return SessionsSendOutput::error(
                     run_id,
-                    format!("Target agent '{}' not found in registry", target_agent_id),
+                    format!("Target agent '{target_agent_id}' not found in registry"),
                 );
             }
         };
@@ -417,7 +417,7 @@ impl SessionsSendTool {
                             );
                             // Send a continuation request to the sub-agent
                             let continue_request = RunRequest {
-                                run_id: format!("{}-continue", run_id),
+                                run_id: format!("{run_id}-continue"),
                                 input: "继续".to_string(),
                                 session_key: session_key_to_gateway(&target_session_key),
                                 timeout_secs: Some(args.timeout_seconds as u64),
@@ -453,7 +453,7 @@ impl SessionsSendTool {
                                             // Strip the truncation marker from original, append continuation
                                             let clean = content
                                                 .replace("\n\n---\n⚠️ 输出因 token 限制被截断。请回复「继续」获取剩余内容。", "");
-                                            format!("{}{}", clean, cont_text)
+                                            format!("{clean}{cont_text}")
                                         }
                                         None => content,
                                     }
@@ -498,7 +498,7 @@ impl SessionsSendTool {
                     error = %e,
                     "sessions_send: execution failed"
                 );
-                SessionsSendOutput::error(run_id, format!("Execution failed: {}", e))
+                SessionsSendOutput::error(run_id, format!("Execution failed: {e}"))
             }
             Err(_) => {
                 warn!(

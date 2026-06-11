@@ -423,13 +423,13 @@ impl MemoryConfigApi {
             .rpc_call("memory_config.get", serde_json::Value::Null)
             .await?;
 
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse memory config: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse memory config: {e}"))
     }
 
     /// Update memory configuration
     pub async fn update(state: &DashboardState, config: MemoryConfig) -> Result<(), String> {
         let params = serde_json::to_value(&config)
-            .map_err(|e| format!("Failed to serialize config: {}", e))?;
+            .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
         state.rpc_call("memory_config.update", params).await?;
         Ok(())
@@ -448,7 +448,7 @@ impl RerankConfigApi {
         let result = state
             .rpc_call("rerank_config.get", serde_json::Value::Null)
             .await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse rerank config: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse rerank config: {e}"))
     }
 
     /// Get rerank configuration with a specific provider's API key from vault
@@ -462,13 +462,13 @@ impl RerankConfigApi {
                 serde_json::json!({ "provider": provider }),
             )
             .await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse rerank config: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse rerank config: {e}"))
     }
 
     /// Update rerank configuration
     pub async fn update(state: &DashboardState, config: RerankConfig) -> Result<(), String> {
         let params = serde_json::to_value(&config)
-            .map_err(|e| format!("Failed to serialize rerank config: {}", e))?;
+            .map_err(|e| format!("Failed to serialize rerank config: {e}"))?;
         state.rpc_call("rerank_config.update", params).await?;
         Ok(())
     }
@@ -479,8 +479,8 @@ impl RerankConfigApi {
         config: RerankConfig,
     ) -> Result<TestRerankResponse, String> {
         let params = serde_json::to_value(&config)
-            .map_err(|e| format!("Failed to serialize rerank config: {}", e))?;
+            .map_err(|e| format!("Failed to serialize rerank config: {e}"))?;
         let result = state.rpc_call("rerank_config.test", params).await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse test response: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse test response: {e}"))
     }
 }

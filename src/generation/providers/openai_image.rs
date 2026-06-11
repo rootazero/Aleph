@@ -136,7 +136,7 @@ impl OpenAiImageProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         // Use pre-resolved URL if available, otherwise resolve from base_url
         let resolved = resolved_url.unwrap_or_else(|| {
@@ -176,7 +176,7 @@ impl OpenAiImageProvider {
 
         // Build size string from width/height if both are provided and positive
         let size = match (request.params.width, request.params.height) {
-            (Some(w), Some(h)) if w > 0 && h > 0 => Some(format!("{}x{}", w, h)),
+            (Some(w), Some(h)) if w > 0 && h > 0 => Some(format!("{w}x{h}")),
             _ => None,
         };
 
@@ -228,12 +228,12 @@ impl OpenAiImageProvider {
             ),
             404 => GenerationError::model_not_found(&self.model, "openai-image"),
             500..=599 => GenerationError::provider(
-                format!("OpenAI server error: {}", body),
+                format!("OpenAI server error: {body}"),
                 Some(status.as_u16()),
                 "openai-image",
             ),
             _ => GenerationError::provider(
-                format!("Unexpected error: {}", body),
+                format!("Unexpected error: {body}"),
                 Some(status.as_u16()),
                 "openai-image",
             ),
@@ -351,7 +351,7 @@ impl GenerationProvider for OpenAiImageProvider {
                     if e.is_timeout() {
                         GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
                     } else if e.is_connect() {
-                        GenerationError::network(format!("Connection failed: {}", e))
+                        GenerationError::network(format!("Connection failed: {e}"))
                     } else {
                         GenerationError::network(e.to_string())
                     }
@@ -359,7 +359,7 @@ impl GenerationProvider for OpenAiImageProvider {
 
             let status = response.status();
             let response_text = response.text().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read response body: {}", e))
+                GenerationError::network(format!("Failed to read response body: {e}"))
             })?;
 
             // Handle non-success status codes
@@ -380,7 +380,7 @@ impl GenerationProvider for OpenAiImageProvider {
                         body = %response_text,
                         "Failed to parse OpenAI response"
                     );
-                    GenerationError::serialization(format!("Failed to parse response: {}", e))
+                    GenerationError::serialization(format!("Failed to parse response: {e}"))
                 })?;
 
             // Extract first image (DALL-E 3 only supports n=1)
@@ -396,7 +396,7 @@ impl GenerationProvider for OpenAiImageProvider {
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(b64)
                     .map_err(|e| {
-                        GenerationError::serialization(format!("Failed to decode base64: {}", e))
+                        GenerationError::serialization(format!("Failed to decode base64: {e}"))
                     })?;
                 GenerationData::bytes(bytes)
             } else {

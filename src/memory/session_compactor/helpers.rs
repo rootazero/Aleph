@@ -123,7 +123,7 @@ impl SessionCompactor {
         agent_id: &str,
         depth: u32,
     ) -> Result<usize, AlephError> {
-        let path_prefix = format!("aleph://session/{}/d{}/", session_id, depth);
+        let path_prefix = format!("aleph://session/{session_id}/d{depth}/");
         let raws = self
             .database
             .get_raw_by_path_prefix(&path_prefix, agent_id, 500)
@@ -138,7 +138,7 @@ impl SessionCompactor {
         seq: usize,
         content: &str,
     ) -> Result<(), AlephError> {
-        let path = format!("aleph://session/{}/raw/{}", session_id, seq);
+        let path = format!("aleph://session/{session_id}/raw/{seq}");
         let raw = RawMemory::new(content.to_string(), RawMemorySource::SessionCompressed)
             .with_agent("default")
             .with_session(session_id)
@@ -176,7 +176,7 @@ impl SessionCompactor {
         agent_id: &str,
         depth: u32,
     ) -> Result<Vec<crate::memory::store::raw_memory::RawMemory>, AlephError> {
-        let path_prefix = format!("aleph://session/{}/d{}/", session_id, depth);
+        let path_prefix = format!("aleph://session/{session_id}/d{depth}/");
         self.database
             .get_raw_by_path_prefix(&path_prefix, agent_id, 500)
             .await

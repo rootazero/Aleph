@@ -262,7 +262,7 @@ pub async fn handle(
     } else {
         registry.get(suffix).await
     }
-    .ok_or_else(|| ApiError::NotFound(format!("Agent '{}' not found", suffix)))?;
+    .ok_or_else(|| ApiError::NotFound(format!("Agent '{suffix}' not found")))?;
 
     // 4. Peer ID from header or fallback
     let peer_id = headers

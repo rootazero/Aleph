@@ -593,18 +593,16 @@ impl SeatbeltDriver {
             FsPolicy::WorkspaceOnly => {
                 profile.push_str(&format!(
                     "; workspace-only filesystem access\n\
-                     (allow file-read* (subpath \"{}\"))\n\
-                     (allow file-write* (subpath \"{}\"))\n",
-                    cwd_str, cwd_str
+                     (allow file-read* (subpath \"{cwd_str}\"))\n\
+                     (allow file-write* (subpath \"{cwd_str}\"))\n"
                 ));
                 writable_roots.push(cwd);
             }
             FsPolicy::ReadPaths(paths) => {
                 profile.push_str(&format!(
                     "; workspace read/write\n\
-                     (allow file-read* (subpath \"{}\"))\n\
-                     (allow file-write* (subpath \"{}\"))\n",
-                    cwd_str, cwd_str
+                     (allow file-read* (subpath \"{cwd_str}\"))\n\
+                     (allow file-write* (subpath \"{cwd_str}\"))\n"
                 ));
                 writable_roots.push(cwd);
                 for path in paths {
@@ -614,15 +612,14 @@ impl SeatbeltDriver {
                             path.display()
                         ))
                     })?);
-                    profile.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", path_str));
+                    profile.push_str(&format!("(allow file-read* (subpath \"{path_str}\"))\n"));
                 }
             }
             FsPolicy::WritePaths(paths) => {
                 profile.push_str(&format!(
                     "; workspace read/write\n\
-                     (allow file-read* (subpath \"{}\"))\n\
-                     (allow file-write* (subpath \"{}\"))\n",
-                    cwd_str, cwd_str
+                     (allow file-read* (subpath \"{cwd_str}\"))\n\
+                     (allow file-write* (subpath \"{cwd_str}\"))\n"
                 ));
                 writable_roots.push(cwd);
                 for path in paths {
@@ -633,8 +630,7 @@ impl SeatbeltDriver {
                         ))
                     })?);
                     profile.push_str(&format!(
-                        "(allow file-read* file-write* (subpath \"{}\"))\n",
-                        path_str
+                        "(allow file-read* file-write* (subpath \"{path_str}\"))\n"
                     ));
                     writable_roots.push(path);
                 }
@@ -648,7 +644,7 @@ impl SeatbeltDriver {
                             path.display()
                         ))
                     })?);
-                    profile.push_str(&format!("(deny file-read* (subpath \"{}\"))\n", path_str));
+                    profile.push_str(&format!("(deny file-read* (subpath \"{path_str}\"))\n"));
                 }
             }
             FsPolicy::FullWrite { exclude } => {
@@ -661,8 +657,7 @@ impl SeatbeltDriver {
                         ))
                     })?);
                     profile.push_str(&format!(
-                        "(deny file-read* file-write* (subpath \"{}\"))\n",
-                        path_str
+                        "(deny file-read* file-write* (subpath \"{path_str}\"))\n"
                     ));
                 }
                 // FullWrite is explicit danger-full-access — caller opted out
@@ -707,7 +702,7 @@ impl SeatbeltDriver {
                     if let Some(path_str) = path.to_str() {
                         let path_str = escape_sbpl(path_str);
                         profile
-                            .push_str(&format!("(deny file-write* (subpath \"{}\"))\n", path_str));
+                            .push_str(&format!("(deny file-write* (subpath \"{path_str}\"))\n"));
                     }
                 }
             }
@@ -846,8 +841,7 @@ impl SeatbeltDriver {
                 for host in hosts {
                     let escaped = escape_sbpl(host);
                     profile.push_str(&format!(
-                        "(allow network-outbound (remote ip \"{}\"))\n",
-                        escaped
+                        "(allow network-outbound (remote ip \"{escaped}\"))\n"
                     ));
                 }
             }
@@ -856,8 +850,7 @@ impl SeatbeltDriver {
                 profile.push_str("; proxy-only network access\n");
                 for port in ports {
                     profile.push_str(&format!(
-                        "(allow network-outbound (remote ip \"localhost:{}\"))\n",
-                        port
+                        "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
                     ));
                 }
             }

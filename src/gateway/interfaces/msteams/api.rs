@@ -79,7 +79,7 @@ impl BotFrameworkClient {
             .json(activity)
             .send()
             .await
-            .map_err(|e| ChannelError::SendFailed(format!("HTTP PUT failed: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("HTTP PUT failed: {e}")))?;
 
         let status = resp.status();
         if status.is_success() {
@@ -117,7 +117,7 @@ impl BotFrameworkClient {
             .bearer_auth(&token)
             .send()
             .await
-            .map_err(|e| ChannelError::SendFailed(format!("HTTP DELETE failed: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("HTTP DELETE failed: {e}")))?;
 
         let status = resp.status();
         if status.is_success() {
@@ -163,14 +163,14 @@ impl BotFrameworkClient {
             .json(activity)
             .send()
             .await
-            .map_err(|e| ChannelError::SendFailed(format!("HTTP POST failed: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("HTTP POST failed: {e}")))?;
 
         let status = resp.status();
         if status.is_success() {
             let response: ActivityResponse = resp
                 .json()
                 .await
-                .map_err(|e| ChannelError::Internal(format!("Failed to parse response: {}", e)))?;
+                .map_err(|e| ChannelError::Internal(format!("Failed to parse response: {e}")))?;
             debug!(url = %url, id = %response.id, "Activity sent successfully");
             Ok(response)
         } else {
@@ -190,18 +190,18 @@ fn ensure_trailing_slash(url: &str) -> String {
     if url.ends_with('/') {
         url.to_string()
     } else {
-        format!("{}/", url)
+        format!("{url}/")
     }
 }
 
 fn map_http_error(status: u16, body: &str, retry_after: Option<u64>) -> ChannelError {
     match status {
-        401 | 403 => ChannelError::AuthFailed(format!("HTTP {}: {}", status, body)),
+        401 | 403 => ChannelError::AuthFailed(format!("HTTP {status}: {body}")),
         429 => ChannelError::RateLimited {
             retry_after_secs: retry_after.unwrap_or(5),
         },
-        404 => ChannelError::SendFailed(format!("Not found: {}", body)),
-        _ => ChannelError::SendFailed(format!("HTTP {}: {}", status, body)),
+        404 => ChannelError::SendFailed(format!("Not found: {body}")),
+        _ => ChannelError::SendFailed(format!("HTTP {status}: {body}")),
     }
 }
 

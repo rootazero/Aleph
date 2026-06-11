@@ -14,8 +14,8 @@ pub(super) fn xml_escape(s: &str) -> String {
 /// For `<body>Hello world</body>`, returns `Some("Hello world")`.
 /// Handles self-closing tags by returning `None`.
 pub(super) fn extract_tag_content<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open_tag = format!("<{}", tag);
-    let close_tag = format!("</{}>", tag);
+    let open_tag = format!("<{tag}");
+    let close_tag = format!("</{tag}>");
 
     let start_pos = xml.find(&open_tag)?;
     // Find the end of the opening tag
@@ -39,7 +39,7 @@ pub(super) fn extract_tag_content<'a>(xml: &'a str, tag: &str) -> Option<&'a str
 /// - `from='user@example.com'` -> `Some("user@example.com")`
 pub(super) fn extract_attribute<'a>(xml: &'a str, attr: &str) -> Option<&'a str> {
     // Try double quotes first: attr="value"
-    let dq_pattern = format!("{}=\"", attr);
+    let dq_pattern = format!("{attr}=\"");
     if let Some(start) = xml.find(&dq_pattern) {
         let value_start = start + dq_pattern.len();
         if let Some(value_end) = xml[value_start..].find('"') {
@@ -48,7 +48,7 @@ pub(super) fn extract_attribute<'a>(xml: &'a str, attr: &str) -> Option<&'a str>
     }
 
     // Try single quotes: attr='value'
-    let sq_pattern = format!("{}='", attr);
+    let sq_pattern = format!("{attr}='");
     if let Some(start) = xml.find(&sq_pattern) {
         let value_start = start + sq_pattern.len();
         if let Some(value_end) = xml[value_start..].find('\'') {

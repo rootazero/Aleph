@@ -112,7 +112,7 @@ impl SmartRouter {
                             agent: agent.clone(),
                             confidence: 0.95,
                             method: RoutingMethod::ExactName,
-                            reason: Some(format!("Quoted alias match: {}", quoted)),
+                            reason: Some(format!("Quoted alias match: {quoted}")),
                         });
                     }
                 }

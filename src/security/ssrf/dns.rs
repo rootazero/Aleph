@@ -29,7 +29,7 @@ pub(crate) async fn resolve_and_validate(
     }
 
     // DNS resolution
-    let lookup_addr = format!("{}:{}", host, port);
+    let lookup_addr = format!("{host}:{port}");
     let addrs: Vec<SocketAddr> = tokio::net::lookup_host(&lookup_addr)
         .await
         .map_err(|e| SsrfError::DnsResolutionFailed {

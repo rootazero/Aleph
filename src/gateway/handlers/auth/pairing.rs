@@ -67,7 +67,7 @@ pub async fn handle_pairing_approve(
                 return JsonRpcResponse::error(
                     request.id,
                     -32603,
-                    format!("Failed to approve sender: {}", e),
+                    format!("Failed to approve sender: {e}"),
                 );
             }
             info!(channel = %channel, sender_id = %sender_id, "Channel sender approved");
@@ -113,7 +113,7 @@ pub async fn handle_pairing_approve(
                 return JsonRpcResponse::error(
                     request.id,
                     -32603,
-                    format!("Failed to store device: {}", e),
+                    format!("Failed to store device: {e}"),
                 );
             }
 
@@ -131,7 +131,7 @@ pub async fn handle_pairing_approve(
                 return JsonRpcResponse::error(
                     request.id,
                     -32603,
-                    format!("Failed to register device: {}", e),
+                    format!("Failed to register device: {e}"),
                 );
             }
 
@@ -146,7 +146,7 @@ pub async fn handle_pairing_approve(
                     return JsonRpcResponse::error(
                         request.id,
                         -32603,
-                        format!("Failed to issue token: {}", e),
+                        format!("Failed to issue token: {e}"),
                     );
                 }
             };
@@ -202,7 +202,7 @@ pub async fn handle_pairing_approve(
                 return JsonRpcResponse::error(
                     request.id,
                     -32603,
-                    format!("Failed to register node: {}", e),
+                    format!("Failed to register node: {e}"),
                 );
             }
             let signed = match ctx.token_manager.issue_token(
@@ -216,7 +216,7 @@ pub async fn handle_pairing_approve(
                     return JsonRpcResponse::error(
                         request.id,
                         -32603,
-                        format!("Failed to issue node token: {}", e),
+                        format!("Failed to issue node token: {e}"),
                     );
                 }
             };
@@ -252,7 +252,7 @@ pub async fn handle_pairing_approve(
         return JsonRpcResponse::error(
             request.id,
             -32603,
-            format!("Failed to store device: {}", e),
+            format!("Failed to store device: {e}"),
         );
     }
 
@@ -271,7 +271,7 @@ pub async fn handle_pairing_approve(
         return JsonRpcResponse::error(
             request.id,
             -32603,
-            format!("Failed to register device: {}", e),
+            format!("Failed to register device: {e}"),
         );
     }
 
@@ -289,7 +289,7 @@ pub async fn handle_pairing_approve(
             return JsonRpcResponse::error(
                 request.id,
                 -32603,
-                format!("Failed to issue token: {}", e),
+                format!("Failed to issue token: {e}"),
             );
         }
     };
@@ -352,7 +352,7 @@ pub async fn handle_pairing_reject(
             JsonRpcResponse::error(
                 request.id,
                 -32603,
-                format!("Failed to cancel pairing: {}", e),
+                format!("Failed to cancel pairing: {e}"),
             )
         }
     }
@@ -370,7 +370,7 @@ pub async fn handle_pairing_list(
             return JsonRpcResponse::error(
                 request.id,
                 -32603,
-                format!("Failed to list pending pairings: {}", e),
+                format!("Failed to list pending pairings: {e}"),
             );
         }
     };
@@ -544,7 +544,7 @@ pub async fn handle_pairing_start_browser(
             return JsonRpcResponse::error(
                 request.id,
                 -32603,
-                format!("Failed to create browser pairing: {}", e),
+                format!("Failed to create browser pairing: {e}"),
             );
         }
     };
@@ -610,7 +610,7 @@ pub async fn handle_pairing_start_node(
             return JsonRpcResponse::error(
                 request.id,
                 -32603,
-                format!("Failed to create node pairing: {}", e),
+                format!("Failed to create node pairing: {e}"),
             );
         }
     };

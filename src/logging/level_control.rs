@@ -87,7 +87,7 @@ impl LogLevel {
             3 => LogLevel::Debug,
             4 => LogLevel::Trace,
             _ => {
-                debug_assert!(false, "Invalid LogLevel u8 value: {}", value);
+                debug_assert!(false, "Invalid LogLevel u8 value: {value}");
                 LogLevel::Info // Default fallback
             }
         }

@@ -149,7 +149,7 @@ pub fn Settings() -> impl IntoView {
                         let total = 3usize;
                         view! {
                             <span class="text-xs font-mono text-text-tertiary">
-                                {format!("{}/{} ready", done, total)}
+                                {format!("{done}/{total} ready")}
                             </span>
                         }
                     }}

@@ -54,7 +54,7 @@ pub fn validate_plugin(plugin_dir: &Path) -> ValidationResult {
         Err(e) => {
             result
                 .errors
-                .push(format!("Failed to parse manifest: {}", e));
+                .push(format!("Failed to parse manifest: {e}"));
             return result;
         }
     };
@@ -116,8 +116,7 @@ pub fn validate_plugin(plugin_dir: &Path) -> ValidationResult {
             let parts: Vec<&str> = version.split('.').collect();
             if parts.len() != 3 || !parts.iter().all(|p| p.parse::<u32>().is_ok()) {
                 result.warnings.push(format!(
-                    "Version '{}' is not valid semver (expected X.Y.Z)",
-                    version
+                    "Version '{version}' is not valid semver (expected X.Y.Z)"
                 ));
             }
         }
@@ -175,8 +174,7 @@ pub fn validate_plugin(plugin_dir: &Path) -> ValidationResult {
     let hook_count = manifest.hooks_v2.as_ref().map_or(0, |h| h.len());
     if result.errors.is_empty() {
         result.info.push(format!(
-            "Validation passed: {} tool(s), {} hook(s)",
-            tool_count, hook_count
+            "Validation passed: {tool_count} tool(s), {hook_count} hook(s)"
         ));
     }
 

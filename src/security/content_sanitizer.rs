@@ -150,7 +150,7 @@ const FORMAT_MARKERS: &[&str] = &[
 /// Generate a random 8-byte hex ID.
 fn generate_boundary_id() -> String {
     let bytes = rand::rng().random::<[u8; 8]>();
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Wraps external content with boundary markers for safe LLM injection.
@@ -248,13 +248,7 @@ pub fn wrap_external_content_with_report(content: &str, source: ContentSource) -
     };
 
     let wrapped = format!(
-        "<<<EXTERNAL_UNTRUSTED_CONTENT id=\"{id}\" source=\"{source}\"{suspicious}{scrubbed_attr}{invisible_attr}>\n{content}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"{id}\">",
-        id = id,
-        source = source_label,
-        suspicious = suspicious_attr,
-        scrubbed_attr = scrubbed_attr,
-        invisible_attr = invisible_attr,
-        content = scrubbed,
+        "<<<EXTERNAL_UNTRUSTED_CONTENT id=\"{id}\" source=\"{source_label}\"{suspicious_attr}{scrubbed_attr}{invisible_attr}>\n{scrubbed}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"{id}\">",
     );
     WrapReport {
         wrapped,

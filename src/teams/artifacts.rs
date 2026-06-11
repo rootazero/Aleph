@@ -525,8 +525,7 @@ impl SqliteArtifactStore {
         let conn = self.conn.lock().await;
         let placeholders = blocked_by.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
-            "SELECT COUNT(*) FROM task_artifacts WHERE id IN ({}) AND status != 'completed'",
-            placeholders
+            "SELECT COUNT(*) FROM task_artifacts WHERE id IN ({placeholders}) AND status != 'completed'"
         );
         let params_vec: Vec<&dyn rusqlite::types::ToSql> = blocked_by
             .iter()

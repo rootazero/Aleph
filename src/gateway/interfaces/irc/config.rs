@@ -69,7 +69,7 @@ impl IrcConfig {
         }
         for ch in &self.channels {
             if !ch.starts_with('#') && !ch.starts_with('&') {
-                return Err(format!("channel '{}' must start with '#' or '&'", ch));
+                return Err(format!("channel '{ch}' must start with '#' or '&'"));
             }
         }
         Ok(())

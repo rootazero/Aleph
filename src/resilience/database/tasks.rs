@@ -70,7 +70,7 @@ impl StateDatabase {
                 task.metadata_json,
             ],
         )
-        .map_err(|e| AlephError::config(format!("Failed to insert agent task: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to insert agent task: {e}")))?;
         Ok(())
     }
 
@@ -87,12 +87,12 @@ impl StateDatabase {
                 FROM agent_tasks WHERE id = ?1
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
         let result = stmt
             .query_row(params![task_id], agent_task_from_row)
             .optional()
-            .map_err(|e| AlephError::config(format!("Failed to get agent task: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to get agent task: {e}")))?;
 
         Ok(result)
     }
@@ -110,7 +110,7 @@ impl StateDatabase {
         // stay in sync with status even on crash.
         let tx = conn
             .transaction()
-            .map_err(|e| AlephError::config(format!("Failed to begin transaction: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to begin transaction: {e}")))?;
 
         let result = (|| -> rusqlite::Result<()> {
             // Simple update - timestamps handled separately for clarity
@@ -145,15 +145,14 @@ impl StateDatabase {
         match result {
             Ok(()) => {
                 tx.commit().map_err(|e| {
-                    AlephError::config(format!("Failed to commit transaction: {}", e))
+                    AlephError::config(format!("Failed to commit transaction: {e}"))
                 })?;
                 Ok(())
             }
             Err(e) => {
                 drop(tx); // implicit rollback on uncommitted transaction drop
                 Err(AlephError::config(format!(
-                    "Failed to update task status: {}",
-                    e
+                    "Failed to update task status: {e}"
                 )))
             }
         }
@@ -177,13 +176,13 @@ impl StateDatabase {
                 ORDER BY created_at DESC
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
         let tasks = stmt
             .query_map(params![session_id], agent_task_from_row)
-            .map_err(|e| AlephError::config(format!("Failed to query tasks: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query tasks: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect tasks: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to collect tasks: {e}")))?;
 
         Ok(tasks)
     }
@@ -209,13 +208,13 @@ impl StateDatabase {
                 ORDER BY CASE risk_level WHEN 'low' THEN 0 WHEN 'high' THEN 1 ELSE 2 END ASC, created_at ASC
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
         let tasks = stmt
             .query_map([], agent_task_from_row)
-            .map_err(|e| AlephError::config(format!("Failed to query tasks: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query tasks: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect tasks: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to collect tasks: {e}")))?;
 
         Ok(tasks)
     }
@@ -233,7 +232,7 @@ impl StateDatabase {
                 "#,
                 params![now],
             )
-            .map_err(|e| AlephError::config(format!("Failed to mark tasks: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to mark tasks: {e}")))?;
         Ok(count as u64)
     }
 

@@ -97,8 +97,7 @@ Example:
             Ok(mt) => mt,
             Err(e) => {
                 return Ok(AudioTranscribeOutput::err(format!(
-                    "Format detection failed: {}",
-                    e
+                    "Format detection failed: {e}"
                 )))
             }
         };
@@ -114,7 +113,7 @@ Example:
         let prompt = args
             .language
             .as_deref()
-            .map(|lang| format!("Transcribe this audio. Language: {}", lang))
+            .map(|lang| format!("Transcribe this audio. Language: {lang}"))
             .unwrap_or_else(|| "Transcribe this audio.".to_string());
 
         match self.pipeline.process(&input, &mt, Some(&prompt)).await {
@@ -129,8 +128,7 @@ Example:
                 }
             }
             Err(e) => Ok(AudioTranscribeOutput::err(format!(
-                "Transcription failed: {}",
-                e
+                "Transcription failed: {e}"
             ))),
         }
     }

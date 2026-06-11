@@ -36,7 +36,7 @@ impl GroupChatRenderer for TelegramGroupChatRenderer {
     ) -> RenderedContent {
         let names: Vec<&str> = participants.iter().map(|p| p.name.as_str()).collect();
         let topic_line = topic
-            .map(|t| format!("\n**主题**: {}", t))
+            .map(|t| format!("\n**主题**: {t}"))
             .unwrap_or_default();
         RenderedContent::markdown(format!(
             "🎭 **群聊模式已开启**\n**参与者**: {}{}\n\n_发送消息即可开始讨论，发送 /groupchat end 结束_",

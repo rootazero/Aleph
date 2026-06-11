@@ -270,8 +270,7 @@ impl MultiProviderRegistry {
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
         if !state.providers.contains_key(name) {
             return Err(crate::error::AlephError::provider(format!(
-                "Provider '{}' not found in registry",
-                name
+                "Provider '{name}' not found in registry"
             )));
         }
         state.default_name = name.to_string();

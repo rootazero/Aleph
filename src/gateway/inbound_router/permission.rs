@@ -197,10 +197,9 @@ impl InboundMessageRouter {
         let message = format!(
             "Hi! I'm Aleph, a personal AI assistant.\n\n\
             To chat with me, please have my owner approve your access.\n\n\
-            Your ID: {}\n\
-            Pairing code: {}\n\n\
-            Once approved, just send me a message!",
-            sender_id, code
+            Your ID: {sender_id}\n\
+            Pairing code: {code}\n\n\
+            Once approved, just send me a message!"
         );
 
         let outbound = OutboundMessage::text(ctx.reply_route.conversation_id.as_str(), message);

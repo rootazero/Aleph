@@ -69,7 +69,7 @@ impl ArenaManager {
         let shared = self
             .arenas
             .get(arena_id)
-            .ok_or_else(|| format!("Arena not found: {}", arena_id))?;
+            .ok_or_else(|| format!("Arena not found: {arena_id}"))?;
 
         let arena = shared.read().unwrap_or_else(|e| e.into_inner());
         let participant = arena
@@ -79,8 +79,7 @@ impl ArenaManager {
             .find(|p| p.agent_id == *agent_id)
             .ok_or_else(|| {
                 format!(
-                    "Agent '{}' is not a participant in arena {}",
-                    agent_id, arena_id
+                    "Agent '{agent_id}' is not a participant in arena {arena_id}"
                 )
             })?;
 
@@ -165,7 +164,7 @@ impl ArenaManager {
         let shared = self
             .arenas
             .get(arena_id)
-            .ok_or_else(|| format!("Arena not found: {}", arena_id))?;
+            .ok_or_else(|| format!("Arena not found: {arena_id}"))?;
 
         let mut arena = shared.write().unwrap_or_else(|e| e.into_inner());
 
@@ -176,7 +175,7 @@ impl ArenaManager {
             }
             ArenaStatus::Settling => { /* already settling, proceed */ }
             other => {
-                return Err(format!("Cannot settle arena in {:?} state", other));
+                return Err(format!("Cannot settle arena in {other:?} state"));
             }
         }
 

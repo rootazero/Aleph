@@ -100,8 +100,7 @@ pub fn validate_plugin_id(id: &str) -> Result<(), String> {
     for ch in id.chars() {
         if !ch.is_ascii_lowercase() && !ch.is_ascii_digit() && ch != '-' {
             return Err(format!(
-                "Invalid character '{}'. Only lowercase letters, numbers, and hyphens allowed",
-                ch
+                "Invalid character '{ch}'. Only lowercase letters, numbers, and hyphens allowed"
             ));
         }
     }
@@ -179,7 +178,7 @@ pub mod legacy {
     pub async fn parse_plugin_manifest(path: &Path) -> ExtensionResult<LegacyPluginManifest> {
         let content = tokio::fs::read_to_string(path).await?;
         let manifest: LegacyPluginManifest = serde_json::from_str(&content).map_err(|e| {
-            ExtensionError::invalid_manifest(path, format!("JSON parse error: {}", e))
+            ExtensionError::invalid_manifest(path, format!("JSON parse error: {e}"))
         })?;
         if manifest.name.is_empty() {
             return Err(ExtensionError::missing_field(path, "name"));
@@ -368,7 +367,7 @@ pub fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(
             }
 
             let frontmatter: T = serde_yaml::from_str(frontmatter_str)
-                .map_err(|e| ExtensionError::yaml_parse(path, format!("YAML error: {}", e)))?;
+                .map_err(|e| ExtensionError::yaml_parse(path, format!("YAML error: {e}")))?;
 
             Ok((frontmatter, body))
         }

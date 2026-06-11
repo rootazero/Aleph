@@ -135,7 +135,7 @@ impl SessionSearchTool {
                 .filter_map(|item| {
                     let (session_key, fact_path) = match &item.source {
                         ItemSource::Summary { session_id, layer } => {
-                            let path = format!("aleph://session/{}/{}", session_id, layer);
+                            let path = format!("aleph://session/{session_id}/{layer}");
                             (session_id.clone(), path)
                         }
                         ItemSource::Raw {
@@ -144,7 +144,7 @@ impl SessionSearchTool {
                             path,
                         } => {
                             let fact_path = path.clone().unwrap_or_else(|| {
-                                format!("aleph://session/{}/raw/{}", session_id, raw_id)
+                                format!("aleph://session/{session_id}/raw/{raw_id}")
                             });
                             (session_id.clone(), fact_path)
                         }
@@ -243,7 +243,7 @@ impl SessionSearchTool {
 
         notify_tool_result(
             "session_search",
-            &format!("找到 {} 条历史会话摘要", total_hits),
+            &format!("找到 {total_hits} 条历史会话摘要"),
             true,
         );
         Ok(SessionSearchOutput {

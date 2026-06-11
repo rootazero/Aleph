@@ -68,10 +68,10 @@ pub(crate) async fn edit_image_impl(
             .get(reference_image)
             .send()
             .await
-            .map_err(|e| GenerationError::network(format!("Failed to download image: {}", e)))?
+            .map_err(|e| GenerationError::network(format!("Failed to download image: {e}")))?
             .bytes()
             .await
-            .map_err(|e| GenerationError::network(format!("Failed to read image bytes: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to read image bytes: {e}")))?;
 
         let part = reqwest::multipart::Part::bytes(image_bytes.to_vec())
             .file_name("image.png")
@@ -94,7 +94,7 @@ pub(crate) async fn edit_image_impl(
             .decode(base64_data)
             .map_err(|e| {
                 GenerationError::invalid_parameters(
-                    format!("Invalid base64 image data: {}", e),
+                    format!("Invalid base64 image data: {e}"),
                     Some("reference_image".to_string()),
                 )
             })?;
@@ -113,7 +113,7 @@ pub(crate) async fn edit_image_impl(
                 .decode(mask_str)
                 .map_err(|e| {
                     GenerationError::invalid_parameters(
-                        format!("Invalid base64 mask data: {}", e),
+                        format!("Invalid base64 mask data: {e}"),
                         Some("mask".to_string()),
                     )
                 })?;
@@ -128,7 +128,7 @@ pub(crate) async fn edit_image_impl(
 
     // Add optional size
     if let (Some(w), Some(h)) = (request.params.width, request.params.height) {
-        form = form.text("size", format!("{}x{}", w, h));
+        form = form.text("size", format!("{w}x{h}"));
     }
 
     // Add optional n (number of images)
@@ -159,7 +159,7 @@ pub(crate) async fn edit_image_impl(
             if e.is_timeout() {
                 GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             } else if e.is_connect() {
-                GenerationError::network(format!("Connection failed: {}", e))
+                GenerationError::network(format!("Connection failed: {e}"))
             } else {
                 GenerationError::network(e.to_string())
             }
@@ -169,7 +169,7 @@ pub(crate) async fn edit_image_impl(
     let response_text = response
         .text()
         .await
-        .map_err(|e| GenerationError::network(format!("Failed to read response body: {}", e)))?;
+        .map_err(|e| GenerationError::network(format!("Failed to read response body: {e}")))?;
 
     // Handle non-success status codes
     if !status.is_success() {
@@ -190,7 +190,7 @@ pub(crate) async fn edit_image_impl(
                 body = %response_text,
                 "Failed to parse OpenAI-compatible edit response"
             );
-            GenerationError::serialization(format!("Failed to parse response: {}", e))
+            GenerationError::serialization(format!("Failed to parse response: {e}"))
         })?;
 
     // Extract first image
@@ -206,7 +206,7 @@ pub(crate) async fn edit_image_impl(
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(b64)
             .map_err(|e| {
-                GenerationError::serialization(format!("Failed to decode base64: {}", e))
+                GenerationError::serialization(format!("Failed to decode base64: {e}"))
             })?;
         GenerationData::bytes(bytes)
     } else {

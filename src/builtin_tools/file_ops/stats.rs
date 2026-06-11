@@ -55,7 +55,7 @@ pub async fn execute_stats(
     let mut skipped: usize = 0;
 
     for entry in glob::glob(&pattern_str)
-        .map_err(|e| ToolError::InvalidArgs(format!("Invalid glob pattern: {}", e)))?
+        .map_err(|e| ToolError::InvalidArgs(format!("Invalid glob pattern: {e}")))?
     {
         let path = match entry {
             Ok(p) => p,

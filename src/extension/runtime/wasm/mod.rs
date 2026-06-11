@@ -68,8 +68,7 @@ impl WasmRuntime {
 
         if !wasm_path.exists() {
             return Err(ExtensionError::Runtime(format!(
-                "WASM file not found: {:?}",
-                wasm_path
+                "WASM file not found: {wasm_path:?}"
             )));
         }
 
@@ -125,7 +124,7 @@ impl WasmRuntime {
                 host_functions::host_secret_exists,
             )
             .build()
-            .map_err(|e| ExtensionError::Runtime(format!("Failed to load WASM: {}", e)))?;
+            .map_err(|e| ExtensionError::Runtime(format!("Failed to load WASM: {e}")))?;
 
         let loaded = LoadedWasmPlugin {
             plugin: Mutex::new(plugin),
@@ -160,7 +159,7 @@ impl WasmRuntime {
             .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
 
         let input_json = serde_json::to_string(&input)
-            .map_err(|e| ExtensionError::Runtime(format!("Failed to serialize input: {}", e)))?;
+            .map_err(|e| ExtensionError::Runtime(format!("Failed to serialize input: {e}")))?;
 
         debug!(
             "Calling WASM handler '{}' with input: {}",
@@ -170,14 +169,14 @@ impl WasmRuntime {
         let mut plugin = loaded
             .plugin
             .lock()
-            .map_err(|e| ExtensionError::Runtime(format!("Failed to lock plugin: {}", e)))?;
+            .map_err(|e| ExtensionError::Runtime(format!("Failed to lock plugin: {e}")))?;
 
         let result = plugin
             .call::<&str, &str>(handler, &input_json)
-            .map_err(|e| ExtensionError::Runtime(format!("WASM call failed: {}", e)))?;
+            .map_err(|e| ExtensionError::Runtime(format!("WASM call failed: {e}")))?;
 
         let output: WasmToolOutput = serde_json::from_str(result)
-            .map_err(|e| ExtensionError::Runtime(format!("Failed to parse output: {}", e)))?;
+            .map_err(|e| ExtensionError::Runtime(format!("Failed to parse output: {e}")))?;
 
         Ok(output)
     }

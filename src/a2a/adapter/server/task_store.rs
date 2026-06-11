@@ -69,8 +69,7 @@ impl A2ATaskManager for TaskStore {
         let mut tasks = self.tasks.write().await;
         if tasks.contains_key(task_id) {
             return Err(A2AError::InvalidRequest(format!(
-                "Task already exists: {}",
-                task_id
+                "Task already exists: {task_id}"
             )));
         }
         evict_terminal_tasks(&mut tasks);

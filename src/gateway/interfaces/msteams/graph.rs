@@ -298,7 +298,7 @@ impl GraphClient {
         let url = if path.starts_with("http") {
             path.to_string()
         } else {
-            format!("{}{}", GRAPH_BASE_URL, path)
+            format!("{GRAPH_BASE_URL}{path}")
         };
 
         let token = self.token_source.get_token().await?;
@@ -422,8 +422,7 @@ impl GraphClient {
         // Escape single quotes for OData filter
         let escaped = encode_odata_param(query);
         let filter = format!(
-            "resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'{}')",
-            escaped
+            "resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'{escaped}')"
         );
         let url = format!(
             "{}/groups?$filter={}&$top={}&$select=id,displayName",
@@ -664,8 +663,7 @@ impl GraphClient {
         // In practice, the actual file URL would be constructed from SharePoint
         // This is a simplified return - in production you'd parse the actual response
         Ok(format!(
-            "https://graph.microsoft.com/v1.0/$sharepoint+upload+placeholder+{}",
-            file_name
+            "https://graph.microsoft.com/v1.0/$sharepoint+upload+placeholder+{file_name}"
         ))
     }
 
@@ -678,7 +676,7 @@ impl GraphClient {
         let url = if path.starts_with("http") {
             path.to_string()
         } else {
-            format!("{}{}", GRAPH_BASE_URL, path)
+            format!("{GRAPH_BASE_URL}{path}")
         };
 
         let token = self.token_source.get_token().await?;
@@ -711,7 +709,7 @@ impl GraphClient {
         let url = if path.starts_with("http") {
             path.to_string()
         } else {
-            format!("{}{}", GRAPH_BASE_URL, path)
+            format!("{GRAPH_BASE_URL}{path}")
         };
 
         let token = self.token_source.get_token().await?;
@@ -748,7 +746,7 @@ impl GraphClient {
         let url = if path.starts_with("http") {
             path.to_string()
         } else {
-            format!("{}{}", GRAPH_BASE_URL, path)
+            format!("{GRAPH_BASE_URL}{path}")
         };
 
         let token = self.token_source.get_token().await?;
@@ -833,7 +831,7 @@ fn encode_uri_component(value: &str) -> String {
             '/' => result.push_str("%2F"),
             _ => {
                 for byte in c.to_string().as_bytes() {
-                    write!(&mut result, "%{:02X}", byte).unwrap();
+                    write!(&mut result, "%{byte:02X}").unwrap();
                 }
             }
         }
@@ -848,17 +846,17 @@ fn map_graph_error(status: u16, body: &str) -> ChannelError {
         if let Some(error) = error_resp.error {
             let code = error.code.unwrap_or_default();
             let message = error.message.unwrap_or_default();
-            return ChannelError::Internal(format!("Graph API error [{}]: {}", code, message));
+            return ChannelError::Internal(format!("Graph API error [{code}]: {message}"));
         }
     }
 
     match status {
-        401 | 403 => ChannelError::AuthFailed(format!("Graph API {}: {}", status, body)),
+        401 | 403 => ChannelError::AuthFailed(format!("Graph API {status}: {body}")),
         404 => ChannelError::Internal("Graph API resource not found".into()),
         429 => ChannelError::RateLimited {
             retry_after_secs: 5,
         },
-        _ => ChannelError::Internal(format!("Graph API HTTP {}: {}", status, body)),
+        _ => ChannelError::Internal(format!("Graph API HTTP {status}: {body}")),
     }
 }
 

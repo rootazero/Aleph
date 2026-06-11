@@ -42,7 +42,7 @@ pub fn sse_event_stream(response: reqwest::Response) -> BoxStream<'static, Resul
 
     let stream = response
         .bytes_stream()
-        .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
+        .map_err(|e| AlephError::network(format!("Stream error: {e}")))
         .try_filter_map(move |chunk| {
             let buf = buf.clone();
             async move {

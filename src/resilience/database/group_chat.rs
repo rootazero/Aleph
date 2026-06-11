@@ -52,7 +52,7 @@ impl StateDatabase {
             "#,
             params![id, topic, source_channel, source_session_key, now, now],
         )
-        .map_err(|e| AlephError::config(format!("Failed to insert group chat session: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to insert group chat session: {e}")))?;
         Ok(())
     }
 
@@ -73,7 +73,7 @@ impl StateDatabase {
             params![status, now, session_id],
         )
         .map_err(|e| {
-            AlephError::config(format!("Failed to update group chat session status: {}", e))
+            AlephError::config(format!("Failed to update group chat session status: {e}"))
         })?;
         Ok(())
     }
@@ -110,7 +110,7 @@ impl StateDatabase {
                 now
             ],
         )
-        .map_err(|e| AlephError::config(format!("Failed to insert group chat turn: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to insert group chat turn: {e}")))?;
         Ok(())
     }
 
@@ -128,7 +128,7 @@ impl StateDatabase {
                 "#,
             )
             .map_err(|e| {
-                AlephError::config(format!("Failed to prepare group chat turns query: {}", e))
+                AlephError::config(format!("Failed to prepare group chat turns query: {e}"))
             })?;
 
         let turns = stmt
@@ -143,10 +143,10 @@ impl StateDatabase {
                     timestamp: row.get::<_, i64>(6)?,
                 })
             })
-            .map_err(|e| AlephError::config(format!("Failed to query group chat turns: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query group chat turns: {e}")))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| {
-                AlephError::config(format!("Failed to collect group chat turns: {}", e))
+                AlephError::config(format!("Failed to collect group chat turns: {e}"))
             })?;
 
         Ok(turns)
@@ -165,7 +165,7 @@ impl StateDatabase {
                 "#,
             )
             .map_err(|e| {
-                AlephError::config(format!("Failed to prepare active group chats query: {}", e))
+                AlephError::config(format!("Failed to prepare active group chats query: {e}"))
             })?;
 
         let sessions = stmt
@@ -177,10 +177,10 @@ impl StateDatabase {
                     created_at: row.get::<_, i64>(3)?,
                 })
             })
-            .map_err(|e| AlephError::config(format!("Failed to query active group chats: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query active group chats: {e}")))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| {
-                AlephError::config(format!("Failed to collect active group chats: {}", e))
+                AlephError::config(format!("Failed to collect active group chats: {e}"))
             })?;
 
         Ok(sessions)

@@ -259,7 +259,7 @@ impl ChannelFactory for MatrixChannelFactory {
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let config: MatrixConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid Matrix config: {}", e)))?;
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid Matrix config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 

@@ -118,7 +118,7 @@ impl ImageGenerateTool {
         } else {
             args.prompt.clone()
         };
-        notify_tool_start(Self::NAME, &format!("生成图像: {}", prompt_display));
+        notify_tool_start(Self::NAME, &format!("生成图像: {prompt_display}"));
 
         info!(prompt = %args.prompt, provider = ?args.provider, "Starting image generation");
 
@@ -129,7 +129,7 @@ impl ImageGenerateTool {
 
             if let Some(name) = &args.provider {
                 let provider = registry.get(name).ok_or_else(|| {
-                    let error_msg = format!("Provider '{}' not found", name);
+                    let error_msg = format!("Provider '{name}' not found");
                     notify_tool_result(Self::NAME, &error_msg, false);
                     ToolError::InvalidArgs(error_msg)
                 })?;
@@ -137,7 +137,7 @@ impl ImageGenerateTool {
                 // Check if provider supports image generation
                 if !provider.supports(GenerationType::Image) {
                     let error_msg =
-                        format!("Provider '{}' does not support image generation", name);
+                        format!("Provider '{name}' does not support image generation");
                     notify_tool_result(Self::NAME, &error_msg, false);
                     return Err(ToolError::InvalidArgs(error_msg));
                 }
@@ -179,7 +179,7 @@ impl ImageGenerateTool {
         // Execute generation
         let output: crate::generation::GenerationOutput =
             provider.generate(request).await.map_err(|e| {
-                let error_msg = format!("Image generation failed: {}", e);
+                let error_msg = format!("Image generation failed: {e}");
                 notify_tool_result(Self::NAME, &error_msg, false);
                 ToolError::from(e)
             })?;
@@ -201,7 +201,7 @@ impl ImageGenerateTool {
                     .content_type
                     .as_deref()
                     .unwrap_or("image/png");
-                let data_url = format!("data:{};base64,{}", content_type, base64_data);
+                let data_url = format!("data:{content_type};base64,{base64_data}");
                 (data_url, "data_url".to_string())
             }
         };
@@ -215,8 +215,7 @@ impl ImageGenerateTool {
 
         // Notify success
         let result_summary = format!(
-            "图像生成完成 ({} ms, provider: {})",
-            duration_ms, provider_name
+            "图像生成完成 ({duration_ms} ms, provider: {provider_name})"
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 

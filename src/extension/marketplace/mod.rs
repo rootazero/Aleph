@@ -232,8 +232,7 @@ impl MarketplaceManager {
 
         match results.len() {
             0 => Err(format!(
-                "Plugin '{}' not found. Try 'aleph plugin marketplace update' first.",
-                plugin_name
+                "Plugin '{plugin_name}' not found. Try 'aleph plugin marketplace update' first."
             )),
             1 => {
                 let result = &results[0];

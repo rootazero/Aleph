@@ -66,8 +66,8 @@ pub(crate) async fn convert_message(
                     .resolve_description(file_unique_id, "")
                     .await;
                 match desc {
-                    Some(d) => format!("[Sticker: {} | {}]", emoji, d),
-                    None => format!("[Sticker: {}]", emoji),
+                    Some(d) => format!("[Sticker: {emoji} | {d}]"),
+                    None => format!("[Sticker: {emoji}]"),
                 }
             }
             _ => String::new(),

@@ -94,8 +94,7 @@ impl Persona {
         }
         if self.system_prompt.chars().count() > MAX_SYSTEM_PROMPT_LEN {
             return Err(GroupChatError::InvalidPersona(format!(
-                "persona system_prompt exceeds maximum length of {} characters",
-                MAX_SYSTEM_PROMPT_LEN
+                "persona system_prompt exceeds maximum length of {MAX_SYSTEM_PROMPT_LEN} characters"
             )));
         }
         Ok(())
@@ -222,7 +221,7 @@ impl FromStr for GroupChatStatus {
             s if s.eq_ignore_ascii_case("active") => Ok(GroupChatStatus::Active),
             s if s.eq_ignore_ascii_case("paused") => Ok(GroupChatStatus::Paused),
             s if s.eq_ignore_ascii_case("ended") => Ok(GroupChatStatus::Ended),
-            _ => Err(format!("unknown group chat status: '{}'", s)),
+            _ => Err(format!("unknown group chat status: '{s}'")),
         }
     }
 }

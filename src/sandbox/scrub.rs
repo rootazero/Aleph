@@ -49,7 +49,7 @@ pub fn scrub_secrets_bytes<'a>(bytes: &'a [u8], injected: &[InjectedSecret]) -> 
             if is_whitelisted(&working[start..end], injected) {
                 continue;
             }
-            let replacement = format!("[REDACTED:{}]", name).into_bytes();
+            let replacement = format!("[REDACTED:{name}]").into_bytes();
             working.splice(start..end, replacement);
             hits.push(*name);
         }

@@ -236,8 +236,7 @@ impl AlephTool for AcpSwitchTool {
             .await
             .unwrap_or_else(|| args.target.clone());
         let msg = format!(
-            "Switched to {}. Messages will be forwarded to this agent.",
-            display_name
+            "Switched to {display_name}. Messages will be forwarded to this agent."
         );
 
         info!(target = %args.target, "ACP agent switch");
@@ -439,7 +438,7 @@ fn parse_mode(s: &str) -> Result<AdapterMode> {
         "native_acp" => Ok(AdapterMode::NativeAcp),
         _ => Err(crate::acp::protocol::AcpOperationError::new(
             crate::acp::protocol::AcpErrorCode::ModeUnsupported,
-            format!("Invalid mode '{}'. Use 'oneshot' or 'native_acp'.", s),
+            format!("Invalid mode '{s}'. Use 'oneshot' or 'native_acp'."),
         )
         .into()),
     }

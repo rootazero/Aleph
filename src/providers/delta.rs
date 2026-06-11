@@ -356,7 +356,7 @@ impl DeltaCollector {
             .unwrap_or(Value::Object(serde_json::Map::new()));
         // Generate a deterministic synthetic id from the tool name so the
         // harness can correlate tool results on subsequent turns.
-        let id = format!("json_{}", name);
+        let id = format!("json_{name}");
         Some(NativeToolCall {
             id,
             name,

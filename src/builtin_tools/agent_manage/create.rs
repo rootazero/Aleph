@@ -78,15 +78,13 @@ pub fn validate_agent_id(id: &str) -> std::result::Result<(), String> {
     let first = chars.next().unwrap(); // safe: checked non-empty above
     if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
         return Err(format!(
-            "Agent ID must start with a lowercase letter or digit, got '{}'",
-            first
+            "Agent ID must start with a lowercase letter or digit, got '{first}'"
         ));
     }
     for ch in chars {
         if !ch.is_ascii_lowercase() && !ch.is_ascii_digit() && ch != '_' && ch != '-' {
             return Err(format!(
-                "Agent ID contains invalid character '{}'. Allowed: a-z, 0-9, _, -",
-                ch
+                "Agent ID contains invalid character '{ch}'. Allowed: a-z, 0-9, _, -"
             ));
         }
     }
@@ -278,15 +276,14 @@ impl AlephTool for AgentCreateTool {
         if let Some(ref prompt) = args.system_prompt {
             let agents_md = agent_state_dir.join("AGENTS.md");
             let content = format!(
-                "# {} Workspace\n\n\
+                "# {display_name} Workspace\n\n\
                  ## System Prompt\n\n\
-                 {}\n\n\
+                 {prompt}\n\n\
                  ## Instructions\n\n\
-                 Add workspace-specific instructions here.\n",
-                display_name, prompt
+                 Add workspace-specific instructions here.\n"
             );
             std::fs::write(&agents_md, content).map_err(|e| {
-                crate::error::AlephError::other(format!("Failed to write AGENTS.md: {}", e))
+                crate::error::AlephError::other(format!("Failed to write AGENTS.md: {e}"))
             })?;
         }
 
@@ -298,17 +295,16 @@ impl AlephTool for AgentCreateTool {
             } else {
                 let soul_name = args.name.as_deref().unwrap_or(&args.id);
                 let specialized = match args.description.as_deref() {
-                    Some(desc) => format!(" specialized in {}", desc),
+                    Some(desc) => format!(" specialized in {desc}"),
                     None => String::new(),
                 };
                 format!(
-                    "You are {}{}.\n\n\
+                    "You are {soul_name}{specialized}.\n\n\
                      ## Tone\n\
                      - Professional, friendly, concise\n\n\
                      ## Boundaries\n\
                      - Focus on your area of expertise\n\
-                     - Suggest switching to another agent for out-of-scope requests\n",
-                    soul_name, specialized
+                     - Suggest switching to another agent for out-of-scope requests\n"
                 )
             };
             if let Err(e) = std::fs::write(&soul_path, soul_content) {
@@ -321,8 +317,7 @@ impl AlephTool for AgentCreateTool {
         if !identity_path.exists() {
             let identity_name = args.name.as_deref().unwrap_or(&args.id);
             let identity_content = format!(
-                "- Name: {}\n- Emoji: \u{1f916}\n- Theme: professional\n",
-                identity_name
+                "- Name: {identity_name}\n- Emoji: \u{1f916}\n- Theme: professional\n"
             );
             if let Err(e) = std::fs::write(&identity_path, identity_content) {
                 warn!(agent_id = %args.id, path = %identity_path.display(), error = %e,

@@ -166,7 +166,7 @@ impl StabilityImageProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         Ok(Self {
             client,
@@ -275,12 +275,12 @@ impl StabilityImageProvider {
             ),
             404 => GenerationError::model_not_found(DEFAULT_MODEL, "stability-image"),
             500..=599 => GenerationError::provider(
-                format!("Stability AI server error: {}", body),
+                format!("Stability AI server error: {body}"),
                 Some(status.as_u16()),
                 "stability-image",
             ),
             _ => GenerationError::provider(
-                format!("Unexpected error: {}", body),
+                format!("Unexpected error: {body}"),
                 Some(status.as_u16()),
                 "stability-image",
             ),
@@ -398,7 +398,7 @@ impl GenerationProvider for StabilityImageProvider {
                     if e.is_timeout() {
                         GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
                     } else if e.is_connect() {
-                        GenerationError::network(format!("Connection failed: {}", e))
+                        GenerationError::network(format!("Connection failed: {e}"))
                     } else {
                         GenerationError::network(e.to_string())
                     }
@@ -406,7 +406,7 @@ impl GenerationProvider for StabilityImageProvider {
 
             let status = response.status();
             let response_text = response.text().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read response body: {}", e))
+                GenerationError::network(format!("Failed to read response body: {e}"))
             })?;
 
             // Handle non-success status codes
@@ -427,7 +427,7 @@ impl GenerationProvider for StabilityImageProvider {
                         body = %response_text,
                         "Failed to parse Stability AI response"
                     );
-                    GenerationError::serialization(format!("Failed to parse response: {}", e))
+                    GenerationError::serialization(format!("Failed to parse response: {e}"))
                 })?;
 
             // Check if any artifacts were returned
@@ -452,7 +452,7 @@ impl GenerationProvider for StabilityImageProvider {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(&first_artifact.base64)
                 .map_err(|e| {
-                    GenerationError::serialization(format!("Failed to decode base64: {}", e))
+                    GenerationError::serialization(format!("Failed to decode base64: {e}"))
                 })?;
 
             let data = GenerationData::bytes(bytes);

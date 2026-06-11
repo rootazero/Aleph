@@ -98,7 +98,7 @@ impl InboundContext {
                 .unwrap_or(&self.sender.id),
         );
         let role = if self.sender.is_owner { " (owner)" } else { "" };
-        lines.push(format!("Sender: {}{}", sender_name, role));
+        lines.push(format!("Sender: {sender_name}{role}"));
         if self.redact_ids && self.sender.display_name.is_some() {
             lines.push(format!(
                 "Sender ID: {}",
@@ -137,7 +137,7 @@ impl InboundContext {
             } else {
                 self.session.session_key.clone()
             };
-            lines.push(format!("Session: {}", session_val));
+            lines.push(format!("Session: {session_val}"));
         }
 
         // Active agent — agent names can be user-created via tools (R8), so
@@ -153,7 +153,7 @@ impl InboundContext {
         if self.message.has_attachments && !self.message.attachment_types.is_empty() {
             let count = self.message.attachment_types.len();
             let summary = format!("{} ({})", self.message.attachment_types.join(", "), count);
-            lines.push(format!("Attachments: {}", summary));
+            lines.push(format!("Attachments: {summary}"));
         }
 
         // Reply-to
@@ -163,7 +163,7 @@ impl InboundContext {
             } else {
                 reply.clone()
             };
-            lines.push(format!("Reply To: {}", reply_val));
+            lines.push(format!("Reply To: {reply_val}"));
         }
 
         // Voice mode

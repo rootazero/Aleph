@@ -267,7 +267,7 @@ where
         (summary, Some(e))
     } else if failed {
         let msg = if body.is_empty() {
-            format!("Remote A2A task ended in state {:?}", final_state)
+            format!("Remote A2A task ended in state {final_state:?}")
         } else {
             body
         };

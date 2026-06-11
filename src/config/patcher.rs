@@ -199,7 +199,7 @@ impl ConfigPatcher {
         let config_json = {
             let config = self.config.read().await;
             serde_json::to_value(&*config).map_err(|e| {
-                AlephError::invalid_config(format!("Failed to serialize config to JSON: {}", e))
+                AlephError::invalid_config(format!("Failed to serialize config to JSON: {e}"))
             })?
         };
 
@@ -215,7 +215,7 @@ impl ConfigPatcher {
 
         // 6. Deserialize back to Config
         let new_config: Config = serde_json::from_value(patched_json.clone()).map_err(|e| {
-            AlephError::invalid_config(format!("Patched config failed deserialization: {}", e))
+            AlephError::invalid_config(format!("Patched config failed deserialization: {e}"))
         })?;
 
         // 7. Run Config::validate()
@@ -253,7 +253,7 @@ impl ConfigPatcher {
         // 12. Backup snapshot
         if self.config_path.exists() {
             if let Err(e) = self.backup.create_snapshot(&self.config_path) {
-                warnings.push(format!("Backup warning: {}", e));
+                warnings.push(format!("Backup warning: {e}"));
             }
         }
 
@@ -268,8 +268,7 @@ impl ConfigPatcher {
             let mut config = self.config.write().await;
             let latest_json = serde_json::to_value(&*config).map_err(|e| {
                 AlephError::invalid_config(format!(
-                    "Failed to serialize latest config to JSON: {}",
-                    e
+                    "Failed to serialize latest config to JSON: {e}"
                 ))
             })?;
             let mut re_patched = latest_json;
@@ -282,8 +281,7 @@ impl ConfigPatcher {
             self.validate_schema(&re_patched)?;
             let final_config: Config = serde_json::from_value(re_patched).map_err(|e| {
                 AlephError::invalid_config(format!(
-                    "Re-patched config failed deserialization: {}",
-                    e
+                    "Re-patched config failed deserialization: {e}"
                 ))
             })?;
             final_config.validate()?;
@@ -327,7 +325,7 @@ impl ConfigPatcher {
         let schema_json = cached_config_schema();
 
         let validator = jsonschema::validator_for(schema_json)
-            .map_err(|e| AlephError::invalid_config(format!("Invalid JSON Schema: {}", e)))?;
+            .map_err(|e| AlephError::invalid_config(format!("Invalid JSON Schema: {e}")))?;
 
         let errors: Vec<String> = validator
             .iter_errors(config_json)
@@ -355,7 +353,7 @@ impl ConfigPatcher {
         let current_mtime = std::fs::metadata(&self.config_path)
             .and_then(|m| m.modified())
             .map_err(|e| {
-                AlephError::invalid_config(format!("Failed to read config mtime: {}", e))
+                AlephError::invalid_config(format!("Failed to read config mtime: {e}"))
             })?;
 
         if current_mtime != stored_mtime {
@@ -406,13 +404,12 @@ impl ConfigPatcher {
         let current_json = {
             let config = self.config.read().await;
             serde_json::to_value(&*config).map_err(|e| {
-                AlephError::invalid_config(format!("Failed to serialize config to JSON: {}", e))
+                AlephError::invalid_config(format!("Failed to serialize config to JSON: {e}"))
             })?
         };
         let restored_json = serde_json::to_value(&restored).map_err(|e| {
             AlephError::invalid_config(format!(
-                "Failed to serialize restored config to JSON: {}",
-                e
+                "Failed to serialize restored config to JSON: {e}"
             ))
         })?;
         let diff = compute_diff("", Some(&current_json), &restored_json);
@@ -433,7 +430,7 @@ impl ConfigPatcher {
         // 6. Snapshot the current config first, so the rollback is undoable.
         if self.config_path.exists() {
             if let Err(e) = self.backup.create_snapshot(&self.config_path) {
-                warnings.push(format!("Pre-rollback backup warning: {}", e));
+                warnings.push(format!("Pre-rollback backup warning: {e}"));
             }
         }
 
@@ -513,8 +510,7 @@ pub(crate) fn set_nested_value(
     for segment in &segments[..segments.len() - 1] {
         if !current.is_object() {
             return Err(AlephError::invalid_config(format!(
-                "Path segment '{}' is not an object",
-                segment
+                "Path segment '{segment}' is not an object"
             )));
         }
         current = current
@@ -530,8 +526,7 @@ pub(crate) fn set_nested_value(
     })?;
     if !current.is_object() {
         return Err(AlephError::invalid_config(format!(
-            "Cannot set '{}': parent is not an object",
-            path
+            "Cannot set '{path}': parent is not an object"
         )));
     }
 
@@ -599,7 +594,7 @@ fn collect_leaf_diffs(
                 let child_path = if path.is_empty() {
                     key.clone()
                 } else {
-                    format!("{}.{}", path, key)
+                    format!("{path}.{key}")
                 };
                 collect_leaf_diffs(&child_path, old_obj.get(key), new_val, diffs);
             }
@@ -610,7 +605,7 @@ fn collect_leaf_diffs(
                     let child_path = if path.is_empty() {
                         key.clone()
                     } else {
-                        format!("{}.{}", path, key)
+                        format!("{path}.{key}")
                     };
                     diffs.push(FieldDiff {
                         path: child_path,
@@ -626,7 +621,7 @@ fn collect_leaf_diffs(
                 let child_path = if path.is_empty() {
                     key.clone()
                 } else {
-                    format!("{}.{}", path, key)
+                    format!("{path}.{key}")
                 };
                 collect_leaf_diffs(&child_path, None, new_val, diffs);
             }

@@ -394,7 +394,7 @@ impl MemorySearchTool {
                     .retrieve(&args.query, &primary_ws, args.max_results)
                     .await
                     .map_err(|e| {
-                        ToolError::Execution(format!("Smart recall phase 1 failed: {}", e))
+                        ToolError::Execution(format!("Smart recall phase 1 failed: {e}"))
                     })?;
 
                 let recall_triggered = primary_scored.len() < threshold;
@@ -417,7 +417,7 @@ impl MemorySearchTool {
                         .retrieve_all_agents(&args.query, &memory_dir, args.max_results)
                         .await
                         .map_err(|e| {
-                            ToolError::Execution(format!("Smart recall phase 2 failed: {}", e))
+                            ToolError::Execution(format!("Smart recall phase 2 failed: {e}"))
                         })?
                 } else {
                     Vec::new()
@@ -473,7 +473,7 @@ impl MemorySearchTool {
                     .note_retrieval
                     .retrieve(&args.query, &agent_id, args.max_results)
                     .await
-                    .map_err(|e| ToolError::Execution(format!("Note retrieval failed: {}", e)))?;
+                    .map_err(|e| ToolError::Execution(format!("Note retrieval failed: {e}")))?;
                 // Convert Vec<ScoredFact> → RetrievalResult for the comptroller pipeline.
                 let facts = scored
                     .into_iter()

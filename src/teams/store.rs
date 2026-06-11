@@ -576,8 +576,7 @@ impl TeamStore for SqliteTeamStore {
 
         if team.leader_id == agent_id {
             return Err(domain_err(format!(
-                "cannot remove the team leader ({})",
-                agent_id
+                "cannot remove the team leader ({agent_id})"
             )));
         }
 

@@ -172,7 +172,7 @@ impl OpenAiCompatProviderBuilder {
         let client = Client::builder()
             .timeout(Duration::from_secs(self.timeout_secs))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         // Resolve endpoint: if URL is just a base domain (no endpoint path),
         // auto-complete with the standard OpenAI-compatible path based on primary type.

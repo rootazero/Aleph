@@ -32,14 +32,14 @@ pub async fn execute_list(
 
     let mut files = Vec::new();
     for entry in fs::read_dir(&canonical)
-        .map_err(|e| ToolError::Execution(format!("Failed to read directory: {}", e)))?
+        .map_err(|e| ToolError::Execution(format!("Failed to read directory: {e}")))?
     {
         let entry =
-            entry.map_err(|e| ToolError::Execution(format!("Failed to read entry: {}", e)))?;
+            entry.map_err(|e| ToolError::Execution(format!("Failed to read entry: {e}")))?;
 
         let metadata = entry
             .metadata()
-            .map_err(|e| ToolError::Execution(format!("Failed to get metadata: {}", e)))?;
+            .map_err(|e| ToolError::Execution(format!("Failed to get metadata: {e}")))?;
 
         let entry_path = entry.path();
         files.push(FileInfo {
@@ -104,18 +104,17 @@ pub(super) async fn read_file_bytes(
     }
 
     let metadata = fs::metadata(&canonical)
-        .map_err(|e| ToolError::Execution(format!("Failed to get metadata: {}", e)))?;
+        .map_err(|e| ToolError::Execution(format!("Failed to get metadata: {e}")))?;
     let size = metadata.len();
 
     if size > max_read_size {
         return Err(ToolError::InvalidArgs(format!(
-            "File too large: {} bytes (max {})",
-            size, max_read_size
+            "File too large: {size} bytes (max {max_read_size})"
         )));
     }
 
     let bytes = fs::read(&canonical)
-        .map_err(|e| ToolError::Execution(format!("Failed to read file: {}", e)))?;
+        .map_err(|e| ToolError::Execution(format!("Failed to read file: {e}")))?;
 
     info!(path = %canonical.display(), size, "Read file");
 
@@ -147,7 +146,7 @@ pub(super) async fn execute_write(
         if let Some(parent) = canonical.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent).map_err(|e| {
-                    ToolError::Execution(format!("Failed to create directories: {}", e))
+                    ToolError::Execution(format!("Failed to create directories: {e}"))
                 })?;
                 debug!(path = %parent.display(), "Created parent directories");
             }
@@ -159,7 +158,7 @@ pub(super) async fn execute_write(
     // half-written file. Parent directories are already created above.
     crate::utils::atomic_write::atomic_write_file(&canonical, content)
         .await
-        .map_err(|e| ToolError::Execution(format!("Failed to write file: {}", e)))?;
+        .map_err(|e| ToolError::Execution(format!("Failed to write file: {e}")))?;
 
     info!(path = %canonical.display(), bytes, "Wrote file");
 
@@ -189,14 +188,14 @@ pub async fn execute_move(
         if let Some(parent) = to_canonical.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent).map_err(|e| {
-                    ToolError::Execution(format!("Failed to create directories: {}", e))
+                    ToolError::Execution(format!("Failed to create directories: {e}"))
                 })?;
             }
         }
     }
 
     fs::rename(&from_canonical, &to_canonical)
-        .map_err(|e| ToolError::Execution(format!("Failed to move: {}", e)))?;
+        .map_err(|e| ToolError::Execution(format!("Failed to move: {e}")))?;
 
     info!(from = %from_canonical.display(), to = %to_canonical.display(), "Moved");
 
@@ -238,7 +237,7 @@ pub async fn execute_copy(
         if let Some(parent) = to_canonical.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent).map_err(|e| {
-                    ToolError::Execution(format!("Failed to create directories: {}", e))
+                    ToolError::Execution(format!("Failed to create directories: {e}"))
                 })?;
             }
         }
@@ -246,7 +245,7 @@ pub async fn execute_copy(
 
     let bytes = if from_canonical.is_file() {
         fs::copy(&from_canonical, &to_canonical)
-            .map_err(|e| ToolError::Execution(format!("Failed to copy: {}", e)))?
+            .map_err(|e| ToolError::Execution(format!("Failed to copy: {e}")))?
     } else {
         // Directory copy - recursive
         let mut visited = std::collections::HashSet::new();
@@ -278,22 +277,22 @@ fn copy_dir_recursive(
     visited: &mut std::collections::HashSet<PathBuf>,
 ) -> Result<u64, ToolError> {
     fs::create_dir_all(to)
-        .map_err(|e| ToolError::Execution(format!("Failed to create directory: {}", e)))?;
+        .map_err(|e| ToolError::Execution(format!("Failed to create directory: {e}")))?;
 
     let mut total_bytes = 0u64;
 
     for entry in fs::read_dir(from)
-        .map_err(|e| ToolError::Execution(format!("Failed to read directory: {}", e)))?
+        .map_err(|e| ToolError::Execution(format!("Failed to read directory: {e}")))?
     {
         let entry =
-            entry.map_err(|e| ToolError::Execution(format!("Failed to read entry: {}", e)))?;
+            entry.map_err(|e| ToolError::Execution(format!("Failed to read entry: {e}")))?;
 
         let from_path = entry.path();
         let to_path = to.join(entry.file_name());
 
         if from_path.is_symlink() {
             let canonical = fs::canonicalize(&from_path).map_err(|e| {
-                ToolError::Execution(format!("Failed to canonicalize symlink: {}", e))
+                ToolError::Execution(format!("Failed to canonicalize symlink: {e}"))
             })?;
             if !visited.insert(canonical.clone()) {
                 return Err(ToolError::Execution(format!(
@@ -307,7 +306,7 @@ fn copy_dir_recursive(
             total_bytes += copy_dir_recursive(&from_path, &to_path, visited)?;
         } else {
             total_bytes += fs::copy(&from_path, &to_path)
-                .map_err(|e| ToolError::Execution(format!("Failed to copy file: {}", e)))?;
+                .map_err(|e| ToolError::Execution(format!("Failed to copy file: {e}")))?;
         }
     }
 
@@ -352,11 +351,11 @@ pub async fn execute_delete(
         // true total, not just the directory's top-level entries.
         let count = count_path_entries(&canonical);
         fs::remove_dir_all(&canonical)
-            .map_err(|e| ToolError::Execution(format!("Failed to delete directory: {}", e)))?;
+            .map_err(|e| ToolError::Execution(format!("Failed to delete directory: {e}")))?;
         count
     } else {
         fs::remove_file(&canonical)
-            .map_err(|e| ToolError::Execution(format!("Failed to delete file: {}", e)))?;
+            .map_err(|e| ToolError::Execution(format!("Failed to delete file: {e}")))?;
         1
     };
 
@@ -403,10 +402,10 @@ pub async fn execute_mkdir(
 
     if create_parents {
         fs::create_dir_all(&canonical)
-            .map_err(|e| ToolError::Execution(format!("Failed to create directories: {}", e)))?;
+            .map_err(|e| ToolError::Execution(format!("Failed to create directories: {e}")))?;
     } else {
         fs::create_dir(&canonical)
-            .map_err(|e| ToolError::Execution(format!("Failed to create directory: {}", e)))?;
+            .map_err(|e| ToolError::Execution(format!("Failed to create directory: {e}")))?;
     }
 
     info!(path = %canonical.display(), "Created directory");

@@ -349,7 +349,7 @@ async fn dispatch_event(event: &LineEvent, ctx: &WebhookContext) -> Result<(), S
 
     ctx.sender
         .send(inbound)
-        .map_err(|e| format!("Failed to send inbound message: {:?}", e))?;
+        .map_err(|e| format!("Failed to send inbound message: {e:?}"))?;
 
     Ok(())
 }

@@ -163,7 +163,7 @@ fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
 /// refresh token and every later refresh fails with "No refresh token
 /// available. Please re-login."
 fn oauth_blob_key(provider_name: &str) -> String {
-    format!("ai:{}:oauth", provider_name)
+    format!("ai:{provider_name}:oauth")
 }
 
 /// Persist the full OAuth cache (refresh token + real expiry) as a vault blob.
@@ -192,7 +192,7 @@ async fn update_config_api_key(
     token: Option<&str>,
 ) {
     // Store/delete token in vault
-    let vault_key = format!("ai:{}", provider_name);
+    let vault_key = format!("ai:{provider_name}");
     if let Some(token) = token {
         if let Err(e) = vault.store_secret(&vault_key, token) {
             warn!(error = %e, "Failed to store OAuth token in vault");
@@ -348,7 +348,7 @@ pub async fn handle_oauth_login(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("OAuth login failed: {}", e),
+                format!("OAuth login failed: {e}"),
             );
         }
     };

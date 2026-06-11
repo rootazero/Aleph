@@ -478,19 +478,19 @@ impl GenerationProvider for MockGenerationProvider {
             // Generate a mock URL based on the generation type
             let url = match request.generation_type {
                 GenerationType::Image => {
-                    format!("https://mock.example.com/{}/image.png", name)
+                    format!("https://mock.example.com/{name}/image.png")
                 }
                 GenerationType::Video => {
-                    format!("https://mock.example.com/{}/video.mp4", name)
+                    format!("https://mock.example.com/{name}/video.mp4")
                 }
                 GenerationType::Audio => {
-                    format!("https://mock.example.com/{}/audio.mp3", name)
+                    format!("https://mock.example.com/{name}/audio.mp3")
                 }
                 GenerationType::Speech => {
-                    format!("https://mock.example.com/{}/speech.mp3", name)
+                    format!("https://mock.example.com/{name}/speech.mp3")
                 }
                 GenerationType::Transcription => {
-                    format!("https://mock.example.com/{}/transcription.json", name)
+                    format!("https://mock.example.com/{name}/transcription.json")
                 }
             };
 

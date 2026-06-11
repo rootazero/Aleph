@@ -321,8 +321,7 @@ impl IrcMessageOps {
                                     // Send NickServ IDENTIFY if password is configured
                                     if let Some(ref password) = config.password {
                                         let identify = format!(
-                                            "PRIVMSG NickServ :IDENTIFY {}\r\n",
-                                            password
+                                            "PRIVMSG NickServ :IDENTIFY {password}\r\n"
                                         );
                                         if let Err(e) =
                                             writer.write_all(identify.as_bytes()).await

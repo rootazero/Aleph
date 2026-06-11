@@ -170,7 +170,7 @@ impl CliChannel {
         };
 
         tx.send(message)
-            .map_err(|e| ChannelError::Internal(format!("Failed to inject message: {:?}", e)))?;
+            .map_err(|e| ChannelError::Internal(format!("Failed to inject message: {e:?}")))?;
         Ok(())
     }
 }
@@ -303,11 +303,11 @@ impl Channel for CliChannel {
         if !self.test_mode {
             let mut stdout = io::stdout().lock();
             writeln!(stdout, "\n{}", message.text).map_err(|e| {
-                ChannelError::SendFailed(format!("Failed to write to stdout: {}", e))
+                ChannelError::SendFailed(format!("Failed to write to stdout: {e}"))
             })?;
             stdout
                 .flush()
-                .map_err(|e| ChannelError::SendFailed(format!("Failed to flush stdout: {}", e)))?;
+                .map_err(|e| ChannelError::SendFailed(format!("Failed to flush stdout: {e}")))?;
 
             print!("{}", self.config.prompt);
             io::stdout().flush().ok();
@@ -344,7 +344,7 @@ impl ChannelFactory for CliChannelFactory {
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let config: CliChannelConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid CLI channel config: {}", e)))?;
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid CLI channel config: {e}")))?;
 
         Ok(Box::new(CliChannel::with_config(config)))
     }

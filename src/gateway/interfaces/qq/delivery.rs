@@ -76,8 +76,7 @@ pub fn parse_target(conversation_id: &ConversationId) -> Result<(&str, &str), Ch
         Ok(("group", rest))
     } else {
         Err(ChannelError::ConfigError(format!(
-            "Invalid QQ conversation id: {}",
-            id
+            "Invalid QQ conversation id: {id}"
         )))
     }
 }

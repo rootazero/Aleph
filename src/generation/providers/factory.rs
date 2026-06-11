@@ -76,7 +76,7 @@ pub fn create_provider(
 
     let api_key = config.api_key.clone().ok_or_else(|| {
         GenerationError::authentication(
-            format!("API key is required for provider '{}'", name),
+            format!("API key is required for provider '{name}'"),
             name,
         )
     })?;
@@ -246,8 +246,7 @@ pub fn create_provider(
                     _ => {
                         return Err(GenerationError::invalid_parameters(
                             format!(
-                                "Invalid midjourney mode: '{}'. Supported: fast, relax",
-                                model
+                                "Invalid midjourney mode: '{model}'. Supported: fast, relax"
                             ),
                             Some("model".to_string()),
                         ));
@@ -265,8 +264,7 @@ pub fn create_provider(
         other => {
             return Err(GenerationError::invalid_parameters(
                 format!(
-                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_whisper, whisper, deepgram_stt, deepgram, deepgram_tts, azure_speech, azure_tts, suno, bfl, bfl_flux, flux, cartesia, minimax_stt, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, fal",
-                    other
+                    "Unknown provider type: '{other}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_whisper, whisper, deepgram_stt, deepgram, deepgram_tts, azure_speech, azure_tts, suno, bfl, bfl_flux, flux, cartesia, minimax_stt, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, fal"
                 ),
                 Some("provider_type".to_string()),
             ));

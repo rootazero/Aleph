@@ -11,7 +11,7 @@ pub fn scope_install_dir(
     match scope {
         PluginScope::User => {
             let home = crate::discovery::aleph_home_dir()
-                .map_err(|e| format!("Cannot resolve home dir: {}", e))?;
+                .map_err(|e| format!("Cannot resolve home dir: {e}"))?;
             Ok(home.join("plugins/installed"))
         }
         PluginScope::Project => {
@@ -37,7 +37,7 @@ pub fn scope_dirs_by_priority(
         if let Ok(home) = crate::discovery::aleph_home_dir() {
             dirs.push((
                 "agent".to_string(),
-                home.join(format!("agents/{}/plugins", aid)),
+                home.join(format!("agents/{aid}/plugins")),
             ));
         }
     }
@@ -59,8 +59,7 @@ pub fn parse_scope(s: &str) -> Result<PluginScope, String> {
         "project" => Ok(PluginScope::Project),
         "local" => Ok(PluginScope::Local),
         _ => Err(format!(
-            "Invalid scope '{}'. Expected: user, project, local",
-            s
+            "Invalid scope '{s}'. Expected: user, project, local"
         )),
     }
 }

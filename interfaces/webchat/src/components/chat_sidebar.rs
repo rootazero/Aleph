@@ -885,7 +885,7 @@ fn format_session_subtitle(session: &SessionEntry) -> String {
             let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ts as f64 * 1000.0));
             let month = date.get_month() + 1; // 0-based in JS
             let day = date.get_date();
-            format!("{msg_count} msgs - {:02}-{:02}", month, day)
+            format!("{msg_count} msgs - {month:02}-{day:02}")
         }
         None => format!("{msg_count} messages"),
     }

@@ -160,7 +160,7 @@ impl ListSkillsTool {
         args: ListSkillsArgs,
     ) -> std::result::Result<ListSkillsOutput, super::super::error::ToolError> {
         let args_summary = match &args.filter {
-            Some(f) => format!("Listing skills (filter: {})", f),
+            Some(f) => format!("Listing skills (filter: {f})"),
             None => "Listing all skills".to_string(),
         };
         notify_tool_start(Self::NAME, &args_summary);
@@ -242,7 +242,7 @@ impl ListSkillsTool {
         });
 
         let count = skills.len();
-        let result_msg = format!("Found {} skills", count);
+        let result_msg = format!("Found {count} skills");
         notify_tool_result(Self::NAME, &result_msg, true);
 
         info!(count = count, "Listed skills");

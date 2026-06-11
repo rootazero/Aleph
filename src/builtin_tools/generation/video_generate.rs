@@ -81,7 +81,7 @@ impl VideoGenerateTool {
         } else {
             args.prompt.clone()
         };
-        notify_tool_start(Self::NAME, &format!("生成视频: {}", prompt_display));
+        notify_tool_start(Self::NAME, &format!("生成视频: {prompt_display}"));
 
         info!(prompt = %args.prompt, provider = ?args.provider, "Starting video generation");
 
@@ -91,13 +91,13 @@ impl VideoGenerateTool {
 
             if let Some(ref name) = args.provider {
                 let p = reg.get(name).ok_or_else(|| {
-                    let error_msg = format!("Video provider '{}' not found", name);
+                    let error_msg = format!("Video provider '{name}' not found");
                     notify_tool_result(Self::NAME, &error_msg, false);
                     ToolError::InvalidArgs(error_msg)
                 })?;
                 if !p.supports(GenerationType::Video) {
                     let error_msg =
-                        format!("Provider '{}' does not support video generation", name);
+                        format!("Provider '{name}' does not support video generation");
                     notify_tool_result(Self::NAME, &error_msg, false);
                     return Err(ToolError::InvalidArgs(error_msg));
                 }
@@ -122,7 +122,7 @@ impl VideoGenerateTool {
 
         // Execute generation
         let output = provider.generate(request).await.map_err(|e| {
-            let error_msg = format!("Video generation failed: {}", e);
+            let error_msg = format!("Video generation failed: {e}");
             notify_tool_result(Self::NAME, &error_msg, false);
             ToolError::from(e)
         })?;
@@ -143,8 +143,7 @@ impl VideoGenerateTool {
 
         // Notify success
         let result_summary = format!(
-            "视频生成完成 ({} ms, provider: {})",
-            duration_ms, provider_name
+            "视频生成完成 ({duration_ms} ms, provider: {provider_name})"
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 

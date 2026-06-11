@@ -23,8 +23,7 @@ fn sanitize_skill_name(slug: &str) -> Result<&str> {
     if name.is_empty() || name == "." || name == ".." || name.contains('\\') || name.contains('\0')
     {
         return Err(AlephError::tool(format!(
-            "Invalid skill slug '{}': directory name '{}' is not allowed",
-            slug, name
+            "Invalid skill slug '{slug}': directory name '{name}' is not allowed"
         )));
     }
     Ok(name)
@@ -185,9 +184,9 @@ impl ClawHubTool {
         registry_url: &str,
     ) -> Result<String> {
         let file = std::fs::File::open(zip_path)
-            .map_err(|e| AlephError::tool(format!("Failed to open ZIP file: {}", e)))?;
+            .map_err(|e| AlephError::tool(format!("Failed to open ZIP file: {e}")))?;
         let mut archive = zip::ZipArchive::new(file)
-            .map_err(|e| AlephError::tool(format!("Failed to read ZIP archive: {}", e)))?;
+            .map_err(|e| AlephError::tool(format!("Failed to read ZIP archive: {e}")))?;
 
         // Validate and sanitize the skill directory name
         let skill_name = sanitize_skill_name(slug)?;
@@ -204,7 +203,7 @@ impl ClawHubTool {
         // Discard any leftover staging from a previously interrupted run.
         let _ = std::fs::remove_dir_all(&staging_dir);
         std::fs::create_dir_all(&staging_dir)
-            .map_err(|e| AlephError::tool(format!("Failed to create skill directory: {}", e)))?;
+            .map_err(|e| AlephError::tool(format!("Failed to create skill directory: {e}")))?;
 
         let mut found_skill_md = false;
         // Phase 4 — install-time security scan (defense in depth).
@@ -214,7 +213,7 @@ impl ClawHubTool {
         for i in 0..archive.len() {
             let mut entry = archive
                 .by_index(i)
-                .map_err(|e| AlephError::tool(format!("Failed to read ZIP entry: {}", e)))?;
+                .map_err(|e| AlephError::tool(format!("Failed to read ZIP entry: {e}")))?;
 
             // Reject oversized entries (ZIP bomb protection).
             let entry_size = entry.size();
@@ -274,13 +273,13 @@ impl ClawHubTool {
 
             if let Some(parent) = out_path.parent() {
                 std::fs::create_dir_all(parent)
-                    .map_err(|e| AlephError::tool(format!("Failed to create directory: {}", e)))?;
+                    .map_err(|e| AlephError::tool(format!("Failed to create directory: {e}")))?;
             }
 
             // Read and write the file (bounded by the entry size check above).
             let mut content = Vec::new();
             entry.read_to_end(&mut content).map_err(|e| {
-                AlephError::tool(format!("Failed to read ZIP entry content: {}", e))
+                AlephError::tool(format!("Failed to read ZIP entry content: {e}"))
             })?;
 
             // Accumulate per-file security verdict before writing anything.
@@ -294,12 +293,12 @@ impl ClawHubTool {
             if relative_path == "SKILL.md" {
                 let text = String::from_utf8_lossy(&content);
                 crate::skill::parse_skill_content(&text, crate::domain::skill::SkillSource::Global)
-                    .map_err(|e| AlephError::tool(format!("Invalid SKILL.md in package: {}", e)))?;
+                    .map_err(|e| AlephError::tool(format!("Invalid SKILL.md in package: {e}")))?;
                 found_skill_md = true;
             }
 
             std::fs::write(&out_path, &content)
-                .map_err(|e| AlephError::tool(format!("Failed to write file: {}", e)))?;
+                .map_err(|e| AlephError::tool(format!("Failed to write file: {e}")))?;
         }
 
         // Security gate: merge all per-file verdicts and apply trust×verdict policy.
@@ -336,9 +335,9 @@ impl ClawHubTool {
         };
         let meta_path = staging_dir.join(".clawhub.json");
         let meta_json = serde_json::to_string_pretty(&meta)
-            .map_err(|e| AlephError::tool(format!("Failed to serialize metadata: {}", e)))?;
+            .map_err(|e| AlephError::tool(format!("Failed to serialize metadata: {e}")))?;
         std::fs::write(&meta_path, meta_json)
-            .map_err(|e| AlephError::tool(format!("Failed to write .clawhub.json: {}", e)))?;
+            .map_err(|e| AlephError::tool(format!("Failed to write .clawhub.json: {e}")))?;
 
         // Atomic swap: stage is fully validated, so move the old install aside,
         // promote staging into place, then drop the backup. On a failed promote,
@@ -350,7 +349,7 @@ impl ClawHubTool {
         if had_old {
             std::fs::rename(&dest_dir, &backup_dir).map_err(|e| {
                 let _ = std::fs::remove_dir_all(&staging_dir);
-                AlephError::tool(format!("Failed to stage previous install for swap: {}", e))
+                AlephError::tool(format!("Failed to stage previous install for swap: {e}"))
             })?;
         }
         if let Err(e) = std::fs::rename(&staging_dir, &dest_dir) {
@@ -360,8 +359,7 @@ impl ClawHubTool {
             }
             let _ = std::fs::remove_dir_all(&staging_dir);
             return Err(AlephError::tool(format!(
-                "Failed to finalize skill install: {}",
-                e
+                "Failed to finalize skill install: {e}"
             )));
         }
         let _ = std::fs::remove_dir_all(&backup_dir);
@@ -403,7 +401,7 @@ impl AlephTool for ClawHubTool {
                 let count = results.len();
 
                 Ok(ClawHubOutput {
-                    message: format!("Found {} skills matching '{}'", count, query),
+                    message: format!("Found {count} skills matching '{query}'"),
                     skills: Some(results),
                     cursor: None,
                     has_more: None,
@@ -421,7 +419,7 @@ impl AlephTool for ClawHubTool {
                 let count = resp.skills.len();
 
                 Ok(ClawHubOutput {
-                    message: format!("Showing {} skills", count),
+                    message: format!("Showing {count} skills"),
                     skills: Some(resp.skills),
                     cursor: resp.cursor,
                     has_more: Some(resp.has_more),
@@ -467,8 +465,7 @@ impl AlephTool for ClawHubTool {
 
                 Ok(ClawHubOutput {
                     message: format!(
-                        "Skill '{}' v{} installed successfully",
-                        slug, installed_version
+                        "Skill '{slug}' v{installed_version} installed successfully"
                     ),
                     skills: None,
                     cursor: None,
@@ -489,15 +486,14 @@ impl AlephTool for ClawHubTool {
 
                 let local_meta: ClawHubMeta = if meta_path.exists() {
                     let content = std::fs::read_to_string(&meta_path).map_err(|e| {
-                        AlephError::tool(format!("Failed to read .clawhub.json: {}", e))
+                        AlephError::tool(format!("Failed to read .clawhub.json: {e}"))
                     })?;
                     serde_json::from_str(&content).map_err(|e| {
-                        AlephError::tool(format!("Failed to parse .clawhub.json: {}", e))
+                        AlephError::tool(format!("Failed to parse .clawhub.json: {e}"))
                     })?
                 } else {
                     return Err(AlephError::tool(format!(
-                        "Skill '{}' is not installed from ClawHub (no .clawhub.json found)",
-                        slug
+                        "Skill '{slug}' is not installed from ClawHub (no .clawhub.json found)"
                     )));
                 };
 
@@ -507,8 +503,7 @@ impl AlephTool for ClawHubTool {
                 if let Some(ref moderation) = detail.moderation {
                     if moderation.is_malware_blocked() {
                         return Err(AlephError::tool(format!(
-                            "Skill '{}' is now blocked by ClawHub (malware detected). Update aborted.",
-                            slug
+                            "Skill '{slug}' is now blocked by ClawHub (malware detected). Update aborted."
                         )));
                     }
                 }

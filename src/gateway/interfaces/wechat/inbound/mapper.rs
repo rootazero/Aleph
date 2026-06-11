@@ -22,7 +22,7 @@ fn build_media_url(media: &MediaRef) -> Option<String> {
     }
     if let Some(param) = &media.encrypt_query_param {
         let base = crate::gateway::interfaces::wechat::types::WEIXIN_CDN_BASE_URL;
-        return Some(format!("{}/download?encrypted_query_param={}", base, param));
+        return Some(format!("{base}/download?encrypted_query_param={param}"));
     }
     None
 }
@@ -31,7 +31,7 @@ fn build_media_url(media: &MediaRef) -> Option<String> {
 fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
     match item {
         MessageItem::Image(i) => Some(Attachment {
-            id: format!("img_{}", index),
+            id: format!("img_{index}"),
             mime_type: "image/jpeg".to_string(),
             filename: None,
             size: None,
@@ -40,7 +40,7 @@ fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
             data: None,
         }),
         MessageItem::Voice(v) => Some(Attachment {
-            id: format!("voice_{}", index),
+            id: format!("voice_{index}"),
             mime_type: "audio/amr".to_string(),
             filename: None,
             size: None,
@@ -49,7 +49,7 @@ fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
             data: None,
         }),
         MessageItem::File(f) => Some(Attachment {
-            id: format!("file_{}", index),
+            id: format!("file_{index}"),
             mime_type: "application/octet-stream".to_string(),
             filename: f.file_name.clone(),
             size: f.file_size,
@@ -58,7 +58,7 @@ fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
             data: None,
         }),
         MessageItem::Video(v) => Some(Attachment {
-            id: format!("video_{}", index),
+            id: format!("video_{index}"),
             mime_type: "video/mp4".to_string(),
             filename: None,
             size: None,

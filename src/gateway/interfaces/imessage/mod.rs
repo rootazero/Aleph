@@ -123,7 +123,7 @@ impl IMessageChannel {
 
         // Open database
         let mut db = MessagesDb::open(&db_path).map_err(|e| {
-            ChannelError::ConfigError(format!("Failed to open Messages database: {}", e))
+            ChannelError::ConfigError(format!("Failed to open Messages database: {e}"))
         })?;
 
         // Apply attachment handling policy from config.
@@ -335,7 +335,7 @@ impl ChannelFactory for IMessageChannelFactory {
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let config: IMessageConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid iMessage config: {}", e)))?;
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid iMessage config: {e}")))?;
 
         if !config.enabled {
             return Err(ChannelError::ConfigError(

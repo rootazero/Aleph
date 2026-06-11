@@ -503,7 +503,7 @@ pub fn parse_aleph_plugin_toml_content(
     let toml_path = plugin_dir.join(ALEPH_PLUGIN_TOML);
 
     let toml: AlephPluginToml = toml::from_str(content).map_err(|e| {
-        ExtensionError::invalid_manifest(&toml_path, format!("TOML parse error: {}", e))
+        ExtensionError::invalid_manifest(&toml_path, format!("TOML parse error: {e}"))
     })?;
 
     let plugin_id = if toml.plugin.id.is_empty() {

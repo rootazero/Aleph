@@ -28,12 +28,12 @@ impl fmt::Display for AllowlistError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AllowlistError::HttpsRequired => write!(f, "HTTPS is required; HTTP is not allowed"),
-            AllowlistError::InvalidUrl(reason) => write!(f, "Invalid URL: {}", reason),
+            AllowlistError::InvalidUrl(reason) => write!(f, "Invalid URL: {reason}"),
             AllowlistError::PathTraversal => {
                 write!(f, "Path traversal detected: URL path contains '..'")
             }
             AllowlistError::NotAllowed(detail) => {
-                write!(f, "Request not allowed by allowlist: {}", detail)
+                write!(f, "Request not allowed by allowlist: {detail}")
             }
         }
     }
@@ -75,7 +75,7 @@ impl AllowlistValidator {
     pub fn check(&self, method: &str, url_str: &str) -> Result<(), AllowlistError> {
         // 1. Parse URL
         let parsed = Url::parse(url_str)
-            .map_err(|e| AllowlistError::InvalidUrl(format!("failed to parse: {}", e)))?;
+            .map_err(|e| AllowlistError::InvalidUrl(format!("failed to parse: {e}")))?;
 
         // 2. HTTPS only
         if parsed.scheme() != "https" {
@@ -117,8 +117,7 @@ impl AllowlistValidator {
             Ok(())
         } else {
             Err(AllowlistError::NotAllowed(format!(
-                "{} {} does not match any allowed endpoint",
-                method, url_str
+                "{method} {url_str} does not match any allowed endpoint"
             )))
         }
     }

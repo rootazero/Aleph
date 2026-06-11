@@ -93,7 +93,7 @@ impl AlephTool for ArenaCreateTool {
         .map_err(crate::error::AlephError::other)?;
 
         let mut manager = self.manager.write().map_err(|e| {
-            crate::error::AlephError::other(format!("Arena manager lock poisoned: {}", e))
+            crate::error::AlephError::other(format!("Arena manager lock poisoned: {e}"))
         })?;
         let (arena_id, _handles) = manager
             .create_arena(manifest)
@@ -187,7 +187,7 @@ impl AlephTool for ArenaQueryTool {
 
         let arena_id = ArenaId::from_string(&args.arena_id);
         let manager = self.manager.read().map_err(|e| {
-            crate::error::AlephError::other(format!("Arena manager lock poisoned: {}", e))
+            crate::error::AlephError::other(format!("Arena manager lock poisoned: {e}"))
         })?;
 
         if let Some(ref agent_id_str) = args.agent_id {
@@ -206,7 +206,7 @@ impl AlephTool for ArenaQueryTool {
                 let artifacts = handle.list_artifacts(&agent).unwrap_or_default();
                 let slot_status = handle
                     .slot_status(&agent)
-                    .map(|s| format!("{:?}", s))
+                    .map(|s| format!("{s:?}"))
                     .unwrap_or_else(|| "Idle".to_string());
                 slot_summaries.push(SlotSummary {
                     agent_id: agent.as_str().to_string(),
@@ -229,7 +229,7 @@ impl AlephTool for ArenaQueryTool {
 
         // No agent_id — use manager's global query
         let snapshot = manager.query_arena(&arena_id).ok_or_else(|| {
-            crate::error::AlephError::other(format!("Arena not found: {}", arena_id))
+            crate::error::AlephError::other(format!("Arena not found: {arena_id}"))
         })?;
 
         let goal = snapshot["goal"].as_str().unwrap_or("").to_string();
@@ -340,7 +340,7 @@ impl AlephTool for ArenaSettleTool {
 
         let arena_id = ArenaId::from_string(&args.arena_id);
         let mut manager = self.manager.write().map_err(|e| {
-            crate::error::AlephError::other(format!("Arena manager lock poisoned: {}", e))
+            crate::error::AlephError::other(format!("Arena manager lock poisoned: {e}"))
         })?;
 
         let (report, facts) = manager

@@ -17,7 +17,7 @@ impl GraphApi {
             "kind_filter": kind_filter,
         });
         let result = state.rpc_call("graph.query", params).await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse graph.query: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse graph.query: {e}"))
     }
 
     pub async fn neighbors(
@@ -35,7 +35,7 @@ impl GraphApi {
         });
         let result = state.rpc_call("graph.neighbors", params).await?;
         serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse graph.neighbors: {}", e))
+            .map_err(|e| format!("Failed to parse graph.neighbors: {e}"))
     }
 
     pub async fn node_detail(
@@ -46,7 +46,7 @@ impl GraphApi {
         let params = json!({ "agent_id": agent_id, "node_id": node_id });
         let result = state.rpc_call("graph.node_detail", params).await?;
         serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse graph.node_detail: {}", e))
+            .map_err(|e| format!("Failed to parse graph.node_detail: {e}"))
     }
 
     pub async fn search(
@@ -57,7 +57,7 @@ impl GraphApi {
     ) -> Result<GraphSearchResponse, String> {
         let params = json!({ "agent_id": agent_id, "query": query, "limit": limit });
         let result = state.rpc_call("graph.search", params).await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse graph.search: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse graph.search: {e}"))
     }
 
     /// Persist an edited note body. `content` is the full raw markdown

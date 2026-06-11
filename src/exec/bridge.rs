@@ -29,19 +29,19 @@ impl ApprovalBridge {
         if allowed.contains(&ApprovalDecisionType::AllowOnce) {
             allow_row.push(InlineButton {
                 text: "✅ Allow Once".into(),
-                callback_data: format!("approve:{}:once", approval_id),
+                callback_data: format!("approve:{approval_id}:once"),
             });
         }
         if allowed.contains(&ApprovalDecisionType::AllowSession) {
             allow_row.push(InlineButton {
                 text: "✅ Allow Session".into(),
-                callback_data: format!("approve:{}:session", approval_id),
+                callback_data: format!("approve:{approval_id}:session"),
             });
         }
         if allowed.contains(&ApprovalDecisionType::AllowAlways) {
             allow_row.push(InlineButton {
                 text: "✅ Allow Always".into(),
-                callback_data: format!("approve:{}:always", approval_id),
+                callback_data: format!("approve:{approval_id}:always"),
             });
         }
 
@@ -50,7 +50,7 @@ impl ApprovalBridge {
             keyboard = keyboard.row(allow_row);
         }
         if allowed.contains(&ApprovalDecisionType::Deny) {
-            keyboard = keyboard.button("❌ Deny", format!("approve:{}:deny", approval_id));
+            keyboard = keyboard.button("❌ Deny", format!("approve:{approval_id}:deny"));
         }
         keyboard
     }

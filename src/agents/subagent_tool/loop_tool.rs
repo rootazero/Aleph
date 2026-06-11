@@ -164,7 +164,7 @@ impl LoopTool for SubagentTool {
                         Ok(id) => id,
                         Err(e) => {
                             return ToolResult::Error {
-                                error: format!("Failed to resolve team '{}': {}", team_name, e),
+                                error: format!("Failed to resolve team '{team_name}': {e}"),
                                 retryable: false,
                             };
                         }
@@ -221,7 +221,7 @@ impl LoopTool for SubagentTool {
                         Ok(id) => id,
                         Err(e) => {
                             return ToolResult::Error {
-                                error: format!("Failed to resolve team '{}': {}", team_name, e),
+                                error: format!("Failed to resolve team '{team_name}': {e}"),
                                 retryable: false,
                             };
                         }
@@ -400,8 +400,7 @@ impl LoopTool for SubagentTool {
                                 let available = self.agent_registry.list_ids().join(", ");
                                 return ToolResult::Error {
                                     error: format!(
-                                        "batch task {}: Unknown agent_type '{}'. Available agents: {}",
-                                        idx, agent_type, available
+                                        "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
                                     ),
                                     retryable: false,
                                 };
@@ -414,8 +413,7 @@ impl LoopTool for SubagentTool {
                                 let available = self.agent_registry.list_ids().join(", ");
                                 return ToolResult::Error {
                                     error: format!(
-                                        "batch task {}: Unknown agent_type '{}'. Available agents: {}",
-                                        idx, agent_type, available
+                                        "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
                                     ),
                                     retryable: false,
                                 };
@@ -552,8 +550,7 @@ impl LoopTool for SubagentTool {
                     let available = self.agent_registry.list_ids().join(", ");
                     return ToolResult::Error {
                         error: format!(
-                            "Unknown agent_type '{}'. Available agents: {}",
-                            agent_type, available
+                            "Unknown agent_type '{agent_type}'. Available agents: {available}"
                         ),
                         retryable: false,
                     };
@@ -595,14 +592,14 @@ impl LoopTool for SubagentTool {
                     Ok(tid) => {
                         if let Err(e) = mgr.register_teammate(&tid, name, "worker").await {
                             return ToolResult::Error {
-                                error: format!("Failed to register teammate '{}': {}", name, e),
+                                error: format!("Failed to register teammate '{name}': {e}"),
                                 retryable: true,
                             };
                         }
                     }
                     Err(e) => {
                         return ToolResult::Error {
-                            error: format!("Failed to create team '{}': {}", tname, e),
+                            error: format!("Failed to create team '{tname}': {e}"),
                             retryable: false,
                         };
                     }

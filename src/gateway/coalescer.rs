@@ -111,7 +111,7 @@ impl MessageCoalescer {
         // Choose the buffer key: media_group_id takes precedence.
         let is_media_group = msg.meta_media_group_id().is_some();
         let key = if let Some(mg) = msg.meta_media_group_id() {
-            format!("mg:{}", mg)
+            format!("mg:{mg}")
         } else {
             format!("cv:{}", msg.conversation_id.as_str())
         };

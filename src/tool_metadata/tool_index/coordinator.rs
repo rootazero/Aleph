@@ -591,7 +591,7 @@ impl ToolIndexCoordinator {
                                 );
 
                                 // Skill tools use format "skill:{skill_id}" as tool name
-                                let tool_name = format!("skill:{}", skill_id);
+                                let tool_name = format!("skill:{skill_id}");
                                 if let Err(e) = coordinator.remove_tool(&tool_name).await {
                                     tracing::error!(
                                         error = %e,

@@ -135,7 +135,7 @@ impl MemoryExploreTool {
             .embedder
             .embed(&args.query)
             .await
-            .map_err(|e| ToolError::Execution(format!("Embedding failed: {}", e)))?;
+            .map_err(|e| ToolError::Execution(format!("Embedding failed: {e}")))?;
 
         let dim_hint = embedding.len() as u32;
 
@@ -144,7 +144,7 @@ impl MemoryExploreTool {
             .database
             .vector_search_notes_with_content(&embedding, &self.agent_id, dim_hint, 3)
             .await
-            .map_err(|e| ToolError::Execution(format!("Seed search failed: {}", e)))?;
+            .map_err(|e| ToolError::Execution(format!("Seed search failed: {e}")))?;
 
         debug!(seed_count = seed_results.len(), "Seed notes retrieved");
 
@@ -198,7 +198,7 @@ impl MemoryExploreTool {
         let result = ripple
             .explore(seed_facts)
             .await
-            .map_err(|e| ToolError::Execution(format!("Ripple explore failed: {}", e)))?;
+            .map_err(|e| ToolError::Execution(format!("Ripple explore failed: {e}")))?;
 
         // Step 5: Convert expanded facts to output format
         let mut expanded_output: Vec<ExploredFact> =

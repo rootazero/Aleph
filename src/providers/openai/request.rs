@@ -30,8 +30,8 @@ pub(crate) fn build_text_content(
 
     match (use_prepend_mode, system_prompt, input.is_empty()) {
         // Prepend mode with system prompt
-        (true, Some(prompt), false) => format!("{}\n\n{}", prompt, input),
-        (true, Some(prompt), true) => format!("{}\n\n{}", prompt, DEFAULT_IMAGE_DESC),
+        (true, Some(prompt), false) => format!("{prompt}\n\n{input}"),
+        (true, Some(prompt), true) => format!("{prompt}\n\n{DEFAULT_IMAGE_DESC}"),
         // No prepend mode or no system prompt
         (_, _, false) => input.to_string(),
         (_, _, true) => DEFAULT_IMAGE_DESC.to_string(),
@@ -69,8 +69,7 @@ pub fn build_request_with_mode(
             // Format with strong emphasis on following instructions
             // The <<< >>> markers and CRITICAL language help model understand importance
             format!(
-                "<<< SYSTEM INSTRUCTIONS - YOU MUST FOLLOW EXACTLY >>>\n\n{}\n\n<<< END INSTRUCTIONS >>>\n\n<<< USER INPUT >>>\n{}",
-                prompt, input
+                "<<< SYSTEM INSTRUCTIONS - YOU MUST FOLLOW EXACTLY >>>\n\n{prompt}\n\n<<< END INSTRUCTIONS >>>\n\n<<< USER INPUT >>>\n{input}"
             )
         } else {
             input.to_string()

@@ -29,7 +29,7 @@ impl ManifestAdapter for AlephTomlAdapter {
         let toml_path = plugin_dir.join(ALEPH_PLUGIN_TOML);
         let content = std::fs::read_to_string(&toml_path)?;
         let raw: AlephPluginToml = toml::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("aleph.plugin.toml parse error: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("aleph.plugin.toml parse error: {e}"))?;
 
         // Sanitize the declared id so a third-party manifest cannot claim an
         // arbitrary/colliding capability-registry key (mirrors the Codex and

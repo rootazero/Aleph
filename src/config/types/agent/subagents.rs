@@ -119,8 +119,7 @@ impl SubagentsConfigToml {
             // Check for invalid characters (basic validation)
             if agent_id.contains(char::is_whitespace) {
                 return Err(format!(
-                    "cowork.subagents.allow_agents contains agent ID with whitespace: '{}'",
-                    agent_id
+                    "cowork.subagents.allow_agents contains agent ID with whitespace: '{agent_id}'"
                 ));
             }
         }

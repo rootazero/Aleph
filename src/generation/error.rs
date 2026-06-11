@@ -444,8 +444,7 @@ impl GenerationError {
         match self {
             GenerationError::AuthenticationError { provider, .. } => {
                 format!(
-                    "Authentication failed for {}. Please check your API key in settings.",
-                    provider
+                    "Authentication failed for {provider}. Please check your API key in settings."
                 )
             }
             GenerationError::RateLimitError { retry_after, .. } => {
@@ -461,8 +460,7 @@ impl GenerationError {
             GenerationError::QuotaExceededError { resets_at, .. } => {
                 if let Some(reset) = resets_at {
                     format!(
-                        "Usage quota exceeded. Your quota resets at {}. Consider upgrading your plan.",
-                        reset
+                        "Usage quota exceeded. Your quota resets at {reset}. Consider upgrading your plan."
                     )
                 } else {
                     "Usage quota exceeded. Consider upgrading your plan or waiting for quota reset."
@@ -481,21 +479,18 @@ impl GenerationError {
             GenerationError::InvalidParametersError { parameter, message } => {
                 if let Some(param) = parameter {
                     format!(
-                        "Invalid parameter '{}': {}. Please adjust your settings.",
-                        param, message
+                        "Invalid parameter '{param}': {message}. Please adjust your settings."
                     )
                 } else {
                     format!(
-                        "Invalid parameters: {}. Please check your request.",
-                        message
+                        "Invalid parameters: {message}. Please check your request."
                     )
                 }
             }
             GenerationError::ContentFilteredError { category, .. } => {
                 if let Some(cat) = category {
                     format!(
-                        "Content was filtered for '{}' category. Please modify your prompt.",
-                        cat
+                        "Content was filtered for '{cat}' category. Please modify your prompt."
                     )
                 } else {
                     "Content was filtered by safety systems. Please modify your prompt.".to_string()
@@ -505,8 +500,7 @@ impl GenerationError {
                 feature, provider, ..
             } => {
                 format!(
-                    "The feature '{}' is not supported by {}. Try a different provider.",
-                    feature, provider
+                    "The feature '{feature}' is not supported by {provider}. Try a different provider."
                 )
             }
             GenerationError::ProviderError {
@@ -515,19 +509,18 @@ impl GenerationError {
                 provider,
             } => {
                 if let Some(code) = status_code {
-                    format!("{} returned error {}: {}", provider, code, message)
+                    format!("{provider} returned error {code}: {message}")
                 } else {
-                    format!("{} error: {}", provider, message)
+                    format!("{provider} error: {message}")
                 }
             }
             GenerationError::Cancelled => "Generation was cancelled.".to_string(),
             GenerationError::InternalError { message } => {
-                format!("Internal error: {}. Please try again.", message)
+                format!("Internal error: {message}. Please try again.")
             }
             GenerationError::ModelNotFoundError { model, provider } => {
                 format!(
-                    "Model '{}' not found on {}. Check the model name or try a different model.",
-                    model, provider
+                    "Model '{model}' not found on {provider}. Check the model name or try a different model."
                 )
             }
             GenerationError::UnsupportedGenerationTypeError {
@@ -535,8 +528,7 @@ impl GenerationError {
                 provider,
             } => {
                 format!(
-                    "{} does not support {} generation. Try a different provider.",
-                    provider, generation_type
+                    "{provider} does not support {generation_type} generation. Try a different provider."
                 )
             }
             GenerationError::UnsupportedFormatError { format, supported } => {
@@ -548,27 +540,27 @@ impl GenerationError {
             }
             GenerationError::UnsupportedDimensionError { message, suggested } => {
                 if let Some(sug) = suggested {
-                    format!("{}. Suggested: {}", message, sug)
+                    format!("{message}. Suggested: {sug}")
                 } else {
                     message.clone()
                 }
             }
             GenerationError::JobFailedError { message, job_id } => {
                 if let Some(id) = job_id {
-                    format!("Generation job {} failed: {}", id, message)
+                    format!("Generation job {id} failed: {message}")
                 } else {
-                    format!("Generation job failed: {}", message)
+                    format!("Generation job failed: {message}")
                 }
             }
             GenerationError::DownloadError { message, url } => {
                 if let Some(u) = url {
-                    format!("Failed to download from {}: {}", u, message)
+                    format!("Failed to download from {u}: {message}")
                 } else {
-                    format!("Download failed: {}", message)
+                    format!("Download failed: {message}")
                 }
             }
             GenerationError::SerializationError { message } => {
-                format!("Data processing error: {}. Please try again.", message)
+                format!("Data processing error: {message}. Please try again.")
             }
         }
     }
@@ -583,7 +575,7 @@ impl From<GenerationError> for AlephError {
             }
             GenerationError::RateLimitError { message, .. } => AlephError::rate_limit(message),
             GenerationError::QuotaExceededError { message, .. } => {
-                AlephError::rate_limit(format!("Quota exceeded: {}", message))
+                AlephError::rate_limit(format!("Quota exceeded: {message}"))
             }
             GenerationError::TimeoutError { duration } => AlephError::Timeout {
                 suggestion: Some(format!(
@@ -596,7 +588,7 @@ impl From<GenerationError> for AlephError {
                 AlephError::invalid_config(message)
             }
             GenerationError::ContentFilteredError { message, .. } => {
-                AlephError::provider(format!("Content filtered: {}", message))
+                AlephError::provider(format!("Content filtered: {message}"))
             }
             GenerationError::UnsupportedFeatureError { message, .. } => {
                 AlephError::provider(message)
@@ -605,17 +597,16 @@ impl From<GenerationError> for AlephError {
             GenerationError::Cancelled => AlephError::cancelled(),
             GenerationError::InternalError { message } => AlephError::other(message),
             GenerationError::ModelNotFoundError { model, provider } => {
-                AlephError::invalid_config(format!("Model '{}' not found on {}", model, provider))
+                AlephError::invalid_config(format!("Model '{model}' not found on {provider}"))
             }
             GenerationError::UnsupportedGenerationTypeError {
                 generation_type,
                 provider,
             } => AlephError::provider(format!(
-                "{} does not support {} generation",
-                provider, generation_type
+                "{provider} does not support {generation_type} generation"
             )),
             GenerationError::UnsupportedFormatError { format, .. } => {
-                AlephError::invalid_config(format!("Unsupported format: {}", format))
+                AlephError::invalid_config(format!("Unsupported format: {format}"))
             }
             GenerationError::UnsupportedDimensionError { message, .. } => {
                 AlephError::invalid_config(message)

@@ -34,7 +34,7 @@ pub fn group_by_category_into_clusters(
         let member_ids: Vec<String> = group.iter().map(|n| n.id.clone()).collect();
         let radius = cluster_radius(member_ids.len());
         clusters.push(ClusterNode {
-            id: format!("cluster::_default::{}::{}", category, active_id),
+            id: format!("cluster::_default::{category}::{active_id}"),
             relation: "_default".to_string(),
             kind: category,
             member_ids,

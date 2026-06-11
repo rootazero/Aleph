@@ -55,7 +55,7 @@ pub async fn handle_list(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -> 
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to list teams: {}", e),
+            format!("Failed to list teams: {e}"),
         ),
     }
 }
@@ -560,7 +560,7 @@ pub async fn handle_list_task_events(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to load events for team '{}': {}", team_id, e),
+                format!("Failed to load events for team '{team_id}': {e}"),
             )
         }
     };

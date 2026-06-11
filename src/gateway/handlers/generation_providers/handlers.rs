@@ -74,7 +74,7 @@ pub async fn handle_list(
                 obj.insert("has_api_key".into(), serde_json::json!(has_api_key));
                 obj.insert(
                     "generation_type".into(),
-                    serde_json::Value::String(format!("{:?}", gen_type).to_lowercase()),
+                    serde_json::Value::String(format!("{gen_type:?}").to_lowercase()),
                 );
             }
             val
@@ -144,7 +144,7 @@ pub async fn handle_get(
                 obj.insert("has_api_key".into(), serde_json::json!(has_api_key));
                 obj.insert(
                     "generation_type".into(),
-                    serde_json::Value::String(format!("{:?}", gen_type).to_lowercase()),
+                    serde_json::Value::String(format!("{gen_type:?}").to_lowercase()),
                 );
             }
             JsonRpcResponse::success(request.id, val)
@@ -219,7 +219,7 @@ pub async fn handle_create(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Validation failed: {}", e),
+                format!("Validation failed: {e}"),
             );
         }
 
@@ -230,7 +230,7 @@ pub async fn handle_create(
                 return JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to store API key: {}", e),
+                    format!("Failed to store API key: {e}"),
                 );
             }
         }
@@ -245,7 +245,7 @@ pub async fn handle_create(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -307,7 +307,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Validation failed: {}", e),
+                format!("Validation failed: {e}"),
             );
         }
 
@@ -318,7 +318,7 @@ pub async fn handle_update(
                 return JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to store API key: {}", e),
+                    format!("Failed to store API key: {e}"),
                 );
             }
         }
@@ -334,7 +334,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -424,7 +424,7 @@ pub async fn handle_delete(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -531,7 +531,7 @@ pub async fn handle_set_default(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -622,7 +622,7 @@ pub async fn handle_test_connection(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to serialize result: {}", e),
+            format!("Failed to serialize result: {e}"),
         ),
     }
 }

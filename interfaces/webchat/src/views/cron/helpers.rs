@@ -33,7 +33,7 @@ pub(super) fn format_schedule_summary(
                 }
                 "at" => {
                     if let Some(dt) = obj.get("datetime").and_then(|v| v.as_str()) {
-                        return format!("At {}", dt);
+                        return format!("At {dt}");
                     }
                     // Backend stores ms; convert to seconds for display
                     if let Some(ts_ms) = obj
@@ -54,16 +54,16 @@ pub(super) fn format_schedule_summary(
         "every" => {
             let trimmed = schedule.trim();
             if let Some(rest) = trimmed.strip_suffix('m') {
-                format!("Every {}min", rest)
+                format!("Every {rest}min")
             } else if let Some(rest) = trimmed.strip_suffix('h') {
-                format!("Every {}h", rest)
+                format!("Every {rest}h")
             } else if let Some(rest) = trimmed.strip_suffix('s') {
-                format!("Every {}s", rest)
+                format!("Every {rest}s")
             } else {
-                format!("Every {}", trimmed)
+                format!("Every {trimmed}")
             }
         }
-        "at" => format!("At {}", schedule),
+        "at" => format!("At {schedule}"),
         _ => schedule.to_string(),
     }
 }
@@ -97,13 +97,13 @@ pub(super) fn format_relative_time(ts: i64, overdue_label: &str) -> String {
     let days = diff / 86400;
 
     if minutes < 1 {
-        format!("{}s", diff)
+        format!("{diff}s")
     } else if hours < 1 {
-        format!("{}min", minutes)
+        format!("{minutes}min")
     } else if days < 1 {
-        format!("{}h", hours)
+        format!("{hours}h")
     } else {
-        format!("{}d", days)
+        format!("{days}d")
     }
 }
 
@@ -117,14 +117,14 @@ pub(super) fn format_timestamp(ts: i64) -> String {
     let hours = date.get_hours();
     let minutes = date.get_minutes();
 
-    format!("{:02}/{:02} {:02}:{:02}", month, day, hours, minutes)
+    format!("{month:02}/{day:02} {hours:02}:{minutes:02}")
 }
 
 /// Format a duration in milliseconds to a human-readable string.
 /// e.g. "200ms", "1.5s", "2.1min".
 pub(super) fn format_duration(ms: u64) -> String {
     if ms < 1000 {
-        format!("{}ms", ms)
+        format!("{ms}ms")
     } else if ms < 60_000 {
         format!("{:.1}s", ms as f64 / 1000.0)
     } else {
@@ -238,7 +238,7 @@ pub(super) fn ms_to_datetime_local(ms: i64) -> String {
     let d = date.get_date();
     let hh = date.get_hours();
     let mm = date.get_minutes();
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}", y, m, d, hh, mm)
+    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}")
 }
 
 /// Convert a `YYYY-MM-DDTHH:MM` local datetime string to epoch milliseconds.

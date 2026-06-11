@@ -88,9 +88,9 @@ pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
                     // Match level as a standalone word to avoid partial matches
                     // (e.g., "ERROR" shouldn't match "WARN" or "INFO").
                     lines.retain(|line| {
-                        line.contains(&format!(" {} ", level_upper))
-                            || line.contains(&format!("[{}]", level_upper))
-                            || line.ends_with(&format!(" {}", level_upper))
+                        line.contains(&format!(" {level_upper} "))
+                            || line.contains(&format!("[{level_upper}]"))
+                            || line.ends_with(&format!(" {level_upper}"))
                     });
                 }
 
@@ -109,7 +109,7 @@ pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
             Err(e) => JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to read log file: {}", e),
+                format!("Failed to read log file: {e}"),
             ),
         },
         None => JsonRpcResponse::success(

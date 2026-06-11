@@ -32,7 +32,7 @@ pub fn deterministic_truncate(messages: &[(String, String)], max_chars: usize) -
         if !result.is_empty() {
             result.push('\n');
         }
-        result.push_str(&format!("[{}] {}", role, sentence));
+        result.push_str(&format!("[{role}] {sentence}"));
     }
     if result.len() > max_chars {
         // Truncate at char boundary safely

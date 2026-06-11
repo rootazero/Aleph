@@ -221,7 +221,7 @@ impl fmt::Display for LaneError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LaneError::Congested(lane) => {
-                write!(f, "lane {} is congested, could not acquire permit", lane)
+                write!(f, "lane {lane} is congested, could not acquire permit")
             }
         }
     }

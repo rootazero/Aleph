@@ -27,8 +27,7 @@ impl Config {
             if !self.providers.contains_key(default_provider) {
                 error!(default_provider = %default_provider, "Default provider not found");
                 return Err(AlephError::invalid_config(format!(
-                    "Default provider '{}' not found in providers",
-                    default_provider
+                    "Default provider '{default_provider}' not found in providers"
                 )));
             }
             debug!(default_provider = %default_provider, "Default provider validated");
@@ -45,8 +44,7 @@ impl Config {
             if provider.timeout_seconds == 0 {
                 error!(provider = %name, "Provider timeout is zero");
                 return Err(AlephError::invalid_config(format!(
-                    "Provider '{}' timeout must be greater than 0",
-                    name
+                    "Provider '{name}' timeout must be greater than 0"
                 )));
             }
 
@@ -63,8 +61,7 @@ impl Config {
                 if !(min..=max).contains(&temp) {
                     error!(provider = %name, temperature = temp, "Invalid temperature for {}", provider_name);
                     return Err(AlephError::invalid_config(format!(
-                        "Provider '{}' ({}) temperature must be between {} and {}, got {}",
-                        name, provider_name, min, max, temp
+                        "Provider '{name}' ({provider_name}) temperature must be between {min} and {max}, got {temp}"
                     )));
                 }
             }
@@ -74,8 +71,7 @@ impl Config {
                 if max_tokens == 0 {
                     error!(provider = %name, max_tokens = max_tokens, "Invalid max_tokens");
                     return Err(AlephError::invalid_config(format!(
-                        "Provider '{}' max_tokens must be greater than 0, got {}",
-                        name, max_tokens
+                        "Provider '{name}' max_tokens must be greater than 0, got {max_tokens}"
                     )));
                 }
             }
@@ -85,8 +81,7 @@ impl Config {
                 if !(0.0..=1.0).contains(&top_p) {
                     error!(provider = %name, top_p = top_p, "Invalid top_p");
                     return Err(AlephError::invalid_config(format!(
-                        "Provider '{}' top_p must be between 0.0 and 1.0, got {}",
-                        name, top_p
+                        "Provider '{name}' top_p must be between 0.0 and 1.0, got {top_p}"
                     )));
                 }
             }
@@ -96,8 +91,7 @@ impl Config {
                 if top_k == 0 {
                     error!(provider = %name, top_k = top_k, "Invalid top_k");
                     return Err(AlephError::invalid_config(format!(
-                        "Provider '{}' top_k must be greater than 0, got {}",
-                        name, top_k
+                        "Provider '{name}' top_k must be greater than 0, got {top_k}"
                     )));
                 }
             }
@@ -108,8 +102,7 @@ impl Config {
                     if !(-2.0..=2.0).contains(&freq_pen) {
                         error!(provider = %name, frequency_penalty = freq_pen, "Invalid frequency_penalty");
                         return Err(AlephError::invalid_config(format!(
-                            "Provider '{}' frequency_penalty must be between -2.0 and 2.0, got {}",
-                            name, freq_pen
+                            "Provider '{name}' frequency_penalty must be between -2.0 and 2.0, got {freq_pen}"
                         )));
                     }
                 }
@@ -118,8 +111,7 @@ impl Config {
                     if !(-2.0..=2.0).contains(&pres_pen) {
                         error!(provider = %name, presence_penalty = pres_pen, "Invalid presence_penalty");
                         return Err(AlephError::invalid_config(format!(
-                            "Provider '{}' presence_penalty must be between -2.0 and 2.0, got {}",
-                            name, pres_pen
+                            "Provider '{name}' presence_penalty must be between -2.0 and 2.0, got {pres_pen}"
                         )));
                     }
                 }
@@ -131,8 +123,7 @@ impl Config {
                     if thinking_level != "LOW" && thinking_level != "HIGH" {
                         error!(provider = %name, thinking_level = %thinking_level, "Invalid thinking_level");
                         return Err(AlephError::invalid_config(format!(
-                            "Provider '{}' thinking_level must be 'LOW' or 'HIGH', got '{}'",
-                            name, thinking_level
+                            "Provider '{name}' thinking_level must be 'LOW' or 'HIGH', got '{thinking_level}'"
                         )));
                     }
                 }
@@ -141,8 +132,7 @@ impl Config {
                     if media_res != "LOW" && media_res != "MEDIUM" && media_res != "HIGH" {
                         error!(provider = %name, media_resolution = %media_res, "Invalid media_resolution");
                         return Err(AlephError::invalid_config(format!(
-                            "Provider '{}' media_resolution must be 'LOW', 'MEDIUM', or 'HIGH', got '{}'",
-                            name, media_res
+                            "Provider '{name}' media_resolution must be 'LOW', 'MEDIUM', or 'HIGH', got '{media_res}'"
                         )));
                     }
                 }
@@ -154,8 +144,7 @@ impl Config {
                     if repeat_pen < 0.0 {
                         error!(provider = %name, repeat_penalty = repeat_pen, "Invalid repeat_penalty");
                         return Err(AlephError::invalid_config(format!(
-                            "Provider '{}' repeat_penalty must be >= 0.0, got {}",
-                            name, repeat_pen
+                            "Provider '{name}' repeat_penalty must be >= 0.0, got {repeat_pen}"
                         )));
                     }
                 }
@@ -433,8 +422,7 @@ impl Config {
                                 "Search fallback provider not found in backends"
                             );
                             return Err(AlephError::invalid_config(format!(
-                                "Search fallback provider '{}' not found in backends",
-                                provider_name
+                                "Search fallback provider '{provider_name}' not found in backends"
                             )));
                         }
                     }
@@ -495,16 +483,14 @@ impl Config {
                             if backend_config.engine_id.is_none() {
                                 error!(backend = %backend_name, "Google backend requires engine_id");
                                 return Err(AlephError::invalid_config(format!(
-                                    "Search backend '{}' (Google) requires an engine_id",
-                                    backend_name
+                                    "Search backend '{backend_name}' (Google) requires an engine_id"
                                 )));
                             }
                         }
                         "searxng" if backend_config.base_url.is_none() => {
                             error!(backend = %backend_name, "SearXNG backend requires base_url");
                             return Err(AlephError::invalid_config(format!(
-                                "Search backend '{}' (SearXNG) requires a base_url",
-                                backend_name
+                                "Search backend '{backend_name}' (SearXNG) requires a base_url"
                             )));
                         }
                         _ => {
@@ -544,8 +530,7 @@ impl Config {
                     "Agent planner_provider not found in providers"
                 );
                 return Err(AlephError::invalid_config(format!(
-                    "Agent planner_provider '{}' not found in providers",
-                    provider_name
+                    "Agent planner_provider '{provider_name}' not found in providers"
                 )));
             }
         }

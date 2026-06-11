@@ -83,7 +83,7 @@ impl SunoProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         let base = base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
         let base_url = base.trim_end_matches('/').to_string();
@@ -130,11 +130,11 @@ impl SunoProvider {
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .send()
                 .await
-                .map_err(|e| GenerationError::network(format!("Poll request failed: {}", e)))?;
+                .map_err(|e| GenerationError::network(format!("Poll request failed: {e}")))?;
 
             let status = response.status();
             let body = response.text().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read poll body: {}", e))
+                GenerationError::network(format!("Failed to read poll body: {e}"))
             })?;
             if !status.is_success() {
                 error!(status = %status, body = %body, "Suno poll failed");
@@ -142,7 +142,7 @@ impl SunoProvider {
             }
 
             let clips: Vec<types::SunoClip> = serde_json::from_str(&body).map_err(|e| {
-                GenerationError::serialization(format!("Failed to parse Suno clips: {}", e))
+                GenerationError::serialization(format!("Failed to parse Suno clips: {e}"))
             })?;
 
             // All complete? Return.
@@ -162,7 +162,7 @@ impl SunoProvider {
         debug!(url, "downloading Suno audio");
         let response =
             self.client.get(url).send().await.map_err(|e| {
-                GenerationError::network(format!("Failed to download audio: {}", e))
+                GenerationError::network(format!("Failed to download audio: {e}"))
             })?;
         if !response.status().is_success() {
             return Err(GenerationError::network(format!(
@@ -173,7 +173,7 @@ impl SunoProvider {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| GenerationError::network(format!("Failed to read audio bytes: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to read audio bytes: {e}")))?;
         Ok(bytes.to_vec())
     }
 }
@@ -257,7 +257,7 @@ impl GenerationProvider for SunoProvider {
                     if e.is_timeout() {
                         GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
                     } else if e.is_connect() {
-                        GenerationError::network(format!("Connection failed: {}", e))
+                        GenerationError::network(format!("Connection failed: {e}"))
                     } else {
                         GenerationError::network(e.to_string())
                     }
@@ -266,7 +266,7 @@ impl GenerationProvider for SunoProvider {
             let status = response.status();
             if !status.is_success() {
                 let body = response.text().await.map_err(|e| {
-                    GenerationError::network(format!("Failed to read error body: {}", e))
+                    GenerationError::network(format!("Failed to read error body: {e}"))
                 })?;
                 error!(status = %status, body = %body, "Suno submit failed");
                 return Err(self.parse_error(status, &body));
@@ -274,8 +274,7 @@ impl GenerationProvider for SunoProvider {
 
             let initial_clips: Vec<types::SunoClip> = response.json().await.map_err(|e| {
                 GenerationError::serialization(format!(
-                    "Failed to parse Suno submit response: {}",
-                    e
+                    "Failed to parse Suno submit response: {e}"
                 ))
             })?;
             if initial_clips.is_empty() {

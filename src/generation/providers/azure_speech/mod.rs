@@ -107,7 +107,7 @@ impl AzureSpeechProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         Ok(Self {
             client,
@@ -263,7 +263,7 @@ impl GenerationProvider for AzureSpeechProvider {
                     if e.is_timeout() {
                         GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
                     } else if e.is_connect() {
-                        GenerationError::network(format!("Connection failed: {}", e))
+                        GenerationError::network(format!("Connection failed: {e}"))
                     } else {
                         GenerationError::network(e.to_string())
                     }
@@ -272,14 +272,14 @@ impl GenerationProvider for AzureSpeechProvider {
             let status = response.status();
             if !status.is_success() {
                 let body = response.text().await.map_err(|e| {
-                    GenerationError::network(format!("Failed to read error body: {}", e))
+                    GenerationError::network(format!("Failed to read error body: {e}"))
                 })?;
                 error!(status = %status, body = %body, "Azure Speech request failed");
                 return Err(self.parse_error(status, &body));
             }
 
             let audio_bytes = response.bytes().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read audio bytes: {}", e))
+                GenerationError::network(format!("Failed to read audio bytes: {e}"))
             })?;
             if audio_bytes.is_empty() {
                 return Err(GenerationError::provider(
@@ -348,8 +348,7 @@ fn resolve_endpoint(input: &str) -> String {
         }
     } else {
         format!(
-            "https://{}.tts.speech.microsoft.com/cognitiveservices/v1",
-            trimmed
+            "https://{trimmed}.tts.speech.microsoft.com/cognitiveservices/v1"
         )
     }
 }
@@ -385,10 +384,7 @@ fn build_ssml(input: &str, voice: &str) -> String {
     let escaped_input = xml_escape(input);
     let escaped_voice = xml_escape(voice);
     format!(
-        r#"<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{lang}"><voice name="{voice}">{text}</voice></speak>"#,
-        lang = xml_lang,
-        voice = escaped_voice,
-        text = escaped_input,
+        r#"<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{xml_lang}"><voice name="{escaped_voice}">{escaped_input}</voice></speak>"#,
     )
 }
 

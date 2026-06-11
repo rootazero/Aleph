@@ -124,7 +124,7 @@ impl LoopProvider for AiProviderBridge {
             .provider
             .process(payload)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         Ok(response_to_delta_stream(response))
     }
 }

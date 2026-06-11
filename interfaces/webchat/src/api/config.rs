@@ -39,12 +39,12 @@ impl ConfigApi {
     pub async fn list(state: &DashboardState) -> Result<Vec<String>, String> {
         let result = state.rpc_call("config.list", Value::Null).await?;
 
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse config list: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse config list: {e}"))
     }
 
     /// Reload configuration from disk and refresh subsystems
     pub async fn reload(state: &DashboardState) -> Result<ConfigReloadResult, String> {
         let result = state.rpc_call("config.reload", Value::Null).await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse reload result: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse reload result: {e}"))
     }
 }

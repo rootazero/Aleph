@@ -42,7 +42,7 @@ pub async fn handle_call_tool(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Tool call failed: {}", e),
+            format!("Tool call failed: {e}"),
         ),
     }
 }
@@ -118,13 +118,13 @@ pub async fn handle_execute_command(request: JsonRpcRequest) -> JsonRpcResponse 
             Err(e) => JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to serialize command result: {}", e),
+                format!("Failed to serialize command result: {e}"),
             ),
         },
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Command execution failed: {}", e),
+            format!("Command execution failed: {e}"),
         ),
     }
 }
@@ -166,7 +166,7 @@ pub async fn handle_load(request: JsonRpcRequest) -> JsonRpcResponse {
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Failed to parse manifest: {}", e),
+                format!("Failed to parse manifest: {e}"),
             );
         }
     };
@@ -176,7 +176,7 @@ pub async fn handle_load(request: JsonRpcRequest) -> JsonRpcResponse {
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to load plugin: {}", e),
+            format!("Failed to load plugin: {e}"),
         );
     }
 
@@ -223,7 +223,7 @@ pub async fn handle_unload(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to unload plugin: {}", e),
+            format!("Failed to unload plugin: {e}"),
         ),
     }
 }
@@ -263,7 +263,7 @@ pub async fn handle_reload(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to reload plugin: {}", e),
+            format!("Failed to reload plugin: {e}"),
         ),
     }
 }

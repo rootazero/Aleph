@@ -137,7 +137,7 @@ impl QQApiClient {
         payload: SendMessagePayload,
     ) -> Result<String, QQError> {
         let token = self.token_manager.get_token(&self.http).await?;
-        let url = format!("{}/v2/users/{}/messages", API_BASE, openid);
+        let url = format!("{API_BASE}/v2/users/{openid}/messages");
         self.post_message(&url, &token, payload).await
     }
 
@@ -147,7 +147,7 @@ impl QQApiClient {
         payload: SendMessagePayload,
     ) -> Result<String, QQError> {
         let token = self.token_manager.get_token(&self.http).await?;
-        let url = format!("{}/v2/groups/{}/messages", API_BASE, group_openid);
+        let url = format!("{API_BASE}/v2/groups/{group_openid}/messages");
         self.post_message(&url, &token, payload).await
     }
 
@@ -160,7 +160,7 @@ impl QQApiClient {
         let resp = self
             .http
             .post(url)
-            .header("Authorization", format!("QQBot {}", token))
+            .header("Authorization", format!("QQBot {token}"))
             .json(&payload)
             .send()
             .await

@@ -269,8 +269,7 @@ impl ArenaManifest {
 
         if !agent_ids.contains(&coord) {
             return Err(format!(
-                "Coordinator '{}' must be one of the participants",
-                coord
+                "Coordinator '{coord}' must be one of the participants"
             ));
         }
 
@@ -343,8 +342,7 @@ impl ArenaManifest {
                 for id in agent_ids {
                     if !stage_agent_ids.contains(id) {
                         return Err(format!(
-                            "Participant '{}' is not assigned to any pipeline stage",
-                            id
+                            "Participant '{id}' is not assigned to any pipeline stage"
                         ));
                     }
                 }
@@ -357,8 +355,7 @@ impl ArenaManifest {
             }
             other => {
                 return Err(format!(
-                    "Unknown strategy '{}': expected 'peer' or 'pipeline'",
-                    other
+                    "Unknown strategy '{other}': expected 'peer' or 'pipeline'"
                 ));
             }
         };
@@ -576,8 +573,7 @@ impl SharedFact {
     ) -> Result<Self, String> {
         if !(0.0..=1.0).contains(&confidence) {
             return Err(format!(
-                "Confidence must be in [0.0, 1.0], got {}",
-                confidence
+                "Confidence must be in [0.0, 1.0], got {confidence}"
             ));
         }
         Ok(Self {

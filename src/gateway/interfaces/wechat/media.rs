@@ -45,7 +45,7 @@ fn pkcs7_unpad(data: &mut Vec<u8>) -> Result<(), String> {
 
     let pad_len = data[len - 1] as usize;
     if pad_len == 0 || pad_len > AES_BLOCK_SIZE {
-        return Err(format!("Invalid PKCS7 padding byte: {}", pad_len));
+        return Err(format!("Invalid PKCS7 padding byte: {pad_len}"));
     }
 
     if pad_len > len {
@@ -88,7 +88,7 @@ pub fn parse_aes_key(aes_key_b64: &str) -> Result<[u8; 16], String> {
             return Ok(key);
         }
     }
-    Err(format!("Invalid AES key format: {}", aes_key_b64))
+    Err(format!("Invalid AES key format: {aes_key_b64}"))
 }
 
 /// Download and decrypt media from CDN.
@@ -115,7 +115,7 @@ pub async fn download_and_decrypt_media(
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("Download failed: {}", e))?;
+        .map_err(|e| format!("Download failed: {e}"))?;
 
     if !response.status().is_success() {
         return Err(format!("Download error: {}", response.status()));
@@ -124,7 +124,7 @@ pub async fn download_and_decrypt_media(
     let mut data = response
         .bytes()
         .await
-        .map_err(|e| format!("Read failed: {}", e))?
+        .map_err(|e| format!("Read failed: {e}"))?
         .to_vec();
 
     if let Some(key_b64) = aes_key_b64 {

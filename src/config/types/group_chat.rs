@@ -129,8 +129,7 @@ impl PersonaConfig {
         }
         if self.system_prompt.chars().count() > MAX_PROMPT_LEN {
             return Err(format!(
-                "persona system_prompt exceeds maximum length of {} characters",
-                MAX_PROMPT_LEN
+                "persona system_prompt exceeds maximum length of {MAX_PROMPT_LEN} characters"
             ));
         }
         Ok(())

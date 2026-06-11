@@ -78,7 +78,7 @@ impl std::str::FromStr for TaskStatus {
             "interrupted" => Ok(TaskStatus::Interrupted),
             "idle" => Ok(TaskStatus::Idle),
             "swapped" => Ok(TaskStatus::Swapped),
-            _ => Err(format!("Unknown task status: {}", s)),
+            _ => Err(format!("Unknown task status: {s}")),
         }
     }
 }
@@ -122,7 +122,7 @@ impl std::str::FromStr for RiskLevel {
         match s.to_lowercase().as_str() {
             "low" => Ok(RiskLevel::Low),
             "high" => Ok(RiskLevel::High),
-            _ => Err(format!("Unknown risk level: {}", s)),
+            _ => Err(format!("Unknown risk level: {s}")),
         }
     }
 }
@@ -166,7 +166,7 @@ impl std::str::FromStr for Lane {
         match s.to_lowercase().as_str() {
             "main" => Ok(Lane::Main),
             "subagent" => Ok(Lane::Subagent),
-            _ => Err(format!("Unknown lane: {}", s)),
+            _ => Err(format!("Unknown lane: {s}")),
         }
     }
 }

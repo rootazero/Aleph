@@ -96,7 +96,7 @@ impl ListToolsTool {
         use super::{notify_tool_result, notify_tool_start};
 
         let category_filter = args.category.as_deref().unwrap_or("all");
-        notify_tool_start(Self::NAME, &format!("列出工具: {}", category_filter));
+        notify_tool_start(Self::NAME, &format!("列出工具: {category_filter}"));
 
         let registry = self.registry.read().await;
         let tools = registry
@@ -115,7 +115,7 @@ impl ListToolsTool {
         let total_count = tools.len();
         let categories_json = serde_json::to_value(&categories).unwrap_or_default();
 
-        notify_tool_result(Self::NAME, &format!("找到 {} 个工具", total_count), true);
+        notify_tool_result(Self::NAME, &format!("找到 {total_count} 个工具"), true);
 
         Ok(ListToolsOutput {
             total_count,
@@ -408,7 +408,7 @@ impl SearchToolsTool {
             .unwrap_or(SEARCH_TOOLS_DEFAULT_LIMIT)
             .clamp(1, SEARCH_TOOLS_MAX_LIMIT);
 
-        notify_tool_start(Self::NAME, &format!("搜索工具: {}", query));
+        notify_tool_start(Self::NAME, &format!("搜索工具: {query}"));
 
         if query.is_empty() {
             notify_tool_result(Self::NAME, "空查询", false);

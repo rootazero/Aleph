@@ -33,7 +33,7 @@ use super::normalize_optional_string;
 
 /// Vault key prefix for search provider API keys
 fn vault_key(backend_name: &str) -> String {
-    format!("search:{}", backend_name)
+    format!("search:{backend_name}")
 }
 
 /// Resolve API key from vault for a search backend
@@ -112,7 +112,7 @@ pub async fn handle_get(
             Err(e) => JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to serialize config: {}", e),
+                format!("Failed to serialize config: {e}"),
             ),
         }
     } else {
@@ -135,7 +135,7 @@ pub async fn handle_get(
             Err(e) => JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to serialize config: {}", e),
+                format!("Failed to serialize config: {e}"),
             ),
         }
     }
@@ -161,7 +161,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Invalid params: {}", e),
+                format!("Invalid params: {e}"),
             )
         }
     };
@@ -216,7 +216,7 @@ pub async fn handle_update(
                         return JsonRpcResponse::error(
                             request.id,
                             INTERNAL_ERROR,
-                            format!("Failed to store API key: {}", e),
+                            format!("Failed to store API key: {e}"),
                         );
                     }
                 }
@@ -273,7 +273,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
 
@@ -366,13 +366,13 @@ pub async fn handle_test(
                         },
                         Err(e) => SearchTestResult {
                             success: false,
-                            message: format!("Search failed: {}", e),
+                            message: format!("Search failed: {e}"),
                         },
                     }
                 }
                 Err(e) => SearchTestResult {
                     success: false,
-                    message: format!("Failed to create provider: {}", e),
+                    message: format!("Failed to create provider: {e}"),
                 },
             }
         }
@@ -396,13 +396,13 @@ pub async fn handle_test(
                         },
                         Err(e) => SearchTestResult {
                             success: false,
-                            message: format!("Search failed: {}", e),
+                            message: format!("Search failed: {e}"),
                         },
                     }
                 }
                 Err(e) => SearchTestResult {
                     success: false,
-                    message: format!("Failed to create provider: {}", e),
+                    message: format!("Failed to create provider: {e}"),
                 },
             }
         }
@@ -425,13 +425,13 @@ pub async fn handle_test(
                         },
                         Err(e) => SearchTestResult {
                             success: false,
-                            message: format!("Search failed: {}", e),
+                            message: format!("Search failed: {e}"),
                         },
                     }
                 }
                 Err(e) => SearchTestResult {
                     success: false,
-                    message: format!("Failed to create provider: {}", e),
+                    message: format!("Failed to create provider: {e}"),
                 },
             }
         }
@@ -461,13 +461,13 @@ pub async fn handle_test(
                         },
                         Err(e) => SearchTestResult {
                             success: false,
-                            message: format!("Search failed: {}", e),
+                            message: format!("Search failed: {e}"),
                         },
                     }
                 }
                 Err(e) => SearchTestResult {
                     success: false,
-                    message: format!("Failed to create provider: {}", e),
+                    message: format!("Failed to create provider: {e}"),
                 },
             }
         }
@@ -491,13 +491,13 @@ pub async fn handle_test(
                         },
                         Err(e) => SearchTestResult {
                             success: false,
-                            message: format!("Search failed: {}", e),
+                            message: format!("Search failed: {e}"),
                         },
                     }
                 }
                 Err(e) => SearchTestResult {
                     success: false,
-                    message: format!("Failed to create provider: {}", e),
+                    message: format!("Failed to create provider: {e}"),
                 },
             }
         }
@@ -521,13 +521,13 @@ pub async fn handle_test(
                         },
                         Err(e) => SearchTestResult {
                             success: false,
-                            message: format!("Search failed: {}", e),
+                            message: format!("Search failed: {e}"),
                         },
                     }
                 }
                 Err(e) => SearchTestResult {
                     success: false,
-                    message: format!("Failed to create provider: {}", e),
+                    message: format!("Failed to create provider: {e}"),
                 },
             }
         }
@@ -551,13 +551,13 @@ pub async fn handle_test(
                         },
                         Err(e) => SearchTestResult {
                             success: false,
-                            message: format!("Search failed: {}", e),
+                            message: format!("Search failed: {e}"),
                         },
                     }
                 }
                 Err(e) => SearchTestResult {
                     success: false,
-                    message: format!("Failed to create provider: {}", e),
+                    message: format!("Failed to create provider: {e}"),
                 },
             }
         }
@@ -574,18 +574,18 @@ pub async fn handle_test(
                     },
                     Err(e) => SearchTestResult {
                         success: false,
-                        message: format!("Search failed: {}", e),
+                        message: format!("Search failed: {e}"),
                     },
                 }
             }
             Err(e) => SearchTestResult {
                 success: false,
-                message: format!("Failed to create provider: {}", e),
+                message: format!("Failed to create provider: {e}"),
             },
         },
         _ => SearchTestResult {
             success: false,
-            message: format!("Unknown provider type: {}", provider_type),
+            message: format!("Unknown provider type: {provider_type}"),
         },
     };
 
@@ -607,7 +607,7 @@ pub async fn handle_test(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to serialize result: {}", e),
+            format!("Failed to serialize result: {e}"),
         ),
     }
 }
@@ -673,7 +673,7 @@ pub async fn handle_delete_backend(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }

@@ -71,7 +71,7 @@ fn extract_hostname(url: &str) -> Option<String> {
     let with_scheme = if url.contains("://") {
         url.to_string()
     } else {
-        format!("https://{}", url)
+        format!("https://{url}")
     };
     with_scheme
         .parse::<url::Url>()
@@ -204,7 +204,7 @@ fn extract_path(url: &str) -> Option<String> {
     let with_scheme = if url.contains("://") {
         url.to_string()
     } else {
-        format!("https://{}", url)
+        format!("https://{url}")
     };
     with_scheme
         .parse::<url::Url>()

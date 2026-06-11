@@ -131,7 +131,7 @@ impl TokenManager {
                     }
                 }
 
-                let url = format!("{}/open-apis/auth/v3/app_access_token/internal", base_url);
+                let url = format!("{base_url}/open-apis/auth/v3/app_access_token/internal");
                 let body = serde_json::json!({
                     "app_id": app_id,
                     "app_secret": app_secret,

@@ -653,7 +653,7 @@ impl Certificate {
                 base64::engine::general_purpose::STANDARD
                     .decode(&cleaned)
                     .map_err(|e| {
-                        CertificateError::ParseError(format!("certificate base64 error: {}", e))
+                        CertificateError::ParseError(format!("certificate base64 error: {e}"))
                     })?,
             );
         }
@@ -669,7 +669,7 @@ impl Certificate {
                 base64::engine::general_purpose::STANDARD
                     .decode(&cleaned)
                     .map_err(|e| {
-                        CertificateError::ParseError(format!("key base64 error: {}", e))
+                        CertificateError::ParseError(format!("key base64 error: {e}"))
                     })?,
             );
         }
@@ -706,9 +706,9 @@ impl ManagedIdentityTokenProvider {
 
     pub async fn get_token(&self, resource: &str) -> Result<String, MsTeamsAuthError> {
         let endpoint = "http://169.254.169.254/metadata/identity/oauth2/token";
-        let mut url = format!("{}?api-version=2018-02-01&resource={}", endpoint, resource);
+        let mut url = format!("{endpoint}?api-version=2018-02-01&resource={resource}");
         if let Some(cid) = &self.client_id {
-            url = format!("{}&client_id={}", url, cid);
+            url = format!("{url}&client_id={cid}");
         }
 
         let response = self
@@ -785,8 +785,7 @@ impl JwtAssertionGenerator {
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(MsTeamsAuthError::TokenExchangeError(format!(
-                "Token endpoint returned {}: {}",
-                status, body
+                "Token endpoint returned {status}: {body}"
             )));
         }
 
@@ -843,7 +842,7 @@ impl JwtAssertionGenerator {
         let encoding_key = EncodingKey::from_rsa_der(&self.private_key_der);
 
         encode(&Header::new(Algorithm::RS256), &claims, &encoding_key).map_err(|e| {
-            MsTeamsAuthError::TokenExchangeError(format!("Failed to sign JWT assertion: {}", e))
+            MsTeamsAuthError::TokenExchangeError(format!("Failed to sign JWT assertion: {e}"))
         })
     }
 }

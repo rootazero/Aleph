@@ -59,7 +59,7 @@ impl SecurityStore {
     /// Set schema version
     pub(crate) fn set_schema_version(&self, version: i32) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(&format!("PRAGMA user_version = {}", version), [])?;
+        conn.execute(&format!("PRAGMA user_version = {version}"), [])?;
         Ok(())
     }
 

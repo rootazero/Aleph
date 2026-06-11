@@ -355,7 +355,7 @@ impl ExecutionContext {
             self.original_intent.raw_input
         ));
         if let Some(ref understood) = self.original_intent.understood_as {
-            parts.push(format!("**Understood As**: {}", understood));
+            parts.push(format!("**Understood As**: {understood}"));
         }
 
         // Implicit expectations
@@ -372,7 +372,7 @@ impl ExecutionContext {
             self.current_goal.description
         ));
         if let Some(ref criteria) = self.current_goal.success_criteria {
-            parts.push(format!("**Success Criteria**: {}", criteria));
+            parts.push(format!("**Success Criteria**: {criteria}"));
         }
 
         // Acquired knowledge

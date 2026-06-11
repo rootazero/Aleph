@@ -176,7 +176,7 @@ impl WizardFlow for OnboardingFlow {
         if primary_provider != "ollama" {
             let api_key = prompter
                 .text(
-                    &format!("Enter your {} API key:", primary_provider),
+                    &format!("Enter your {primary_provider} API key:"),
                     Some("sk-..."),
                     true, // sensitive
                 )
@@ -226,7 +226,7 @@ impl WizardFlow for OnboardingFlow {
                         Some(
                             prompter
                                 .text(
-                                    &format!("Enter your {} API key:", secondary_provider),
+                                    &format!("Enter your {secondary_provider} API key:"),
                                     Some("sk-..."),
                                     true,
                                 )
@@ -237,7 +237,7 @@ impl WizardFlow for OnboardingFlow {
                     Some(
                         prompter
                             .text(
-                                &format!("Enter your {} API key:", secondary_provider),
+                                &format!("Enter your {secondary_provider} API key:"),
                                 Some("sk-..."),
                                 true,
                             )
@@ -409,7 +409,7 @@ impl WizardFlow for ProviderSetupFlow {
         if provider != "ollama" {
             let _api_key = prompter
                 .text(
-                    &format!("Enter your {} API key:", provider),
+                    &format!("Enter your {provider} API key:"),
                     Some("sk-..."),
                     true,
                 )

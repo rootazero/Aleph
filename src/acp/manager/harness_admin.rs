@@ -139,7 +139,7 @@ impl AcpAdapterManager {
         if !entry.enabled {
             return Err(AcpOperationError::new(
                 AcpErrorCode::HarnessDenied,
-                format!("Cannot register disabled harness '{}'", id),
+                format!("Cannot register disabled harness '{id}'"),
             )
             .into());
         }
@@ -156,8 +156,7 @@ impl AcpAdapterManager {
             return Err(AcpOperationError::new(
                 AcpErrorCode::HarnessDenied,
                 format!(
-                    "Harness '{}' is already registered. Use update_harness to modify it.",
-                    id
+                    "Harness '{id}' is already registered. Use update_harness to modify it."
                 ),
             )
             .into());
@@ -180,8 +179,7 @@ impl AcpAdapterManager {
             return Err(AcpOperationError::new(
                 AcpErrorCode::HarnessDenied,
                 format!(
-                    "Cannot unregister preset harness '{}'. Disable it via update_harness instead.",
-                    id
+                    "Cannot unregister preset harness '{id}'. Disable it via update_harness instead."
                 ),
             )
             .into());
@@ -195,7 +193,7 @@ impl AcpAdapterManager {
         if adapters.remove(id).is_none() {
             return Err(AcpOperationError::new(
                 AcpErrorCode::HarnessNotFound,
-                format!("Harness '{}' is not registered", id),
+                format!("Harness '{id}' is not registered"),
             )
             .into());
         }

@@ -67,7 +67,7 @@ impl GenerationProvider for OpenAiCompatProvider {
                     if e.is_timeout() {
                         GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
                     } else if e.is_connect() {
-                        GenerationError::network(format!("Connection failed: {}", e))
+                        GenerationError::network(format!("Connection failed: {e}"))
                     } else {
                         GenerationError::network(e.to_string())
                     }
@@ -75,7 +75,7 @@ impl GenerationProvider for OpenAiCompatProvider {
 
             let status = response.status();
             let response_text = response.text().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read response body: {}", e))
+                GenerationError::network(format!("Failed to read response body: {e}"))
             })?;
 
             // Handle non-success status codes
@@ -94,7 +94,7 @@ impl GenerationProvider for OpenAiCompatProvider {
             // - Sync response: response contains "data" → parse directly
             let parsed: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| {
                 error!(error = %e, body = %response_text, "Failed to parse response JSON");
-                GenerationError::serialization(format!("Failed to parse response: {}", e))
+                GenerationError::serialization(format!("Failed to parse response: {e}"))
             })?;
 
             let data = if parsed.get("task_id").is_some() {
@@ -102,8 +102,7 @@ impl GenerationProvider for OpenAiCompatProvider {
                 let submit: AsyncTaskSubmitResponse =
                     serde_json::from_value(parsed).map_err(|e| {
                         GenerationError::serialization(format!(
-                            "Failed to parse task submit response: {}",
-                            e
+                            "Failed to parse task submit response: {e}"
                         ))
                     })?;
 
@@ -120,8 +119,7 @@ impl GenerationProvider for OpenAiCompatProvider {
                     || task_id.contains('%')
                 {
                     return Err(GenerationError::serialization(format!(
-                        "Invalid task_id format: {}",
-                        task_id
+                        "Invalid task_id format: {task_id}"
                     )));
                 }
                 let poll_url = format!("{}/{}", url.trim_end_matches('/'), task_id);
@@ -131,7 +129,7 @@ impl GenerationProvider for OpenAiCompatProvider {
                 let api_response: ImageGenerationResponse = serde_json::from_value(parsed)
                     .map_err(|e| {
                         error!(error = %e, body = %response_text, "Failed to parse OpenAI-compatible response");
-                        GenerationError::serialization(format!("Failed to parse response: {}", e))
+                        GenerationError::serialization(format!("Failed to parse response: {e}"))
                     })?;
                 self.extract_sync_result(&api_response)?
             };
@@ -208,7 +206,7 @@ impl OpenAiCompatProvider {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(b64)
                 .map_err(|e| {
-                    GenerationError::serialization(format!("Failed to decode base64: {}", e))
+                    GenerationError::serialization(format!("Failed to decode base64: {e}"))
                 })?;
             Ok(GenerationData::bytes(bytes))
         } else {
@@ -237,11 +235,11 @@ impl OpenAiCompatProvider {
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .send()
                 .await
-                .map_err(|e| GenerationError::network(format!("Poll request failed: {}", e)))?;
+                .map_err(|e| GenerationError::network(format!("Poll request failed: {e}")))?;
 
             let status = response.status();
             let body = response.text().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read poll response: {}", e))
+                GenerationError::network(format!("Failed to read poll response: {e}"))
             })?;
 
             if !status.is_success() {
@@ -251,7 +249,7 @@ impl OpenAiCompatProvider {
 
             let task: AsyncTaskPollResponse = serde_json::from_str(&body).map_err(|e| {
                 error!(error = %e, body = %body, "Failed to parse poll response");
-                GenerationError::serialization(format!("Failed to parse poll response: {}", e))
+                GenerationError::serialization(format!("Failed to parse poll response: {e}"))
             })?;
 
             match task.status.to_uppercase().as_str() {

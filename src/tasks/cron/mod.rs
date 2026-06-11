@@ -238,10 +238,10 @@ impl CronService {
                 .get_job_mut(id)
                 .ok_or_else(|| format!("job not found: {id}"))?;
             if !job.enabled {
-                return Err(format!("job '{}' is disabled, enable it first", id));
+                return Err(format!("job '{id}' is disabled, enable it first"));
             }
             if job.state.running_at_ms.is_some() {
-                return Err(format!("job '{}' is already running", id));
+                return Err(format!("job '{id}' is already running"));
             }
             let now = self.state.clock.now_ms();
             job.state.next_run_at_ms = Some(now);

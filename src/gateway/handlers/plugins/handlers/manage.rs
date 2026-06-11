@@ -94,7 +94,7 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to remove plugin: {}", e),
+            format!("Failed to remove plugin: {e}"),
         ),
     }
 }
@@ -134,7 +134,7 @@ pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to enable plugin: {}", e),
+                format!("Failed to enable plugin: {e}"),
             );
         }
     }
@@ -185,7 +185,7 @@ pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to disable plugin: {}", e),
+                format!("Failed to disable plugin: {e}"),
             );
         }
     }

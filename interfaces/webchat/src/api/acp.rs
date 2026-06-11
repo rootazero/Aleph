@@ -60,14 +60,14 @@ impl AcpApi {
     pub async fn list(state: &DashboardState) -> Result<Vec<AcpHarnessInfo>, String> {
         let result = state.rpc_call("acp.list", Value::Null).await?;
         serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse ACP harness list: {}", e))
+            .map_err(|e| format!("Failed to parse ACP harness list: {e}"))
     }
 
     pub async fn get(state: &DashboardState, id: &str) -> Result<AcpHarnessInfo, String> {
         let result = state
             .rpc_call("acp.get", serde_json::json!({ "id": id }))
             .await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse ACP harness: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse ACP harness: {e}"))
     }
 
     pub async fn create(
@@ -81,7 +81,7 @@ impl AcpApi {
                 serde_json::json!({ "id": id, "config": config }),
             )
             .await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to create ACP harness: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to create ACP harness: {e}"))
     }
 
     pub async fn update(
@@ -95,7 +95,7 @@ impl AcpApi {
                 serde_json::json!({ "id": id, "config": config }),
             )
             .await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to update ACP harness: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to update ACP harness: {e}"))
     }
 
     pub async fn delete(state: &DashboardState, id: &str) -> Result<(), String> {
@@ -109,7 +109,7 @@ impl AcpApi {
         let result = state
             .rpc_call("acp.test", serde_json::json!({ "id": id }))
             .await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse test result: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse test result: {e}"))
     }
 
     pub async fn set_enabled(
@@ -134,7 +134,7 @@ impl AcpApi {
     pub async fn presets_meta(state: &DashboardState) -> Result<Vec<AcpPresetMeta>, String> {
         let result = state.rpc_call("acp.presets_meta", Value::Null).await?;
         serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse preset metadata: {}", e))
+            .map_err(|e| format!("Failed to parse preset metadata: {e}"))
     }
 
     /// Get the top-level ACP enabled state from config.
@@ -169,7 +169,7 @@ impl AcpApi {
     pub async fn list_sessions(state: &DashboardState) -> Result<Vec<AcpSessionSnapshot>, String> {
         let result = state.rpc_call("acp.sessions.list", Value::Null).await?;
         serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse ACP session snapshots: {}", e))
+            .map_err(|e| format!("Failed to parse ACP session snapshots: {e}"))
     }
 
     pub async fn cancel_session(

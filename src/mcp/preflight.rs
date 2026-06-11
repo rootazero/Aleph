@@ -33,7 +33,7 @@ const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
 /// The SSRF policy is enforced before any network access.
 pub async fn preflight_remote_url(url: &str, headers: &HashMap<String, String>) -> Result<()> {
     validate_url(url, &SsrfPolicy::default())
-        .map_err(|e| AlephError::IoError(format!("SSRF blocked for '{}': {}", url, e)))?;
+        .map_err(|e| AlephError::IoError(format!("SSRF blocked for '{url}': {e}")))?;
 
     let client = match reqwest::Client::builder()
         .timeout(PREFLIGHT_TIMEOUT)
@@ -72,9 +72,8 @@ pub async fn preflight_remote_url(url: &str, headers: &HashMap<String, String>) 
 
     if is_html_content_type(&content_type) {
         return Err(AlephError::IoError(format!(
-            "Remote MCP URL '{}' returned an HTML page (Content-Type: {}); it does not \
-             appear to be an MCP endpoint — check the URL or transport setting.",
-            url, content_type
+            "Remote MCP URL '{url}' returned an HTML page (Content-Type: {content_type}); it does not \
+             appear to be an MCP endpoint — check the URL or transport setting."
         )));
     }
 

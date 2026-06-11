@@ -75,7 +75,7 @@ impl TranscriptIndexer {
         let combined = if ai_output.trim().is_empty() {
             user_input.to_string()
         } else {
-            format!("[user]: {}\n\n[assistant]: {}", user_input, ai_output)
+            format!("[user]: {user_input}\n\n[assistant]: {ai_output}")
         };
 
         if combined.trim().is_empty() {

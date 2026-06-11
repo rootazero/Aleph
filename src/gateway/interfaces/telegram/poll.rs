@@ -24,6 +24,6 @@ pub async fn send_poll(
     }
     match req.await {
         Ok(msg) => Ok(msg.poll().map(|p| p.id.0.clone()).unwrap_or_default()),
-        Err(e) => Err(ChannelError::SendFailed(format!("Poll failed: {}", e))),
+        Err(e) => Err(ChannelError::SendFailed(format!("Poll failed: {e}"))),
     }
 }

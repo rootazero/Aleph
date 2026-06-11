@@ -94,7 +94,7 @@ fn verify_github_signature(
     // Decode hex signature
     let signature_bytes = match hex::decode(signature_hex) {
         Ok(bytes) => bytes,
-        Err(e) => return VerificationResult::Malformed(format!("Invalid hex: {}", e)),
+        Err(e) => return VerificationResult::Malformed(format!("Invalid hex: {e}")),
     };
 
     // Compute expected signature
@@ -205,7 +205,7 @@ fn verify_generic_signature(
     // Decode hex signature
     let signature_bytes = match hex::decode(header.trim()) {
         Ok(bytes) => bytes,
-        Err(e) => return VerificationResult::Malformed(format!("Invalid hex: {}", e)),
+        Err(e) => return VerificationResult::Malformed(format!("Invalid hex: {e}")),
     };
 
     // Compute expected signature
@@ -244,7 +244,7 @@ pub fn generate_signature(format: SignatureFormat, secret: &str, payload: &[u8])
     let hex_sig = hex::encode(&hmac);
 
     match format {
-        SignatureFormat::Github => format!("sha256={}", hex_sig),
+        SignatureFormat::Github => format!("sha256={hex_sig}"),
         SignatureFormat::Stripe => {
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

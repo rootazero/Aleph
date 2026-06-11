@@ -33,22 +33,22 @@ fn format_duration(secs: u64) -> String {
         let days = secs / 86400;
         let hours = (secs % 86400) / 3600;
         if hours > 0 {
-            format!("{} days {} hours", days, hours)
+            format!("{days} days {hours} hours")
         } else {
-            format!("{} days", days)
+            format!("{days} days")
         }
     } else if secs >= 3600 {
         let hours = secs / 3600;
         let mins = (secs % 3600) / 60;
         if mins > 0 {
-            format!("{} hours {} min", hours, mins)
+            format!("{hours} hours {mins} min")
         } else {
-            format!("{} hours", hours)
+            format!("{hours} hours")
         }
     } else if secs >= 60 {
         format!("{} min", secs / 60)
     } else {
-        format!("{} sec", secs)
+        format!("{secs} sec")
     }
 }
 

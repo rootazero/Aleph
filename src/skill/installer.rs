@@ -149,7 +149,7 @@ impl InstallExecutor {
             }
             Ok(Err(e)) => InstallResult {
                 success: false,
-                message: format!("Failed to execute install command: {}", e),
+                message: format!("Failed to execute install command: {e}"),
                 stdout: String::new(),
                 stderr: String::new(),
                 exit_code: None,

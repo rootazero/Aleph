@@ -95,8 +95,7 @@ impl AlephToolDyn for McpGetPromptTool {
                     Some(pair) => pair,
                     None => {
                         return Err(crate::error::AlephError::NotFound(format!(
-                            "No MCP server found for prompt: {}",
-                            name
+                            "No MCP server found for prompt: {name}"
                         )));
                     }
                 }
@@ -113,10 +112,10 @@ impl AlephToolDyn for McpGetPromptTool {
                         crate::mcp::PromptContent::Image { data, mime_type } => {
                             // data is base64-encoded; approximate decoded size
                             let approx_bytes = data.len() * 3 / 4;
-                            format!("[Image: {} (~{} bytes)]", mime_type, approx_bytes)
+                            format!("[Image: {mime_type} (~{approx_bytes} bytes)]")
                         }
                         crate::mcp::PromptContent::Resource { uri, text } => {
-                            text.unwrap_or_else(|| format!("[Resource: {}]", uri))
+                            text.unwrap_or_else(|| format!("[Resource: {uri}]"))
                         }
                     };
                     PromptOutputMessage {

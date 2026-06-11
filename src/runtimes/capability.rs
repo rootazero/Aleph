@@ -42,7 +42,7 @@ impl RuntimeCapability {
             let _ = writeln!(output, "- {}", cap.description);
 
             if let Some(ref version) = cap.version {
-                let _ = writeln!(output, "- Version: {}", version);
+                let _ = writeln!(output, "- Version: {version}");
             }
 
             if let Some(ref path) = cap.executable_path {
@@ -50,7 +50,7 @@ impl RuntimeCapability {
             }
 
             if let Some(hint) = get_hint_from_spec(&cap.id) {
-                let _ = writeln!(output, "- {}", hint);
+                let _ = writeln!(output, "- {hint}");
             }
             output.push('\n');
         }
@@ -90,7 +90,7 @@ pub fn format_entries_for_prompt(entries: &[&CapabilityEntry]) -> String {
         }
         // Reuse existing usage hints from SPECS
         if let Some(hint) = get_hint_from_spec(&entry.name) {
-            let _ = writeln!(output, "- {}", hint);
+            let _ = writeln!(output, "- {hint}");
         }
         output.push('\n');
     }

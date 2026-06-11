@@ -179,9 +179,9 @@ pub fn AcpHarnessesView() -> impl IntoView {
                                                             let base = "text-left p-3 rounded-lg border transition-all w-full";
                                                             let is_sel = selected_id.get().as_deref() == Some(&pid_check) && !show_add_form.get();
                                                             if is_sel {
-                                                                format!("{} bg-primary-subtle border-primary", base)
+                                                                format!("{base} bg-primary-subtle border-primary")
                                                             } else {
-                                                                format!("{} bg-surface-sunken border-border hover:border-border-strong", base)
+                                                                format!("{base} bg-surface-sunken border-border hover:border-border-strong")
                                                             }
                                                         }
                                                     >
@@ -260,9 +260,9 @@ pub fn AcpHarnessesView() -> impl IntoView {
                                                                     let base = "text-left p-3 rounded-lg border transition-all w-full";
                                                                     let is_sel = selected_id.get().as_deref() == Some(&hid_check) && !show_add_form.get();
                                                                     if is_sel {
-                                                                        format!("{} bg-primary-subtle border-primary", base)
+                                                                        format!("{base} bg-primary-subtle border-primary")
                                                                     } else {
-                                                                        format!("{} bg-surface-sunken border-border hover:border-border-strong", base)
+                                                                        format!("{base} bg-surface-sunken border-border hover:border-border-strong")
                                                                     }
                                                                 }
                                                             >

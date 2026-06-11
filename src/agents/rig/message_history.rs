@@ -127,12 +127,12 @@ impl ChatMessage {
         if result.success {
             if let Some(summary) = &result.summary {
                 if !summary.trim().is_empty() {
-                    content_parts.push(format!("[Summary] {}", summary));
+                    content_parts.push(format!("[Summary] {summary}"));
                 }
             }
             if let Some(contribution) = &result.goal_contribution {
                 if !contribution.trim().is_empty() {
-                    content_parts.push(format!("[GoalContribution] {}", contribution));
+                    content_parts.push(format!("[GoalContribution] {contribution}"));
                 }
             }
             if !result.extracted_knowledge.is_empty() {
@@ -145,7 +145,7 @@ impl ChatMessage {
                             // Truncate on a char boundary — byte slicing `&k.value[..200]`
                             // panics when byte 200 lands inside a multibyte UTF-8 char.
                             let preview: String = k.value.chars().take(200).collect();
-                            format!("{}... [{} chars]", preview, char_count)
+                            format!("{preview}... [{char_count} chars]")
                         } else {
                             k.value.clone()
                         }

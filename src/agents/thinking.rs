@@ -165,7 +165,7 @@ impl std::str::FromStr for ThinkLevel {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        normalize_think_level(s).ok_or_else(|| format!("Unknown thinking level: '{}'", s))
+        normalize_think_level(s).ok_or_else(|| format!("Unknown thinking level: '{s}'"))
     }
 }
 
@@ -316,7 +316,7 @@ pub fn supports_xhigh_thinking(provider: &str, model: &str) -> bool {
     let provider_key = provider.trim().to_lowercase();
 
     // Check full reference (provider/model)
-    let full_ref = format!("{}/{}", provider_key, model_key);
+    let full_ref = format!("{provider_key}/{model_key}");
     if XHIGH_MODEL_REFS
         .iter()
         .any(|r| r.eq_ignore_ascii_case(&full_ref))

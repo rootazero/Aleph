@@ -102,9 +102,7 @@ pub async fn refresh_token(cred: &OAuthCredential) -> Result<OAuthCredential> {
             .replace("token", "[REDACTED_TOKEN]");
         let body_preview: String = sanitized.chars().take(200).collect();
         return Err(anyhow::anyhow!(
-            "Token refresh failed: {} — {}",
-            status,
-            body_preview
+            "Token refresh failed: {status} — {body_preview}"
         ));
     }
 

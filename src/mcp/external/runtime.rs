@@ -67,7 +67,7 @@ impl std::str::FromStr for RuntimeKind {
             "bun" => Ok(Self::Bun),
             "deno" => Ok(Self::Deno),
             "none" | "" => Ok(Self::None),
-            _ => Err(format!("Unknown runtime kind: {}", s)),
+            _ => Err(format!("Unknown runtime kind: {s}")),
         }
     }
 }

@@ -24,7 +24,7 @@ pub async fn handle_gateway_credentials(
         Err(err) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("credential plan serialize failed: {}", err),
+            format!("credential plan serialize failed: {err}"),
         ),
     }
 }

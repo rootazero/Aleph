@@ -279,7 +279,7 @@ pub async fn handle_create(
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to register harness: {}", e),
+            format!("Failed to register harness: {e}"),
         );
     }
 
@@ -293,7 +293,7 @@ pub async fn handle_create(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -336,7 +336,7 @@ pub async fn handle_update(
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to update harness: {}", e),
+            format!("Failed to update harness: {e}"),
         );
     }
 
@@ -350,7 +350,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -401,7 +401,7 @@ pub async fn handle_delete(
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to delete harness: {}", e),
+            format!("Failed to delete harness: {e}"),
         );
     }
 
@@ -413,7 +413,7 @@ pub async fn handle_delete(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -517,7 +517,7 @@ pub async fn handle_set_enabled(
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to update harness: {}", e),
+            format!("Failed to update harness: {e}"),
         );
     }
 
@@ -529,7 +529,7 @@ pub async fn handle_set_enabled(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }

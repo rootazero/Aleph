@@ -226,7 +226,7 @@ pub(super) fn ProviderDetailPanel(
                     }
                     selected.set(Some(name));
                 }
-                Err(e) => error.set(Some(format!("Failed to save: {}", e))),
+                Err(e) => error.set(Some(format!("Failed to save: {e}"))),
             }
             saving.set(false);
         });
@@ -248,7 +248,7 @@ pub(super) fn ProviderDetailPanel(
                         providers.set(list);
                     }
                 }
-                Err(e) => error.set(Some(format!("Test failed: {}", e))),
+                Err(e) => error.set(Some(format!("Test failed: {e}"))),
             }
             testing.set(false);
         });
@@ -267,7 +267,7 @@ pub(super) fn ProviderDetailPanel(
                             providers.set(list);
                         }
                     }
-                    Err(e) => error.set(Some(format!("Failed: {}", e))),
+                    Err(e) => error.set(Some(format!("Failed: {e}"))),
                 }
                 saving.set(false);
             });
@@ -289,7 +289,7 @@ pub(super) fn ProviderDetailPanel(
                         }
                         selected.set(None);
                     }
-                    Err(e) => error.set(Some(format!("Failed: {}", e))),
+                    Err(e) => error.set(Some(format!("Failed: {e}"))),
                 }
                 saving.set(false);
             });
@@ -396,9 +396,9 @@ pub(super) fn ProviderDetailPanel(
                                                             let hours = secs / 3600;
                                                             let mins = (secs % 3600) / 60;
                                                             if hours > 0 {
-                                                                format!("Expires in {}h {}m", hours, mins)
+                                                                format!("Expires in {hours}h {mins}m")
                                                             } else {
-                                                                format!("Expires in {}m", mins)
+                                                                format!("Expires in {mins}m")
                                                             }
                                                         });
                                                     view! {
@@ -447,7 +447,7 @@ pub(super) fn ProviderDetailPanel(
                                                                             }
                                                                         }
                                                                         Err(e) => {
-                                                                            error.set(Some(format!("Logout failed: {}", e)));
+                                                                            error.set(Some(format!("Logout failed: {e}")));
                                                                         }
                                                                     }
                                                                 });
@@ -481,7 +481,7 @@ pub(super) fn ProviderDetailPanel(
                                                                             }
                                                                         }
                                                                         Err(e) => {
-                                                                            error.set(Some(format!("OAuth login failed: {}", e)));
+                                                                            error.set(Some(format!("OAuth login failed: {e}")));
                                                                         }
                                                                     }
                                                                     oauth_loading.set(false);
@@ -797,7 +797,7 @@ pub(super) fn ProviderDetailPanel(
                                                             <span class="font-medium">{t!(i18n, settings.providers.connection_successful)}</span>
                                                         </div>
                                                         {result.latency_ms.map(|ms| view! {
-                                                            <p class="mt-1 text-xs text-success">{format!("Latency: {}ms", ms)}</p>
+                                                            <p class="mt-1 text-xs text-success">{format!("Latency: {ms}ms")}</p>
                                                         })}
                                                     </div>
                                                 }.into_any()

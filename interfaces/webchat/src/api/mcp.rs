@@ -37,7 +37,7 @@ impl McpConfigApi {
             .get("servers")
             .cloned()
             .unwrap_or(serde_json::Value::Array(vec![]));
-        serde_json::from_value(servers).map_err(|e| format!("Failed to parse MCP servers: {}", e))
+        serde_json::from_value(servers).map_err(|e| format!("Failed to parse MCP servers: {e}"))
     }
 
     /// Get a specific MCP server
@@ -49,7 +49,7 @@ impl McpConfigApi {
         let result = state.rpc_call("mcp_config.get", params).await?;
 
         let server = result.get("server").cloned().unwrap_or(result);
-        serde_json::from_value(server).map_err(|e| format!("Failed to parse MCP server: {}", e))
+        serde_json::from_value(server).map_err(|e| format!("Failed to parse MCP server: {e}"))
     }
 
     /// Create a new MCP server

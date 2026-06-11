@@ -99,7 +99,7 @@ pub async fn handle_start(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Invalid personas: {}", e),
+                format!("Invalid personas: {e}"),
             );
         }
     };
@@ -133,7 +133,7 @@ pub async fn handle_start(
                 return JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to create session: {}", e),
+                    format!("Failed to create session: {e}"),
                 );
             }
         }
@@ -156,7 +156,7 @@ pub async fn handle_start(
             Err(e) => JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to execute initial round: {}", e),
+                format!("Failed to execute initial round: {e}"),
             ),
         }
     } else {
@@ -210,7 +210,7 @@ async fn handle_continue_with_targets(
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Session not found: {}", session_id),
+                    format!("Session not found: {session_id}"),
                 );
             }
         };
@@ -233,8 +233,7 @@ async fn handle_continue_with_targets(
             request.id,
             INTERNAL_ERROR,
             format!(
-                "Round limit exceeded: maximum rounds reached: {}",
-                max_rounds
+                "Round limit exceeded: maximum rounds reached: {max_rounds}"
             ),
         );
     }
@@ -256,7 +255,7 @@ async fn handle_continue_with_targets(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to execute round: {}", e),
+            format!("Failed to execute round: {e}"),
         ),
     }
 }
@@ -294,7 +293,7 @@ pub async fn handle_end(request: JsonRpcRequest, orch: SharedOrchestrator) -> Js
                 return JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Session not found: {}", session_id),
+                    format!("Session not found: {session_id}"),
                 );
             }
         }
@@ -369,7 +368,7 @@ pub async fn handle_history(request: JsonRpcRequest, orch: SharedOrchestrator) -
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Session not found: {}", session_id),
+                    format!("Session not found: {session_id}"),
                 );
             }
         }
@@ -411,7 +410,7 @@ pub async fn handle_start_placeholder(req: JsonRpcRequest) -> JsonRpcResponse {
     JsonRpcResponse::error(
         req.id,
         INTERNAL_ERROR,
-        format!("group_chat.start {}", RUNTIME_REQUIRED),
+        format!("group_chat.start {RUNTIME_REQUIRED}"),
     )
 }
 
@@ -419,7 +418,7 @@ pub async fn handle_continue_placeholder(req: JsonRpcRequest) -> JsonRpcResponse
     JsonRpcResponse::error(
         req.id,
         INTERNAL_ERROR,
-        format!("group_chat.continue {}", RUNTIME_REQUIRED),
+        format!("group_chat.continue {RUNTIME_REQUIRED}"),
     )
 }
 
@@ -427,7 +426,7 @@ pub async fn handle_mention_placeholder(req: JsonRpcRequest) -> JsonRpcResponse 
     JsonRpcResponse::error(
         req.id,
         INTERNAL_ERROR,
-        format!("group_chat.mention {}", RUNTIME_REQUIRED),
+        format!("group_chat.mention {RUNTIME_REQUIRED}"),
     )
 }
 
@@ -435,7 +434,7 @@ pub async fn handle_end_placeholder(req: JsonRpcRequest) -> JsonRpcResponse {
     JsonRpcResponse::error(
         req.id,
         INTERNAL_ERROR,
-        format!("group_chat.end {}", RUNTIME_REQUIRED),
+        format!("group_chat.end {RUNTIME_REQUIRED}"),
     )
 }
 
@@ -443,7 +442,7 @@ pub async fn handle_list_placeholder(req: JsonRpcRequest) -> JsonRpcResponse {
     JsonRpcResponse::error(
         req.id,
         INTERNAL_ERROR,
-        format!("group_chat.list {}", RUNTIME_REQUIRED),
+        format!("group_chat.list {RUNTIME_REQUIRED}"),
     )
 }
 
@@ -451,7 +450,7 @@ pub async fn handle_history_placeholder(req: JsonRpcRequest) -> JsonRpcResponse 
     JsonRpcResponse::error(
         req.id,
         INTERNAL_ERROR,
-        format!("group_chat.history {}", RUNTIME_REQUIRED),
+        format!("group_chat.history {RUNTIME_REQUIRED}"),
     )
 }
 

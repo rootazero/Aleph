@@ -919,7 +919,7 @@ impl ExtensionManager {
             registry
                 .get_plugin(plugin_id)
                 .map(|p| p.root_dir.clone())
-                .ok_or_else(|| anyhow::anyhow!("Plugin not found: {}", plugin_id))?
+                .ok_or_else(|| anyhow::anyhow!("Plugin not found: {plugin_id}"))?
         };
 
         // Re-parse manifest via adapter registry

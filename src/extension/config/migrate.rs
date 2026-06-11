@@ -83,7 +83,7 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, ExtensionEr
 
     // Serialize to TOML
     let toml_content = toml::to_string_pretty(&config).map_err(|e| {
-        ExtensionError::config_parse(jsonc_path, format!("Failed to serialize to TOML: {}", e))
+        ExtensionError::config_parse(jsonc_path, format!("Failed to serialize to TOML: {e}"))
     })?;
 
     // Add a header comment
@@ -105,7 +105,7 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, ExtensionEr
         std::fs::rename(&target_path, &backup).map_err(|e| {
             ExtensionError::config_parse(
                 &target_path,
-                format!("Failed to backup existing file: {}", e),
+                format!("Failed to backup existing file: {e}"),
             )
         })?;
         Some(backup)
@@ -115,7 +115,7 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, ExtensionEr
 
     // Write the new TOML file
     std::fs::write(&target_path, toml_with_header).map_err(|e| {
-        ExtensionError::config_parse(&target_path, format!("Failed to write TOML file: {}", e))
+        ExtensionError::config_parse(&target_path, format!("Failed to write TOML file: {e}"))
     })?;
 
     Ok(MigrationResult {
@@ -213,7 +213,7 @@ pub fn migrate_directory(
 
     // Scan subdirectories
     let entries = std::fs::read_dir(root).map_err(|e| {
-        ExtensionError::config_parse(root, format!("Failed to read directory: {}", e))
+        ExtensionError::config_parse(root, format!("Failed to read directory: {e}"))
     })?;
 
     for entry in entries.flatten() {

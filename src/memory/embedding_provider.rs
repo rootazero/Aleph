@@ -73,7 +73,7 @@ impl RemoteEmbeddingProvider {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(config.timeout_ms))
             .build()
-            .map_err(|e| AlephError::config(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to create HTTP client: {e}")))?;
 
         Ok(Self {
             client,
@@ -124,9 +124,9 @@ impl RemoteEmbeddingProvider {
         let normalized = if base.ends_with("/v1") {
             base.to_string()
         } else {
-            format!("{}/v1", base)
+            format!("{base}/v1")
         };
-        let url = format!("{}/embeddings", normalized);
+        let url = format!("{normalized}/embeddings");
 
         // Truncate each input UTF-8-safely to stay under the provider's
         // token cap (8192 for T8Star/OpenAI text-embedding-3-*). Without
@@ -154,14 +154,13 @@ impl RemoteEmbeddingProvider {
         let response = request
             .send()
             .await
-            .map_err(|e| AlephError::config(format!("Embedding API request failed: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Embedding API request failed: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(AlephError::config(format!(
-                "Embedding API returned {}: {}",
-                status, body
+                "Embedding API returned {status}: {body}"
             )));
         }
 
@@ -182,21 +181,19 @@ impl RemoteEmbeddingProvider {
                 .take(200)
                 .collect();
             return Err(AlephError::config(format!(
-                "Embedding API returned non-JSON response (content-type: {}). \
-                 Check that api_base points to a valid OpenAI-compatible endpoint. Body: {}",
-                content_type, body_snippet
+                "Embedding API returned non-JSON response (content-type: {content_type}). \
+                 Check that api_base points to a valid OpenAI-compatible endpoint. Body: {body_snippet}"
             )));
         }
 
         let raw_body = response.text().await.map_err(|e| {
-            AlephError::config(format!("Failed to read embedding response body: {}", e))
+            AlephError::config(format!("Failed to read embedding response body: {e}"))
         })?;
 
         let resp: serde_json::Value = serde_json::from_str(&raw_body).map_err(|e| {
             let snippet: String = raw_body.chars().take(200).collect();
             AlephError::config(format!(
-                "Failed to parse embedding response: {}. Body: {}",
-                e, snippet
+                "Failed to parse embedding response: {e}. Body: {snippet}"
             ))
         })?;
 

@@ -169,8 +169,7 @@ impl MediaPolicy {
                 if file_size_bytes > DEFAULT_MAX_BYTES {
                     return Err(MediaError::SizeLimitExceeded {
                         message: format!(
-                            "Unknown media type size {} bytes exceeds default limit of {} bytes",
-                            file_size_bytes, DEFAULT_MAX_BYTES
+                            "Unknown media type size {file_size_bytes} bytes exceeds default limit of {DEFAULT_MAX_BYTES} bytes"
                         ),
                     });
                 }

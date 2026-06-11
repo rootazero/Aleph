@@ -173,7 +173,7 @@ impl Channel for WhatsAppChannel {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(64);
         let mut runtime = WaRuntime::new(auth, event_tx)
             .await
-            .map_err(|e| ChannelError::Internal(format!("Failed to create runtime: {}", e)))?;
+            .map_err(|e| ChannelError::Internal(format!("Failed to create runtime: {e}")))?;
         runtime.start().await?;
 
         let connected = Arc::clone(&self.connected);
@@ -343,7 +343,7 @@ impl ChannelFactory for WhatsAppChannelFactory {
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let config: WhatsAppConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid WhatsApp config: {}", e)))?;
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid WhatsApp config: {e}")))?;
         Ok(Box::new(WhatsAppChannel::new("whatsapp", config)))
     }
 }

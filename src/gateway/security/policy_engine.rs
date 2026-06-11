@@ -150,8 +150,7 @@ impl PolicyEngine {
         {
             return PermissionResult::Denied {
                 reason: format!(
-                    "Dangerous tool '{}' requires an explicit grant for guest '{}' (wildcard / category scopes do not cover it)",
-                    tool_name, guest_id
+                    "Dangerous tool '{tool_name}' requires an explicit grant for guest '{guest_id}' (wildcard / category scopes do not cover it)"
                 ),
             };
         }

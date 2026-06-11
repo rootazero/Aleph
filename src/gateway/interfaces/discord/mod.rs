@@ -222,11 +222,11 @@ impl DiscordChannel {
                 .strip_prefix("dm:")
                 .unwrap()
                 .parse()
-                .map_err(|e| ChannelError::Internal(format!("Invalid user ID: {}", e)))?;
+                .map_err(|e| ChannelError::Internal(format!("Invalid user ID: {e}")))?;
 
             let user = serenity::all::UserId::new(user_id);
             let dm = user.create_dm_channel(http).await.map_err(|e| {
-                ChannelError::Internal(format!("Failed to create DM channel: {}", e))
+                ChannelError::Internal(format!("Failed to create DM channel: {e}"))
             })?;
             Ok(dm.id)
         } else {
@@ -234,7 +234,7 @@ impl DiscordChannel {
                 .as_str()
                 .parse::<u64>()
                 .map(SerenityChannelId::new)
-                .map_err(|e| ChannelError::Internal(format!("Invalid channel ID: {}", e)))
+                .map_err(|e| ChannelError::Internal(format!("Invalid channel ID: {e}")))
         }
     }
 
@@ -244,7 +244,7 @@ impl DiscordChannel {
             .as_str()
             .parse::<u64>()
             .map(SerenityMessageId::new)
-            .map_err(|e| ChannelError::Internal(format!("Invalid message ID: {}", e)))
+            .map_err(|e| ChannelError::Internal(format!("Invalid message ID: {e}")))
     }
 
     /// Resolve settings for a channel using the nested config hierarchy.
@@ -531,7 +531,7 @@ impl EventHandler for Handler {
 
         let args_text = args
             .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
+            .map(|(k, v)| format!("{k}={v}"))
             .collect::<Vec<_>>()
             .join(" ");
 
@@ -689,7 +689,7 @@ impl Channel for DiscordChannel {
             .event_handler(handler)
             .await
             .map_err(|e| {
-                ChannelError::ConfigError(format!("Failed to create Discord client: {}", e))
+                ChannelError::ConfigError(format!("Failed to create Discord client: {e}"))
             })?;
 
         // Store HTTP client for sending messages
@@ -773,18 +773,18 @@ impl Channel for DiscordChannel {
                     .strip_prefix("dm:")
                     .unwrap()
                     .parse()
-                    .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {}", e)))?;
+                    .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {e}")))?;
 
                 let user = serenity::all::UserId::new(user_id);
                 let dm_channel = user.create_dm_channel(http).await.map_err(|e| {
-                    ChannelError::SendFailed(format!("Failed to create DM channel: {}", e))
+                    ChannelError::SendFailed(format!("Failed to create DM channel: {e}"))
                 })?;
 
                 dm_channel.id
             } else {
                 SerenityChannelId::new(
                     message.conversation_id.as_str().parse().map_err(|e| {
-                        ChannelError::SendFailed(format!("Invalid channel ID: {}", e))
+                        ChannelError::SendFailed(format!("Invalid channel ID: {e}"))
                     })?,
                 )
             };
@@ -817,7 +817,7 @@ impl Channel for DiscordChannel {
         let sent = channel_id
             .send_message(http, builder)
             .await
-            .map_err(|e| ChannelError::SendFailed(format!("Discord send error: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Discord send error: {e}")))?;
 
         Ok(SendResult {
             message_id: MessageId::new(sent.id.to_string()),
@@ -854,13 +854,13 @@ impl Channel for DiscordChannel {
         let channel_id = SerenityChannelId::new(
             channel_id_str
                 .parse()
-                .map_err(|e| ChannelError::Internal(format!("Invalid channel ID: {}", e)))?,
+                .map_err(|e| ChannelError::Internal(format!("Invalid channel ID: {e}")))?,
         );
 
         channel_id
             .broadcast_typing(http)
             .await
-            .map_err(|e| ChannelError::Internal(format!("Failed to send typing: {}", e)))?;
+            .map_err(|e| ChannelError::Internal(format!("Failed to send typing: {e}")))?;
 
         Ok(())
     }
@@ -891,7 +891,7 @@ impl Channel for DiscordChannel {
         channel_id
             .edit_message(http, msg_id, builder)
             .await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to edit message: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to edit message: {e}")))?;
 
         Ok(())
     }
@@ -920,7 +920,7 @@ impl Channel for DiscordChannel {
         channel_id
             .delete_message(http, msg_id)
             .await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to delete message: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to delete message: {e}")))?;
 
         Ok(())
     }
@@ -950,14 +950,14 @@ impl Channel for DiscordChannel {
         // Parse emoji — custom format <:name:id> or <a:name:id>, otherwise Unicode
         let reaction_type = if reaction.starts_with('<') {
             serenity::all::ReactionType::try_from(reaction)
-                .map_err(|e| ChannelError::Internal(format!("Invalid emoji format: {}", e)))?
+                .map_err(|e| ChannelError::Internal(format!("Invalid emoji format: {e}")))?
         } else {
             serenity::all::ReactionType::Unicode(reaction.to_string())
         };
 
         http.create_reaction(channel_id, msg_id, &reaction_type)
             .await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to add reaction: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to add reaction: {e}")))?;
 
         Ok(())
     }
@@ -974,7 +974,7 @@ impl ChannelFactory for DiscordChannelFactory {
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let config: DiscordConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid Discord config: {}", e)))?;
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid Discord config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 

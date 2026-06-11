@@ -87,7 +87,7 @@ pub async fn validate_token(token: &str) -> Result<BotIdentity, String> {
     let user = http
         .get_current_user()
         .await
-        .map_err(|e| format!("Failed to validate token: {}", e))?;
+        .map_err(|e| format!("Failed to validate token: {e}"))?;
 
     // Build avatar CDN URL if the user has one
     let bot_avatar = user.avatar.as_ref().map(|hash| {
@@ -99,7 +99,7 @@ pub async fn validate_token(token: &str) -> Result<BotIdentity, String> {
 
     let discriminator = user
         .discriminator
-        .map(|d| format!("{:04}", d))
+        .map(|d| format!("{d:04}"))
         .unwrap_or_else(|| "0".to_string());
 
     Ok(BotIdentity {
@@ -120,7 +120,7 @@ pub async fn list_guilds(http: &Http) -> Result<Vec<GuildSummary>, String> {
     let guild_infos = http
         .get_guilds(None, Some(200))
         .await
-        .map_err(|e| format!("Failed to fetch guilds: {}", e))?;
+        .map_err(|e| format!("Failed to fetch guilds: {e}"))?;
 
     let mut summaries = Vec::with_capacity(guild_infos.len());
 
@@ -157,7 +157,7 @@ pub async fn list_channels(http: &Http, guild_id: u64) -> Result<Vec<ChannelSumm
     let channels = http
         .get_channels(gid)
         .await
-        .map_err(|e| format!("Failed to fetch channels for guild {}: {}", guild_id, e))?;
+        .map_err(|e| format!("Failed to fetch channels for guild {guild_id}: {e}"))?;
 
     let summaries = channels
         .iter()
@@ -187,13 +187,13 @@ pub async fn audit_guild_permissions(
     let guild = http
         .get_guild(gid)
         .await
-        .map_err(|e| format!("Failed to fetch guild {}: {}", guild_id, e))?;
+        .map_err(|e| format!("Failed to fetch guild {guild_id}: {e}"))?;
 
     // Fetch the bot's member info using the dedicated endpoint
     let member = http
         .get_current_user_guild_member(gid)
         .await
-        .map_err(|e| format!("Failed to fetch bot member in guild {}: {}", guild_id, e))?;
+        .map_err(|e| format!("Failed to fetch bot member in guild {guild_id}: {e}"))?;
 
     // Compute effective permissions by OR-ing all role permission bitfields.
     // Start with @everyone role permissions (role ID == guild ID).

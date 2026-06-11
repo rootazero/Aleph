@@ -503,7 +503,7 @@ impl HookExecutor {
         let effective = self.effective_timeout(timeout_override.map(|d| d.as_secs()));
         let output = match timeout(effective, async {
             let mut child = cmd.spawn().map_err(|e| {
-                ExtensionError::HookExecution(format!("Failed to spawn command: {}", e))
+                ExtensionError::HookExecution(format!("Failed to spawn command: {e}"))
             })?;
             if let Some(mut stdin) = child.stdin.take() {
                 // Best-effort: if stdin write fails (hook ignored stdin), keep going.
@@ -511,7 +511,7 @@ impl HookExecutor {
                 let _ = stdin.shutdown().await;
             }
             child.wait_with_output().await.map_err(|e| {
-                ExtensionError::HookExecution(format!("Failed to await command: {}", e))
+                ExtensionError::HookExecution(format!("Failed to await command: {e}"))
             })
         })
         .await
@@ -519,8 +519,7 @@ impl HookExecutor {
             Ok(result) => result?,
             Err(_) => {
                 return Err(ExtensionError::HookExecution(format!(
-                    "Command timed out after {:?}",
-                    effective
+                    "Command timed out after {effective:?}"
                 )));
             }
         };
@@ -600,7 +599,7 @@ impl HookExecutor {
             .timeout(effective)
             .build()
             .map_err(|e| {
-                ExtensionError::HookExecution(format!("Failed to build HTTP client: {}", e))
+                ExtensionError::HookExecution(format!("Failed to build HTTP client: {e}"))
             })?;
 
         let mut req = client
@@ -635,7 +634,7 @@ impl HookExecutor {
             Err(e) => Ok(ActionResult {
                 success: false,
                 output: None,
-                error: Some(format!("HTTP request failed: {}", e)),
+                error: Some(format!("HTTP request failed: {e}")),
                 exit_code: None,
             }),
         }
@@ -735,7 +734,7 @@ impl HookExecutor {
                         warn!("Interceptor hook action failed: {}", e);
                         // Interceptor failures block by default for safety
                         accumulated.blocked = true;
-                        accumulated.block_reason = Some(format!("Interceptor hook failed: {}", e));
+                        accumulated.block_reason = Some(format!("Interceptor hook failed: {e}"));
                         return Ok((current_context, accumulated));
                     }
                 }

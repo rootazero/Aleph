@@ -90,7 +90,7 @@ fn migrate_ai_providers(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
         if let Some(provider) = cfg.providers.get_mut(&name) {
             if let Some(ref key) = provider.api_key {
                 if !key.is_empty() {
-                    let vault_key = format!("ai:{}", name);
+                    let vault_key = format!("ai:{name}");
                     match vault.store_secret(&vault_key, key) {
                         Ok(_) => {
                             provider.api_key = None;
@@ -127,7 +127,7 @@ fn migrate_generation_providers(cfg: &mut Config, vault: &SharedTokenManager) ->
             if let Some(provider) = providers.get_mut(&name) {
                 if let Some(ref key) = provider.api_key {
                     if !key.is_empty() {
-                        let vault_key = format!("gen:{}", name);
+                        let vault_key = format!("gen:{name}");
                         match vault.store_secret(&vault_key, key) {
                             Ok(_) => {
                                 provider.api_key = None;
@@ -179,7 +179,7 @@ fn migrate_rerank(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
         return 0;
     }
     let provider_name = format!("{:?}", rerank.provider).to_lowercase();
-    let vault_key = format!("rerank:{}", provider_name);
+    let vault_key = format!("rerank:{provider_name}");
     match vault.store_secret(&vault_key, &rerank.api_key) {
         Ok(_) => {
             tracing::info!(provider = %provider_name, "Migrated rerank api_key to vault");
@@ -206,7 +206,7 @@ fn migrate_search_backends(cfg: &mut Config, vault: &SharedTokenManager) -> usiz
         if let Some(backend) = search.backends.get_mut(&name) {
             if let Some(ref key) = backend.api_key {
                 if !key.is_empty() {
-                    let vault_key = format!("search:{}", name);
+                    let vault_key = format!("search:{name}");
                     match vault.store_secret(&vault_key, key) {
                         Ok(_) => {
                             backend.api_key = None;

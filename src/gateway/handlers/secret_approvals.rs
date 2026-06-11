@@ -106,7 +106,7 @@ impl SecretApprovalManager {
             Err(_) => {
                 let mut pending = self.pending.lock().await;
                 pending.remove(&id);
-                Err(format!("Approval timed out after {}ms", timeout_ms))
+                Err(format!("Approval timed out after {timeout_ms}ms"))
             }
         }
     }
@@ -123,7 +123,7 @@ impl SecretApprovalManager {
             info!(id = %id, decision = ?decision, "Secret approval resolved");
             Ok(())
         } else {
-            Err(format!("Approval request '{}' not found", id))
+            Err(format!("Approval request '{id}' not found"))
         }
     }
 

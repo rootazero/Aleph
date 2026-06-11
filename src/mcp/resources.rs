@@ -103,7 +103,7 @@ impl McpResourceManager {
     /// A list of resources available from the server
     pub async fn list(&self, server: &str) -> Result<Vec<McpResource>> {
         let all_resources = self.client.list_resources().await;
-        let prefix = format!("{}:", server);
+        let prefix = format!("{server}:");
 
         Ok(all_resources
             .into_iter()
@@ -123,10 +123,10 @@ impl McpResourceManager {
     /// The resource content
     pub async fn read(&self, server: &str, uri: &str) -> Result<ResourceContent> {
         // Ensure URI has server prefix
-        let full_uri = if uri.starts_with(&format!("{}:", server)) {
+        let full_uri = if uri.starts_with(&format!("{server}:")) {
             uri.to_string()
         } else {
-            format!("{}:{}", server, uri)
+            format!("{server}:{uri}")
         };
 
         self.client.read_resource(&full_uri).await
@@ -169,10 +169,10 @@ impl McpResourceManager {
     /// * `server` - The server name
     /// * `uri` - The resource URI to subscribe to
     pub async fn subscribe(&self, server: &str, uri: &str) -> Result<()> {
-        let full_uri = if uri.starts_with(&format!("{}:", server)) {
+        let full_uri = if uri.starts_with(&format!("{server}:")) {
             uri.to_string()
         } else {
-            format!("{}:{}", server, uri)
+            format!("{server}:{uri}")
         };
 
         self.client.subscribe_resource(server, &full_uri).await
@@ -185,10 +185,10 @@ impl McpResourceManager {
     /// * `server` - The server name
     /// * `uri` - The resource URI to unsubscribe from
     pub async fn unsubscribe(&self, server: &str, uri: &str) -> Result<()> {
-        let full_uri = if uri.starts_with(&format!("{}:", server)) {
+        let full_uri = if uri.starts_with(&format!("{server}:")) {
             uri.to_string()
         } else {
-            format!("{}:{}", server, uri)
+            format!("{server}:{uri}")
         };
 
         self.client.unsubscribe_resource(server, &full_uri).await

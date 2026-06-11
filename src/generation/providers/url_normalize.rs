@@ -30,7 +30,7 @@ impl ResolvedUrl {
                     GenerationType::Audio => "/v1/audio/generations",
                     GenerationType::Transcription => "/v1/audio/transcriptions",
                 };
-                format!("{}{}", base, suffix)
+                format!("{base}{suffix}")
             }
         }
     }
@@ -46,7 +46,7 @@ impl ResolvedUrl {
                     GenerationType::Image => Some("/v1/images/edits"),
                     _ => None,
                 };
-                suffix.map(|s| format!("{}{}", base, s))
+                suffix.map(|s| format!("{base}{s}"))
             }
         }
     }

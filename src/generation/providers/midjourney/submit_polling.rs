@@ -57,7 +57,7 @@ impl SubmitPolling for MidjourneyProvider {
                 if e.is_timeout() {
                     GenerationError::timeout(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS))
                 } else if e.is_connect() {
-                    GenerationError::network(format!("Connection failed: {}", e))
+                    GenerationError::network(format!("Connection failed: {e}"))
                 } else {
                     GenerationError::network(e.to_string())
                 }
@@ -65,7 +65,7 @@ impl SubmitPolling for MidjourneyProvider {
 
         let status = response.status();
         let response_text = response.text().await.map_err(|e| {
-            GenerationError::network(format!("Failed to read response body: {}", e))
+            GenerationError::network(format!("Failed to read response body: {e}"))
         })?;
 
         // Handle non-success status codes
@@ -86,7 +86,7 @@ impl SubmitPolling for MidjourneyProvider {
                     body = %response_text,
                     "Failed to parse Midjourney submit response"
                 );
-                GenerationError::serialization(format!("Failed to parse response: {}", e))
+                GenerationError::serialization(format!("Failed to parse response: {e}"))
             })?;
 
         // Check response code (1 = success)
@@ -136,11 +136,11 @@ impl SubmitPolling for MidjourneyProvider {
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .send()
                 .await
-                .map_err(|e| GenerationError::network(format!("Poll request failed: {}", e)))?;
+                .map_err(|e| GenerationError::network(format!("Poll request failed: {e}")))?;
 
             let status = response.status();
             let response_text = response.text().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read poll response: {}", e))
+                GenerationError::network(format!("Failed to read poll response: {e}"))
             })?;
 
             if !status.is_success() {
@@ -153,7 +153,7 @@ impl SubmitPolling for MidjourneyProvider {
             }
 
             let task: TaskResponse = serde_json::from_str(&response_text).map_err(|e| {
-                GenerationError::serialization(format!("Failed to parse task response: {}", e))
+                GenerationError::serialization(format!("Failed to parse task response: {e}"))
             })?;
 
             match task.status.as_str() {
@@ -210,7 +210,7 @@ impl SubmitPolling for MidjourneyProvider {
 
         let response = self.client.get(image_url).send().await.map_err(|e| {
             GenerationError::download(
-                format!("Failed to download image: {}", e),
+                format!("Failed to download image: {e}"),
                 Some(image_url.to_string()),
             )
         })?;
@@ -224,7 +224,7 @@ impl SubmitPolling for MidjourneyProvider {
 
         let bytes = response.bytes().await.map_err(|e| {
             GenerationError::download(
-                format!("Failed to read image bytes: {}", e),
+                format!("Failed to read image bytes: {e}"),
                 Some(image_url.to_string()),
             )
         })?;
@@ -258,12 +258,12 @@ impl SubmitPolling for MidjourneyProvider {
             429 => GenerationError::rate_limit("Rate limit exceeded", None),
             404 => GenerationError::provider("Endpoint not found", Some(404), PROVIDER_NAME),
             500..=599 => GenerationError::provider(
-                format!("Server error: {}", body),
+                format!("Server error: {body}"),
                 Some(status.as_u16()),
                 PROVIDER_NAME,
             ),
             _ => GenerationError::provider(
-                format!("Unexpected error: {}", body),
+                format!("Unexpected error: {body}"),
                 Some(status.as_u16()),
                 PROVIDER_NAME,
             ),

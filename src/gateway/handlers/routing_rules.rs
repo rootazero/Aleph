@@ -162,7 +162,7 @@ pub async fn handle_create(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -244,7 +244,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -319,7 +319,7 @@ pub async fn handle_delete(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to remove rule: {}", e),
+                format!("Failed to remove rule: {e}"),
             );
         }
 
@@ -329,7 +329,7 @@ pub async fn handle_delete(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -385,7 +385,7 @@ pub async fn handle_move(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Failed to move rule: {}", e),
+                format!("Failed to move rule: {e}"),
             );
         }
 
@@ -395,7 +395,7 @@ pub async fn handle_move(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }

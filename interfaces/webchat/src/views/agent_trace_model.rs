@@ -68,7 +68,7 @@ pub fn trace_node_from_event(
     )?;
 
     Some(TraceNode {
-        id: format!("step-{}", step),
+        id: format!("step-{step}"),
         node_type: map_node_type(&presentation.kind),
         timestamp: 0.0,
         duration_ms: presentation.duration_ms,

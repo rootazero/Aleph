@@ -21,7 +21,7 @@ impl Config {
     pub(crate) fn migrate_mcp_builtin_in_toml(contents: &str) -> Result<String> {
         // Parse as raw TOML value
         let mut value: toml::Value = toml::from_str(contents).map_err(|e| {
-            AlephError::invalid_config(format!("Failed to parse TOML for migration: {}", e))
+            AlephError::invalid_config(format!("Failed to parse TOML for migration: {e}"))
         })?;
 
         // Check if migration is needed
@@ -61,7 +61,7 @@ impl Config {
 
         // Serialize back to TOML
         toml::to_string_pretty(&value).map_err(|e| {
-            AlephError::invalid_config(format!("Failed to serialize migrated TOML: {}", e))
+            AlephError::invalid_config(format!("Failed to serialize migrated TOML: {e}"))
         })
     }
 
@@ -69,8 +69,7 @@ impl Config {
         // Parse as raw TOML value
         let mut value: toml::Value = toml::from_str(contents).map_err(|e| {
             AlephError::invalid_config(format!(
-                "Failed to parse TOML for vector_db migration: {}",
-                e
+                "Failed to parse TOML for vector_db migration: {e}"
             ))
         })?;
 
@@ -104,7 +103,7 @@ impl Config {
 
         // Serialize back to TOML
         toml::to_string_pretty(&value).map_err(|e| {
-            AlephError::invalid_config(format!("Failed to serialize migrated TOML: {}", e))
+            AlephError::invalid_config(format!("Failed to serialize migrated TOML: {e}"))
         })
     }
 }

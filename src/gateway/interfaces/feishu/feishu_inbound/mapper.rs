@@ -94,10 +94,10 @@ fn build_conversation_id(
     }
     match config.group_session_scope {
         GroupSessionScope::Group => chat_id.to_string(),
-        GroupSessionScope::User => format!("{}:{}", chat_id, sender_id),
+        GroupSessionScope::User => format!("{chat_id}:{sender_id}"),
         GroupSessionScope::Thread => root_id
             .as_ref()
-            .map(|r| format!("{}:{}", chat_id, r))
+            .map(|r| format!("{chat_id}:{r}"))
             .unwrap_or_else(|| chat_id.to_string()),
     }
 }
@@ -127,7 +127,7 @@ fn extract_message_text(message_type: &str, content: &str, mentions: &[Mention])
                     .to_string()
             })
             .unwrap_or_else(|_| "[Forwarded Messages]".to_string()),
-        _ => format!("[{} message]", message_type),
+        _ => format!("[{message_type} message]"),
     }
 }
 

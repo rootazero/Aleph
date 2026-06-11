@@ -166,7 +166,7 @@ pub fn build_footer_line(
             }
             "tokens" => {
                 if let Some(t) = inputs.total_tokens {
-                    parts.push(format!("{}t", t));
+                    parts.push(format!("{t}t"));
                 }
             }
             "cwd" => {
@@ -232,7 +232,7 @@ pub fn build_footer_block(
         return String::new();
     }
     match build_footer_line(inputs, &cfg.fields, home) {
-        Some(line) => format!("\n\n{}", line),
+        Some(line) => format!("\n\n{line}"),
         None => String::new(),
     }
 }

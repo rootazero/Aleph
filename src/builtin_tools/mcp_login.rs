@@ -88,17 +88,16 @@ impl AlephToolDyn for McpLoginTool {
 
             // Resolve the server's URL from its managed configuration.
             let detail = self.handle.get_status(&server_id).await?.ok_or_else(|| {
-                AlephError::NotFound(format!("MCP server not found: {}", server_id))
+                AlephError::NotFound(format!("MCP server not found: {server_id}"))
             })?;
 
             if matches!(detail.config.transport, McpTransportType::Stdio) {
                 return Err(AlephError::IoError(format!(
-                    "MCP server '{}' uses stdio transport; OAuth applies only to remote (http/sse) servers",
-                    server_id
+                    "MCP server '{server_id}' uses stdio transport; OAuth applies only to remote (http/sse) servers"
                 )));
             }
             let url = detail.config.url.clone().ok_or_else(|| {
-                AlephError::IoError(format!("MCP server '{}' has no URL configured", server_id))
+                AlephError::IoError(format!("MCP server '{server_id}' has no URL configured"))
             })?;
 
             let storage = Arc::new(OAuthStorage::new(OAuthStorage::default_path()));

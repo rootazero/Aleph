@@ -159,7 +159,7 @@ pub fn SearchView() -> impl IntoView {
                 error.set(None);
             }
             Err(e) => {
-                error.set(Some(format!("Failed to load config: {}", e)));
+                error.set(Some(format!("Failed to load config: {e}")));
             }
         }
         loading.set(false);
@@ -280,11 +280,11 @@ fn PresetGrid(
                                 let sel = selected.get();
                                 let is_sel = sel.as_deref() == Some(name);
                                 if is_sel {
-                                    format!("{} bg-primary-subtle border-primary", base)
+                                    format!("{base} bg-primary-subtle border-primary")
                                 } else if is_active() {
-                                    format!("{} bg-surface-raised border-border hover:border-primary/40", base)
+                                    format!("{base} bg-surface-raised border-border hover:border-primary/40")
                                 } else {
-                                    format!("{} bg-surface-sunken border-border hover:border-border-strong", base)
+                                    format!("{base} bg-surface-sunken border-border hover:border-border-strong")
                                 }
                             }
                         >
@@ -372,9 +372,9 @@ fn CustomSearchProvidersList(
                                             let base = "text-left p-3 rounded-lg border transition-all";
                                             let is_sel = selected.get().as_deref() == Some(&name_check);
                                             if is_sel {
-                                                format!("{} bg-primary-subtle border-primary", base)
+                                                format!("{base} bg-primary-subtle border-primary")
                                             } else {
-                                                format!("{} bg-surface-raised border-border hover:border-primary/40", base)
+                                                format!("{base} bg-surface-raised border-border hover:border-primary/40")
                                             }
                                         }
                                     >
@@ -621,7 +621,7 @@ fn ProviderDetailPanel(
                 }
                 Err(e) => {
                     test_success.set(Some(false));
-                    error.set(Some(format!("Test failed: {}", e)));
+                    error.set(Some(format!("Test failed: {e}")));
                     set_timeout(
                         move || test_success.set(None),
                         std::time::Duration::from_secs(3),
@@ -666,7 +666,7 @@ fn ProviderDetailPanel(
                     );
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to save: {}", e)));
+                    error.set(Some(format!("Failed to save: {e}")));
                 }
             }
             saving.set(false);
@@ -704,7 +704,7 @@ fn ProviderDetailPanel(
                     );
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to save: {}", e)));
+                    error.set(Some(format!("Failed to save: {e}")));
                 }
             }
             saving.set(false);
@@ -732,7 +732,7 @@ fn ProviderDetailPanel(
                     selected.set(None);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Delete failed: {}", e)));
+                    error.set(Some(format!("Delete failed: {e}")));
                 }
             }
             deleting.set(false);
@@ -1165,7 +1165,7 @@ fn AddCustomSearchProviderPanel(
                     on_added();
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to add provider: {}", e)));
+                    error.set(Some(format!("Failed to add provider: {e}")));
                 }
             }
             saving.set(false);

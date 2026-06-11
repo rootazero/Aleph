@@ -57,7 +57,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                         set_is_loading.set(false);
                     }
                     (Err(e), _) | (_, Err(e)) => {
-                        set_error_message.set(Some(format!("Failed to load: {}", e)));
+                        set_error_message.set(Some(format!("Failed to load: {e}")));
                         set_is_loading.set(false);
                     }
                 }
@@ -186,7 +186,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                                                                 set_show_add_form.set(false);
                                                                             }
                                                                             Err(e) => {
-                                                                                web_sys::console::error_1(&format!("Failed to add preset: {}", e).into());
+                                                                                web_sys::console::error_1(&format!("Failed to add preset: {e}").into());
                                                                             }
                                                                         }
                                                                     });

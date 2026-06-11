@@ -314,7 +314,7 @@ impl ChannelFactory for SlackChannelFactory {
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let config: SlackConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid Slack config: {}", e)))?;
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid Slack config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
@@ -359,7 +359,7 @@ impl SlackChannel {
                 .await
             } else if let Some(path) = &attachment.path {
                 let file_data = tokio::fs::read(path).await.map_err(|e| {
-                    ChannelError::SendFailed(format!("Failed to read file {}: {}", path, e))
+                    ChannelError::SendFailed(format!("Failed to read file {path}: {e}"))
                 })?;
                 let filename = attachment.filename.as_deref().unwrap_or(path);
                 SlackMessageOps::upload_file_with_base(
@@ -435,7 +435,7 @@ impl SlackChannel {
     async fn download_url(&self, url: &str) -> ChannelResult<Vec<u8>> {
         let response =
             self.client.get(url).send().await.map_err(|e| {
-                ChannelError::SendFailed(format!("Failed to download {}: {}", url, e))
+                ChannelError::SendFailed(format!("Failed to download {url}: {e}"))
             })?;
 
         if !response.status().is_success() {
@@ -446,7 +446,7 @@ impl SlackChannel {
         }
 
         let bytes = response.bytes().await.map_err(|e| {
-            ChannelError::SendFailed(format!("Failed to read download body: {}", e))
+            ChannelError::SendFailed(format!("Failed to read download body: {e}"))
         })?;
 
         Ok(bytes.to_vec())

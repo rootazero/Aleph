@@ -29,7 +29,7 @@ fn load_servers(
                 loading.set(false);
             }
             Err(e) => {
-                error.set(Some(format!("Failed to load MCP servers: {}", e)));
+                error.set(Some(format!("Failed to load MCP servers: {e}")));
                 loading.set(false);
             }
         }
@@ -257,7 +257,7 @@ fn McpServerCard(
                                                     load_servers(state, servers, loading, error);
                                                 }
                                                 Err(e) => {
-                                                    error.set(Some(format!("Failed to delete server: {}", e)));
+                                                    error.set(Some(format!("Failed to delete server: {e}")));
                                                     deleting.set(false);
                                                 }
                                             }
@@ -305,14 +305,14 @@ fn EditMcpServerDialog(
                     if let Some(env_map) = server.env {
                         let env_str = env_map
                             .iter()
-                            .map(|(k, v)| format!("{}={}", k, v))
+                            .map(|(k, v)| format!("{k}={v}"))
                             .collect::<Vec<_>>()
                             .join("\n");
                         env.set(env_str);
                     }
                 }
                 Err(e) => {
-                    dialog_error.set(Some(format!("Failed to load server: {}", e)));
+                    dialog_error.set(Some(format!("Failed to load server: {e}")));
                 }
             }
         });
@@ -366,7 +366,7 @@ fn EditMcpServerDialog(
                     on_close();
                 }
                 Err(e) => {
-                    dialog_error.set(Some(format!("Failed to save: {}", e)));
+                    dialog_error.set(Some(format!("Failed to save: {e}")));
                     saving.set(false);
                 }
             }

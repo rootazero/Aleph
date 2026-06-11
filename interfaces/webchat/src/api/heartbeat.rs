@@ -159,7 +159,7 @@ impl HeartbeatApi {
             .ok_or_else(|| "Invalid response: missing tasks".to_string())
             .and_then(|tasks| {
                 serde_json::from_value(tasks.clone())
-                    .map_err(|e| format!("Failed to parse heartbeat tasks: {}", e))
+                    .map_err(|e| format!("Failed to parse heartbeat tasks: {e}"))
             })
     }
 
@@ -173,7 +173,7 @@ impl HeartbeatApi {
             .ok_or_else(|| "Invalid response: missing task".to_string())
             .and_then(|task| {
                 serde_json::from_value(task.clone())
-                    .map_err(|e| format!("Failed to parse heartbeat task: {}", e))
+                    .map_err(|e| format!("Failed to parse heartbeat task: {e}"))
             })
     }
 
@@ -201,7 +201,7 @@ impl HeartbeatApi {
             .ok_or_else(|| "Invalid response: missing task".to_string())
             .and_then(|task| {
                 serde_json::from_value(task.clone())
-                    .map_err(|e| format!("Failed to parse created heartbeat task: {}", e))
+                    .map_err(|e| format!("Failed to parse created heartbeat task: {e}"))
             })
     }
 
@@ -244,7 +244,7 @@ impl HeartbeatApi {
             .ok_or_else(|| "Invalid response: missing task".to_string())
             .and_then(|task| {
                 serde_json::from_value(task.clone())
-                    .map_err(|e| format!("Failed to parse updated heartbeat task: {}", e))
+                    .map_err(|e| format!("Failed to parse updated heartbeat task: {e}"))
             })
     }
 
@@ -269,7 +269,7 @@ impl HeartbeatApi {
         let result = state.rpc_call("heartbeat.toggle", params).await?;
 
         serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse toggled heartbeat task: {}", e))
+            .map_err(|e| format!("Failed to parse toggled heartbeat task: {e}"))
     }
 
     /// Wake a heartbeat task immediately (trigger L1 probe now)
@@ -296,7 +296,7 @@ impl HeartbeatApi {
             .ok_or_else(|| "Invalid response: missing runs".to_string())
             .and_then(|runs| {
                 serde_json::from_value(runs.clone())
-                    .map_err(|e| format!("Failed to parse heartbeat runs: {}", e))
+                    .map_err(|e| format!("Failed to parse heartbeat runs: {e}"))
             })
     }
 }

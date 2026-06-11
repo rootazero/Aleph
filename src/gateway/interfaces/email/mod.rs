@@ -210,7 +210,7 @@ impl ChannelFactory for EmailChannelFactory {
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let config: EmailConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid Email config: {}", e)))?;
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid Email config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 

@@ -508,8 +508,7 @@ where
 
                             let prompt = format!(
                                 "Generate a concise topic title (5-10 characters, same language as the message) \
-                                 for a conversation that starts with: {}",
-                                topic_message
+                                 for a conversation that starts with: {topic_message}"
                             );
                             let messages = vec![UnifiedMessage::user(&prompt)];
                             let payload = RequestPayload {
@@ -545,7 +544,7 @@ where
                                 let msg = topic_message.trim();
                                 let truncated: String = msg.chars().take(20).collect();
                                 if msg.chars().count() > 20 {
-                                    format!("{}…", truncated)
+                                    format!("{truncated}…")
                                 } else {
                                     truncated
                                 }

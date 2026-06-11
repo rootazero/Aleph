@@ -52,7 +52,7 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                         set_migrating.set(false);
 
                         if let Some(error) = data.get("error").and_then(|v| v.as_str()) {
-                            set_error_message.set(Some(format!("Migration failed: {}", error)));
+                            set_error_message.set(Some(format!("Migration failed: {error}")));
                         } else {
                             let facts_updated = data
                                 .get("facts_updated")
@@ -91,7 +91,7 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                                 memories_updated,
                                 memories_total,
                                 if errors > 0 {
-                                    format!(", {} errors", errors)
+                                    format!(", {errors} errors")
                                 } else {
                                     String::new()
                                 },
@@ -120,7 +120,7 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                 Ok(_) => {} // Progress tracked via events
                 Err(e) => {
                     set_migrating.set(false);
-                    set_error_message.set(Some(format!("Failed to start: {}", e)));
+                    set_error_message.set(Some(format!("Failed to start: {e}")));
                 }
             }
         });
@@ -160,12 +160,12 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                         <div class="space-y-2">
                             <div class="flex justify-between text-xs text-text-tertiary">
                                 <span>{phase_label}</span>
-                                <span>{format!("{}/{}", completed, total)}{if failed > 0 { format!(" ({} failed)", failed) } else { String::new() }}</span>
+                                <span>{format!("{completed}/{total}")}{if failed > 0 { format!(" ({failed} failed)") } else { String::new() }}</span>
                             </div>
                             <div class="w-full h-2 bg-surface-sunken rounded-full overflow-hidden">
                                 <div
                                     class="h-full bg-primary rounded-full transition-all duration-300"
-                                    style=move || format!("width: {}%", pct)
+                                    style=move || format!("width: {pct}%")
                                 ></div>
                             </div>
                         </div>

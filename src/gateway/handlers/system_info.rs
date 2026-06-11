@@ -56,7 +56,7 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to collect system info: {}", e),
+            format!("Failed to collect system info: {e}"),
         ),
     }
 }

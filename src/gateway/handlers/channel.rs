@@ -36,7 +36,7 @@ pub const CHANNEL_SECRET_FIELDS: &[&str] = &[
 
 /// Vault key for a channel secret field.
 fn channel_vault_key(channel_id: &str, field: &str) -> String {
-    format!("channel:{}:{}", channel_id, field)
+    format!("channel:{channel_id}:{field}")
 }
 
 /// Inject vault-resolved secrets into a channel config Value.
@@ -94,7 +94,7 @@ pub fn report_channel_secret_presence(
         let key = channel_vault_key(channel_id, field);
         match vault.get_secret(&key) {
             Ok(Some(_)) => {
-                obj.insert(format!("has_{}", field), Value::Bool(true));
+                obj.insert(format!("has_{field}"), Value::Bool(true));
             }
             Ok(None) => {}
             Err(e) => {
@@ -325,7 +325,7 @@ pub async fn handle_status(
         None => JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            format!("Channel not found: {}", channel_id),
+            format!("Channel not found: {channel_id}"),
         ),
     }
 }
@@ -412,7 +412,7 @@ pub async fn handle_start(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to start channel: {}", e),
+            format!("Failed to start channel: {e}"),
         ),
     }
 }
@@ -490,7 +490,7 @@ pub async fn handle_stop(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to stop channel: {}", e),
+            format!("Failed to stop channel: {e}"),
         ),
     }
 }
@@ -524,14 +524,14 @@ pub async fn handle_pairing_data(
                 Err(e) => JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to get pairing data: {}", e),
+                    format!("Failed to get pairing data: {e}"),
                 ),
             }
         }
         None => JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            format!("Channel not found: {}", channel_id),
+            format!("Channel not found: {channel_id}"),
         ),
     }
 }
@@ -591,7 +591,7 @@ pub async fn handle_send(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to send message: {}", e),
+            format!("Failed to send message: {e}"),
         ),
     }
 }
@@ -639,7 +639,7 @@ pub async fn handle_create(
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            format!("Channel '{}' already exists", id),
+            format!("Channel '{id}' already exists"),
         );
     }
 
@@ -747,7 +747,7 @@ pub async fn handle_delete(
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            format!("Channel '{}' not found", id),
+            format!("Channel '{id}' not found"),
         );
     }
 
@@ -839,7 +839,7 @@ pub async fn handle_health(
             None => JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Channel not found: {}", id),
+                format!("Channel not found: {id}"),
             ),
         }
     } else {

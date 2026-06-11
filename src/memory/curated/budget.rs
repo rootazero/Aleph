@@ -39,13 +39,13 @@ pub fn header(entries: &[String], limit: usize, near_threshold: f32) -> String {
     let used = used_chars(entries);
     let pct = usage_pct(used, limit);
     let pct_label = if used > limit {
-        format!("OVER BUDGET — {}%", pct)
+        format!("OVER BUDGET — {pct}%")
     } else if (used as f32) >= (limit as f32) * near_threshold {
-        format!("NEAR LIMIT — {}%", pct)
+        format!("NEAR LIMIT — {pct}%")
     } else {
-        format!("{}%", pct)
+        format!("{pct}%")
     };
-    format!("[{} — {}/{} chars]", pct_label, used, limit)
+    format!("[{pct_label} — {used}/{limit} chars]")
 }
 
 /// Sanity check: would adding `new_content` exceed the limit?

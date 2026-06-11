@@ -26,8 +26,7 @@ impl AgentManager {
             .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
         {
             return Err(AlephError::invalid_config(format!(
-                "Invalid agent_id '{}': must be alphanumeric, '_', or '-'",
-                agent_id
+                "Invalid agent_id '{agent_id}': must be alphanumeric, '_', or '-'"
             )));
         }
         Ok(())
@@ -43,14 +42,14 @@ impl AgentManager {
 
         let mut files = Vec::new();
         let entries = fs::read_dir(&agent_dir)
-            .map_err(|e| AlephError::IoError(format!("Failed to read agent dir: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Failed to read agent dir: {e}")))?;
 
         for entry in entries {
             let entry = entry
-                .map_err(|e| AlephError::IoError(format!("Failed to read dir entry: {}", e)))?;
+                .map_err(|e| AlephError::IoError(format!("Failed to read dir entry: {e}")))?;
             let metadata = entry
                 .metadata()
-                .map_err(|e| AlephError::IoError(format!("Failed to read metadata: {}", e)))?;
+                .map_err(|e| AlephError::IoError(format!("Failed to read metadata: {e}")))?;
 
             if !metadata.is_file() {
                 continue;
@@ -92,7 +91,7 @@ impl AgentManager {
         self.validate_filename(filename)?;
         let agent_dir = self.agents_root.join(agent_id);
         fs::create_dir_all(&agent_dir)
-            .map_err(|e| AlephError::IoError(format!("Failed to create agent dir: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Failed to create agent dir: {e}")))?;
         let path = agent_dir.join(filename);
         fs::write(&path, content).map_err(|e| {
             AlephError::IoError(format!("Failed to write file '{}': {}", path.display(), e))

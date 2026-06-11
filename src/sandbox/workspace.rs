@@ -162,7 +162,7 @@ pub fn session_workspace_dir(workspace_root: &std::path::Path, sid: &SessionId) 
 /// chars). Keeps the path short and avoids slashes / special chars that the
 /// various `SessionKey` variants may carry.
 fn session_key_to_filename(sid: &SessionId) -> String {
-    let json = serde_json::to_string(sid).unwrap_or_else(|_| format!("{:?}", sid));
+    let json = serde_json::to_string(sid).unwrap_or_else(|_| format!("{sid:?}"));
     let mut hasher = Sha256::new();
     hasher.update(json.as_bytes());
     let digest = hasher.finalize();

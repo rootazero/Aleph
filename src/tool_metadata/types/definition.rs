@@ -277,7 +277,7 @@ impl StructuredToolMeta {
                 .map(|c| c.to_prompt())
                 .collect::<Vec<_>>()
                 .join("; ");
-            parts.push(format!("Can: {}", caps));
+            parts.push(format!("Can: {caps}"));
         }
 
         if !self.not_suitable_for.is_empty() {

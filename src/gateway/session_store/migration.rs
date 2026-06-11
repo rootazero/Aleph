@@ -31,7 +31,7 @@ pub async fn export_legacy_messages(
 ) -> Result<usize, crate::error::AlephError> {
     let legacy_db = crate::utils::paths::get_sessions_db_path().map_err(|e| {
         crate::error::AlephError::ConfigError {
-            message: format!("Failed to resolve legacy DB path: {}", e),
+            message: format!("Failed to resolve legacy DB path: {e}"),
             suggestion: None,
         }
     })?;
@@ -57,7 +57,7 @@ pub async fn export_legacy_messages_from(
 
     let conn = crate::utils::sqlite_open::open_sqlite_safe(legacy_db).map_err(|e| {
         crate::error::AlephError::ConfigError {
-            message: format!("Failed to open legacy session DB: {}", e),
+            message: format!("Failed to open legacy session DB: {e}"),
             suggestion: None,
         }
     })?;
@@ -76,7 +76,7 @@ pub async fn export_legacy_messages_from(
             "SELECT key, agent_id, session_type, created_at, last_active_at, message_count, total_tokens, auto_reset_at, state, metadata, label, input_tokens, output_tokens, model, model_provider, parent_session_key, compaction_count FROM sessions",
         )
         .map_err(|e| crate::error::AlephError::ConfigError {
-            message: format!("Prepare failed: {}", e),
+            message: format!("Prepare failed: {e}"),
             suggestion: None,
         })?;
 
@@ -84,7 +84,7 @@ pub async fn export_legacy_messages_from(
         .query_map([], |row| {
             let state_str: Option<String> = row.get(8)?;
             let state = state_str
-                .and_then(|s| serde_json::from_str(&format!("\"{}\"", s)).ok())
+                .and_then(|s| serde_json::from_str(&format!("\"{s}\"")).ok())
                 .unwrap_or_default();
             let metadata_json: Option<String> = row.get(9)?;
             let (topic, status, identity_meta) =
@@ -120,20 +120,20 @@ pub async fn export_legacy_messages_from(
             })
         })
         .map_err(|e| crate::error::AlephError::ConfigError {
-            message: format!("Query failed: {}", e),
+            message: format!("Query failed: {e}"),
             suggestion: None,
         })?;
 
     let mut migrated_count = 0usize;
     for meta in session_rows {
         let meta = meta.map_err(|e| crate::error::AlephError::ConfigError {
-            message: format!("Row error: {}", e),
+            message: format!("Row error: {e}"),
             suggestion: None,
         })?;
         let key_str = &meta.key;
         store.write_metadata(key_str, &meta).await.map_err(|e| {
             crate::error::AlephError::ConfigError {
-                message: format!("Write metadata failed for {}: {}", key_str, e),
+                message: format!("Write metadata failed for {key_str}: {e}"),
                 suggestion: None,
             }
         })?;
@@ -149,7 +149,7 @@ pub async fn export_legacy_messages_from(
             "SELECT session_key, role, content, timestamp, metadata, input_tokens, output_tokens FROM messages ORDER BY id ASC",
         )
         .map_err(|e| crate::error::AlephError::ConfigError {
-            message: format!("Prepare messages failed: {}", e),
+            message: format!("Prepare messages failed: {e}"),
             suggestion: None,
         })?;
 
@@ -179,13 +179,13 @@ pub async fn export_legacy_messages_from(
             ))
         })
         .map_err(|e| crate::error::AlephError::ConfigError {
-            message: format!("Query messages failed: {}", e),
+            message: format!("Query messages failed: {e}"),
             suggestion: None,
         })?;
 
     for row in message_rows {
         let (key, msg) = row.map_err(|e| crate::error::AlephError::ConfigError {
-            message: format!("Message row error: {}", e),
+            message: format!("Message row error: {e}"),
             suggestion: None,
         })?;
 
@@ -216,12 +216,12 @@ pub async fn export_legacy_messages_from(
     let keys: Vec<String> = conn
         .prepare("SELECT key FROM sessions")
         .map_err(|e| crate::error::AlephError::ConfigError {
-            message: format!("Prepare post-migration failed: {}", e),
+            message: format!("Prepare post-migration failed: {e}"),
             suggestion: None,
         })?
         .query_map([], |row| row.get::<usize, String>(0))
         .map_err(|e| crate::error::AlephError::ConfigError {
-            message: format!("Query post-migration failed: {}", e),
+            message: format!("Query post-migration failed: {e}"),
             suggestion: None,
         })?
         .filter_map(|r| r.ok())
@@ -270,7 +270,7 @@ pub async fn export_legacy_messages_from(
     tokio::fs::write(&marker, marker_content)
         .await
         .map_err(|e| crate::error::AlephError::ConfigError {
-            message: format!("Failed to write migration marker: {}", e),
+            message: format!("Failed to write migration marker: {e}"),
             suggestion: None,
         })?;
 
@@ -300,12 +300,12 @@ fn ensure_sessions_columns(conn: &Connection) -> Result<(), crate::error::AlephE
     let existing: std::collections::HashSet<String> = conn
         .prepare("PRAGMA table_info(sessions)")
         .map_err(|e| crate::error::AlephError::ConfigError {
-            message: format!("PRAGMA table_info(sessions) prepare failed: {}", e),
+            message: format!("PRAGMA table_info(sessions) prepare failed: {e}"),
             suggestion: None,
         })?
         .query_map([], |row| row.get::<usize, String>(1))
         .map_err(|e| crate::error::AlephError::ConfigError {
-            message: format!("PRAGMA table_info(sessions) query failed: {}", e),
+            message: format!("PRAGMA table_info(sessions) query failed: {e}"),
             suggestion: None,
         })?
         .filter_map(|r| r.ok())
@@ -330,10 +330,10 @@ fn ensure_sessions_columns(conn: &Connection) -> Result<(), crate::error::AlephE
     ];
     for (col, ty) in needed {
         if !existing.contains(*col) {
-            let sql = format!("ALTER TABLE sessions ADD COLUMN {} {}", col, ty);
+            let sql = format!("ALTER TABLE sessions ADD COLUMN {col} {ty}");
             conn.execute(&sql, [])
                 .map_err(|e| crate::error::AlephError::ConfigError {
-                    message: format!("ALTER TABLE sessions ADD COLUMN {} failed: {}", col, e),
+                    message: format!("ALTER TABLE sessions ADD COLUMN {col} failed: {e}"),
                     suggestion: None,
                 })?;
         }
@@ -349,7 +349,7 @@ async fn write_batch(
     for msg in messages {
         store.append_transcript(key, msg).await.map_err(|e| {
             crate::error::AlephError::ConfigError {
-                message: format!("Append transcript failed for {}: {}", key, e),
+                message: format!("Append transcript failed for {key}: {e}"),
                 suggestion: None,
             }
         })?;

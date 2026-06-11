@@ -57,7 +57,7 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
         spawn_local(async move {
             match AgentsApi::files_get(&dash, &id, &filename).await {
                 Ok(content) => file_content.set(content),
-                Err(e) => file_content.set(format!("Error loading file: {}", e)),
+                Err(e) => file_content.set(format!("Error loading file: {e}")),
             }
         });
     };
@@ -133,7 +133,7 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
                                                                 }>{name_owned}</span>
                                                             </button>
                                                             <span class="text-[10px] text-text-tertiary">
-                                                                {format!("{} B", size)}
+                                                                {format!("{size} B")}
                                                             </span>
                                                         }.into_any()
                                                     }}

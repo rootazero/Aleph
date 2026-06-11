@@ -197,7 +197,7 @@ impl ProtocolAdapter for OpenAiProtocol {
                 })
                 .collect();
             body["tools"] = serde_json::to_value(&tools)
-                .map_err(|e| AlephError::provider(format!("Failed to serialize tools: {}", e)))?;
+                .map_err(|e| AlephError::provider(format!("Failed to serialize tools: {e}")))?;
         }
 
         if let Some(obj) = body.as_object_mut() {
@@ -247,7 +247,7 @@ impl ProtocolAdapter for OpenAiProtocol {
         Ok(self
             .client
             .post(&endpoint)
-            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Authorization", format!("Bearer {api_key}"))
             .header("Content-Type", "application/json")
             .json(&body))
     }
@@ -278,7 +278,7 @@ impl ProtocolAdapter for OpenAiProtocol {
                         "Rate limited. Wait before retrying or upgrade your API plan.".to_string()
                     });
                 return Err(AlephError::RateLimitError {
-                    message: format!("OpenAI Chat API rate limited (429): {}", error_text),
+                    message: format!("OpenAI Chat API rate limited (429): {error_text}"),
                     suggestion: Some(suggestion),
                 });
             }
@@ -290,7 +290,7 @@ impl ProtocolAdapter for OpenAiProtocol {
             // generic provider error that reads as a transient fault. (#86614)
             if is_usage_limit_body(&error_text) {
                 return Err(AlephError::RateLimitError {
-                    message: format!("Provider usage limit reached ({}): {}", status, error_text),
+                    message: format!("Provider usage limit reached ({status}): {error_text}"),
                     suggestion: Some(
                         "Account quota or spending limit exhausted. Upgrade your plan or wait \
                          for the quota to reset — retrying will not help."
@@ -299,15 +299,14 @@ impl ProtocolAdapter for OpenAiProtocol {
                 });
             }
             return Err(AlephError::provider(format!(
-                "OpenAI Chat API error ({}): {}",
-                status, error_text
+                "OpenAI Chat API error ({status}): {error_text}"
             )));
         }
 
         // Wrap the bytes stream in an AlephError-typed stream
         let byte_stream = response
             .bytes_stream()
-            .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
+            .map_err(|e| AlephError::network(format!("Stream error: {e}")))
             .boxed();
         let idle_secs = self
             .stream_idle_timeout_secs

@@ -101,7 +101,7 @@ impl SemanticPurposeInferrer {
 
         // Build semantic description from available parts
         if let Some(cat) = category {
-            parts.push(format!("[{}]", cat));
+            parts.push(format!("[{cat}]"));
         }
 
         // Use description if available, otherwise derive from name
@@ -210,7 +210,7 @@ impl SemanticPurposeInferrer {
             .process(RequestPayload::new(&__msgs).with_system(Some(&system_prompt)))
             .await
             .map_err(|e| {
-                crate::error::AlephError::provider(format!("L2 LLM enhancement failed: {}", e))
+                crate::error::AlephError::provider(format!("L2 LLM enhancement failed: {e}"))
             })?;
 
         // Extract and clean the response
@@ -245,15 +245,15 @@ impl SemanticPurposeInferrer {
         );
 
         let mut user_prompt = String::from("Generate a semantic description for this tool:\n\n");
-        user_prompt.push_str(&format!("Tool ID: {}\n", tool_id));
-        user_prompt.push_str(&format!("Name: {}\n", name));
+        user_prompt.push_str(&format!("Tool ID: {tool_id}\n"));
+        user_prompt.push_str(&format!("Name: {name}\n"));
 
         if let Some(cat) = category {
-            user_prompt.push_str(&format!("Category: {}\n", cat));
+            user_prompt.push_str(&format!("Category: {cat}\n"));
         }
 
         if let Some(desc) = description {
-            user_prompt.push_str(&format!("Current Description: {}\n", desc));
+            user_prompt.push_str(&format!("Current Description: {desc}\n"));
         }
 
         user_prompt.push_str(

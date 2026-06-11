@@ -157,7 +157,7 @@ impl InboxContextProvider for TeamInboxContextProvider {
             unread_to: total_to,
             unread_cc: total_cc,
             urgent_summary: if total_to > 5 {
-                format!("{} unread items require immediate attention", total_to)
+                format!("{total_to} unread items require immediate attention")
             } else {
                 String::new()
             },

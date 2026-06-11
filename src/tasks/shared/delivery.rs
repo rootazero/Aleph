@@ -207,13 +207,13 @@ impl DeliveryEngine {
                 Err(e) => DeliveryOutcome {
                     target_kind: kind.to_string(),
                     success: false,
-                    message: Some(format!("Delivery error: {}", e)),
+                    message: Some(format!("Delivery error: {e}")),
                 },
             },
             None => DeliveryOutcome {
                 target_kind: kind.to_string(),
                 success: false,
-                message: Some(format!("Target '{}' not registered", kind)),
+                message: Some(format!("Target '{kind}' not registered")),
             },
         }
     }

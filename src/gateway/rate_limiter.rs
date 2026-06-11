@@ -212,8 +212,7 @@ impl RateLimitError {
             } => (*lockout_remaining_ms, format!("Locked out for {scope}")),
         };
         format!(
-            r#"{{"jsonrpc":"2.0","error":{{"code":-32029,"message":"{}","data":{{"retry_after_ms":{}}}}},"id":null}}"#,
-            message, retry_after_ms
+            r#"{{"jsonrpc":"2.0","error":{{"code":-32029,"message":"{message}","data":{{"retry_after_ms":{retry_after_ms}}}}},"id":null}}"#
         )
     }
 

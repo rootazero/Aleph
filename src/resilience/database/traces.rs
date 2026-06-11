@@ -91,7 +91,7 @@ impl StateDatabase {
     pub async fn insert_trace(&self, trace: &TaskTrace) -> Result<i64, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let event_json = serde_json::to_string(&trace.event)
-            .map_err(|e| AlephError::config(format!("Failed to serialize trace event: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to serialize trace event: {e}")))?;
         conn.execute(
             r#"
             INSERT INTO task_traces (task_id, step_index, event_kind, event_json, timestamp)
@@ -105,7 +105,7 @@ impl StateDatabase {
                 trace.timestamp,
             ],
         )
-        .map_err(|e| AlephError::config(format!("Failed to insert trace: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to insert trace: {e}")))?;
 
         Ok(conn.last_insert_rowid())
     }
@@ -119,7 +119,7 @@ impl StateDatabase {
         let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn
             .transaction()
-            .map_err(|e| AlephError::config(format!("Failed to begin transaction: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to begin transaction: {e}")))?;
 
         {
             let mut stmt = tx
@@ -129,11 +129,11 @@ impl StateDatabase {
                     VALUES (?1, ?2, ?3, ?4, ?5)
                     "#,
                 )
-                .map_err(|e| AlephError::config(format!("Failed to prepare statement: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to prepare statement: {e}")))?;
 
             for trace in traces {
                 let event_json = serde_json::to_string(&trace.event).map_err(|e| {
-                    AlephError::config(format!("Failed to serialize trace event: {}", e))
+                    AlephError::config(format!("Failed to serialize trace event: {e}"))
                 })?;
                 stmt.execute(params![
                     trace.task_id,
@@ -142,12 +142,12 @@ impl StateDatabase {
                     event_json,
                     trace.timestamp,
                 ])
-                .map_err(|e| AlephError::config(format!("Failed to insert trace: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to insert trace: {e}")))?;
             }
         }
 
         tx.commit()
-            .map_err(|e| AlephError::config(format!("Failed to commit transaction: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to commit transaction: {e}")))?;
 
         Ok(())
     }
@@ -164,13 +164,13 @@ impl StateDatabase {
                 ORDER BY step_index ASC
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
         let traces = stmt
             .query_map(params![task_id], task_trace_from_row)
-            .map_err(|e| AlephError::config(format!("Failed to query traces: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query traces: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect traces: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to collect traces: {e}")))?;
 
         Ok(traces)
     }
@@ -188,12 +188,12 @@ impl StateDatabase {
                 LIMIT 1
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
         let result = stmt
             .query_row(params![task_id], task_trace_from_row)
             .optional()
-            .map_err(|e| AlephError::config(format!("Failed to get last trace: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to get last trace: {e}")))?;
 
         Ok(result)
     }
@@ -214,13 +214,13 @@ impl StateDatabase {
                 ORDER BY step_index ASC
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
         let traces = stmt
             .query_map(params![task_id, from_step], task_trace_from_row)
-            .map_err(|e| AlephError::config(format!("Failed to query traces: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query traces: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect traces: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to collect traces: {e}")))?;
 
         Ok(traces)
     }
@@ -233,7 +233,7 @@ impl StateDatabase {
                 "DELETE FROM task_traces WHERE task_id = ?1",
                 params![task_id],
             )
-            .map_err(|e| AlephError::config(format!("Failed to delete traces: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to delete traces: {e}")))?;
         Ok(count as u64)
     }
 
@@ -246,7 +246,7 @@ impl StateDatabase {
                 params![task_id],
                 |row| row.get(0),
             )
-            .map_err(|e| AlephError::config(format!("Failed to count traces: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to count traces: {e}")))?;
         Ok(count as u64)
     }
 
@@ -262,7 +262,7 @@ impl StateDatabase {
                 ORDER BY last_timestamp DESC
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
         let tasks = stmt
             .query_map([], |row| {
@@ -272,9 +272,9 @@ impl StateDatabase {
                     last_timestamp: row.get(2)?,
                 })
             })
-            .map_err(|e| AlephError::config(format!("Failed to query traces: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query traces: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect traces: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to collect traces: {e}")))?;
 
         Ok(tasks)
     }
@@ -366,12 +366,12 @@ impl StateDatabase {
                 WHERE id = ?1
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
         let result = stmt
             .query_row(params![trace_id], task_trace_from_row)
             .optional()
-            .map_err(|e| AlephError::config(format!("Failed to get trace: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to get trace: {e}")))?;
 
         Ok(result)
     }

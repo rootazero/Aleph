@@ -73,7 +73,7 @@ pub async fn handle_update(
                 return JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to serialize existing config: {}", e),
+                    format!("Failed to serialize existing config: {e}"),
                 )
             }
         };
@@ -89,7 +89,7 @@ pub async fn handle_update(
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Invalid memory config after merge: {}", e),
+                    format!("Invalid memory config after merge: {e}"),
                 )
             }
         };
@@ -109,7 +109,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }

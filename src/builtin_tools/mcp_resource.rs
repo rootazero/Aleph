@@ -86,8 +86,7 @@ impl AlephToolDyn for McpReadResourceTool {
                     Some(pair) => pair,
                     None => {
                         return Err(crate::error::AlephError::NotFound(format!(
-                            "No MCP server found for URI: {}",
-                            uri
+                            "No MCP server found for URI: {uri}"
                         )));
                     }
                 }

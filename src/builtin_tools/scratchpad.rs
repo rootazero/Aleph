@@ -242,7 +242,7 @@ impl AlephTool for ScratchpadTool {
                 manager.set_objective(&value).await?;
                 Ok(ScratchpadOutput {
                     success: true,
-                    message: format!("Objective updated: {}", value),
+                    message: format!("Objective updated: {value}"),
                     content: progress_echo(&manager).await,
                 })
             }
@@ -263,7 +263,7 @@ impl AlephTool for ScratchpadTool {
                 manager.start_item(index).await?;
                 Ok(ScratchpadOutput {
                     success: true,
-                    message: format!("Item {} marked in progress (current step)", index),
+                    message: format!("Item {index} marked in progress (current step)"),
                     content: progress_echo(&manager).await,
                 })
             }
@@ -273,7 +273,7 @@ impl AlephTool for ScratchpadTool {
                 manager.complete_item(index).await?;
                 Ok(ScratchpadOutput {
                     success: true,
-                    message: format!("Item {} marked as complete", index),
+                    message: format!("Item {index} marked as complete"),
                     content: progress_echo(&manager).await,
                 })
             }

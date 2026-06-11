@@ -106,7 +106,7 @@ pub async fn handle_get_directory(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             -32000, // Server error
-            format!("Failed to get log directory: {}", e),
+            format!("Failed to get log directory: {e}"),
         ),
     }
 }

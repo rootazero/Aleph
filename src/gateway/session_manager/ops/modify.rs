@@ -13,7 +13,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         // Get the ID threshold
         let threshold_id: Option<i64> = conn
@@ -75,7 +75,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         // Check current state - can't close if already stopped
         let current_state: Option<String> = conn
@@ -150,7 +150,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         // Get existing metadata
         let existing_json: Option<String> = conn
@@ -203,7 +203,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let existing_json: Option<String> = conn
             .query_row(
@@ -269,13 +269,13 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         conn.execute(
             "UPDATE sessions SET state = ? WHERE key = ?",
             params![state.to_string(), &key_str],
         )
-        .map_err(|e| SessionManagerError::DatabaseError(format!("Set state failed: {}", e)))?;
+        .map_err(|e| SessionManagerError::DatabaseError(format!("Set state failed: {e}")))?;
 
         drop(conn);
 
@@ -295,7 +295,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let existing_json: Option<String> = conn
             .query_row(
@@ -347,7 +347,7 @@ impl SessionManager {
 
         let updated = conn
             .execute(&sql, sql_params.as_slice())
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Patch failed: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Patch failed: {e}")))?;
 
         drop(conn);
         self.emit_session_updated(&key_str);
@@ -367,7 +367,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let total = input_tokens + output_tokens;
         let model_owned = model.map(|s| s.to_string());
@@ -395,7 +395,7 @@ impl SessionManager {
         params.push(&key_str);
 
         conn.execute(&sql, params.as_slice()).map_err(|e| {
-            SessionManagerError::DatabaseError(format!("Usage update failed: {}", e))
+            SessionManagerError::DatabaseError(format!("Usage update failed: {e}"))
         })?;
 
         drop(conn);

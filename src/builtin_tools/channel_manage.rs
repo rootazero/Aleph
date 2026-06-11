@@ -133,8 +133,7 @@ impl AlephTool for ChannelPairingTool {
             .await
             .ok_or_else(|| {
                 crate::error::AlephError::tool(format!(
-                    "Channel '{}' not found in registry",
-                    channel_id
+                    "Channel '{channel_id}' not found in registry"
                 ))
             })?;
 
@@ -143,8 +142,7 @@ impl AlephTool for ChannelPairingTool {
                 let channel = channel_handle.read().await;
                 let pairing_data = channel.get_pairing_data().await.map_err(|e| {
                     crate::error::AlephError::tool(format!(
-                        "Failed to generate pairing code: {}",
-                        e
+                        "Failed to generate pairing code: {e}"
                     ))
                 })?;
 
@@ -153,10 +151,9 @@ impl AlephTool for ChannelPairingTool {
                         info!(channel = %channel_id, code = %code, "Pairing code generated via tool");
                         Ok(ChannelPairingOutput {
                             message: format!(
-                                "Pairing code generated for channel '{}': {}. \
+                                "Pairing code generated for channel '{channel_id}': {code}. \
                                  The user should send this code to the Telegram bot in a DM. \
-                                 Code expires in 1 hour.",
-                                channel_id, code
+                                 Code expires in 1 hour."
                             ),
                             code: Some(code),
                             codes: None,
@@ -164,14 +161,13 @@ impl AlephTool for ChannelPairingTool {
                         })
                     }
                     PairingData::QrCode(qr) => Ok(ChannelPairingOutput {
-                        message: format!("QR code generated for channel '{}'", channel_id),
+                        message: format!("QR code generated for channel '{channel_id}'"),
                         code: Some(qr),
                         codes: None,
                         channel_id: channel_id.to_string(),
                     }),
                     PairingData::None => Err(crate::error::AlephError::tool(format!(
-                        "Channel '{}' does not support pairing",
-                        channel_id
+                        "Channel '{channel_id}' does not support pairing"
                     ))),
                 }
             }
@@ -179,7 +175,7 @@ impl AlephTool for ChannelPairingTool {
             PairingAction::List => {
                 let channel = channel_handle.read().await;
                 let active_codes = channel.list_active_pairing_codes().await.map_err(|e| {
-                    crate::error::AlephError::tool(format!("Failed to list pairing codes: {}", e))
+                    crate::error::AlephError::tool(format!("Failed to list pairing codes: {e}"))
                 })?;
 
                 let entries: Vec<PairingCodeEntry> = active_codes
@@ -195,11 +191,10 @@ impl AlephTool for ChannelPairingTool {
 
                 Ok(ChannelPairingOutput {
                     message: if count == 0 {
-                        format!("No active pairing codes for channel '{}'.", channel_id)
+                        format!("No active pairing codes for channel '{channel_id}'.")
                     } else {
                         format!(
-                            "{} active pairing code(s) for channel '{}'.",
-                            count, channel_id
+                            "{count} active pairing code(s) for channel '{channel_id}'."
                         )
                     },
                     code: None,

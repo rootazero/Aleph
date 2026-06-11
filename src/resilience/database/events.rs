@@ -54,7 +54,7 @@ impl StateDatabase {
                 event.timestamp,
             ],
         )
-        .map_err(|e| AlephError::config(format!("Failed to insert event: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to insert event: {e}")))?;
 
         let last_id = conn.last_insert_rowid();
         drop(conn);
@@ -81,7 +81,7 @@ impl StateDatabase {
         let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn
             .transaction()
-            .map_err(|e| AlephError::config(format!("Failed to begin transaction: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to begin transaction: {e}")))?;
 
         {
             let mut stmt = tx
@@ -91,7 +91,7 @@ impl StateDatabase {
                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                     "#,
                 )
-                .map_err(|e| AlephError::config(format!("Failed to prepare statement: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to prepare statement: {e}")))?;
 
             for event in events {
                 stmt.execute(params![
@@ -102,12 +102,12 @@ impl StateDatabase {
                     event.is_structural as i32,
                     event.timestamp,
                 ])
-                .map_err(|e| AlephError::config(format!("Failed to insert event: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to insert event: {e}")))?;
             }
         }
 
         tx.commit()
-            .map_err(|e| AlephError::config(format!("Failed to commit transaction: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to commit transaction: {e}")))?;
 
         Ok(())
     }
@@ -124,13 +124,13 @@ impl StateDatabase {
                 ORDER BY seq ASC
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
         let events = stmt
             .query_map(params![task_id], agent_event_from_row)
-            .map_err(|e| AlephError::config(format!("Failed to query events: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query events: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect events: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to collect events: {e}")))?;
 
         Ok(events)
     }
@@ -151,13 +151,13 @@ impl StateDatabase {
                 ORDER BY seq ASC
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
         let events = stmt
             .query_map(params![task_id, since_seq], agent_event_from_row)
-            .map_err(|e| AlephError::config(format!("Failed to query events: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query events: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect events: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to collect events: {e}")))?;
 
         Ok(events)
     }
@@ -179,13 +179,13 @@ impl StateDatabase {
                 ORDER BY seq ASC
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
         let events = stmt
             .query_map(params![task_id, from_seq, to_seq], agent_event_from_row)
-            .map_err(|e| AlephError::config(format!("Failed to query events: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query events: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect events: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to collect events: {e}")))?;
 
         Ok(events)
     }
@@ -205,13 +205,13 @@ impl StateDatabase {
                 ORDER BY seq ASC
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
         let events = stmt
             .query_map(params![task_id], agent_event_from_row)
-            .map_err(|e| AlephError::config(format!("Failed to query events: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query events: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect events: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to collect events: {e}")))?;
 
         Ok(events)
     }
@@ -226,7 +226,7 @@ impl StateDatabase {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| AlephError::config(format!("Failed to get latest seq: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to get latest seq: {e}")))?
             .flatten();
 
         Ok(result)
@@ -240,7 +240,7 @@ impl StateDatabase {
                 "DELETE FROM agent_events WHERE task_id = ?1",
                 params![task_id],
             )
-            .map_err(|e| AlephError::config(format!("Failed to delete events: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to delete events: {e}")))?;
         Ok(count as u64)
     }
 
@@ -253,7 +253,7 @@ impl StateDatabase {
                 params![task_id],
                 |row| row.get(0),
             )
-            .map_err(|e| AlephError::config(format!("Failed to count events: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to count events: {e}")))?;
         Ok(count as u64)
     }
 }

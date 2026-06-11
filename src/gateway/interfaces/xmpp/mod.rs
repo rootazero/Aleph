@@ -234,10 +234,9 @@ impl Channel for XmppChannel {
                 .replace('>', "&gt;")
                 .replace('\'', "&apos;");
             let stanza = format!(
-                "<message to='{}' type='chat'>\
+                "<message to='{to}' type='chat'>\
                  <composing xmlns='http://jabber.org/protocol/chatstates'/>\
-                 </message>",
-                to
+                 </message>"
             );
             let _ = write_tx.send(stanza).await;
         }
@@ -256,7 +255,7 @@ impl ChannelFactory for XmppChannelFactory {
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let config: XmppConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid XMPP config: {}", e)))?;
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid XMPP config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 

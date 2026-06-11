@@ -144,10 +144,10 @@ impl SkillLoader {
         // Read file
         let content = fs::read_to_string(path)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to read file: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to read file: {e}"))?;
 
         // Parse spec
-        let spec = parse_skill_file(&content).map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
+        let spec = parse_skill_file(&content).map_err(|e| anyhow::anyhow!("Parse error: {e}"))?;
 
         // Validate binary availability (optional warning)
         self.check_binary_availability(&spec);

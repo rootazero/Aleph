@@ -97,11 +97,11 @@ impl MediaProvider for TextDocumentProvider {
                     .decode(data)
                     .map_err(|e| MediaError::ProviderError {
                         provider: "text-document".into(),
-                        message: format!("Base64 decode error: {}", e),
+                        message: format!("Base64 decode error: {e}"),
                     })?;
                 let text = String::from_utf8(bytes).map_err(|e| MediaError::ProviderError {
                     provider: "text-document".into(),
-                    message: format!("UTF-8 decode error: {}", e),
+                    message: format!("UTF-8 decode error: {e}"),
                 })?;
                 Ok(MediaOutput::Text { text })
             }

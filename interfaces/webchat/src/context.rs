@@ -387,7 +387,7 @@ impl DashboardState {
                     return Ok(());
                 }
                 Err(e) => {
-                    web_sys::console::error_1(&format!("Shared token auth failed: {}", e).into());
+                    web_sys::console::error_1(&format!("Shared token auth failed: {e}").into());
                     // Clear invalid shared token
                     remove_local_storage("aleph_shared_token");
                 }
@@ -491,7 +491,7 @@ impl DashboardState {
                                         pending_rpcs.insert(rpc_req.id, rpc_req.response_tx);
                                     }
                                     Err(e) => {
-                                        web_sys::console::error_1(&format!("Failed to send RPC: {:?}", e).into());
+                                        web_sys::console::error_1(&format!("Failed to send RPC: {e:?}").into());
                                         let _ = rpc_req.response_tx.send(Err(e.to_string()));
                                     }
                                 }
@@ -501,7 +501,7 @@ impl DashboardState {
                             msg = stream.select_next_some() => {
                                 match msg {
                                     Ok(value) => {
-                                        web_sys::console::log_1(&format!("Received message: {:?}", value).into());
+                                        web_sys::console::log_1(&format!("Received message: {value:?}").into());
 
                                         // Check if this is an RPC response (has 'id' field)
                                         if let Some(id) = value.get("id").and_then(|id| id.as_str()) {
@@ -553,8 +553,8 @@ impl DashboardState {
                                         }
                                     }
                                     Err(e) => {
-                                        web_sys::console::error_1(&format!("Message loop error: {:?}", e).into());
-                                        drop_reason = Some(format!("WebSocket dropped: {}", e));
+                                        web_sys::console::error_1(&format!("Message loop error: {e:?}").into());
+                                        drop_reason = Some(format!("WebSocket dropped: {e}"));
                                         break;
                                     }
                                 }
@@ -595,8 +595,7 @@ impl DashboardState {
                         if let Some(reason) = drop_reason.as_deref() {
                             web_sys::console::warn_1(
                                 &format!(
-                                    "WS dropped unintentionally; auto-reconnecting. reason={}",
-                                    reason
+                                    "WS dropped unintentionally; auto-reconnecting. reason={reason}"
                                 )
                                 .into(),
                             );
@@ -627,7 +626,7 @@ impl DashboardState {
                         spawn_local(async move {
                             if let Err(e) = state_for_subscribe.subscribe_topic("config.**").await {
                                 web_sys::console::error_1(
-                                    &format!("Failed to subscribe to config events: {}", e).into(),
+                                    &format!("Failed to subscribe to config events: {e}").into(),
                                 );
                             }
                         });
@@ -717,7 +716,7 @@ impl DashboardState {
 
                     if attempt + 1 >= max_attempts {
                         let error_msg =
-                            format!("Failed to reconnect after {} attempts", max_attempts);
+                            format!("Failed to reconnect after {max_attempts} attempts");
                         self.connection_error.set(Some(error_msg.clone()));
                         self.is_reconnecting.set(false);
                         return Err(error_msg);
@@ -745,7 +744,7 @@ impl DashboardState {
         let state_for_init = *self;
         spawn_local(async move {
             if let Err(e) = state_for_init.load_initial_alerts().await {
-                web_sys::console::error_1(&format!("Failed to load initial alerts: {}", e).into());
+                web_sys::console::error_1(&format!("Failed to load initial alerts: {e}").into());
             }
         });
 
@@ -769,7 +768,7 @@ impl DashboardState {
                         "error" | "critical" => crate::components::sidebar::AlertLevel::Critical,
                         _ => {
                             web_sys::console::warn_1(
-                                &format!("Unknown alert severity: {}", severity).into(),
+                                &format!("Unknown alert severity: {severity}").into(),
                             );
                             crate::components::sidebar::AlertLevel::None
                         }
@@ -952,13 +951,13 @@ impl DashboardState {
 
                         self.update_alert(alert.key.clone(), alert);
                         web_sys::console::log_1(
-                            &format!("Loaded system.health alert: {:?}", level).into(),
+                            &format!("Loaded system.health alert: {level:?}").into(),
                         );
                     }
                 }
             }
             Err(e) => {
-                web_sys::console::warn_1(&format!("Failed to fetch system health: {}", e).into());
+                web_sys::console::warn_1(&format!("Failed to fetch system health: {e}").into());
             }
         }
 
@@ -972,18 +971,18 @@ impl DashboardState {
                             key: "memory.status".to_string(),
                             level: crate::components::sidebar::AlertLevel::Warning,
                             count: None,
-                            message: Some(format!("Database size: {:.1} MB", db_size)),
+                            message: Some(format!("Database size: {db_size:.1} MB")),
                         };
 
                         self.update_alert(alert.key.clone(), alert);
                         web_sys::console::log_1(
-                            &format!("Loaded memory.status alert: {:.1} MB", db_size).into(),
+                            &format!("Loaded memory.status alert: {db_size:.1} MB").into(),
                         );
                     }
                 }
             }
             Err(e) => {
-                web_sys::console::warn_1(&format!("Failed to fetch memory stats: {}", e).into());
+                web_sys::console::warn_1(&format!("Failed to fetch memory stats: {e}").into());
             }
         }
 

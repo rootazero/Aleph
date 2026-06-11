@@ -118,7 +118,7 @@ impl FalProviderBuilder {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         // Fal's queue URL doesn't fit the OpenAI-style /v1 auto-complete
         // (paths look like `<base>/<owner>/<model>/...`), so we just trim
@@ -245,7 +245,7 @@ impl FalProvider {
                 None,
             ),
             500..=599 => GenerationError::provider(
-                format!("Fal server error: {}", body),
+                format!("Fal server error: {body}"),
                 Some(status.as_u16()),
                 &self.name,
             ),
@@ -269,19 +269,19 @@ impl FalProvider {
             .json(input)
             .send()
             .await
-            .map_err(|e| GenerationError::network(format!("Fal submit: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Fal submit: {e}")))?;
 
         let status = resp.status();
         let body = resp
             .text()
             .await
-            .map_err(|e| GenerationError::network(format!("Fal submit body: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Fal submit body: {e}")))?;
         if !status.is_success() {
             error!(%status, %body, "fal submit failed");
             return Err(self.map_http_error(status, &body));
         }
         serde_json::from_str(&body).map_err(|e| {
-            GenerationError::serialization(format!("Fal submit parse: {} (body={})", e, body))
+            GenerationError::serialization(format!("Fal submit parse: {e} (body={body})"))
         })
     }
 
@@ -297,17 +297,17 @@ impl FalProvider {
             .header("Authorization", self.auth_header())
             .send()
             .await
-            .map_err(|e| GenerationError::network(format!("Fal poll: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Fal poll: {e}")))?;
         let status = resp.status();
         let body = resp
             .text()
             .await
-            .map_err(|e| GenerationError::network(format!("Fal poll body: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Fal poll body: {e}")))?;
         if !status.is_success() {
             return Err(self.map_http_error(status, &body));
         }
         serde_json::from_str(&body).map_err(|e| {
-            GenerationError::serialization(format!("Fal poll parse: {} (body={})", e, body))
+            GenerationError::serialization(format!("Fal poll parse: {e} (body={body})"))
         })
     }
 
@@ -319,17 +319,17 @@ impl FalProvider {
             .header("Authorization", self.auth_header())
             .send()
             .await
-            .map_err(|e| GenerationError::network(format!("Fal result: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Fal result: {e}")))?;
         let status = resp.status();
         let body = resp
             .text()
             .await
-            .map_err(|e| GenerationError::network(format!("Fal result body: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Fal result body: {e}")))?;
         if !status.is_success() {
             return Err(self.map_http_error(status, &body));
         }
         serde_json::from_str(&body).map_err(|e| {
-            GenerationError::serialization(format!("Fal result parse: {} (body={})", e, body))
+            GenerationError::serialization(format!("Fal result parse: {e} (body={body})"))
         })
     }
 }

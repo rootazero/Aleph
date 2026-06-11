@@ -34,7 +34,7 @@ pub fn MemoryView() -> impl IntoView {
                         error.set(None);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to load memory config: {}", e)));
+                        error.set(Some(format!("Failed to load memory config: {e}")));
                     }
                 }
                 loading.set(false);
@@ -53,7 +53,7 @@ pub fn MemoryView() -> impl IntoView {
                         error.set(None);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to save: {}", e)));
+                        error.set(Some(format!("Failed to save: {e}")));
                     }
                 }
                 saving.set(false);
@@ -828,11 +828,11 @@ fn RetrievalDebugPanel() -> impl IntoView {
                         trace_result.set(Some(resp));
                     }
                     Err(e) => {
-                        trace_error.set(Some(format!("Parse error: {}", e)));
+                        trace_error.set(Some(format!("Parse error: {e}")));
                     }
                 },
                 Err(e) => {
-                    trace_error.set(Some(format!("RPC error: {}", e)));
+                    trace_error.set(Some(format!("RPC error: {e}")));
                 }
             }
             searching.set(false);

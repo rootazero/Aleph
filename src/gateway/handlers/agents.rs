@@ -120,7 +120,7 @@ pub async fn handle_list(request: JsonRpcRequest, manager: Arc<AgentManager>) ->
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to list agents: {}", e),
+            format!("Failed to list agents: {e}"),
         ),
     }
 }
@@ -187,7 +187,7 @@ pub async fn handle_create(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to create agent: {}", e),
+            format!("Failed to create agent: {e}"),
         ),
     }
 }

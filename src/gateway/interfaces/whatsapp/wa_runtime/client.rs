@@ -135,7 +135,7 @@ impl WaRuntime {
         let backend = whatsapp_rust::store::SqliteStore::new(db_path)
             .await
             .map_err(|e| {
-                ChannelError::Internal(format!("Failed to create SQLite backend: {}", e))
+                ChannelError::Internal(format!("Failed to create SQLite backend: {e}"))
             })?;
         Ok(Arc::new(backend) as Arc<dyn whatsapp_rust::store::traits::Backend>)
     }
@@ -176,7 +176,7 @@ impl WaRuntime {
             .conversation_id
             .as_str()
             .parse()
-            .map_err(|e| ChannelError::Internal(format!("Invalid JID: {}", e)))?;
+            .map_err(|e| ChannelError::Internal(format!("Invalid JID: {e}")))?;
 
         let wa_msg = if let Some(reply_to) = msg.reply_to {
             let context_info = whatsapp_rust::waproto::whatsapp::ContextInfo {
@@ -203,7 +203,7 @@ impl WaRuntime {
         let msg_id = client
             .send_message(jid, wa_msg)
             .await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send message: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send message: {e}")))?;
 
         Ok(MessageId::new(msg_id))
     }
@@ -213,7 +213,7 @@ impl WaRuntime {
         let client = self.get_client().await?;
         let jid: whatsapp_rust::Jid = jid
             .parse()
-            .map_err(|e| ChannelError::Internal(format!("Invalid JID: {}", e)))?;
+            .map_err(|e| ChannelError::Internal(format!("Invalid JID: {e}")))?;
 
         let reaction = whatsapp_rust::waproto::whatsapp::message::ReactionMessage {
             key: Some(whatsapp_rust::waproto::whatsapp::MessageKey {
@@ -234,7 +234,7 @@ impl WaRuntime {
         client
             .send_message(jid, wa_msg)
             .await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send reaction: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send reaction: {e}")))?;
 
         Ok(())
     }
@@ -245,14 +245,14 @@ impl WaRuntime {
         let chat = {
             let guard = self.message_jids.lock().await;
             guard.get(msg_id).cloned().ok_or_else(|| {
-                ChannelError::Internal(format!("Unknown message ID for read receipt: {}", msg_id))
+                ChannelError::Internal(format!("Unknown message ID for read receipt: {msg_id}"))
             })?
         };
 
         client
             .mark_as_read(&chat, None, vec![msg_id.to_string()])
             .await
-            .map_err(|e| ChannelError::Internal(format!("Failed to send read receipt: {}", e)))?;
+            .map_err(|e| ChannelError::Internal(format!("Failed to send read receipt: {e}")))?;
 
         Ok(())
     }
@@ -262,10 +262,10 @@ impl WaRuntime {
         let client = self.get_client().await?;
         let jid: whatsapp_rust::Jid = jid
             .parse()
-            .map_err(|e| ChannelError::Internal(format!("Invalid JID: {}", e)))?;
+            .map_err(|e| ChannelError::Internal(format!("Invalid JID: {e}")))?;
 
         client.chatstate().send_composing(&jid).await.map_err(|e| {
-            ChannelError::Internal(format!("Failed to send typing indicator: {}", e))
+            ChannelError::Internal(format!("Failed to send typing indicator: {e}"))
         })?;
 
         Ok(())

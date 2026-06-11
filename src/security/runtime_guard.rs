@@ -288,7 +288,7 @@ impl RuntimeSecurityGuard {
                             &context,
                             AuditEventType::PiiDetected,
                             AuditSeverity::Critical,
-                            format!("PII filter blocked {} detection(s)", blocked),
+                            format!("PII filter blocked {blocked} detection(s)"),
                         );
                     }
                     if warned > 0 {
@@ -296,7 +296,7 @@ impl RuntimeSecurityGuard {
                             &context,
                             AuditEventType::PiiDetected,
                             AuditSeverity::Warn,
-                            format!("PII filter warned {} detection(s)", warned),
+                            format!("PII filter warned {warned} detection(s)"),
                         );
                     }
                 }
@@ -424,10 +424,10 @@ impl RuntimeSecurityGuard {
                 context,
                 AuditEventType::EnvInjectionDetected,
                 AuditSeverity::Critical,
-                format!("inbound secret leak blocked: {}", reason),
+                format!("inbound secret leak blocked: {reason}"),
             );
             return Ok(GuardResult::Blocked {
-                reason: format!("Secret leak detector: {}", reason),
+                reason: format!("Secret leak detector: {reason}"),
                 redacted_text: Some(redacted_content),
             });
         }

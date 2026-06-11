@@ -256,13 +256,13 @@ pub fn generate(
     // Create parent directories if needed
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            ToolError::Execution(format!("Failed to create output directory: {}", e))
+            ToolError::Execution(format!("Failed to create output directory: {e}"))
         })?;
     }
 
     // Write the PDF bytes to disk.
     std::fs::write(output_path, &pdf_bytes)
-        .map_err(|e| ToolError::Execution(format!("Failed to write PDF file: {}", e)))?;
+        .map_err(|e| ToolError::Execution(format!("Failed to write PDF file: {e}")))?;
 
     info!(
         output = %output_path.display(),

@@ -64,7 +64,7 @@ impl AlephTool for HeartbeatListTool {
         let tasks = service.list_tasks().await;
         let count = tasks.len();
         Ok(HeartbeatListOutput {
-            message: format!("{} heartbeat monitoring tasks", count),
+            message: format!("{count} heartbeat monitoring tasks"),
             tasks,
         })
     }
@@ -262,8 +262,7 @@ impl AlephTool for HeartbeatUpdateTool {
         if let Some(interval_ms) = args.interval_ms {
             if interval_ms < 1000 {
                 return Err(crate::error::AlephError::tool(format!(
-                    "Interval too short: interval_ms={} is below the 1000ms minimum.",
-                    interval_ms
+                    "Interval too short: interval_ms={interval_ms} is below the 1000ms minimum."
                 )));
             }
         }
@@ -284,8 +283,7 @@ impl AlephTool for HeartbeatUpdateTool {
                 .await
                 .map_err(|e| {
                     crate::error::AlephError::tool(format!(
-                        "Failed to update heartbeat task: {}",
-                        e
+                        "Failed to update heartbeat task: {e}"
                     ))
                 })?;
         }
@@ -343,7 +341,7 @@ impl AlephTool for HeartbeatDeleteTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let service = self.service.lock().await;
         service.delete_task(&args.id).await.map_err(|e| {
-            crate::error::AlephError::tool(format!("Failed to delete heartbeat task: {}", e))
+            crate::error::AlephError::tool(format!("Failed to delete heartbeat task: {e}"))
         })?;
 
         info!(task_id = %args.id, "Heartbeat task deleted via tool");
@@ -402,7 +400,7 @@ impl AlephTool for HeartbeatToggleTool {
         let service = self.service.lock().await;
         let clock = SystemClock;
         let enabled = service.toggle_task(&args.id, &clock).await.map_err(|e| {
-            crate::error::AlephError::tool(format!("Failed to toggle heartbeat task: {}", e))
+            crate::error::AlephError::tool(format!("Failed to toggle heartbeat task: {e}"))
         })?;
 
         let state_str = if enabled { "enabled" } else { "disabled" };

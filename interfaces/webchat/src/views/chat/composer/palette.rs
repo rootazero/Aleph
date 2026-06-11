@@ -146,7 +146,7 @@ pub(super) fn build_palette_entries(
             } else {
                 format!("/{} ", cmd.key)
             },
-            description: format!("{}{}", desc, indicator),
+            description: format!("{desc}{indicator}"),
             is_namespace: cmd.is_namespace,
             is_back: false,
         });

@@ -330,8 +330,7 @@ impl SqliteMessageStore {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT message_id, agent_id, role FROM message_recipients WHERE message_id IN ({})",
-            placeholders
+            "SELECT message_id, agent_id, role FROM message_recipients WHERE message_id IN ({placeholders})"
         );
 
         let mut stmt = conn.prepare_cached(&sql).map_err(db_err)?;
@@ -381,8 +380,7 @@ impl SqliteMessageStore {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT message_id, artifact_id FROM message_attachments WHERE message_id IN ({})",
-            placeholders
+            "SELECT message_id, artifact_id FROM message_attachments WHERE message_id IN ({placeholders})"
         );
 
         let mut stmt = conn.prepare_cached(&sql).map_err(db_err)?;
@@ -513,8 +511,7 @@ impl MessageStore for SqliteMessageStore {
             let sql = format!(
                 "SELECT id, team_id, from_agent, msg_type, subject, content, \
                  reply_to, thread_id, created_at, expires_at \
-                 FROM team_messages WHERE id IN ({})",
-                placeholders
+                 FROM team_messages WHERE id IN ({placeholders})"
             );
             let params: Vec<&dyn rusqlite::types::ToSql> = ids
                 .iter()

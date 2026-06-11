@@ -123,8 +123,7 @@ async fn ensure_capability_recursive(
             Some(path) => path,
             None => {
                 return Err(AlephError::other(format!(
-                    "Capability {} found but no binary path reported",
-                    capability
+                    "Capability {capability} found but no binary path reported"
                 )));
             }
         };
@@ -182,7 +181,7 @@ async fn ensure_capability_recursive(
     // Run bootstrap (async dispatcher)
     let bootstrap_result = bootstrap::install(capability)
         .await
-        .map_err(|e| AlephError::runtime(capability, format!("Bootstrap failed: {}", e)))?;
+        .map_err(|e| AlephError::runtime(capability, format!("Bootstrap failed: {e}")))?;
 
     let now = now_secs();
 

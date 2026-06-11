@@ -103,8 +103,7 @@ impl SpeechGenerateTool {
         if let Some(speed) = args.speed {
             if !(0.25..=4.0).contains(&speed) {
                 return Err(ToolError::InvalidArgs(format!(
-                    "Speed must be between 0.25 and 4.0, got {}",
-                    speed
+                    "Speed must be between 0.25 and 4.0, got {speed}"
                 )));
             }
         }
@@ -135,14 +134,13 @@ impl SpeechGenerateTool {
 
             if let Some(name) = &args.provider {
                 let provider = reg.get(name).ok_or_else(|| {
-                    ToolError::InvalidArgs(format!("Provider '{}' not found", name))
+                    ToolError::InvalidArgs(format!("Provider '{name}' not found"))
                 })?;
 
                 // Check if provider supports speech generation
                 if !provider.supports(GenerationType::Speech) {
                     return Err(ToolError::InvalidArgs(format!(
-                        "Provider '{}' does not support speech generation",
-                        name
+                        "Provider '{name}' does not support speech generation"
                     )));
                 }
 
@@ -194,7 +192,7 @@ impl SpeechGenerateTool {
                     .content_type
                     .as_deref()
                     .unwrap_or("audio/mpeg");
-                let data_url = format!("data:{};base64,{}", content_type, base64_data);
+                let data_url = format!("data:{content_type};base64,{base64_data}");
                 let size = bytes.len() as u64;
                 (data_url, "data_url".to_string(), Some(size))
             }

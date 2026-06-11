@@ -79,7 +79,7 @@ fn load_browse(
                 loading.set(false);
             }
             Err(e) => {
-                error.set(Some(format!("Failed to load skills: {}", e)));
+                error.set(Some(format!("Failed to load skills: {e}")));
                 loading.set(false);
             }
         }
@@ -110,7 +110,7 @@ fn load_search(
                 loading.set(false);
             }
             Err(e) => {
-                error.set(Some(format!("Search failed: {}", e)));
+                error.set(Some(format!("Search failed: {e}")));
                 loading.set(false);
             }
         }
@@ -343,7 +343,7 @@ fn ClawHubSkillCard(skill: ClawHubSkill, installed_slugs: RwSignal<Vec<String>>)
                     }
                 }
                 Err(e) => {
-                    install_error.set(Some(format!("Install failed: {}", e)));
+                    install_error.set(Some(format!("Install failed: {e}")));
                     installing.set(false);
                 }
             }

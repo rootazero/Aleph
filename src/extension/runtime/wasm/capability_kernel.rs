@@ -30,16 +30,16 @@ pub enum CapabilityError {
 impl std::fmt::Display for CapabilityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotDeclared(msg) => write!(f, "Capability not declared: {}", msg),
-            Self::NotAllowed(msg) => write!(f, "Not allowed: {}", msg),
-            Self::RateLimited(msg) => write!(f, "Rate limited: {}", msg),
-            Self::ResourceExhausted(msg) => write!(f, "Resource exhausted: {}", msg),
-            Self::LeakDetected(msg) => write!(f, "Leak detected: {}", msg),
-            Self::PathTraversal(msg) => write!(f, "Path traversal: {}", msg),
-            Self::SecretNotFound(msg) => write!(f, "Secret not found: {}", msg),
-            Self::ApprovalDenied(msg) => write!(f, "Approval denied: {}", msg),
+            Self::NotDeclared(msg) => write!(f, "Capability not declared: {msg}"),
+            Self::NotAllowed(msg) => write!(f, "Not allowed: {msg}"),
+            Self::RateLimited(msg) => write!(f, "Rate limited: {msg}"),
+            Self::ResourceExhausted(msg) => write!(f, "Resource exhausted: {msg}"),
+            Self::LeakDetected(msg) => write!(f, "Leak detected: {msg}"),
+            Self::PathTraversal(msg) => write!(f, "Path traversal: {msg}"),
+            Self::SecretNotFound(msg) => write!(f, "Secret not found: {msg}"),
+            Self::ApprovalDenied(msg) => write!(f, "Approval denied: {msg}"),
             Self::ApprovalTimeout => write!(f, "Approval timed out"),
-            Self::InternalError(msg) => write!(f, "Internal error: {}", msg),
+            Self::InternalError(msg) => write!(f, "Internal error: {msg}"),
         }
     }
 }
@@ -88,8 +88,7 @@ impl WasmCapabilityKernel {
             || !ws.allowed_prefixes.iter().any(|p| path.starts_with(p))
         {
             return Err(CapabilityError::NotAllowed(format!(
-                "path '{}' not in allowed prefixes",
-                path
+                "path '{path}' not in allowed prefixes"
             )));
         }
         Ok(())
@@ -173,7 +172,7 @@ impl WasmCapabilityKernel {
         ti.aliases
             .get(alias)
             .cloned()
-            .ok_or_else(|| CapabilityError::NotAllowed(format!("unknown tool alias: {}", alias)))
+            .ok_or_else(|| CapabilityError::NotAllowed(format!("unknown tool alias: {alias}")))
     }
 
     pub fn plugin_id(&self) -> &str {

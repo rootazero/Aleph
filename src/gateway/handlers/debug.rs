@@ -62,7 +62,7 @@ pub fn parse_tool_call_params(
         JsonRpcResponse::error(
             request.id.clone(),
             INVALID_PARAMS,
-            format!("Invalid params: {}", e),
+            format!("Invalid params: {e}"),
         )
     })
 }

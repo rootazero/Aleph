@@ -178,11 +178,11 @@ impl AgentInstance {
 
         // Create directories
         std::fs::create_dir_all(&agent_dir).map_err(|e| {
-            AgentInstanceError::InitFailed(format!("Failed to create agent dir: {}", e))
+            AgentInstanceError::InitFailed(format!("Failed to create agent dir: {e}"))
         })?;
 
         std::fs::create_dir_all(&config.workspace).map_err(|e| {
-            AgentInstanceError::InitFailed(format!("Failed to create workspace: {}", e))
+            AgentInstanceError::InitFailed(format!("Failed to create workspace: {e}"))
         })?;
 
         // Set restrictive permissions on Unix
@@ -413,7 +413,7 @@ impl AgentInstance {
         // loop. Skipping them keeps L0 focused on conversational signal.
         if matches!(role, MessageRole::User | MessageRole::Assistant) {
             if let Some(writer) = self.raw_memory_writer.as_ref() {
-                let body = format!("[{}] {}", role_str, content);
+                let body = format!("[{role_str}] {content}");
                 let raw = crate::memory::store::raw_memory::RawMemory::new(
                     body,
                     crate::memory::store::raw_memory::RawMemorySource::Transcript,
@@ -788,8 +788,7 @@ impl AgentRegistry {
             let agents = self.agents.read().await;
             if agents.contains_key(id) {
                 return Err(AgentInstanceError::InitFailed(format!(
-                    "Agent '{}' already exists",
-                    id
+                    "Agent '{id}' already exists"
                 )));
             }
         }
@@ -801,16 +800,14 @@ impl AgentRegistry {
         // Create workspace directory (runtime output, project files)
         std::fs::create_dir_all(&workspace_path).map_err(|e| {
             AgentInstanceError::InitFailed(format!(
-                "Failed to create workspace for '{}': {}",
-                id, e
+                "Failed to create workspace for '{id}': {e}"
             ))
         })?;
 
         // Initialize all identity files (SOUL.md, AGENTS.md, IDENTITY.md, etc.)
         crate::config::agent_resolver::initialize_agent_identity(&agent_dir, id).map_err(|e| {
             AgentInstanceError::InitFailed(format!(
-                "Failed to initialize identity files for '{}': {}",
-                id, e
+                "Failed to initialize identity files for '{id}': {e}"
             ))
         })?;
 
@@ -819,8 +816,7 @@ impl AgentRegistry {
             let soul_path = agent_dir.join("SOUL.md");
             std::fs::write(&soul_path, soul_content).map_err(|e| {
                 AgentInstanceError::InitFailed(format!(
-                    "Failed to write SOUL.md for '{}': {}",
-                    id, e
+                    "Failed to write SOUL.md for '{id}': {e}"
                 ))
             })?;
         }

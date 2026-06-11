@@ -111,7 +111,7 @@ impl EventEmitter for GatewayEventEmitter {
                     delta.clone()
                 } else {
                     let buffered = std::mem::take(&mut *buffer);
-                    format!("{}{}", buffered, delta)
+                    format!("{buffered}{delta}")
                 };
                 drop(buffer);
 

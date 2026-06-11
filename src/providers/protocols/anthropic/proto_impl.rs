@@ -48,7 +48,7 @@ impl AnthropicProtocol {
             .trim_end_matches('/')
             .to_string();
 
-        format!("{}/v1/messages", base_url)
+        format!("{base_url}/v1/messages")
     }
 
     /// Convert UnifiedMessages to Anthropic Messages

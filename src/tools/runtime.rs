@@ -222,7 +222,7 @@ impl LoopToolRegistry {
             name.replace('_', ".")
         } else {
             return ToolResult::Error {
-                error: format!("unknown tool: {}", name),
+                error: format!("unknown tool: {name}"),
                 retryable: false,
             };
         };
@@ -233,7 +233,7 @@ impl LoopToolRegistry {
         }
 
         ToolResult::Error {
-            error: format!("unknown tool: {}", name),
+            error: format!("unknown tool: {name}"),
             retryable: false,
         }
     }

@@ -272,7 +272,7 @@ impl ReadSkillTool {
 
         // Check file size
         let metadata = fs::metadata(&file_path).map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to read file metadata: {}", e))
+            ToolError::ExecutionFailed(format!("Failed to read file metadata: {e}"))
         })?;
 
         if metadata.len() > self.max_file_size {
@@ -287,7 +287,7 @@ impl ReadSkillTool {
 
         // Read file content
         let raw_content = fs::read_to_string(&file_path)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {e}")))?;
 
         // Preprocess Markdown instruction files: expand `${ALEPH_SKILL_DIR}` /
         // `${ALEPH_SESSION_ID}` template variables and, when the skill opts in

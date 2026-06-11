@@ -146,16 +146,16 @@ impl ConflictResolver {
             tool.original_name = Some(original_name.clone());
             tool.was_renamed = true;
             tool.name = new_name.to_string();
-            tool.display_name = format!("{} (renamed)", new_name);
+            tool.display_name = format!("{new_name} (renamed)");
 
             // Update ID to reflect new name
             let new_id = match &tool.source {
-                ToolSource::Native => format!("native:{}", new_name),
-                ToolSource::Builtin => format!("builtin:{}", new_name),
-                ToolSource::Mcp { server } => format!("mcp:{}:{}", server, new_name),
-                ToolSource::Skill { id } => format!("skill:{}", id), // Keep skill ID
-                ToolSource::Custom { rule_index } => format!("custom:{}:{}", rule_index, new_name),
-                ToolSource::Plugin { plugin_id } => format!("plugin:{}:{}", plugin_id, new_name),
+                ToolSource::Native => format!("native:{new_name}"),
+                ToolSource::Builtin => format!("builtin:{new_name}"),
+                ToolSource::Mcp { server } => format!("mcp:{server}:{new_name}"),
+                ToolSource::Skill { id } => format!("skill:{id}"), // Keep skill ID
+                ToolSource::Custom { rule_index } => format!("custom:{rule_index}:{new_name}"),
+                ToolSource::Plugin { plugin_id } => format!("plugin:{plugin_id}:{new_name}"),
             };
 
             debug!(
@@ -222,7 +222,7 @@ impl ConflictResolver {
                         existing.original_name = Some(orig_name.clone());
                         existing.was_renamed = true;
                         existing.name = new_name.clone();
-                        existing.display_name = format!("{} (renamed)", new_name);
+                        existing.display_name = format!("{new_name} (renamed)");
 
                         let new_id = existing.source.format_tool_id(&new_name);
 

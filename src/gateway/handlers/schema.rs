@@ -42,7 +42,7 @@ impl ParamParseError {
     #[must_use]
     pub fn invalid(e: serde_json::Error) -> Self {
         Self {
-            message: format!("Invalid params: {}", e),
+            message: format!("Invalid params: {e}"),
         }
     }
 }
@@ -304,7 +304,7 @@ impl TypedHandlerRegistry {
 
         for handler in &self.handlers {
             let path_name = handler.method.replace('.', "/");
-            let rpc_path = format!("/rpc/{}", path_name);
+            let rpc_path = format!("/rpc/{path_name}");
 
             let params_schema = &handler.params_schema;
             let request_body_schema = params_schema
@@ -432,7 +432,7 @@ impl SchemaValidator {
     ///
     /// Returns `Ok(params)` if valid, or an error with details otherwise.
     pub fn validate<T: DeserializeOwned + JsonSchema>(params: &Value) -> Result<T, String> {
-        serde_json::from_value(params.clone()).map_err(|e| format!("Invalid params: {}", e))
+        serde_json::from_value(params.clone()).map_err(|e| format!("Invalid params: {e}"))
     }
 
     /// Validate that params are present (not null/omitted) for a handler.

@@ -89,7 +89,7 @@ pub(crate) fn resolve_linked_peer_id(
     let scoped = if channel_lower.is_empty() {
         None
     } else {
-        Some(format!("{}:{}", channel_lower, peer_lower))
+        Some(format!("{channel_lower}:{peer_lower}"))
     };
 
     // Sort entries for deterministic iteration. In the unlikely event of

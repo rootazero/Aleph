@@ -121,7 +121,7 @@ impl<'a, R: SecretResolver> EvmSigner<'a, R> {
         let digest = compute_signing_digest(intent);
         let (signature, recovery_id) = signing_key
             .sign_prehash_recoverable(&digest)
-            .map_err(|e| SecretError::EncryptionFailed(format!("ECDSA signing failed: {}", e)))?;
+            .map_err(|e| SecretError::EncryptionFailed(format!("ECDSA signing failed: {e}")))?;
 
         Ok(SignedResult {
             signature: signature.to_bytes().to_vec(),
@@ -135,7 +135,7 @@ fn parse_private_key(hex_key: &str) -> Result<SigningKey, SecretError> {
     let key_str = hex_key.strip_prefix("0x").unwrap_or(hex_key);
     let key_bytes =
         zeroize::Zeroizing::new(hex::decode(key_str).map_err(|e| {
-            SecretError::EncryptionFailed(format!("Invalid hex private key: {}", e))
+            SecretError::EncryptionFailed(format!("Invalid hex private key: {e}"))
         })?);
     // Length must be checked before the GenericArray conversion below:
     // `From<&[u8]> for &GenericArray<u8, U32>` panics on length mismatch,
@@ -147,7 +147,7 @@ fn parse_private_key(hex_key: &str) -> Result<SigningKey, SecretError> {
         )));
     }
     SigningKey::from_bytes((&key_bytes[..]).into())
-        .map_err(|e| SecretError::EncryptionFailed(format!("Invalid secp256k1 private key: {}", e)))
+        .map_err(|e| SecretError::EncryptionFailed(format!("Invalid secp256k1 private key: {e}")))
 }
 
 fn eth_address_from_pubkey(pubkey: &VerifyingKey) -> [u8; 20] {

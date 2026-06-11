@@ -52,10 +52,10 @@ impl MdnsBroadcaster {
     /// ```
     pub fn new(port: u16, instance_name: &str) -> Result<Self, String> {
         let daemon =
-            ServiceDaemon::new().map_err(|e| format!("Failed to create mDNS daemon: {}", e))?;
+            ServiceDaemon::new().map_err(|e| format!("Failed to create mDNS daemon: {e}"))?;
 
         let service_type = "_aleph._tcp.local.";
-        let hostname = format!("{}.local.", instance_name);
+        let hostname = format!("{instance_name}.local.");
 
         let service_info = ServiceInfo::new(
             service_type,
@@ -65,11 +65,11 @@ impl MdnsBroadcaster {
             port,
             None, // No TXT records for now
         )
-        .map_err(|e| format!("Failed to create service info: {}", e))?;
+        .map_err(|e| format!("Failed to create service info: {e}"))?;
 
         daemon
             .register(service_info)
-            .map_err(|e| format!("Failed to register service: {}", e))?;
+            .map_err(|e| format!("Failed to register service: {e}"))?;
 
         info!(
             "mDNS service registered: {} on port {} ({})",

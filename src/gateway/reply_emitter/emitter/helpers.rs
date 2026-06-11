@@ -255,7 +255,7 @@ impl ReplyEmitter {
 
         let (embedded_reasoning, answer) = super::super::sanitize::split_reasoning(content);
         let final_reasoning = match (reasoning, embedded_reasoning) {
-            (Some(r), Some(e)) if !r.is_empty() && !e.is_empty() => Some(format!("{}\n\n{}", r, e)),
+            (Some(r), Some(e)) if !r.is_empty() && !e.is_empty() => Some(format!("{r}\n\n{e}")),
             (Some(r), _) if !r.is_empty() => Some(r.to_string()),
             (None, Some(e)) => Some(e),
             _ => None,
@@ -350,7 +350,7 @@ impl ReplyEmitter {
     }
 
     pub(crate) async fn send_error(&self, error: &str) {
-        let error_message = format!("Error: {}", error);
+        let error_message = format!("Error: {error}");
         self.send_to_channel(&error_message).await;
     }
 

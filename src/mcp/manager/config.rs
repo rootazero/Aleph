@@ -120,7 +120,7 @@ impl McpPersistentConfig {
 
         // Serialize to pretty JSON
         let json = serde_json::to_string_pretty(self)
-            .map_err(|e| AlephError::IoError(format!("Failed to serialize MCP config: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize MCP config: {e}")))?;
 
         // Write atomically by writing to temp file and renaming
         let temp_path = path.with_extension("json.tmp");

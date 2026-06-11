@@ -38,7 +38,7 @@ impl PineconeRerankProvider {
         if base.ends_with("/rerank") {
             return base.to_string();
         }
-        format!("{}/rerank", base)
+        format!("{base}/rerank")
     }
 }
 

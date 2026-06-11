@@ -50,7 +50,7 @@ impl PromptLayer for ToolsLayer {
                     if let Some(ref schema) = tool.parameters_schema {
                         let schema_str = serde_json::to_string(schema).unwrap_or_default();
                         if !schema_str.is_empty() {
-                            output.push_str(&format!("Parameters: {}\n", schema_str));
+                            output.push_str(&format!("Parameters: {schema_str}\n"));
                         }
                     }
                     output.push('\n');
@@ -107,7 +107,7 @@ impl PromptLayer for HydratedToolsLayer {
                 output.push_str(&format!("#### {}\n", tool.name));
                 output.push_str(&format!("{}\n", tool.description));
                 if let Some(schema) = tool.schema_json() {
-                    output.push_str(&format!("Parameters: {}\n", schema));
+                    output.push_str(&format!("Parameters: {schema}\n"));
                 }
                 output.push('\n');
             }

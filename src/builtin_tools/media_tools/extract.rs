@@ -98,8 +98,7 @@ Example:
             Ok(mt) => mt,
             Err(e) => {
                 return Ok(DocumentExtractOutput::err(format!(
-                    "Format detection failed: {}",
-                    e
+                    "Format detection failed: {e}"
                 )))
             }
         };
@@ -128,8 +127,7 @@ Example:
                 }
             }
             Err(e) => Ok(DocumentExtractOutput::err(format!(
-                "Document extraction failed: {}",
-                e
+                "Document extraction failed: {e}"
             ))),
         }
     }

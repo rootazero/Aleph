@@ -111,8 +111,7 @@ Examples:
                     Ok(mt) => mt,
                     Err(e) => {
                         return Ok(MediaUnderstandOutput::err(format!(
-                            "Format detection failed: {}",
-                            e
+                            "Format detection failed: {e}"
                         )))
                     }
                 };
@@ -123,8 +122,7 @@ Examples:
                 let ssrf_policy = SsrfPolicy::default();
                 if let Err(e) = validate_url(url, &ssrf_policy) {
                     return Ok(MediaUnderstandOutput::err(format!(
-                        "SSRF blocked for URL '{}': {}",
-                        url, e
+                        "SSRF blocked for URL '{url}': {e}"
                     )));
                 }
 
@@ -182,8 +180,7 @@ Examples:
                 Ok(MediaUnderstandOutput::ok(&category, data))
             }
             Err(e) => Ok(MediaUnderstandOutput::err(format!(
-                "Media processing failed: {}",
-                e
+                "Media processing failed: {e}"
             ))),
         }
     }

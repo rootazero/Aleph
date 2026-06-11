@@ -23,6 +23,6 @@ impl LogsApi {
             params["level"] = serde_json::Value::String(lvl.to_string());
         }
         let result = state.rpc_call("daemon.logs", params).await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse logs: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse logs: {e}"))
     }
 }

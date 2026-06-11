@@ -31,9 +31,9 @@ impl std::fmt::Display for LockError {
         match self {
             LockError::ReadLockFailed => write!(f, "Failed to acquire read lock"),
             LockError::WriteLockFailed { hint } => {
-                write!(f, "Failed to acquire write lock: {}", hint)
+                write!(f, "Failed to acquire write lock: {hint}")
             }
-            LockError::IoError(e) => write!(f, "IO error: {}", e),
+            LockError::IoError(e) => write!(f, "IO error: {e}"),
         }
     }
 }
@@ -152,7 +152,7 @@ impl MemoryLock {
         let memory_dir = crate::utils::paths::get_memory_db_path().map_err(|e| {
             LockError::IoError(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("Could not determine memory directory: {}", e),
+                format!("Could not determine memory directory: {e}"),
             ))
         })?;
 

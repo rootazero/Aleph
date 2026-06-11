@@ -119,8 +119,7 @@ impl CodeExecConfigToml {
         for pattern in &self.blocked_commands {
             if regex::Regex::new(pattern).is_err() {
                 return Err(format!(
-                    "agent.code_exec.blocked_commands contains invalid regex: '{}'",
-                    pattern
+                    "agent.code_exec.blocked_commands contains invalid regex: '{pattern}'"
                 ));
             }
         }

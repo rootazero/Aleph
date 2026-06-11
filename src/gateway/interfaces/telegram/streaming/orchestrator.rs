@@ -119,7 +119,7 @@ impl StreamOrchestrator {
                 }
                 StreamEvent::RunError { error, .. } => {
                     tracing::warn!("Run error: {}", error);
-                    let error_msg = format!("Error: {}", error);
+                    let error_msg = format!("Error: {error}");
                     let _ = answer_lane.write_chunk(&error_msg).await;
                     let _ = answer_lane.finalize(&error_msg).await;
                     break;

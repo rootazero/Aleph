@@ -20,15 +20,15 @@ impl StateDatabase {
         let mut stmt = conn
             .prepare("SELECT user_id FROM paired_users WHERE channel_id = ?1")
             .map_err(|e| {
-                AlephError::config(format!("Failed to prepare load_paired_users: {}", e))
+                AlephError::config(format!("Failed to prepare load_paired_users: {e}"))
             })?;
         let rows = stmt
             .query_map(params![channel_id], |row| row.get(0))
-            .map_err(|e| AlephError::config(format!("Failed to load paired users: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to load paired users: {e}")))?;
         let mut user_ids = Vec::new();
         for row in rows {
             user_ids.push(row.map_err(|e| {
-                AlephError::config(format!("Failed to read paired user row: {}", e))
+                AlephError::config(format!("Failed to read paired user row: {e}"))
             })?);
         }
         Ok(user_ids)
@@ -43,7 +43,7 @@ impl StateDatabase {
             "INSERT OR IGNORE INTO paired_users (channel_id, user_id, paired_at) VALUES (?1, ?2, datetime('now'))",
             params![channel_id, user_id],
         )
-        .map_err(|e| AlephError::config(format!("Failed to add paired user: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to add paired user: {e}")))?;
         Ok(())
     }
 
@@ -54,7 +54,7 @@ impl StateDatabase {
             "DELETE FROM paired_users WHERE channel_id = ?1 AND user_id = ?2",
             params![channel_id, user_id],
         )
-        .map_err(|e| AlephError::config(format!("Failed to remove paired user: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to remove paired user: {e}")))?;
         Ok(())
     }
 }

@@ -372,8 +372,8 @@ pub fn substitute_variables(template: &str, context: &HookContext, plugin_root: 
 
     // Custom environment variables
     for (key, value) in &context.env {
-        result = result.replace(&format!("${}", key), value);
-        result = result.replace(&format!("${{{}}}", key), value);
+        result = result.replace(&format!("${key}"), value);
+        result = result.replace(&format!("${{{key}}}"), value);
     }
 
     result

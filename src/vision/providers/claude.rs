@@ -199,21 +199,20 @@ impl ClaudeVisionProvider {
             .json(&request)
             .send()
             .await
-            .map_err(|e| VisionError::ProviderError(format!("request failed: {}", e)))?;
+            .map_err(|e| VisionError::ProviderError(format!("request failed: {e}")))?;
 
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(VisionError::ProviderError(format!(
-                "API {}: {}",
-                status, body
+                "API {status}: {body}"
             )));
         }
 
         let response = resp
             .json::<MessagesResponse>()
             .await
-            .map_err(|e| VisionError::ProviderError(format!("parse failed: {}", e)))?;
+            .map_err(|e| VisionError::ProviderError(format!("parse failed: {e}")))?;
 
         let text = response
             .content

@@ -175,7 +175,7 @@ impl TeamCreateTool {
             }
 
             let instance = self.registry.get(agent_id).await.ok_or_else(|| {
-                AlephError::other(format!("Agent '{}' not found in registry", agent_id))
+                AlephError::other(format!("Agent '{agent_id}' not found in registry"))
             })?;
 
             if !spec.role.is_empty() {
@@ -208,7 +208,7 @@ impl TeamCreateTool {
     /// Non-fatal: logs a warning on I/O failure.
     async fn append_role_prompt_to_soul(agent_dir: &std::path::Path, template: &str) {
         let soul_path = agent_dir.join("SOUL.md");
-        let section = format!("\n\n---\n\n## Team Role\n\n{}", template);
+        let section = format!("\n\n---\n\n## Team Role\n\n{template}");
 
         let result = if soul_path.exists() {
             let existing = tokio::fs::read_to_string(&soul_path)
@@ -218,7 +218,7 @@ impl TeamCreateTool {
             if existing.contains("## Team Role") {
                 return;
             }
-            tokio::fs::write(&soul_path, format!("{}{}", existing, section)).await
+            tokio::fs::write(&soul_path, format!("{existing}{section}")).await
         } else {
             tokio::fs::write(&soul_path, section.trim_start()).await
         };
@@ -300,10 +300,10 @@ impl TeamCreateTool {
 
         let combined_prompt = match (&spec.profile, role_template) {
             (Some(profile), Some(tpl)) => {
-                Some(format!("{}\n\n---\n\n## Team Role\n\n{}", profile, tpl))
+                Some(format!("{profile}\n\n---\n\n## Team Role\n\n{tpl}"))
             }
             (Some(profile), None) => Some(profile.clone()),
-            (None, Some(tpl)) => Some(format!("## Team Role\n\n{}", tpl)),
+            (None, Some(tpl)) => Some(format!("## Team Role\n\n{tpl}")),
             (None, None) => None,
         };
 

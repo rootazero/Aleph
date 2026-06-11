@@ -92,7 +92,7 @@ impl AlephTool for SelfManageTool {
                         }
                     }
                     Err(e) => {
-                        let msg = format!("Failed to read self-management skill: {}", e);
+                        let msg = format!("Failed to read self-management skill: {e}");
                         notify_tool_result(Self::NAME, &msg, false);
                         return Ok(SelfManageOutput {
                             success: false,

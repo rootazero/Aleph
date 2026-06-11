@@ -91,7 +91,7 @@ pub async fn handle_list_db(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to list sessions: {}", e),
+            format!("Failed to list sessions: {e}"),
         ),
     }
 }
@@ -158,7 +158,7 @@ pub async fn handle_history_db(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to get history: {}", e),
+            format!("Failed to get history: {e}"),
         ),
     }
 }
@@ -215,7 +215,7 @@ pub async fn handle_usage_db(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to query sessions: {}", e),
+            format!("Failed to query sessions: {e}"),
         ),
     }
 }
@@ -322,7 +322,7 @@ pub async fn handle_preview_db(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to get session preview: {}", e),
+            format!("Failed to get session preview: {e}"),
         ),
     }
 }

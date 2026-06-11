@@ -8,7 +8,7 @@ const SYNC_FILE_SUFFIX: &str = ".sync.json";
 
 fn sync_path(hermes_home: &str, account_id: &str) -> std::path::PathBuf {
     let base = Path::new(hermes_home).join("wechat").join("accounts");
-    base.join(format!("{}{}", account_id, SYNC_FILE_SUFFIX))
+    base.join(format!("{account_id}{SYNC_FILE_SUFFIX}"))
 }
 
 /// Load sync buffer for an account.

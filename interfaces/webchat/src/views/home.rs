@@ -66,28 +66,28 @@ fn summarize_event(topic: &str, data: &serde_json::Value) -> String {
 
     match topic {
         "session.lifecycle.changed" | "session.updated" => pick(&["session_key", "session_id"])
-            .map(|s| format!("session {}", s))
+            .map(|s| format!("session {s}"))
             .unwrap_or_else(|| topic.to_string()),
         "channel.message" => pick(&["channel", "from", "user"])
-            .map(|s| format!("message from {}", s))
+            .map(|s| format!("message from {s}"))
             .unwrap_or_else(|| "channel message".to_string()),
         "channel.status" => pick(&["channel", "status"])
-            .map(|s| format!("channel {}", s))
+            .map(|s| format!("channel {s}"))
             .unwrap_or_else(|| "channel status".to_string()),
         "config.changed" => pick(&["section"])
-            .map(|s| format!("config: {}", s))
+            .map(|s| format!("config: {s}"))
             .unwrap_or_else(|| "config changed".to_string()),
         "agent.run.complete" => pick(&["run_id", "session_key"])
-            .map(|s| format!("run {} complete", s))
+            .map(|s| format!("run {s} complete"))
             .unwrap_or_else(|| "run complete".to_string()),
         "agent.run.error" => pick(&["error", "message"])
-            .map(|s| format!("run error: {}", s))
+            .map(|s| format!("run error: {s}"))
             .unwrap_or_else(|| "run error".to_string()),
         "approval.requested" => pick(&["tool", "scope"])
-            .map(|s| format!("approval requested: {}", s))
+            .map(|s| format!("approval requested: {s}"))
             .unwrap_or_else(|| "approval requested".to_string()),
         "approval.resolved" => pick(&["decision", "tool"])
-            .map(|s| format!("approval resolved: {}", s))
+            .map(|s| format!("approval resolved: {s}"))
             .unwrap_or_else(|| "approval resolved".to_string()),
         "pairing.requested" => "device pairing requested".to_string(),
         "pairing.completed" => "device pairing completed".to_string(),
@@ -115,7 +115,7 @@ fn format_clock(ts_ms: f64) -> String {
     let hh = date.get_hours();
     let mm = date.get_minutes();
     let ss = date.get_seconds();
-    format!("{:02}:{:02}:{:02}", hh, mm, ss)
+    format!("{hh:02}:{mm:02}:{ss:02}")
 }
 
 fn format_uptime(secs: u64) -> String {
@@ -123,11 +123,11 @@ fn format_uptime(secs: u64) -> String {
     let hours = (secs % 86400) / 3600;
     let mins = (secs % 3600) / 60;
     if days > 0 {
-        format!("{}d {}h {}m", days, hours, mins)
+        format!("{days}d {hours}h {mins}m")
     } else if hours > 0 {
-        format!("{}h {}m", hours, mins)
+        format!("{hours}h {mins}m")
     } else {
-        format!("{}m", mins)
+        format!("{mins}m")
     }
 }
 
@@ -197,7 +197,7 @@ pub fn Home() -> impl IntoView {
             leptos::task::spawn_local(async move {
                 if let Err(e) = state_for_topic.subscribe_topic("**").await {
                     web_sys::console::warn_1(
-                        &format!("Activity feed: subscribe failed: {}", e).into(),
+                        &format!("Activity feed: subscribe failed: {e}").into(),
                     );
                 }
             });
@@ -284,7 +284,7 @@ pub fn Home() -> impl IntoView {
                     web_sys::console::log_1(&"Successfully connected to gateway".into());
                 }
                 Err(e) => {
-                    web_sys::console::error_1(&format!("Failed to connect: {}", e).into());
+                    web_sys::console::error_1(&format!("Failed to connect: {e}").into());
                 }
             }
             is_connecting.set(false);
@@ -299,7 +299,7 @@ pub fn Home() -> impl IntoView {
                     web_sys::console::log_1(&"Successfully disconnected from gateway".into());
                 }
                 Err(e) => {
-                    web_sys::console::error_1(&format!("Failed to disconnect: {}", e).into());
+                    web_sys::console::error_1(&format!("Failed to disconnect: {e}").into());
                 }
             }
         });
@@ -313,7 +313,7 @@ pub fn Home() -> impl IntoView {
                     web_sys::console::log_1(&"Successfully reconnected to gateway".into());
                 }
                 Err(e) => {
-                    web_sys::console::error_1(&format!("Failed to reconnect: {}", e).into());
+                    web_sys::console::error_1(&format!("Failed to reconnect: {e}").into());
                 }
             }
         });
@@ -336,7 +336,7 @@ pub fn Home() -> impl IntoView {
                     });
                 }
                 Err(e) => {
-                    web_sys::console::error_1(&format!("Failed to restart gateway: {}", e).into());
+                    web_sys::console::error_1(&format!("Failed to restart gateway: {e}").into());
                 }
             }
         });
@@ -351,7 +351,7 @@ pub fn Home() -> impl IntoView {
                     web_sys::console::log_1(&"Chat buffer cleared successfully".into());
                 }
                 Err(e) => {
-                    web_sys::console::error_1(&format!("Failed to clear buffer: {}", e).into());
+                    web_sys::console::error_1(&format!("Failed to clear buffer: {e}").into());
                 }
             }
         });
@@ -375,7 +375,7 @@ pub fn Home() -> impl IntoView {
                         Ok(s) => s,
                         Err(e) => {
                             web_sys::console::error_1(
-                                &format!("Failed to serialize memory: {}", e).into(),
+                                &format!("Failed to serialize memory: {e}").into(),
                             );
                             return;
                         }
@@ -411,7 +411,7 @@ pub fn Home() -> impl IntoView {
                         .unwrap_or_default()
                         .replace(":", "-");
                     link.set_href(&url);
-                    link.set_download(&format!("aleph-memory-export-{}.json", timestamp));
+                    link.set_download(&format!("aleph-memory-export-{timestamp}.json"));
                     let _ = document.body().map(|body| body.append_child(&link));
                     link.click();
                     let _ = document.body().map(|body| body.remove_child(&link));
@@ -420,7 +420,7 @@ pub fn Home() -> impl IntoView {
                     web_sys::console::log_1(&"Memory exported successfully".into());
                 }
                 Err(e) => {
-                    web_sys::console::error_1(&format!("Failed to export memory: {}", e).into());
+                    web_sys::console::error_1(&format!("Failed to export memory: {e}").into());
                 }
             }
         });
@@ -545,7 +545,7 @@ pub fn Home() -> impl IntoView {
                 </StatCard>
                 <StatCard label=Signal::derive(move || t_string!(i18n, dashboard.stats.gateway_latency).to_string()) value=Signal::derive(move || {
                     gateway_latency_ms.get()
-                        .map(|ms| format!("{} ms", ms))
+                        .map(|ms| format!("{ms} ms"))
                         .unwrap_or_else(|| "\u{2014}".to_string())
                 }) icon_color="text-warning" icon_bg="bg-warning-subtle">
                     <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />

@@ -80,11 +80,11 @@ pub fn ProviderRowCard(
             class=move || {
                 let base = "text-left p-3 rounded-lg border transition-all";
                 if is_selected() {
-                    format!("{} bg-primary-subtle border-primary", base)
+                    format!("{base} bg-primary-subtle border-primary")
                 } else if is_configured() {
-                    format!("{} bg-surface-raised border-border hover:border-primary/40", base)
+                    format!("{base} bg-surface-raised border-border hover:border-primary/40")
                 } else {
-                    format!("{} bg-surface-sunken border-border hover:border-border-strong", base)
+                    format!("{base} bg-surface-sunken border-border hover:border-border-strong")
                 }
             }
         >

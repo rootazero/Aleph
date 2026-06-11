@@ -351,16 +351,14 @@ impl GenerationConfig {
                     Ok(())
                 } else {
                     Err(format!(
-                        "generation.{} references disabled provider '{}'",
-                        field, provider
+                        "generation.{field} references disabled provider '{provider}'"
                     ))
                 };
             }
         }
 
         Err(format!(
-            "generation.{} references unknown provider '{}'",
-            field, provider
+            "generation.{field} references unknown provider '{provider}'"
         ))
     }
 

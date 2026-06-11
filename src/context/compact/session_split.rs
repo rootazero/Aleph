@@ -146,7 +146,7 @@ pub async fn perform_session_split(
 fn build_summary_event(summary: String) -> SessionEvent {
     SessionEvent::SystemMessage {
         turn_id: uuid::Uuid::new_v4(),
-        content: format!("[Context Summary]\n{}", summary),
+        content: format!("[Context Summary]\n{summary}"),
         at: crate::session::events::now_ms(),
     }
 }

@@ -25,7 +25,7 @@ pub struct Candidate {
 impl std::fmt::Display for ChannelResolutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotFound(input) => write!(f, "No channel found matching '{}'", input),
+            Self::NotFound(input) => write!(f, "No channel found matching '{input}'"),
             Self::Ambiguous(candidates) => {
                 write!(f, "Multiple channels matched: ")?;
                 for (i, c) in candidates.iter().enumerate() {
@@ -36,7 +36,7 @@ impl std::fmt::Display for ChannelResolutionError {
                 }
                 Ok(())
             }
-            Self::NoPermission(ch) => write!(f, "No permission to access channel: {}", ch),
+            Self::NoPermission(ch) => write!(f, "No permission to access channel: {ch}"),
         }
     }
 }

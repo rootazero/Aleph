@@ -186,9 +186,9 @@ impl std::fmt::Display for SoulLoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotFound(p) => write!(f, "Soul file not found: {}", p.display()),
-            Self::Io(e) => write!(f, "IO error: {}", e),
-            Self::Parse(e) => write!(f, "Parse error: {}", e),
-            Self::UnsupportedFormat(ext) => write!(f, "Unsupported format: {}", ext),
+            Self::Io(e) => write!(f, "IO error: {e}"),
+            Self::Parse(e) => write!(f, "Parse error: {e}"),
+            Self::UnsupportedFormat(ext) => write!(f, "Unsupported format: {ext}"),
         }
     }
 }
@@ -245,7 +245,7 @@ impl SoulManifest {
         // Start with frontmatter values
         let mut manifest: SoulManifest = if !frontmatter.is_empty() {
             serde_yaml::from_str(&frontmatter)
-                .map_err(|e| SoulLoadError::Parse(format!("YAML frontmatter error: {}", e)))?
+                .map_err(|e| SoulLoadError::Parse(format!("YAML frontmatter error: {e}")))?
         } else {
             SoulManifest::default()
         };
@@ -405,19 +405,19 @@ impl SoulManifest {
 
         let content = match ext {
             "json" => serde_json::to_string_pretty(self)
-                .map_err(|e| SoulLoadError::Parse(format!("JSON serialize error: {}", e)))?,
+                .map_err(|e| SoulLoadError::Parse(format!("JSON serialize error: {e}")))?,
             "toml" => toml::to_string_pretty(self)
-                .map_err(|e| SoulLoadError::Parse(format!("TOML serialize error: {}", e)))?,
+                .map_err(|e| SoulLoadError::Parse(format!("TOML serialize error: {e}")))?,
             "yaml" | "yml" => {
                 // Pure YAML format
                 serde_yaml::to_string(self)
-                    .map_err(|e| SoulLoadError::Parse(format!("YAML serialize error: {}", e)))?
+                    .map_err(|e| SoulLoadError::Parse(format!("YAML serialize error: {e}")))?
             }
             _ => {
                 // Default: YAML frontmatter format (for .md and unknown extensions)
                 let yaml = serde_yaml::to_string(self)
-                    .map_err(|e| SoulLoadError::Parse(format!("YAML serialize error: {}", e)))?;
-                format!("---\n{}---\n", yaml)
+                    .map_err(|e| SoulLoadError::Parse(format!("YAML serialize error: {e}")))?;
+                format!("---\n{yaml}---\n")
             }
         };
 

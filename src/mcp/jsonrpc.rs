@@ -44,7 +44,7 @@ impl JsonRpcRequest {
     /// Serialize to JSON string with newline delimiter
     pub fn to_json_line(&self) -> Result<String, serde_json::Error> {
         let json = serde_json::to_string(self)?;
-        Ok(format!("{}\n", json))
+        Ok(format!("{json}\n"))
     }
 }
 
@@ -85,7 +85,7 @@ impl JsonRpcNotification {
     /// Serialize to JSON string with newline delimiter
     pub fn to_json_line(&self) -> Result<String, serde_json::Error> {
         let json = serde_json::to_string(self)?;
-        Ok(format!("{}\n", json))
+        Ok(format!("{json}\n"))
     }
 }
 

@@ -50,7 +50,7 @@ fn apply_embedding_preset_defaults(config: &mut EmbeddingProviderConfig) {
 
 /// Vault key prefix for embedding provider API keys
 fn vault_key(provider_id: &str) -> String {
-    format!("embed:{}", provider_id)
+    format!("embed:{provider_id}")
 }
 
 /// Resolve API key from vault for an embedding provider
@@ -172,7 +172,7 @@ pub async fn handle_add(
                 return JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to store API key: {}", e),
+                    format!("Failed to store API key: {e}"),
                 );
             }
         }
@@ -212,7 +212,7 @@ pub async fn handle_add(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
 
@@ -258,7 +258,7 @@ pub async fn handle_update(
                 return JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to store API key: {}", e),
+                    format!("Failed to store API key: {e}"),
                 );
             }
         }
@@ -298,7 +298,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -373,7 +373,7 @@ pub async fn handle_remove(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -446,7 +446,7 @@ pub async fn handle_set_active(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -503,7 +503,7 @@ pub async fn handle_test(
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Embedding provider '{}' not found", id),
+                    format!("Embedding provider '{id}' not found"),
                 )
             }
         }

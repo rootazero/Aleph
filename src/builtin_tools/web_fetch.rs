@@ -335,7 +335,7 @@ impl WebFetchTool {
 
         // Notify tool start
         let url_display = crate::utils::text_format::truncate_text(&args.url, 50);
-        notify_tool_start(Self::NAME, &format!("获取网页: {}", url_display));
+        notify_tool_start(Self::NAME, &format!("获取网页: {url_display}"));
 
         // Cache lookup BEFORE notify_tool_start would otherwise be cleaner
         // semantically, but we want the "fetching ..." progress notice to
@@ -372,7 +372,7 @@ impl WebFetchTool {
         let fetch_response = safe_fetch(&args.url, ssrf_policy, fetch_request)
             .await
             .map_err(|e| {
-                let error_msg = format!("Fetch blocked or failed: {}", e);
+                let error_msg = format!("Fetch blocked or failed: {e}");
                 notify_tool_result(Self::NAME, &error_msg, false);
                 ToolError::Network(error_msg)
             })?;
@@ -519,7 +519,7 @@ impl WebFetchTool {
         } else {
             // Truncate at character boundary
             let truncated: String = content.chars().take(self.max_content_length).collect();
-            format!("{}...", truncated)
+            format!("{truncated}...")
         }
     }
 

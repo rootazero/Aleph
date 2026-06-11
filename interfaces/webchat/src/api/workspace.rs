@@ -34,7 +34,7 @@ impl WorkspaceApi {
             .ok_or_else(|| "Invalid response: missing bindings".to_string())
             .and_then(|b| {
                 serde_json::from_value(b.clone())
-                    .map_err(|e| format!("Failed to parse bindings: {}", e))
+                    .map_err(|e| format!("Failed to parse bindings: {e}"))
             })
     }
 }

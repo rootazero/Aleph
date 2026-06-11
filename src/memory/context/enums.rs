@@ -172,7 +172,7 @@ impl std::str::FromStr for NoteType {
             "subagent_transcript" => Ok(NoteType::SubagentTranscript),
             "transcript" => Ok(NoteType::Transcript),
             "other" => Ok(NoteType::Other),
-            _ => Err(format!("Unknown fact type: {}", s)),
+            _ => Err(format!("Unknown fact type: {s}")),
         }
     }
 }
@@ -244,7 +244,7 @@ impl std::str::FromStr for FactSource {
             "manual" => Ok(Self::Manual),
             "session_compressed" => Ok(Self::SessionCompressed),
             "synthesis" => Ok(Self::Synthesis),
-            _ => Err(format!("Unknown fact source: {}", s)),
+            _ => Err(format!("Unknown fact source: {s}")),
         }
     }
 }
@@ -296,7 +296,7 @@ impl std::str::FromStr for MemoryLayer {
             "l0_abstract" => Ok(Self::L0Abstract),
             "l1_overview" => Ok(Self::L1Overview),
             "l2_detail" => Ok(Self::L2Detail),
-            _ => Err(format!("Unknown memory layer: {}", s)),
+            _ => Err(format!("Unknown memory layer: {s}")),
         }
     }
 }
@@ -399,7 +399,7 @@ impl std::str::FromStr for MemoryCategory {
             "events" => Ok(Self::Events),
             "cases" => Ok(Self::Cases),
             "patterns" => Ok(Self::Patterns),
-            _ => Err(format!("Unknown memory category: {}", s)),
+            _ => Err(format!("Unknown memory category: {s}")),
         }
     }
 }
@@ -456,7 +456,7 @@ impl std::str::FromStr for FactSpecificity {
             "principle" => Ok(Self::Principle),
             "pattern" => Ok(Self::Pattern),
             "instance" => Ok(Self::Instance),
-            _ => Err(format!("Unknown fact specificity: {}", s)),
+            _ => Err(format!("Unknown fact specificity: {s}")),
         }
     }
 }
@@ -509,7 +509,7 @@ impl std::str::FromStr for TemporalScope {
             "permanent" => Ok(Self::Permanent),
             "contextual" => Ok(Self::Contextual),
             "ephemeral" => Ok(Self::Ephemeral),
-            _ => Err(format!("Unknown temporal scope: {}", s)),
+            _ => Err(format!("Unknown temporal scope: {s}")),
         }
     }
 }

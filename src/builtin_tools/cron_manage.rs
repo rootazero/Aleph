@@ -301,13 +301,13 @@ impl AlephTool for CronManageTool {
                 // Store conversation_id for delivery routing (e.g. Telegram chat_id)
                 job.source_conversation_id = args.__conversation_id;
                 let id = service.add_job(job).await.map_err(|e| {
-                    crate::error::AlephError::tool(format!("Failed to create cron job: {}", e))
+                    crate::error::AlephError::tool(format!("Failed to create cron job: {e}"))
                 })?;
 
                 info!(job_id = %id, name = %name, "Cron job created via tool");
 
                 Ok(CronManageOutput {
-                    message: format!("定时任务 '{}' 已创建 (ID: {})", name, id),
+                    message: format!("定时任务 '{name}' 已创建 (ID: {id})"),
                     job_id: Some(id),
                     jobs: None,
                     job: None,
@@ -316,12 +316,12 @@ impl AlephTool for CronManageTool {
 
             CronAction::List => {
                 let jobs = service.list_jobs().await.map_err(|e| {
-                    crate::error::AlephError::tool(format!("Failed to list cron jobs: {}", e))
+                    crate::error::AlephError::tool(format!("Failed to list cron jobs: {e}"))
                 })?;
 
                 let count = jobs.len();
                 Ok(CronManageOutput {
-                    message: format!("共 {} 个定时任务", count),
+                    message: format!("共 {count} 个定时任务"),
                     job_id: None,
                     jobs: Some(jobs),
                     job: None,
@@ -333,7 +333,7 @@ impl AlephTool for CronManageTool {
                     crate::error::AlephError::tool("cron_manage get: 'job_id' is required")
                 })?;
                 let job = service.get_job(&id).await.map_err(|e| {
-                    crate::error::AlephError::tool(format!("Failed to get cron job: {}", e))
+                    crate::error::AlephError::tool(format!("Failed to get cron job: {e}"))
                 })?;
 
                 Ok(CronManageOutput {
@@ -349,13 +349,13 @@ impl AlephTool for CronManageTool {
                     crate::error::AlephError::tool("cron_manage delete: 'job_id' is required")
                 })?;
                 service.delete_job(&id).await.map_err(|e| {
-                    crate::error::AlephError::tool(format!("Failed to delete cron job: {}", e))
+                    crate::error::AlephError::tool(format!("Failed to delete cron job: {e}"))
                 })?;
 
                 info!(job_id = %id, "Cron job deleted via tool");
 
                 Ok(CronManageOutput {
-                    message: format!("定时任务 {} 已删除", id),
+                    message: format!("定时任务 {id} 已删除"),
                     job_id: Some(id),
                     jobs: None,
                     job: None,
@@ -367,11 +367,11 @@ impl AlephTool for CronManageTool {
                     crate::error::AlephError::tool("cron_manage enable: 'job_id' is required")
                 })?;
                 service.enable_job(&id).await.map_err(|e| {
-                    crate::error::AlephError::tool(format!("Failed to enable cron job: {}", e))
+                    crate::error::AlephError::tool(format!("Failed to enable cron job: {e}"))
                 })?;
 
                 Ok(CronManageOutput {
-                    message: format!("定时任务 {} 已启用", id),
+                    message: format!("定时任务 {id} 已启用"),
                     job_id: Some(id),
                     jobs: None,
                     job: None,
@@ -383,11 +383,11 @@ impl AlephTool for CronManageTool {
                     crate::error::AlephError::tool("cron_manage disable: 'job_id' is required")
                 })?;
                 service.disable_job(&id).await.map_err(|e| {
-                    crate::error::AlephError::tool(format!("Failed to disable cron job: {}", e))
+                    crate::error::AlephError::tool(format!("Failed to disable cron job: {e}"))
                 })?;
 
                 Ok(CronManageOutput {
-                    message: format!("定时任务 {} 已禁用", id),
+                    message: format!("定时任务 {id} 已禁用"),
                     job_id: Some(id),
                     jobs: None,
                     job: None,
@@ -399,12 +399,12 @@ impl AlephTool for CronManageTool {
                     crate::error::AlephError::tool("cron_manage toggle: 'job_id' is required")
                 })?;
                 let new_state = service.toggle_job(&id).await.map_err(|e| {
-                    crate::error::AlephError::tool(format!("Failed to toggle cron job: {}", e))
+                    crate::error::AlephError::tool(format!("Failed to toggle cron job: {e}"))
                 })?;
 
                 let state_str = if new_state { "启用" } else { "禁用" };
                 Ok(CronManageOutput {
-                    message: format!("定时任务 {} 已{}", id, state_str),
+                    message: format!("定时任务 {id} 已{state_str}"),
                     job_id: Some(id),
                     jobs: None,
                     job: None,
@@ -416,13 +416,13 @@ impl AlephTool for CronManageTool {
                     crate::error::AlephError::tool("cron_manage run: 'job_id' is required")
                 })?;
                 service.run_job(&id).await.map_err(|e| {
-                    crate::error::AlephError::tool(format!("Failed to trigger cron job: {}", e))
+                    crate::error::AlephError::tool(format!("Failed to trigger cron job: {e}"))
                 })?;
 
                 info!(job_id = %id, "Cron job triggered manually via tool");
 
                 Ok(CronManageOutput {
-                    message: format!("定时任务 {} 已手动触发，将在下一次检查周期内执行", id),
+                    message: format!("定时任务 {id} 已手动触发，将在下一次检查周期内执行"),
                     job_id: Some(id),
                     jobs: None,
                     job: None,
@@ -450,13 +450,13 @@ impl AlephTool for CronManageTool {
                 };
 
                 service.update_job(&id, updates).await.map_err(|e| {
-                    crate::error::AlephError::tool(format!("Failed to update cron job: {}", e))
+                    crate::error::AlephError::tool(format!("Failed to update cron job: {e}"))
                 })?;
 
                 info!(job_id = %id, "Cron job updated via tool");
 
                 Ok(CronManageOutput {
-                    message: format!("定时任务 {} 已更新", id),
+                    message: format!("定时任务 {id} 已更新"),
                     job_id: Some(id),
                     jobs: None,
                     job: None,

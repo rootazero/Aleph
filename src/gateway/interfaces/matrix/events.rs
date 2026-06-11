@@ -79,7 +79,7 @@ fn convert_room_message(
             let text = if geo_uri.is_empty() {
                 body.to_string()
             } else {
-                format!("{} (location: {})", body, geo_uri)
+                format!("{body} (location: {geo_uri})")
             };
             (text, Vec::new(), Vec::new())
         }

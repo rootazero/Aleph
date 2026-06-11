@@ -154,8 +154,7 @@ impl AgentResolver for CardRegistry {
         agents.retain(|a| a.card.id != agent_id);
         if agents.len() == before {
             return Err(A2AError::InvalidParams(format!(
-                "Agent not found: {}",
-                agent_id
+                "Agent not found: {agent_id}"
             )));
         }
         Ok(())

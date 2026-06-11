@@ -101,8 +101,8 @@ fn format_edit_params(params: &Value) -> String {
 
     let short_path = shorten_path(path);
     match (line, end_line) {
-        (Some(l), Some(e)) if l != e => format!("{}:{}-{}", short_path, l, e),
-        (Some(l), _) => format!("{}:{}", short_path, l),
+        (Some(l), Some(e)) if l != e => format!("{short_path}:{l}-{e}"),
+        (Some(l), _) => format!("{short_path}:{l}"),
         _ => short_path,
     }
 }

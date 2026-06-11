@@ -145,7 +145,7 @@ impl std::str::FromStr for HookKind {
             "observer" => Ok(HookKind::Observer),
             "interceptor" => Ok(HookKind::Interceptor),
             "resolver" => Ok(HookKind::Resolver),
-            _ => Err(format!("Unknown hook kind: {}", s)),
+            _ => Err(format!("Unknown hook kind: {s}")),
         }
     }
 }
@@ -193,7 +193,7 @@ impl std::str::FromStr for HookPriority {
             "high" => Ok(HookPriority::High),
             "normal" => Ok(HookPriority::Normal),
             "low" => Ok(HookPriority::Low),
-            _ => Err(format!("Unknown hook priority: {}", s)),
+            _ => Err(format!("Unknown hook priority: {s}")),
         }
     }
 }
@@ -235,7 +235,7 @@ impl std::str::FromStr for PromptScope {
             "tool" => Ok(PromptScope::Tool),
             "standalone" => Ok(PromptScope::Standalone),
             "disabled" => Ok(PromptScope::Disabled),
-            _ => Err(format!("Unknown prompt scope: {}", s)),
+            _ => Err(format!("Unknown prompt scope: {s}")),
         }
     }
 }

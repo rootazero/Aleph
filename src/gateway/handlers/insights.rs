@@ -80,7 +80,7 @@ pub async fn handle_tools(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         Err(err) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("insights.tools failed: {}", err),
+            format!("insights.tools failed: {err}"),
         ),
     }
 }

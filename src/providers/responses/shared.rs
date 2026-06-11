@@ -36,7 +36,7 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                             }
                             ContentBlock::Image { data, mime_type } => {
                                 Some(InputContentPart::InputImage {
-                                    image_url: format!("data:{};base64,{}", mime_type, data),
+                                    image_url: format!("data:{mime_type};base64,{data}"),
                                 })
                             }
                             _ => None,

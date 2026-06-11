@@ -104,7 +104,7 @@ impl Config {
         // Serialize to TOML
         let contents = toml::to_string_pretty(self).map_err(|e| {
             error!(error = %e, "Failed to serialize config to TOML");
-            AlephError::invalid_config(format!("Failed to serialize config: {}", e))
+            AlephError::invalid_config(format!("Failed to serialize config: {e}"))
         })?;
 
         debug!(
@@ -137,15 +137,14 @@ impl Config {
                 .map_err(|e| {
                     error!(temp_path = %temp_path.display(), error = %e, "Failed to open temp file for fsync");
                     AlephError::invalid_config(format!(
-                        "Failed to open temp file for fsync: {}",
-                        e
+                        "Failed to open temp file for fsync: {e}"
                     ))
                 })?;
 
             // Sync file data and metadata
             file.sync_all().map_err(|e| {
                 error!(temp_path = %temp_path.display(), error = %e, "Failed to fsync temp file");
-                AlephError::invalid_config(format!("Failed to fsync temp file: {}", e))
+                AlephError::invalid_config(format!("Failed to fsync temp file: {e}"))
             })?;
 
             debug!(temp_path = %temp_path.display(), "Fsynced temp file to disk");
@@ -176,13 +175,13 @@ impl Config {
             let mut perms = fs::metadata(path)
                 .map_err(|e| {
                     error!(path = %path.display(), error = %e, "Failed to get file metadata");
-                    AlephError::invalid_config(format!("Failed to get file metadata: {}", e))
+                    AlephError::invalid_config(format!("Failed to get file metadata: {e}"))
                 })?
                 .permissions();
             perms.set_mode(0o600); // Owner read/write only
             fs::set_permissions(path, perms).map_err(|e| {
                 error!(path = %path.display(), error = %e, "Failed to set file permissions to 600");
-                AlephError::invalid_config(format!("Failed to set file permissions: {}", e))
+                AlephError::invalid_config(format!("Failed to set file permissions: {e}"))
             })?;
             debug!(path = %path.display(), "Set file permissions to 600 (owner read/write only)");
         }
@@ -313,17 +312,17 @@ impl Config {
 
         // Read existing file
         let existing_contents = fs::read_to_string(path).map_err(|e| {
-            AlephError::invalid_config(format!("Failed to read config for incremental save: {}", e))
+            AlephError::invalid_config(format!("Failed to read config for incremental save: {e}"))
         })?;
 
         // Parse existing as toml::Value
         let mut existing: toml::Value = toml::from_str(&existing_contents).map_err(|e| {
-            AlephError::invalid_config(format!("Failed to parse existing config: {}", e))
+            AlephError::invalid_config(format!("Failed to parse existing config: {e}"))
         })?;
 
         // Serialize current config to toml::Value
         let current: toml::Value = toml::Value::try_from(self).map_err(|e| {
-            AlephError::invalid_config(format!("Failed to serialize current config: {}", e))
+            AlephError::invalid_config(format!("Failed to serialize current config: {e}"))
         })?;
 
         // Only update specified sections
@@ -403,13 +402,13 @@ impl Config {
 
         // Serialize back to TOML string
         let new_contents = toml::to_string_pretty(&existing).map_err(|e| {
-            AlephError::invalid_config(format!("Failed to serialize updated config: {}", e))
+            AlephError::invalid_config(format!("Failed to serialize updated config: {e}"))
         })?;
 
         // Write with atomic operation (same as save_to_file)
         let temp_path = path.with_extension("tmp");
         fs::write(&temp_path, &new_contents).map_err(|e| {
-            AlephError::invalid_config(format!("Failed to write temp config: {}", e))
+            AlephError::invalid_config(format!("Failed to write temp config: {e}"))
         })?;
 
         // fsync on Unix
@@ -419,16 +418,16 @@ impl Config {
                 .write(true)
                 .open(&temp_path)
                 .map_err(|e| {
-                    AlephError::invalid_config(format!("Failed to open temp file for fsync: {}", e))
+                    AlephError::invalid_config(format!("Failed to open temp file for fsync: {e}"))
                 })?;
             file.sync_all()
-                .map_err(|e| AlephError::invalid_config(format!("Failed to fsync: {}", e)))?;
+                .map_err(|e| AlephError::invalid_config(format!("Failed to fsync: {e}")))?;
         }
 
         // Atomic rename
         fs::rename(&temp_path, path).map_err(|e| {
             let _ = fs::remove_file(&temp_path);
-            AlephError::invalid_config(format!("Failed to rename temp config: {}", e))
+            AlephError::invalid_config(format!("Failed to rename temp config: {e}"))
         })?;
 
         // Set permissions on Unix

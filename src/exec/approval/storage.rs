@@ -193,7 +193,7 @@ impl ApprovalAuditStorage {
                     {
                         for fs_cap in fs_array {
                             if let Some(cap_type) = fs_cap.get("type").and_then(|v| v.as_str()) {
-                                capabilities.push(format!("filesystem.{}", cap_type));
+                                capabilities.push(format!("filesystem.{cap_type}"));
                             }
                         }
                     }
@@ -201,7 +201,7 @@ impl ApprovalAuditStorage {
                     // Extract network capability
                     if let Some(network) = json_value.get("network") {
                         if let Some(net_str) = network.as_str() {
-                            capabilities.push(format!("network.{}", net_str));
+                            capabilities.push(format!("network.{net_str}"));
                         } else if network.is_object() {
                             // Handle AllowDomains case
                             capabilities.push("network.allow_domains".to_string());

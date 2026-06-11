@@ -119,7 +119,7 @@ impl IdentityResolver {
 
             if let (Some(stem), Some(parent)) = (stem, parent) {
                 for ext in ["json", "toml"] {
-                    let alt_path = parent.join(format!("{}.{}", stem, ext));
+                    let alt_path = parent.join(format!("{stem}.{ext}"));
                     if alt_path.exists() {
                         if let Ok(manifest) = SoulManifest::from_file(&alt_path) {
                             return Some(manifest);

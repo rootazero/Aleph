@@ -128,7 +128,7 @@ impl std::str::FromStr for SearchProviderType {
             "exa" => Ok(SearchProviderType::Exa),
             "jina" => Ok(SearchProviderType::Jina),
             "duckduckgo" => Ok(SearchProviderType::DuckDuckGo),
-            _ => Err(format!("Unknown provider type: {}", s)),
+            _ => Err(format!("Unknown provider type: {s}")),
         }
     }
 }

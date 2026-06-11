@@ -185,8 +185,7 @@ impl ApprovalHandler {
             Ok(())
         } else {
             Err(AlephError::NotFound(format!(
-                "No pending approval with ID: {}",
-                request_id
+                "No pending approval with ID: {request_id}"
             )))
         }
     }

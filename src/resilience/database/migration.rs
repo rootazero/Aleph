@@ -24,7 +24,7 @@ use serde_json::Value;
 pub fn migrate_add_experience_replays(conn: &Connection) -> Result<(), AlephError> {
     // Use savepoint for atomic migration
     conn.execute_batch("SAVEPOINT migration_experience_replays")
-        .map_err(|e| AlephError::config(format!("Failed to begin migration: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to begin migration: {e}")))?;
 
     // Check if experience_replays table already exists
     let table_exists: i64 = conn
@@ -37,7 +37,7 @@ pub fn migrate_add_experience_replays(conn: &Connection) -> Result<(), AlephErro
             if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_experience_replays") {
                 tracing::warn!(error = %rollback_err, "Rollback of experience_replays migration failed");
             }
-            AlephError::config(format!("Failed to check experience_replays table: {}", e))
+            AlephError::config(format!("Failed to check experience_replays table: {e}"))
         })?;
 
     if table_exists == 0 {
@@ -101,7 +101,7 @@ pub fn migrate_add_experience_replays(conn: &Connection) -> Result<(), AlephErro
             if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_experience_replays") {
                 tracing::warn!(error = %rollback_err, "Rollback of migration_experience_replays failed");
             }
-            AlephError::config(format!("Failed to create experience_replays table: {}", e))
+            AlephError::config(format!("Failed to create experience_replays table: {e}"))
         })?;
 
         tracing::info!("Created experience_replays table and indexes");
@@ -111,7 +111,7 @@ pub fn migrate_add_experience_replays(conn: &Connection) -> Result<(), AlephErro
 
     // Release savepoint (commits all changes)
     conn.execute_batch("RELEASE migration_experience_replays")
-        .map_err(|e| AlephError::config(format!("Failed to commit migration: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to commit migration: {e}")))?;
 
     Ok(())
 }
@@ -127,8 +127,7 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
     conn.execute_batch("SAVEPOINT migration_task_traces_agent_trace")
         .map_err(|e| {
             AlephError::config(format!(
-                "Failed to begin task_traces agent trace migration: {}",
-                e
+                "Failed to begin task_traces agent trace migration: {e}"
             ))
         })?;
 
@@ -144,12 +143,12 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
             {
                 tracing::warn!(error = %rollback_err, "Rollback of task_traces migration failed");
             }
-            AlephError::config(format!("Failed to check task_traces table: {}", e))
+            AlephError::config(format!("Failed to check task_traces table: {e}"))
         })?;
 
     if table_exists == 0 {
         conn.execute_batch("RELEASE migration_task_traces_agent_trace")
-            .map_err(|e| AlephError::config(format!("Failed to commit migration: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to commit migration: {e}")))?;
         return Ok(());
     }
 
@@ -163,7 +162,7 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
             if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
                 tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
             }
-            AlephError::config(format!("Failed to inspect task_traces columns: {}", e))
+            AlephError::config(format!("Failed to inspect task_traces columns: {e}"))
         })?;
     let has_event_kind: i64 = conn
         .query_row(
@@ -175,12 +174,12 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
             if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
                 tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
             }
-            AlephError::config(format!("Failed to inspect task_traces columns: {}", e))
+            AlephError::config(format!("Failed to inspect task_traces columns: {e}"))
         })?;
 
     if has_event_json > 0 && has_event_kind > 0 {
         conn.execute_batch("RELEASE migration_task_traces_agent_trace")
-            .map_err(|e| AlephError::config(format!("Failed to commit migration: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to commit migration: {e}")))?;
         return Ok(());
     }
 
@@ -202,7 +201,7 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
         if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
                 tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
             }
-        AlephError::config(format!("Failed to recreate task_traces table: {}", e))
+        AlephError::config(format!("Failed to recreate task_traces table: {e}"))
     })?;
 
     // Legacy DBs predate strict FK enforcement; a trace whose parent
@@ -224,7 +223,7 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
             {
                 tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
             }
-            AlephError::config(format!("Failed to count orphaned legacy traces: {}", e))
+            AlephError::config(format!("Failed to count orphaned legacy traces: {e}"))
         })?;
     if orphan_count > 0 {
         tracing::warn!(
@@ -247,7 +246,7 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
                 if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
                 tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
             }
-                AlephError::config(format!("Failed to prepare legacy trace query: {}", e))
+                AlephError::config(format!("Failed to prepare legacy trace query: {e}"))
             })?;
 
         let legacy_rows = select
@@ -265,14 +264,14 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
                 if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
                     tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
                 }
-                AlephError::config(format!("Failed to load legacy traces: {}", e))
+                AlephError::config(format!("Failed to load legacy traces: {e}"))
             })?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| {
                 if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
                     tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
                 }
-                AlephError::config(format!("Failed to collect legacy traces: {}", e))
+                AlephError::config(format!("Failed to collect legacy traces: {e}"))
             })?;
 
         let mut insert = conn
@@ -286,7 +285,7 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
                 if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
                     tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
                 }
-                AlephError::config(format!("Failed to prepare migrated trace insert: {}", e))
+                AlephError::config(format!("Failed to prepare migrated trace insert: {e}"))
             })?;
 
         for (id, task_id, step_index, role, content_json, timestamp) in legacy_rows {
@@ -295,7 +294,7 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
                 if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
                     tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
                 }
-                AlephError::config(format!("Failed to serialize migrated trace: {}", e))
+                AlephError::config(format!("Failed to serialize migrated trace: {e}"))
             })?;
 
             insert
@@ -311,7 +310,7 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
                     if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
                         tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
                     }
-                    AlephError::config(format!("Failed to insert migrated trace: {}", e))
+                    AlephError::config(format!("Failed to insert migrated trace: {e}"))
                 })?;
         }
     }
@@ -326,11 +325,11 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
         if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
             tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
         }
-        AlephError::config(format!("Failed to finalize task_traces migration: {}", e))
+        AlephError::config(format!("Failed to finalize task_traces migration: {e}"))
     })?;
 
     conn.execute_batch("RELEASE migration_task_traces_agent_trace")
-        .map_err(|e| AlephError::config(format!("Failed to commit migration: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to commit migration: {e}")))?;
 
     Ok(())
 }
@@ -346,7 +345,7 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
 pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch("SAVEPOINT migration_channel_offsets")
         .map_err(|e| {
-            AlephError::config(format!("Failed to begin channel_offsets migration: {}", e))
+            AlephError::config(format!("Failed to begin channel_offsets migration: {e}"))
         })?;
 
     let table_exists: i64 = conn
@@ -359,7 +358,7 @@ pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> 
             if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_channel_offsets") {
                 tracing::warn!(error = %rollback_err, "Rollback of migration_channel_offsets failed");
             }
-            AlephError::config(format!("Failed to check channel_offsets table: {}", e))
+            AlephError::config(format!("Failed to check channel_offsets table: {e}"))
         })?;
 
     if table_exists == 0 {
@@ -377,7 +376,7 @@ pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> 
             if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_channel_offsets") {
                 tracing::warn!(error = %rollback_err, "Rollback of migration_channel_offsets failed");
             }
-            AlephError::config(format!("Failed to create channel_offsets table: {}", e))
+            AlephError::config(format!("Failed to create channel_offsets table: {e}"))
         })?;
 
         tracing::info!("Created channel_offsets table");
@@ -387,7 +386,7 @@ pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> 
 
     conn.execute_batch("RELEASE migration_channel_offsets")
         .map_err(|e| {
-            AlephError::config(format!("Failed to commit channel_offsets migration: {}", e))
+            AlephError::config(format!("Failed to commit channel_offsets migration: {e}"))
         })?;
 
     Ok(())
@@ -404,7 +403,7 @@ pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> 
 pub fn migrate_add_paired_users(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch("SAVEPOINT migration_paired_users")
         .map_err(|e| {
-            AlephError::config(format!("Failed to begin paired_users migration: {}", e))
+            AlephError::config(format!("Failed to begin paired_users migration: {e}"))
         })?;
 
     let table_exists: i64 = conn
@@ -417,7 +416,7 @@ pub fn migrate_add_paired_users(conn: &Connection) -> Result<(), AlephError> {
             if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_paired_users") {
                 tracing::warn!(error = %rollback_err, "Rollback of migration_paired_users failed");
             }
-            AlephError::config(format!("Failed to check paired_users table: {}", e))
+            AlephError::config(format!("Failed to check paired_users table: {e}"))
         })?;
 
     if table_exists == 0 {
@@ -435,7 +434,7 @@ pub fn migrate_add_paired_users(conn: &Connection) -> Result<(), AlephError> {
             if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_paired_users") {
                 tracing::warn!(error = %rollback_err, "Rollback of migration_paired_users failed");
             }
-            AlephError::config(format!("Failed to create paired_users table: {}", e))
+            AlephError::config(format!("Failed to create paired_users table: {e}"))
         })?;
 
         tracing::info!("Created paired_users table");
@@ -445,7 +444,7 @@ pub fn migrate_add_paired_users(conn: &Connection) -> Result<(), AlephError> {
 
     conn.execute_batch("RELEASE migration_paired_users")
         .map_err(|e| {
-            AlephError::config(format!("Failed to commit paired_users migration: {}", e))
+            AlephError::config(format!("Failed to commit paired_users migration: {e}"))
         })?;
 
     Ok(())
@@ -463,8 +462,7 @@ pub fn migrate_add_sticker_descriptions(conn: &Connection) -> Result<(), AlephEr
     conn.execute_batch("SAVEPOINT migration_sticker_descriptions")
         .map_err(|e| {
             AlephError::config(format!(
-                "Failed to begin sticker_descriptions migration: {}",
-                e
+                "Failed to begin sticker_descriptions migration: {e}"
             ))
         })?;
 
@@ -478,7 +476,7 @@ pub fn migrate_add_sticker_descriptions(conn: &Connection) -> Result<(), AlephEr
             if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_sticker_descriptions") {
                 tracing::warn!(error = %rollback_err, "Rollback of migration_sticker_descriptions failed");
             }
-            AlephError::config(format!("Failed to check sticker_descriptions table: {}", e))
+            AlephError::config(format!("Failed to check sticker_descriptions table: {e}"))
         })?;
 
     if table_exists == 0 {
@@ -496,8 +494,7 @@ pub fn migrate_add_sticker_descriptions(conn: &Connection) -> Result<(), AlephEr
                 tracing::warn!(error = %rollback_err, "Rollback of migration_sticker_descriptions failed");
             }
             AlephError::config(format!(
-                "Failed to create sticker_descriptions table: {}",
-                e
+                "Failed to create sticker_descriptions table: {e}"
             ))
         })?;
 
@@ -509,8 +506,7 @@ pub fn migrate_add_sticker_descriptions(conn: &Connection) -> Result<(), AlephEr
     conn.execute_batch("RELEASE migration_sticker_descriptions")
         .map_err(|e| {
             AlephError::config(format!(
-                "Failed to commit sticker_descriptions migration: {}",
-                e
+                "Failed to commit sticker_descriptions migration: {e}"
             ))
         })?;
 

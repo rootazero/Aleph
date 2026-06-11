@@ -87,12 +87,12 @@ pub fn GenerationProvidersView() -> impl IntoView {
             .await;
             match providers_res {
                 Ok(list) => set_providers.set(list),
-                Err(e) => set_error_message.set(Some(format!("Failed to load providers: {}", e))),
+                Err(e) => set_error_message.set(Some(format!("Failed to load providers: {e}"))),
             }
             match presets_res {
                 Ok(dtos) => set_catalog.set(PresetCatalog::from_dtos(dtos)),
                 Err(e) => {
-                    set_error_message.set(Some(format!("Failed to load preset catalog: {}", e)))
+                    set_error_message.set(Some(format!("Failed to load preset catalog: {e}")))
                 }
             }
             set_is_loading.set(false);
@@ -191,7 +191,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                                             let is_selected = {
                                                 let sel = selected_provider_id.get();
                                                 sel.as_deref() == Some(&preset_id)
-                                                    || sel.as_deref() == Some(&format!("__preset__{}", preset_id))
+                                                    || sel.as_deref() == Some(&format!("__preset__{preset_id}"))
                                             };
 
                                             view! {
@@ -205,7 +205,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                                                         if configured {
                                                             set_selected_provider_id.set(Some(preset_id.clone()));
                                                         } else {
-                                                            set_selected_provider_id.set(Some(format!("__preset__{}", preset_id)));
+                                                            set_selected_provider_id.set(Some(format!("__preset__{preset_id}")));
                                                         }
                                                         set_show_add_form.set(false);
                                                     }
@@ -341,9 +341,9 @@ fn CategoryTab(
             class=move || {
                 let base = "flex-1 flex flex-col items-center gap-1 px-3 py-2 rounded-lg font-medium transition-colors text-sm";
                 if is_selected() {
-                    format!("{} bg-info text-white", base)
+                    format!("{base} bg-info text-white")
                 } else {
-                    format!("{} bg-surface-raised text-text-secondary hover:bg-surface-sunken", base)
+                    format!("{base} bg-surface-raised text-text-secondary hover:bg-surface-sunken")
                 }
             }
             on:click=move |_| on_select.set(category)

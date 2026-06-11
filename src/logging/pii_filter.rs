@@ -93,7 +93,7 @@ where
         let target = metadata.target();
 
         // Write prefix: timestamp level target
-        write!(writer, "{} {:5} {}: ", timestamp, level, target)?;
+        write!(writer, "{timestamp} {level:5} {target}: ")?;
 
         // Collect all fields into a string
         let mut visitor = StringVisitor::default();
@@ -103,7 +103,7 @@ where
         let scrubbed_message = scrub_pii(&visitor.message);
 
         // Write scrubbed message
-        write!(writer, "{}", scrubbed_message)?;
+        write!(writer, "{scrubbed_message}")?;
 
         // Add span context if available
         if let Some(scope) = ctx.event_scope() {
@@ -120,7 +120,7 @@ where
 
                 write!(writer, "{}{{", span.name())?;
                 if !fields.is_empty() {
-                    write!(writer, "{}", fields)?;
+                    write!(writer, "{fields}")?;
                 }
                 write!(writer, "}}")?;
             }
@@ -159,7 +159,7 @@ impl Visit for StringVisitor {
         if field.name() == "message" {
             // Strip surrounding quotes from debug-formatted strings to ensure
             // PII scrubbing works correctly (scrub_pii regex relies on word boundaries)
-            let formatted = format!("{:?}", value);
+            let formatted = format!("{value:?}");
             let trimmed = formatted
                 .strip_prefix('"')
                 .and_then(|s| s.strip_suffix('"'))

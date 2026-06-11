@@ -150,7 +150,7 @@ impl A2ARequestProcessor {
                 return JsonRpcResponse::error(
                     request.id,
                     -32602,
-                    &format!("Invalid params: missing or invalid 'message': {}", e),
+                    &format!("Invalid params: missing or invalid 'message': {e}"),
                 );
             }
         };
@@ -165,7 +165,7 @@ impl A2ARequestProcessor {
                     return JsonRpcResponse::error(
                         request.id,
                         -32602,
-                        &format!("Invalid params: {}", e),
+                        &format!("Invalid params: {e}"),
                     );
                 }
             }
@@ -195,7 +195,7 @@ impl A2ARequestProcessor {
                 Err(e) => JsonRpcResponse::error(
                     request.id,
                     -32603,
-                    &format!("Internal error: serialization failed: {}", e),
+                    &format!("Internal error: serialization failed: {e}"),
                 ),
             },
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
@@ -228,7 +228,7 @@ impl A2ARequestProcessor {
             Ok(task) => match serde_json::to_value(&task) {
                 Ok(v) => JsonRpcResponse::success(request.id, v),
                 Err(e) => {
-                    JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {}", e))
+                    JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {e}"))
                 }
             },
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
@@ -258,7 +258,7 @@ impl A2ARequestProcessor {
             Ok(task) => match serde_json::to_value(&task) {
                 Ok(v) => JsonRpcResponse::success(request.id, v),
                 Err(e) => {
-                    JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {}", e))
+                    JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {e}"))
                 }
             },
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
@@ -283,7 +283,7 @@ impl A2ARequestProcessor {
                     return JsonRpcResponse::error(
                         request.id,
                         -32602,
-                        &format!("Invalid params: {}", e),
+                        &format!("Invalid params: {e}"),
                     );
                 }
             }
@@ -295,7 +295,7 @@ impl A2ARequestProcessor {
             Ok(result) => match serde_json::to_value(&result) {
                 Ok(v) => JsonRpcResponse::success(request.id, v),
                 Err(e) => {
-                    JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {}", e))
+                    JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {e}"))
                 }
             },
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
@@ -324,7 +324,7 @@ impl A2ARequestProcessor {
                             return JsonRpcResponse::error(
                                 request.id,
                                 -32602,
-                                &format!("Invalid params: {}", e),
+                                &format!("Invalid params: {e}"),
                             );
                         }
                     };
@@ -334,7 +334,7 @@ impl A2ARequestProcessor {
                         Err(e) => JsonRpcResponse::error(
                             request.id,
                             -32603,
-                            &format!("Internal error: {}", e),
+                            &format!("Internal error: {e}"),
                         ),
                     },
                     Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
@@ -357,7 +357,7 @@ impl A2ARequestProcessor {
                         Err(e) => JsonRpcResponse::error(
                             request.id,
                             -32603,
-                            &format!("Internal error: {}", e),
+                            &format!("Internal error: {e}"),
                         ),
                     },
                     Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
@@ -370,7 +370,7 @@ impl A2ARequestProcessor {
                         Err(e) => JsonRpcResponse::error(
                             request.id,
                             -32603,
-                            &format!("Internal error: {}", e),
+                            &format!("Internal error: {e}"),
                         ),
                     },
                     Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),

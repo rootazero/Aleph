@@ -301,7 +301,7 @@ impl crate::search::ProviderFactory for DuckDuckGoFactory {
         match DuckDuckGoProvider::new() {
             Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
             Err(e) => {
-                log::warn!("search backend '{name}' ({}) construct failed: {e}", NAME);
+                log::warn!("search backend '{name}' ({NAME}) construct failed: {e}");
                 Ok(None)
             }
         }

@@ -95,7 +95,7 @@ impl ServiceManager {
 
     /// Build a composite service key from plugin_id and service_id.
     fn make_key(plugin_id: &str, service_id: &str) -> String {
-        format!("{}:{}", plugin_id, service_id)
+        format!("{plugin_id}:{service_id}")
     }
 
     /// Start a service.

@@ -180,7 +180,7 @@ pub fn ModelPicker() -> impl IntoView {
                         } else if let Some(err) = load_error.get() {
                             view! {
                                 <div class="px-2.5 py-3 text-xs text-danger/80 text-center">
-                                    {format!("error: {}", err)}
+                                    {format!("error: {err}")}
                                 </div>
                             }.into_any()
                         } else if entries.get().is_empty() {

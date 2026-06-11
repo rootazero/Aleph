@@ -52,7 +52,7 @@ pub(crate) fn find_provider_type(config: &GenerationConfig, name: &str) -> Optio
     // Legacy: derive from capabilities
     if let Some(cfg) = config.providers.get(name) {
         if let Some(gen_type) = cfg.capabilities.first() {
-            return Some(format!("{:?}", gen_type).to_lowercase());
+            return Some(format!("{gen_type:?}").to_lowercase());
         }
         // Legacy provider with no capabilities — treat as legacy bucket
         return Some("legacy".to_string());

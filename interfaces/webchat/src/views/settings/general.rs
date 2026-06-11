@@ -32,7 +32,7 @@ pub fn GeneralView() -> impl IntoView {
                         set_saving.set(false);
                     }
                     Err(e) => {
-                        set_error.set(Some(format!("Failed to save config: {}", e)));
+                        set_error.set(Some(format!("Failed to save config: {e}")));
                         set_saving.set(false);
                     }
                 }
@@ -57,7 +57,7 @@ pub fn GeneralView() -> impl IntoView {
                 set_loading.set(false);
             }
             Err(e) => {
-                set_error.set(Some(format!("Failed to load config: {}", e)));
+                set_error.set(Some(format!("Failed to load config: {e}")));
                 set_loading.set(false);
             }
         }
@@ -234,7 +234,7 @@ fn ConfigReloadSection() -> impl IntoView {
                     set_result_msg.set(Some((result.ok, msg)));
                 }
                 Err(e) => {
-                    set_result_msg.set(Some((false, format!("Reload failed: {}", e))));
+                    set_result_msg.set(Some((false, format!("Reload failed: {e}"))));
                 }
             }
             set_reloading.set(false);

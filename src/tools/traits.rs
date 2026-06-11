@@ -153,7 +153,7 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            let context = format!("## Usage Examples\n\n{}", examples_text);
+            let context = format!("## Usage Examples\n\n{examples_text}");
             def = def.with_llm_context(context);
         }
 

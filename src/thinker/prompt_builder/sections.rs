@@ -90,7 +90,7 @@ impl PromptBuilder {
                 prompt.push_str(&format!("#### {}\n", tool.name));
                 prompt.push_str(&format!("{}\n", tool.description));
                 if let Some(schema) = tool.schema_json() {
-                    prompt.push_str(&format!("Parameters: {}\n", schema));
+                    prompt.push_str(&format!("Parameters: {schema}\n"));
                 }
                 prompt.push('\n');
             }
@@ -276,7 +276,7 @@ impl PromptBuilder {
             let tone = sanitize_for_prompt(&soul.voice.tone, SanitizeLevel::Moderate);
             let tone = sanitize_for_prompt(&tone, SanitizeLevel::Light);
             prompt.push_str("## Communication Style\n\n");
-            prompt.push_str(&format!("- **Tone**: {}\n", tone));
+            prompt.push_str(&format!("- **Tone**: {tone}\n"));
             prompt.push_str(&format!("- **Verbosity**: {:?}\n", soul.voice.verbosity));
             prompt.push_str(&format!(
                 "- **Formatting**: {:?}\n",
@@ -285,7 +285,7 @@ impl PromptBuilder {
             if let Some(ref notes) = soul.voice.language_notes {
                 let notes = sanitize_for_prompt(notes, SanitizeLevel::Moderate);
                 let notes = sanitize_for_prompt(&notes, SanitizeLevel::Light);
-                prompt.push_str(&format!("- **Language Notes**: {}\n", notes));
+                prompt.push_str(&format!("- **Language Notes**: {notes}\n"));
             }
             prompt.push('\n');
         }
@@ -301,7 +301,7 @@ impl PromptBuilder {
             for domain in &soul.expertise {
                 let domain = sanitize_for_prompt(domain, SanitizeLevel::Moderate);
                 let domain = sanitize_for_prompt(&domain, SanitizeLevel::Light);
-                prompt.push_str(&format!("- {}\n", domain));
+                prompt.push_str(&format!("- {domain}\n"));
             }
             prompt.push('\n');
         }
@@ -312,7 +312,7 @@ impl PromptBuilder {
             for directive in &soul.directives {
                 let directive = sanitize_for_prompt(directive, SanitizeLevel::Moderate);
                 let directive = sanitize_for_prompt(&directive, SanitizeLevel::Light);
-                prompt.push_str(&format!("- {}\n", directive));
+                prompt.push_str(&format!("- {directive}\n"));
             }
             prompt.push('\n');
         }
@@ -323,7 +323,7 @@ impl PromptBuilder {
             for anti in &soul.anti_patterns {
                 let anti = sanitize_for_prompt(anti, SanitizeLevel::Moderate);
                 let anti = sanitize_for_prompt(&anti, SanitizeLevel::Light);
-                prompt.push_str(&format!("- {}\n", anti));
+                prompt.push_str(&format!("- {anti}\n"));
             }
             prompt.push('\n');
         }
@@ -362,7 +362,7 @@ impl PromptBuilder {
             prompt.push_str("**Active Capabilities**:\n");
             for cap in &contract.active_capabilities {
                 let (name, hint) = cap.prompt_hint();
-                prompt.push_str(&format!("- `{}`: {}\n", name, hint));
+                prompt.push_str(&format!("- `{name}`: {hint}\n"));
             }
             prompt.push('\n');
         }
@@ -370,7 +370,7 @@ impl PromptBuilder {
         // Constraints
         let mut constraint_notes = Vec::new();
         if let Some(max_chars) = contract.constraints.max_output_chars {
-            constraint_notes.push(format!("Max output: {} characters", max_chars));
+            constraint_notes.push(format!("Max output: {max_chars} characters"));
         }
         if contract.constraints.prefer_compact {
             constraint_notes.push("Prefer concise responses".to_string());
@@ -382,7 +382,7 @@ impl PromptBuilder {
         if !constraint_notes.is_empty() {
             prompt.push_str("**Constraints**:\n");
             for note in constraint_notes {
-                prompt.push_str(&format!("- {}\n", note));
+                prompt.push_str(&format!("- {note}\n"));
             }
             prompt.push('\n');
         }
@@ -410,7 +410,7 @@ impl PromptBuilder {
         // Security notes
         for note in security_notes {
             let note = sanitize_for_prompt(note, SanitizeLevel::Light);
-            prompt.push_str(&format!("- {}\n", note));
+            prompt.push_str(&format!("- {note}\n"));
         }
         if !security_notes.is_empty() {
             prompt.push('\n');

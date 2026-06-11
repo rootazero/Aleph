@@ -144,7 +144,7 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
             Err(e) => JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Note search failed: {}", e),
+                format!("Note search failed: {e}"),
             ),
         };
     }
@@ -172,7 +172,7 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Search raw memories failed: {}", e),
+            format!("Search raw memories failed: {e}"),
         ),
     }
 }
@@ -210,7 +210,7 @@ pub async fn handle_delete(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Delete raw memory failed: {}", e),
+            format!("Delete raw memory failed: {e}"),
         ),
     }
 }
@@ -322,7 +322,7 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("List notes failed: {}", e),
+            format!("List notes failed: {e}"),
         ),
     }
 }
@@ -401,7 +401,7 @@ pub async fn handle_compress(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Compression failed: {}", e),
+            format!("Compression failed: {e}"),
         ),
     }
 }

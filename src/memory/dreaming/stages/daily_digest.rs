@@ -52,7 +52,7 @@ impl DreamStage for DailyDigestStage {
             let content = ctx.load_content(&path).await.unwrap_or_default();
             // Take first 200 chars as preview
             let preview: String = content.chars().take(200).collect();
-            note_summaries.push(format!("- **{}** ({}): {}", path, category, preview));
+            note_summaries.push(format!("- **{path}** ({category}): {preview}"));
         }
 
         let note_count = note_summaries.len();

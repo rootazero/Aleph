@@ -126,8 +126,7 @@ pub async fn download_media(
     let uri = matrix_sdk::ruma::OwnedMxcUri::from(mxc_uri);
     if !uri.is_valid() {
         return Err(ChannelError::ReceiveFailed(format!(
-            "Invalid mxc URI: {}",
-            mxc_uri
+            "Invalid mxc URI: {mxc_uri}"
         )));
     }
 

@@ -66,7 +66,7 @@ pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to update config: {}", e),
+                format!("Failed to update config: {e}"),
             );
         }
     }
@@ -92,7 +92,7 @@ pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to update scope: {}", e),
+                format!("Failed to update scope: {e}"),
             );
         }
     }
@@ -170,7 +170,7 @@ pub async fn handle_remove(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to remove skill: {}", e),
+            format!("Failed to remove skill: {e}"),
         ),
     }
 }

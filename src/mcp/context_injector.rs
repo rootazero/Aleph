@@ -68,8 +68,8 @@ impl ContextInjector {
         let resources: Vec<ResourceContext> = all_resources
             .into_iter()
             .filter(|r| {
-                r.uri.starts_with(&format!("{}:", server_name))
-                    || r.name.starts_with(&format!("{}:", server_name))
+                r.uri.starts_with(&format!("{server_name}:"))
+                    || r.name.starts_with(&format!("{server_name}:"))
             })
             .map(|r| ResourceContext {
                 uri: r.uri,
@@ -80,7 +80,7 @@ impl ContextInjector {
 
         let tools: Vec<ToolContext> = all_tools
             .into_iter()
-            .filter(|t| t.name.starts_with(&format!("{}:", server_name)))
+            .filter(|t| t.name.starts_with(&format!("{server_name}:")))
             .map(|t| ToolContext {
                 name: t.name,
                 description: t.description,

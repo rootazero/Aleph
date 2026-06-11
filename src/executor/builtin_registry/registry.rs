@@ -51,7 +51,7 @@ pub(crate) fn resolve_plugin_handler_from_sources(
         .get(tool_name)
         .and_then(|unified| match &unified.source {
             ToolSource::Plugin { plugin_id } => {
-                Some((plugin_id.clone(), format!("tool_{}", tool_name)))
+                Some((plugin_id.clone(), format!("tool_{tool_name}")))
             }
             _ => None,
         })
@@ -602,9 +602,8 @@ impl ToolRegistry for BuiltinToolRegistry {
             if let Ok(policy) = policy_handle.try_read() {
                 if !policy.is_allowed(tool_name) {
                     let msg = format!(
-                        "Tool '{}' is not allowed for the current agent. \
-                         Use agent.list to check available tools, or switch to an agent that has access.",
-                        tool_name
+                        "Tool '{tool_name}' is not allowed for the current agent. \
+                         Use agent.list to check available tools, or switch to an agent that has access."
                     );
                     return Box::pin(async move { Err(AlephError::tool(msg)) });
                 }
@@ -1182,8 +1181,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                         let tool = tool_name.to_string();
                         Box::pin(async move {
                             Err(AlephError::tool(format!(
-                                "Agent tool '{}' is not yet wired",
-                                tool
+                                "Agent tool '{tool}' is not yet wired"
                             )))
                         })
                     }
@@ -1788,13 +1786,13 @@ impl ToolRegistry for BuiltinToolRegistry {
                             .call_plugin_tool(&plugin_id, &handler, arguments)
                             .await
                             .map_err(|e| {
-                                AlephError::tool(format!("Plugin tool '{}' failed: {}", handler, e))
+                                AlephError::tool(format!("Plugin tool '{handler}' failed: {e}"))
                             })
                     });
                 }
                 let tool = tool_name.to_string();
                 error!(tool = %tool, "Unknown tool requested");
-                Box::pin(async move { Err(AlephError::tool(format!("Unknown tool: {}", tool))) })
+                Box::pin(async move { Err(AlephError::tool(format!("Unknown tool: {tool}"))) })
             }
         }
     }

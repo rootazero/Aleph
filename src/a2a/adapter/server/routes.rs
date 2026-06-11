@@ -142,7 +142,7 @@ async fn stream_message_send(
             return sse_error(JsonRpcResponse::error(
                 request.id.clone(),
                 -32602,
-                &format!("Invalid params: missing or invalid 'message': {}", e),
+                &format!("Invalid params: missing or invalid 'message': {e}"),
             ));
         }
     };

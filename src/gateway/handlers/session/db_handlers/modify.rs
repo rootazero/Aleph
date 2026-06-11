@@ -62,7 +62,7 @@ pub async fn handle_reset_db(
                 Err(e) => JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to reset session: {}", e),
+                    format!("Failed to reset session: {e}"),
                 ),
             }
         }
@@ -153,7 +153,7 @@ async fn handle_delete_db_inner(
                 Err(e) => JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("Failed to delete session: {}", e),
+                    format!("Failed to delete session: {e}"),
                 ),
             }
         }
@@ -222,7 +222,7 @@ pub async fn handle_patch_db(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to patch session: {}", e),
+            format!("Failed to patch session: {e}"),
         ),
     }
 }
@@ -286,7 +286,7 @@ pub async fn handle_compact_db(
             )
         }
         Err(e) => {
-            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Compact failed: {}", e))
+            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Compact failed: {e}"))
         }
     }
 }
@@ -339,7 +339,7 @@ pub async fn handle_truncate_db(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Truncate failed: {}", e),
+            format!("Truncate failed: {e}"),
         ),
     }
 }
@@ -407,7 +407,7 @@ pub async fn handle_set_topic_db(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to set topic: {}", e),
+            format!("Failed to set topic: {e}"),
         ),
     }
 }

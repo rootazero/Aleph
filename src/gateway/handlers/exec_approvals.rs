@@ -334,7 +334,7 @@ async fn handle_approvals_get(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to load config: {}", e),
+            format!("Failed to load config: {e}"),
         ),
     }
 }
@@ -357,11 +357,10 @@ async fn handle_approvals_set(
             request.id,
             INVALID_PARAMS,
             format!(
-                "Config changed since last load. Expected hash: {}, current: {}. Please reload and retry.",
-                base, current
+                "Config changed since last load. Expected hash: {base}, current: {current}. Please reload and retry."
             ),
         ),
-        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to save config: {}", e)),
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to save config: {e}")),
     }
 }
 

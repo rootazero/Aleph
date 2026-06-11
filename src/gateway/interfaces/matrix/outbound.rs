@@ -27,7 +27,7 @@ pub async fn send_message(client: &Client, message: OutboundMessage) -> ChannelR
         .map_err(|e| ChannelError::SendFailed(format!("Invalid room ID: {e}")))?;
     let room = client
         .get_room(&room_id)
-        .ok_or_else(|| ChannelError::SendFailed(format!("Room {} not found", room_id)))?;
+        .ok_or_else(|| ChannelError::SendFailed(format!("Room {room_id} not found")))?;
 
     let reply_to = message.reply_to.as_ref().map(|id| id.as_str());
 
@@ -139,8 +139,7 @@ fn build_media_message(
     let uri = OwnedMxcUri::from(mxc_uri);
     if !uri.is_valid() {
         return Err(ChannelError::SendFailed(format!(
-            "Invalid mxc URI: {}",
-            mxc_uri
+            "Invalid mxc URI: {mxc_uri}"
         )));
     }
 
@@ -228,7 +227,7 @@ pub async fn send_reaction(
         .map_err(|e| ChannelError::SendFailed(format!("Invalid room ID: {e}")))?;
     let room = client
         .get_room(&room_id)
-        .ok_or_else(|| ChannelError::SendFailed(format!("Room {} not found", room_id)))?;
+        .ok_or_else(|| ChannelError::SendFailed(format!("Room {room_id} not found")))?;
 
     let event_id: OwnedEventId = message_id
         .as_str()
@@ -257,7 +256,7 @@ pub async fn edit_message(
         .map_err(|e| ChannelError::SendFailed(format!("Invalid room ID: {e}")))?;
     let room = client
         .get_room(&room_id)
-        .ok_or_else(|| ChannelError::SendFailed(format!("Room {} not found", room_id)))?;
+        .ok_or_else(|| ChannelError::SendFailed(format!("Room {room_id} not found")))?;
 
     let event_id: OwnedEventId = message_id
         .as_str()
@@ -299,7 +298,7 @@ pub async fn delete_message(
         .map_err(|e| ChannelError::SendFailed(format!("Invalid room ID: {e}")))?;
     let room = client
         .get_room(&room_id)
-        .ok_or_else(|| ChannelError::SendFailed(format!("Room {} not found", room_id)))?;
+        .ok_or_else(|| ChannelError::SendFailed(format!("Room {room_id} not found")))?;
 
     let event_id: OwnedEventId = message_id
         .as_str()
@@ -325,7 +324,7 @@ pub async fn send_typing(
         .map_err(|e| ChannelError::SendFailed(format!("Invalid room ID: {e}")))?;
     let room = client
         .get_room(&room_id)
-        .ok_or_else(|| ChannelError::SendFailed(format!("Room {} not found", room_id)))?;
+        .ok_or_else(|| ChannelError::SendFailed(format!("Room {room_id} not found")))?;
 
     room.typing_notice(typing)
         .await

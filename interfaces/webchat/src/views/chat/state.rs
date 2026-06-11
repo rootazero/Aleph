@@ -411,7 +411,7 @@ impl ChatState {
 
     /// Final accumulated text of the assistant message for `run_id`, if present.
     pub fn assistant_text_for_run(&self, run_id: &str) -> String {
-        let target_id = format!("assistant-{}", run_id);
+        let target_id = format!("assistant-{run_id}");
         self.messages.with(|msgs| {
             msgs.iter()
                 .rev()
@@ -437,7 +437,7 @@ impl ChatState {
     pub fn push_user_message(&self, text: &str) {
         let seq = self.next_msg_id.get_untracked();
         self.next_msg_id.set(seq + 1);
-        let id = format!("user-{}", seq);
+        let id = format!("user-{seq}");
         self.messages.update(|msgs| {
             msgs.push(ChatMessage {
                 id,
@@ -459,7 +459,7 @@ impl ChatState {
 
     /// Start a new assistant message placeholder (streaming).
     pub fn start_assistant_message(&self, run_id: &str) {
-        let id = format!("assistant-{}", run_id);
+        let id = format!("assistant-{run_id}");
         self.messages.update(|msgs| {
             msgs.push(ChatMessage {
                 id,
@@ -490,7 +490,7 @@ impl ChatState {
     /// one created on `run_accepted` before the first turn) is reused — just
     /// stamped with the iteration — to avoid an empty step bubble.
     pub fn begin_step(&self, run_id: &str, iteration: usize) {
-        let target_id = format!("assistant-{}", run_id);
+        let target_id = format!("assistant-{run_id}");
         self.messages.update(|msgs| {
             let len = msgs.len();
             if let Some(idx) = msgs.iter().rposition(|m| m.id == target_id) {
@@ -508,7 +508,7 @@ impl ChatState {
                 if has_payload && prior_step {
                     msgs[idx].is_streaming = false;
                     msgs[idx].is_intermediate = true;
-                    msgs[idx].id = format!("intermediate-{}-{}", run_id, len);
+                    msgs[idx].id = format!("intermediate-{run_id}-{len}");
                     msgs.push(ChatMessage {
                         id: target_id,
                         role: "assistant".into(),
@@ -537,8 +537,8 @@ impl ChatState {
     /// bubble or an already-finalized `intermediate-{run_id}-{n}` bubble for
     /// this run — so late `text_emitted` events still land correctly.
     pub fn set_step_text(&self, run_id: &str, iteration: usize, text: &str) {
-        let assistant_id = format!("assistant-{}", run_id);
-        let intermediate_prefix = format!("intermediate-{}-", run_id);
+        let assistant_id = format!("assistant-{run_id}");
+        let intermediate_prefix = format!("intermediate-{run_id}-");
         self.messages.update(|msgs| {
             if let Some(m) = msgs.iter_mut().rev().find(|m| {
                 m.iteration == Some(iteration)
@@ -556,7 +556,7 @@ impl ChatState {
 
     /// Set model info on the current assistant message for the given run.
     pub fn set_model_info(&self, run_id: &str, info: ModelInfo) {
-        let target_id = format!("assistant-{}", run_id);
+        let target_id = format!("assistant-{run_id}");
         self.messages.update(|msgs| {
             if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
                 msg.model_info = Some(info);
@@ -567,7 +567,7 @@ impl ChatState {
     /// Resolved model id for `run_id`, read from the assistant bubble's
     /// `model_info`. Used by the context gauge to pick a window size.
     pub fn model_for_run(&self, run_id: &str) -> Option<String> {
-        let target_id = format!("assistant-{}", run_id);
+        let target_id = format!("assistant-{run_id}");
         self.messages.with(|msgs| {
             msgs.iter()
                 .rev()
@@ -581,7 +581,7 @@ impl ChatState {
     pub fn append_chunk(&self, run_id: &str, content: &str) {
         // Provider produced output — any pending retry notice is stale.
         self.clear_provider_retry();
-        let target_id = format!("assistant-{}", run_id);
+        let target_id = format!("assistant-{run_id}");
         self.messages.update(|msgs| {
             if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
                 // Skip once `set_step_text` has written the authoritative text
@@ -604,7 +604,7 @@ impl ChatState {
         status: &str,
         duration_ms: Option<u64>,
     ) {
-        let target_id = format!("assistant-{}", run_id);
+        let target_id = format!("assistant-{run_id}");
         self.messages.update(|msgs| {
             if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
                 if let Some(tc) = msg.tool_calls.iter_mut().find(|t| t.tool_id == tool_id) {
@@ -624,7 +624,7 @@ impl ChatState {
 
     /// Finalize current run (mark message as not streaming).
     pub fn complete_run(&self, run_id: &str) {
-        let target_id = format!("assistant-{}", run_id);
+        let target_id = format!("assistant-{run_id}");
         self.messages.update(|msgs| {
             if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
                 msg.is_streaming = false;
@@ -646,8 +646,8 @@ impl ChatState {
         if final_text.trim().is_empty() {
             return;
         }
-        let assistant_id = format!("assistant-{}", run_id);
-        let intermediate_prefix = format!("intermediate-{}-", run_id);
+        let assistant_id = format!("assistant-{run_id}");
+        let intermediate_prefix = format!("intermediate-{run_id}-");
         self.messages.update(|msgs| {
             if let Some(m) = msgs.iter_mut().rev().find(|m| {
                 m.role == "assistant"
@@ -664,7 +664,7 @@ impl ChatState {
 
     /// Mark current run as errored.
     pub fn fail_run(&self, run_id: &str, error: &str) {
-        let target_id = format!("assistant-{}", run_id);
+        let target_id = format!("assistant-{run_id}");
         self.messages.update(|msgs| {
             if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
                 msg.is_streaming = false;

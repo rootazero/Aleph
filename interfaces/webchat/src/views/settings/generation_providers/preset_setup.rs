@@ -140,7 +140,7 @@ pub(super) fn PresetSetupPanel(
                     }
                     Err(e) => {
                         set_adding.set(false);
-                        set_error.set(Some(format!("Failed: {}", e)));
+                        set_error.set(Some(format!("Failed: {e}")));
                     }
                 }
             });

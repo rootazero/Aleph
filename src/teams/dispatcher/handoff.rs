@@ -243,15 +243,13 @@ pub async fn build_handoff_context(
             Ok(None) => {
                 tracing::warn!(task_id = %task.id, dep_id = %dep_id, "Handoff: dependency task not found");
                 dep_section.push_str(&format!(
-                    "### Dependency `{}`\n*(missing from store)*\n",
-                    dep_id
+                    "### Dependency `{dep_id}`\n*(missing from store)*\n"
                 ));
             }
             Err(e) => {
                 tracing::warn!(task_id = %task.id, dep_id = %dep_id, error = %e, "Handoff: failed to fetch dependency");
                 dep_section.push_str(&format!(
-                    "### Dependency `{}`\n*(fetch error: {})*\n",
-                    dep_id, e
+                    "### Dependency `{dep_id}`\n*(fetch error: {e})*\n"
                 ));
             }
         }

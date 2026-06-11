@@ -53,7 +53,7 @@ pub(crate) fn combine_with_document_context(doc_context: &str, input: &str) -> S
     if doc_context.is_empty() {
         input.to_string()
     } else {
-        format!("{}\n\n{}", doc_context, input)
+        format!("{doc_context}\n\n{input}")
     }
 }
 

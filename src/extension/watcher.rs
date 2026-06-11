@@ -236,7 +236,7 @@ impl ExtensionWatcher {
                 }
             },
         )
-        .map_err(|e| AlephError::config(format!("Failed to create extension watcher: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to create extension watcher: {e}")))?;
 
         // Watch each directory recursively
         for dir in &self.watch_dirs {

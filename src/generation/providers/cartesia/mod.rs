@@ -85,7 +85,7 @@ impl CartesiaProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         let base = base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
         let endpoint = if base.contains("/tts/bytes") {
@@ -275,7 +275,7 @@ impl GenerationProvider for CartesiaProvider {
                     if e.is_timeout() {
                         GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
                     } else if e.is_connect() {
-                        GenerationError::network(format!("Connection failed: {}", e))
+                        GenerationError::network(format!("Connection failed: {e}"))
                     } else {
                         GenerationError::network(e.to_string())
                     }
@@ -284,14 +284,14 @@ impl GenerationProvider for CartesiaProvider {
             let status = response.status();
             if !status.is_success() {
                 let body = response.text().await.map_err(|e| {
-                    GenerationError::network(format!("Failed to read error body: {}", e))
+                    GenerationError::network(format!("Failed to read error body: {e}"))
                 })?;
                 error!(status = %status, body = %body, "Cartesia request failed");
                 return Err(self.parse_error(status, &body));
             }
 
             let audio_bytes = response.bytes().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read audio bytes: {}", e))
+                GenerationError::network(format!("Failed to read audio bytes: {e}"))
             })?;
             if audio_bytes.is_empty() {
                 return Err(GenerationError::provider(

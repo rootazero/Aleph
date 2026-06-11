@@ -94,7 +94,7 @@ impl SkillWatcher {
             },
         )
         .map_err(|e| AlephError::Other {
-            message: format!("Failed to create file watcher: {}", e),
+            message: format!("Failed to create file watcher: {e}"),
             suggestion: Some("Check file system permissions".to_string()),
         })?;
 
@@ -103,7 +103,7 @@ impl SkillWatcher {
             .watcher()
             .watch(&skills_dir, RecursiveMode::Recursive)
             .map_err(|e| AlephError::Other {
-                message: format!("Failed to watch directory: {}", e),
+                message: format!("Failed to watch directory: {e}"),
                 suggestion: Some("Ensure the directory exists and is readable".to_string()),
             })?;
 

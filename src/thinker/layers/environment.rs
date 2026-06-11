@@ -72,14 +72,14 @@ impl PromptLayer for EnvironmentLayer {
             output.push_str("**Active Capabilities**:\n");
             for cap in &contract.active_capabilities {
                 let (name, hint) = cap.prompt_hint();
-                output.push_str(&format!("- `{}`: {}\n", name, hint));
+                output.push_str(&format!("- `{name}`: {hint}\n"));
             }
             output.push('\n');
         }
 
         let mut constraint_notes = Vec::new();
         if let Some(max_chars) = contract.constraints.max_output_chars {
-            constraint_notes.push(format!("Max output: {} characters", max_chars));
+            constraint_notes.push(format!("Max output: {max_chars} characters"));
         }
         if contract.constraints.prefer_compact {
             constraint_notes.push("Prefer concise responses".to_string());
@@ -91,7 +91,7 @@ impl PromptLayer for EnvironmentLayer {
         if !constraint_notes.is_empty() {
             output.push_str("**Constraints**:\n");
             for note in constraint_notes {
-                output.push_str(&format!("- {}\n", note));
+                output.push_str(&format!("- {note}\n"));
             }
             output.push('\n');
         }

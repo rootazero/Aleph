@@ -72,11 +72,11 @@ pub fn read_mcp_json(
     }
 
     let content = std::fs::read_to_string(&mcp_path).map_err(|e| {
-        ExtensionError::config_parse(&mcp_path, format!("Failed to read .mcp.json: {}", e))
+        ExtensionError::config_parse(&mcp_path, format!("Failed to read .mcp.json: {e}"))
     })?;
 
     parse_mcp_json_content(&content, plugin_dir, plugin_id)
-        .map_err(|e| ExtensionError::config_parse(&mcp_path, format!("Invalid .mcp.json: {}", e)))
+        .map_err(|e| ExtensionError::config_parse(&mcp_path, format!("Invalid .mcp.json: {e}")))
 }
 
 /// Parse .mcp.json content and return MCP manager configs.
@@ -88,14 +88,14 @@ fn parse_mcp_json_content(
     plugin_id: &str,
 ) -> Result<HashMap<String, McpManagerConfig>, String> {
     let file: McpJsonFile =
-        serde_json::from_str(content).map_err(|e| format!("JSON parse error: {}", e))?;
+        serde_json::from_str(content).map_err(|e| format!("JSON parse error: {e}"))?;
 
     let plugin_root = plugin_dir.to_string_lossy();
     let mut result = HashMap::new();
 
     for (server_name, entry) in file.mcp_servers {
-        let server_id = format!("plugin:{}/{}", plugin_id, server_name);
-        let display_name = format!("{} ({})", server_name, plugin_id);
+        let server_id = format!("plugin:{plugin_id}/{server_name}");
+        let display_name = format!("{server_name} ({plugin_id})");
 
         let command = substitute_vars(&entry.command, &plugin_root);
         let args: Vec<String> = entry

@@ -42,7 +42,7 @@ pub fn AuthView() -> impl IntoView {
                     }
                     Err(e) => {
                         if error.get().is_none() {
-                            error.set(Some(format!("Failed to load sessions: {}", e)));
+                            error.set(Some(format!("Failed to load sessions: {e}")));
                         }
                     }
                 }
@@ -134,7 +134,7 @@ fn SharedTokenSection(error: RwSignal<Option<String>>) -> impl IntoView {
                     error.set(None);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to regenerate token: {}", e)));
+                    error.set(Some(format!("Failed to regenerate token: {e}")));
                 }
             }
             regenerating.set(false);
@@ -287,10 +287,10 @@ fn ActiveSessionsSection(
                             session_count.set(resp.count);
                             sessions.set(resp.sessions);
                         }
-                        Err(e) => error.set(Some(format!("Failed to reload sessions: {}", e))),
+                        Err(e) => error.set(Some(format!("Failed to reload sessions: {e}"))),
                     }
                 }
-                Err(e) => error.set(Some(format!("Failed to revoke session: {}", e))),
+                Err(e) => error.set(Some(format!("Failed to revoke session: {e}"))),
             }
         });
     };

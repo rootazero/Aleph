@@ -76,11 +76,10 @@ impl MessageSender {
             r#"
             tell application "Messages"
                 set targetService to 1st account whose service type = iMessage
-                set targetBuddy to participant "{}" of targetService
-                send "{}" to targetBuddy
+                set targetBuddy to participant "{escaped_to}" of targetService
+                send "{escaped_text}" to targetBuddy
             end tell
-            "#,
-            escaped_to, escaped_text
+            "#
         );
 
         execute_applescript(&script).await?;
@@ -121,12 +120,11 @@ impl MessageSender {
             r#"
             tell application "Messages"
                 set targetService to 1st account whose service type = iMessage
-                set targetBuddy to participant "{}" of targetService
-                set theFile to POSIX file "{}"
+                set targetBuddy to participant "{escaped_to}" of targetService
+                set theFile to POSIX file "{escaped_path}"
                 send theFile to targetBuddy
             end tell
-            "#,
-            escaped_to, escaped_path
+            "#
         );
 
         execute_applescript(&script).await?;
@@ -160,11 +158,10 @@ impl MessageSender {
         let script = format!(
             r#"
             tell application "Messages"
-                set targetChat to chat id "{}"
-                send "{}" to targetChat
+                set targetChat to chat id "{escaped_chat_id}"
+                send "{escaped_text}" to targetChat
             end tell
-            "#,
-            escaped_chat_id, escaped_text
+            "#
         );
 
         execute_applescript(&script).await?;

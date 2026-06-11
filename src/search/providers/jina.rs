@@ -133,15 +133,14 @@ impl crate::search::ProviderFactory for JinaFactory {
     {
         let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
             log::warn!(
-                "search backend '{name}' ({}) skipped: no api_key in vault",
-                NAME
+                "search backend '{name}' ({NAME}) skipped: no api_key in vault"
             );
             return Ok(None);
         };
         match JinaProvider::new(key.to_string()) {
             Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
             Err(e) => {
-                log::warn!("search backend '{name}' ({}) construct failed: {e}", NAME);
+                log::warn!("search backend '{name}' ({NAME}) construct failed: {e}");
                 Ok(None)
             }
         }

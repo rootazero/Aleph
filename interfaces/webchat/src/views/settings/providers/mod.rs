@@ -56,7 +56,7 @@ pub fn ProvidersView() -> impl IntoView {
                 error.set(None);
             }
             Err(e) => {
-                error.set(Some(format!("Failed to load providers: {}", e)));
+                error.set(Some(format!("Failed to load providers: {e}")));
             }
         }
         loading.set(false);

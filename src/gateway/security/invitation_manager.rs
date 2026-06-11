@@ -107,7 +107,7 @@ impl InvitationManager {
         self.pending.insert(token.clone(), invitation);
 
         // Build the invitation URL (mock for now, would be configurable in production)
-        let url = format!("https://aleph.local/join?t={}", token);
+        let url = format!("https://aleph.local/join?t={token}");
 
         Ok(Invitation {
             token,

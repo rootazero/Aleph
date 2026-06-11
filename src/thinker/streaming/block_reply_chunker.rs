@@ -142,7 +142,7 @@ impl BlockReplyChunker {
                     blocks.push(block.trim().to_string());
 
                     // Prepend fence reopen to remaining buffer
-                    self.buffer.insert_str(0, &format!("{}\n", reopen_line));
+                    self.buffer.insert_str(0, &format!("{reopen_line}\n"));
                 }
                 None => {
                     if self.buffer.len() >= self.config.max_block_size {

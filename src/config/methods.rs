@@ -83,15 +83,13 @@ impl Config {
             Some(_) => {
                 error!(provider = %name, "Cannot set disabled provider as default");
                 Err(AlephError::invalid_config(format!(
-                    "Provider '{}' is not enabled",
-                    name
+                    "Provider '{name}' is not enabled"
                 )))
             }
             None => {
                 error!(provider = %name, "Provider not found in config");
                 Err(AlephError::invalid_config(format!(
-                    "Provider '{}' not found",
-                    name
+                    "Provider '{name}' not found"
                 )))
             }
         }

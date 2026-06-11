@@ -223,20 +223,20 @@ impl InitializationCoordinator {
                     } else if skills_dir.exists() {
                         if let Err(e) = tokio::fs::remove_dir_all(&skills_dir).await {
                             warn!(error = %e, dir = ?skills_dir, "Failed to remove skills directory during rollback");
-                            errors.push(format!("skills dir: {}", e));
+                            errors.push(format!("skills dir: {e}"));
                         }
                     }
                 }
                 InitPhase::Runtimes => {
                     let runtimes_dir = get_runtimes_dir().map_err(|e| {
-                        InitError::new("rollback", format!("Failed to get runtimes dir: {}", e))
+                        InitError::new("rollback", format!("Failed to get runtimes dir: {e}"))
                     })?;
                     if pre_existing.runtimes_dir {
                         warn!(dir = ?runtimes_dir, "Runtimes directory pre-existed; skipping rollback to preserve installed runtimes");
                     } else if runtimes_dir.exists() {
                         if let Err(e) = tokio::fs::remove_dir_all(&runtimes_dir).await {
                             warn!(error = %e, dir = ?runtimes_dir, "Failed to remove runtimes directory during rollback");
-                            errors.push(format!("runtimes dir: {}", e));
+                            errors.push(format!("runtimes dir: {e}"));
                         }
                     }
                 }
@@ -249,11 +249,11 @@ impl InitializationCoordinator {
                         warn!("memory.db pre-existed; skipping WAL cleanup during rollback");
                     } else {
                         for suffix in ["-wal", "-shm"] {
-                            let wal_path = self.config_dir.join(format!("memory.db{}", suffix));
+                            let wal_path = self.config_dir.join(format!("memory.db{suffix}"));
                             if wal_path.exists() {
                                 if let Err(e) = tokio::fs::remove_file(&wal_path).await {
                                     warn!(error = %e, path = ?wal_path, "Failed to remove WAL file during rollback");
-                                    errors.push(format!("wal {}: {}", suffix, e));
+                                    errors.push(format!("wal {suffix}: {e}"));
                                 }
                             }
                         }
@@ -272,7 +272,7 @@ impl InitializationCoordinator {
                                     Ok(None) => {
                                         if let Err(e) = tokio::fs::remove_dir(&path).await {
                                             warn!(error = %e, dir = ?path, "Failed to remove empty directory during rollback");
-                                            errors.push(format!("dir {}: {}", subdir, e));
+                                            errors.push(format!("dir {subdir}: {e}"));
                                         }
                                     }
                                     Ok(Some(_)) => {
@@ -280,12 +280,12 @@ impl InitializationCoordinator {
                                     }
                                     Err(e) => {
                                         warn!(error = %e, dir = ?path, "Failed to read directory during rollback");
-                                        errors.push(format!("dir {}: {}", subdir, e));
+                                        errors.push(format!("dir {subdir}: {e}"));
                                     }
                                 },
                                 Err(e) => {
                                     warn!(error = %e, dir = ?path, "Failed to open directory during rollback");
-                                    errors.push(format!("dir {}: {}", subdir, e));
+                                    errors.push(format!("dir {subdir}: {e}"));
                                 }
                             }
                         }
@@ -321,7 +321,7 @@ impl InitializationCoordinator {
 
         for dir in &dirs {
             tokio::fs::create_dir_all(dir).await.map_err(|e| {
-                InitError::new("directories", format!("Failed to create {:?}: {}", dir, e))
+                InitError::new("directories", format!("Failed to create {dir:?}: {e}"))
             })?;
 
             #[cfg(unix)]
@@ -330,7 +330,7 @@ impl InitializationCoordinator {
                 let metadata = tokio::fs::metadata(dir).await.map_err(|e| {
                     InitError::new(
                         "directories",
-                        format!("Failed to get metadata for {:?}: {}", dir, e),
+                        format!("Failed to get metadata for {dir:?}: {e}"),
                     )
                 })?;
                 let mut perms = metadata.permissions();
@@ -338,7 +338,7 @@ impl InitializationCoordinator {
                 tokio::fs::set_permissions(dir, perms).await.map_err(|e| {
                     InitError::new(
                         "directories",
-                        format!("Failed to set permissions for {:?}: {}", dir, e),
+                        format!("Failed to set permissions for {dir:?}: {e}"),
                     )
                 })?;
             }
@@ -363,13 +363,13 @@ impl InitializationCoordinator {
 
         let default_config = Config::default();
         let toml_str = toml::to_string_pretty(&default_config)
-            .map_err(|e| InitError::new("config", format!("Failed to serialize config: {}", e)))?;
+            .map_err(|e| InitError::new("config", format!("Failed to serialize config: {e}")))?;
 
         // Use process-specific temp filename to avoid collisions with concurrent
         // or crashed initialization attempts.
         let temp_path = config_path.with_extension(format!("tmp.{}", std::process::id()));
         tokio::fs::write(&temp_path, toml_str).await.map_err(|e| {
-            InitError::new("config", format!("Failed to write temporary config: {}", e))
+            InitError::new("config", format!("Failed to write temporary config: {e}"))
         })?;
 
         if let Err(e) = tokio::fs::rename(&temp_path, &config_path).await {
@@ -377,7 +377,7 @@ impl InitializationCoordinator {
             let _ = tokio::fs::remove_file(&temp_path).await;
             return Err(InitError::new(
                 "config",
-                format!("Failed to finalize config: {}", e),
+                format!("Failed to finalize config: {e}"),
             ));
         }
 
@@ -397,7 +397,7 @@ impl InitializationCoordinator {
         info!(path = ?db_path, "Initializing memory database (SQLite + sqlite-vec)");
 
         let db = SqliteMemoryBackend::new(&db_path)
-            .map_err(|e| InitError::new("database", format!("Failed to create database: {}", e)))?;
+            .map_err(|e| InitError::new("database", format!("Failed to create database: {e}")))?;
         drop(db);
 
         info!("Memory database initialized");
@@ -414,14 +414,14 @@ impl InitializationCoordinator {
         info!("Initializing runtime ledger (zero-install)...");
 
         let runtimes_dir = crate::utils::paths::get_runtimes_dir().map_err(|e| {
-            InitError::new("runtimes", format!("Failed to get runtimes dir: {}", e))
+            InitError::new("runtimes", format!("Failed to get runtimes dir: {e}"))
         })?;
 
         // Create directory if needed
         tokio::fs::create_dir_all(&runtimes_dir)
             .await
             .map_err(|e| {
-                InitError::new("runtimes", format!("Failed to create runtimes dir: {}", e))
+                InitError::new("runtimes", format!("Failed to create runtimes dir: {e}"))
             })?;
 
         // Migrate from legacy manifest.json or create fresh ledger
@@ -437,9 +437,9 @@ impl InitializationCoordinator {
                 let msg = if e.is_panic() {
                     if let Ok(payload) = e.try_into_panic() {
                         if let Some(s) = payload.downcast_ref::<String>() {
-                            format!("Runtime init task panicked: {}", s)
+                            format!("Runtime init task panicked: {s}")
                         } else if let Some(s) = payload.downcast_ref::<&str>() {
-                            format!("Runtime init task panicked: {}", s)
+                            format!("Runtime init task panicked: {s}")
                         } else {
                             "Runtime init task panicked (unknown payload)".to_string()
                         }
@@ -447,12 +447,12 @@ impl InitializationCoordinator {
                         "Runtime init task panicked".to_string()
                     }
                 } else {
-                    format!("Runtime init task cancelled: {}", e)
+                    format!("Runtime init task cancelled: {e}")
                 };
                 InitError::new("runtimes", msg)
             })?
             .map_err(|e| {
-                InitError::new("runtimes", format!("Failed to initialize ledger: {}", e))
+                InitError::new("runtimes", format!("Failed to initialize ledger: {e}"))
             })?;
 
         info!("Runtime ledger initialized (no downloads, runtimes provisioned on-demand)");
@@ -479,7 +479,7 @@ impl InitializationCoordinator {
         system.init(vec![skills_dir.clone()]).await.map_err(|e| {
             InitError::new(
                 "skills",
-                format!("Failed to initialize skill system: {}", e),
+                format!("Failed to initialize skill system: {e}"),
             )
         })?;
 

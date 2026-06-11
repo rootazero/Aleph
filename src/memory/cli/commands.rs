@@ -67,7 +67,7 @@ impl std::str::FromStr for OutputFormat {
             "table" => Ok(OutputFormat::Table),
             "json" => Ok(OutputFormat::Json),
             "csv" => Ok(OutputFormat::Csv),
-            _ => Err(format!("Unknown format: {}. Use: table, json, csv", s)),
+            _ => Err(format!("Unknown format: {s}. Use: table, json, csv")),
         }
     }
 }
@@ -113,7 +113,7 @@ impl NoteSummary {
         };
         let filename_col = if self.filename.chars().count() > 30 {
             let t: String = self.filename.chars().take(27).collect();
-            format!("{}...", t)
+            format!("{t}...")
         } else {
             self.filename.clone()
         };
@@ -402,8 +402,7 @@ impl MemoryCommands {
 
         match matches.len() {
             0 => Err(AlephError::other(format!(
-                "Note not found: {}",
-                path_or_prefix
+                "Note not found: {path_or_prefix}"
             ))),
             1 => Ok(matches[0].path.clone()),
             _ => Err(AlephError::other(format!(

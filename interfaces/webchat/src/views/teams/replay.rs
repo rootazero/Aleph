@@ -556,5 +556,5 @@ fn format_timestamp(ts: i64) -> String {
     let day = date.get_date();
     let hours = date.get_hours();
     let minutes = date.get_minutes();
-    format!("{:02}/{:02} {:02}:{:02}", month, day, hours, minutes)
+    format!("{month:02}/{day:02} {hours:02}:{minutes:02}")
 }

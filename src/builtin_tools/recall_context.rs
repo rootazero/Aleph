@@ -84,7 +84,7 @@ impl RecallContextTool {
             .database
             .get_raw_by_path_prefix(&path_prefix, "default", args.max_results)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to retrieve raw context chunks: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to retrieve raw context chunks: {e}"))?;
 
         let fragments = raws
             .into_iter()

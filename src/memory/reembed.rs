@@ -239,7 +239,7 @@ async fn reembed_agent_notes(
             Err(e) => {
                 warn!(batch_size = text_refs.len(), error = %e, "[reembed] Batch embed failed");
                 failed += text_refs.len();
-                errors.push(format!("notes batch for agent {agent_id}: {}", e));
+                errors.push(format!("notes batch for agent {agent_id}: {e}"));
             }
         }
 

@@ -18,12 +18,11 @@ pub fn EdgeLabel(
         let opacity = if visible.get() { 1.0 } else { 0.0 };
         format!(
             "position:absolute;left:0;top:0;\
-             transform:translate3d({:.1}px,{:.1}px,0) translate(-50%,-50%) rotate({:.1}deg);\
+             transform:translate3d({x:.1}px,{y:.1}px,0) translate(-50%,-50%) rotate({deg:.1}deg);\
              padding:2px 8px;border-radius:6px;\
              background:rgba(15,23,42,0.85);color:#cbd5e1;\
              font-size:10px;white-space:nowrap;\
-             opacity:{:.2};transition:opacity 120ms ease-out;pointer-events:none",
-            x, y, deg, opacity
+             opacity:{opacity:.2};transition:opacity 120ms ease-out;pointer-events:none"
         )
     };
 

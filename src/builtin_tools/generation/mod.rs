@@ -25,13 +25,13 @@ impl From<GenerationError> for ToolError {
                 ToolError::InvalidArgs(message.clone())
             }
             GenerationError::AuthenticationError { message, .. } => {
-                ToolError::InvalidArgs(format!("Authentication failed: {}", message))
+                ToolError::InvalidArgs(format!("Authentication failed: {message}"))
             }
             GenerationError::RateLimitError { message, .. } => {
-                ToolError::Execution(format!("Rate limited: {}", message))
+                ToolError::Execution(format!("Rate limited: {message}"))
             }
             GenerationError::ContentFilteredError { message, .. } => {
-                ToolError::Execution(format!("Content filtered: {}", message))
+                ToolError::Execution(format!("Content filtered: {message}"))
             }
             _ => ToolError::Execution(err.to_string()),
         }

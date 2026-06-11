@@ -109,7 +109,7 @@ impl TranscriptionService for WhisperTranscription {
             let body = resp
                 .text()
                 .await
-                .unwrap_or_else(|e| format!("<failed to read body: {}>", e));
+                .unwrap_or_else(|e| format!("<failed to read body: {e}>"));
             anyhow::bail!("Whisper API error {status}: {body}");
         }
 

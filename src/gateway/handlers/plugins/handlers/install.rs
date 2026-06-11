@@ -94,7 +94,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
                     JsonRpcResponse::error(
                         request.id,
                         INTERNAL_ERROR,
-                        format!("Failed to load installed plugin: {}", e),
+                        format!("Failed to load installed plugin: {e}"),
                     )
                 }
             }
@@ -102,7 +102,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to clone repository: {}", e),
+            format!("Failed to clone repository: {e}"),
         ),
     }
 }
@@ -121,7 +121,7 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Invalid base64 data: {}", e),
+                format!("Invalid base64 data: {e}"),
             );
         }
     };
@@ -135,7 +135,7 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to write temp file: {}", e),
+            format!("Failed to write temp file: {e}"),
         );
     }
 
@@ -147,7 +147,7 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to open zip file: {}", e),
+                format!("Failed to open zip file: {e}"),
             );
         }
     };
@@ -159,7 +159,7 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to read zip archive: {}", e),
+                format!("Failed to read zip archive: {e}"),
             );
         }
     };
@@ -169,7 +169,7 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to extract zip: {}", e),
+            format!("Failed to extract zip: {e}"),
         );
     }
 

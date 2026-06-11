@@ -244,7 +244,7 @@ fn JobListItem(
                     let next_prefix = t_string!(i18n, cron.next).to_string();
                     view! {
                         <div class="ml-4 mt-1 text-xs text-text-tertiary">
-                            {format!("{}{}", next_prefix, relative)}
+                            {format!("{next_prefix}{relative}")}
                         </div>
                     }.into_any()
                 } else {

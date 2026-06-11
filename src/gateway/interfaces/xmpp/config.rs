@@ -76,8 +76,7 @@ impl XmppConfig {
         for room in &self.muc_rooms {
             if !room.contains('@') {
                 return Err(format!(
-                    "MUC room '{}' must contain '@' (e.g., room@conference.example.com)",
-                    room
+                    "MUC room '{room}' must contain '@' (e.g., room@conference.example.com)"
                 ));
             }
         }

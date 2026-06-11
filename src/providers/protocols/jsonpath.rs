@@ -54,7 +54,7 @@ pub fn extract_value(json: &Value, path: &str) -> Result<String> {
     // matched values in document order, borrowing from the input JSON).
     let results = json
         .query(path)
-        .map_err(|e| AlephError::provider(format!("JSONPath query failed: {}", e)))?;
+        .map_err(|e| AlephError::provider(format!("JSONPath query failed: {e}")))?;
 
     // RFC 9535 semantics make path existence unambiguous: an empty result set
     // means the path matched nothing, while a present `Value::Null` means the
@@ -63,8 +63,7 @@ pub fn extract_value(json: &Value, path: &str) -> Result<String> {
         Some(&value) => value,
         None => {
             return Err(AlephError::provider(format!(
-                "No value found at JSONPath '{}' in response (path does not exist)",
-                path
+                "No value found at JSONPath '{path}' in response (path does not exist)"
             )));
         }
     };
@@ -78,7 +77,7 @@ pub fn extract_value(json: &Value, path: &str) -> Result<String> {
         Value::Object(_) | Value::Array(_) => {
             // Serialize complex types to JSON string
             serde_json::to_string(first_match).map_err(|e| {
-                AlephError::provider(format!("Failed to serialize JSON value: {}", e))
+                AlephError::provider(format!("Failed to serialize JSON value: {e}"))
             })?
         }
     };

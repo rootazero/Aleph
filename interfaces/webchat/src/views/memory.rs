@@ -591,5 +591,5 @@ fn format_ts(ts: i64) -> String {
     let day = date.get_date();
     let hour = date.get_hours();
     let min = date.get_minutes();
-    format!("{:04}-{:02}-{:02} {:02}:{:02}", year, month, day, hour, min)
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{min:02}")
 }

@@ -86,8 +86,7 @@ impl ChromeMcpBackend {
     async fn select_page(&self, tab_id: &str) -> Result<(), BrowserError> {
         let page_id: u32 = tab_id.parse().map_err(|_| {
             BrowserError::ActionFailed(format!(
-                "Invalid tab ID '{}': expected numeric page ID",
-                tab_id
+                "Invalid tab ID '{tab_id}': expected numeric page ID"
             ))
         })?;
         self.call("select_page", json!({ "pageId": page_id }))
@@ -150,8 +149,7 @@ impl BrowserBackend for ChromeMcpBackend {
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
         let page_id: u32 = tab_id.parse().map_err(|_| {
             BrowserError::TabNotFound(format!(
-                "Invalid tab ID '{}': expected numeric page ID",
-                tab_id
+                "Invalid tab ID '{tab_id}': expected numeric page ID"
             ))
         })?;
         self.call("close_page", json!({ "pageId": page_id }))

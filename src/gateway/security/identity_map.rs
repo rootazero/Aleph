@@ -36,7 +36,7 @@ impl IdentityMap {
 
     /// Create identity key from platform and user_id
     fn make_key(platform: &str, platform_user_id: &str) -> String {
-        format!("{}:{}", platform, platform_user_id)
+        format!("{platform}:{platform_user_id}")
     }
 
     /// Resolve external identity to internal user ID

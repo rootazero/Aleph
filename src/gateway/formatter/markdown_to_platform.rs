@@ -104,10 +104,10 @@ pub(super) fn markdown_to_slack_mrkdwn(text: &str) -> String {
             BlockElement::CodeBlock { lang, code } => {
                 // Slack supports ``` code blocks natively.
                 if lang.is_empty() {
-                    out.push_str(&format!("```\n{}```", code));
+                    out.push_str(&format!("```\n{code}```"));
                 } else {
                     // Slack ignores lang tag but we include it for readability.
-                    out.push_str(&format!("```\n{}```", code));
+                    out.push_str(&format!("```\n{code}```"));
                 }
             }
             BlockElement::Heading { text: h, .. } => {

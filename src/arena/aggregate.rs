@@ -148,11 +148,10 @@ impl SharedArena {
         let slot = self
             .slots
             .get_mut(agent_id)
-            .ok_or_else(|| format!("Unknown agent: {}", agent_id))?;
+            .ok_or_else(|| format!("Unknown agent: {agent_id}"))?;
         if slot.artifacts.len() >= MAX_ARTIFACTS_PER_SLOT {
             return Err(format!(
-                "Artifact limit reached for agent {}: max {} artifacts per slot",
-                agent_id, MAX_ARTIFACTS_PER_SLOT
+                "Artifact limit reached for agent {agent_id}: max {MAX_ARTIFACTS_PER_SLOT} artifacts per slot"
             ));
         }
         slot.artifacts.push(artifact);
@@ -198,8 +197,7 @@ impl SharedArena {
         }
         if !self.slots.contains_key(agent_id) {
             return Err(format!(
-                "Agent '{}' is not a participant in this arena",
-                agent_id
+                "Agent '{agent_id}' is not a participant in this arena"
             ));
         }
 
@@ -246,8 +244,7 @@ impl SharedArena {
         }
         if self.shared_facts.len() >= MAX_SHARED_FACTS {
             return Err(format!(
-                "Shared fact limit reached: max {} facts per arena",
-                MAX_SHARED_FACTS
+                "Shared fact limit reached: max {MAX_SHARED_FACTS} facts per arena"
             ));
         }
         self.shared_facts.push(fact);

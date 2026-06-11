@@ -41,7 +41,7 @@ pub fn get_home_dir() -> Result<PathBuf> {
 
     // Try HOMEDRIVE + HOMEPATH (older Windows)
     if let (Ok(drive), Ok(path)) = (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
-        return Ok(PathBuf::from(format!("{}{}", drive, path)));
+        return Ok(PathBuf::from(format!("{drive}{path}")));
     }
 
     Err(AlephError::config(
@@ -104,7 +104,7 @@ pub fn get_cache_dir() -> Result<PathBuf> {
 pub fn get_memory_db_path() -> Result<PathBuf> {
     let memory_dir = get_config_dir()?.join("memory");
     std::fs::create_dir_all(&memory_dir)
-        .map_err(|e| AlephError::config(format!("Failed to create memory directory: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to create memory directory: {e}")))?;
     Ok(memory_dir)
 }
 
@@ -135,7 +135,7 @@ pub fn get_runtimes_dir() -> Result<PathBuf> {
 pub fn get_data_dir() -> Result<PathBuf> {
     let data_dir = get_config_dir()?.join("data");
     std::fs::create_dir_all(&data_dir)
-        .map_err(|e| AlephError::config(format!("Failed to create data directory: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to create data directory: {e}")))?;
     Ok(data_dir)
 }
 
@@ -147,7 +147,7 @@ pub fn get_data_dir() -> Result<PathBuf> {
 pub fn get_note_memory_dir() -> Result<PathBuf> {
     let dir = get_config_dir()?.join("memory").join("note");
     std::fs::create_dir_all(&dir).map_err(|e| {
-        AlephError::config(format!("Failed to create note memory directory: {}", e))
+        AlephError::config(format!("Failed to create note memory directory: {e}"))
     })?;
     Ok(dir)
 }
@@ -160,7 +160,7 @@ pub fn get_note_memory_dir() -> Result<PathBuf> {
 pub fn get_raw_memory_dir() -> Result<PathBuf> {
     let dir = get_config_dir()?.join("memory").join("raw");
     std::fs::create_dir_all(&dir)
-        .map_err(|e| AlephError::config(format!("Failed to create raw memory directory: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to create raw memory directory: {e}")))?;
     Ok(dir)
 }
 
@@ -365,15 +365,14 @@ pub fn get_agent_config_dir(agent_id: &str) -> Result<PathBuf> {
         || agent_id.contains('\0')
     {
         return Err(AlephError::config(format!(
-            "Invalid agent ID '{}': must not contain path separators, '..', or null bytes",
-            agent_id
+            "Invalid agent ID '{agent_id}': must not contain path separators, '..', or null bytes"
         )));
     }
 
     let agent_dir = get_config_dir()?.join("agents").join(agent_id);
 
     std::fs::create_dir_all(&agent_dir).map_err(|e| {
-        AlephError::config(format!("Failed to create agent config directory: {}", e))
+        AlephError::config(format!("Failed to create agent config directory: {e}"))
     })?;
 
     Ok(agent_dir)

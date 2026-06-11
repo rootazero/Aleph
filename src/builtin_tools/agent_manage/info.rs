@@ -45,14 +45,14 @@ impl fmt::Display for AgentInfoOutput {
         writeln!(f, "Agent: {} ({})", self.id, self.mode)?;
         writeln!(f, "  description: {}", self.description)?;
         if let Some(ref when) = self.when_to_use {
-            writeln!(f, "  when_to_use: {}", when)?;
+            writeln!(f, "  when_to_use: {when}")?;
         }
         writeln!(f, "  allowed_tools: {}", self.allowed_tools.join(", "))?;
         if !self.denied_tools.is_empty() {
             writeln!(f, "  denied_tools: {}", self.denied_tools.join(", "))?;
         }
         if let Some(max) = self.max_iterations {
-            writeln!(f, "  max_iterations: {}", max)?;
+            writeln!(f, "  max_iterations: {max}")?;
         }
         writeln!(f, "  context_mode: {}", self.context_mode)?;
         Ok(())

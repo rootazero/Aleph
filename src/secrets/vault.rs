@@ -36,7 +36,7 @@ impl SecretVault {
             Some(bytes) => {
                 debug!(path = %path.display(), "Loading existing vault");
                 let data: VaultData = bincode::deserialize(&bytes).map_err(|e| {
-                    SecretError::Serialization(format!("Failed to deserialize vault: {}", e))
+                    SecretError::Serialization(format!("Failed to deserialize vault: {e}"))
                 })?;
                 if data.version > VAULT_VERSION {
                     return Err(SecretError::Serialization(format!(
@@ -125,7 +125,7 @@ impl SecretVault {
     /// Save vault to disk with atomic write + fcntl lock via `VaultIo`.
     fn save(&self) -> Result<(), SecretError> {
         let bytes = bincode::serialize(&self.data)
-            .map_err(|e| SecretError::Serialization(format!("Failed to serialize vault: {}", e)))?;
+            .map_err(|e| SecretError::Serialization(format!("Failed to serialize vault: {e}")))?;
 
         // Ensure parent directory exists
         if let Some(parent) = self.path.parent() {

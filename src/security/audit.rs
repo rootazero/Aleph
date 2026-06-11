@@ -50,7 +50,7 @@ impl fmt::Display for AuditEventType {
             Self::PiiDetected => "pii_detected",
             Self::LeakWarning => "leak_warning",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 

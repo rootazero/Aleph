@@ -318,7 +318,7 @@ impl SkillManageTool {
             self.system
                 .update_config(&skill_id, SkillConfigUpdate::SetEnabled(enabled))
                 .await
-                .map_err(|e| AlephError::tool(format!("Failed to set enabled: {}", e)))?;
+                .map_err(|e| AlephError::tool(format!("Failed to set enabled: {e}")))?;
         }
 
         if let Some(scope_str) = &args.scope {
@@ -328,13 +328,13 @@ impl SkillManageTool {
                 "standalone" => PromptScope::Standalone,
                 "disabled" => PromptScope::Disabled,
                 other => {
-                    return Err(AlephError::tool(format!("Invalid scope: {}", other)));
+                    return Err(AlephError::tool(format!("Invalid scope: {other}")));
                 }
             };
             self.system
                 .update_config(&skill_id, SkillConfigUpdate::SetScope(scope))
                 .await
-                .map_err(|e| AlephError::tool(format!("Failed to set scope: {}", e)))?;
+                .map_err(|e| AlephError::tool(format!("Failed to set scope: {e}")))?;
         }
 
         // Mutation succeeded — record as a patch event so the curator /

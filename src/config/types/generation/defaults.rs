@@ -98,8 +98,7 @@ impl GenerationDefaults {
         if let Some(width) = self.width {
             if width == 0 {
                 return Err(format!(
-                    "generation.providers.{}.defaults.width must be greater than 0",
-                    provider_name
+                    "generation.providers.{provider_name}.defaults.width must be greater than 0"
                 ));
             }
             if width > 8192 {
@@ -114,8 +113,7 @@ impl GenerationDefaults {
         if let Some(height) = self.height {
             if height == 0 {
                 return Err(format!(
-                    "generation.providers.{}.defaults.height must be greater than 0",
-                    provider_name
+                    "generation.providers.{provider_name}.defaults.height must be greater than 0"
                 ));
             }
             if height > 8192 {
@@ -131,8 +129,7 @@ impl GenerationDefaults {
         if let Some(n) = self.n {
             if n == 0 {
                 return Err(format!(
-                    "generation.providers.{}.defaults.n must be greater than 0",
-                    provider_name
+                    "generation.providers.{provider_name}.defaults.n must be greater than 0"
                 ));
             }
             if n > 10 {
@@ -148,8 +145,7 @@ impl GenerationDefaults {
         if let Some(speed) = self.speed {
             if !(0.25..=4.0).contains(&speed) {
                 return Err(format!(
-                    "generation.providers.{}.defaults.speed must be between 0.25 and 4.0, got {}",
-                    provider_name, speed
+                    "generation.providers.{provider_name}.defaults.speed must be between 0.25 and 4.0, got {speed}"
                 ));
             }
         }
@@ -158,8 +154,7 @@ impl GenerationDefaults {
         if let Some(fps) = self.fps {
             if fps == 0 {
                 return Err(format!(
-                    "generation.providers.{}.defaults.fps must be greater than 0",
-                    provider_name
+                    "generation.providers.{provider_name}.defaults.fps must be greater than 0"
                 ));
             }
             if fps > 120 {
@@ -175,8 +170,7 @@ impl GenerationDefaults {
         if let Some(duration) = self.duration_seconds {
             if duration <= 0.0 {
                 return Err(format!(
-                    "generation.providers.{}.defaults.duration_seconds must be greater than 0",
-                    provider_name
+                    "generation.providers.{provider_name}.defaults.duration_seconds must be greater than 0"
                 ));
             }
         }
@@ -185,8 +179,7 @@ impl GenerationDefaults {
         if let Some(scale) = self.guidance_scale {
             if scale < 0.0 {
                 return Err(format!(
-                    "generation.providers.{}.defaults.guidance_scale must be >= 0, got {}",
-                    provider_name, scale
+                    "generation.providers.{provider_name}.defaults.guidance_scale must be >= 0, got {scale}"
                 ));
             }
             if scale > 30.0 {
@@ -202,8 +195,7 @@ impl GenerationDefaults {
         if let Some(steps) = self.steps {
             if steps == 0 {
                 return Err(format!(
-                    "generation.providers.{}.defaults.steps must be greater than 0",
-                    provider_name
+                    "generation.providers.{provider_name}.defaults.steps must be greater than 0"
                 ));
             }
             if steps > 150 {

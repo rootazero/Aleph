@@ -109,7 +109,7 @@ impl EmbeddingManager {
                 .providers
                 .iter()
                 .find(|p| p.id == new_id)
-                .ok_or_else(|| AlephError::config(format!("Provider not found: {}", new_id)))?
+                .ok_or_else(|| AlephError::config(format!("Provider not found: {new_id}")))?
                 .clone()
         }; // settings lock released
 
@@ -134,7 +134,7 @@ impl EmbeddingManager {
                 .providers
                 .iter()
                 .find(|p| p.id == provider_id)
-                .ok_or_else(|| AlephError::config(format!("Provider not found: {}", provider_id)))?
+                .ok_or_else(|| AlephError::config(format!("Provider not found: {provider_id}")))?
                 .clone()
         }; // settings lock released here
         let provider = RemoteEmbeddingProvider::from_config(&config)?;

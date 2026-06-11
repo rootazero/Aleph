@@ -386,7 +386,7 @@ impl GatewayEventBus {
     pub fn publish_frame(&self, frame: &GatewayEventFrame) -> Result<usize, serde_json::Error> {
         // Truncate on a char boundary (frame Debug embeds user/model text which
         // is frequently multibyte UTF-8); byte-slicing would panic mid-char.
-        let preview: String = format!("{:?}", frame).chars().take(100).collect();
+        let preview: String = format!("{frame:?}").chars().take(100).collect();
         debug!("Publishing typed event: {}", preview);
         let frame_value = serde_json::to_value(frame)?;
         let wire_json = if let Some(method) = frame.stream_method() {
@@ -415,7 +415,7 @@ impl GatewayEventBus {
         let event_str = event.as_ref();
         let preview = if event_str.chars().count() > 100 {
             let truncated: String = event_str.chars().take(100).collect();
-            format!("{}...", truncated)
+            format!("{truncated}...")
         } else {
             event_str.to_string()
         };

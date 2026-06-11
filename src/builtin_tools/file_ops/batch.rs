@@ -29,7 +29,7 @@ pub async fn execute_batch_move(
         let checked_dest = check_and_resolve_path(dest, denied_paths, output_dir_override)?;
         // Create destination if needed
         fs::create_dir_all(&checked_dest)
-            .map_err(|e| ToolError::Execution(format!("Failed to create destination: {}", e)))?;
+            .map_err(|e| ToolError::Execution(format!("Failed to create destination: {e}")))?;
         checked_dest
     } else {
         return Err(ToolError::InvalidArgs(format!(
@@ -52,7 +52,7 @@ pub async fn execute_batch_move(
     let mut errors = Vec::new();
 
     for entry in glob::glob(&pattern_str)
-        .map_err(|e| ToolError::InvalidArgs(format!("Invalid glob pattern: {}", e)))?
+        .map_err(|e| ToolError::InvalidArgs(format!("Invalid glob pattern: {e}")))?
     {
         match entry {
             Ok(path) => {
@@ -191,7 +191,7 @@ pub async fn execute_organize(
 
     // Read directory entries
     let entries: Vec<_> = fs::read_dir(&canonical)
-        .map_err(|e| ToolError::Execution(format!("Failed to read directory: {}", e)))?
+        .map_err(|e| ToolError::Execution(format!("Failed to read directory: {e}")))?
         .filter_map(|e| e.ok())
         .collect();
 
@@ -223,7 +223,7 @@ pub async fn execute_organize(
         let category_dir = canonical.join(category);
         if !category_dir.exists() {
             if let Err(e) = fs::create_dir(&category_dir) {
-                errors.push(format!("Failed to create {}: {}", category, e));
+                errors.push(format!("Failed to create {category}: {e}"));
                 continue;
             }
         }
@@ -259,7 +259,7 @@ pub async fn execute_organize(
     let count = moved_files.len();
     let summary: Vec<String> = category_counts
         .iter()
-        .map(|(cat, cnt)| format!("{}: {}", cat, cnt))
+        .map(|(cat, cnt)| format!("{cat}: {cnt}"))
         .collect();
 
     let message = if errors.is_empty() {

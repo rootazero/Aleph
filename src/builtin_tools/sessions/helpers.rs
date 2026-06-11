@@ -122,7 +122,7 @@ pub fn parse_session_key(display: &str) -> Result<SessionKey, String> {
         return Err("Empty session key string".to_string());
     }
 
-    SessionKey::parse(trimmed).ok_or_else(|| format!("Invalid session key format: '{}'", trimmed))
+    SessionKey::parse(trimmed).ok_or_else(|| format!("Invalid session key format: '{trimmed}'"))
 }
 
 /// Extract the channel name from a session key.

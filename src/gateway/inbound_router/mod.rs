@@ -532,7 +532,7 @@ impl InboundMessageRouter {
                     warn!("[Router] {}", e);
                     let reply = OutboundMessage::text(
                         msg.conversation_id.as_str(),
-                        format!("\u{26d4} {}", e),
+                        format!("\u{26d4} {e}"),
                     );
                     let _ = self.channel_registry.send(&msg.channel_id, reply).await;
                     return Ok(());
@@ -657,7 +657,7 @@ impl InboundMessageRouter {
 
                         let reply_msg = super::channel::OutboundMessage {
                             conversation_id: ctx.reply_route.conversation_id.clone(),
-                            text: format!("🎙 Voice Mode: {}", status),
+                            text: format!("🎙 Voice Mode: {status}"),
                             attachments: vec![],
                             reply_to: ctx.reply_route.reply_to.clone(),
                             inline_keyboard: Some(keyboard),
@@ -882,7 +882,7 @@ impl InboundMessageRouter {
                                 let keyboard = self.build_namespace_keyboard(namespace, &children);
                                 let reply = OutboundMessage {
                                     conversation_id: msg.conversation_id.clone(),
-                                    text: format!("/{} — choose a sub-command:", namespace),
+                                    text: format!("/{namespace} — choose a sub-command:"),
                                     attachments: Vec::new(),
                                     reply_to: Some(msg.id.clone()),
                                     inline_keyboard: Some(keyboard),
@@ -930,7 +930,7 @@ impl InboundMessageRouter {
                     Err(e) => {
                         let error_msg = OutboundMessage::text(
                             msg.conversation_id.as_str(),
-                            format!("Group chat error: {}", e),
+                            format!("Group chat error: {e}"),
                         );
                         let _ = self.channel_registry.send(&msg.channel_id, error_msg).await;
                         return Ok(());
@@ -1107,7 +1107,7 @@ impl InboundMessageRouter {
     ) -> super::channel::InlineKeyboard {
         use super::channel::{InlineButton, InlineKeyboard};
 
-        let prefix = format!("{}_", namespace);
+        let prefix = format!("{namespace}_");
         // Build buttons: 2 per row for compact layout
         let buttons: Vec<InlineButton> = children
             .iter()
@@ -1115,7 +1115,7 @@ impl InboundMessageRouter {
                 let sub_name = tool.name.strip_prefix(&prefix).unwrap_or(&tool.name);
                 let display = sub_name.to_string();
                 // Callback data: "/namespace sub" format for re-injection
-                let callback = format!("/{} {}", namespace, sub_name);
+                let callback = format!("/{namespace} {sub_name}");
                 InlineButton {
                     text: display,
                     callback_data: callback,

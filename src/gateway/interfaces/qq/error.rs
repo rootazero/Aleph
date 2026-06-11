@@ -26,7 +26,7 @@ impl From<QQError> for ChannelError {
                 ChannelError::RateLimited { retry_after_secs }
             }
             QQError::HttpError { status, body } => {
-                ChannelError::SendFailed(format!("HTTP {}: {}", status, body))
+                ChannelError::SendFailed(format!("HTTP {status}: {body}"))
             }
             QQError::SendFailed(msg) => ChannelError::SendFailed(msg),
             QQError::GatewayError(msg) => ChannelError::NotConnected(msg),

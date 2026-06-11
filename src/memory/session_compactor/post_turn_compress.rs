@@ -102,7 +102,7 @@ impl SessionCompactor {
             if let Some(ref writer) = self.raw_memory_writer {
                 let raw_text: String = chunk
                     .iter()
-                    .map(|(role, text)| format!("[{}]: {}", role, text))
+                    .map(|(role, text)| format!("[{role}]: {text}"))
                     .collect::<Vec<_>>()
                     .join("\n\n");
                 if !raw_text.is_empty() {
@@ -196,7 +196,7 @@ impl SessionCompactor {
 
                 let raw_content: String = chunk
                     .iter()
-                    .map(|(role, text)| format!("[{}]: {}", role, text))
+                    .map(|(role, text)| format!("[{role}]: {text}"))
                     .collect::<Vec<_>>()
                     .join("\n\n");
                 self.store_raw_chunk(&session_id, next_seq as usize, &raw_content)

@@ -172,7 +172,7 @@ impl MarkdownCliTool {
                             continue;
                         }
                         docker_args.push("-e".to_string());
-                        docker_args.push(format!("{}={}", env_var, value));
+                        docker_args.push(format!("{env_var}={value}"));
                         tracing::debug!(env_var = %env_var, "Passing env var to container");
                     } else {
                         warn!(
@@ -227,17 +227,16 @@ impl MarkdownCliTool {
 
             match exit_code {
                 125 => anyhow::bail!(
-                    "Docker runtime error (container failed to start): {}",
-                    stderr
+                    "Docker runtime error (container failed to start): {stderr}"
                 ),
-                126 => anyhow::bail!("Command cannot be executed in container: {}", stderr),
+                126 => anyhow::bail!("Command cannot be executed in container: {stderr}"),
                 127 => anyhow::bail!(
                     "Command '{}' not found in container image '{}'. \
                     Check metadata.aleph.docker.image configuration.",
                     bin,
                     self.get_docker_image().unwrap_or_default()
                 ),
-                137 => anyhow::bail!("Container killed (OOM or SIGKILL): {}", stderr),
+                137 => anyhow::bail!("Container killed (OOM or SIGKILL): {stderr}"),
                 _ => {
                     // Tool itself failed (non-zero exit), return output
                     warn!(

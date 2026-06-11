@@ -135,16 +135,16 @@ fn error_class_to_kind(ec: &ErrorClass) -> ErrorKind {
 pub(crate) fn parse_conversation_id(conv_id: &str) -> ChannelResult<(ChatId, Option<i32>)> {
     if let Some((chat, topic)) = conv_id.split_once(":topic:") {
         let chat_id = chat.parse::<i64>().map_err(|_| {
-            ChannelError::Internal(format!("Invalid chat_id in conversation_id: {}", conv_id))
+            ChannelError::Internal(format!("Invalid chat_id in conversation_id: {conv_id}"))
         })?;
         let thread_id = topic.parse::<i32>().map_err(|_| {
-            ChannelError::Internal(format!("Invalid thread_id in conversation_id: {}", conv_id))
+            ChannelError::Internal(format!("Invalid thread_id in conversation_id: {conv_id}"))
         })?;
         Ok((ChatId(chat_id), Some(thread_id)))
     } else {
         let chat_id = conv_id
             .parse::<i64>()
-            .map_err(|_| ChannelError::Internal(format!("Invalid conversation_id: {}", conv_id)))?;
+            .map_err(|_| ChannelError::Internal(format!("Invalid conversation_id: {conv_id}")))?;
         Ok((ChatId(chat_id), None))
     }
 }
@@ -205,7 +205,7 @@ pub(crate) async fn send_message(
             remaining_secs = cd.remaining.as_secs_f64(),
             "skipping send — conversation in cooldown",
         );
-        let err = ChannelError::SendFailed(format!("conversation in cooldown: {}", cd));
+        let err = ChannelError::SendFailed(format!("conversation in cooldown: {cd}"));
         if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
             return Err(ChannelError::SendFailed(
                 "Error suppressed by policy".to_string(),
@@ -293,7 +293,7 @@ pub(crate) async fn send_message(
     // Send reasoning first if present in metadata
     if let Some(reasoning) = message.metadata.get("reasoning") {
         if !reasoning.is_empty() {
-            let reasoning_text = format!("🤔 {}", reasoning);
+            let reasoning_text = format!("🤔 {reasoning}");
             let reasoning_html =
                 MessageFormatter::format(&reasoning_text, MarkupFormat::TelegramHtml);
             let reasoning_chunks = split_html_safe(&reasoning_html, 4000);
@@ -348,8 +348,7 @@ pub(crate) async fn send_message(
                                     let cls = classify_error(&fallback_err);
                                     cooldown.record_failure(conv_id, error_class_to_kind(&cls));
                                     let err = ChannelError::SendFailed(format!(
-                                        "Telegram send error: {}",
-                                        fallback_err
+                                        "Telegram send error: {fallback_err}"
                                     ));
                                     if !cooldown.should_send_error(
                                         conv_id,
@@ -376,8 +375,7 @@ pub(crate) async fn send_message(
                                         let cls = classify_error(&fallback_err);
                                         cooldown.record_failure(conv_id, error_class_to_kind(&cls));
                                         let err = ChannelError::SendFailed(format!(
-                                            "Telegram send error: {}",
-                                            fallback_err
+                                            "Telegram send error: {fallback_err}"
                                         ));
                                         if !cooldown.should_send_error(
                                             conv_id,
@@ -403,8 +401,7 @@ pub(crate) async fn send_message(
                                     ));
                                 }
                                 return Err(ChannelError::SendFailed(format!(
-                                    "HTML parse error: {}",
-                                    reason
+                                    "HTML parse error: {reason}"
                                 )));
                             }
                         }
@@ -542,8 +539,7 @@ pub(crate) async fn send_typing(
         Err(e) => {
             cooldown.record_typing_failure();
             Err(ChannelError::Internal(format!(
-                "Failed to send typing: {}",
-                e
+                "Failed to send typing: {e}"
             )))
         }
     }
@@ -566,7 +562,7 @@ pub(crate) async fn send_reaction(
         message_id
             .as_str()
             .parse::<i32>()
-            .map_err(|e| ChannelError::Internal(format!("Invalid message ID: {}", e)))?,
+            .map_err(|e| ChannelError::Internal(format!("Invalid message ID: {e}")))?,
     );
 
     let reactions = if reaction.is_empty() {
@@ -616,7 +612,7 @@ pub(crate) async fn send_attachment(
     } else if let Some(url) = &attachment.url {
         InputFile::url(
             url.parse()
-                .map_err(|e| ChannelError::SendFailed(format!("Invalid attachment URL: {}", e)))?,
+                .map_err(|e| ChannelError::SendFailed(format!("Invalid attachment URL: {e}")))?,
         )
     } else {
         return Err(ChannelError::SendFailed(
@@ -630,29 +626,29 @@ pub(crate) async fn send_attachment(
         // Sticker formats: static (webp), animated (tgsticker), video (webm)
         let req = with_thread!(bot.send_sticker(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send sticker: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send sticker: {e}")))?;
     } else if mime.starts_with("image/") {
         let req = with_thread!(bot.send_photo(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send photo: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send photo: {e}")))?;
     } else if mime == "audio/ogg" || mime == "audio/opus" || mime == "audio/ogg; codecs=opus" {
         // Voice messages: OGG/Opus → send as voice (inline playable)
         let req = with_thread!(bot.send_voice(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {e}")))?;
     } else if mime.starts_with("audio/") {
         // Other audio: MP3, WAV, etc. → also send as voice for TTS output
         let req = with_thread!(bot.send_voice(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {e}")))?;
     } else if mime.starts_with("video/") {
         let req = with_thread!(bot.send_video(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send video: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send video: {e}")))?;
     } else {
         let req = with_thread!(bot.send_document(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send document: {}", e)))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send document: {e}")))?;
     }
 
     Ok(())

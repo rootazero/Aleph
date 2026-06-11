@@ -123,7 +123,7 @@ impl McpPromptManager {
     /// A list of prompts available from the server
     pub async fn list(&self, server: &str) -> Result<Vec<McpPrompt>> {
         let all_prompts = self.client.list_prompts().await;
-        let prefix = format!("{}:", server);
+        let prefix = format!("{server}:");
 
         Ok(all_prompts
             .into_iter()
@@ -149,10 +149,10 @@ impl McpPromptManager {
         arguments: Option<HashMap<String, Value>>,
     ) -> Result<PromptResult> {
         // Ensure name has server prefix
-        let full_name = if name.starts_with(&format!("{}:", server)) {
+        let full_name = if name.starts_with(&format!("{server}:")) {
             name.to_string()
         } else {
-            format!("{}:{}", server, name)
+            format!("{server}:{name}")
         };
 
         self.client.get_prompt(&full_name, arguments).await

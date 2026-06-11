@@ -193,14 +193,12 @@ pub(crate) fn validate_path_component(name: &str) -> DiscoveryResult<()> {
     }
     if name.contains('/') || name.contains('\\') {
         return Err(DiscoveryError::InvalidPath(format!(
-            "path component cannot contain path separators: {}",
-            name
+            "path component cannot contain path separators: {name}"
         )));
     }
     if name.contains("..") {
         return Err(DiscoveryError::InvalidPath(format!(
-            "path component cannot contain parent directory references: {}",
-            name
+            "path component cannot contain parent directory references: {name}"
         )));
     }
     Ok(())

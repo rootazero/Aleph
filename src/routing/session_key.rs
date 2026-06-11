@@ -196,13 +196,13 @@ impl SessionKey {
     /// Format the base string for a DM session key (shared between `to_key_string` and `base_key_pattern`).
     fn format_dm_base(agent_id: &str, channel: &str, peer_id: &str, dm_scope: &DmScope) -> String {
         match dm_scope {
-            DmScope::Main => format!("agent:{}:main", agent_id),
+            DmScope::Main => format!("agent:{agent_id}:main"),
             DmScope::PerPeer if channel.is_empty() => {
-                format!("agent:{}:peer:{}", agent_id, peer_id)
+                format!("agent:{agent_id}:peer:{peer_id}")
             }
-            DmScope::PerPeer => format!("agent:{}:dm:{}", agent_id, peer_id),
+            DmScope::PerPeer => format!("agent:{agent_id}:dm:{peer_id}"),
             DmScope::PerChannelPeer => {
-                format!("agent:{}:{}:dm:{}", agent_id, channel, peer_id)
+                format!("agent:{agent_id}:{channel}:dm:{peer_id}")
             }
         }
     }
@@ -210,7 +210,7 @@ impl SessionKey {
     /// Append epoch suffix if non-zero.
     fn append_epoch(base: String, epoch: u32) -> String {
         if epoch > 0 {
-            format!("{}:s{}", base, epoch)
+            format!("{base}:s{epoch}")
         } else {
             base
         }
@@ -314,7 +314,7 @@ impl SessionKey {
             Self::Main {
                 agent_id, main_key, ..
             } => {
-                format!("agent:{}:{}", agent_id, main_key)
+                format!("agent:{agent_id}:{main_key}")
             }
             Self::DirectMessage {
                 agent_id,
@@ -337,7 +337,7 @@ impl SessionKey {
                 main_key,
                 epoch,
             } => {
-                let base = format!("agent:{}:{}", agent_id, main_key);
+                let base = format!("agent:{agent_id}:{main_key}");
                 Self::append_epoch(base, *epoch)
             }
             Self::DirectMessage {
@@ -364,10 +364,9 @@ impl SessionKey {
                 };
                 match thread_id {
                     Some(tid) => format!(
-                        "agent:{}:{}:{}:{}:thread:{}",
-                        agent_id, channel, kind, peer_id, tid
+                        "agent:{agent_id}:{channel}:{kind}:{peer_id}:thread:{tid}"
                     ),
-                    None => format!("agent:{}:{}:{}:{}", agent_id, channel, kind, peer_id),
+                    None => format!("agent:{agent_id}:{channel}:{kind}:{peer_id}"),
                 }
             }
             Self::Task {
@@ -375,7 +374,7 @@ impl SessionKey {
                 task_type,
                 task_id,
             } => {
-                format!("agent:{}:{}:{}", agent_id, task_type, task_id)
+                format!("agent:{agent_id}:{task_type}:{task_id}")
             }
             Self::Subagent {
                 parent_key,
@@ -387,7 +386,7 @@ impl SessionKey {
                 agent_id,
                 ephemeral_id,
             } => {
-                format!("agent:{}:ephemeral:{}", agent_id, ephemeral_id)
+                format!("agent:{agent_id}:ephemeral:{ephemeral_id}")
             }
         }
     }

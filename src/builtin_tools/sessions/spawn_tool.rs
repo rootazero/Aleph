@@ -317,8 +317,7 @@ impl SessionsSpawnTool {
         }
 
         Err(format!(
-            "Agent '{}' is not in the spawn whitelist",
-            target_agent_id
+            "Agent '{target_agent_id}' is not in the spawn whitelist"
         ))
     }
 
@@ -359,7 +358,7 @@ impl SessionsSpawnTool {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         // Generate the child session key
-        let child_session_key = format!("agent:{}:subagent:{}", target_agent_id, subagent_uuid);
+        let child_session_key = format!("agent:{target_agent_id}:subagent:{subagent_uuid}");
 
         debug!(
             run_id = %run_id,
@@ -404,7 +403,7 @@ impl SessionsSpawnTool {
         if agent_registry.get(&target_agent_id).await.is_none() {
             return SessionsSpawnOutput::error(
                 run_id,
-                format!("Target agent '{}' not found in registry", target_agent_id),
+                format!("Target agent '{target_agent_id}' not found in registry"),
             );
         }
 

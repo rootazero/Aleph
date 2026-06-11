@@ -215,7 +215,7 @@ impl AlephTool for SessionsListTool {
             .list_sessions(filter)
             .await
             .map_err(|e| {
-                let msg = format!("Failed to list sessions: {}", e);
+                let msg = format!("Failed to list sessions: {e}");
                 notify_tool_result(Self::NAME, &msg, false);
                 crate::error::AlephError::other(msg)
             })?;
@@ -302,7 +302,7 @@ impl AlephTool for SessionsListTool {
         }
 
         let count = rows.len();
-        let result_summary = format!("Found {} accessible sessions", count);
+        let result_summary = format!("Found {count} accessible sessions");
         notify_tool_result(Self::NAME, &result_summary, true);
 
         info!(

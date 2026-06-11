@@ -21,7 +21,7 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
     }
     // Use .get() for defensive UTF-8 safety per project convention (P7)
     let truncated = s.get(..end_byte).unwrap_or(s);
-    format!("{}...", truncated)
+    format!("{truncated}...")
 }
 
 #[derive(Debug, Error)]
@@ -271,8 +271,7 @@ impl AlephError {
     pub fn authentication<S: Into<String>, M: Into<String>>(provider: S, msg: M) -> Self {
         let provider_name = provider.into();
         let suggestion = format!(
-            "Verify your {} API key in Settings → Providers → {}",
-            provider_name, provider_name
+            "Verify your {provider_name} API key in Settings → Providers → {provider_name}"
         );
         AlephError::AuthenticationError {
             message: msg.into(),
@@ -428,84 +427,75 @@ impl AlephError {
             }
             AlephError::InvalidConfig { message, .. } => {
                 format!(
-                    "Configuration error: {}. Please check your settings.",
-                    message
+                    "Configuration error: {message}. Please check your settings."
                 )
             }
             AlephError::ProviderError { message, .. } => {
                 // Show the actual error message for debugging
                 // Previously we hid 5xx errors, but users need to see what went wrong
-                format!("AI service error: {}. Please try again.", message)
+                format!("AI service error: {message}. Please try again.")
             }
             AlephError::HotkeyError { message, .. } => {
                 format!(
-                    "Hotkey error: {}. Please check your system permissions.",
-                    message
+                    "Hotkey error: {message}. Please check your system permissions."
                 )
             }
             AlephError::ClipboardError { message, .. } => {
                 format!(
-                    "Clipboard error: {}. Please check your system permissions.",
-                    message
+                    "Clipboard error: {message}. Please check your system permissions."
                 )
             }
             AlephError::InputSimulationError { message, .. } => {
                 format!(
-                    "Input simulation error: {}. Please check accessibility permissions.",
-                    message
+                    "Input simulation error: {message}. Please check accessibility permissions."
                 )
             }
             AlephError::ConfigError { message, .. } => {
                 format!(
-                    "Configuration error: {}. Please check your settings file.",
-                    message
+                    "Configuration error: {message}. Please check your settings file."
                 )
             }
             AlephError::KeychainError { message, .. } => {
                 format!(
-                    "Keychain access error: {}. Please check your system permissions.",
-                    message
+                    "Keychain access error: {message}. Please check your system permissions."
                 )
             }
             AlephError::CallbackError { message, .. } => {
                 format!(
-                    "Internal error: {}. Please restart the application.",
-                    message
+                    "Internal error: {message}. Please restart the application."
                 )
             }
             AlephError::Other { message, .. } => {
-                format!("An error occurred: {}. Please try again.", message)
+                format!("An error occurred: {message}. Please try again.")
             }
             AlephError::PermissionDenied { message, .. } => {
                 format!(
-                    "Permission denied: {}. Please grant required permissions in System Settings.",
-                    message
+                    "Permission denied: {message}. Please grant required permissions in System Settings."
                 )
             }
             AlephError::VideoError { message, .. } => {
                 format!(
-                    "Video processing error: {}. Check if the video has captions available.",
-                    message
+                    "Video processing error: {message}. Check if the video has captions available."
                 )
             }
             AlephError::NotFound(path) => {
-                format!("File or resource not found: {}", path)
+                format!("File or resource not found: {path}")
             }
             AlephError::IoError(msg) => {
-                format!("I/O error: {}", msg)
+                format!("I/O error: {msg}")
             }
             AlephError::GitError(msg) => {
-                format!("Git operation failed: {}", msg)
+                format!("Git operation failed: {msg}")
             }
             AlephError::McpToolNotFound(tool) => {
-                format!("MCP tool '{}' not found", tool)
+                format!("MCP tool '{tool}' not found")
             }
             AlephError::McpTimeout => "MCP request timed out. Please try again.".to_string(),
             AlephError::ToolNotFound { name, suggestion } => {
                 if let Some(sug) = suggestion {
-                    format!("Tool '{}' not found. {}", name, sug)
+                    format!("Tool '{name}' not found. {sug}")
                 } else {
-                    format!("Tool '{}' not found", name)
+                    format!("Tool '{name}' not found")
                 }
             }
             AlephError::Cancelled => "Operation cancelled.".to_string(),
@@ -515,8 +505,7 @@ impl AlephError {
                 ..
             } => {
                 format!(
-                    "Runtime '{}' error: {}. Check Settings → Runtimes for details.",
-                    runtime_id, message
+                    "Runtime '{runtime_id}' error: {message}. Check Settings → Runtimes for details."
                 )
             }
             AlephError::MissingInput {
@@ -531,30 +520,26 @@ impl AlephError {
             }
             AlephError::CorruptData(msg) => {
                 format!(
-                    "Data corruption detected: {}. Please try again or restore from backup.",
-                    msg
+                    "Data corruption detected: {msg}. Please try again or restore from backup."
                 )
             }
             AlephError::ChannelClosed(msg) => {
                 format!(
-                    "Internal communication failed: {}. Please restart the application.",
-                    msg
+                    "Internal communication failed: {msg}. Please restart the application."
                 )
             }
             AlephError::SandboxUnavailable { reason } => {
                 format!(
-                    "Sandbox unavailable: {}. Please check your system configuration.",
-                    reason
+                    "Sandbox unavailable: {reason}. Please check your system configuration."
                 )
             }
             AlephError::ExecutionTimeout { timeout_secs } => {
                 format!(
-                    "Execution timed out after {} seconds. The command took too long to complete.",
-                    timeout_secs
+                    "Execution timed out after {timeout_secs} seconds. The command took too long to complete."
                 )
             }
             AlephError::Validation(msg) => {
-                format!("Validation failed: {}", msg)
+                format!("Validation failed: {msg}")
             }
             AlephError::AcpError {
                 code,
@@ -563,11 +548,10 @@ impl AlephError {
             } => {
                 if *retryable {
                     format!(
-                        "ACP harness error ({}): {}. This is usually transient — try again.",
-                        code, message
+                        "ACP harness error ({code}): {message}. This is usually transient — try again."
                     )
                 } else {
-                    format!("ACP harness error ({}): {}.", code, message)
+                    format!("ACP harness error ({code}): {message}.")
                 }
             }
         }
@@ -732,7 +716,7 @@ pub type Result<T> = std::result::Result<T, AlephError>;
 
 impl From<serde_json::Error> for AlephError {
     fn from(err: serde_json::Error) -> Self {
-        AlephError::IoError(format!("JSON serialization error: {}", err))
+        AlephError::IoError(format!("JSON serialization error: {err}"))
     }
 }
 

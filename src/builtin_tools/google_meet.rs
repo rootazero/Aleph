@@ -219,8 +219,7 @@ impl GoogleMeetTool {
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
                 AlephError::tool(format!(
-                    "`{}` is required for the `{}` action",
-                    field, action
+                    "`{field}` is required for the `{action}` action"
                 ))
             })
     }
@@ -271,7 +270,7 @@ impl GoogleMeetTool {
         let client = reqwest::Client::builder()
             .timeout(bridge.timeout)
             .build()
-            .map_err(|e| AlephError::tool(format!("failed to build HTTP client: {}", e)))?;
+            .map_err(|e| AlephError::tool(format!("failed to build HTTP client: {e}")))?;
 
         let mut req = client.post(&bridge.url).json(&request);
         if let Some(ref token) = bridge.token {
@@ -287,7 +286,7 @@ impl GoogleMeetTool {
 
         let status = resp.status();
         let body: serde_json::Value = resp.json().await.map_err(|e| {
-            AlephError::tool(format!("Google Meet bridge returned invalid JSON: {}", e))
+            AlephError::tool(format!("Google Meet bridge returned invalid JSON: {e}"))
         })?;
 
         // JSON-RPC error envelope.

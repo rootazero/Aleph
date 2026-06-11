@@ -52,7 +52,7 @@ pub(super) fn replace_paired_marker_positional(
             if let Some(rel_end) = result[after_start..].find(marker) {
                 let end = after_start + rel_end;
                 let inner = result[after_start..end].to_string();
-                let replacement = format!("{}{}{}", open, inner, close);
+                let replacement = format!("{open}{inner}{close}");
                 let new_cursor = start + replacement.len();
                 result = format!(
                     "{}{}{}",

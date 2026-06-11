@@ -249,7 +249,7 @@ impl SelfConfigTool {
             }),
             Err(e) => Ok(SelfConfigOutput {
                 success: false,
-                message: format!("Failed to read {}: {}", file_name, e),
+                message: format!("Failed to read {file_name}: {e}"),
                 data: None,
                 preview_message: None,
             }),
@@ -277,8 +277,7 @@ impl SelfConfigTool {
             return Ok(SelfConfigOutput {
                 success: false,
                 message: format!(
-                    "Content exceeds maximum size limit of {} bytes",
-                    MAX_FILE_CONTENT_SIZE
+                    "Content exceeds maximum size limit of {MAX_FILE_CONTENT_SIZE} bytes"
                 ),
                 data: None,
                 preview_message: None,
@@ -288,7 +287,7 @@ impl SelfConfigTool {
         if let Err(e) = std::fs::create_dir_all(&self.agent_dir) {
             return Ok(SelfConfigOutput {
                 success: false,
-                message: format!("Failed to create agent directory: {}", e),
+                message: format!("Failed to create agent directory: {e}"),
                 data: None,
                 preview_message: None,
             });
@@ -312,8 +311,7 @@ impl SelfConfigTool {
                 Ok(SelfConfigOutput {
                     success: true,
                     message: format!(
-                        "Written {} bytes to {}. Changes will take effect on the next turn.{}",
-                        bytes, file_name, backup_note
+                        "Written {bytes} bytes to {file_name}. Changes will take effect on the next turn.{backup_note}"
                     ),
                     data: Some(serde_json::json!({
                         "bytes_written": bytes,
@@ -324,7 +322,7 @@ impl SelfConfigTool {
             }
             Err(e) => Ok(SelfConfigOutput {
                 success: false,
-                message: format!("Failed to write {}: {}", file_name, e),
+                message: format!("Failed to write {file_name}: {e}"),
                 data: None,
                 preview_message: None,
             }),
@@ -346,19 +344,19 @@ impl SelfConfigTool {
 
         let config_guard = config.read().await;
         let config_json = serde_json::to_value(&*config_guard)
-            .map_err(|e| ToolError::Execution(format!("Failed to serialize config: {}", e)))?;
+            .map_err(|e| ToolError::Execution(format!("Failed to serialize config: {e}")))?;
 
         let value = get_nested_value(&config_json, config_path);
         match value {
             Some(v) => Ok(SelfConfigOutput {
                 success: true,
-                message: format!("Config at '{}'", config_path),
+                message: format!("Config at '{config_path}'"),
                 data: Some(v.clone()),
                 preview_message: None,
             }),
             None => Ok(SelfConfigOutput {
                 success: false,
-                message: format!("Config path '{}' not found", config_path),
+                message: format!("Config path '{config_path}' not found"),
                 data: None,
                 preview_message: None,
             }),
@@ -507,7 +505,7 @@ impl SelfConfigTool {
             }
             Err(e) => Ok(SelfConfigOutput {
                 success: false,
-                message: format!("Config patch failed: {}", e),
+                message: format!("Config patch failed: {e}"),
                 data: None,
                 preview_message: None,
             }),
@@ -608,7 +606,7 @@ impl SelfConfigTool {
             }
             Err(e) => Ok(SelfConfigOutput {
                 success: false,
-                message: format!("Config rollback failed: {}", e),
+                message: format!("Config rollback failed: {e}"),
                 data: None,
                 preview_message: None,
             }),
@@ -626,7 +624,7 @@ fn generate_preview_message(
     diffs: &[crate::config::patcher::FieldDiff],
 ) -> String {
     if diffs.is_empty() {
-        return format!("配置路径 '{}' 无变更。", config_path);
+        return format!("配置路径 '{config_path}' 无变更。");
     }
 
     let mut lines = vec![format!("将为 '{}' 做出以下更改：", config_path)];
@@ -668,7 +666,7 @@ fn generate_preview_message(
 /// Convert a JSON value to a compact human-readable string.
 fn value_to_string(value: &serde_json::Value) -> String {
     match value {
-        serde_json::Value::String(s) => format!("\"{}\"", s),
+        serde_json::Value::String(s) => format!("\"{s}\""),
         serde_json::Value::Null => "null".to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => n.to_string(),
@@ -706,16 +704,16 @@ impl AlephTool for SelfConfigTool {
         match &args {
             SelfConfigArgs::ListFiles => notify_tool_start(Self::NAME, "list_files"),
             SelfConfigArgs::ReadFile { file_name } => {
-                notify_tool_start(Self::NAME, &format!("read_file:{}", file_name))
+                notify_tool_start(Self::NAME, &format!("read_file:{file_name}"))
             }
             SelfConfigArgs::WriteFile { file_name, .. } => {
-                notify_tool_start(Self::NAME, &format!("write_file:{}", file_name))
+                notify_tool_start(Self::NAME, &format!("write_file:{file_name}"))
             }
             SelfConfigArgs::ReadConfig { config_path } => {
-                notify_tool_start(Self::NAME, &format!("read_config:{}", config_path))
+                notify_tool_start(Self::NAME, &format!("read_config:{config_path}"))
             }
             SelfConfigArgs::UpdateConfig { config_path, .. } => {
-                notify_tool_start(Self::NAME, &format!("update_config:{}", config_path))
+                notify_tool_start(Self::NAME, &format!("update_config:{config_path}"))
             }
             SelfConfigArgs::RouteStatus => notify_tool_start(Self::NAME, "route_status"),
             SelfConfigArgs::ListBackups => notify_tool_start(Self::NAME, "list_backups"),

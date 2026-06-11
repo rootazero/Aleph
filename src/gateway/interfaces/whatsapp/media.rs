@@ -43,9 +43,7 @@ impl MediaProcessor {
         if let Some(size) = attachment.size {
             if size > max_bytes {
                 return Err(anyhow::anyhow!(
-                    "Media file too large: {} bytes (max: {})",
-                    size,
-                    max_bytes
+                    "Media file too large: {size} bytes (max: {max_bytes})"
                 ));
             }
         }

@@ -32,7 +32,7 @@ pub fn RoutingRulesView() -> impl IntoView {
                 loading.set(false);
             }
             Err(e) => {
-                error.set(Some(format!("Failed to load rules: {}", e)));
+                error.set(Some(format!("Failed to load rules: {e}")));
                 loading.set(false);
             }
         }
@@ -292,7 +292,7 @@ fn RuleEditor(
                     selected.set(None);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to save: {}", e)));
+                    error.set(Some(format!("Failed to save: {e}")));
                 }
             }
             saving.set(false);
@@ -321,7 +321,7 @@ fn RuleEditor(
                         selected.set(None);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to delete: {}", e)));
+                        error.set(Some(format!("Failed to delete: {e}")));
                     }
                 }
                 saving.set(false);

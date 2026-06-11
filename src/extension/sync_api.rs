@@ -47,7 +47,7 @@ impl SyncExtensionManager {
     pub fn with_config(config: ExtensionConfig) -> ExtensionResult<Self> {
         // Create a new runtime for this manager
         let runtime = Runtime::new().map_err(|e| {
-            ExtensionError::Runtime(format!("Failed to create tokio runtime: {}", e))
+            ExtensionError::Runtime(format!("Failed to create tokio runtime: {e}"))
         })?;
 
         // Create the async manager within the runtime
@@ -62,7 +62,7 @@ impl SyncExtensionManager {
     /// Create from an existing async manager (for integration with existing async code)
     pub fn from_async(manager: Arc<RwLock<ExtensionManager>>) -> ExtensionResult<Self> {
         let runtime = Runtime::new().map_err(|e| {
-            ExtensionError::Runtime(format!("Failed to create tokio runtime: {}", e))
+            ExtensionError::Runtime(format!("Failed to create tokio runtime: {e}"))
         })?;
 
         Ok(Self {

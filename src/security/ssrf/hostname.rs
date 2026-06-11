@@ -70,7 +70,7 @@ pub(crate) fn is_allowlisted(hostname: &str, allowed_hosts: &[String]) -> bool {
         let pattern_lower = normalize_host(pattern);
         if let Some(base) = pattern_lower.strip_prefix("*.") {
             // strip "*."
-            if hostname_lower == base || hostname_lower.ends_with(&format!(".{}", base)) {
+            if hostname_lower == base || hostname_lower.ends_with(&format!(".{base}")) {
                 return true;
             }
         } else if hostname_lower == pattern_lower {

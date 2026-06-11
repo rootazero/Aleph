@@ -97,8 +97,7 @@ impl GenerationProviderRegistry {
     ) -> GenerationResult<()> {
         if self.providers.contains_key(&name) {
             return Err(GenerationError::internal(format!(
-                "Provider '{}' is already registered",
-                name
+                "Provider '{name}' is already registered"
             )));
         }
         self.providers.insert(name, provider);
@@ -172,7 +171,7 @@ impl GenerationProviderRegistry {
     /// ```
     pub fn get_or_err(&self, name: &str) -> GenerationResult<Arc<dyn GenerationProvider>> {
         self.get(name).ok_or_else(|| {
-            GenerationError::internal(format!("Provider '{}' not found in registry", name))
+            GenerationError::internal(format!("Provider '{name}' not found in registry"))
         })
     }
 

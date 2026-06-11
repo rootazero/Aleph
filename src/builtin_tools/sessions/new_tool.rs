@@ -87,8 +87,7 @@ impl AlephTool for SessionNewTool {
         // Parse routing key (supports epoch)
         let routing_key = RoutingSessionKey::parse(session_key_str).ok_or_else(|| {
             crate::error::AlephError::tool(format!(
-                "session_new: failed to parse session key '{}'",
-                session_key_str
+                "session_new: failed to parse session key '{session_key_str}'"
             ))
         })?;
 
@@ -132,14 +131,14 @@ impl AlephTool for SessionNewTool {
         let topic_suffix = args
             .topic
             .as_ref()
-            .map(|t| format!(" ({})", t))
+            .map(|t| format!(" ({t})"))
             .unwrap_or_default();
 
         Ok(SessionNewOutput {
             old_session_key: session_key_str.clone(),
             new_session_key: new_key_str,
             topic: args.topic,
-            message: format!("新对话已开始{}", topic_suffix),
+            message: format!("新对话已开始{topic_suffix}"),
         })
     }
 }

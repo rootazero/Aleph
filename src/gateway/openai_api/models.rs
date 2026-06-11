@@ -46,7 +46,7 @@ async fn build_model_list(state: &OpenAiApiState) -> Vec<ModelObject> {
 
     if let Some(ref registry) = state.agent_registry {
         for agent_id in registry.list().await {
-            let model_id = format!("aleph/{}", agent_id);
+            let model_id = format!("aleph/{agent_id}");
             if seen.insert(model_id.clone()) {
                 models.push(ModelObject {
                     id: model_id,
@@ -98,5 +98,5 @@ pub async fn get_model(
         .into_iter()
         .find(|m| m.id == model_id)
         .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("Model '{}' not found", model_id)))
+        .ok_or_else(|| ApiError::NotFound(format!("Model '{model_id}' not found")))
 }

@@ -108,7 +108,7 @@ impl ApprovalRequester for OperatorApprovalRequester {
         // non-fatal and must not derail the approval.
         if let Some(t) = &turn {
             if !t.run_id.is_empty() {
-                let notice = format!("⏳ 正在等待管理员授权运行工具 `{}`…", tool_name);
+                let notice = format!("⏳ 正在等待管理员授权运行工具 `{tool_name}`…");
                 if let Err(e) = self
                     .event_bus
                     .publish_frame(&GatewayEventFrame::ResponseChunk {

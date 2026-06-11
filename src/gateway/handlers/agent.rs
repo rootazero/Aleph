@@ -226,9 +226,9 @@ impl AgentRunManager {
                 error!("Agent not found: {}", agent_id);
                 let mut runs = self.active_runs.write().await;
                 if let Some(run) = runs.get_mut(&run_id) {
-                    run.status = RunStatus::Failed(format!("Agent not found: {}", agent_id));
+                    run.status = RunStatus::Failed(format!("Agent not found: {agent_id}"));
                 }
-                return Err(format!("Agent not found: {}", agent_id));
+                return Err(format!("Agent not found: {agent_id}"));
             }
         };
 
@@ -596,7 +596,7 @@ pub async fn handle_generate_title(request: JsonRpcRequest) -> JsonRpcResponse {
     // TODO: Use AI to generate a better title
     let title = if params.user_input.chars().count() > 50 {
         let truncated: String = params.user_input.chars().take(47).collect();
-        format!("{}...", truncated)
+        format!("{truncated}...")
     } else {
         params.user_input.clone()
     };

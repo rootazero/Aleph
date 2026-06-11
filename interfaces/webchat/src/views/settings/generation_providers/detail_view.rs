@@ -186,7 +186,7 @@ pub(super) fn ProviderDetailView(
                 }
                 Err(e) => {
                     saving.set(false);
-                    action_error.set(Some(format!("Save failed: {}", e)));
+                    action_error.set(Some(format!("Save failed: {e}")));
                 }
             }
         });
@@ -244,7 +244,7 @@ pub(super) fn ProviderDetailView(
                 }
                 Err(e) => {
                     deleting.set(false);
-                    action_error.set(Some(format!("Delete failed: {}", e)));
+                    action_error.set(Some(format!("Delete failed: {e}")));
                 }
             }
         });
@@ -267,7 +267,7 @@ pub(super) fn ProviderDetailView(
                     }
                     Err(e) => {
                         setting_default.set(false);
-                        action_error.set(Some(format!("Set default failed: {}", e)));
+                        action_error.set(Some(format!("Set default failed: {e}")));
                     }
                 }
             });
@@ -493,7 +493,7 @@ pub(super) fn ProviderDetailView(
                                         {move || {
                                             let base = form_base_url.get();
                                             let base = extract_base_url(&base);
-                                            format!("{}/v1/audio/speech", base)
+                                            format!("{base}/v1/audio/speech")
                                         }}
                                     </span>
                                 </div>
@@ -566,9 +566,9 @@ pub(super) fn ProviderDetailView(
                             class=move || {
                                 let base = "w-full px-4 py-2.5 rounded-lg transition-colors font-medium text-sm";
                                 if is_default {
-                                    format!("{} bg-primary-subtle text-primary cursor-not-allowed", base)
+                                    format!("{base} bg-primary-subtle text-primary cursor-not-allowed")
                                 } else {
-                                    format!("{} bg-surface-sunken text-text-secondary hover:bg-surface-raised disabled:opacity-50", base)
+                                    format!("{base} bg-surface-sunken text-text-secondary hover:bg-surface-raised disabled:opacity-50")
                                 }
                             }
                         >

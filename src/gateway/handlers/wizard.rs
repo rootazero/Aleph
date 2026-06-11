@@ -105,7 +105,7 @@ impl WizardSessionManager {
     ) -> Result<(String, WizardNextResult), WizardSessionError> {
         // Create the flow
         let flow = (self.flow_factory)(wizard_type, initial_data).ok_or_else(|| {
-            WizardSessionError::FlowError(format!("Unknown wizard type: {}", wizard_type))
+            WizardSessionError::FlowError(format!("Unknown wizard type: {wizard_type}"))
         })?;
 
         // Create the session
@@ -235,7 +235,7 @@ pub async fn handle_start(
                 return JsonRpcResponse::error(
                     req.id,
                     INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
+                    format!("Invalid params: {e}"),
                 )
             }
         },
@@ -259,7 +259,7 @@ pub async fn handle_start(
                 Err(e) => JsonRpcResponse::error(
                     req.id,
                     INTERNAL_ERROR,
-                    format!("Failed to serialize response: {}", e),
+                    format!("Failed to serialize response: {e}"),
                 ),
             }
         }
@@ -279,7 +279,7 @@ pub async fn handle_answer(
                 return JsonRpcResponse::error(
                     req.id,
                     INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
+                    format!("Invalid params: {e}"),
                 )
             }
         },
@@ -303,7 +303,7 @@ pub async fn handle_answer(
             Err(e) => JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                format!("Failed to serialize response: {}", e),
+                format!("Failed to serialize response: {e}"),
             ),
         },
         Err(e) => JsonRpcResponse::error(req.id, wizard_error_code(&e), e.to_string()),
@@ -322,7 +322,7 @@ pub async fn handle_next(
                 return JsonRpcResponse::error(
                     req.id,
                     INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
+                    format!("Invalid params: {e}"),
                 )
             }
         },
@@ -337,7 +337,7 @@ pub async fn handle_next(
             Err(e) => JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                format!("Failed to serialize response: {}", e),
+                format!("Failed to serialize response: {e}"),
             ),
         },
         Err(e) => JsonRpcResponse::error(req.id, wizard_error_code(&e), e.to_string()),
@@ -356,7 +356,7 @@ pub async fn handle_cancel(
                 return JsonRpcResponse::error(
                     req.id,
                     INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
+                    format!("Invalid params: {e}"),
                 )
             }
         },
@@ -372,7 +372,7 @@ pub async fn handle_cancel(
         Err(e) => JsonRpcResponse::error(
             req.id,
             INTERNAL_ERROR,
-            format!("Failed to serialize response: {}", e),
+            format!("Failed to serialize response: {e}"),
         ),
     }
 }
@@ -394,7 +394,7 @@ pub async fn handle_status(
                 return JsonRpcResponse::error(
                     req.id,
                     INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
+                    format!("Invalid params: {e}"),
                 )
             }
         },

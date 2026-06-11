@@ -317,7 +317,7 @@ impl McpClient {
         }
         let mut best: Option<&Arc<McpServerConnection>> = None;
         for (id, conn) in servers {
-            if name.starts_with(&format!("{}:", id))
+            if name.starts_with(&format!("{id}:"))
                 && best
                     .as_ref()
                     .map(|b| b.name().len() < id.len())
@@ -358,7 +358,7 @@ impl McpClient {
             }
         }
 
-        Err(AlephError::NotFound(format!("Resource not found: {}", uri)))
+        Err(AlephError::NotFound(format!("Resource not found: {uri}")))
     }
 
     /// Subscribe to resource updates from a specific server
@@ -368,8 +368,7 @@ impl McpClient {
             connection.subscribe_resource(uri).await
         } else {
             Err(AlephError::NotFound(format!(
-                "Server not found: {}",
-                server
+                "Server not found: {server}"
             )))
         }
     }
@@ -381,8 +380,7 @@ impl McpClient {
             connection.unsubscribe_resource(uri).await
         } else {
             Err(AlephError::NotFound(format!(
-                "Server not found: {}",
-                server
+                "Server not found: {server}"
             )))
         }
     }
@@ -422,7 +420,7 @@ impl McpClient {
             }
         }
 
-        Err(AlephError::NotFound(format!("Prompt not found: {}", name)))
+        Err(AlephError::NotFound(format!("Prompt not found: {name}")))
     }
 
     /// Get tools as a formatted list for context injection
@@ -538,7 +536,7 @@ impl McpClient {
                 );
                 config
                     .headers
-                    .insert("Authorization".to_string(), format!("Bearer {}", token));
+                    .insert("Authorization".to_string(), format!("Bearer {token}"));
             }
         }
 

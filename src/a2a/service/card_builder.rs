@@ -55,7 +55,7 @@ impl CardBuilder {
             }),
             documentation_url: None,
             interfaces: vec![AgentInterface {
-                url: format!("http://{}/a2a", bind_addr),
+                url: format!("http://{bind_addr}/a2a"),
                 protocol: TransportProtocol::JsonRpc,
             }],
             skills,

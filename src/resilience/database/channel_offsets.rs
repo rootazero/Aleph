@@ -25,7 +25,7 @@ impl StateDatabase {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| AlephError::config(format!("Failed to get channel offset: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to get channel offset: {e}")))?;
         Ok(result)
     }
 
@@ -48,7 +48,7 @@ impl StateDatabase {
             "#,
             params![channel_id, bot_id, update_id, now],
         )
-        .map_err(|e| AlephError::config(format!("Failed to set channel offset: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to set channel offset: {e}")))?;
         Ok(())
     }
 }

@@ -230,8 +230,7 @@ impl PluginLoader {
                 if let Some(runtime) = &mut self.wasm_runtime {
                     if !runtime.unload_plugin(plugin_id) {
                         return Err(ExtensionError::Runtime(format!(
-                            "Failed to unload WASM plugin '{}'",
-                            plugin_id
+                            "Failed to unload WASM plugin '{plugin_id}'"
                         )));
                     }
                     info!("Unloaded WASM plugin '{}'", plugin_id);
@@ -297,8 +296,7 @@ impl PluginLoader {
                 "MCP plugin tool calls must go through McpManager, not PluginLoader".to_string(),
             )),
             PluginKind::Static => Err(ExtensionError::Runtime(format!(
-                "Plugin kind {:?} does not support tool calls",
-                kind
+                "Plugin kind {kind:?} does not support tool calls"
             ))),
         }
     }
@@ -323,8 +321,7 @@ impl PluginLoader {
                 "MCP plugins do not support hooks via PluginLoader".to_string(),
             )),
             PluginKind::Static => Err(ExtensionError::Runtime(format!(
-                "Plugin kind {:?} does not support hooks",
-                kind
+                "Plugin kind {kind:?} does not support hooks"
             ))),
         }
     }

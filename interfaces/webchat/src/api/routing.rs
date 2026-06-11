@@ -49,7 +49,7 @@ impl RoutingRulesApi {
             .ok_or_else(|| "Invalid response: missing rules".to_string())
             .and_then(|rules| {
                 serde_json::from_value(rules.clone())
-                    .map_err(|e| format!("Failed to parse rules: {}", e))
+                    .map_err(|e| format!("Failed to parse rules: {e}"))
             })
     }
 
@@ -66,7 +66,7 @@ impl RoutingRulesApi {
             .ok_or_else(|| "Invalid response: missing rule".to_string())
             .and_then(|rule| {
                 serde_json::from_value(rule.clone())
-                    .map_err(|e| format!("Failed to parse rule: {}", e))
+                    .map_err(|e| format!("Failed to parse rule: {e}"))
             })
     }
 

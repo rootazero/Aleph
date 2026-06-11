@@ -58,7 +58,7 @@ async fn require_connected_channel(
         }
         None => Err((
             INVALID_PARAMS,
-            format!("Channel '{}' not found in registry", channel_id_str),
+            format!("Channel '{channel_id_str}' not found in registry"),
         )),
     }
 }
@@ -124,7 +124,7 @@ pub async fn handle_validate_token(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Token validation failed: {}", e),
+            format!("Token validation failed: {e}"),
         ),
     }
 }
@@ -216,7 +216,7 @@ pub async fn handle_list_guilds(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to list guilds: {}", e),
+            format!("Failed to list guilds: {e}"),
         ),
     }
 }
@@ -283,7 +283,7 @@ pub async fn handle_list_channels(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to list channels: {}", e),
+            format!("Failed to list channels: {e}"),
         ),
     }
 }
@@ -350,7 +350,7 @@ pub async fn handle_audit_permissions(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to audit permissions: {}", e),
+            format!("Failed to audit permissions: {e}"),
         ),
     }
 }
@@ -396,7 +396,7 @@ pub async fn handle_update_allowlists(
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            format!("Channel '{}' not found in registry", channel_id),
+            format!("Channel '{channel_id}' not found in registry"),
         );
     }
 

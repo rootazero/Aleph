@@ -113,7 +113,7 @@ pub struct SessionEventHit {
 pub fn migrate_add_session_events(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch("SAVEPOINT migration_session_events")
         .map_err(|e| {
-            AlephError::config(format!("Failed to begin session_events migration: {}", e))
+            AlephError::config(format!("Failed to begin session_events migration: {e}"))
         })?;
 
     let result = conn.execute_batch(
@@ -139,14 +139,13 @@ pub fn migrate_add_session_events(conn: &Connection) -> Result<(), AlephError> {
     if let Err(e) = result {
         let _ = conn.execute_batch("ROLLBACK TO migration_session_events");
         return Err(AlephError::config(format!(
-            "Failed to create session_events table: {}",
-            e
+            "Failed to create session_events table: {e}"
         )));
     }
 
     conn.execute_batch("RELEASE migration_session_events")
         .map_err(|e| {
-            AlephError::config(format!("Failed to commit session_events migration: {}", e))
+            AlephError::config(format!("Failed to commit session_events migration: {e}"))
         })?;
 
     Ok(())

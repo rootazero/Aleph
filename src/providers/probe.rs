@@ -40,7 +40,7 @@ pub async fn probe_provider(label: &str, provider_config: ProviderConfig) -> Pro
         Err(e) => {
             return ProbeOutcome {
                 success: false,
-                error: Some(format!("Failed to create provider: {}", e)),
+                error: Some(format!("Failed to create provider: {e}")),
                 latency_ms: None,
             };
         }
@@ -59,7 +59,7 @@ pub async fn probe_provider(label: &str, provider_config: ProviderConfig) -> Pro
         },
         Err(e) => ProbeOutcome {
             success: false,
-            error: Some(format!("{}", e)),
+            error: Some(format!("{e}")),
             latency_ms: Some(start.elapsed().as_millis() as u64),
         },
     }

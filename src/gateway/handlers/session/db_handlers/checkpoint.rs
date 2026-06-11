@@ -59,7 +59,7 @@ pub async fn handle_list_checkpoints_db(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to list checkpoints: {}", e),
+            format!("Failed to list checkpoints: {e}"),
         ),
     }
 }
@@ -114,7 +114,7 @@ pub async fn handle_restore_checkpoint_db(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to restore checkpoint: {}", e),
+            format!("Failed to restore checkpoint: {e}"),
         ),
     }
 }
@@ -191,7 +191,7 @@ pub async fn handle_branch_checkpoint_db(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to branch checkpoint: {}", e),
+            format!("Failed to branch checkpoint: {e}"),
         ),
     }
 }

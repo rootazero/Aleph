@@ -335,8 +335,7 @@ impl Channel for MsTeamsChannel {
         let conversation_id = message.conversation_id.as_str();
         let service_url = self.get_service_url(conversation_id).await.ok_or_else(|| {
             ChannelError::SendFailed(format!(
-                "No cached service URL for conversation '{}'",
-                conversation_id
+                "No cached service URL for conversation '{conversation_id}'"
             ))
         })?;
 
@@ -447,8 +446,7 @@ impl Channel for MsTeamsChannel {
             .await
             .ok_or_else(|| {
                 ChannelError::SendFailed(format!(
-                    "No cached service URL for conversation '{}'",
-                    conversation_id
+                    "No cached service URL for conversation '{conversation_id}'"
                 ))
             })?;
 

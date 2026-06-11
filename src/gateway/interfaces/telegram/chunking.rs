@@ -136,7 +136,7 @@ pub(crate) fn split_html_safe(html: &str, max_len: usize) -> Vec<String> {
         let mut chunk_str = chunk_text.to_string();
         // Append closing tags to current chunk
         for tag in &close_tags {
-            chunk_str.push_str(&format!("</{}>", tag));
+            chunk_str.push_str(&format!("</{tag}>"));
         }
 
         chunks.push(chunk_str);
@@ -144,7 +144,7 @@ pub(crate) fn split_html_safe(html: &str, max_len: usize) -> Vec<String> {
         // Build next iteration's remaining: reopening tags + rest
         let mut next = String::new();
         for tag in &reopen_tags {
-            next.push_str(&format!("<{}>", tag));
+            next.push_str(&format!("<{tag}>"));
         }
         next.push_str(rest);
         remaining = next;

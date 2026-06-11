@@ -90,11 +90,11 @@ impl AgentRouter {
                 let pattern = if channel == "*" {
                     "*".to_string()
                 } else if let Some(ref team_id) = b.match_rule.team_id {
-                    format!("{}:team:{}", channel, team_id)
+                    format!("{channel}:team:{team_id}")
                 } else if let Some(ref guild_id) = b.match_rule.guild_id {
-                    format!("{}:guild:{}", channel, guild_id)
+                    format!("{channel}:guild:{guild_id}")
                 } else {
-                    format!("{}:*", channel)
+                    format!("{channel}:*")
                 };
                 Some(RoutingBinding {
                     pattern,
@@ -204,7 +204,7 @@ impl AgentRouter {
 
             // Try wildcard match
             let channel_prefix = ch.split(':').next().unwrap_or("");
-            let wildcard = format!("{}:*", channel_prefix);
+            let wildcard = format!("{channel_prefix}:*");
             for binding in bindings.iter() {
                 if binding.pattern == wildcard {
                     return binding.agent_id.clone();

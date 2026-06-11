@@ -86,7 +86,7 @@ impl BflProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
         let base = base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
         let base_url = base.trim_end_matches('/').to_string();
         Ok(Self {
@@ -136,10 +136,10 @@ impl BflProvider {
                 .header("accept", "application/json")
                 .send()
                 .await
-                .map_err(|e| GenerationError::network(format!("Poll request failed: {}", e)))?;
+                .map_err(|e| GenerationError::network(format!("Poll request failed: {e}")))?;
             let status = response.status();
             let body = response.text().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read poll body: {}", e))
+                GenerationError::network(format!("Failed to read poll body: {e}"))
             })?;
             if !status.is_success() {
                 error!(status = %status, body = %body, "BFL poll failed");
@@ -147,7 +147,7 @@ impl BflProvider {
             }
 
             let poll: types::BflPollResponse = serde_json::from_str(&body).map_err(|e| {
-                GenerationError::serialization(format!("Failed to parse BFL poll response: {}", e))
+                GenerationError::serialization(format!("Failed to parse BFL poll response: {e}"))
             })?;
 
             match classify_status(&poll.status) {
@@ -167,7 +167,7 @@ impl BflProvider {
                 }
                 StatusClass::Error => {
                     return Err(GenerationError::provider(
-                        format!("BFL render failed for id {}", id),
+                        format!("BFL render failed for id {id}"),
                         None,
                         "bfl-flux",
                     ));
@@ -180,7 +180,7 @@ impl BflProvider {
                 }
                 StatusClass::NotFound => {
                     return Err(GenerationError::provider(
-                        format!("BFL task {} not found (expired or invalid)", id),
+                        format!("BFL task {id} not found (expired or invalid)"),
                         None,
                         "bfl-flux",
                     ));
@@ -203,7 +203,7 @@ impl BflProvider {
         debug!(url, "downloading BFL image");
         let response =
             self.client.get(url).send().await.map_err(|e| {
-                GenerationError::network(format!("Failed to download image: {}", e))
+                GenerationError::network(format!("Failed to download image: {e}"))
             })?;
         if !response.status().is_success() {
             return Err(GenerationError::network(format!(
@@ -214,7 +214,7 @@ impl BflProvider {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| GenerationError::network(format!("Failed to read image bytes: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to read image bytes: {e}")))?;
         Ok(bytes.to_vec())
     }
 }
@@ -302,7 +302,7 @@ impl GenerationProvider for BflProvider {
                     if e.is_timeout() {
                         GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
                     } else if e.is_connect() {
-                        GenerationError::network(format!("Connection failed: {}", e))
+                        GenerationError::network(format!("Connection failed: {e}"))
                     } else {
                         GenerationError::network(e.to_string())
                     }
@@ -311,7 +311,7 @@ impl GenerationProvider for BflProvider {
             let status = response.status();
             if !status.is_success() {
                 let body = response.text().await.map_err(|e| {
-                    GenerationError::network(format!("Failed to read error body: {}", e))
+                    GenerationError::network(format!("Failed to read error body: {e}"))
                 })?;
                 error!(status = %status, body = %body, "BFL submit failed");
                 return Err(self.parse_error(status, &body));
@@ -319,8 +319,7 @@ impl GenerationProvider for BflProvider {
 
             let submit: types::BflSubmitResponse = response.json().await.map_err(|e| {
                 GenerationError::serialization(format!(
-                    "Failed to parse BFL submit response: {}",
-                    e
+                    "Failed to parse BFL submit response: {e}"
                 ))
             })?;
             info!(id = %submit.id, model = %model, "BFL render submitted, polling");

@@ -97,7 +97,7 @@ pub(super) fn AddProviderPanel(
                 }
                 Err(e) => {
                     set_adding.set(false);
-                    set_add_error.set(Some(format!("Failed to add: {}", e)));
+                    set_add_error.set(Some(format!("Failed to add: {e}")));
                 }
             }
         });

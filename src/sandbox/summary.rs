@@ -228,7 +228,7 @@ impl SandboxSummary {
         lines.push(net_line);
 
         if let Some(mb) = self.max_memory_mb {
-            lines.push(format!("Per-command memory ceiling: {} MiB", mb));
+            lines.push(format!("Per-command memory ceiling: {mb} MiB"));
         }
 
         lines

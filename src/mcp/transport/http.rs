@@ -94,7 +94,7 @@ impl HttpTransport {
         let client = Client::builder()
             .timeout(config.timeout)
             .build()
-            .map_err(|e| AlephError::IoError(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Failed to create HTTP client: {e}")))?;
 
         Ok(Self {
             server_name: name.into(),
@@ -199,7 +199,7 @@ impl McpTransport for HttpTransport {
         })?;
 
         let body = serde_json::to_string(request)
-            .map_err(|e| AlephError::IoError(format!("Failed to serialize request: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize request: {e}")))?;
 
         tracing::debug!(
             server = %self.server_name,
@@ -245,7 +245,7 @@ impl McpTransport for HttpTransport {
         let text = response
             .text()
             .await
-            .map_err(|e| AlephError::IoError(format!("Failed to read response: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Failed to read response: {e}")))?;
 
         if is_sse {
             return parse_sse_response(&text, request.id).ok_or_else(|| {
@@ -272,7 +272,7 @@ impl McpTransport for HttpTransport {
         })?;
 
         let body = serde_json::to_string(notification)
-            .map_err(|e| AlephError::IoError(format!("Failed to serialize notification: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize notification: {e}")))?;
 
         tracing::debug!(
             server = %self.server_name,

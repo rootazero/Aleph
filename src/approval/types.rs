@@ -41,7 +41,7 @@ impl fmt::Display for ActionType {
             ActionType::DesktopLaunchApp => "desktop launch app",
             ActionType::ShellExec => "shell exec",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 

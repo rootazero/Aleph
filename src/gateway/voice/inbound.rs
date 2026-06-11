@@ -47,7 +47,7 @@ pub fn resolve_stt_config(
                 return Some(key.clone());
             }
         }
-        if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+        if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{name}")) {
             let val = secret.expose().to_string();
             if !val.is_empty() {
                 return Some(val);
@@ -196,7 +196,7 @@ pub async fn transcribe_bytes(
     let file_part = reqwest::multipart::Part::bytes(bytes)
         .file_name(filename.to_string())
         .mime_str(mime)
-        .map_err(|e| format!("Invalid MIME type: {}", e))?;
+        .map_err(|e| format!("Invalid MIME type: {e}"))?;
 
     let mut form = reqwest::multipart::Form::new()
         .part("file", file_part)
@@ -220,12 +220,12 @@ pub async fn transcribe_bytes(
         .timeout(std::time::Duration::from_secs(60))
         .send()
         .await
-        .map_err(|e| format!("Whisper API request failed: {}", e))?;
+        .map_err(|e| format!("Whisper API request failed: {e}"))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Whisper API error {}: {}", status, body));
+        return Err(format!("Whisper API error {status}: {body}"));
     }
 
     #[derive(serde::Deserialize)]
@@ -236,7 +236,7 @@ pub async fn transcribe_bytes(
     let result: WhisperResponse = resp
         .json()
         .await
-        .map_err(|e| format!("Failed to parse Whisper response: {}", e))?;
+        .map_err(|e| format!("Failed to parse Whisper response: {e}"))?;
 
     Ok(result.text)
 }
@@ -255,7 +255,7 @@ async fn get_audio_bytes(attachment: &Attachment) -> Result<(Vec<u8>, String), S
     if let Some(ref path) = attachment.path {
         let bytes = tokio::fs::read(path)
             .await
-            .map_err(|e| format!("Failed to read audio file {}: {}", path, e))?;
+            .map_err(|e| format!("Failed to read audio file {path}: {e}"))?;
         return Ok((bytes, filename));
     }
 
@@ -263,14 +263,14 @@ async fn get_audio_bytes(attachment: &Attachment) -> Result<(Vec<u8>, String), S
         debug!(url = %url, "Downloading audio for transcription");
         let resp = reqwest::get(url)
             .await
-            .map_err(|e| format!("Failed to download audio from {}: {}", url, e))?;
+            .map_err(|e| format!("Failed to download audio from {url}: {e}"))?;
         if !resp.status().is_success() {
             return Err(format!("Audio download failed: HTTP {}", resp.status()));
         }
         let bytes = resp
             .bytes()
             .await
-            .map_err(|e| format!("Failed to read audio bytes: {}", e))?;
+            .map_err(|e| format!("Failed to read audio bytes: {e}"))?;
         return Ok((bytes.to_vec(), filename));
     }
 

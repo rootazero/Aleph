@@ -234,12 +234,12 @@ impl MatrixConfig {
         // Check for exact user_id as a Matrix mention (starts with @, contains :)
         // Pattern: @userid:server - the mention ends at : or whitespace/punctuation
         let stripped = user_id.trim_start_matches('@');
-        let mention_pattern = format!("@{}", stripped);
+        let mention_pattern = format!("@{stripped}");
         body.split_whitespace().any(|word| {
             word == stripped
                 || word == mention_pattern
-                || word.starts_with(&format!("@{}:", stripped))
-                || word.starts_with(&format!("{}:", mention_pattern))
+                || word.starts_with(&format!("@{stripped}:"))
+                || word.starts_with(&format!("{mention_pattern}:"))
         })
     }
 }

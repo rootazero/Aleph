@@ -164,16 +164,14 @@ impl GenerationProviderConfig {
         // Validate provider_type is not empty
         if self.provider_type.is_empty() {
             return Err(format!(
-                "generation.providers.{}.provider_type cannot be empty",
-                name
+                "generation.providers.{name}.provider_type cannot be empty"
             ));
         }
 
         // Validate timeout
         if self.timeout_seconds == 0 {
             return Err(format!(
-                "generation.providers.{}.timeout_seconds must be greater than 0",
-                name
+                "generation.providers.{name}.timeout_seconds must be greater than 0"
             ));
         }
 

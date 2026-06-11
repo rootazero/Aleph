@@ -140,7 +140,7 @@ impl OpenAiTtsProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         let resolved = resolved_url.unwrap_or_else(|| {
             let url = base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
@@ -259,12 +259,12 @@ impl OpenAiTtsProvider {
             429 => GenerationError::rate_limit("Rate limit exceeded", None),
             400 => GenerationError::invalid_parameters(body.to_string(), None),
             500..=599 => GenerationError::provider(
-                format!("OpenAI server error: {}", body),
+                format!("OpenAI server error: {body}"),
                 Some(status.as_u16()),
                 "openai-tts",
             ),
             _ => GenerationError::provider(
-                format!("Unexpected error: {}", body),
+                format!("Unexpected error: {body}"),
                 Some(status.as_u16()),
                 "openai-tts",
             ),
@@ -310,7 +310,7 @@ impl GenerationProvider for OpenAiTtsProvider {
             if let Some(speed) = request.params.speed {
                 if !(0.25..=4.0).contains(&speed) {
                     return Err(GenerationError::invalid_parameters(
-                        format!("Speed must be between 0.25 and 4.0, got {}", speed),
+                        format!("Speed must be between 0.25 and 4.0, got {speed}"),
                         Some("speed".to_string()),
                     ));
                 }
@@ -355,7 +355,7 @@ impl GenerationProvider for OpenAiTtsProvider {
                     if e.is_timeout() {
                         GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
                     } else if e.is_connect() {
-                        GenerationError::network(format!("Connection failed: {}", e))
+                        GenerationError::network(format!("Connection failed: {e}"))
                     } else {
                         GenerationError::network(e.to_string())
                     }
@@ -366,7 +366,7 @@ impl GenerationProvider for OpenAiTtsProvider {
             // Handle non-success status codes
             if !status.is_success() {
                 let response_text = response.text().await.map_err(|e| {
-                    GenerationError::network(format!("Failed to read error response: {}", e))
+                    GenerationError::network(format!("Failed to read error response: {e}"))
                 })?;
 
                 error!(
@@ -379,7 +379,7 @@ impl GenerationProvider for OpenAiTtsProvider {
 
             // Get audio bytes from response
             let audio_bytes = response.bytes().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read audio bytes: {}", e))
+                GenerationError::network(format!("Failed to read audio bytes: {e}"))
             })?;
 
             // Validate we got actual data

@@ -63,7 +63,7 @@ impl ReasoningExtractor {
             }
             let (reasoning, answer2, complete) = self.process_reasoning(after_open);
             let final_answer = match answer2 {
-                Some(a) if !answer_part.is_empty() => Some(format!("{}\n{}", answer_part, a)),
+                Some(a) if !answer_part.is_empty() => Some(format!("{answer_part}\n{a}")),
                 Some(a) => Some(a),
                 None => {
                     if answer_part.is_empty() {

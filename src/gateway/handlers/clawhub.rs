@@ -56,7 +56,7 @@ pub async fn handle_search(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("ClawHub search failed: {}", e),
+            format!("ClawHub search failed: {e}"),
         ),
     }
 }
@@ -110,7 +110,7 @@ pub async fn handle_browse(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("ClawHub browse failed: {}", e),
+            format!("ClawHub browse failed: {e}"),
         ),
     }
 }
@@ -136,7 +136,7 @@ pub async fn handle_detail(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("ClawHub detail failed: {}", e),
+            format!("ClawHub detail failed: {e}"),
         ),
     }
 }
@@ -181,7 +181,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("ClawHub install failed: {}", e),
+            format!("ClawHub install failed: {e}"),
         ),
     }
 }

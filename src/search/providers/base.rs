@@ -22,17 +22,15 @@ pub fn check_status(response: Response, provider_name: &str) -> Result<Response>
     } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
         Err(AlephError::authentication(
             provider_name,
-            format!("{} API error: {}", provider_name, status),
+            format!("{provider_name} API error: {status}"),
         ))
     } else if status == StatusCode::TOO_MANY_REQUESTS {
         Err(AlephError::rate_limit(format!(
-            "{} API error: {} (rate limited)",
-            provider_name, status
+            "{provider_name} API error: {status} (rate limited)"
         )))
     } else {
         Err(AlephError::provider(format!(
-            "{} API error: {}",
-            provider_name, status
+            "{provider_name} API error: {status}"
         )))
     }
 }
@@ -43,6 +41,6 @@ pub async fn parse_json<T: serde::de::DeserializeOwned>(
     provider_name: &str,
 ) -> Result<T> {
     response.json::<T>().await.map_err(|e| {
-        AlephError::provider(format!("Failed to parse {} response: {}", provider_name, e))
+        AlephError::provider(format!("Failed to parse {provider_name} response: {e}"))
     })
 }

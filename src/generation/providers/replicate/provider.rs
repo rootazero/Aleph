@@ -181,8 +181,7 @@ impl GenerationProvider for ReplicateProvider {
                 }
                 _ => {
                     return Err(GenerationError::serialization(format!(
-                        "Unexpected output format: {:?}",
-                        output_value
+                        "Unexpected output format: {output_value:?}"
                     )));
                 }
             };

@@ -442,7 +442,7 @@ fn default_soul(agent_name: &str) -> String {
     format!(
         r#"# SOUL.md — Who You Are
 
-_You are {name}. Not a chatbot — a thinking companion._
+_You are {agent_name}. Not a chatbot — a thinking companion._
 
 ## Core Truths
 
@@ -476,14 +476,13 @@ Each session, you wake up fresh. The workspace files _are_ your memory. Read the
 ---
 
 _This file is yours to evolve. As you learn who you are, update it._
-"#,
-        name = agent_name
+"#
     )
 }
 
 fn default_agents(agent_name: &str) -> String {
     format!(
-        r#"# AGENTS.md — {name}'s Operating Manual
+        r#"# AGENTS.md — {agent_name}'s Operating Manual
 
 This workspace is home. Treat it that way.
 
@@ -572,8 +571,7 @@ You can proactively: read/organize files, check project status, update documenta
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.
-"#,
-        name = agent_name
+"#
     )
 }
 
@@ -583,7 +581,7 @@ fn default_identity(agent_name: &str) -> String {
 
 _Fill this in during your first conversation. Make it yours._
 
-- **Name:** {name}
+- **Name:** {agent_name}
 - **Role:** _(assistant? advisor? creative partner? something else?)_
 - **Vibe:** _(sharp? warm? playful? calm? chaotic?)_
 - **Emoji:** _(your signature — pick one that feels right)_
@@ -592,8 +590,7 @@ _Fill this in during your first conversation. Make it yours._
 ---
 
 This isn't just metadata. It's the start of figuring out who you are.
-"#,
-        name = agent_name
+"#
     )
 }
 

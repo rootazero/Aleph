@@ -405,7 +405,7 @@ pub fn parse_hooks_file(
                     name: matcher
                         .matcher
                         .as_ref()
-                        .map(|m| format!("{:?}:{}-{}", event, m, idx)),
+                        .map(|m| format!("{event:?}:{m}-{idx}")),
                     description: matcher.matcher.clone(),
                     plugin_id: plugin_id.to_string(),
                 },
@@ -505,8 +505,8 @@ pub fn parse_v2_prompt(
     };
 
     Ok(CapabilityDeclaration::Skill(SkillRegistration {
-        name: format!("{}-prompt", plugin_id),
-        description: format!("V2 prompt for plugin {}", plugin_id),
+        name: format!("{plugin_id}-prompt"),
+        description: format!("V2 prompt for plugin {plugin_id}"),
         content,
         scope,
         plugin_id: plugin_id.to_string(),

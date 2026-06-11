@@ -140,7 +140,7 @@ fn build_command_tree(tools: Vec<UnifiedTool>) -> Vec<CommandTreeNode> {
                 // Extract subcommand name: "session_new" -> "new"
                 let sub_name = t
                     .name
-                    .strip_prefix(&format!("{}_", ns_name))
+                    .strip_prefix(&format!("{ns_name}_"))
                     .unwrap_or(&t.name)
                     .to_string();
                 ChildCommandNode {
@@ -346,7 +346,7 @@ async fn build_namespace_children(
         .map(|t| {
             let sub_name = t
                 .name
-                .strip_prefix(&format!("{}_", namespace))
+                .strip_prefix(&format!("{namespace}_"))
                 .unwrap_or(&t.name)
                 .to_string();
             ChildCommandNode {
@@ -401,7 +401,7 @@ pub async fn handle_execute(
     let slash_input = if input.starts_with('/') {
         input.to_string()
     } else {
-        format!("/{}", input)
+        format!("/{input}")
     };
 
     // Parse via CommandParser (async, queries ToolCatalog)
@@ -478,7 +478,7 @@ pub async fn handle_execute(
                     .suggest_commands(&first_word, 3)
                     .await
                     .into_iter()
-                    .map(|n| format!("/{}", n))
+                    .map(|n| format!("/{n}"))
                     .collect();
                 JsonRpcResponse::success(
                     request.id,

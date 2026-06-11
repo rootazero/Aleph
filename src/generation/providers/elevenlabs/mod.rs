@@ -115,7 +115,7 @@ impl ElevenLabsProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(constants::DEFAULT_TIMEOUT_SECS))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         Ok(Self {
             client,
@@ -286,12 +286,12 @@ impl ElevenLabsProvider {
                 GenerationError::invalid_parameters("Voice not found", Some("voice".to_string()))
             }
             500..=599 => GenerationError::provider(
-                format!("ElevenLabs server error: {}", body),
+                format!("ElevenLabs server error: {body}"),
                 Some(status.as_u16()),
                 "elevenlabs",
             ),
             _ => GenerationError::provider(
-                format!("Unexpected error: {}", body),
+                format!("Unexpected error: {body}"),
                 Some(status.as_u16()),
                 "elevenlabs",
             ),
@@ -381,7 +381,7 @@ impl GenerationProvider for ElevenLabsProvider {
                 if e.is_timeout() {
                     GenerationError::timeout(Duration::from_secs(constants::DEFAULT_TIMEOUT_SECS))
                 } else if e.is_connect() {
-                    GenerationError::network(format!("Connection failed: {}", e))
+                    GenerationError::network(format!("Connection failed: {e}"))
                 } else {
                     GenerationError::network(e.to_string())
                 }
@@ -392,7 +392,7 @@ impl GenerationProvider for ElevenLabsProvider {
             // Handle non-success status codes
             if !status.is_success() {
                 let response_text = response.text().await.map_err(|e| {
-                    GenerationError::network(format!("Failed to read error response: {}", e))
+                    GenerationError::network(format!("Failed to read error response: {e}"))
                 })?;
 
                 error!(
@@ -405,7 +405,7 @@ impl GenerationProvider for ElevenLabsProvider {
 
             // Get audio bytes from response
             let audio_bytes = response.bytes().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read audio bytes: {}", e))
+                GenerationError::network(format!("Failed to read audio bytes: {e}"))
             })?;
 
             // Validate we got actual data

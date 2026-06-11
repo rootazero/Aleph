@@ -56,7 +56,7 @@ pub async fn handle_voices(
                 .strip_suffix("/v1")
                 .unwrap_or(base)
                 .trim_end_matches('/');
-            format!("{}/v1/audio/voices", base)
+            format!("{base}/v1/audio/voices")
         } else {
             String::new()
         };

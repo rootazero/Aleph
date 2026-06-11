@@ -127,7 +127,7 @@ pub async fn handle_get(
         None => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Task not found: {}", task_id),
+            format!("Task not found: {task_id}"),
         ),
     }
 }
@@ -167,7 +167,7 @@ pub async fn handle_create(
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Invalid interval: {}", e),
+                    format!("Invalid interval: {e}"),
                 );
             }
         }
@@ -200,7 +200,7 @@ pub async fn handle_create(
                         return JsonRpcResponse::error(
                             request.id,
                             INVALID_PARAMS,
-                            format!("Invalid trigger_condition: {}", e),
+                            format!("Invalid trigger_condition: {e}"),
                         );
                     }
                 },
@@ -286,7 +286,7 @@ pub async fn handle_update(
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Invalid interval: {}", e),
+                    format!("Invalid interval: {e}"),
                 );
             }
         }
@@ -301,7 +301,7 @@ pub async fn handle_update(
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Invalid probe: {}", e),
+                    format!("Invalid probe: {e}"),
                 );
             }
         }
@@ -322,7 +322,7 @@ pub async fn handle_update(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to update task: {}", e),
+            format!("Failed to update task: {e}"),
         ),
     }
 }
@@ -345,7 +345,7 @@ pub async fn handle_delete(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to delete task: {}", e),
+            format!("Failed to delete task: {e}"),
         ),
     }
 }
@@ -397,7 +397,7 @@ pub async fn handle_toggle(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to toggle task: {}", e),
+            format!("Failed to toggle task: {e}"),
         ),
     }
 }
@@ -450,7 +450,7 @@ pub async fn handle_wake(
         None => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Task not found: {}", task_id),
+            format!("Task not found: {task_id}"),
         ),
     }
 }
@@ -504,7 +504,7 @@ pub async fn handle_runs(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to get runs: {}", e),
+            format!("Failed to get runs: {e}"),
         ),
     }
 }

@@ -127,7 +127,7 @@ fn compress_screenshot(output: &str) -> String {
     if total > 5 {
         let remaining = total - 5;
         let suffix = if remaining == 1 { "line" } else { "lines" };
-        result.push_str(&format!("\n[... {} more {} omitted]", remaining, suffix));
+        result.push_str(&format!("\n[... {remaining} more {suffix} omitted]"));
     }
     result
 }
@@ -185,8 +185,7 @@ fn compress_snapshot(output: &str) -> String {
     let mut result = kept.join("\n");
     let nodes_word = if total_nodes == 1 { "node" } else { "nodes" };
     result.push_str(&format!(
-        "\n[Snapshot compressed: kept {} interactive elements out of {} total {}]",
-        kept_count, total_nodes, nodes_word,
+        "\n[Snapshot compressed: kept {kept_count} interactive elements out of {total_nodes} total {nodes_word}]",
     ));
     result
 }
@@ -226,14 +225,13 @@ fn compress_network_requests(output: &str) -> String {
                     .or_else(|| v.as_str().map(|s| s.to_string()))
             })
             .unwrap_or_else(|| "pending".to_owned());
-        lines.push(format!("{} {} → {}", method, url, status));
+        lines.push(format!("{method} {url} → {status}"));
     }
 
     let mut result = lines.join("\n");
     if total > limit {
         result.push_str(&format!(
-            "\n[... showing {} of {} total requests]",
-            limit, total
+            "\n[... showing {limit} of {total} total requests]"
         ));
     }
     result
@@ -282,8 +280,7 @@ fn compress_generic(output: &str, max_bytes: usize) -> String {
 
     let mut result = output[..end].to_owned();
     result.push_str(&format!(
-        "\n[... output truncated, showing first {} bytes of {} total]",
-        end, total,
+        "\n[... output truncated, showing first {end} bytes of {total} total]",
     ));
     result
 }

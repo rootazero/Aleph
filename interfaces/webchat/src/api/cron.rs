@@ -138,14 +138,14 @@ impl CronApi {
             .ok_or_else(|| "Invalid response: missing jobs".to_string())
             .and_then(|jobs| {
                 serde_json::from_value(jobs.clone())
-                    .map_err(|e| format!("Failed to parse cron jobs: {}", e))
+                    .map_err(|e| format!("Failed to parse cron jobs: {e}"))
             })
     }
 
     /// Create a new cron job
     pub async fn create(state: &DashboardState, job: CreateCronJob) -> Result<CronJobInfo, String> {
         let params =
-            serde_json::to_value(&job).map_err(|e| format!("Failed to serialize job: {}", e))?;
+            serde_json::to_value(&job).map_err(|e| format!("Failed to serialize job: {e}"))?;
 
         let result = state.rpc_call("cron.create", params).await?;
 
@@ -154,7 +154,7 @@ impl CronApi {
             .ok_or_else(|| "Invalid response: missing job".to_string())
             .and_then(|job| {
                 serde_json::from_value(job.clone())
-                    .map_err(|e| format!("Failed to parse created cron job: {}", e))
+                    .map_err(|e| format!("Failed to parse created cron job: {e}"))
             })
     }
 
@@ -164,7 +164,7 @@ impl CronApi {
         patch: UpdateCronJob,
     ) -> Result<CronJobInfo, String> {
         let params = serde_json::to_value(&patch)
-            .map_err(|e| format!("Failed to serialize patch: {}", e))?;
+            .map_err(|e| format!("Failed to serialize patch: {e}"))?;
 
         let result = state.rpc_call("cron.update", params).await?;
 
@@ -173,7 +173,7 @@ impl CronApi {
             .ok_or_else(|| "Invalid response: missing job".to_string())
             .and_then(|job| {
                 serde_json::from_value(job.clone())
-                    .map_err(|e| format!("Failed to parse updated cron job: {}", e))
+                    .map_err(|e| format!("Failed to parse updated cron job: {e}"))
             })
     }
 
@@ -202,7 +202,7 @@ impl CronApi {
             .ok_or_else(|| "Invalid response: missing runs".to_string())
             .and_then(|runs| {
                 serde_json::from_value(runs.clone())
-                    .map_err(|e| format!("Failed to parse job runs: {}", e))
+                    .map_err(|e| format!("Failed to parse job runs: {e}"))
             })
     }
 
@@ -220,7 +220,7 @@ impl CronApi {
         let result = state.rpc_call("cron.toggle", params).await?;
 
         serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse toggled cron job: {}", e))
+            .map_err(|e| format!("Failed to parse toggled cron job: {e}"))
     }
 
     /// Trigger an immediate run of a cron job

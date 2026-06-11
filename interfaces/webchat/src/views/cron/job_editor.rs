@@ -219,8 +219,7 @@ pub(super) fn JobEditor(
                 _ => "cron expression, e.g. 0 0 9 * * *",
             };
             error.set(Some(format!(
-                "Invalid schedule value for type '{}'. Expected: {}",
-                schedule_kind, hint
+                "Invalid schedule value for type '{schedule_kind}'. Expected: {hint}"
             )));
             saving.set(false);
             return;
@@ -274,7 +273,7 @@ pub(super) fn JobEditor(
                         selected.set(None);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to create job: {}", e)));
+                        error.set(Some(format!("Failed to create job: {e}")));
                     }
                 }
                 saving.set(false);
@@ -304,7 +303,7 @@ pub(super) fn JobEditor(
                             selected.set(None);
                         }
                         Err(e) => {
-                            error.set(Some(format!("Failed to update job: {}", e)));
+                            error.set(Some(format!("Failed to update job: {e}")));
                         }
                     }
                     saving.set(false);
@@ -351,7 +350,7 @@ pub(super) fn JobEditor(
                             selected.set(None);
                         }
                         Err(e) => {
-                            error.set(Some(format!("Failed to delete job: {}", e)));
+                            error.set(Some(format!("Failed to delete job: {e}")));
                         }
                     }
                     saving.set(false);
@@ -387,7 +386,7 @@ pub(super) fn JobEditor(
                             success_for_spawn.set(None);
                         }
                         Err(e) => {
-                            error_for_spawn.set(Some(format!("Failed to trigger run: {}", e)));
+                            error_for_spawn.set(Some(format!("Failed to trigger run: {e}")));
                         }
                     }
                 });

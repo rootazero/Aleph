@@ -245,7 +245,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Invalid security config: {}", e),
+                format!("Invalid security config: {e}"),
             )
         }
     };
@@ -312,7 +312,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -328,7 +328,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save gateway auth config: {}", e),
+                format!("Failed to save gateway auth config: {e}"),
             );
         }
     }
@@ -338,7 +338,7 @@ pub async fn handle_update(
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to save SSRF config: {}", e),
+            format!("Failed to save SSRF config: {e}"),
         );
     }
 
@@ -349,7 +349,7 @@ pub async fn handle_update(
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to save shell security config: {}", e),
+            format!("Failed to save shell security config: {e}"),
         );
     }
 
@@ -360,7 +360,7 @@ pub async fn handle_update(
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to save custom PII rules: {}", e),
+            format!("Failed to save custom PII rules: {e}"),
         );
     }
 
@@ -371,7 +371,7 @@ pub async fn handle_update(
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to save secret protection config: {}", e),
+            format!("Failed to save secret protection config: {e}"),
         );
     }
 
@@ -383,7 +383,7 @@ pub async fn handle_update(
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to save sandbox rate limit config: {}", e),
+            format!("Failed to save sandbox rate limit config: {e}"),
         );
     }
 
@@ -451,7 +451,7 @@ pub async fn handle_revoke_device(
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Invalid device_id: {}", e),
+                    format!("Invalid device_id: {e}"),
                 )
             }
         };
@@ -471,7 +471,7 @@ pub async fn handle_revoke_device(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to revoke device: {}", e),
+            format!("Failed to revoke device: {e}"),
         ),
     }
 }

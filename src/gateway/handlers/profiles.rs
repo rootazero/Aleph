@@ -111,7 +111,7 @@ pub async fn handle_list(
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
+                    format!("Invalid params: {e}"),
                 );
             }
         },

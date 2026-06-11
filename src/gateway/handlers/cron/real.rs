@@ -66,7 +66,7 @@ pub async fn handle_list(request: JsonRpcRequest, cron: SharedCronService) -> Js
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to list jobs: {}", e),
+            format!("Failed to list jobs: {e}"),
         ),
     }
 }
@@ -86,7 +86,7 @@ pub async fn handle_get(request: JsonRpcRequest, cron: SharedCronService) -> Jso
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to get job: {}", e),
+            format!("Failed to get job: {e}"),
         ),
     }
 }
@@ -127,7 +127,7 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Invalid schedule_kind: {}", e),
+                    format!("Invalid schedule_kind: {e}"),
                 );
             }
         },
@@ -156,7 +156,7 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
         if *at <= now_ms {
             let at_human = chrono::DateTime::from_timestamp_millis(*at)
                 .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-                .unwrap_or_else(|| format!("{}ms", at));
+                .unwrap_or_else(|| format!("{at}ms"));
             let now_human = chrono::Utc::now()
                 .format("%Y-%m-%d %H:%M:%S UTC")
                 .to_string();
@@ -164,8 +164,7 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
                 request.id,
                 INVALID_PARAMS,
                 format!(
-                    "Cannot schedule in the past. at={} resolves to {}, current time is {} (now_ms={})",
-                    at, at_human, now_human, now_ms
+                    "Cannot schedule in the past. at={at} resolves to {at_human}, current time is {now_human} (now_ms={now_ms})"
                 ),
             );
         }
@@ -224,7 +223,7 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to create job: {}", e),
+            format!("Failed to create job: {e}"),
         ),
     }
 }
@@ -269,7 +268,7 @@ pub async fn handle_update(request: JsonRpcRequest, cron: SharedCronService) -> 
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Invalid schedule_kind: {}", e),
+                    format!("Invalid schedule_kind: {e}"),
                 );
             }
         }
@@ -326,7 +325,7 @@ pub async fn handle_update(request: JsonRpcRequest, cron: SharedCronService) -> 
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to update job: {}", e),
+            format!("Failed to update job: {e}"),
         ),
     }
 }
@@ -346,7 +345,7 @@ pub async fn handle_delete(request: JsonRpcRequest, cron: SharedCronService) -> 
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to delete job: {}", e),
+            format!("Failed to delete job: {e}"),
         ),
     }
 }
@@ -369,7 +368,7 @@ pub async fn handle_status(request: JsonRpcRequest, cron: SharedCronService) -> 
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to get status: {}", e),
+            format!("Failed to get status: {e}"),
         ),
     }
 }
@@ -407,7 +406,7 @@ pub async fn handle_run(request: JsonRpcRequest, cron: SharedCronService) -> Jso
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to run job: {}", e),
+            format!("Failed to run job: {e}"),
         ),
     }
 }
@@ -457,7 +456,7 @@ pub async fn handle_runs(request: JsonRpcRequest, cron: SharedCronService) -> Js
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to get runs: {}", e),
+            format!("Failed to get runs: {e}"),
         ),
     }
 }
@@ -498,7 +497,7 @@ pub async fn handle_toggle(request: JsonRpcRequest, cron: SharedCronService) -> 
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to toggle job: {}", e),
+            format!("Failed to toggle job: {e}"),
         ),
     }
 }

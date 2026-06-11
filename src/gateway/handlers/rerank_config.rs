@@ -26,7 +26,7 @@ use tokio::sync::RwLock;
 
 /// Build vault key for a rerank provider (consistent with other modules: prefix:name)
 fn vault_key(provider_name: &str) -> String {
-    format!("rerank:{}", provider_name)
+    format!("rerank:{provider_name}")
 }
 
 /// Get provider name as lowercase string
@@ -97,7 +97,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Invalid rerank config: {}", e),
+                format!("Invalid rerank config: {e}"),
             )
         }
     };
@@ -130,7 +130,7 @@ pub async fn handle_update(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
+                format!("Failed to save config: {e}"),
             );
         }
     }
@@ -168,7 +168,7 @@ pub async fn handle_test(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Invalid rerank config: {}", e),
+                format!("Invalid rerank config: {e}"),
             )
         }
     };

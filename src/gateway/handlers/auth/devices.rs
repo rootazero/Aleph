@@ -63,7 +63,7 @@ pub async fn handle_devices_revoke(
             JsonRpcResponse::success(request.id, json!({"revoked": true}))
         }
         Ok(false) => JsonRpcResponse::error(request.id, -32004, "Device not found"),
-        Err(e) => JsonRpcResponse::error(request.id, -32603, format!("Failed to revoke: {}", e)),
+        Err(e) => JsonRpcResponse::error(request.id, -32603, format!("Failed to revoke: {e}")),
     }
 }
 
@@ -126,7 +126,7 @@ pub async fn handle_devices_set_level(
             return JsonRpcResponse::error(
                 request.id,
                 -32603,
-                format!("Failed to update permissions: {}", e),
+                format!("Failed to update permissions: {e}"),
             );
         }
     }

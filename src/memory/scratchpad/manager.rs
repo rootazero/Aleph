@@ -260,7 +260,7 @@ impl ScratchpadManager {
     pub async fn ensure_dir(&self) -> Result<(), AlephError> {
         fs::create_dir_all(&self.project_dir)
             .await
-            .map_err(|e| AlephError::other(format!("Failed to create project dir: {}", e)))
+            .map_err(|e| AlephError::other(format!("Failed to create project dir: {e}")))
     }
 
     /// Check if scratchpad file exists
@@ -316,7 +316,7 @@ impl ScratchpadManager {
     pub async fn read(&self) -> Result<String, AlephError> {
         fs::read_to_string(self.scratchpad_path())
             .await
-            .map_err(|e| AlephError::other(format!("Failed to read scratchpad: {}", e)))
+            .map_err(|e| AlephError::other(format!("Failed to read scratchpad: {e}")))
     }
 
     /// Write content to scratchpad (creates backup if configured)
@@ -352,7 +352,7 @@ impl ScratchpadManager {
         if let Some(notes_pos) = content.find("## Notes") {
             let insert_pos = notes_pos + "## Notes".len();
             let timestamp = chrono::Utc::now().format("%H:%M");
-            let note_line = format!("\n- [{}] {}", timestamp, note);
+            let note_line = format!("\n- [{timestamp}] {note}");
             content.insert_str(insert_pos, &note_line);
         }
 
@@ -375,7 +375,7 @@ impl ScratchpadManager {
             if let Some(plan_pos) = content.find("## Plan") {
                 let before = &content[..obj_pos + "## Objective".len()];
                 let after = &content[plan_pos..];
-                content = format!("{}\n{}\n\n{}", before, objective, after);
+                content = format!("{before}\n{objective}\n\n{after}");
             }
         }
 
@@ -394,7 +394,7 @@ impl ScratchpadManager {
         // Build plan section
         let plan_content: String = items
             .iter()
-            .map(|item| format!("- [ ] {}", item))
+            .map(|item| format!("- [ ] {item}"))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -403,7 +403,7 @@ impl ScratchpadManager {
             if let Some(working_pos) = content.find("## Working State") {
                 let before = &content[..plan_pos + "## Plan".len()];
                 let after = &content[working_pos..];
-                content = format!("{}\n{}\n\n{}", before, plan_content, after);
+                content = format!("{before}\n{plan_content}\n\n{after}");
             }
         }
 
@@ -484,7 +484,7 @@ impl ScratchpadManager {
             if let Some(end) = content[pos..].find("_\n") {
                 let before = &content[..pos];
                 let after = &content[pos + end + 2..];
-                content = format!("{}_Last updated: {}_\n{}", before, now, after);
+                content = format!("{before}_Last updated: {now}_\n{after}");
             }
         }
 

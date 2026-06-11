@@ -328,7 +328,7 @@ impl ContextCompactor {
         match summary {
             Some(summary) => {
                 // Success: drain old window and insert the stripped summary.
-                let summary_text = format!("[Context Summary]\n{}", summary);
+                let summary_text = format!("[Context Summary]\n{summary}");
                 let summary_msg = UnifiedMessage::user(summary_text.clone());
                 let tokens_after = estimate_tokens(&summary);
 
@@ -348,7 +348,7 @@ impl ContextCompactor {
                 if self.config.fallback_to_truncation {
                     let truncated = deterministic_truncation(window);
                     let tokens_after = estimate_tokens(&truncated);
-                    let summary_text = format!("[Context Summary]\n{}", truncated);
+                    let summary_text = format!("[Context Summary]\n{truncated}");
                     let summary_msg = UnifiedMessage::user(summary_text.clone());
 
                     messages.drain(window_start..cut_end);
@@ -467,7 +467,7 @@ impl ContextCompactor {
             }
         };
 
-        let summary_text = format!("[Context Summary]\n{}", body);
+        let summary_text = format!("[Context Summary]\n{body}");
         let tokens_after = estimate_tokens(&summary_text);
         messages.drain(c.start..cut_end_m);
         messages.insert(c.start, UnifiedMessage::user(summary_text.clone()));
@@ -612,13 +612,13 @@ fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
             UnifiedMessage::ToolResult { tool_name, .. } => {
                 let text = msg.text_content();
                 let first_line = text.lines().next().unwrap_or("");
-                lines.push(format!("tool_result({}): {}", tool_name, first_line));
+                lines.push(format!("tool_result({tool_name}): {first_line}"));
                 continue;
             }
         };
         let text = msg.text_content();
         let first_line = text.lines().next().unwrap_or("");
-        lines.push(format!("{}: {}", role, first_line));
+        lines.push(format!("{role}: {first_line}"));
     }
     lines.join("\n")
 }

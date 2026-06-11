@@ -78,7 +78,7 @@ impl DeepgramSttProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         let base = base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
         let endpoint = if base.contains("/v1/listen") {
@@ -204,7 +204,7 @@ impl GenerationProvider for DeepgramSttProvider {
                 if e.is_timeout() {
                     GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
                 } else if e.is_connect() {
-                    GenerationError::network(format!("Connection failed: {}", e))
+                    GenerationError::network(format!("Connection failed: {e}"))
                 } else {
                     GenerationError::network(e.to_string())
                 }
@@ -213,7 +213,7 @@ impl GenerationProvider for DeepgramSttProvider {
             let status = response.status();
             if !status.is_success() {
                 let body = response.text().await.map_err(|e| {
-                    GenerationError::network(format!("Failed to read error body: {}", e))
+                    GenerationError::network(format!("Failed to read error body: {e}"))
                 })?;
                 error!(status = %status, body = %body, "Deepgram listen request failed");
                 return Err(self.parse_error(status, &body));
@@ -221,7 +221,7 @@ impl GenerationProvider for DeepgramSttProvider {
 
             let parsed: types::DeepgramResponse = response.json().await.map_err(|e| {
                 GenerationError::provider(
-                    format!("Failed to parse Deepgram response: {}", e),
+                    format!("Failed to parse Deepgram response: {e}"),
                     None,
                     "deepgram-stt",
                 )
@@ -347,7 +347,7 @@ fn decode_data_url(rest: &str) -> GenerationResult<(Vec<u8>, String)> {
             .decode(payload)
             .map_err(|e| {
                 GenerationError::invalid_parameters(
-                    format!("Failed to base64-decode audio data URL: {}", e),
+                    format!("Failed to base64-decode audio data URL: {e}"),
                     Some("reference_audio".to_string()),
                 )
             })?

@@ -232,9 +232,8 @@ fn wrap_skills<'a>(fragments: impl Iterator<Item = &'a str>, omitted: usize) -> 
     if omitted > 0 {
         buf.push_str("  <note>");
         buf.push_str(&format!(
-            "{} additional skill(s) omitted to conserve context; \
-             call `skill_list` to enumerate all available skills.",
-            omitted
+            "{omitted} additional skill(s) omitted to conserve context; \
+             call `skill_list` to enumerate all available skills."
         ));
         buf.push_str("</note>\n");
     }

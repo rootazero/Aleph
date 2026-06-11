@@ -189,7 +189,7 @@ pub fn audit_permissions(guild_id: u64, guild_name: &str, bot_permissions: u64) 
 
     // Summary
     let summary = match overall_status {
-        HealthStatus::Healthy => format!("All permissions OK for guild \"{}\".", guild_name,),
+        HealthStatus::Healthy => format!("All permissions OK for guild \"{guild_name}\".",),
         HealthStatus::Degraded => format!(
             "Guild \"{}\" is missing recommended permissions: {}.",
             guild_name,
@@ -206,14 +206,12 @@ pub fn audit_permissions(guild_id: u64, guild_name: &str, bot_permissions: u64) 
     let mut fix_suggestions = Vec::new();
     for name in &missing_required {
         fix_suggestions.push(format!(
-            "Grant the \"{}\" permission to the bot role in Server Settings > Roles.",
-            name,
+            "Grant the \"{name}\" permission to the bot role in Server Settings > Roles.",
         ));
     }
     for name in &missing_recommended {
         fix_suggestions.push(format!(
-            "Consider granting \"{}\" for richer interaction.",
-            name,
+            "Consider granting \"{name}\" for richer interaction.",
         ));
     }
 

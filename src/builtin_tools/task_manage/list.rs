@@ -76,7 +76,7 @@ fn format_task_board(tasks: &[CoordTask]) -> String {
         let owner_str = task
             .owner
             .as_deref()
-            .map(|o| format!(" [{}]", o))
+            .map(|o| format!(" [{o}]"))
             .unwrap_or_default();
         let deps_str = if task.dependencies.is_empty() {
             String::new()

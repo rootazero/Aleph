@@ -92,8 +92,7 @@ impl FileOpsConfigToml {
         for path in &self.allowed_paths {
             if glob::Pattern::new(path).is_err() {
                 return Err(format!(
-                    "agent.file_ops.allowed_paths contains invalid glob pattern: '{}'",
-                    path
+                    "agent.file_ops.allowed_paths contains invalid glob pattern: '{path}'"
                 ));
             }
         }
@@ -101,8 +100,7 @@ impl FileOpsConfigToml {
         for path in &self.denied_paths {
             if glob::Pattern::new(path).is_err() {
                 return Err(format!(
-                    "agent.file_ops.denied_paths contains invalid glob pattern: '{}'",
-                    path
+                    "agent.file_ops.denied_paths contains invalid glob pattern: '{path}'"
                 ));
             }
         }
@@ -177,18 +175,17 @@ pub fn parse_file_size(s: &str) -> Result<u64, String> {
         (n, 1)
     } else {
         return Err(format!(
-            "Invalid file size format: '{}'. Use formats like '100MB', '1GB', etc.",
-            s
+            "Invalid file size format: '{s}'. Use formats like '100MB', '1GB', etc."
         ));
     };
 
     let num: u64 = num_part
         .trim()
         .parse()
-        .map_err(|_| format!("Invalid number in file size: '{}'", num_part))?;
+        .map_err(|_| format!("Invalid number in file size: '{num_part}'"))?;
 
     num.checked_mul(multiplier)
-        .ok_or_else(|| format!("File size overflow: '{}' exceeds maximum", s))
+        .ok_or_else(|| format!("File size overflow: '{s}' exceeds maximum"))
 }
 
 // =============================================================================

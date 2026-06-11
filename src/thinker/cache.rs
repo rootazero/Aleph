@@ -470,7 +470,7 @@ impl GeminiCacheStrategy {
     ) -> GeminiCacheCreateRequest {
         GeminiCacheCreateRequest {
             model: model.to_string(),
-            display_name: Some(format!("workspace-{}", workspace_id)),
+            display_name: Some(format!("workspace-{workspace_id}")),
             contents: vec![],
             system_instruction: Some(GeminiContent {
                 role: "user".to_string(),
@@ -478,7 +478,7 @@ impl GeminiCacheStrategy {
                     text: system_prompt.to_string(),
                 }],
             }),
-            ttl: format!("{}s", GEMINI_CACHE_TTL_SECS),
+            ttl: format!("{GEMINI_CACHE_TTL_SECS}s"),
         }
     }
 }

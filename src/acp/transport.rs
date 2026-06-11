@@ -92,8 +92,7 @@ impl StdioTransport {
                         warn!("ACP reader: I/O error: {}", e);
                         let _ = tx
                             .send(Err(AlephError::IoError(format!(
-                                "ACP stdout read error: {}",
-                                e
+                                "ACP stdout read error: {e}"
                             ))))
                             .await;
                         break;
@@ -135,11 +134,11 @@ pub async fn write_request(stdin: &SharedStdin, req: &AcpRequest) -> Result<()> 
     guard
         .write_all(line.as_bytes())
         .await
-        .map_err(|e| AlephError::IoError(format!("ACP stdin write error: {}", e)))?;
+        .map_err(|e| AlephError::IoError(format!("ACP stdin write error: {e}")))?;
     guard
         .flush()
         .await
-        .map_err(|e| AlephError::IoError(format!("ACP stdin flush error: {}", e)))?;
+        .map_err(|e| AlephError::IoError(format!("ACP stdin flush error: {e}")))?;
     debug!("ACP sent: method={} id={}", req.method, req.id);
     Ok(())
 }
@@ -153,11 +152,11 @@ pub async fn write_value(stdin: &SharedStdin, value: &serde_json::Value) -> Resu
     guard
         .write_all(line.as_bytes())
         .await
-        .map_err(|e| AlephError::IoError(format!("ACP stdin write error: {}", e)))?;
+        .map_err(|e| AlephError::IoError(format!("ACP stdin write error: {e}")))?;
     guard
         .flush()
         .await
-        .map_err(|e| AlephError::IoError(format!("ACP stdin flush error: {}", e)))?;
+        .map_err(|e| AlephError::IoError(format!("ACP stdin flush error: {e}")))?;
     Ok(())
 }
 
@@ -187,7 +186,7 @@ impl StdioTransport {
     fn timeout_err(timeout: Duration) -> crate::error::AlephError {
         crate::acp::protocol::AcpOperationError::new(
             crate::acp::protocol::AcpErrorCode::Timeout,
-            format!("ACP request timed out after {:?}", timeout),
+            format!("ACP request timed out after {timeout:?}"),
         )
         .into()
     }

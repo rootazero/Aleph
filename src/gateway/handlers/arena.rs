@@ -109,7 +109,7 @@ pub async fn handle_query(request: JsonRpcRequest, manager: SharedArenaManager) 
         None => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Arena not found: {}", arena_id),
+            format!("Arena not found: {arena_id}"),
         ),
     }
 }

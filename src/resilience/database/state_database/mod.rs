@@ -46,9 +46,9 @@ impl StateDatabase {
     /// Create the database schema
     fn create_schema(conn: &Connection, embedding_dim: u32) -> Result<(), AlephError> {
         conn.execute_batch(Self::schema_sql())
-            .map_err(|e| AlephError::config(format!("Failed to create schema: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to create schema: {e}")))?;
         conn.execute_batch(&Self::vec_schema_sql(embedding_dim))
-            .map_err(|e| AlephError::config(format!("Failed to create vec0 tables: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to create vec0 tables: {e}")))?;
         Ok(())
     }
 
@@ -94,14 +94,14 @@ impl StateDatabase {
         // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                AlephError::config(format!("Failed to create database directory: {}", e))
+                AlephError::config(format!("Failed to create database directory: {e}"))
             })?;
         }
 
         Self::register_sqlite_vec_extension();
 
         let conn = crate::utils::sqlite_open::open_sqlite_safe(&db_path)
-            .map_err(|e| AlephError::config(format!("Failed to open database: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to open database: {e}")))?;
 
         // Check if migration is needed (dimension change)
         let needs_migration = Self::check_needs_migration(&conn)?;
@@ -124,7 +124,7 @@ impl StateDatabase {
             conn.execute_batch(
                 "DROP TABLE IF EXISTS memories; DROP TABLE IF EXISTS memories_vec; DROP TABLE IF EXISTS memories_fts;",
             )
-            .map_err(|e| AlephError::config(format!("Failed to drop old table: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to drop old table: {e}")))?;
 
             tracing::info!(
                 new_dim = DEFAULT_EMBEDDING_DIM,
@@ -137,7 +137,7 @@ impl StateDatabase {
 
         // Drop obsolete memory_facts / facts_fts / facts_vec tables from existing DBs
         Self::drop_obsolete_state_facts_tables(&conn).map_err(|e| {
-            AlephError::config(format!("Failed to drop obsolete facts tables: {}", e))
+            AlephError::config(format!("Failed to drop obsolete facts tables: {e}"))
         })?;
 
         // Migrate to add experience_replays table for Cortex evolution system (idempotent)
@@ -163,7 +163,7 @@ impl StateDatabase {
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('embedding_dimension', ?1)",
             params![DEFAULT_EMBEDDING_DIM.to_string()],
         )
-        .map_err(|e| AlephError::config(format!("Failed to update schema_info: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to update schema_info: {e}")))?;
 
         tracing::info!(
             subsystem = "resilience",
@@ -191,14 +191,14 @@ impl StateDatabase {
 
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                AlephError::config(format!("Failed to create database directory: {}", e))
+                AlephError::config(format!("Failed to create database directory: {e}"))
             })?;
         }
 
         Self::register_sqlite_vec_extension();
 
         let conn = crate::utils::sqlite_open::open_sqlite_safe(&db_path)
-            .map_err(|e| AlephError::config(format!("Failed to open database: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to open database: {e}")))?;
 
         // Check if dimension changed
         let dim_changed = Self::check_dimension_change(&conn, embedding_dim)?;
@@ -217,7 +217,7 @@ impl StateDatabase {
             conn.execute_batch(
                 "DROP TABLE IF EXISTS memories; DROP TABLE IF EXISTS memories_vec; DROP TABLE IF EXISTS memories_fts;",
             )
-            .map_err(|e| AlephError::config(format!("Failed to drop vec0 tables: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to drop vec0 tables: {e}")))?;
 
             tracing::info!(
                 new_dim = embedding_dim,
@@ -229,7 +229,7 @@ impl StateDatabase {
 
         // Drop obsolete memory_facts / facts_fts / facts_vec tables from existing DBs
         Self::drop_obsolete_state_facts_tables(&conn).map_err(|e| {
-            AlephError::config(format!("Failed to drop obsolete facts tables: {}", e))
+            AlephError::config(format!("Failed to drop obsolete facts tables: {e}"))
         })?;
 
         // Run migrations
@@ -248,7 +248,7 @@ impl StateDatabase {
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('embedding_dimension', ?1)",
             params![embedding_dim.to_string()],
         )
-        .map_err(|e| AlephError::config(format!("Failed to update schema_info: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to update schema_info: {e}")))?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -264,7 +264,7 @@ impl StateDatabase {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| AlephError::config(format!("Failed to check schema_info table: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to check schema_info table: {e}")))?;
 
         if !table_exists {
             return Ok(false);
@@ -278,7 +278,7 @@ impl StateDatabase {
             )
             .optional()
             .map_err(|e| {
-                AlephError::config(format!("Failed to read embedding dimension: {}", e))
+                AlephError::config(format!("Failed to read embedding dimension: {e}"))
             })?;
 
         match stored {
@@ -310,11 +310,11 @@ impl StateDatabase {
         // Check if migration needed (vec tables exist but empty, memories table has data)
         let memories_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
-            .map_err(|e| AlephError::config(format!("Failed to count memories: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to count memories: {e}")))?;
 
         let vec_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM memories_vec", [], |row| row.get(0))
-            .map_err(|e| AlephError::config(format!("Failed to count memories_vec: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to count memories_vec: {e}")))?;
 
         if memories_count > 0 && vec_count == 0 {
             tracing::info!(
@@ -331,7 +331,7 @@ impl StateDatabase {
                 [],
             )
             .map_err(|e| {
-                AlephError::config(format!("Failed to migrate memories to vec0: {}", e))
+                AlephError::config(format!("Failed to migrate memories to vec0: {e}"))
             })?;
 
             tracing::info!("Memories migration complete");
@@ -349,7 +349,7 @@ impl StateDatabase {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| AlephError::config(format!("Failed to check schema_info table: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to check schema_info table: {e}")))?;
 
         if !table_exists {
             // Check if memories table exists (old database without schema_info)
@@ -360,7 +360,7 @@ impl StateDatabase {
                     |row| row.get(0),
                 )
                 .map_err(|e| {
-                    AlephError::config(format!("Failed to check memories table: {}", e))
+                    AlephError::config(format!("Failed to check memories table: {e}"))
                 })?;
 
             // If old memories table exists but no schema_info, needs migration
@@ -376,7 +376,7 @@ impl StateDatabase {
             )
             .optional()
             .map_err(|e| {
-                AlephError::config(format!("Failed to read embedding dimension: {}", e))
+                AlephError::config(format!("Failed to read embedding dimension: {e}"))
             })?;
 
         match current_dimension {
@@ -420,7 +420,7 @@ impl StateDatabase {
             "INSERT OR REPLACE INTO sticker_descriptions (file_unique_id, description, cached_at) VALUES (?1, ?2, datetime('now'))",
             [file_unique_id, description],
         )
-        .map_err(|e| AlephError::config(format!("Failed to store sticker description: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to store sticker description: {e}")))?;
         Ok(())
     }
 
@@ -434,17 +434,17 @@ impl StateDatabase {
             .prepare(
                 "SELECT description FROM sticker_descriptions WHERE file_unique_id = ?1 LIMIT 1",
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare sticker query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare sticker query: {e}")))?;
         let mut rows = stmt.query([file_unique_id]).map_err(|e| {
-            AlephError::config(format!("Failed to query sticker description: {}", e))
+            AlephError::config(format!("Failed to query sticker description: {e}"))
         })?;
         if let Some(row) = rows
             .next()
-            .map_err(|e| AlephError::config(format!("Failed to read sticker row: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to read sticker row: {e}")))?
         {
             row.get(0)
                 .map_err(|e| {
-                    AlephError::config(format!("Failed to deserialize sticker description: {}", e))
+                    AlephError::config(format!("Failed to deserialize sticker description: {e}"))
                 })
                 .map(Some)
         } else {

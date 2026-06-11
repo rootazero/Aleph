@@ -87,7 +87,7 @@ pub fn build_headers(token: Option<&str>, body: &str) -> HeaderMap {
     }
     if let Some(t) = token {
         let name = HeaderName::from_static("authorization");
-        if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", t)) {
+        if let Ok(value) = HeaderValue::from_str(&format!("Bearer {t}")) {
             headers.insert(name, value);
         }
     }

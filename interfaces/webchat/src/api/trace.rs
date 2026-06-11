@@ -9,7 +9,7 @@ impl TraceApi {
     /// Fetch the list of available trace replays.
     pub async fn list(state: &DashboardState) -> Result<Vec<AgentTraceReplayListItem>, String> {
         let result = state.rpc_call("trace.list", serde_json::json!({})).await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse trace list: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse trace list: {e}"))
     }
 
     /// Fetch a full trace replay for a given task.
@@ -17,7 +17,7 @@ impl TraceApi {
         let result = state
             .rpc_call("trace.get", serde_json::json!({ "task_id": task_id }))
             .await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse trace: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse trace: {e}"))
     }
 
     /// Fetch persisted agent-trace events for the given run_ids, grouped by

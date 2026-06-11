@@ -106,7 +106,7 @@ impl ManifestAdapter for CodexAdapter {
                 .map(String::from),
             description: json.get("description").and_then(|v| v.as_str()).map(|d| {
                 if json.get("apps").is_some() {
-                    format!("{} [has Codex apps]", d)
+                    format!("{d} [has Codex apps]")
                 } else {
                     d.to_string()
                 }

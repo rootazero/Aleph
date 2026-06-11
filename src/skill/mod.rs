@@ -68,8 +68,8 @@ pub enum SkillSystemError {
 impl std::fmt::Display for SkillSystemError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Parse(e) => write!(f, "skill parse error: {}", e),
-            Self::Io(e) => write!(f, "I/O error: {}", e),
+            Self::Parse(e) => write!(f, "skill parse error: {e}"),
+            Self::Io(e) => write!(f, "I/O error: {e}"),
         }
     }
 }

@@ -54,7 +54,7 @@ impl PromptLayer for SecurityLayer {
         if let Some(summary) = sandbox_summary {
             for line in summary.to_prompt_lines() {
                 let line = sanitize_for_prompt(&line, SanitizeLevel::Light);
-                output.push_str(&format!("- {}\n", line));
+                output.push_str(&format!("- {line}\n"));
             }
             output.push('\n');
         }
@@ -62,7 +62,7 @@ impl PromptLayer for SecurityLayer {
         // Security notes
         for note in security_notes {
             let note = sanitize_for_prompt(note, SanitizeLevel::Light);
-            output.push_str(&format!("- {}\n", note));
+            output.push_str(&format!("- {note}\n"));
         }
         if !security_notes.is_empty() {
             output.push('\n');

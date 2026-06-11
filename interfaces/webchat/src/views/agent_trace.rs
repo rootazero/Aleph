@@ -416,7 +416,7 @@ fn TraceNodeRow(node: TraceNode) -> impl IntoView {
 
     let duration_text = node
         .duration_ms
-        .map(|ms| format!("{}ms", ms))
+        .map(|ms| format!("{ms}ms"))
         .unwrap_or_default();
 
     view! {

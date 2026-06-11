@@ -45,19 +45,19 @@ fn check_status_google(response: Response, provider_name: &str, api_key: &str) -
     if status.is_success() {
         Ok(response)
     } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-        let msg = sanitize_api_key(format!("{} API error: {}", provider_name, status), api_key);
+        let msg = sanitize_api_key(format!("{provider_name} API error: {status}"), api_key);
         Err(AlephError::authentication(provider_name, msg))
     } else if status == StatusCode::TOO_MANY_REQUESTS {
         // Google CSE returns 429 on daily-quota / per-100s-quota exhaustion.
         // Mirror base `check_status` so this surfaces as RateLimitError
         // (kind=rate-limit) instead of a generic provider error.
         let msg = sanitize_api_key(
-            format!("{} API error: {} (rate limited)", provider_name, status),
+            format!("{provider_name} API error: {status} (rate limited)"),
             api_key,
         );
         Err(AlephError::rate_limit(msg))
     } else {
-        let msg = sanitize_api_key(format!("{} API error: {}", provider_name, status), api_key);
+        let msg = sanitize_api_key(format!("{provider_name} API error: {status}"), api_key);
         Err(AlephError::provider(msg))
     }
 }
@@ -121,7 +121,7 @@ impl SearchProvider for GoogleProvider {
 
         let google_response: GoogleResponse = response.json().await.map_err(|e| {
             let msg = sanitize_api_key(e.to_string(), &self.api_key);
-            AlephError::provider(format!("Failed to parse Google response: {}", msg))
+            AlephError::provider(format!("Failed to parse Google response: {msg}"))
         })?;
 
         let results = google_response
@@ -169,22 +169,20 @@ impl crate::search::ProviderFactory for GoogleFactory {
     {
         let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
             log::warn!(
-                "search backend '{name}' ({}) skipped: no api_key in vault",
-                NAME
+                "search backend '{name}' ({NAME}) skipped: no api_key in vault"
             );
             return Ok(None);
         };
         let Some(engine) = backend.engine_id.as_deref().filter(|s| !s.is_empty()) else {
             log::warn!(
-                "search backend '{name}' ({}) skipped: engine_id missing",
-                NAME
+                "search backend '{name}' ({NAME}) skipped: engine_id missing"
             );
             return Ok(None);
         };
         match GoogleProvider::new(key.to_string(), engine.to_string()) {
             Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
             Err(e) => {
-                log::warn!("search backend '{name}' ({}) construct failed: {e}", NAME);
+                log::warn!("search backend '{name}' ({NAME}) construct failed: {e}");
                 Ok(None)
             }
         }

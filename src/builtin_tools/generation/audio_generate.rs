@@ -69,7 +69,7 @@ impl AudioGenerateTool {
         } else {
             args.prompt.clone()
         };
-        notify_tool_start(Self::NAME, &format!("生成音频: {}", prompt_display));
+        notify_tool_start(Self::NAME, &format!("生成音频: {prompt_display}"));
 
         info!(prompt = %args.prompt, provider = ?args.provider, "Starting audio generation");
 
@@ -78,13 +78,13 @@ impl AudioGenerateTool {
 
             if let Some(ref name) = args.provider {
                 let p = reg.get(name).ok_or_else(|| {
-                    let error_msg = format!("Audio provider '{}' not found", name);
+                    let error_msg = format!("Audio provider '{name}' not found");
                     notify_tool_result(Self::NAME, &error_msg, false);
                     ToolError::InvalidArgs(error_msg)
                 })?;
                 if !p.supports(GenerationType::Audio) {
                     let error_msg =
-                        format!("Provider '{}' does not support audio generation", name);
+                        format!("Provider '{name}' does not support audio generation");
                     notify_tool_result(Self::NAME, &error_msg, false);
                     return Err(ToolError::InvalidArgs(error_msg));
                 }
@@ -102,7 +102,7 @@ impl AudioGenerateTool {
 
         let request = GenerationRequest::audio(&args.prompt);
         let output = provider.generate(request).await.map_err(|e| {
-            let error_msg = format!("Audio generation failed: {}", e);
+            let error_msg = format!("Audio generation failed: {e}");
             notify_tool_result(Self::NAME, &error_msg, false);
             ToolError::from(e)
         })?;
@@ -121,8 +121,7 @@ impl AudioGenerateTool {
         };
 
         let result_summary = format!(
-            "音频生成完成 ({} ms, provider: {})",
-            duration_ms, provider_name
+            "音频生成完成 ({duration_ms} ms, provider: {provider_name})"
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 

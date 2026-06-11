@@ -29,7 +29,7 @@ impl AgentManager {
         }
 
         let wrapper: Wrapper = toml::from_str(&content)
-            .map_err(|e| AlephError::invalid_config(format!("Failed to parse config: {}", e)))?;
+            .map_err(|e| AlephError::invalid_config(format!("Failed to parse config: {e}")))?;
 
         Ok(wrapper.agents)
     }
@@ -45,7 +45,7 @@ impl AgentManager {
         })?;
 
         content.parse::<DocumentMut>().map_err(|e| {
-            AlephError::invalid_config(format!("Failed to parse config as TOML: {}", e))
+            AlephError::invalid_config(format!("Failed to parse config as TOML: {e}"))
         })
     }
 
@@ -55,7 +55,7 @@ impl AgentManager {
         let tmp_path = self.config_path.with_extension("toml.tmp");
 
         fs::write(&tmp_path, &content)
-            .map_err(|e| AlephError::IoError(format!("Failed to write tmp config: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Failed to write tmp config: {e}")))?;
 
         // fsync on unix
         #[cfg(unix)]
@@ -66,16 +66,16 @@ impl AgentManager {
                 .write(true)
                 .open(&tmp_path)
                 .map_err(|e| {
-                    AlephError::IoError(format!("Failed to open temp file for fsync: {}", e))
+                    AlephError::IoError(format!("Failed to open temp file for fsync: {e}"))
                 })?;
             f.flush()
-                .map_err(|e| AlephError::IoError(format!("Failed to flush temp file: {}", e)))?;
+                .map_err(|e| AlephError::IoError(format!("Failed to flush temp file: {e}")))?;
             f.sync_all()
-                .map_err(|e| AlephError::IoError(format!("Failed to fsync temp file: {}", e)))?;
+                .map_err(|e| AlephError::IoError(format!("Failed to fsync temp file: {e}")))?;
         }
 
         fs::rename(&tmp_path, &self.config_path)
-            .map_err(|e| AlephError::IoError(format!("Failed to rename tmp config: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Failed to rename tmp config: {e}")))?;
 
         // Restore 600 permissions (owner read/write only): the rename replaces
         // the config file with the freshly-created temp file (default umask
@@ -115,8 +115,7 @@ impl AgentManager {
         }
 
         Err(AlephError::invalid_config(format!(
-            "Agent '{}' not found in config",
-            id
+            "Agent '{id}' not found in config"
         )))
     }
 

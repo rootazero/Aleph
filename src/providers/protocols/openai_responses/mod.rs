@@ -114,7 +114,7 @@ impl OpenAiResponsesProtocol {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.trim_end_matches('/').to_string())
                 .unwrap_or_else(|| "https://chatgpt.com".to_string());
-            format!("{}{}", base_url, endpoint_path)
+            format!("{base_url}{endpoint_path}")
         } else {
             // Standard OpenAI style: strip trailing /v1 to allow normalization
             let base_url = config
@@ -126,7 +126,7 @@ impl OpenAiResponsesProtocol {
                     trimmed.trim_end_matches("/v1").to_string()
                 })
                 .unwrap_or_else(|| "https://api.openai.com".to_string());
-            format!("{}{}", base_url, endpoint_path)
+            format!("{base_url}{endpoint_path}")
         }
     }
 
@@ -298,7 +298,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
         let mut builder = self
             .client
             .post(&endpoint)
-            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Authorization", format!("Bearer {api_key}"))
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream");
 
@@ -362,7 +362,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                         "Rate limited. Wait before retrying or upgrade your API plan.".to_string()
                     });
                 return Err(AlephError::RateLimitError {
-                    message: format!("OpenAI Responses API rate limited (429): {}", error_text),
+                    message: format!("OpenAI Responses API rate limited (429): {error_text}"),
                     suggestion: Some(suggestion),
                 });
             }
@@ -374,7 +374,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                 &error_text,
             ) {
                 return Err(AlephError::RateLimitError {
-                    message: format!("Provider usage limit reached ({}): {}", status, error_text),
+                    message: format!("Provider usage limit reached ({status}): {error_text}"),
                     suggestion: Some(
                         "Account quota or spending limit exhausted. Upgrade your plan or wait \
                          for the quota to reset — retrying will not help."
@@ -383,15 +383,14 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                 });
             }
             return Err(AlephError::provider(format!(
-                "OpenAI Responses API error ({}): {}",
-                status, error_text
+                "OpenAI Responses API error ({status}): {error_text}"
             )));
         }
 
         // Build a boxed stream of raw chunks with AlephError as error type
         let byte_stream = response
             .bytes_stream()
-            .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
+            .map_err(|e| AlephError::network(format!("Stream error: {e}")))
             .boxed();
         let idle_secs = self
             .stream_idle_timeout_secs

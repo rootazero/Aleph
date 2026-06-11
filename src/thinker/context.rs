@@ -152,7 +152,7 @@ impl EnvironmentContract {
                 .iter()
                 .map(|c| {
                     let (name, hint) = c.prompt_hint();
-                    format!("- {}: {}", name, hint)
+                    format!("- {name}: {hint}")
                 })
                 .collect();
             parts.push(format!("Capabilities:\n{}", cap_hints.join("\n")));
@@ -161,7 +161,7 @@ impl EnvironmentContract {
         // Constraints
         let mut constraint_notes = Vec::new();
         if let Some(max_chars) = self.constraints.max_output_chars {
-            constraint_notes.push(format!("Max output: {} characters", max_chars));
+            constraint_notes.push(format!("Max output: {max_chars} characters"));
         }
         if self.constraints.prefer_compact {
             constraint_notes.push("Prefer compact responses".to_string());
@@ -176,7 +176,7 @@ impl EnvironmentContract {
                 "Security:\n{}",
                 self.security_notes
                     .iter()
-                    .map(|n| format!("- {}", n))
+                    .map(|n| format!("- {n}"))
                     .collect::<Vec<_>>()
                     .join("\n")
             ));

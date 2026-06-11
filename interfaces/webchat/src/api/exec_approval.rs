@@ -33,7 +33,7 @@ impl ExecApprovalApi {
             .rpc_call("exec.approvals.pending", serde_json::Value::Null)
             .await?;
         let resp: PendingListResp = serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse pending approvals: {}", e))?;
+            .map_err(|e| format!("Failed to parse pending approvals: {e}"))?;
         Ok(resp
             .pending
             .into_iter()

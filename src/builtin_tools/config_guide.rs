@@ -118,7 +118,7 @@ impl AlephTool for ReadConfigGuideTool {
             }
         };
 
-        notify_tool_result(Self::NAME, &format!("loaded {} guide", topic_name), true);
+        notify_tool_result(Self::NAME, &format!("loaded {topic_name} guide"), true);
         Ok(ReadConfigGuideOutput {
             success: true,
             topic: topic_name,

@@ -169,7 +169,7 @@ impl SkillTemplate {
     /// Read a file's content
     async fn read_file(&self, path: &Path) -> ExtensionResult<String> {
         tokio::fs::read_to_string(path).await.map_err(|e| {
-            ExtensionError::file_reference(path, format!("Failed to read file: {}", e))
+            ExtensionError::file_reference(path, format!("Failed to read file: {e}"))
         })
     }
 }

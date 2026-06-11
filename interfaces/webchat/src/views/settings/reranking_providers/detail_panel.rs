@@ -140,7 +140,7 @@ pub(super) fn ProviderDetailPanel(
                     }
                 }
                 Err(e) => {
-                    set_test_result.set(Some((false, format!("RPC error: {}", e))));
+                    set_test_result.set(Some((false, format!("RPC error: {e}"))));
                 }
             }
             set_testing.set(false);
@@ -175,7 +175,7 @@ pub(super) fn ProviderDetailPanel(
                     );
                 }
                 Err(e) => {
-                    set_action_error.set(Some(format!("Save failed: {}", e)));
+                    set_action_error.set(Some(format!("Save failed: {e}")));
                 }
             }
             set_saving.set(false);

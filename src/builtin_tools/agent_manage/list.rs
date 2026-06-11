@@ -61,7 +61,7 @@ impl fmt::Display for AgentListOutput {
             writeln!(f, "  {} ({})", agent.name, agent.id)?;
             writeln!(f, "    model: {}", agent.model)?;
             if let Some(ref ch) = agent.bound_channel {
-                writeln!(f, "    bound to: {}", ch)?;
+                writeln!(f, "    bound to: {ch}")?;
             }
         }
         Ok(())

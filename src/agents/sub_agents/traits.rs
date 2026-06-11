@@ -226,16 +226,16 @@ impl ExecutionContextInfo {
         let mut lines = Vec::new();
 
         if let Some(ref request) = self.original_request {
-            lines.push(format!("Original Request: {}", request));
+            lines.push(format!("Original Request: {request}"));
         }
         if let Some(ref dir) = self.working_directory {
-            lines.push(format!("Working Directory: {}", dir));
+            lines.push(format!("Working Directory: {dir}"));
         }
         if let Some(ref app) = self.current_app {
-            lines.push(format!("Current App: {}", app));
+            lines.push(format!("Current App: {app}"));
         }
         if let Some(ref history) = self.history_summary {
-            lines.push(format!("Progress: {}", history));
+            lines.push(format!("Progress: {history}"));
         }
         if !self.recent_steps.is_empty() {
             let steps: Vec<String> = self

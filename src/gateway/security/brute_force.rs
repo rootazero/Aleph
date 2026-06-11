@@ -34,7 +34,7 @@ impl BruteForceDetector {
     /// Check if a sender is currently blocked.
     #[must_use]
     pub fn is_blocked(&self, channel: &str, sender: &str) -> bool {
-        let key = format!("{}:{}", channel, sender);
+        let key = format!("{channel}:{sender}");
         if let Some(record) = self.records.get(&key) {
             if let Some(blocked_until) = record.blocked_until {
                 if Instant::now() < blocked_until {
@@ -48,7 +48,7 @@ impl BruteForceDetector {
     /// Record a failed pairing attempt. Returns true if the sender is now blocked.
     #[must_use]
     pub fn record_failure(&self, channel: &str, sender: &str) -> bool {
-        let key = format!("{}:{}", channel, sender);
+        let key = format!("{channel}:{sender}");
         let mut entry = self.records.entry(key).or_insert_with(|| AttemptRecord {
             failures: 0,
             first_failure: Instant::now(),
@@ -82,7 +82,7 @@ impl BruteForceDetector {
 
     /// Record a successful pairing (resets the failure counter).
     pub fn record_success(&self, channel: &str, sender: &str) {
-        let key = format!("{}:{}", channel, sender);
+        let key = format!("{channel}:{sender}");
         self.records.remove(&key);
     }
 

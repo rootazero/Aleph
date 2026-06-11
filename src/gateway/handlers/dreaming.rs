@@ -37,7 +37,7 @@ pub async fn handle_run_now(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(err) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("dreaming.run_now failed: {}", err),
+            format!("dreaming.run_now failed: {err}"),
         ),
     }
 }

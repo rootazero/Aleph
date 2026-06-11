@@ -203,7 +203,7 @@ impl ActionResult {
                         SingleToolResult::Success { output, .. } => {
                             serde_json::to_string(output).unwrap_or_else(|_| "success".to_string())
                         }
-                        SingleToolResult::Error { error, .. } => format!("Error: {}", error),
+                        SingleToolResult::Error { error, .. } => format!("Error: {error}"),
                     }
                 } else {
                     "No results".to_string()

@@ -43,7 +43,7 @@ pub async fn handle_auth_reset_token(
             }),
         ),
         Err(e) => {
-            JsonRpcResponse::error(request.id, -32603, format!("Failed to reset token: {}", e))
+            JsonRpcResponse::error(request.id, -32603, format!("Failed to reset token: {e}"))
         }
     }
 }
@@ -78,7 +78,7 @@ pub async fn handle_auth_list_sessions(
         Err(e) => JsonRpcResponse::error(
             request.id,
             -32603,
-            format!("Failed to list sessions: {}", e),
+            format!("Failed to list sessions: {e}"),
         ),
     }
 }
@@ -106,7 +106,7 @@ pub async fn handle_auth_revoke_session(
             Err(e) => JsonRpcResponse::error(
                 request.id,
                 -32603,
-                format!("Failed to revoke session: {}", e),
+                format!("Failed to revoke session: {e}"),
             ),
         },
         None => {

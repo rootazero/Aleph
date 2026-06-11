@@ -133,7 +133,7 @@ impl A2ASubAgent {
         request: &SubAgentRequest,
     ) -> crate::error::Result<SubAgentResult> {
         let client = self.client_pool.get_or_create(agent).await.map_err(|e| {
-            crate::error::AlephError::other(format!("A2A client creation failed: {}", e))
+            crate::error::AlephError::other(format!("A2A client creation failed: {e}"))
         })?;
 
         let message = A2AMessage::text(A2ARole::User, &request.prompt);
@@ -244,7 +244,7 @@ impl A2ASubAgent {
             }
             Err(e) => Ok(SubAgentResult::failure(
                 request.id.clone(),
-                format!("A2A call failed: {}", e),
+                format!("A2A call failed: {e}"),
             )),
         }
     }
@@ -266,7 +266,7 @@ impl A2ASubAgent {
             Some(name) => {
                 let needle = name.trim().to_lowercase();
                 let agents = self.smart_router.list_agents().await.map_err(|e| {
-                    crate::error::AlephError::other(format!("A2A agent lookup failed: {}", e))
+                    crate::error::AlephError::other(format!("A2A agent lookup failed: {e}"))
                 })?;
                 agents.into_iter().find(|a| {
                     a.card.id.to_lowercase() == needle || a.card.name.to_lowercase() == needle
@@ -276,7 +276,7 @@ impl A2ASubAgent {
                 .smart_router
                 .route(prompt)
                 .await
-                .map_err(|e| crate::error::AlephError::other(format!("A2A routing failed: {}", e)))?
+                .map_err(|e| crate::error::AlephError::other(format!("A2A routing failed: {e}")))?
                 .map(|d| {
                     tracing::info!(
                         agent = %d.agent.card.name,
@@ -292,7 +292,7 @@ impl A2ASubAgent {
             Some(t) => t,
             None => {
                 let msg = match agent {
-                    Some(name) => format!("No A2A agent registered matching '{}'", name),
+                    Some(name) => format!("No A2A agent registered matching '{name}'"),
                     None => "No matching A2A agent found for this request".to_string(),
                 };
                 return Ok(DelegationOutcome {
@@ -453,7 +453,7 @@ impl SubAgent for A2ASubAgent {
             .smart_router
             .route(&request.prompt)
             .await
-            .map_err(|e| crate::error::AlephError::other(format!("A2A routing failed: {}", e)))?;
+            .map_err(|e| crate::error::AlephError::other(format!("A2A routing failed: {e}")))?;
 
         let decision = match decision {
             Some(d) => d,

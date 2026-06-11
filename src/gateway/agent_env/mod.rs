@@ -485,12 +485,12 @@ impl AgentEnvStore {
         // Ensure parent directory exists
         if let Some(parent) = config.db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                AgentEnvError::Database(format!("Failed to create db directory: {}", e))
+                AgentEnvError::Database(format!("Failed to create db directory: {e}"))
             })?;
         }
 
         let conn = crate::utils::sqlite_open::open_sqlite_safe(&config.db_path)
-            .map_err(|e| AgentEnvError::Database(format!("Failed to open database: {}", e)))?;
+            .map_err(|e| AgentEnvError::Database(format!("Failed to open database: {e}")))?;
 
         Self::init_schema(&conn)?;
 
@@ -541,7 +541,7 @@ impl AgentEnvStore {
             CREATE INDEX IF NOT EXISTS idx_agent_envs_last_active ON agent_envs(last_active_at);
             "#,
         )
-        .map_err(|e| AgentEnvError::Database(format!("Schema init failed: {}", e)))?;
+        .map_err(|e| AgentEnvError::Database(format!("Schema init failed: {e}")))?;
 
         // Migrate: add columns that may be missing on older databases.
         // SQLite ALTER TABLE ADD COLUMN is a no-op error if column exists,

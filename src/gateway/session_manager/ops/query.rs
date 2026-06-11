@@ -16,7 +16,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let sql = "SELECT key, agent_id, session_type, created_at, last_active_at,
                           message_count, total_tokens, auto_reset_at, state, metadata,
@@ -27,8 +27,7 @@ impl SessionManager {
         let sessions = if let Some(id) = agent_id {
             let mut stmt = conn
                 .prepare(&format!(
-                    "{} WHERE agent_id = ? ORDER BY last_active_at DESC",
-                    sql
+                    "{sql} WHERE agent_id = ? ORDER BY last_active_at DESC"
                 ))
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
@@ -39,7 +38,7 @@ impl SessionManager {
             rows.filter_map(|r| r.ok()).collect()
         } else {
             let mut stmt = conn
-                .prepare(&format!("{} ORDER BY last_active_at DESC", sql))
+                .prepare(&format!("{sql} ORDER BY last_active_at DESC"))
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
             let rows = stmt
@@ -61,7 +60,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         // Graceful degradation for old databases without FTS5
         let fts_exists: bool = conn
@@ -133,7 +132,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let meta = conn
             .query_row(
@@ -188,7 +187,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let state_str: Option<String> = conn
             .query_row(
@@ -199,7 +198,7 @@ impl SessionManager {
             .ok();
 
         match state_str {
-            Some(s) => match serde_json::from_str::<SessionState>(&format!("\"{}\"", s)) {
+            Some(s) => match serde_json::from_str::<SessionState>(&format!("\"{s}\"")) {
                 Ok(state) => Ok(state),
                 Err(e) => {
                     tracing::warn!(
@@ -226,7 +225,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let count: i64 = conn
             .query_row(
@@ -247,7 +246,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let mut stmt = conn
             .prepare(

@@ -40,9 +40,8 @@ impl PromptLayer for LanguageLayer {
             };
             output.push_str("## Response Language\n");
             output.push_str(&format!(
-                "Respond in {} by default. Exception: If the task explicitly requires a different language \
-                (e.g., translation, writing in a specific language), use the requested language instead.\n\n",
-                language_name
+                "Respond in {language_name} by default. Exception: If the task explicitly requires a different language \
+                (e.g., translation, writing in a specific language), use the requested language instead.\n\n"
             ));
         }
     }

@@ -73,13 +73,13 @@ fn user_header(body: &str, limit: usize, near_threshold: f32) -> String {
     let used = body.chars().count();
     let pct = usage_pct(used, limit);
     let label = if used > limit {
-        format!("OVER BUDGET — {}%", pct)
+        format!("OVER BUDGET — {pct}%")
     } else if (used as f32) >= (limit as f32) * near_threshold {
-        format!("NEAR LIMIT — {}%", pct)
+        format!("NEAR LIMIT — {pct}%")
     } else {
-        format!("{}%", pct)
+        format!("{pct}%")
     };
-    format!("[{} — {}/{} chars]", label, used, limit)
+    format!("[{label} — {used}/{limit} chars]")
 }
 
 #[cfg(test)]

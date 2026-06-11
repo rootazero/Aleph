@@ -46,8 +46,7 @@ pub(super) fn validate_regex(pattern: &str) -> Result<(), String> {
     // Use js_sys::eval to test regex validity in JS context
     let escaped = pattern.replace('\'', "\\'");
     let js_code = format!(
-        "try {{ new RegExp('{}'); true; }} catch(e) {{ false; }}",
-        escaped
+        "try {{ new RegExp('{escaped}'); true; }} catch(e) {{ false; }}"
     );
     match js_sys::eval(&js_code) {
         Ok(result) => match result.as_bool() {
@@ -94,7 +93,7 @@ pub fn SecurityView() -> impl IntoView {
                         config.set(Some(cfg));
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to load security config: {}", e)));
+                        error.set(Some(format!("Failed to load security config: {e}")));
                     }
                 }
 
@@ -104,7 +103,7 @@ pub fn SecurityView() -> impl IntoView {
                         devices.set(devs);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to load devices: {}", e)));
+                        error.set(Some(format!("Failed to load devices: {e}")));
                     }
                 }
 
@@ -142,7 +141,7 @@ pub fn SecurityView() -> impl IntoView {
             match SearchConfigApi::update(&state, search_cfg).await {
                 Ok(_) => {}
                 Err(e) => {
-                    error.set(Some(format!("Failed to save PII config: {}", e)));
+                    error.set(Some(format!("Failed to save PII config: {e}")));
                 }
             }
 
@@ -153,7 +152,7 @@ pub fn SecurityView() -> impl IntoView {
                         needs_restart.set(restart);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to save security config: {}", e)));
+                        error.set(Some(format!("Failed to save security config: {e}")));
                     }
                 }
             }

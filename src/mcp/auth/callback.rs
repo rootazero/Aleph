@@ -215,8 +215,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream) -> Option<Callback
         send_success_response(
             &mut stream,
             &format!(
-                "Authorization failed: {} - {}. You can close this window.",
-                error, description
+                "Authorization failed: {error} - {description}. You can close this window."
             ),
         )
         .await;
@@ -329,11 +328,10 @@ async fn send_error_response(stream: &mut tokio::net::TcpStream, status: u16, me
 <html>
 <head><title>Error</title></head>
 <body style="font-family: system-ui; text-align: center; padding: 50px;">
-<h1>Error {}</h1>
-<p>{}</p>
+<h1>Error {status}</h1>
+<p>{safe_message}</p>
 </body>
-</html>"#,
-        status, safe_message
+</html>"#
     );
 
     // Use standard reason phrase for status line (not user-controlled message)
@@ -365,11 +363,10 @@ async fn send_success_response(stream: &mut tokio::net::TcpStream, message: &str
 <head><title>Authorization Complete</title></head>
 <body style="font-family: system-ui; text-align: center; padding: 50px;">
 <h1>Success!</h1>
-<p>{}</p>
+<p>{message}</p>
 <script>setTimeout(function() {{ window.close(); }}, 3000);</script>
 </body>
-</html>"#,
-        message
+</html>"#
     );
 
     let response = format!(

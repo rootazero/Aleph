@@ -40,13 +40,13 @@ impl LineMessagingApi {
             .json(payload)
             .send()
             .await
-            .map_err(|e| format!("HTTP error: {}", e))?;
+            .map_err(|e| format!("HTTP error: {e}"))?;
 
         if resp.status().is_success() {
             let body: serde_json::Value = resp
                 .json()
                 .await
-                .map_err(|e| format!("Failed to parse response: {}", e))?;
+                .map_err(|e| format!("Failed to parse response: {e}"))?;
             Ok(body
                 .get("sentMessages")
                 .and_then(|m| m.get(0))
@@ -80,7 +80,7 @@ impl LineMessagingApi {
             .json(&payload)
             .send()
             .await
-            .map_err(|e| format!("HTTP error: {}", e))?;
+            .map_err(|e| format!("HTTP error: {e}"))?;
 
         if resp.status().is_success() {
             Ok("ok".to_string())
@@ -228,7 +228,7 @@ impl LineMessagingApi {
             )
             .send()
             .await
-            .map_err(|e| format!("HTTP error: {}", e))?;
+            .map_err(|e| format!("HTTP error: {e}"))?;
 
         if resp.status().is_success() {
             Ok(())
@@ -248,13 +248,13 @@ impl LineMessagingApi {
             )
             .send()
             .await
-            .map_err(|e| format!("HTTP error: {}", e))?;
+            .map_err(|e| format!("HTTP error: {e}"))?;
 
         if resp.status().is_success() {
             let profile: LineUserProfile = resp
                 .json()
                 .await
-                .map_err(|e| format!("Failed to parse profile response: {}", e))?;
+                .map_err(|e| format!("Failed to parse profile response: {e}"))?;
             Ok(profile)
         } else {
             Err(format!("LINE API error: {}", resp.status()))

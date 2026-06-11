@@ -140,7 +140,7 @@ pub fn classify_exhausted(raw: &str) -> RetryVerdict {
     // Transient errors (overloaded, network) that exhausted retries → Fallback
     if matches!(base, RetryVerdict::Retry { .. }) {
         return RetryVerdict::Fallback {
-            reason: format!("primary model unavailable: {}", raw),
+            reason: format!("primary model unavailable: {raw}"),
         };
     }
 

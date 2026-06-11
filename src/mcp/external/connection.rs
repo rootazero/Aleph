@@ -164,7 +164,7 @@ impl McpServerConnection {
             self.id_gen.next(),
             "initialize",
             serde_json::to_value(&params).map_err(|e| {
-                AlephError::IoError(format!("Failed to serialize initialize params: {}", e))
+                AlephError::IoError(format!("Failed to serialize initialize params: {e}"))
             })?,
         );
 
@@ -469,7 +469,7 @@ impl McpServerConnection {
             self.id_gen.next(),
             "tools/call",
             serde_json::to_value(&params).map_err(|e| {
-                AlephError::IoError(format!("Failed to serialize tool call params: {}", e))
+                AlephError::IoError(format!("Failed to serialize tool call params: {e}"))
             })?,
         );
 
@@ -592,7 +592,7 @@ impl McpServerConnection {
             self.id_gen.next(),
             "resources/read",
             serde_json::to_value(&params).map_err(|e| {
-                AlephError::IoError(format!("Failed to serialize resource read params: {}", e))
+                AlephError::IoError(format!("Failed to serialize resource read params: {e}"))
             })?,
         );
 
@@ -632,7 +632,7 @@ impl McpServerConnection {
                     let data = base64::engine::general_purpose::STANDARD
                         .decode(&blob)
                         .map_err(|e| {
-                            AlephError::IoError(format!("Failed to decode blob: {}", e))
+                            AlephError::IoError(format!("Failed to decode blob: {e}"))
                         })?;
                     Ok(crate::mcp::resources::ResourceContent::Binary {
                         data,
@@ -716,7 +716,7 @@ impl McpServerConnection {
             self.id_gen.next(),
             "prompts/get",
             serde_json::to_value(&params).map_err(|e| {
-                AlephError::IoError(format!("Failed to serialize prompt get params: {}", e))
+                AlephError::IoError(format!("Failed to serialize prompt get params: {e}"))
             })?,
         );
 
@@ -763,7 +763,7 @@ impl McpServerConnection {
                     // marker rather than dropping the message.
                     mcp_types::PromptContentItem::Audio { mime_type, .. } => {
                         crate::mcp::prompts::PromptContent::Text {
-                            text: format!("[audio content: {}]", mime_type),
+                            text: format!("[audio content: {mime_type}]"),
                         }
                     }
                     mcp_types::PromptContentItem::Resource { resource } => {

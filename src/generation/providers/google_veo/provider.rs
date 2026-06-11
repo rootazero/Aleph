@@ -99,7 +99,7 @@ impl GoogleVeoProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         Ok(Self {
             client,
@@ -282,11 +282,11 @@ impl GoogleVeoProvider {
                 .header("x-goog-api-key", &self.api_key)
                 .send()
                 .await
-                .map_err(|e| GenerationError::network(format!("Poll request failed: {}", e)))?;
+                .map_err(|e| GenerationError::network(format!("Poll request failed: {e}")))?;
 
             let status = response.status();
             let response_text = response.text().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read poll response: {}", e))
+                GenerationError::network(format!("Failed to read poll response: {e}"))
             })?;
 
             if !status.is_success() {
@@ -300,7 +300,7 @@ impl GoogleVeoProvider {
 
             let operation: VeoOperationResponse =
                 serde_json::from_str(&response_text).map_err(|e| {
-                    GenerationError::serialization(format!("Failed to parse operation: {}", e))
+                    GenerationError::serialization(format!("Failed to parse operation: {e}"))
                 })?;
 
             // Check for error in operation BEFORE the `done` short-circuit:
@@ -339,7 +339,7 @@ impl GoogleVeoProvider {
 
         let response =
             self.client.get(uri).send().await.map_err(|e| {
-                GenerationError::network(format!("Failed to download video: {}", e))
+                GenerationError::network(format!("Failed to download video: {e}"))
             })?;
 
         if !response.status().is_success() {
@@ -352,7 +352,7 @@ impl GoogleVeoProvider {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| GenerationError::network(format!("Failed to read video bytes: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to read video bytes: {e}")))?;
 
         Ok(bytes.to_vec())
     }
@@ -402,7 +402,7 @@ impl GenerationProvider for GoogleVeoProvider {
                     if e.is_timeout() {
                         GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
                     } else if e.is_connect() {
-                        GenerationError::network(format!("Connection failed: {}", e))
+                        GenerationError::network(format!("Connection failed: {e}"))
                     } else {
                         GenerationError::network(e.to_string())
                     }
@@ -410,7 +410,7 @@ impl GenerationProvider for GoogleVeoProvider {
 
             let status = response.status();
             let response_text = response.text().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read response body: {}", e))
+                GenerationError::network(format!("Failed to read response body: {e}"))
             })?;
 
             // Handle non-success status codes
@@ -431,7 +431,7 @@ impl GenerationProvider for GoogleVeoProvider {
                         body = %response_text,
                         "Failed to parse Veo predict response"
                     );
-                    GenerationError::serialization(format!("Failed to parse response: {}", e))
+                    GenerationError::serialization(format!("Failed to parse response: {e}"))
                 })?;
 
             info!(
@@ -470,7 +470,7 @@ impl GenerationProvider for GoogleVeoProvider {
                 base64::engine::general_purpose::STANDARD
                     .decode(base64_data)
                     .map_err(|e| {
-                        GenerationError::serialization(format!("Failed to decode base64: {}", e))
+                        GenerationError::serialization(format!("Failed to decode base64: {e}"))
                     })?
             } else if let Some(ref uri) = video.uri {
                 self.download_video(uri).await?

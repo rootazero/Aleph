@@ -21,7 +21,7 @@ pub(super) fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CoordTa
             rusqlite::types::Type::Text,
             Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("unknown task status: {}", status_str),
+                format!("unknown task status: {status_str}"),
             )),
         )
     })?;
@@ -31,7 +31,7 @@ pub(super) fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CoordTa
             rusqlite::types::Type::Text,
             Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("unknown task priority: {}", priority_str),
+                format!("unknown task priority: {priority_str}"),
             )),
         )
     })?;
@@ -51,7 +51,7 @@ pub(super) fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CoordTa
                 rusqlite::types::Type::Text,
                 Box::new(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("invalid metadata JSON: {}", e),
+                    format!("invalid metadata JSON: {e}"),
                 )),
             )
         })?,

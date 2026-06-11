@@ -49,7 +49,7 @@ pub async fn handle_reload(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to reload configuration: {}", e),
+            format!("Failed to reload configuration: {e}"),
         ),
     }
 }
@@ -207,7 +207,7 @@ pub async fn handle_get(request: JsonRpcRequest, watcher: Arc<ConfigWatcher>) ->
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Unknown section: {}. Valid sections: gateway, agents, bindings, channels, sandbox, tools", unknown),
+                format!("Unknown section: {unknown}. Valid sections: gateway, agents, bindings, channels, sandbox, tools"),
             );
         }
         None => {
@@ -371,7 +371,7 @@ pub async fn handle_schema(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to serialize schema response: {}", e),
+            format!("Failed to serialize schema response: {e}"),
         ),
     }
 }
@@ -418,7 +418,7 @@ pub async fn handle_get_full_config(
             return JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                format!("Failed to serialize config: {}", e),
+                format!("Failed to serialize config: {e}"),
             );
         }
     };
@@ -544,7 +544,7 @@ pub async fn handle_patch_config(
             return JsonRpcResponse::error(
                 req.id,
                 INVALID_PARAMS,
-                format!("Config patch failed: {}", e),
+                format!("Config patch failed: {e}"),
             );
         }
     };
@@ -571,7 +571,7 @@ pub async fn handle_patch_config(
         return JsonRpcResponse::error(
             req.id,
             INTERNAL_ERROR,
-            format!("Failed to broadcast event: {}", e),
+            format!("Failed to broadcast event: {e}"),
         );
     }
 
@@ -607,7 +607,7 @@ pub async fn handle_get_tool_permissions(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to serialize tool permissions: {}", e),
+            format!("Failed to serialize tool permissions: {e}"),
         ),
     }
 }
@@ -655,7 +655,7 @@ pub async fn handle_update_tool_permissions(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save configuration: {}", e),
+                format!("Failed to save configuration: {e}"),
             );
         }
 
@@ -676,7 +676,7 @@ pub async fn handle_update_tool_permissions(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to serialize tool permissions: {}", e),
+            format!("Failed to serialize tool permissions: {e}"),
         ),
     }
 }

@@ -417,7 +417,7 @@ impl EventEmitter for ReplyEmitter {
                     } else if self.config.stream_enabled {
                         // Send explicit reasoning first if available
                         if let Some(ref r) = reasoning {
-                            self.send_to_channel(&format!("🤔 {}", r)).await;
+                            self.send_to_channel(&format!("🤔 {r}")).await;
                         }
                         // Finalize the streaming controller
                         let mut ctrl = self.streaming.lock().await;

@@ -102,7 +102,7 @@ impl MemoryTimeTraveler {
             // Track audit metadata
             match &env.event {
                 MemoryEvent::NoteCreated { source, .. } => {
-                    creation_source = Some(format!("{:?}", source));
+                    creation_source = Some(format!("{source:?}"));
                 }
                 MemoryEvent::NoteMigrated { .. } => {
                     creation_source = Some("migration".to_string());
@@ -148,7 +148,7 @@ fn describe_event(env: &MemoryEventEnvelope) -> String {
             format!("Fact created: \"{}\"", truncate(content, 50))
         }
         MemoryEvent::NoteContentUpdated { reason, .. } => {
-            format!("Content updated: {}", reason)
+            format!("Content updated: {reason}")
         }
         MemoryEvent::NoteMetadataUpdated {
             field,
@@ -157,8 +157,7 @@ fn describe_event(env: &MemoryEventEnvelope) -> String {
             ..
         } => {
             format!(
-                "Metadata '{}' changed from '{}' to '{}'",
-                field, old_value, new_value
+                "Metadata '{field}' changed from '{old_value}' to '{new_value}'"
             )
         }
         MemoryEvent::NoteAccessed {
@@ -168,16 +167,15 @@ fn describe_event(env: &MemoryEventEnvelope) -> String {
             ..
         } => {
             format!(
-                "Accessed (count: {}, used: {}, query: {:?})",
-                new_access_count, used_in_response, query
+                "Accessed (count: {new_access_count}, used: {used_in_response}, query: {query:?})"
             )
         }
         MemoryEvent::NoteInvalidated { reason, actor, .. } => {
-            format!("Invalidated by {}: {}", actor, reason)
+            format!("Invalidated by {actor}: {reason}")
         }
         MemoryEvent::NoteRestored { .. } => "Restored".to_string(),
         MemoryEvent::NoteDeleted { reason, .. } => {
-            format!("Permanently deleted: {}", reason)
+            format!("Permanently deleted: {reason}")
         }
         MemoryEvent::NoteConsolidated {
             source_note_paths, ..
@@ -194,7 +192,7 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         let truncated: String = s.chars().take(max).collect();
-        format!("{}...", truncated)
+        format!("{truncated}...")
     }
 }
 

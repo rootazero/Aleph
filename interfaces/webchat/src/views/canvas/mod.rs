@@ -88,8 +88,7 @@ fn RadialCanvasView() -> impl IntoView {
                             retries += 1;
                             web_sys::console::log_1(
                                 &format!(
-                                    "Agents list not connected, retrying {}/{} in {}ms...",
-                                    retries, MAX_RETRIES, RETRY_DELAY_MS
+                                    "Agents list not connected, retrying {retries}/{MAX_RETRIES} in {RETRY_DELAY_MS}ms..."
                                 )
                                 .into(),
                             );

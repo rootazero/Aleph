@@ -96,7 +96,7 @@ impl SecretProvider for OnePasswordProvider {
             } else {
                 SecretError::ProviderError {
                     provider: "1password".into(),
-                    message: format!("Failed to execute `op`: {}", e),
+                    message: format!("Failed to execute `op`: {e}"),
                 }
             }
         })?;
@@ -125,7 +125,7 @@ impl SecretProvider for OnePasswordProvider {
             } else {
                 SecretError::ProviderError {
                     provider: "1password".into(),
-                    message: format!("Failed to execute `op whoami`: {}", e),
+                    message: format!("Failed to execute `op whoami`: {e}"),
                 }
             }
         })?;
@@ -148,7 +148,7 @@ impl SecretProvider for OnePasswordProvider {
 
         let output = cmd.output().await.map_err(|e| SecretError::ProviderError {
             provider: "1password".into(),
-            message: format!("Failed to execute `op item list`: {}", e),
+            message: format!("Failed to execute `op item list`: {e}"),
         })?;
 
         if output.status.success() {
@@ -156,7 +156,7 @@ impl SecretProvider for OnePasswordProvider {
             let items: Vec<serde_json::Value> =
                 serde_json::from_str(&stdout).map_err(|e| SecretError::ProviderError {
                     provider: "1password".into(),
-                    message: format!("Failed to parse `op item list` JSON output: {}", e),
+                    message: format!("Failed to parse `op item list` JSON output: {e}"),
                 })?;
             Ok(items
                 .iter()

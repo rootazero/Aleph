@@ -33,9 +33,9 @@ impl E164Number {
         }
         if cleaned.len() == 10 {
             // Assume US/Canada: prepend country code 1
-            Some(Self(format!("+1{}", cleaned)))
+            Some(Self(format!("+1{cleaned}")))
         } else {
-            Some(Self(format!("+{}", cleaned)))
+            Some(Self(format!("+{cleaned}")))
         }
     }
 }

@@ -35,7 +35,7 @@ impl OpenAiCompatProvider {
 
         // Build size string from width/height if provided
         let size = match (request.params.width, request.params.height) {
-            (Some(w), Some(h)) => Some(format!("{}x{}", w, h)),
+            (Some(w), Some(h)) => Some(format!("{w}x{h}")),
             _ => None,
         };
 
@@ -89,12 +89,12 @@ impl OpenAiCompatProvider {
             ),
             404 => GenerationError::model_not_found(&self.model, &self.name),
             500..=599 => GenerationError::provider(
-                format!("Server error: {}", body),
+                format!("Server error: {body}"),
                 Some(status.as_u16()),
                 &self.name,
             ),
             _ => GenerationError::provider(
-                format!("Unexpected error: {}", body),
+                format!("Unexpected error: {body}"),
                 Some(status.as_u16()),
                 &self.name,
             ),

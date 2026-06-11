@@ -58,7 +58,7 @@ pub fn CronSparklines() -> impl IntoView {
             <div class="p-4 border-b border-border bg-surface-sunken flex items-center justify-between">
                 <span class="text-sm font-medium text-text-secondary">"Scheduled job pulse"</span>
                 <span class="text-[10px] font-mono text-text-tertiary uppercase tracking-wider">
-                    {format!("Last {} runs", SPARK_CELLS)}
+                    {format!("Last {SPARK_CELLS} runs")}
                 </span>
             </div>
             <div class="p-4">
@@ -133,7 +133,7 @@ fn SparklineRow(job: CronJobInfo, runs: Vec<JobRunInfo>) -> impl IntoView {
             </div>
             {(consec_errs > 0).then(|| view! {
                 <span class="text-[10px] font-mono text-danger flex-shrink-0" title=move || t_string!(i18n, dashboard_cron.consecutive_failures).to_string()>
-                    {format!("\u{00d7} {}", consec_errs)}
+                    {format!("\u{00d7} {consec_errs}")}
                 </span>
             })}
         </li>

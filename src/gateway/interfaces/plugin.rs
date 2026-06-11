@@ -13,8 +13,7 @@ pub fn register(channel_type: &'static str, create: ChannelFactoryFn) {
     let mut guard = PLUGINS.write().unwrap_or_else(|e| e.into_inner());
     if guard.contains_key(channel_type) {
         panic!(
-            "Duplicate ChannelFactory registration for type: {}",
-            channel_type
+            "Duplicate ChannelFactory registration for type: {channel_type}"
         );
     }
     guard.insert(channel_type, create);

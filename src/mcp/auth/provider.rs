@@ -112,7 +112,7 @@ impl OAuthProvider {
 
         let response =
             self.client.get(&url).send().await.map_err(|e| {
-                AlephError::IoError(format!("Failed to fetch OAuth metadata: {}", e))
+                AlephError::IoError(format!("Failed to fetch OAuth metadata: {e}"))
             })?;
 
         if !response.status().is_success() {
@@ -125,7 +125,7 @@ impl OAuthProvider {
         response
             .json::<OAuthServerMetadata>()
             .await
-            .map_err(|e| AlephError::IoError(format!("Failed to parse OAuth metadata: {}", e)))
+            .map_err(|e| AlephError::IoError(format!("Failed to parse OAuth metadata: {e}")))
     }
 
     /// Register client dynamically (if server supports it)
@@ -151,16 +151,15 @@ impl OAuthProvider {
             .json(&request_body)
             .send()
             .await
-            .map_err(|e| AlephError::IoError(format!("Client registration failed: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Client registration failed: {e}")))?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_else(|e| {
                 tracing::warn!(error = %e, "Failed to read client registration error response body");
-                format!("<failed to read body: {}>", e)
+                format!("<failed to read body: {e}>")
             });
             return Err(AlephError::IoError(format!(
-                "Client registration failed: {}",
-                body
+                "Client registration failed: {body}"
             )));
         }
 
@@ -173,7 +172,7 @@ impl OAuthProvider {
         }
 
         let reg_response: RegistrationResponse = response.json().await.map_err(|e| {
-            AlephError::IoError(format!("Failed to parse registration response: {}", e))
+            AlephError::IoError(format!("Failed to parse registration response: {e}"))
         })?;
 
         let client_info = ClientInfo {
@@ -211,7 +210,7 @@ impl OAuthProvider {
 
         // Build authorization URL
         let mut url = url::Url::parse(&metadata.authorization_endpoint)
-            .map_err(|e| AlephError::IoError(format!("Invalid authorization endpoint: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Invalid authorization endpoint: {e}")))?;
 
         url.query_pairs_mut()
             .append_pair("response_type", "code")
@@ -295,16 +294,15 @@ impl OAuthProvider {
             .form(&params)
             .send()
             .await
-            .map_err(|e| AlephError::IoError(format!("Token exchange failed: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Token exchange failed: {e}")))?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_else(|e| {
                 tracing::warn!(error = %e, "Failed to read token exchange error response body");
-                format!("<failed to read body: {}>", e)
+                format!("<failed to read body: {e}>")
             });
             return Err(AlephError::IoError(format!(
-                "Token exchange failed: {}",
-                body
+                "Token exchange failed: {body}"
             )));
         }
 
@@ -370,16 +368,15 @@ impl OAuthProvider {
             .form(&params)
             .send()
             .await
-            .map_err(|e| AlephError::IoError(format!("Token refresh failed: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Token refresh failed: {e}")))?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_else(|e| {
                 tracing::warn!(error = %e, "Failed to read token refresh error response body");
-                format!("<failed to read body: {}>", e)
+                format!("<failed to read body: {e}>")
             });
             return Err(AlephError::IoError(format!(
-                "Token refresh failed: {}",
-                body
+                "Token refresh failed: {body}"
             )));
         }
 
@@ -507,7 +504,7 @@ async fn parse_token_response(response: reqwest::Response) -> Result<OAuthTokens
     let token_response: TokenResponse = response
         .json()
         .await
-        .map_err(|e| AlephError::IoError(format!("Failed to parse token response: {}", e)))?;
+        .map_err(|e| AlephError::IoError(format!("Failed to parse token response: {e}")))?;
 
     let expires_at = token_response.expires_in.map(|exp| {
         let now: i64 = std::time::SystemTime::now()

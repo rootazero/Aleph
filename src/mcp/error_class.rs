@@ -63,7 +63,7 @@ impl McpErrorKind {
     #[must_use]
     pub fn guidance_suffix(&self) -> String {
         match self.guidance() {
-            Some(hint) => format!(" (hint: {})", hint),
+            Some(hint) => format!(" (hint: {hint})"),
             None => String::new(),
         }
     }

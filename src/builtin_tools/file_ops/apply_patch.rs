@@ -175,7 +175,7 @@ make several coordinated edits at once."#;
         }
 
         let message = if all_ok {
-            format!("applied {} file operation(s)", applied)
+            format!("applied {applied} file operation(s)")
         } else {
             format!(
                 "applied {}/{} operations; aborted on first failure",
@@ -256,7 +256,7 @@ make several coordinated edits at once."#;
                 success: true,
                 message: format!("created ({byte_count} bytes)"),
             },
-            Err(e) => fail("add", path, format!("write failed: {}", e)),
+            Err(e) => fail("add", path, format!("write failed: {e}")),
         }
     }
 
@@ -281,7 +281,7 @@ make several coordinated edits at once."#;
                 success: true,
                 message: "deleted".into(),
             },
-            Err(e) => fail("delete", path, format!("delete failed: {}", e)),
+            Err(e) => fail("delete", path, format!("delete failed: {e}")),
         }
     }
 
@@ -306,7 +306,7 @@ make several coordinated edits at once."#;
             Some(new_path) => match self.resolve(new_path, output_dir) {
                 Ok(p) => Some(p),
                 Err(msg) => {
-                    return fail("update", path, format!("move-to path rejected: {}", msg));
+                    return fail("update", path, format!("move-to path rejected: {msg}"));
                 }
             },
             None => None,
@@ -338,7 +338,7 @@ make several coordinated edits at once."#;
         // Read + binary refusal mirrors `file_edit::read_text_file`.
         let bytes = match std::fs::read(&resolved) {
             Ok(b) => b,
-            Err(e) => return fail("update", path, format!("read failed: {}", e)),
+            Err(e) => return fail("update", path, format!("read failed: {e}")),
         };
         if is_binary(&bytes) {
             return fail(
@@ -420,7 +420,7 @@ make several coordinated edits at once."#;
 
         // Atomic write-back: a crash mid-write must never truncate the file.
         if let Err(e) = crate::utils::atomic_write::atomic_write_file(&resolved, &content).await {
-            return fail("update", path, format!("write-back failed: {}", e));
+            return fail("update", path, format!("write-back failed: {e}"));
         }
 
         let final_path = if let Some(new_resolved) = move_dest {
@@ -458,7 +458,7 @@ make several coordinated edits at once."#;
             path: final_path.display().to_string(),
             op: "update",
             success: true,
-            message: format!("applied {} hunk(s)", hunks_applied),
+            message: format!("applied {hunks_applied} hunk(s)"),
         }
     }
 
@@ -469,8 +469,7 @@ make several coordinated edits at once."#;
     ) -> std::result::Result<PathBuf, String> {
         if Path::new(path).is_absolute() {
             return Err(format!(
-                "absolute path `{}` is not allowed; apply_patch requires relative paths",
-                path
+                "absolute path `{path}` is not allowed; apply_patch requires relative paths"
             ));
         }
         check_and_resolve_path(Path::new(path), &self.denied_paths, output_dir)
@@ -596,8 +595,7 @@ fn parse_patch(input: &str) -> std::result::Result<Vec<PatchOp>, String> {
         .trim_end_matches('\r');
     if first.trim() != "*** Begin Patch" {
         return Err(format!(
-            "patch must start with `*** Begin Patch` (got `{}`)",
-            first
+            "patch must start with `*** Begin Patch` (got `{first}`)"
         ));
     }
 
@@ -627,12 +625,11 @@ fn parse_patch(input: &str) -> std::result::Result<Vec<PatchOp>, String> {
                             buf.push(String::new());
                         } else {
                             return Err(format!(
-                                "Add File `{}`: expected `+...` line, got `{}`",
-                                path, next
+                                "Add File `{path}`: expected `+...` line, got `{next}`"
                             ));
                         }
                     }
-                    None => return Err(format!("Add File `{}`: unterminated", path)),
+                    None => return Err(format!("Add File `{path}`: unterminated")),
                 }
             }
             ops.push(PatchOp::Add {
@@ -701,12 +698,11 @@ fn parse_patch(input: &str) -> std::result::Result<Vec<PatchOp>, String> {
                                 .push(HunkLine::Context(String::new()));
                         } else {
                             return Err(format!(
-                                "Update File `{}`: unexpected line `{}` (each hunk line must start with ` `, `+`, or `-`)",
-                                path, raw
+                                "Update File `{path}`: unexpected line `{raw}` (each hunk line must start with ` `, `+`, or `-`)"
                             ));
                         }
                     }
-                    None => return Err(format!("Update File `{}`: unterminated", path)),
+                    None => return Err(format!("Update File `{path}`: unterminated")),
                 }
             }
             if let Some(h) = current.take() {
@@ -714,8 +710,7 @@ fn parse_patch(input: &str) -> std::result::Result<Vec<PatchOp>, String> {
             }
             if hunks.is_empty() {
                 return Err(format!(
-                    "Update File `{}`: at least one `@@`-introduced hunk is required",
-                    path
+                    "Update File `{path}`: at least one `@@`-introduced hunk is required"
                 ));
             }
             ops.push(PatchOp::Update {
@@ -725,8 +720,7 @@ fn parse_patch(input: &str) -> std::result::Result<Vec<PatchOp>, String> {
             });
         } else {
             return Err(format!(
-                "expected file header (`*** Add File:`, `*** Update File:`, `*** Delete File:`) or `*** End Patch`, got `{}`",
-                line
+                "expected file header (`*** Add File:`, `*** Update File:`, `*** Delete File:`) or `*** End Patch`, got `{line}`"
             ));
         }
     }

@@ -131,7 +131,7 @@ pub(super) fn ProviderDetailPanel(
                 }
                 Err(e) => {
                     set_saving.set(false);
-                    set_action_error.set(Some(format!("Save failed: {}", e)));
+                    set_action_error.set(Some(format!("Save failed: {e}")));
                 }
             }
         });
@@ -152,7 +152,7 @@ pub(super) fn ProviderDetailPanel(
                 }
                 Err(e) => {
                     set_activating.set(false);
-                    set_action_error.set(Some(format!("Activation failed: {}", e)));
+                    set_action_error.set(Some(format!("Activation failed: {e}")));
                 }
             }
         });
@@ -174,7 +174,7 @@ pub(super) fn ProviderDetailPanel(
                 }
                 Err(e) => {
                     set_deleting.set(false);
-                    set_action_error.set(Some(format!("Delete failed: {}", e)));
+                    set_action_error.set(Some(format!("Delete failed: {e}")));
                 }
             }
         });
@@ -190,7 +190,7 @@ pub(super) fn ProviderDetailPanel(
                             {provider_name}
                         </h2>
                         <p class="text-sm text-text-tertiary mt-0.5">
-                            {format!("ID: {}", provider_id)}
+                            {format!("ID: {provider_id}")}
                         </p>
                     </div>
                     <div class="flex gap-1">
@@ -217,7 +217,7 @@ pub(super) fn ProviderDetailPanel(
                     />
                     {provider_api_key_env.map(|env_var| view! {
                         <p class="mt-1 text-xs text-text-tertiary">
-                            {format!("Env var: {}", env_var)}
+                            {format!("Env var: {env_var}")}
                         </p>
                     })}
                 </div>

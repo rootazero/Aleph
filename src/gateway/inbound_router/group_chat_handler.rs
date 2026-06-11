@@ -26,7 +26,7 @@ impl InboundMessageRouter {
                     Err(e) => {
                         let error_msg = OutboundMessage::text(
                             msg.conversation_id.as_str(),
-                            format!("Group chat error: {}", e),
+                            format!("Group chat error: {e}"),
                         );
                         let _ = self.channel_registry.send(&msg.channel_id, error_msg).await;
                         return Ok(());
@@ -217,7 +217,7 @@ impl InboundMessageRouter {
         let topic_line = if topic.is_empty() {
             String::new()
         } else {
-            format!("\nTopic: {}", topic)
+            format!("\nTopic: {topic}")
         };
         let start_msg = format!(
             "🎭 Group chat started!\nParticipants: {}{}\n\nSend messages to continue, /groupchat end to finish.",
@@ -240,7 +240,7 @@ impl InboundMessageRouter {
                 Err(e) => {
                     let err_msg = OutboundMessage::text(
                         &conversation_id,
-                        format!("Round execution failed: {}", e),
+                        format!("Round execution failed: {e}"),
                     );
                     let _ = self.channel_registry.send(&msg.channel_id, err_msg).await;
                 }
@@ -287,7 +287,7 @@ impl InboundMessageRouter {
             let mut session = handle.lock().await;
             session.end();
         } else {
-            return Err(format!("Session not found: {}", session_id));
+            return Err(format!("Session not found: {session_id}"));
         }
 
         // Remove from active tracking
@@ -324,7 +324,7 @@ impl InboundMessageRouter {
             let orch_guard = orch.lock().await;
             let handle = orch_guard
                 .get_session(session_id)
-                .ok_or_else(|| format!("Session not found: {}", session_id))?;
+                .ok_or_else(|| format!("Session not found: {session_id}"))?;
             (handle, orch_guard.max_rounds())
         };
 
@@ -351,7 +351,7 @@ impl InboundMessageRouter {
             }
             let outbound = OutboundMessage::text(
                 msg.conversation_id.as_str(),
-                format!("🎭 Group chat ended (max {} rounds reached).", max_rounds),
+                format!("🎭 Group chat ended (max {max_rounds} rounds reached)."),
             );
             let _ = self.channel_registry.send(&msg.channel_id, outbound).await;
             return Ok(());
@@ -369,7 +369,7 @@ impl InboundMessageRouter {
             Err(e) => {
                 let err_msg = OutboundMessage::text(
                     msg.conversation_id.as_str(),
-                    format!("Round failed: {}", e),
+                    format!("Round failed: {e}"),
                 );
                 let _ = self.channel_registry.send(&msg.channel_id, err_msg).await;
             }

@@ -19,7 +19,7 @@ pub async fn create_prediction(
     model: &str,
     input: serde_json::Value,
 ) -> GenerationResult<String> {
-    let url = format!("{}/v1/predictions", endpoint);
+    let url = format!("{endpoint}/v1/predictions");
 
     let request_body = CreatePredictionRequest {
         version: model.to_string(),
@@ -34,7 +34,7 @@ pub async fn create_prediction(
 
     let response = client
         .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .json(&request_body)
         .send()
@@ -43,7 +43,7 @@ pub async fn create_prediction(
             if e.is_timeout() {
                 GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             } else if e.is_connect() {
-                GenerationError::network(format!("Connection failed: {}", e))
+                GenerationError::network(format!("Connection failed: {e}"))
             } else {
                 GenerationError::network(e.to_string())
             }
@@ -53,7 +53,7 @@ pub async fn create_prediction(
     let response_text = response
         .text()
         .await
-        .map_err(|e| GenerationError::network(format!("Failed to read response: {}", e)))?;
+        .map_err(|e| GenerationError::network(format!("Failed to read response: {e}")))?;
 
     if !status.is_success() {
         error!(
@@ -65,7 +65,7 @@ pub async fn create_prediction(
     }
 
     let prediction: PredictionResponse = serde_json::from_str(&response_text)
-        .map_err(|e| GenerationError::serialization(format!("Failed to parse response: {}", e)))?;
+        .map_err(|e| GenerationError::serialization(format!("Failed to parse response: {e}")))?;
 
     debug!(
         id = %prediction.id,
@@ -83,7 +83,7 @@ pub async fn poll_prediction(
     api_key: &str,
     id: &str,
 ) -> GenerationResult<PredictionResponse> {
-    let url = format!("{}/v1/predictions/{}", endpoint, id);
+    let url = format!("{endpoint}/v1/predictions/{id}");
     let mut attempts = 0;
 
     loop {
@@ -96,7 +96,7 @@ pub async fn poll_prediction(
 
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Authorization", format!("Bearer {api_key}"))
             .send()
             .await
             .map_err(|e| GenerationError::network(e.to_string()))?;
@@ -105,7 +105,7 @@ pub async fn poll_prediction(
         let response_text = response
             .text()
             .await
-            .map_err(|e| GenerationError::network(format!("Failed to read response: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to read response: {e}")))?;
 
         if !status.is_success() {
             error!(
@@ -117,7 +117,7 @@ pub async fn poll_prediction(
         }
 
         let prediction: PredictionResponse = serde_json::from_str(&response_text).map_err(|e| {
-            GenerationError::serialization(format!("Failed to parse response: {}", e))
+            GenerationError::serialization(format!("Failed to parse response: {e}"))
         })?;
 
         match prediction.status.as_str() {

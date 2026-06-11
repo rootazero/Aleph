@@ -114,7 +114,7 @@ impl SamplingHandler {
     ) -> Result<SamplingResponse> {
         // Parse the request
         let mut request: SamplingRequest = serde_json::from_value(params)
-            .map_err(|e| AlephError::IoError(format!("Failed to parse sampling request: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Failed to parse sampling request: {e}")))?;
 
         tracing::debug!(
             request_id = %request_id,

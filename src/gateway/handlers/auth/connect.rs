@@ -27,7 +27,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Invalid connect params: {}", e),
+                    format!("Invalid connect params: {e}"),
                 );
             }
         },
@@ -166,7 +166,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                     .scope
                     .allowed_tools
                     .iter()
-                    .map(|t| format!("tool:{}", t))
+                    .map(|t| format!("tool:{t}"))
                     .collect();
                 let role = super::tier::role_for_permissions(&permissions).to_string();
                 return JsonRpcResponse::success(
@@ -195,7 +195,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                 return JsonRpcResponse::error(
                     request.id,
                     -32001,
-                    format!("Invalid invitation: {}", e),
+                    format!("Invalid invitation: {e}"),
                 );
             }
         }
@@ -236,7 +236,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                     return JsonRpcResponse::error(
                         request.id,
                         -32603,
-                        format!("Failed to register device: {}", e),
+                        format!("Failed to register device: {e}"),
                     );
                 }
 
@@ -251,7 +251,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                         return JsonRpcResponse::error(
                             request.id,
                             -32603,
-                            format!("Failed to issue token: {}", e),
+                            format!("Failed to issue token: {e}"),
                         );
                     }
                 };
@@ -287,7 +287,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                 return JsonRpcResponse::error(
                     request.id,
                     -32603,
-                    format!("Token validation error: {}", e),
+                    format!("Token validation error: {e}"),
                 );
             }
         }
@@ -323,7 +323,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
             return JsonRpcResponse::error(
                 request.id,
                 -32603,
-                format!("Failed to register device: {}", e),
+                format!("Failed to register device: {e}"),
             );
         }
 
@@ -338,7 +338,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                     return JsonRpcResponse::error(
                         request.id,
                         -32603,
-                        format!("Failed to issue token: {}", e),
+                        format!("Failed to issue token: {e}"),
                     );
                 }
             };
@@ -460,7 +460,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                     return JsonRpcResponse::error(
                         request.id,
                         -32603,
-                        format!("Failed to issue token: {}", e),
+                        format!("Failed to issue token: {e}"),
                     );
                 }
             };
@@ -516,7 +516,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
             return JsonRpcResponse::error(
                 request.id,
                 -32603,
-                format!("Failed to list pending pairings: {}", e),
+                format!("Failed to list pending pairings: {e}"),
             );
         }
     };
@@ -541,8 +541,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                 code: code.to_string(),
                 expires_in: remaining,
                 message: format!(
-                    "Enter code {} to approve this device, or run: aleph-gateway pairing approve {}",
-                    code, code
+                    "Enter code {code} to approve this device, or run: aleph-gateway pairing approve {code}"
                 ),
             }),
         );
@@ -562,7 +561,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
             return JsonRpcResponse::error(
                 request.id,
                 -32603,
-                format!("Failed to initiate pairing: {}", e),
+                format!("Failed to initiate pairing: {e}"),
             );
         }
     };
@@ -584,8 +583,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
             code: code.clone(),
             expires_in,
             message: format!(
-                "Enter code {} to approve this device, or run: aleph-gateway pairing approve {}",
-                code, code
+                "Enter code {code} to approve this device, or run: aleph-gateway pairing approve {code}"
             ),
         }),
     )

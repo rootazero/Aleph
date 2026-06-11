@@ -1028,7 +1028,7 @@ impl DreamDaemon {
         let cycle = event_log.next_cycle().await.unwrap_or(1);
 
         let event = DreamEvent {
-            id: format!("dream_{}_{}", run_start, cycle),
+            id: format!("dream_{run_start}_{cycle}"),
             cycle,
             strategy,
             selection: selection.clone(),

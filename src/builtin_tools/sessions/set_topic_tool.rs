@@ -92,8 +92,7 @@ impl AlephTool for SessionSetTopicTool {
 
         let legacy_key = LegacySessionKey::from_key_string(session_key_str).ok_or_else(|| {
             crate::error::AlephError::tool(format!(
-                "session_set_topic: failed to parse session key '{}'",
-                session_key_str
+                "session_set_topic: failed to parse session key '{session_key_str}'"
             ))
         })?;
 
@@ -102,8 +101,7 @@ impl AlephTool for SessionSetTopicTool {
             .await
             .map_err(|e| {
                 crate::error::AlephError::tool(format!(
-                    "session_set_topic: failed to set topic: {}",
-                    e
+                    "session_set_topic: failed to set topic: {e}"
                 ))
             })?;
 
@@ -116,7 +114,7 @@ impl AlephTool for SessionSetTopicTool {
         Ok(SessionSetTopicOutput {
             session_key: session_key_str.clone(),
             topic: topic.to_string(),
-            message: format!("会话主题已更新为: {}", topic),
+            message: format!("会话主题已更新为: {topic}"),
         })
     }
 }

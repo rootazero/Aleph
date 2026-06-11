@@ -18,7 +18,7 @@ pub(crate) use emit::*;
 fn map_session_metadata(row: &rusqlite::Row) -> Result<SessionMetadata, rusqlite::Error> {
     let state_str: Option<String> = row.get(8)?;
     let state = state_str
-        .and_then(|s| serde_json::from_str(&format!("\"{}\"", s)).ok())
+        .and_then(|s| serde_json::from_str(&format!("\"{s}\"")).ok())
         .unwrap_or_default();
     let metadata_json: Option<String> = row.get(9)?;
     let (topic, status, identity_meta) =

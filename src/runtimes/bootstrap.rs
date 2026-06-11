@@ -58,7 +58,7 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
         None => {
             return Ok(BootstrapResult::Unsupported {
                 capability: name.into(),
-                reason: format!("no install strategy for {:?}", current),
+                reason: format!("no install strategy for {current:?}"),
             });
         }
     };
@@ -99,14 +99,14 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
     let probe_result = probe::probe(name);
     if !probe_result.found {
         return Ok(BootstrapResult::PathNotFound {
-            expected: format!("binary '{}' on PATH after install", name),
+            expected: format!("binary '{name}' on PATH after install"),
         });
     }
     let bin_path = match probe_result.bin_path.clone() {
         Some(path) => path,
         None => {
             return Ok(BootstrapResult::PathNotFound {
-                expected: format!("binary path for '{}' after successful probe", name),
+                expected: format!("binary path for '{name}' after successful probe"),
             });
         }
     };
@@ -294,7 +294,7 @@ async fn run_via_parent(parent: &str, subcommand: &[&str]) -> Result<CmdOutcome,
         "cargo" => Command::new("cargo"),
         _ => {
             return Ok(CmdOutcome::Failed {
-                stderr: format!("unknown Via parent: {}", parent),
+                stderr: format!("unknown Via parent: {parent}"),
             });
         }
     };

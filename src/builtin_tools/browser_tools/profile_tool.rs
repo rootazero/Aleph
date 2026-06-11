@@ -79,11 +79,11 @@ impl AlephTool for BrowserProfileTool {
                         let driver = self
                             .manager
                             .get_driver(&name)
-                            .map(|d| format!("{:?}", d))
+                            .map(|d| format!("{d:?}"))
                             .unwrap_or_else(|| "unknown".to_string());
                         ProfileInfo {
                             name,
-                            state: format!("{:?}", state),
+                            state: format!("{state:?}"),
                             driver,
                         }
                     })
@@ -102,14 +102,14 @@ impl AlephTool for BrowserProfileTool {
                     Some(s) => Ok(BrowserProfileOutput {
                         success: true,
                         profiles: None,
-                        state: Some(format!("{:?}", s)),
+                        state: Some(format!("{s:?}")),
                         message: None,
                     }),
                     None => Ok(BrowserProfileOutput {
                         success: false,
                         profiles: None,
                         state: None,
-                        message: Some(format!("Profile '{}' not found", name)),
+                        message: Some(format!("Profile '{name}' not found")),
                     }),
                 }
             }

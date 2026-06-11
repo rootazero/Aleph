@@ -292,7 +292,7 @@ impl A2AClient {
     /// List tasks
     pub async fn list_tasks(&self, params: &ListTasksParams) -> A2AResult<ListTasksResult> {
         let params_value = serde_json::to_value(params)
-            .map_err(|e| A2AError::InternalError(format!("Failed to serialize params: {}", e)))?;
+            .map_err(|e| A2AError::InternalError(format!("Failed to serialize params: {e}")))?;
         let result = self.rpc_call("tasks/list", params_value).await?;
         serde_json::from_value(result).map_err(|e| A2AError::ParseError(e.to_string()))
     }

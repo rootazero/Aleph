@@ -325,7 +325,7 @@ fn ensure_frontmatter(content: &str, default_category: &str) -> Option<String> {
         let header = format!(
             "---\ncategory: {default_category}\ntags: []\ncreated: {today}\nupdated: {today}\n---\n\n"
         );
-        return Some(format!("{header}{}", trimmed));
+        return Some(format!("{header}{trimmed}"));
     }
 
     // Parse the frontmatter section to check for missing fields

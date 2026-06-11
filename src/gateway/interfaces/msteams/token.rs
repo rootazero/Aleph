@@ -133,7 +133,7 @@ impl GraphTokenManager {
 
         let cert = Certificate::load(credential.certificate_path.clone())
             .await
-            .map_err(|e| ChannelError::AuthFailed(format!("Failed to load certificate: {}", e)))?;
+            .map_err(|e| ChannelError::AuthFailed(format!("Failed to load certificate: {e}")))?;
 
         Ok(JwtAssertionGenerator::new(
             cert,

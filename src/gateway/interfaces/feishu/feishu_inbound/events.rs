@@ -705,16 +705,16 @@ pub fn parse_merge_forward_content(content: &str) -> String {
                 } else {
                     "unknown".to_string()
                 };
-                format!("[File: {}]", name)
+                format!("[File: {name}]")
             }
             (Some("audio"), _) => "[Audio]".to_string(),
             (Some("video"), _) => "[Video]".to_string(),
             (Some("sticker"), _) => "[Sticker]".to_string(),
             (Some("merge_forward"), _) => "[Nested Merged Forward]".to_string(),
-            (Some(msg_type), _) => format!("[{}]", msg_type),
+            (Some(msg_type), _) => format!("[{msg_type}]"),
             _ => "[Unknown content]".to_string(),
         };
-        lines.push(format!("- {}", item_text));
+        lines.push(format!("- {item_text}"));
     }
 
     if sorted.len() > max_messages {

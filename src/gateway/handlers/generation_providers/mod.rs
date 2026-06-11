@@ -40,7 +40,7 @@ fn save_config(cfg: &Config) -> Result<(), String> {
 
 /// Vault key prefix for generation provider API keys
 fn vault_key(provider_name: &str) -> String {
-    format!("gen:{}", provider_name)
+    format!("gen:{provider_name}")
 }
 
 /// Resolve API key from vault for a generation provider

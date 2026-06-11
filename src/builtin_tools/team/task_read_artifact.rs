@@ -75,7 +75,7 @@ impl AlephTool for TaskReadArtifactTool {
                 .await
                 .map_err(|e| AlephError::other(format!("Failed to read artifact: {e}")))?
                 .ok_or_else(|| {
-                    AlephError::other(format!("Artifact '{}' not found", artifact_id))
+                    AlephError::other(format!("Artifact '{artifact_id}' not found"))
                 })?;
 
             // Verify the artifact belongs to the requested task

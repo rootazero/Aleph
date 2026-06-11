@@ -237,7 +237,7 @@ impl SearchFilter {
         }
 
         if let Some(valid) = self.is_valid {
-            clauses.push(format!("is_valid = {}", valid));
+            clauses.push(format!("is_valid = {valid}"));
         }
 
         if let Some(ref prefix) = self.path_prefix {
@@ -249,15 +249,15 @@ impl SearchFilter {
         }
 
         if let Some(min_conf) = self.min_confidence {
-            clauses.push(format!("confidence >= {}", min_conf));
+            clauses.push(format!("confidence >= {min_conf}"));
         }
 
         if let Some(ts) = self.created_after {
-            clauses.push(format!("created_at >= {}", ts));
+            clauses.push(format!("created_at >= {ts}"));
         }
 
         if let Some(ts) = self.created_before {
-            clauses.push(format!("created_at <= {}", ts));
+            clauses.push(format!("created_at <= {ts}"));
         }
 
         if let Some(ref persona_id) = self.persona_id {
@@ -367,7 +367,7 @@ impl MemoryFilter {
         }
 
         if let Some(ts) = self.after_timestamp {
-            clauses.push(format!("created_at >= {}", ts));
+            clauses.push(format!("created_at >= {ts}"));
         }
 
         if let Some(ref ids) = self.session_ids {

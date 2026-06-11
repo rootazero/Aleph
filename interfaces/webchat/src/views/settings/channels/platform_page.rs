@@ -148,7 +148,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
                     refresh_trigger.update(|n| *n += 1);
                 }
                 Err(e) => {
-                    new_error.set(Some(format!("Failed to create: {}", e)));
+                    new_error.set(Some(format!("Failed to create: {e}")));
                 }
             }
             creating.set(false);
@@ -166,7 +166,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
     let brand_color = definition.brand_color;
     let name = definition.name;
     let description = definition.description;
-    let icon_bg = format!("background-color: {}15", brand_color);
+    let icon_bg = format!("background-color: {brand_color}15");
     let is_discord = definition.id == "discord";
 
     view! {

@@ -110,7 +110,7 @@ impl McpManagerActor {
         // Load and expand configuration
         let mut config = McpPersistentConfig::load(&config_path)
             .await
-            .map_err(|e| format!("Failed to load MCP config: {}", e))?;
+            .map_err(|e| format!("Failed to load MCP config: {e}"))?;
         config.expand_env_vars();
 
         // Create channels
@@ -451,7 +451,7 @@ impl McpManagerActor {
         self.config
             .save(&self.config_path)
             .await
-            .map_err(|e| format!("Failed to save config: {}", e))?;
+            .map_err(|e| format!("Failed to save config: {e}"))?;
 
         // Start if auto_start
         if auto_start {
@@ -489,7 +489,7 @@ impl McpManagerActor {
         self.config
             .save(&self.config_path)
             .await
-            .map_err(|e| format!("Failed to save config: {}", e))?;
+            .map_err(|e| format!("Failed to save config: {e}"))?;
 
         // Broadcast event
         let _ = self.event_tx.send(McpManagerEvent::ServerRemoved {
@@ -553,7 +553,7 @@ impl McpManagerActor {
             .config
             .get_server(server_id)
             .cloned()
-            .ok_or_else(|| format!("Server not found: {}", server_id))?;
+            .ok_or_else(|| format!("Server not found: {server_id}"))?;
 
         let server_name = config.name.clone();
 
@@ -592,14 +592,14 @@ impl McpManagerActor {
     async fn start_server(&mut self, server_id: &str) -> Result<(), String> {
         // Check if already running
         if self.clients.contains_key(server_id) {
-            return Err(format!("Server already running: {}", server_id));
+            return Err(format!("Server already running: {server_id}"));
         }
 
         let config = self
             .config
             .get_server(server_id)
             .cloned()
-            .ok_or_else(|| format!("Server not found: {}", server_id))?;
+            .ok_or_else(|| format!("Server not found: {server_id}"))?;
 
         self.start_server_internal(&config).await
     }
@@ -607,7 +607,7 @@ impl McpManagerActor {
     /// Stop a running server
     async fn stop_server(&mut self, server_id: &str) -> Result<(), String> {
         if !self.clients.contains_key(server_id) {
-            return Err(format!("Server not running: {}", server_id));
+            return Err(format!("Server not running: {server_id}"));
         }
 
         let server_name = self
@@ -659,7 +659,7 @@ impl McpManagerActor {
                 client
                     .start_external_server(external_config)
                     .await
-                    .map_err(|e| format!("Failed to start stdio server: {}", e))?;
+                    .map_err(|e| format!("Failed to start stdio server: {e}"))?;
             }
             McpTransportType::Http | McpTransportType::Sse => {
                 let url = config
@@ -685,7 +685,7 @@ impl McpManagerActor {
                 client
                     .start_remote_server(remote_config)
                     .await
-                    .map_err(|e| format!("Failed to start remote server: {}", e))?;
+                    .map_err(|e| format!("Failed to start remote server: {e}"))?;
             }
         }
 
@@ -941,7 +941,7 @@ impl McpManagerActor {
         // Load new config
         let mut new_config = McpPersistentConfig::load(&self.config_path)
             .await
-            .map_err(|e| format!("Failed to reload config: {}", e))?;
+            .map_err(|e| format!("Failed to reload config: {e}"))?;
         new_config.expand_env_vars();
 
         // Find servers to stop (in old config but not in new)

@@ -386,8 +386,7 @@ impl StateDatabase {
             CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
                 embedding float[{dim}]
             );
-            "#,
-            dim = dim
+            "#
         )
     }
 

@@ -125,9 +125,9 @@ fn find_in_dirs(bin_name: &str, search_path: &OsStr) -> Option<PathBuf> {
     for dir in std::env::split_paths(search_path) {
         let candidates: Vec<PathBuf> = if cfg!(target_os = "windows") {
             vec![
-                dir.join(format!("{}.exe", bin_name)),
-                dir.join(format!("{}.bat", bin_name)),
-                dir.join(format!("{}.cmd", bin_name)),
+                dir.join(format!("{bin_name}.exe")),
+                dir.join(format!("{bin_name}.bat")),
+                dir.join(format!("{bin_name}.cmd")),
                 dir.join(bin_name),
             ]
         } else {

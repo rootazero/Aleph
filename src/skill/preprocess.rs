@@ -257,7 +257,7 @@ async fn run_snippet(cmd: &str, ctx: &SkillPreprocessContext) -> String {
             }
             s
         }
-        Ok(Err(e)) => format!("[inline-shell error: {}]", e),
+        Ok(Err(e)) => format!("[inline-shell error: {e}]"),
         Err(_) => format!(
             "[inline-shell error: timed out after {}s]",
             ctx.timeout.as_secs()

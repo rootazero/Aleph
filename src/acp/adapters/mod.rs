@@ -45,15 +45,13 @@ pub(super) async fn run_oneshot_command(
         .await
         .map_err(|_| {
             AlephError::tool(format!(
-                "Harness '{}' timed out after {:?}",
-                harness_id, timeout
+                "Harness '{harness_id}' timed out after {timeout:?}"
             ))
         })?
         .map_err(|e| {
             AlephError::tool(format!(
-                "Failed to execute harness '{}' (executable: '{}'): {}. \
-                 Is the executable installed and in PATH?",
-                harness_id, executable, e
+                "Failed to execute harness '{harness_id}' (executable: '{executable}'): {e}. \
+                 Is the executable installed and in PATH?"
             ))
         })?;
 

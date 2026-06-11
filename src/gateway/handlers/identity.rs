@@ -95,7 +95,7 @@ pub async fn handle_get(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to serialize response: {}", e),
+            format!("Failed to serialize response: {e}"),
         ),
     }
 }
@@ -144,7 +144,7 @@ pub async fn handle_set(
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Invalid parameters: {}", e),
+                format!("Invalid parameters: {e}"),
             );
         }
     };
@@ -230,7 +230,7 @@ pub async fn handle_list(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to serialize response: {}", e),
+            format!("Failed to serialize response: {e}"),
         ),
     }
 }

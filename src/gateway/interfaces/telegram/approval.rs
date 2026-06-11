@@ -38,7 +38,7 @@ impl TelegramChannelApprovalCapability {
                     cmd.cwd.as_deref().unwrap_or("default")
                 );
                 if let Some(reason) = cmd.reason.as_deref().filter(|r| !r.is_empty()) {
-                    text.push_str(&format!("\n\n*Why:* {}", reason));
+                    text.push_str(&format!("\n\n*Why:* {reason}"));
                 }
                 text
             }

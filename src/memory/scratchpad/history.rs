@@ -35,13 +35,12 @@ impl SessionHistory {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)
                 .await
-                .map_err(|e| AlephError::other(format!("Failed to create history dir: {}", e)))?;
+                .map_err(|e| AlephError::other(format!("Failed to create history dir: {e}")))?;
         }
 
         let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S");
         let entry = format!(
-            "\n--- Archived: {} (Session: {}) ---\n{}\n",
-            timestamp, session_id, content
+            "\n--- Archived: {timestamp} (Session: {session_id}) ---\n{content}\n"
         );
 
         let mut file = OpenOptions::new()
@@ -49,15 +48,15 @@ impl SessionHistory {
             .append(true)
             .open(&self.path)
             .await
-            .map_err(|e| AlephError::other(format!("Failed to open history file: {}", e)))?;
+            .map_err(|e| AlephError::other(format!("Failed to open history file: {e}")))?;
 
         file.write_all(entry.as_bytes())
             .await
-            .map_err(|e| AlephError::other(format!("Failed to write history: {}", e)))?;
+            .map_err(|e| AlephError::other(format!("Failed to write history: {e}")))?;
 
         file.flush()
             .await
-            .map_err(|e| AlephError::other(format!("Failed to flush history: {}", e)))?;
+            .map_err(|e| AlephError::other(format!("Failed to flush history: {e}")))?;
 
         Ok(())
     }
@@ -67,7 +66,7 @@ impl SessionHistory {
         let content = match fs::read_to_string(&self.path).await {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(AlephError::other(format!("Failed to read history: {}", e))),
+            Err(e) => return Err(AlephError::other(format!("Failed to read history: {e}"))),
         };
 
         let entries: Vec<HistoryEntry> = content
@@ -112,8 +111,7 @@ impl SessionHistory {
             Ok(metadata) => Ok(metadata.len()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
             Err(e) => Err(AlephError::other(format!(
-                "Failed to get history metadata: {}",
-                e
+                "Failed to get history metadata: {e}"
             ))),
         }
     }
@@ -132,15 +130,14 @@ impl SessionHistory {
         if let Err(e) = fs::remove_file(&old_path).await {
             if e.kind() != std::io::ErrorKind::NotFound {
                 return Err(AlephError::other(format!(
-                    "Failed to remove old history: {}",
-                    e
+                    "Failed to remove old history: {e}"
                 )));
             }
         }
 
         fs::rename(&self.path, &old_path)
             .await
-            .map_err(|e| AlephError::other(format!("Failed to rotate history: {}", e)))?;
+            .map_err(|e| AlephError::other(format!("Failed to rotate history: {e}")))?;
 
         Ok(true)
     }

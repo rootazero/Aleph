@@ -105,7 +105,7 @@ pub fn build_summary_prompt(
     // System-level instruction and target length hint.
     prompt.push_str(instruction);
     prompt.push_str(IDENTIFIER_PRESERVATION);
-    prompt.push_str(&format!("\n\nTarget summary length: ~{} tokens.", target));
+    prompt.push_str(&format!("\n\nTarget summary length: ~{target} tokens."));
 
     // Inject previous context as a reminder if available.
     if let Some(ctx) = previous_context {
@@ -120,7 +120,7 @@ pub fn build_summary_prompt(
     prompt.push_str("\n\n--- Conversation ---");
     for (role, content) in messages {
         prompt.push('\n');
-        prompt.push_str(&format!("[{}]: {}", role, content));
+        prompt.push_str(&format!("[{role}]: {content}"));
     }
     prompt.push_str("\n--- End conversation ---");
 

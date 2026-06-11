@@ -311,7 +311,7 @@ impl ChannelFactory for NostrChannelFactory {
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let config: NostrConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid Nostr config: {}", e)))?;
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid Nostr config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 

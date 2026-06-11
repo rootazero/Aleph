@@ -155,7 +155,7 @@ async fn handle_webhook(
                 StatusCode::NOT_FOUND,
                 Json(WebhookRejected {
                     accepted: false,
-                    error: format!("Webhook '{}' not found", webhook_id),
+                    error: format!("Webhook '{webhook_id}' not found"),
                 }),
             )
                 .into_response();
@@ -266,7 +266,7 @@ async fn handle_webhook(
                 StatusCode::FORBIDDEN,
                 Json(WebhookRejected {
                     accepted: false,
-                    error: format!("Event type '{}' not allowed", event),
+                    error: format!("Event type '{event}' not allowed"),
                 }),
             )
                 .into_response();

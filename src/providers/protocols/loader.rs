@@ -53,12 +53,12 @@ impl ProtocolLoader {
     pub async fn load_from_file(path: &Path) -> Result<()> {
         // Read YAML file
         let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-            AlephError::invalid_config(format!("Failed to read protocol file {:?}: {}", path, e))
+            AlephError::invalid_config(format!("Failed to read protocol file {path:?}: {e}"))
         })?;
 
         // Parse as ProtocolDefinition
         let def: ProtocolDefinition = serde_yaml::from_str(&content).map_err(|e| {
-            AlephError::invalid_config(format!("Failed to parse protocol YAML {:?}: {}", path, e))
+            AlephError::invalid_config(format!("Failed to parse protocol YAML {path:?}: {e}"))
         })?;
 
         // Create ConfigurableProtocol
@@ -84,21 +84,19 @@ impl ProtocolLoader {
         // Check if directory exists
         if !dir.exists() {
             return Err(AlephError::invalid_config(format!(
-                "Protocol directory does not exist: {:?}",
-                dir
+                "Protocol directory does not exist: {dir:?}"
             )));
         }
 
         if !dir.is_dir() {
             return Err(AlephError::invalid_config(format!(
-                "Path is not a directory: {:?}",
-                dir
+                "Path is not a directory: {dir:?}"
             )));
         }
 
         // Read directory entries
         let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| {
-            AlephError::invalid_config(format!("Failed to read directory {:?}: {}", dir, e))
+            AlephError::invalid_config(format!("Failed to read directory {dir:?}: {e}"))
         })?;
 
         let mut loaded_count = 0;
@@ -106,7 +104,7 @@ impl ProtocolLoader {
 
         // Process each entry
         while let Some(entry) = entries.next_entry().await.map_err(|e| {
-            AlephError::invalid_config(format!("Failed to read directory entry: {}", e))
+            AlephError::invalid_config(format!("Failed to read directory entry: {e}"))
         })? {
             let path = entry.path();
 
@@ -243,14 +241,14 @@ impl ProtocolLoader {
                 }
             },
         )
-        .map_err(|e| AlephError::invalid_config(format!("Failed to create watcher: {}", e)))?;
+        .map_err(|e| AlephError::invalid_config(format!("Failed to create watcher: {e}")))?;
 
         // Watch directory non-recursively
         debouncer
             .watcher()
             .watch(&dir, RecursiveMode::NonRecursive)
             .map_err(|e| {
-                AlephError::invalid_config(format!("Failed to watch directory {:?}: {}", dir, e))
+                AlephError::invalid_config(format!("Failed to watch directory {dir:?}: {e}"))
             })?;
 
         info!(

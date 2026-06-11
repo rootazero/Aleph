@@ -42,7 +42,7 @@ impl NamespaceScope {
     pub fn to_namespace_value(&self) -> String {
         match self {
             NamespaceScope::Owner => "owner".to_string(),
-            NamespaceScope::Guest(guest_id) => format!("guest:{}", guest_id),
+            NamespaceScope::Guest(guest_id) => format!("guest:{guest_id}"),
             NamespaceScope::Shared => "shared".to_string(),
         }
     }

@@ -72,7 +72,7 @@ pub fn parse_generation_requests(response: &str) -> ParseResult {
         });
 
         // Replace the generation tag with a user-friendly message
-        let replacement = format!("🎨 正在使用 {} ({}) 生成: {}", provider, model, prompt);
+        let replacement = format!("🎨 正在使用 {provider} ({model}) 生成: {prompt}");
         // Use replacen to only replace the first occurrence, avoiding issues
         // when the same tag appears multiple times or replacement text contains similar patterns
         cleaned_response = cleaned_response.replacen(original_text, &replacement, 1);

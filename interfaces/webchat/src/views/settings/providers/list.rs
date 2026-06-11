@@ -78,7 +78,7 @@ pub(super) fn SubscriptionLoginSection(
                                 .unwrap_or_else(|| name.to_string());
                             selected.set(Some(actual_name));
                         } else {
-                            selected.set(Some(format!("__preset__{}", name)));
+                            selected.set(Some(format!("__preset__{name}")));
                         }
                     };
 
@@ -91,7 +91,7 @@ pub(super) fn SubscriptionLoginSection(
                                 let sel = selected.get();
                                 sel.as_deref() == Some(name)
                                     || sel.as_deref() == Some(canonical)
-                                    || sel.as_deref() == Some(&format!("__preset__{}", name))
+                                    || sel.as_deref() == Some(&format!("__preset__{name}"))
                             }
                             is_configured=move || {
                                 let connected = oauth_connected.get().unwrap_or(false);
@@ -157,7 +157,7 @@ pub(super) fn PresetGrid(
                             is_selected=move || {
                                 let sel = selected.get();
                                 sel.as_deref() == Some(name)
-                                    || sel.as_deref() == Some(&format!("__preset__{}", name))
+                                    || sel.as_deref() == Some(&format!("__preset__{name}"))
                             }
                             is_configured=move || providers.get().iter().any(|p| p.name == name)
                             dot=move || {
@@ -182,7 +182,7 @@ pub(super) fn PresetGrid(
                                 if providers.get().iter().any(|p| p.name == name) {
                                     selected.set(Some(name.to_string()));
                                 } else {
-                                    selected.set(Some(format!("__preset__{}", name)));
+                                    selected.set(Some(format!("__preset__{name}")));
                                 }
                             }
                         />

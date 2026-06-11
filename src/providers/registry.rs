@@ -85,8 +85,7 @@ impl ProviderRegistry {
     pub fn register(&mut self, name: String, provider: Arc<dyn AiProvider>) -> Result<()> {
         if self.providers.contains_key(&name) {
             return Err(AlephError::invalid_config(format!(
-                "Provider '{}' is already registered",
-                name
+                "Provider '{name}' is already registered"
             )));
         }
         self.providers.insert(name, provider);

@@ -21,7 +21,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         // Try to get existing session
         let existing: Option<SessionMetadata> = conn
@@ -64,7 +64,7 @@ impl SessionManager {
              VALUES (?, ?, ?, ?, ?, 'created')",
             params![&key_str, &agent_id, &session_type, now, now],
         )
-        .map_err(|e| SessionManagerError::DatabaseError(format!("Insert failed: {}", e)))?;
+        .map_err(|e| SessionManagerError::DatabaseError(format!("Insert failed: {e}")))?;
 
         debug!("Created session: {}", key_str);
 
@@ -126,7 +126,7 @@ impl SessionManager {
             let conn = self
                 .conn
                 .lock()
-                .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+                .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
             // Insert message
             conn.execute(
@@ -135,7 +135,7 @@ impl SessionManager {
                 params![&key_str, role, content, now, metadata, input_tokens, output_tokens],
             )
             .map_err(|e| {
-                SessionManagerError::DatabaseError(format!("Insert message failed: {}", e))
+                SessionManagerError::DatabaseError(format!("Insert message failed: {e}"))
             })?;
 
             let message_id = conn.last_insert_rowid();
@@ -260,16 +260,15 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let query = match limit {
             Some(n) => format!(
                 "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM (
                     SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens
                     FROM messages
-                    WHERE session_key = ? ORDER BY timestamp DESC LIMIT {}
-                ) ORDER BY timestamp ASC",
-                n
+                    WHERE session_key = ? ORDER BY timestamp DESC LIMIT {n}
+                ) ORDER BY timestamp ASC"
             ),
             None => "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM messages
                      WHERE session_key = ? ORDER BY timestamp ASC"
@@ -328,7 +327,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         // Mirror `get_history`'s windowing: take the most-recent `limit` rows
         // that satisfy the cursor (inner DESC LIMIT), then re-sort ASC for
@@ -338,9 +337,8 @@ impl SessionManager {
                 "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM (
                     SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens
                     FROM messages
-                    WHERE session_key = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT {}
-                ) ORDER BY timestamp ASC",
-                n
+                    WHERE session_key = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT {n}
+                ) ORDER BY timestamp ASC"
             ),
             None => "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM messages
                      WHERE session_key = ? AND timestamp < ? ORDER BY timestamp ASC"
@@ -380,7 +378,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         // Sync FTS5: remove entries before deleting messages
         conn.execute(
@@ -413,7 +411,7 @@ impl SessionManager {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         // Sync FTS5: remove entries before deleting messages
         conn.execute(

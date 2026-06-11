@@ -54,7 +54,7 @@ pub fn ChannelConfigTemplate(
 
     // Dynamic identifiers based on instance_id
     let channel_id: String = instance_id.clone();
-    let config_section: String = format!("channels.{}", instance_id);
+    let config_section: String = format!("channels.{instance_id}");
 
     // Extract top-level section and sub-key for config.get
     let (top_section, channel_sub_key): (String, String) = config_section
@@ -95,7 +95,7 @@ pub fn ChannelConfigTemplate(
                     }
                     Err(e) => {
                         web_sys::console::warn_1(
-                            &format!("Failed to load config for {}: {}", channel_id_for_load, e)
+                            &format!("Failed to load config for {channel_id_for_load}: {e}")
                                 .into(),
                         );
                         loading.set(false);
@@ -521,7 +521,7 @@ fn render_field(
             let has_key = move || -> bool {
                 field_values
                     .get()
-                    .get(&format!("has_{}", key))
+                    .get(&format!("has_{key}"))
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false)
             };

@@ -93,7 +93,7 @@ impl OpenAiWhisperProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         let resolved = resolved_url.unwrap_or_else(|| {
             let url = base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
@@ -131,15 +131,15 @@ impl OpenAiWhisperProvider {
                     .get(source)
                     .send()
                     .await
-                    .map_err(|e| GenerationError::network(format!("Failed to fetch audio: {}", e)))?
+                    .map_err(|e| GenerationError::network(format!("Failed to fetch audio: {e}")))?
                     .error_for_status()
                     .map_err(|e| {
-                        GenerationError::network(format!("Audio URL returned error: {}", e))
+                        GenerationError::network(format!("Audio URL returned error: {e}"))
                     })?
                     .bytes()
                     .await
                     .map_err(|e| {
-                        GenerationError::network(format!("Failed to read audio bytes: {}", e))
+                        GenerationError::network(format!("Failed to read audio bytes: {e}"))
                     })?
                     .to_vec();
                 let name = source
@@ -173,12 +173,12 @@ impl OpenAiWhisperProvider {
             429 => GenerationError::rate_limit("Rate limit exceeded", None),
             400 => GenerationError::invalid_parameters(body.to_string(), None),
             500..=599 => GenerationError::provider(
-                format!("OpenAI server error: {}", body),
+                format!("OpenAI server error: {body}"),
                 Some(status.as_u16()),
                 "openai-whisper",
             ),
             _ => GenerationError::provider(
-                format!("Whisper API error: {}", body),
+                format!("Whisper API error: {body}"),
                 Some(status.as_u16()),
                 "openai-whisper",
             ),
@@ -206,8 +206,7 @@ impl GenerationProvider for OpenAiWhisperProvider {
             if size > MAX_AUDIO_BYTES {
                 return Err(GenerationError::invalid_parameters(
                     format!(
-                        "Audio file too large: {} bytes (Whisper limit: {} bytes)",
-                        size, MAX_AUDIO_BYTES
+                        "Audio file too large: {size} bytes (Whisper limit: {MAX_AUDIO_BYTES} bytes)"
                     ),
                     Some("audio_size".to_string()),
                 ));
@@ -224,7 +223,7 @@ impl GenerationProvider for OpenAiWhisperProvider {
                 .mime_str(&mime_hint)
                 .map_err(|e| {
                     GenerationError::invalid_parameters(
-                        format!("Invalid mime type for audio: {}", e),
+                        format!("Invalid mime type for audio: {e}"),
                         Some("mime_type".to_string()),
                     )
                 })?;
@@ -256,7 +255,7 @@ impl GenerationProvider for OpenAiWhisperProvider {
                     if e.is_timeout() {
                         GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
                     } else if e.is_connect() {
-                        GenerationError::network(format!("Connection failed: {}", e))
+                        GenerationError::network(format!("Connection failed: {e}"))
                     } else {
                         GenerationError::network(e.to_string())
                     }
@@ -265,7 +264,7 @@ impl GenerationProvider for OpenAiWhisperProvider {
             let status = response.status();
             if !status.is_success() {
                 let body = response.text().await.map_err(|e| {
-                    GenerationError::network(format!("Failed to read error body: {}", e))
+                    GenerationError::network(format!("Failed to read error body: {e}"))
                 })?;
                 error!(status = %status, body = %body, "Whisper API request failed");
                 return Err(self.parse_error(status, &body));
@@ -273,7 +272,7 @@ impl GenerationProvider for OpenAiWhisperProvider {
 
             let whisper: types::WhisperResponse = response.json().await.map_err(|e| {
                 GenerationError::provider(
-                    format!("Failed to parse Whisper response: {}", e),
+                    format!("Failed to parse Whisper response: {e}"),
                     None,
                     "openai-whisper",
                 )
@@ -390,7 +389,7 @@ fn decode_data_url(rest: &str) -> GenerationResult<(Vec<u8>, String, String)> {
             .decode(payload)
             .map_err(|e| {
                 GenerationError::invalid_parameters(
-                    format!("Failed to base64-decode audio data URL: {}", e),
+                    format!("Failed to base64-decode audio data URL: {e}"),
                     Some("reference_audio".to_string()),
                 )
             })?
@@ -398,5 +397,5 @@ fn decode_data_url(rest: &str) -> GenerationResult<(Vec<u8>, String, String)> {
         payload.as_bytes().to_vec()
     };
     let extension = mime.rsplit('/').next().unwrap_or("bin");
-    Ok((bytes, format!("audio.{}", extension), mime))
+    Ok((bytes, format!("audio.{extension}"), mime))
 }

@@ -68,10 +68,10 @@ impl ShutdownContext {
             format!("ppid={}", self.ppid),
         ];
         if let Some(u) = self.uptime_secs {
-            parts.push(format!("uptime_secs={}", u));
+            parts.push(format!("uptime_secs={u}"));
         }
         if let Some(s) = self.signal_num {
-            parts.push(format!("signal_num={}", s));
+            parts.push(format!("signal_num={s}"));
         }
         if let Some(ref c) = self.parent_command {
             // Replace spaces with `_` so the line stays grep-tokenizable.
@@ -87,7 +87,7 @@ impl ShutdownContext {
                     .unwrap_or(0);
                 c.truncate(end);
             }
-            parts.push(format!("parent={}", c));
+            parts.push(format!("parent={c}"));
         }
         format!("[SHUTDOWN] {}", parts.join(" "))
     }

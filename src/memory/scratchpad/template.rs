@@ -38,7 +38,7 @@ pub fn generate_scratchpad(objective: Option<&str>, session_id: &str) -> String 
         r#"# Current Task
 
 ## Objective
-{}
+{obj}
 
 ## Plan
 - [ ] ...
@@ -50,10 +50,9 @@ pub fn generate_scratchpad(objective: Option<&str>, session_id: &str) -> String 
 
 
 ---
-_Last updated: {}_
-_Session: {}_
-"#,
-        obj, now, session_id
+_Last updated: {now}_
+_Session: {session_id}_
+"#
     )
 }
 

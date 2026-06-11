@@ -105,7 +105,7 @@ pub fn parse_template(content: &str) -> Result<ParsedTemplate> {
 
     let frontmatter: TeamTemplate =
         serde_yaml::from_str(yaml_str).map_err(|e| AlephError::Other {
-            message: format!("Failed to parse template YAML frontmatter: {}", e),
+            message: format!("Failed to parse template YAML frontmatter: {e}"),
             suggestion: Some("Check the frontmatter for YAML syntax errors".to_string()),
         })?;
 
@@ -128,7 +128,7 @@ pub fn substitute_variables(text: &str, variables: &HashMap<String, String>) -> 
     let mut sorted_vars: Vec<(&String, &String)> = variables.iter().collect();
     sorted_vars.sort_by_key(|(k, _)| k.as_str());
     for (key, value) in sorted_vars {
-        let placeholder = format!("{{{}}}", key);
+        let placeholder = format!("{{{key}}}");
         result = result.replace(&placeholder, value);
     }
     result
@@ -147,7 +147,7 @@ pub fn find_template(name: &str) -> Result<String> {
     // Reject plugin-namespaced names for now
     if name.contains(':') {
         return Err(AlephError::Other {
-            message: format!("Plugin-namespaced template '{}' is not yet supported", name),
+            message: format!("Plugin-namespaced template '{name}' is not yet supported"),
             suggestion: Some("Use a plain template name from ~/.aleph/templates/".to_string()),
         });
     }
@@ -160,11 +160,11 @@ pub fn find_template(name: &str) -> Result<String> {
     let path = home
         .join(".aleph")
         .join("templates")
-        .join(format!("{}.md", name));
+        .join(format!("{name}.md"));
 
     if path.exists() {
         std::fs::read_to_string(&path)
-            .map_err(|e| AlephError::IoError(format!("Failed to read template '{}': {}", name, e)))
+            .map_err(|e| AlephError::IoError(format!("Failed to read template '{name}': {e}")))
     } else {
         Err(AlephError::NotFound(format!(
             "Template '{}' not found at {}",

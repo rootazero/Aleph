@@ -156,7 +156,7 @@ pub fn parse_cc_plugin_json_content(
     let manifest_path = plugin_dir.join(CC_PLUGIN_JSON);
 
     let json: CcPluginJson = serde_json::from_str(content).map_err(|e| {
-        ExtensionError::invalid_manifest(&manifest_path, format!("JSON parse error: {}", e))
+        ExtensionError::invalid_manifest(&manifest_path, format!("JSON parse error: {e}"))
     })?;
 
     // `name` is required
@@ -177,7 +177,7 @@ pub fn parse_cc_plugin_json_content(
         let aleph_ext: AlephExtensions = serde_json::from_value(aleph_val).map_err(|e| {
             ExtensionError::invalid_manifest(
                 &manifest_path,
-                format!("Invalid [aleph] section: {}", e),
+                format!("Invalid [aleph] section: {e}"),
             )
         })?;
 
@@ -285,7 +285,7 @@ impl ManifestAdapter for ClaudeCodeJsonAdapter {
 
     fn parse(&self, plugin_dir: &Path) -> anyhow::Result<AdapterOutput> {
         let manifest = parse_cc_plugin_json_sync(plugin_dir)
-            .map_err(|e| anyhow::anyhow!("CC JSON parse error: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("CC JSON parse error: {e}"))?;
 
         let plugin_id = manifest.id.clone();
         let mut capabilities = Vec::new();
@@ -294,7 +294,7 @@ impl ManifestAdapter for ClaudeCodeJsonAdapter {
         let json_path = plugin_dir.join(CC_PLUGIN_JSON);
         let content = std::fs::read_to_string(&json_path)?;
         let raw: CcPluginJson = serde_json::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("JSON re-parse error: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("JSON re-parse error: {e}"))?;
 
         // Parse skills
         let skills_rel = raw.skills.as_deref().unwrap_or("skills");

@@ -188,7 +188,7 @@ impl SearchTool {
             .json(&request_body)
             .send()
             .await
-            .map_err(|e| ToolError::Network(format!("Failed to send request: {}", e)))?;
+            .map_err(|e| ToolError::Network(format!("Failed to send request: {e}")))?;
 
         // Check response status
         let status = response.status();
@@ -197,14 +197,14 @@ impl SearchTool {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            let error_msg = format!("Tavily API returned status {}: {}", status, error_text);
+            let error_msg = format!("Tavily API returned status {status}: {error_text}");
             notify_tool_result(Self::NAME, &error_msg, false);
             return Err(ToolError::Execution(error_msg));
         }
 
         // Parse response
         let tavily_response: TavilyResponse = response.json().await.map_err(|e| {
-            let error_msg = format!("Failed to parse response: {}", e);
+            let error_msg = format!("Failed to parse response: {e}");
             notify_tool_result(Self::NAME, &error_msg, false);
             ToolError::Execution(error_msg)
         })?;

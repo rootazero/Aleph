@@ -241,7 +241,7 @@ fn BotIdentitySection(bot_identity: RwSignal<Option<BotIdentity>>) -> impl IntoV
                                     // Online status dot
                                     <span class={
                                         let color = if bot.is_online { "bg-green-500" } else { "bg-gray-400" };
-                                        format!("absolute bottom-0 right-0 w-4 h-4 rounded-full border-2 border-white {}", color)
+                                        format!("absolute bottom-0 right-0 w-4 h-4 rounded-full border-2 border-white {color}")
                                     }></span>
                                 </div>
 
@@ -356,8 +356,7 @@ fn TokenSection(
 
                     let avatar_url = if !avatar.is_empty() && !id.is_empty() {
                         format!(
-                            "https://cdn.discordapp.com/avatars/{}/{}.png?size=128",
-                            id, avatar
+                            "https://cdn.discordapp.com/avatars/{id}/{avatar}.png?size=128"
                         )
                     } else {
                         String::new()
@@ -393,8 +392,7 @@ fn TokenSection(
                                         let gid =
                                             g.get("id").and_then(|v| v.as_str()).unwrap_or("0");
                                         format!(
-                                            "https://cdn.discordapp.com/icons/{}/{}.png?size=64",
-                                            gid, icon
+                                            "https://cdn.discordapp.com/icons/{gid}/{icon}.png?size=64"
                                         )
                                     }),
                                     member_count: g
@@ -407,15 +405,14 @@ fn TokenSection(
                         }
                         Err(e) => {
                             error.set(Some(format!(
-                                "Token valid, but failed to fetch guilds: {}",
-                                e
+                                "Token valid, but failed to fetch guilds: {e}"
                             )));
                         }
                     }
                     loading_guilds.set(false);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Token validation failed: {}", e)));
+                    error.set(Some(format!("Token validation failed: {e}")));
                     bot_identity.set(None);
                 }
             }
@@ -515,8 +512,7 @@ fn GuildSection(
                             icon_url: g.get("icon").and_then(|v| v.as_str()).map(|icon| {
                                 let gid = g.get("id").and_then(|v| v.as_str()).unwrap_or("0");
                                 format!(
-                                    "https://cdn.discordapp.com/icons/{}/{}.png?size=64",
-                                    gid, icon
+                                    "https://cdn.discordapp.com/icons/{gid}/{icon}.png?size=64"
                                 )
                             }),
                             member_count: g
@@ -528,7 +524,7 @@ fn GuildSection(
                     guilds.set(parsed);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to refresh guilds: {}", e)));
+                    error.set(Some(format!("Failed to refresh guilds: {e}")));
                 }
             }
             loading_guilds.set(false);
@@ -567,7 +563,7 @@ fn GuildSection(
                                     5 => "Announcement".to_string(),
                                     13 => "Stage".to_string(),
                                     15 => "Forum".to_string(),
-                                    _ => format!("Type {}", kind_val),
+                                    _ => format!("Type {kind_val}"),
                                 }
                             },
                             checked: false,
@@ -576,7 +572,7 @@ fn GuildSection(
                     channels.set(parsed);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to load channels: {}", e)));
+                    error.set(Some(format!("Failed to load channels: {e}")));
                 }
             }
             loading_channels.set(false);
@@ -642,7 +638,7 @@ fn GuildSection(
                     overall_health.set(health);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to audit permissions: {}", e)));
+                    error.set(Some(format!("Failed to audit permissions: {e}")));
                 }
             }
             loading_permissions.set(false);
@@ -735,7 +731,7 @@ fn GuildSection(
                                                     {members.map(|m| {
                                                         view! {
                                                             <div class="text-xs text-text-tertiary">
-                                                                {format!("{} members", m)}
+                                                                {format!("{m} members")}
                                                             </div>
                                                         }
                                                     })}
@@ -925,7 +921,7 @@ fn PermissionAuditSection(
                                     view! {
                                         <div class="flex items-center gap-3 px-4 py-3 bg-surface-sunken rounded-lg">
                                             // Traffic light dot
-                                            <span class={format!("w-2.5 h-2.5 rounded-full flex-shrink-0 {}", dot_color)}></span>
+                                            <span class={format!("w-2.5 h-2.5 rounded-full flex-shrink-0 {dot_color}")}></span>
                                             // Permission name
                                             <div class="flex-1 min-w-0">
                                                 <span class="text-sm font-medium text-text-primary">{perm_name}</span>
@@ -938,7 +934,7 @@ fn PermissionAuditSection(
                                                 }}
                                             </div>
                                             // Status label
-                                            <span class={format!("text-xs font-medium {}", text_color)}>
+                                            <span class={format!("text-xs font-medium {text_color}")}>
                                                 {status_label}
                                             </span>
                                         </div>

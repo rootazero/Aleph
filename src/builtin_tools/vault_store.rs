@@ -91,7 +91,7 @@ impl AlephTool for VaultStoreTool {
                     .map_err(|e| crate::error::AlephError::tool(e.to_string()))?;
                 VaultStoreOutput {
                     success: true,
-                    message: format!("Secret '{}' stored successfully", key),
+                    message: format!("Secret '{key}' stored successfully"),
                     keys: None,
                 }
             }
@@ -106,9 +106,9 @@ impl AlephTool for VaultStoreTool {
                 VaultStoreOutput {
                     success: deleted,
                     message: if deleted {
-                        format!("Secret '{}' deleted", key)
+                        format!("Secret '{key}' deleted")
                     } else {
-                        format!("Secret '{}' not found", key)
+                        format!("Secret '{key}' not found")
                     },
                     keys: None,
                 }

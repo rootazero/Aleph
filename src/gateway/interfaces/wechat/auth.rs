@@ -24,12 +24,12 @@ impl ContextTokenStore {
     }
 
     fn key(account_id: &str, user_id: &str) -> String {
-        format!("{}:{}", account_id, user_id)
+        format!("{account_id}:{user_id}")
     }
 
     fn cache_path(&self, account_id: &str) -> std::path::PathBuf {
         self.root
-            .join(format!("{}.context-tokens.json", account_id))
+            .join(format!("{account_id}.context-tokens.json"))
     }
 
     /// Get context token for a user.
@@ -57,7 +57,7 @@ impl ContextTokenStore {
             if let Ok(data) = serde_json::from_str::<HashMap<String, String>>(&content) {
                 let mut cache = self.cache.write().await;
                 for (user_id, token) in data {
-                    cache.insert(format!("{}:{}", account_id, user_id), token);
+                    cache.insert(format!("{account_id}:{user_id}"), token);
                 }
             }
         }
@@ -66,7 +66,7 @@ impl ContextTokenStore {
     async fn persist(&self, account_id: &str) {
         let cache = self.cache.read().await;
         let mut payload = HashMap::new();
-        let prefix = format!("{}:", account_id);
+        let prefix = format!("{account_id}:");
         for (key, value) in cache.iter() {
             if key.starts_with(&prefix) {
                 payload.insert(key[prefix.len()..].to_string(), value.clone());

@@ -218,8 +218,7 @@ pub fn verify_plugin_integrity(
     let actual = format!("{:x}", hasher.finalize());
     if actual != expected {
         return Err(format!(
-            "Plugin integrity check failed: expected {}, got {}",
-            expected, actual
+            "Plugin integrity check failed: expected {expected}, got {actual}"
         ));
     }
 

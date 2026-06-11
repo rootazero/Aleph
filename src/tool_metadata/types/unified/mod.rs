@@ -265,7 +265,7 @@ impl UnifiedTool {
     /// ID is automatically prefixed with "builtin:".
     pub fn builtin(name: impl Into<String>) -> Self {
         let name = name.into();
-        let id = format!("builtin:{}", name);
+        let id = format!("builtin:{name}");
         Self::new(id, name, "", ToolSource::Builtin).with_builtin(true)
     }
 }

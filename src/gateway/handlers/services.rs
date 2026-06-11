@@ -105,7 +105,7 @@ pub async fn handle_start(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to start service: {}", e),
+            format!("Failed to start service: {e}"),
         ),
     }
 }
@@ -163,7 +163,7 @@ pub async fn handle_stop(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to stop service: {}", e),
+            format!("Failed to stop service: {e}"),
         ),
     }
 }
@@ -209,7 +209,7 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
+                    format!("Invalid params: {e}"),
                 );
             }
         },

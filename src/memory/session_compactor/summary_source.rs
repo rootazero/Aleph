@@ -110,8 +110,7 @@ impl SessionSummarySource {
         }
 
         let summary_msg = UnifiedMessage::user(format!(
-            "[Context Summary (from session memory)]\n{}",
-            assembled
+            "[Context Summary (from session memory)]\n{assembled}"
         ));
 
         messages.drain(window_start..cut_end);

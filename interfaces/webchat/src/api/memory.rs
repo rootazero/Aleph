@@ -99,7 +99,7 @@ impl MemoryApi {
 
         // Backend returns {"memories": [MemoryEntry...]}
         let response: BackendSearchResponse = serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse search results: {}", e))?;
+            .map_err(|e| format!("Failed to parse search results: {e}"))?;
 
         // Map backend entries to RawMemory
         let facts = response
@@ -158,7 +158,7 @@ impl MemoryApi {
         let result = state.rpc_call("memory.listFacts", params).await?;
 
         let response: BackendListFactsResponse =
-            serde_json::from_value(result).map_err(|e| format!("Failed to parse facts: {}", e))?;
+            serde_json::from_value(result).map_err(|e| format!("Failed to parse facts: {e}"))?;
 
         Ok(response.facts)
     }
@@ -167,7 +167,7 @@ impl MemoryApi {
     pub async fn stats(state: &DashboardState) -> Result<MemoryStats, String> {
         let result = state.rpc_call("memory.stats", Value::Null).await?;
 
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse stats: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse stats: {e}"))
     }
 }
 
@@ -180,5 +180,5 @@ fn format_timestamp_secs(ts: i64) -> String {
     let day = date.get_date();
     let hour = date.get_hours();
     let min = date.get_minutes();
-    format!("{:04}-{:02}-{:02} {:02}:{:02}", year, month, day, hour, min)
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{min:02}")
 }

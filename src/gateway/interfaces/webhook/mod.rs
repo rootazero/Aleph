@@ -269,7 +269,7 @@ impl ChannelFactory for WebhookChannelFactory {
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let config: WebhookChannelConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid Webhook config: {}", e)))?;
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid Webhook config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 

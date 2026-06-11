@@ -81,9 +81,9 @@ impl RuntimeContext {
                 let hours = secs / 3600;
                 let mins = (secs.abs() % 3600) / 60;
                 if mins == 0 {
-                    format!("UTC{:+}", hours)
+                    format!("UTC{hours:+}")
                 } else {
-                    format!("UTC{:+}:{:02}", hours, mins)
+                    format!("UTC{hours:+}:{mins:02}")
                 }
             })
         };

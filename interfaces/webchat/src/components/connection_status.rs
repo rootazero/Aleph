@@ -80,7 +80,7 @@ pub fn ConnectionStatus() -> impl IntoView {
     // attempt counter; Failed surfaces the underlying error verbatim (it
     // already comes from WebSocket/network layer in English, no i18n).
     let detail_text = move || match phase.get() {
-        ConnectionPhase::Reconnecting { attempt, max } => Some(format!("{}/{}", attempt, max)),
+        ConnectionPhase::Reconnecting { attempt, max } => Some(format!("{attempt}/{max}")),
         ConnectionPhase::Failed { reason } => Some(reason),
         _ => None,
     };

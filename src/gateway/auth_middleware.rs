@@ -123,8 +123,7 @@ async fn handle_bootstrap_consume(
     };
     let max_age = state.session_mgr.expiry_hours() * 3600;
     let cookie = format!(
-        "aleph_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
-        session_id, max_age,
+        "aleph_session={session_id}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}",
     );
     tracing::info!("bootstrap nonce consumed; session cookie issued");
     (
@@ -190,7 +189,7 @@ async fn handle_anonymous_rpc(
         other => crate::gateway::protocol::JsonRpcResponse::error(
             req.id.clone(),
             -32601,
-            format!("method '{}' not allowed via /rpc; use /ws", other),
+            format!("method '{other}' not allowed via /rpc; use /ws"),
         ),
     };
     Json(response).into_response()
@@ -213,7 +212,7 @@ pub fn pair_page_html(prefilled_code: Option<&str>) -> String {
     let prefill_js = match prefilled_code {
         Some(c) => {
             let safe: String = c.chars().filter(char::is_ascii_alphanumeric).collect();
-            format!("var prefilled = '{}';", safe)
+            format!("var prefilled = '{safe}';")
         }
         None => "var prefilled = null;".to_string(),
     };
