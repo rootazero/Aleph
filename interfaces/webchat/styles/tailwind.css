@@ -157,9 +157,9 @@
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left:   env(safe-area-inset-left, 0px);
 
-  /* Tiered blur strengths. Small in-content frosts and the full-viewport
-     scrim are deliberately light and stay global here.
-     Per-material values live in the material primitive blocks below; the subtle + scrim tiers stay global. */
+  /* Tiered blur strengths. The subtle in-content frost and full-viewport
+     scrim stay global here; the lush/chrome tiers are per-material (see
+     primitive blocks). */
   --glass-blur-subtle: 8px;
   --scrim-blur: 2px;
 }
@@ -547,7 +547,10 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
   --mat-sheen: oklch(1 0 0 / 0.72);
   /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
   --mat-raised: oklch(1.00 0 0 / 0.55);
-  --mat-grain: 0.10;
+  /* canvas grain CSS opacity over a FULL-strength noise SVG — effective alpha
+     equals this token. Legacy hardcoded grain was 0.025/0.05; luxe deepens it
+     slightly. */
+  --mat-grain: 0.035;
   --mat-fill-chrome: 78%;
   --mat-chrome-topline: oklch(1 0 0 / 0);
   /* popover (.glass) specular edge + grain */
@@ -581,7 +584,7 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
   --mat-glow-counter: color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
   --mat-sheen: oklch(1 0 0 / 0.05);
   --mat-raised: oklch(0.26 0.018 300 / 0.45);
-  --mat-grain: 0.16;
+  --mat-grain: 0.06;
   --mat-fill-chrome: 78%;
   --mat-chrome-topline: oklch(1 0 0 / 0);
   --mat-pop-spec-hi: oklch(1 0 0 / 0.40);
@@ -619,7 +622,7 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
     --mat-glow-counter: color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
     --mat-sheen: oklch(1 0 0 / 0.05);
     --mat-raised: oklch(0.26 0.018 300 / 0.45);
-    --mat-grain: 0.16;
+    --mat-grain: 0.06;
     --mat-fill-chrome: 78%;
     --mat-chrome-topline: oklch(1 0 0 / 0);
     --mat-pop-spec-hi: oklch(1 0 0 / 0.40);
@@ -632,7 +635,9 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
 /* ── Derived surface tokens — defined ONCE; all themes/materials flow
       through the primitives above. All theme classes live on <html>, so
       single-element cascade resolution makes the var() substitution pick
-      up each material/brightness block automatically. ── */
+      up each material/brightness block automatically.
+      (atmosphere tokens have their own derivation block further down —
+      search "Atmosphere tokens — derived") ── */
 :root {
   --msg-glass-bg: color-mix(in oklch, var(--mat-ink-raise) var(--mat-fill-bubble), transparent);
   --msg-glass-sheen: linear-gradient(160deg, var(--mat-bubble-sheen), transparent 42%);
@@ -731,8 +736,10 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
   }
   .aleph-sidebar { background-color: var(--color-sidebar) !important; }
   /* Kill the primitives at the source: every material collapses to solid.
-     `:root, :root[data-material]` matches the material blocks' specificity;
-     this media block stays LAST in the theme cascade so it wins. */
+     !important here beats any non-!important material or theme block
+     regardless of specificity or position. `:root[data-material]` also
+     covers the data-material attribute blocks so they can't re-supply
+     values via the normal cascade. */
   :root, :root[data-material] {
     --aleph-canvas-base: var(--aleph-solid-ground) !important;
     --mat-raised: oklch(1.00 0 0) !important;
@@ -741,6 +748,7 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
     --glass-blur: 0px !important;
     --glass-blur-subtle: 0px !important;
     --glass-blur-chrome: 0px !important;
+    --glass-saturate: 1 !important;
   }
   .dark, .dark[data-material] { --mat-raised: oklch(0.20 0.018 310) !important; }
   /* Message-flow faux glass → opaque solids. */
@@ -984,11 +992,13 @@ html.theme-switching::view-transition-new(root) {
 /* ════════════════════════════════════════════════════════════
    Aleph Atmosphere
    Codex's two-column structure married to a Gemini-style
-   light-field: a slow, accent-aware gradient drifts behind every
+   light-field: a static accent-aware light-field sits behind every
    surface while glossy materials float on top.
    ════════════════════════════════════════════════════════════ */
 
-/* --- Atmosphere tokens — derived once from the material primitives --- */
+/* --- Atmosphere tokens — derived once from the material primitives
+       (message-surface tokens derive in their own block above — search
+       "Derived surface tokens") --- */
 :root {
   --aleph-solid-ground: var(--mat-solid-ground);
   --aleph-canvas-base: var(--mat-canvas-base);
@@ -1033,7 +1043,10 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
 /* Static fine grain over the canvas — painted once, zero per-frame cost.
    Two jobs: (1) gives the chrome backdrop-blur visible structure to frost
    (the grain gets iced flat under sidebar/composer — the frosted-vs-clear
-   differential finally shows), (2) dithers gradient banding on the aurora. */
+   differential finally shows), (2) dithers gradient banding on the aurora.
+   SVG is the seamless 180×180 canvas tile at FULL strength — NOT the popover
+   tile used by .glass::after, which has 0.035 baked into its rect — so the
+   effective alpha equals --mat-grain alone. */
 .aleph-shell::after {
   content: "";
   position: fixed;
@@ -1041,7 +1054,7 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
   z-index: -1;
   pointer-events: none;
   opacity: var(--mat-grain);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 /* --- Glossy sidebar — a soft, accent-tinted column (Codex) --- */
