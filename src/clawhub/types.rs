@@ -261,7 +261,7 @@ pub struct SkillStats {
 
 impl From<BrowseSkill> for SkillSearchResult {
     fn from(s: BrowseSkill) -> Self {
-        let (downloads, stars) = s.stats.map(|s| (s.downloads, s.stars)).unwrap_or((0, 0));
+        let (downloads, stars) = s.stats.map_or((0, 0), |s| (s.downloads, s.stars));
         Self {
             slug: s.slug,
             name: s.display_name,

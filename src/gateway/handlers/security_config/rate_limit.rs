@@ -98,8 +98,7 @@ pub(super) fn read_sandbox_rate_limit_from_toml(
                     ) -> u32 {
                         t.get(key)
                             .and_then(|v| v.as_integer())
-                            .map(|v| v as u32)
-                            .unwrap_or(default)
+                            .map_or(default, |v| v as u32)
                     }
                     fn get_u64(
                         t: &toml::map::Map<String, toml::Value>,
@@ -108,8 +107,7 @@ pub(super) fn read_sandbox_rate_limit_from_toml(
                     ) -> u64 {
                         t.get(key)
                             .and_then(|v| v.as_integer())
-                            .map(|v| v as u64)
-                            .unwrap_or(default)
+                            .map_or(default, |v| v as u64)
                     }
                     fn get_window(
                         t: &toml::map::Map<String, toml::Value>,

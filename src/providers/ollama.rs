@@ -173,9 +173,7 @@ impl OllamaProvider {
         // Build API endpoint
         let base_url = config
             .base_url
-            .as_ref()
-            .map(|s| s.trim_end_matches('/').to_string())
-            .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string());
+            .as_ref().map_or_else(|| DEFAULT_OLLAMA_URL.to_string(), |s| s.trim_end_matches('/').to_string());
         let endpoint = format!("{base_url}/api/chat");
 
         info!(

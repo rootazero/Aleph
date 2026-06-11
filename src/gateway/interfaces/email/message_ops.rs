@@ -467,7 +467,7 @@ impl EmailMessageOps {
             let after_fence = &rest[fence_start + 3..];
 
             // Skip optional language tag
-            let code_start = after_fence.find('\n').map(|n| n + 1).unwrap_or(0);
+            let code_start = after_fence.find('\n').map_or(0, |n| n + 1);
             let code_body = &after_fence[code_start..];
 
             if let Some(close) = code_body.find("```") {

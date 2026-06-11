@@ -234,8 +234,7 @@ impl FailoverHealth {
                 };
                 let cooldown_remaining_secs = (st.circuit == CircuitState::Open).then(|| {
                     st.last_failure
-                        .map(|at| st.cooldown.saturating_sub(at.elapsed()).as_secs())
-                        .unwrap_or(0)
+                        .map_or(0, |at| st.cooldown.saturating_sub(at.elapsed()).as_secs())
                 });
                 ProviderHealthView {
                     provider: name.clone(),
@@ -953,8 +952,7 @@ impl FailoverProvider {
             .read()
             .await
             .get(name)
-            .map(|h| h.circuit == CircuitState::Open)
-            .unwrap_or(false)
+            .is_some_and(|h| h.circuit == CircuitState::Open)
     }
 }
 

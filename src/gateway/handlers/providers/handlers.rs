@@ -631,7 +631,7 @@ async fn set_default_provider_inner(
         provider_config_for_swap = if multi_registry.is_some() {
             cfg.providers.get(&name).map(|pc| {
                 let mut pc = pc.clone();
-                if pc.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
+                if pc.api_key.as_ref().map_or(true, |k| k.is_empty()) {
                     if let Some(v) = vault {
                         pc.api_key = resolve_api_key(&name, v);
                     }
@@ -759,14 +759,12 @@ pub async fn handle_catalog(
             let cfg = config_guard.providers.get(entry.name);
             let api_key = resolve_api_key(entry.name, &vault);
             let has_api_key = api_key.is_some() || cfg.and_then(|c| c.api_key.as_ref()).is_some();
-            let verified = cfg.map(|c| c.verified).unwrap_or(false);
-            let enabled = cfg.map(|c| c.enabled).unwrap_or(false);
+            let verified = cfg.is_some_and(|c| c.verified);
+            let enabled = cfg.is_some_and(|c| c.enabled);
             let models = cfg.map(|c| c.models.clone()).unwrap_or_default();
 
             let display_name = preset
-                .display_name
-                .map(String::from)
-                .unwrap_or_else(|| entry.name.to_string());
+                .display_name.map_or_else(|| entry.name.to_string(), String::from);
 
             // Per-model metadata for the default model. Best-effort: both
             // resolve to `None` for unknown/unpriced families, leaving the

@@ -149,8 +149,7 @@ impl EventEmitter for ReplyEmitter {
                                     let char_boundary = text
                                         .char_indices()
                                         .nth(overflow_threshold)
-                                        .map(|(i, _)| i)
-                                        .unwrap_or(text.len());
+                                        .map_or(text.len(), |(i, _)| i);
                                     let (head, tail) = text.split_at(char_boundary);
 
                                     // Edit current message with head (clean, no cursor)

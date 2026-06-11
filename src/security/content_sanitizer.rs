@@ -347,8 +347,7 @@ fn detect_injection_patterns(content: &str) -> Vec<InjectionPattern> {
             let offset = content
                 .char_indices()
                 .nth(char_idx)
-                .map(|(idx, _)| idx)
-                .unwrap_or(content.len());
+                .map_or(content.len(), |(idx, _)| idx);
             patterns.push(InjectionPattern {
                 pattern_type: "instruction_override",
                 offset,

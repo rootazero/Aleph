@@ -117,8 +117,7 @@ impl InFlightToolCalls {
     ) -> InFlightGuard {
         let started_at_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_millis() as u64);
         let guard_id = NEXT_GUARD_ID.fetch_add(1, Ordering::Relaxed);
         let entry = InFlightEntry {
             tool_name: tool_name.to_string(),

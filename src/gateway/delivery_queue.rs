@@ -119,8 +119,7 @@ pub fn should_enqueue(err: &ChannelError) -> bool {
 pub fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 /// Deterministic exponential backoff: `min(initial * factor^attempt, max)`.
@@ -311,7 +310,7 @@ impl DeliveryStore {
 
     /// `true` when the store holds no pending deliveries.
     pub fn is_empty(&self) -> bool {
-        self.len().map(|n| n == 0).unwrap_or(true)
+        self.len().map_or(true, |n| n == 0)
     }
 }
 

@@ -227,7 +227,7 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        let end = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
+        let end = s.char_indices().nth(max).map_or(s.len(), |(i, _)| i);
         format!("{}...", &s[..end])
     }
 }

@@ -69,8 +69,7 @@ impl SkillStatusEntry {
     ) -> Self {
         let disabled = entry_config
             .and_then(|c| c.enabled)
-            .map(|e| !e)
-            .unwrap_or(false);
+            .is_some_and(|e| !e);
 
         let scope = entry_config
             .and_then(|c| c.scope_override.clone())

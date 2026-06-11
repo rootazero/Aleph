@@ -260,11 +260,11 @@ pub fn sweep_stale_carryovers(dir: &Path, cutoff: Duration) -> usize {
         // user-placed folder never gets purged, and skip leftover .tmp
         // files (a write that crashed mid-rename) — leave those for an
         // operator to inspect.
-        let is_file = entry.file_type().map(|ft| ft.is_file()).unwrap_or(false);
+        let is_file = entry.file_type().is_ok_and(|ft| ft.is_file());
         if !is_file {
             continue;
         }
-        let is_json = path.extension().map(|ext| ext == "json").unwrap_or(false);
+        let is_json = path.extension().is_some_and(|ext| ext == "json");
         if !is_json {
             continue;
         }
@@ -272,8 +272,7 @@ pub fn sweep_stale_carryovers(dir: &Path, cutoff: Duration) -> usize {
             .metadata()
             .ok()
             .and_then(|m| m.modified().ok())
-            .map(|mtime| now.duration_since(mtime).unwrap_or(Duration::ZERO) >= cutoff)
-            .unwrap_or(false);
+            .is_some_and(|mtime| now.duration_since(mtime).unwrap_or(Duration::ZERO) >= cutoff);
         if !stale {
             continue;
         }

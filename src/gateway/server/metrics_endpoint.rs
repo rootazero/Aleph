@@ -88,13 +88,13 @@ pub async fn handle_metrics(State(state): State<Arc<GatewaySharedState>>) -> imp
         max_connections: state.max_connections as u64,
         max_connections_per_ip: state.max_connections_per_ip as u64,
         rate_limit_tracked_entries: state.rate_limiter.tracked_entries() as u64,
-        req_pending: reg.as_ref().map(|s| s.pending).unwrap_or(0),
-        req_validating: reg.as_ref().map(|s| s.validating).unwrap_or(0),
-        req_processing: reg.as_ref().map(|s| s.processing).unwrap_or(0),
-        req_awaiting: reg.as_ref().map(|s| s.awaiting).unwrap_or(0),
-        req_completed: reg.as_ref().map(|s| s.completed).unwrap_or(0),
-        req_failed: reg.as_ref().map(|s| s.failed).unwrap_or(0),
-        req_cancelled: reg.as_ref().map(|s| s.cancelled).unwrap_or(0),
+        req_pending: reg.as_ref().map_or(0, |s| s.pending),
+        req_validating: reg.as_ref().map_or(0, |s| s.validating),
+        req_processing: reg.as_ref().map_or(0, |s| s.processing),
+        req_awaiting: reg.as_ref().map_or(0, |s| s.awaiting),
+        req_completed: reg.as_ref().map_or(0, |s| s.completed),
+        req_failed: reg.as_ref().map_or(0, |s| s.failed),
+        req_cancelled: reg.as_ref().map_or(0, |s| s.cancelled),
     };
 
     let mut body = render_prometheus(&snapshot);

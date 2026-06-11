@@ -292,8 +292,7 @@ impl LoopToolRegistry {
     #[must_use]
     pub fn requires_confirmation(&self, name: &str) -> bool {
         self.resolve(name)
-            .map(|t| t.requires_confirmation())
-            .unwrap_or(false)
+            .is_some_and(|t| t.requires_confirmation())
     }
 
     /// Return the per-result token budget that the named tool declared via

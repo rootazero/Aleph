@@ -611,8 +611,7 @@ impl ChannelState {
     pub fn status(&self) -> ChannelStatus {
         self.status
             .try_read()
-            .map(|s| *s)
-            .unwrap_or(ChannelStatus::Connecting)
+            .map_or(ChannelStatus::Connecting, |s| *s)
     }
 
     /// Set status (async, takes write lock).

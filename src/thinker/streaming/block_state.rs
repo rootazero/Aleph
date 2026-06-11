@@ -235,8 +235,7 @@ impl ThinkingTagParser {
                 .get(3..)
                 .unwrap_or_default()
                 .find('\n')
-                .map(|p| p + 4)
-                .unwrap_or(self.buffer.len());
+                .map_or(self.buffer.len(), |p| p + 4);
             let fence_line = self.buffer.get(..fence_end).unwrap_or_default().to_string();
             // Emit the fence opener as content and remove it from the buffer
             // so the next search for "```" finds the closing fence, not this one.

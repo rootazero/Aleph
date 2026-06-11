@@ -80,8 +80,7 @@ impl MemoryReflector {
         let budget = AssemblyBudget {
             total_tokens: opts
                 .max_tokens
-                .map(|n| n as u32)
-                .unwrap_or(DEFAULT_BUDGET_TOKENS),
+                .map_or(DEFAULT_BUDGET_TOKENS, |n| n as u32),
         };
 
         let envelope = self

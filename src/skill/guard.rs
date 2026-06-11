@@ -195,8 +195,7 @@ fn scan_skill_directory_inner(dir: &std::path::Path, verdicts: &mut Vec<ScanVerd
         if path
             .file_name()
             .and_then(|n| n.to_str())
-            .map(|n| n.starts_with('.'))
-            .unwrap_or(false)
+            .is_some_and(|n| n.starts_with('.'))
         {
             continue;
         }

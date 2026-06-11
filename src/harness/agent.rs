@@ -272,8 +272,7 @@ impl AgentHarness {
     pub fn duration_ms(&self) -> u64 {
         self.started_at
             .get()
-            .map(|t| t.elapsed().as_millis().try_into().unwrap_or(u64::MAX))
-            .unwrap_or(0)
+            .map_or(0, |t| t.elapsed().as_millis().try_into().unwrap_or(u64::MAX))
     }
 
     /// Helper for `act.rs` — append one tool invocation to the timeline.
@@ -792,8 +791,7 @@ pub(crate) fn tail_start_index(events: &[SessionEventRecord]) -> usize {
     events
         .iter()
         .rposition(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
-        .map(|idx| idx + 1)
-        .unwrap_or(0)
+        .map_or(0, |idx| idx + 1)
 }
 
 /// Count `AssistantMessage` events in the log.

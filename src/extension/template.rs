@@ -35,9 +35,7 @@ impl SkillTemplate {
     #[must_use]
     pub fn new(content: &str, source_path: &Path) -> Self {
         let base_dir = source_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
+            .parent().map_or_else(|| PathBuf::from("."), |p| p.to_path_buf());
 
         Self {
             content: content.to_string(),

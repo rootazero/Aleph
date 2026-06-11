@@ -257,9 +257,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // being shadowed by that provider's static catalog. (3) is byte-identical
         // to before — directive-less requests send `model: None`, which the
         // failover primary ignores, walking its catalog as usual.
-        let session_pref_key = SessionKey::from_key_string(&session_key)
-            .map(|s| s.to_key_string())
-            .unwrap_or_else(|| session_key.clone());
+        let session_pref_key = SessionKey::from_key_string(&session_key).map_or_else(|| session_key.clone(), |s| s.to_key_string());
         let model_directive: Option<(Option<String>, String)> =
             crate::providers::session_model_handle::get_session_model(&session_pref_key)
                 .map(|p| (p.provider, p.model))
@@ -610,8 +608,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     SessionEvent::RunStarted { run_id, .. } if run_id == &run_marker_id
                 )
             })
-            .map(|i| i + 1)
-            .unwrap_or(0);
+            .map_or(0, |i| i + 1);
 
         let mut final_text = String::new();
         let mut iterations: u32 = 0;
@@ -1031,13 +1028,11 @@ impl AgentHarnessRunner {
         });
         let has_identity = identity_files
             .as_ref()
-            .map(|f| f.files.iter().any(|file| file.content.is_some()))
-            .unwrap_or(false);
+            .is_some_and(|f| f.files.iter().any(|file| file.content.is_some()));
 
         let has_skills = skill_snapshot
             .as_ref()
-            .map(|s| !s.eligible_manifests.is_empty())
-            .unwrap_or(false);
+            .is_some_and(|s| !s.eligible_manifests.is_empty());
 
         // Load `[prompt.extra_files]` content (size-capped). `None` when the
         // section is absent / disabled / yields no readable content, so the
@@ -1091,21 +1086,20 @@ impl AgentHarnessRunner {
         if let Some(def) = agent_def {
             builder = builder.with_agent(def);
         }
-        let curated_chars = curated_text.as_ref().map(String::len).unwrap_or(0);
+        let curated_chars = curated_text.as_ref().map_or(0, String::len);
         builder = builder.with_curated_envelope(curated_text);
-        let memory_chars = memory_text.as_ref().map(String::len).unwrap_or(0);
+        let memory_chars = memory_text.as_ref().map_or(0, String::len);
         if let Some(text) = memory_text {
             builder = builder.with_memory_user_message(text);
         }
         let identity_chars = identity_files
             .as_ref()
-            .map(|f| {
+            .map_or(0, |f| {
                 f.files
                     .iter()
                     .filter_map(|file| file.content.as_ref().map(String::len))
                     .sum::<usize>()
-            })
-            .unwrap_or(0);
+            });
         if let Some(files) = identity_files {
             if has_identity {
                 builder = builder.with_identity_files(files);
@@ -1200,9 +1194,7 @@ impl AgentHarnessRunner {
         // different model family can advertise the correct target
         // (e.g., `protocol = "openai"`, override = `"anthropic"`).
         let provider_protocol = provider
-            .model_behavior_override()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| provider.protocol().to_string());
+            .model_behavior_override().map_or_else(|| provider.protocol().to_string(), |s| s.to_string());
         builder = builder.with_provider_protocol(provider_protocol);
         // Phase 4 (F2): surface the resolved iteration cap to
         // `SessionBudgetLayer`. Saturating to `u32::MAX` (instead of

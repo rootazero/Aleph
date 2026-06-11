@@ -257,9 +257,7 @@ impl McpManagerActor {
         for server_id in to_restart {
             let server_name = self
                 .config
-                .get_server(&server_id)
-                .map(|c| c.name.clone())
-                .unwrap_or_else(|| server_id.clone());
+                .get_server(&server_id).map_or_else(|| server_id.clone(), |c| c.name.clone());
             // Emit ServerCrashed first so the tool bridge drops the dead
             // server's tools from the registry before the restart re-publishes
             // a fresh set via the ServerStarted event.
@@ -475,9 +473,7 @@ impl McpManagerActor {
         // Get server name before removal for event
         let server_name = self
             .config
-            .get_server(server_id)
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| server_id.to_string());
+            .get_server(server_id).map_or_else(|| server_id.to_string(), |c| c.name.clone());
 
         // Stop if running
         self.stop_server_internal(server_id).await;
@@ -567,8 +563,7 @@ impl McpManagerActor {
         let attempt = self
             .health_states
             .get(server_id)
-            .map(|h| h.restart_count)
-            .unwrap_or(1);
+            .map_or(1, |h| h.restart_count);
         let _ = self.event_tx.send(McpManagerEvent::ServerRestarting {
             server_id: server_id.to_string(),
             server_name,
@@ -612,9 +607,7 @@ impl McpManagerActor {
 
         let server_name = self
             .config
-            .get_server(server_id)
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| server_id.to_string());
+            .get_server(server_id).map_or_else(|| server_id.to_string(), |c| c.name.clone());
 
         self.stop_server_internal(server_id).await;
 
@@ -791,8 +784,7 @@ impl McpManagerActor {
             let health = self
                 .health_states
                 .get(id)
-                .map(|h| h.status.clone())
-                .unwrap_or(HealthStatus::Stopped);
+                .map_or(HealthStatus::Stopped, |h| h.status.clone());
 
             // Get tool/resource/prompt counts from active clients
             let (tool_count, resource_count, prompt_count) =
@@ -827,8 +819,7 @@ impl McpManagerActor {
             let health = self
                 .health_states
                 .get(id)
-                .map(|h| h.status.clone())
-                .unwrap_or(HealthStatus::Healthy);
+                .map_or(HealthStatus::Healthy, |h| h.status.clone());
             servers.push(McpServerInfo {
                 id: id.clone(),
                 name: id.clone(),

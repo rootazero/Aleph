@@ -136,8 +136,7 @@ pub fn frontmatter_allows_inline_shell(content: &str) -> bool {
 
     match crate::skill::manifest::split_frontmatter(content) {
         Ok((yaml, _body)) => serde_yaml::from_str::<Probe>(&yaml)
-            .map(|p| p.allow_inline_shell)
-            .unwrap_or(false),
+            .is_ok_and(|p| p.allow_inline_shell),
         Err(_) => false,
     }
 }

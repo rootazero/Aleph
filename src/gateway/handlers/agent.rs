@@ -156,8 +156,7 @@ impl AgentRunManager {
                 OutputMode::from_config(
                     cfg.behavior
                         .as_ref()
-                        .map(|b| b.output_mode.as_str())
-                        .unwrap_or("typewriter"),
+                        .map_or("typewriter", |b| b.output_mode.as_str()),
                 )
             }
             None => OutputMode::Typewriter,

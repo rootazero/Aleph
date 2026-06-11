@@ -404,8 +404,7 @@ impl HookExecutor {
     /// the executor default).
     fn effective_timeout(&self, override_secs: Option<u64>) -> Duration {
         override_secs
-            .map(Duration::from_secs)
-            .unwrap_or(self.command_timeout)
+            .map_or(self.command_timeout, Duration::from_secs)
     }
 
     /// Execute a shell command

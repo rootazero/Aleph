@@ -274,7 +274,7 @@ impl ProviderConfig {
     /// (e.g. "gpt-5.4,gpt-5.3-codex"), returns only the first model name.
     #[must_use]
     pub fn default_model(&self) -> &str {
-        let first = self.models.first().map(|s| s.as_str()).unwrap_or("");
+        let first = self.models.first().map_or("", |s| s.as_str());
         // Handle comma-separated model lists stored as a single string
         first.split(',').next().unwrap_or(first).trim()
     }

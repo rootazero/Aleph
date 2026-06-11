@@ -239,8 +239,7 @@ impl McpTransport for HttpTransport {
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .map(|v| v.starts_with("text/event-stream"))
-            .unwrap_or(false);
+            .is_some_and(|v| v.starts_with("text/event-stream"));
 
         let text = response
             .text()

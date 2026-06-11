@@ -73,7 +73,7 @@ pub fn evaluate_trigger(
     match condition {
         TriggerCondition::NonEmpty => !is_empty_value(value),
         TriggerCondition::GreaterThan(threshold) => {
-            value.as_f64().map(|v| v > *threshold).unwrap_or(false)
+            value.as_f64().is_some_and(|v| v > *threshold)
         }
         TriggerCondition::Contains(s) => {
             let text = match value {
@@ -84,7 +84,7 @@ pub fn evaluate_trigger(
         }
         TriggerCondition::Changed => {
             let current = value.to_string();
-            last_result.map(|prev| prev != current).unwrap_or(true)
+            last_result.map_or(true, |prev| prev != current)
         }
         TriggerCondition::Always => true,
     }
@@ -129,7 +129,7 @@ fn is_empty_value(v: &Value) -> bool {
     match v {
         Value::Null => true,
         Value::String(s) => s.is_empty(),
-        Value::Number(n) => n.as_f64().map(|f| f == 0.0).unwrap_or(false),
+        Value::Number(n) => n.as_f64().is_some_and(|f| f == 0.0),
         Value::Array(a) => a.is_empty(),
         Value::Object(o) => o.is_empty(),
         Value::Bool(b) => !b,

@@ -44,8 +44,7 @@ impl PromptLayer for VoiceModeLayer {
         // left this layer permanently dead.
         let active = input
             .context
-            .map(|ctx| ctx.voice_mode_active)
-            .unwrap_or(false);
+            .is_some_and(|ctx| ctx.voice_mode_active);
         if active {
             output.push_str(VOICE_MODE_PROMPT);
             output.push('\n');

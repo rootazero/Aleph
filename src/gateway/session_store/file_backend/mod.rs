@@ -94,10 +94,10 @@ impl FileSessionStore {
                 channel: meta.and_then(|m| m.origin_channel()),
                 label: meta.and_then(|m| m.label.clone()),
                 display_name: meta.and_then(|m| m.derived_title.clone()),
-                total_tokens: meta.map(|m| m.total_tokens).unwrap_or(0),
+                total_tokens: meta.map_or(0, |m| m.total_tokens),
                 model: meta.and_then(|m| m.model.clone()),
                 status: meta.and_then(|m| m.state.map(|s| s.to_string())),
-                compacted: meta.map(|m| m.compaction_count > 0).unwrap_or(false),
+                compacted: meta.is_some_and(|m| m.compaction_count > 0),
             };
             let topic_event = crate::gateway::event_bus::TopicEvent::new(
                 "sessions.changed",

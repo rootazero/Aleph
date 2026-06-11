@@ -143,9 +143,9 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
         let line_end = offset + line.len();
 
         if let Some(caps) = FENCE_REGEX.captures(line) {
-            let indent = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            let marker = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-            let info = caps.get(3).map(|m| m.as_str().trim()).unwrap_or("");
+            let indent = caps.get(1).map_or("", |m| m.as_str());
+            let marker = caps.get(2).map_or("", |m| m.as_str());
+            let info = caps.get(3).map_or("", |m| m.as_str().trim());
 
             if let Some(open) = &current_fence {
                 // Check if this closes the current fence.

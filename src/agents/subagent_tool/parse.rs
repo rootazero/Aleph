@@ -116,7 +116,7 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
                 })
                 .collect::<Vec<_>>()
         });
-    let has_batch = batch_tasks.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+    let has_batch = batch_tasks.as_ref().is_some_and(|v| !v.is_empty());
 
     // Run action — top-level `task` is required UNLESS batch_tasks supplies
     // the actual sub-task descriptions.

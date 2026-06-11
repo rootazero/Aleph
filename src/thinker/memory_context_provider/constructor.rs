@@ -203,12 +203,10 @@ impl MemoryContextProvider {
             })
             .unwrap_or_else(|| {
                 memory_dir
-                    .parent()
-                    .map(|p| p.join("sessions"))
-                    .unwrap_or_else(|| {
+                    .parent().map_or_else(|| {
                         tracing::warn!("Memory dir has no parent, using memory_dir for sessions");
                         memory_dir.clone()
-                    })
+                    }, |p| p.join("sessions"))
             });
         let snapshots = Arc::new(SnapshotReader::new(snapshot_dir));
         let feedback_floor = FeedbackFloorLoader::new(memory_dir.clone());

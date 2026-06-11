@@ -134,8 +134,7 @@ impl ScopedToolService {
         // runs (cron/internal) all pass.
         if crate::gateway::method_authz::tool_requires_operator(name) {
             let is_operator = crate::tools::turn_context::current_turn_context()
-                .map(|t| t.caller_is_operator())
-                .unwrap_or(true);
+                .map_or(true, |t| t.caller_is_operator());
             if !is_operator {
                 // Phase 2b: suspend for live operator approval instead of an
                 // outright reject. Routes through the operator-targeted requester
@@ -762,13 +761,11 @@ fn bound_error_body(body: &str) -> std::borrow::Cow<'_, str> {
     let head_end = body
         .char_indices()
         .nth(ERROR_BODY_HEAD_CHARS)
-        .map(|(i, _)| i)
-        .unwrap_or(body.len());
+        .map_or(body.len(), |(i, _)| i);
     let tail_start = body
         .char_indices()
         .nth(total - ERROR_BODY_TAIL_CHARS)
-        .map(|(i, _)| i)
-        .unwrap_or(0);
+        .map_or(0, |(i, _)| i);
     let elided = total - ERROR_BODY_HEAD_CHARS - ERROR_BODY_TAIL_CHARS;
     std::borrow::Cow::Owned(format!(
         "{}\n…[{} chars elided]…\n{}",

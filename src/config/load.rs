@@ -15,9 +15,7 @@ impl Config {
     /// - All platforms: ~/.aleph/config.toml
     #[must_use]
     pub fn default_path() -> PathBuf {
-        crate::utils::paths::get_config_dir()
-            .map(|d| d.join("config.toml"))
-            .unwrap_or_else(|_| PathBuf::from("config.toml"))
+        crate::utils::paths::get_config_dir().map_or_else(|_| PathBuf::from("config.toml"), |d| d.join("config.toml"))
     }
 
     /// Load configuration from a TOML file

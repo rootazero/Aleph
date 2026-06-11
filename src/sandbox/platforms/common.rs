@@ -27,8 +27,7 @@ pub const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
 #[must_use]
 pub fn is_wsl() -> bool {
     std::fs::read_to_string("/proc/version")
-        .map(|content| content.to_lowercase().contains("microsoft"))
-        .unwrap_or(false)
+        .is_ok_and(|content| content.to_lowercase().contains("microsoft"))
 }
 
 #[must_use]

@@ -111,7 +111,7 @@ fn extract_from_json_code_block(response: &str) -> Option<String> {
         while let Some(pos) = content[search_pos..].find(end_marker) {
             let abs_pos = search_pos + pos;
             let before = &content[..abs_pos];
-            let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let line_start = before.rfind('\n').map_or(0, |i| i + 1);
             let line_prefix = &before[line_start..];
             if line_prefix.trim().is_empty() {
                 return Some(content[content_start..abs_pos].trim().to_string());
@@ -131,15 +131,14 @@ fn extract_from_generic_code_block(response: &str) -> Option<String> {
         // Skip language identifier if present (find first newline)
         let content_start = response[block_start..]
             .find('\n')
-            .map(|i| block_start + i + 1)
-            .unwrap_or(block_start);
+            .map_or(block_start, |i| block_start + i + 1);
 
         // Find closing ``` that stands on its own line (preceded only by whitespace)
         let mut search_pos = content_start;
         while let Some(pos) = response[search_pos..].find(marker) {
             let abs_pos = search_pos + pos;
             let before = &response[..abs_pos];
-            let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let line_start = before.rfind('\n').map_or(0, |i| i + 1);
             let line_prefix = &before[line_start..];
             if line_prefix.trim().is_empty() {
                 let content = &response[content_start..abs_pos];

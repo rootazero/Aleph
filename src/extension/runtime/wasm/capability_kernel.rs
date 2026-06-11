@@ -98,8 +98,7 @@ impl WasmCapabilityKernel {
         self.capabilities
             .secrets
             .as_ref()
-            .map(|s| s.is_allowed(name))
-            .unwrap_or(false)
+            .is_some_and(|s| s.is_allowed(name))
     }
 
     pub fn log(&self, level: &str, msg: &str) -> Result<(), CapabilityError> {

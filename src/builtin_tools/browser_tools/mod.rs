@@ -250,7 +250,7 @@ pub(crate) fn bound_content(text: &str, max_chars: usize) -> (String, bool) {
     let head = &text[..byte_cut];
     // Prefer the last newline so we never emit a half line; fall back to the
     // char boundary when the budget contains no line break.
-    let cut = head.rfind('\n').map(|p| p + 1).unwrap_or(byte_cut);
+    let cut = head.rfind('\n').map_or(byte_cut, |p| p + 1);
     (text[..cut].to_string(), true)
 }
 
@@ -271,7 +271,7 @@ pub(crate) fn bound_content_head_tail(text: &str, max_chars: usize) -> (String, 
     // Byte index where the last `tail_budget` chars start (char-safe; `skip`
     // is in 1..total_chars because total_chars > max_chars >= tail_budget).
     let skip = total_chars - tail_budget;
-    let byte_start = text.char_indices().nth(skip).map(|(i, _)| i).unwrap_or(0);
+    let byte_start = text.char_indices().nth(skip).map_or(0, |(i, _)| i);
     // Advance to the next line start so the tail never opens mid-line.
     let tail = match text[byte_start..].find('\n') {
         Some(nl) => &text[byte_start + nl + 1..],

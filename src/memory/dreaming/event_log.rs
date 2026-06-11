@@ -94,7 +94,7 @@ impl EventLog {
     /// Get the next cycle number (max existing + 1, or 1 if empty).
     pub async fn next_cycle(&self) -> Result<u32, AlephError> {
         let events = self.read_last(1).await?;
-        Ok(events.last().map(|e| e.cycle + 1).unwrap_or(1))
+        Ok(events.last().map_or(1, |e| e.cycle + 1))
     }
 }
 

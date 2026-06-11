@@ -143,8 +143,8 @@ impl RouteObservability {
                 let (util_permille, over_limit) = limits.assess(name, m.rpm_used, m.tpm_used);
                 let (rpm_limit, tpm_limit) = limits.ceiling(name).unwrap_or((None, None));
                 let entry = json!({
-                    "circuit": h.map(|h| h.circuit).unwrap_or("closed"),
-                    "failure_count": h.map(|h| h.failure_count).unwrap_or(0),
+                    "circuit": h.map_or("closed", |h| h.circuit),
+                    "failure_count": h.map_or(0, |h| h.failure_count),
                     "last_error": h.and_then(|h| h.last_error.clone()),
                     "breaker_cooldown_remaining_secs": h.and_then(|h| h.cooldown_remaining_secs),
                     "rate_pacing_remaining_secs": pacing_by.get(name.as_str()).copied(),

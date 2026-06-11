@@ -44,8 +44,7 @@ pub(super) fn split_message(text: &str, max_len: usize) -> Vec<String> {
         let reserve = spans
             .first()
             .filter(|f| f.start() == 0 && f.end() > max_len)
-            .map(|f| f.close_line().len() + 1)
-            .unwrap_or(0);
+            .map_or(0, |f| f.close_line().len() + 1);
         let budget = max_len.saturating_sub(reserve).max(1);
 
         // Nearest char boundary at or before `budget`.

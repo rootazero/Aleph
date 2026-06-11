@@ -136,7 +136,7 @@ pub async fn handle_get(request: JsonRpcRequest, manager: Arc<AgentManager>) -> 
 
     match manager.get(&params.id) {
         Ok(definition) => {
-            let file_count = manager.list_files(&params.id).map(|f| f.len()).unwrap_or(0);
+            let file_count = manager.list_files(&params.id).map_or(0, |f| f.len());
             JsonRpcResponse::success(
                 request.id,
                 json!({ "definition": definition, "file_count": file_count }),
@@ -411,8 +411,7 @@ pub async fn handle_tools_schema(request: JsonRpcRequest) -> JsonRpcResponse {
                     let description = BUILTIN_TOOL_DEFINITIONS
                         .iter()
                         .find(|d| d.name == *tool_name)
-                        .map(|d| d.description)
-                        .unwrap_or("");
+                        .map_or("", |d| d.description);
                     json!({
                         "name": tool_name,
                         "description": description,

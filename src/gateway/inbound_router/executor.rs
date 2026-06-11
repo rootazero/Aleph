@@ -115,8 +115,7 @@ impl InboundMessageRouter {
                 let mode = cfg
                     .behavior
                     .as_ref()
-                    .map(|b| b.output_mode.as_str())
-                    .unwrap_or("typewriter");
+                    .map_or("typewriter", |b| b.output_mode.as_str());
                 ReplyEmitterConfig::from_output_mode(mode)
             }
             None => ReplyEmitterConfig::default(),

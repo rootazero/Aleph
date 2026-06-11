@@ -96,7 +96,7 @@ pub fn is_static_file_request(uri: &Uri) -> bool {
     // Check for file extensions
     let has_extension = path
         .rfind('.')
-        .map(|i| {
+        .is_some_and(|i| {
             let ext = &path[i + 1..];
             matches!(
                 ext.to_lowercase().as_str(),
@@ -117,8 +117,7 @@ pub fn is_static_file_request(uri: &Uri) -> bool {
                     | "eot"
                     | "map"
             )
-        })
-        .unwrap_or(false);
+        });
 
     // Check for common static paths
     let is_static_path = path.starts_with("/assets/")

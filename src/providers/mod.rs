@@ -182,8 +182,7 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
             || config
                 .base_url
                 .as_ref()
-                .map(|s| s.is_empty())
-                .unwrap_or(false)
+                .is_some_and(|s| s.is_empty())
         {
             config.base_url = Some(preset.base_url.to_string());
         }

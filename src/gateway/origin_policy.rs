@@ -131,8 +131,7 @@ fn is_loopback_host(host: &str) -> bool {
         return true;
     }
     h.parse::<std::net::IpAddr>()
-        .map(|ip| ip.is_loopback())
-        .unwrap_or(false)
+        .is_ok_and(|ip| ip.is_loopback())
 }
 
 #[cfg(test)]

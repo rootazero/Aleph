@@ -75,8 +75,7 @@ pub(crate) fn should_use_prepend_mode(config: &ProviderConfig) -> bool {
     config
         .system_prompt_mode
         .as_ref()
-        .map(|m| m.to_lowercase() != "standard")
-        .unwrap_or(true)
+        .map_or(true, |m| m.to_lowercase() != "standard")
 }
 
 #[cfg(test)]

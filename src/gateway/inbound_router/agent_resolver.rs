@@ -46,7 +46,7 @@ impl InboundMessageRouter {
             let (guild_id, team_id) = msg
                 .raw
                 .as_ref()
-                .map(|raw| {
+                .map_or((None, None), |raw| {
                     let guild = raw
                         .get("guild_id")
                         .and_then(|v| v.as_str())
@@ -56,8 +56,7 @@ impl InboundMessageRouter {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
                     (guild, team)
-                })
-                .unwrap_or((None, None));
+                });
 
             let input = RouteInput {
                 channel: msg.channel_id.as_str().to_string(),

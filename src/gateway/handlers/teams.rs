@@ -574,8 +574,7 @@ pub async fn handle_list_task_events(
             e.payload
                 .get("task_id")
                 .and_then(|v| v.as_str())
-                .map(|tid| tid == params.task_id)
-                .unwrap_or(false)
+                .is_some_and(|tid| tid == params.task_id)
         })
         .collect();
 
@@ -652,8 +651,7 @@ pub async fn handle_task_trace(
                     e.payload
                         .get("task_id")
                         .and_then(|v| v.as_str())
-                        .map(|tid| tid == params.task_id)
-                        .unwrap_or(false)
+                        .is_some_and(|tid| tid == params.task_id)
                 })
                 .collect(),
             Err(_) => Vec::new(),

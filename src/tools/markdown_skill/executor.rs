@@ -23,8 +23,7 @@ impl MarkdownCliTool {
             .aleph
             .as_ref()
             .and_then(|a| a.timeout_secs)
-            .map(Duration::from_secs)
-            .unwrap_or(DEFAULT_EXECUTION_TIMEOUT)
+            .map_or(DEFAULT_EXECUTION_TIMEOUT, Duration::from_secs)
     }
 
     /// Execute on host system (with SafetyGate if configured).

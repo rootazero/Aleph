@@ -65,11 +65,10 @@ pub fn resolve_deny_read_paths_under(root: &Path, deny_read_globs: &[String]) ->
 
     let matches_any = |path: &Path| -> bool {
         path.to_str()
-            .map(|s| {
+            .is_some_and(|s| {
                 let normalised = s.replace('\\', "/");
                 regexes.iter().any(|re| re.is_match(&normalised))
             })
-            .unwrap_or(false)
     };
 
     let mut matched = Vec::new();
@@ -89,7 +88,7 @@ pub fn resolve_deny_read_paths_under(root: &Path, deny_read_globs: &[String]) ->
             let path = entry.path();
             // `DirEntry::metadata` does not traverse symlinks, so a symlinked
             // directory reports `is_dir() == false` and is never descended.
-            let is_real_dir = entry.metadata().map(|m| m.is_dir()).unwrap_or(false);
+            let is_real_dir = entry.metadata().is_ok_and(|m| m.is_dir());
 
             if matches_any(&path) {
                 matched.push(path);

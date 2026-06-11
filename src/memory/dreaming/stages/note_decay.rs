@@ -165,8 +165,7 @@ impl DreamStage for NoteDecayStage {
                 .store()
                 .get_incoming_links(filename, &ctx.agent_id)
                 .await
-                .map(|links| links.len())
-                .unwrap_or(0);
+                .map_or(0, |links| links.len());
 
             // --- Protection rule 2: highly linked ---
             if incoming_count >= 3 {
@@ -214,8 +213,7 @@ impl DreamStage for NoteDecayStage {
             // Only archival candidates are read here, so this stays cheap.
             if let Ok(content) = tokio::fs::read_to_string(&source_path).await {
                 if KnowledgeNote::from_markdown(filename, &content)
-                    .map(|n| n.is_permanent())
-                    .unwrap_or(false)
+                    .is_ok_and(|n| n.is_permanent())
                 {
                     notes_protected += 1;
                     tracing::debug!(path, "NoteDecay: permanent note exempt from archival");

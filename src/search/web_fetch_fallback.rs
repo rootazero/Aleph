@@ -239,8 +239,7 @@ impl WebFetchSerpFallback {
         let guard = self.cooldowns.lock().unwrap_or_else(|e| e.into_inner());
         guard
             .get(name)
-            .map(|t| t.elapsed() < MIRROR_COOLDOWN)
-            .unwrap_or(false)
+            .is_some_and(|t| t.elapsed() < MIRROR_COOLDOWN)
     }
 
     fn note_failure(&self, name: &'static str) {

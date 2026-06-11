@@ -393,8 +393,7 @@ impl ToolQuery {
                 t.name == name
                     || t.id
                         .rsplit_once(':')
-                        .map(|(_, n)| n == name)
-                        .unwrap_or(false)
+                        .is_some_and(|(_, n)| n == name)
             })
             .max_by(|a, b| {
                 a.source

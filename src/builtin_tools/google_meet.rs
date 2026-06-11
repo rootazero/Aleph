@@ -331,9 +331,7 @@ impl GoogleMeetTool {
         let detail = result
             .get("detail")
             .or_else(|| result.get("message"))
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("{} completed", args.action.rpc_method()));
+            .and_then(|v| v.as_str()).map_or_else(|| format!("{} completed", args.action.rpc_method()), str::to_string);
 
         info!(action = ?args.action, "Google Meet bridge action ok");
         Ok(GoogleMeetOutput {

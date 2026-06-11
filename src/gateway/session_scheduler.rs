@@ -186,8 +186,7 @@ impl SessionScheduler {
                 let mode = cfg
                     .behavior
                     .as_ref()
-                    .map(|b| b.output_mode.as_str())
-                    .unwrap_or("typewriter");
+                    .map_or("typewriter", |b| b.output_mode.as_str());
                 ReplyEmitterConfig::from_output_mode(mode)
             }
             None => ReplyEmitterConfig::default(),
@@ -295,8 +294,7 @@ impl<'a> QueueDepthFuture<'a> {
         let queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
         queues
             .get(&self.session_key)
-            .map(|q| q.pending.len())
-            .unwrap_or(0)
+            .map_or(0, |q| q.pending.len())
     }
 }
 
@@ -492,8 +490,7 @@ async fn execute_next(
             let mode = cfg
                 .behavior
                 .as_ref()
-                .map(|b| b.output_mode.as_str())
-                .unwrap_or("typewriter");
+                .map_or("typewriter", |b| b.output_mode.as_str());
             ReplyEmitterConfig::from_output_mode(mode)
         }
         None => ReplyEmitterConfig::default(),

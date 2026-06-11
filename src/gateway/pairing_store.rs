@@ -222,9 +222,7 @@ impl PairingStore for SqlitePairingStore {
 
         let metadata: HashMap<String, String> =
             serde_json::from_str(&metadata_json).unwrap_or_default();
-        let created_at = DateTime::parse_from_rfc3339(&created_at)
-            .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(|_| Utc::now());
+        let created_at = DateTime::parse_from_rfc3339(&created_at).map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc));
 
         info!("Approved pairing for {}:{}", channel, sender_id);
 
@@ -278,9 +276,7 @@ impl PairingStore for SqlitePairingStore {
                 let (channel, sender_id, code, created_at, metadata_json) = row?;
                 let metadata: HashMap<String, String> =
                     serde_json::from_str(&metadata_json).unwrap_or_default();
-                let created_at = DateTime::parse_from_rfc3339(&created_at)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now());
+                let created_at = DateTime::parse_from_rfc3339(&created_at).map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc));
 
                 requests.push(PairingRequest {
                     channel,
@@ -308,9 +304,7 @@ impl PairingStore for SqlitePairingStore {
                 let (channel, sender_id, code, created_at, metadata_json) = row?;
                 let metadata: HashMap<String, String> =
                     serde_json::from_str(&metadata_json).unwrap_or_default();
-                let created_at = DateTime::parse_from_rfc3339(&created_at)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now());
+                let created_at = DateTime::parse_from_rfc3339(&created_at).map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc));
 
                 requests.push(PairingRequest {
                     channel,

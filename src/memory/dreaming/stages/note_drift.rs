@@ -195,8 +195,7 @@ fn resolve_link_path(ctx: &DreamContext, target: &str) -> Option<String> {
             n.path
                 .split('/')
                 .nth(1)
-                .map(|filename| filename == target)
-                .unwrap_or(false)
+                .is_some_and(|filename| filename == target)
         })
         .map(|n| n.path.clone())
 }

@@ -70,11 +70,9 @@ where
     F: Fn(&str) -> Option<String>,
 {
     let has_env_token = env(ENV_GATEWAY_TOKEN)
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
+        .is_some_and(|v| !v.trim().is_empty());
     let has_env_session_secret = env(ENV_SESSION_SECRET)
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
+        .is_some_and(|v| !v.trim().is_empty());
     CredentialPlan {
         auth_mode: auth_mode_label(&cfg.auth.mode),
         has_env_token,

@@ -560,8 +560,7 @@ fn is_last_assistant(events: &[SessionEventRecord], target: &SessionEventRecord)
         .iter()
         .rev()
         .find(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
-        .map(|r| r.seq == target.seq)
-        .unwrap_or(false)
+        .is_some_and(|r| r.seq == target.seq)
 }
 
 /// Pull a human-readable message out of a panic payload.

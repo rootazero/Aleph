@@ -512,7 +512,7 @@ async fn handle_connection(
                 }
                 match msg {
                     Some(Ok(WsMessage::Text(text))) => {
-                        let preview_end = text.char_indices().take_while(|(i, _)| *i < 200).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(text.len());
+                        let preview_end = text.char_indices().take_while(|(i, _)| *i < 200).last().map_or(text.len(), |(i, c)| i + c.len_utf8());
                         debug!("WS recv from {}: {}", conn_id, &text[..preview_end]);
 
                         // Reverse-RPC response interception: a frame that is a

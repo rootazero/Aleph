@@ -67,7 +67,7 @@ async fn invoke_one(m: NodeMatch, command: String, args: Value, timeout_ms: u64)
         }),
         Ok(resp) => json!({
             "node": m.name, "node_id": m.node_id, "ok": false,
-            "error": resp.error.map(|e| e.message).unwrap_or_else(|| "unknown".to_string())
+            "error": resp.error.map_or_else(|| "unknown".to_string(), |e| e.message)
         }),
         Err(e) => json!({
             "node": m.name, "node_id": m.node_id, "ok": false,

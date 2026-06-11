@@ -201,8 +201,7 @@ impl TurnVerifier for ToolLoopVerifier {
         let same_name_run = trailing_same_name_run(ctx.recent_tool_calls);
         let has_text = ctx
             .final_text
-            .map(|t| !t.trim().is_empty())
-            .unwrap_or(false);
+            .is_some_and(|t| !t.trim().is_empty());
         if !has_text && same_name_run >= TOOL_HISTORY_WINDOW {
             let tool = &ctx.recent_tool_calls[ctx.recent_tool_calls.len() - 1].name;
             return VerifierVerdict::Halt {

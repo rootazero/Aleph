@@ -172,8 +172,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         self.ensure_dirs(agent_id).await?;
 
         let parallelism = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1)
+            .map_or(1, |n| n.get())
             .max(1);
         let sem = Arc::new(tokio::sync::Semaphore::new(parallelism));
         let mut set: tokio::task::JoinSet<Result<IndexStats, AlephError>> =

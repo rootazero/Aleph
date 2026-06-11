@@ -641,11 +641,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         Some(p) => p.to_string(),
                         None => self
                             .provider_registry
-                            .get(override_.model())
-                            .map(|prov| prov.name().to_string())
-                            .unwrap_or_else(|| {
+                            .get(override_.model()).map_or_else(|| {
                                 self.provider_registry.default_provider().name().to_string()
-                            }),
+                            }, |prov| prov.name().to_string()),
                     };
                     ResolvedModel {
                         provider_name,
@@ -1287,8 +1285,7 @@ fn collect_project_context_blocks(workspace: &std::path::Path) -> Vec<String> {
                 p.is_file()
                     && p.extension()
                         .and_then(|ext| ext.to_str())
-                        .map(|s| s.eq_ignore_ascii_case("md"))
-                        .unwrap_or(false)
+                        .is_some_and(|s| s.eq_ignore_ascii_case("md"))
             })
             .collect();
         rule_files.sort();
@@ -1412,7 +1409,7 @@ fn ancestor_chain(start: &std::path::Path) -> Vec<std::path::PathBuf> {
         if cur.join(".git").exists() {
             break;
         }
-        if home_ref.map(|h| h == cur.as_path()).unwrap_or(false) {
+        if home_ref.is_some_and(|h| h == cur.as_path()) {
             break;
         }
         let Some(parent) = cur.parent() else { break };

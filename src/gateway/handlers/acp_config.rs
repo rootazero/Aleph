@@ -92,13 +92,11 @@ async fn build_harness_info(
 
     let mode = manager
         .harness_mode(id)
-        .await
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| {
+        .await.map_or_else(|| {
             crate::acp::adapter::AdapterMode::from_serde(&entry.default_mode)
                 .as_str()
                 .to_string()
-        });
+        }, |m| m.as_str().to_string());
 
     let executable = entry.executable.clone().unwrap_or_default();
 
@@ -597,9 +595,7 @@ pub async fn handle_sessions_cancel(
 ) -> JsonRpcResponse {
     let params: SessionCancelParams = match request
         .params
-        .clone()
-        .map(serde_json::from_value)
-        .unwrap_or_else(|| Err(serde::de::Error::missing_field("params")))
+        .clone().map_or_else(|| Err(serde::de::Error::missing_field("params")), serde_json::from_value)
     {
         Ok(p) => p,
         Err(e) => {
@@ -627,9 +623,7 @@ pub async fn handle_sessions_shutdown(
 ) -> JsonRpcResponse {
     let params: SessionCancelParams = match request
         .params
-        .clone()
-        .map(serde_json::from_value)
-        .unwrap_or_else(|| Err(serde::de::Error::missing_field("params")))
+        .clone().map_or_else(|| Err(serde::de::Error::missing_field("params")), serde_json::from_value)
     {
         Ok(p) => p,
         Err(e) => {

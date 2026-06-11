@@ -179,11 +179,9 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                         expires_at: guest_token
                             .scope
                             .expires_at
-                            .and_then(chrono::DateTime::from_timestamp_millis)
-                            .map(|dt| dt.to_rfc3339())
-                            .unwrap_or_else(|| {
+                            .and_then(chrono::DateTime::from_timestamp_millis).map_or_else(|| {
                                 (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
-                            }),
+                            }, |dt| dt.to_rfc3339()),
                         state_version: ctx.state_versions.snapshot(),
                         transport: ctx.transport_policy.clone(),
                         hello: super::build_hello_snapshot(&ctx),
@@ -267,11 +265,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                         role,
                         expires_at: chrono::DateTime::from_timestamp_millis(
                             signed_token.expires_at
-                        )
-                        .map(|dt| dt.to_rfc3339())
-                        .unwrap_or_else(
-                            || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
-                        ),
+                        ).map_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339(), |dt| dt.to_rfc3339()),
                         state_version: ctx.state_versions.snapshot(),
                         transport: ctx.transport_policy.clone(),
                         hello: super::build_hello_snapshot(&ctx),
@@ -352,11 +346,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                 device_id,
                 permissions: perms,
                 role,
-                expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at)
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_else(
-                        || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
-                    ),
+                expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at).map_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339(), |dt| dt.to_rfc3339()),
                 state_version: ctx.state_versions.snapshot(),
                 transport: ctx.transport_policy.clone(),
                 hello: super::build_hello_snapshot(&ctx),
@@ -415,11 +405,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                             role,
                             expires_at: chrono::DateTime::from_timestamp_millis(
                                 chrono::Utc::now().timestamp_millis() + validation.remaining_ms
-                            )
-                            .map(|dt| dt.to_rfc3339())
-                            .unwrap_or_else(
-                                || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
-                            ),
+                            ).map_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339(), |dt| dt.to_rfc3339()),
                             state_version: ctx.state_versions.snapshot(),
                             transport: ctx.transport_policy.clone(),
                             hello: super::build_hello_snapshot(&ctx),
@@ -445,9 +431,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
             // Device is approved, generate new token
             let device = ctx.device_store.get_device(device_id);
             let permissions = device
-                .as_ref()
-                .map(|d| d.permissions.clone())
-                .unwrap_or_else(|| vec!["*".to_string()]);
+                .as_ref().map_or_else(|| vec!["*".to_string()], |d| d.permissions.clone());
 
             let signed_token = match ctx.token_manager.issue_token(
                 device_id,
@@ -478,11 +462,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                     device_id: device_id.clone(),
                     permissions,
                     role,
-                    expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at)
-                        .map(|dt| dt.to_rfc3339())
-                        .unwrap_or_else(
-                            || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
-                        ),
+                    expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at).map_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339(), |dt| dt.to_rfc3339()),
                     state_version: ctx.state_versions.snapshot(),
                     transport: ctx.transport_policy.clone(),
                     hello: super::build_hello_snapshot(&ctx),

@@ -138,7 +138,7 @@ pub fn list_scoped_agent_ids(memory_dir: &Path, base: &str) -> Vec<String> {
     };
     let mut ids: Vec<String> = entries
         .flatten()
-        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .filter_map(|e| e.file_name().into_string().ok())
         .filter(|name| name.starts_with(&prefix))
         .collect();

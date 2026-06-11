@@ -241,9 +241,7 @@ impl EvolutionConfig {
         if path.is_absolute() {
             path.to_path_buf()
         } else {
-            crate::utils::paths::get_config_dir()
-                .map(|d| d.join(&self.db_path))
-                .unwrap_or_else(|_| path.to_path_buf())
+            crate::utils::paths::get_config_dir().map_or_else(|_| path.to_path_buf(), |d| d.join(&self.db_path))
         }
     }
 
@@ -254,9 +252,7 @@ impl EvolutionConfig {
             if path.is_absolute() {
                 path.to_path_buf()
             } else {
-                crate::utils::paths::get_config_dir()
-                    .map(|d| d.join(dir))
-                    .unwrap_or_else(|_| path.to_path_buf())
+                crate::utils::paths::get_config_dir().map_or_else(|_| path.to_path_buf(), |d| d.join(dir))
             }
         } else {
             skills_config.get_skills_dir_path()
@@ -272,9 +268,7 @@ impl ToolGenerationConfig {
         if path.is_absolute() {
             path.to_path_buf()
         } else {
-            crate::utils::paths::get_config_dir()
-                .map(|d| d.join(&self.tools_output_dir))
-                .unwrap_or_else(|_| path.to_path_buf())
+            crate::utils::paths::get_config_dir().map_or_else(|_| path.to_path_buf(), |d| d.join(&self.tools_output_dir))
         }
     }
 }

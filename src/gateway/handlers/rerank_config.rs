@@ -61,9 +61,7 @@ pub async fn handle_get(
         .params
         .as_ref()
         .and_then(|p| p.get("provider"))
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .unwrap_or_else(|| provider_name(&cfg.memory.rerank.provider));
+        .and_then(|v| v.as_str()).map_or_else(|| provider_name(&cfg.memory.rerank.provider), String::from);
 
     // Security (3def857c6): never echo the stored secret. Report presence only
     // via `has_api_key` so the Panel can render its key-status hint; the editable
@@ -212,7 +210,7 @@ pub async fn handle_test(
                 json!({
                     "success": true,
                     "results_count": results.len(),
-                    "top_score": results.first().map(|r| r.relevance_score).unwrap_or(0.0),
+                    "top_score": results.first().map_or(0.0, |r| r.relevance_score),
                 }),
             )
         }

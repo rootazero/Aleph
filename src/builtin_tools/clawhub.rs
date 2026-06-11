@@ -452,9 +452,7 @@ impl AlephTool for ClawHubTool {
                     v.to_string()
                 } else {
                     detail
-                        .latest_version
-                        .map(|v| v.number)
-                        .unwrap_or_else(|| "unknown".to_string())
+                        .latest_version.map_or_else(|| "unknown".to_string(), |v| v.number)
                 };
 
                 // Download the ZIP (after version is known)
@@ -509,9 +507,7 @@ impl AlephTool for ClawHubTool {
                 }
 
                 let remote_version = detail
-                    .latest_version
-                    .map(|v| v.number)
-                    .unwrap_or_else(|| "unknown".to_string());
+                    .latest_version.map_or_else(|| "unknown".to_string(), |v| v.number);
 
                 if !ClawHubClient::is_newer_version(&local_meta.version, &remote_version) {
                     return Ok(ClawHubOutput {

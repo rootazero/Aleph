@@ -147,8 +147,7 @@ pub fn resolve_route(
         b.match_rule
             .account_id
             .as_ref()
-            .map(|a| a != "*")
-            .unwrap_or(false)
+            .is_some_and(|a| a != "*")
             && b.match_rule.peer.is_none()
             && b.match_rule.guild_id.is_none()
             && b.match_rule.team_id.is_none()
@@ -169,8 +168,7 @@ pub fn resolve_route(
         b.match_rule
             .account_id
             .as_ref()
-            .map(|a| a == "*")
-            .unwrap_or(true)
+            .map_or(true, |a| a == "*")
             && b.match_rule.peer.is_none()
             && b.match_rule.guild_id.is_none()
             && b.match_rule.team_id.is_none()
@@ -216,8 +214,7 @@ fn build_session_key(
 fn matches_channel(rule: &MatchRule, channel: &str) -> bool {
     rule.channel
         .as_ref()
-        .map(|c| c.eq_ignore_ascii_case(channel))
-        .unwrap_or(false)
+        .is_some_and(|c| c.eq_ignore_ascii_case(channel))
 }
 
 fn matches_account(rule: &MatchRule, account_id: &str) -> bool {
@@ -242,15 +239,13 @@ fn matches_peer(rule: &MatchRule, peer: &RoutePeer) -> bool {
 fn matches_guild(rule: &MatchRule, guild_id: &str) -> bool {
     rule.guild_id
         .as_ref()
-        .map(|g| g.eq_ignore_ascii_case(guild_id))
-        .unwrap_or(false)
+        .is_some_and(|g| g.eq_ignore_ascii_case(guild_id))
 }
 
 fn matches_team(rule: &MatchRule, team_id: &str) -> bool {
     rule.team_id
         .as_ref()
-        .map(|t| t.eq_ignore_ascii_case(team_id))
-        .unwrap_or(false)
+        .is_some_and(|t| t.eq_ignore_ascii_case(team_id))
 }
 
 #[cfg(test)]

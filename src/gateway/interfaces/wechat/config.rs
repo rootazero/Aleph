@@ -100,9 +100,7 @@ fn default_chunk_retries() -> u32 {
 
 fn default_data_dir() -> String {
     std::env::var("ALEPH_DATA_DIR").unwrap_or_else(|_| {
-        dirs::home_dir()
-            .map(|p| p.join(".aleph").to_string_lossy().to_string())
-            .unwrap_or_else(|| ".".to_string())
+        dirs::home_dir().map_or_else(|| ".".to_string(), |p| p.join(".aleph").to_string_lossy().to_string())
     })
 }
 

@@ -101,8 +101,7 @@ impl InstallRegistry {
                 // pointing outside the skills dir should not be treated as a skill.
                 e.path()
                     .symlink_metadata()
-                    .map(|m| m.is_dir())
-                    .unwrap_or(false)
+                    .is_ok_and(|m| m.is_dir())
             })
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
@@ -133,8 +132,7 @@ impl InstallRegistry {
     pub fn is_official(&self, name: &str) -> bool {
         self.skills
             .get(name)
-            .map(|e| e.source == SkillOrigin::Official)
-            .unwrap_or(false)
+            .is_some_and(|e| e.source == SkillOrigin::Official)
     }
 }
 

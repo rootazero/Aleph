@@ -308,8 +308,7 @@ impl PairLoopGuard {
     fn maybe_prune(state: &mut GuardState, config: &PairLoopGuardConfig, now: Instant) {
         let due = state
             .last_prune
-            .map(|t| now.saturating_duration_since(t) >= PRUNE_INTERVAL)
-            .unwrap_or(true);
+            .map_or(true, |t| now.saturating_duration_since(t) >= PRUNE_INTERVAL);
         if !due && state.pairs.len() <= MAX_TRACKED_PAIRS {
             return;
         }
@@ -358,13 +357,12 @@ pub fn resolve_pair_loop_settings(
     };
     let merged_defaults = defaults
         .cloned()
-        .map(|d| PairLoopGuardConfig {
+        .map_or(base, |d| PairLoopGuardConfig {
             enabled: d.enabled,
             max_events_per_window: d.max_events_per_window.max(1),
             window_seconds: d.window_seconds.max(1),
             cooldown_seconds: d.cooldown_seconds,
-        })
-        .unwrap_or(base);
+        });
     match channel.cloned() {
         Some(c) => PairLoopGuardConfig {
             enabled: c.enabled,

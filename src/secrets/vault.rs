@@ -258,9 +258,7 @@ impl SecretVault {
     /// the result.
     #[must_use]
     pub fn default_path() -> PathBuf {
-        crate::utils::paths::get_config_dir()
-            .map(|d| d.join("secrets.vault"))
-            .unwrap_or_else(|e| {
+        crate::utils::paths::get_config_dir().map_or_else(|e| {
                 tracing::warn!(
                     error = %e,
                     fallback = "secrets.vault",
@@ -268,7 +266,7 @@ impl SecretVault {
                      This is a fallback path — review permissions and ensure backups."
                 );
                 PathBuf::from("secrets.vault")
-            })
+            }, |d| d.join("secrets.vault"))
     }
 }
 

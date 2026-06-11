@@ -31,9 +31,7 @@ use super::{BuiltinToolConfig, ToolRegistry};
 /// canonical encoding and survives every key variant (Main, DM, Group,
 /// Task, Subagent, Ephemeral) plus the legacy `peer:` form.
 pub(super) fn parse_caller_agent_id(session_key_str: &str, fallback: &str) -> String {
-    crate::routing::session_key::SessionKey::from_key_string(session_key_str)
-        .map(|k| k.agent_id().to_string())
-        .unwrap_or_else(|| fallback.to_string())
+    crate::routing::session_key::SessionKey::from_key_string(session_key_str).map_or_else(|| fallback.to_string(), |k| k.agent_id().to_string())
 }
 
 pub(crate) fn resolve_plugin_handler_from_sources(
@@ -388,9 +386,7 @@ impl BuiltinToolRegistry {
     fn caller_agent_id(&self, fallback: &str) -> String {
         self.session_context_handle
             .as_ref()
-            .and_then(|h| h.try_read().ok())
-            .map(|ctx| parse_caller_agent_id(&ctx.session_key_str, fallback))
-            .unwrap_or_else(|| fallback.to_string())
+            .and_then(|h| h.try_read().ok()).map_or_else(|| fallback.to_string(), |ctx| parse_caller_agent_id(&ctx.session_key_str, fallback))
     }
 
     /// Inject GatewayContext after construction (breaks circular dependency).

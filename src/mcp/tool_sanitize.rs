@@ -99,7 +99,7 @@ fn normalize_node(node: Value) -> Value {
 
 /// Coerce `type`, `properties`, and `required` into a mutually consistent shape.
 fn repair_object_shape(out: &mut Map<String, Value>) {
-    let has_properties = out.get("properties").map(Value::is_object).unwrap_or(false);
+    let has_properties = out.get("properties").is_some_and(Value::is_object);
     let has_required = out.contains_key("required");
 
     // Infer the object type when properties are declared without one.

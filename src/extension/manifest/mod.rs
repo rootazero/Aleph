@@ -309,7 +309,7 @@ fn has_any_component(root: &Path) -> bool {
                 if let Ok(entries) = std::fs::read_dir(&target) {
                     for entry in entries.flatten() {
                         let name = entry.file_name();
-                        if name.to_str().map(|s| s.ends_with(suf)).unwrap_or(false) {
+                        if name.to_str().is_some_and(|s| s.ends_with(suf)) {
                             return true;
                         }
                         // Recurse one level for skills/*/SKILL.md pattern
@@ -321,8 +321,7 @@ fn has_any_component(root: &Path) -> bool {
                                         if inner_entry
                                             .file_name()
                                             .to_str()
-                                            .map(|s| s.ends_with(suf))
-                                            .unwrap_or(false)
+                                            .is_some_and(|s| s.ends_with(suf))
                                         {
                                             return true;
                                         }

@@ -104,8 +104,7 @@ fn remote_exec_pipe(compact: &str) -> Option<String> {
             let at_boundary = compact[end..]
                 .chars()
                 .next()
-                .map(|c| !c.is_alphanumeric())
-                .unwrap_or(true);
+                .map_or(true, |c| !c.is_alphanumeric());
             if at_boundary {
                 return Some(format!(
                     "blocked: typing a 'curl/wget … | {shell}' command is not permitted \

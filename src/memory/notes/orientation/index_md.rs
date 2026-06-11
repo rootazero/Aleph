@@ -76,9 +76,7 @@ impl IndexMdGenerator {
             sorted.sort_by_key(|x| std::cmp::Reverse(x.updated_at));
             for e in sorted {
                 let summary = self.summary_for(e).await.unwrap_or_default();
-                let updated = DateTime::<Utc>::from_timestamp(e.updated_at, 0)
-                    .map(|d| d.format("%Y-%m-%d").to_string())
-                    .unwrap_or_else(|| "unknown".into());
+                let updated = DateTime::<Utc>::from_timestamp(e.updated_at, 0).map_or_else(|| "unknown".into(), |d| d.format("%Y-%m-%d").to_string());
                 out.push_str(&format!(
                     "- [[{path}]] — {summary} (updated {updated})\n",
                     path = e.path,

@@ -108,8 +108,7 @@ impl ExtensionManager {
                 .filter(|s| {
                     registry
                         .get_plugin(&s.plugin_id)
-                        .map(|r| r.status.is_active())
-                        .unwrap_or(false)
+                        .is_some_and(|r| r.status.is_active())
                 })
                 .map(|s| s.plugin_id.clone())
                 .collect();

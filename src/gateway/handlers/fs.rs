@@ -209,7 +209,7 @@ pub async fn handle_list_dir(request: JsonRpcRequest, config: SharedConfig) -> J
         }
         // `file_type()` follows symlinks; we deliberately resolve so the
         // displayed `is_dir` matches what the next `list_dir` would do.
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
         let full = entry.path();
         entries.push(json!({
             "name": name,

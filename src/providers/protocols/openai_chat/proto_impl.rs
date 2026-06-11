@@ -30,9 +30,7 @@ impl OpenAiProtocol {
         let raw_base_url = config
             .base_url
             .as_ref()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+            .filter(|s| !s.is_empty()).map_or_else(|| "https://api.openai.com/v1".to_string(), |s| s.to_string());
 
         // Detect API version from the URL (v1 or v3)
         let is_v3_api = raw_base_url.contains("/v3") || raw_base_url.contains("/api/v3");

@@ -89,8 +89,7 @@ impl MarkdownCliTool {
             .metadata
             .aleph
             .as_ref()
-            .map(|a| a.security.sandbox.clone())
-            .unwrap_or(SandboxMode::Host)
+            .map_or(SandboxMode::Host, |a| a.security.sandbox.clone())
     }
 }
 

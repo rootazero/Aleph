@@ -156,9 +156,7 @@ impl PiiEngine {
                 config
                     .custom_rules
                     .iter()
-                    .find(|r| r.name == rule_name)
-                    .map(|r| &r.action)
-                    .unwrap_or_else(|| &PiiAction::Block)
+                    .find(|r| r.name == rule_name).map_or_else(|| &PiiAction::Block, |r| &r.action)
             }
         }
     }

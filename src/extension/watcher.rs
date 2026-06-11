@@ -287,8 +287,7 @@ impl ExtensionWatcher {
     fn should_watch_file(path: &Path) -> bool {
         path.extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| WATCHED_EXTENSIONS.contains(&ext))
-            .unwrap_or(false)
+            .is_some_and(|ext| WATCHED_EXTENSIONS.contains(&ext))
     }
 
     /// Add a directory to watch (while running)

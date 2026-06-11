@@ -37,9 +37,7 @@ impl AnthropicProtocol {
         let raw_base_url = config
             .base_url
             .as_ref()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "https://api.anthropic.com".to_string());
+            .filter(|s| !s.is_empty()).map_or_else(|| "https://api.anthropic.com".to_string(), |s| s.to_string());
 
         // Normalize URL
         let base_url = raw_base_url
@@ -321,7 +319,7 @@ impl AnthropicProtocol {
         if caps.supports_context_1m && Self::is_claude_4_family(model) {
             betas.push("context-1m-2025-08-07");
         }
-        if api_key.map(Self::is_oauth_token).unwrap_or(false) {
+        if api_key.is_some_and(Self::is_oauth_token) {
             // OAuth requests need the full Claude Code beta stack — without
             // claude-code/oauth Anthropic's OAuth infrastructure intermittently
             // 500s; without token-restricted the token's scope check fails.

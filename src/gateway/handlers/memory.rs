@@ -116,7 +116,7 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
 
     // A non-empty query runs a real full-text search over knowledge notes.
     // Previously the `query` parameter was silently ignored.
-    let query = params.query.as_deref().map(str::trim).unwrap_or("");
+    let query = params.query.as_deref().map_or("", str::trim);
     if !query.is_empty() {
         let agent_id = params
             .agent_id

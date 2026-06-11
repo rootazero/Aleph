@@ -138,8 +138,7 @@ impl ShellHookConsent {
             .unwrap_or_else(|e| e.into_inner())
             .entries
             .get(&fp)
-            .map(|e| e.status == ConsentStatus::Approved)
-            .unwrap_or(false)
+            .is_some_and(|e| e.status == ConsentStatus::Approved)
     }
 
     /// Record an un-approved shell hook as `pending` so the operator can
@@ -368,8 +367,7 @@ fn file_stamp(path: &Path) -> FileStamp {
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 fn hex16(bytes: &[u8]) -> String {

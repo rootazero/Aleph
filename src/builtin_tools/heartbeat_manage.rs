@@ -176,8 +176,7 @@ impl AlephTool for HeartbeatCreateTool {
 
         let trigger_condition = args
             .probe_trigger_condition
-            .map(TriggerCondition::from)
-            .unwrap_or(TriggerCondition::Always);
+            .map_or(TriggerCondition::Always, TriggerCondition::from);
 
         let probe = ProbeConfig {
             tool_name: args.probe_tool_name,

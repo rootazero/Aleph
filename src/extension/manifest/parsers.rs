@@ -209,7 +209,7 @@ where
                 .unwrap_or("unknown")
                 .to_string();
             parse_fn(&entry_file, &dir_name, plugin_id)
-        } else if path.extension().map(|e| e == "md").unwrap_or(false) {
+        } else if path.extension().is_some_and(|e| e == "md") {
             let file_name = path
                 .file_stem()
                 .and_then(|n| n.to_str())
@@ -355,8 +355,7 @@ fn parse_single_agent(
         name: fm.name.unwrap_or_else(|| default_name.to_string()),
         description: fm
             .description
-            .map(|d| if d.is_empty() { None } else { Some(d) })
-            .unwrap_or(None),
+            .and_then(|d| if d.is_empty() { None } else { Some(d) }),
         content: body,
         model: fm.model,
         plugin_id: plugin_id.to_string(),
@@ -612,8 +611,7 @@ pub(crate) fn is_path_inside(root: &Path, target: &Path) -> bool {
 fn is_hidden(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.starts_with('.'))
-        .unwrap_or(false)
+        .is_some_and(|n| n.starts_with('.'))
 }
 
 /// Substitute `${CLAUDE_PLUGIN_ROOT}` and `${ALEPH_PLUGIN_ROOT}` in a string.

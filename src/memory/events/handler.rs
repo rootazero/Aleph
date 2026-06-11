@@ -258,7 +258,7 @@ impl MemoryCommandHandler {
         // Get current access count from event history
         let events = self.db.get_memory_events_for_fact(&cmd.note_path).await?;
         let current_fact = super::projector::EventProjector::fold_events_to_note(&events)?;
-        let current_access_count = current_fact.map(|f| f.access_count).unwrap_or(0);
+        let current_access_count = current_fact.map_or(0, |f| f.access_count);
 
         let event = MemoryEvent::NoteAccessed {
             note_path: cmd.note_path.clone(),

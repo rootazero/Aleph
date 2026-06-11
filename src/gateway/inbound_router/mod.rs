@@ -467,7 +467,7 @@ impl InboundMessageRouter {
                 channel_id = %msg.channel_id.as_str(),
                 conversation_id = %msg.conversation_id.as_str(),
                 sender_id = %msg.sender_id.as_str(),
-                retry_after_secs = result.retry_after.map(|d| d.as_secs()).unwrap_or(0),
+                retry_after_secs = result.retry_after.map_or(0, |d| d.as_secs()),
                 reason = %result.reason.as_deref().unwrap_or(""),
                 "pair-loop guard suppressed bot-authored inbound message"
             );

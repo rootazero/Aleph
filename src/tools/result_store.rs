@@ -353,7 +353,7 @@ pub fn sweep_stale_tool_result_dirs(root: &Path, cutoff: Duration) -> usize {
         let path = entry.path();
         // The store layout is one directory per session_id; ignore stray
         // files at the root so we never delete user-placed artifacts.
-        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+        let is_dir = entry.file_type().is_ok_and(|ft| ft.is_dir());
         if !is_dir {
             continue;
         }

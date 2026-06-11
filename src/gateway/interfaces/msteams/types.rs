@@ -269,9 +269,7 @@ pub fn extract_quote_info(attachments: &[ActivityAttachment]) -> Option<QuoteInf
         // Extract sender from <strong itemprop="mri">
         let sender = QUOTE_SENDER_RE
             .captures(html)
-            .and_then(|c| c.get(1))
-            .map(|m| html_to_plain_text(m.as_str()))
-            .unwrap_or_else(|| "unknown".to_string());
+            .and_then(|c| c.get(1)).map_or_else(|| "unknown".to_string(), |m| html_to_plain_text(m.as_str()));
 
         // Extract body from <p itemprop="copy">
         let body = QUOTE_BODY_RE

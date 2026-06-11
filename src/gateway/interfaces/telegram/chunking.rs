@@ -107,8 +107,7 @@ pub(crate) fn split_html_safe(html: &str, max_len: usize) -> Vec<String> {
         let byte_limit = remaining
             .char_indices()
             .nth(effective_limit)
-            .map(|(idx, _)| idx)
-            .unwrap_or(remaining.len());
+            .map_or(remaining.len(), |(idx, _)| idx);
 
         let search_slice = &remaining[..byte_limit];
 

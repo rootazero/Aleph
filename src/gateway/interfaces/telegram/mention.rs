@@ -69,8 +69,7 @@ fn contains_username_mention(text: &str, username: &str) -> bool {
         let boundary_ok = text[end..]
             .chars()
             .next()
-            .map(|c| !(c.is_ascii_alphanumeric() || c == '_'))
-            .unwrap_or(true);
+            .map_or(true, |c| !(c.is_ascii_alphanumeric() || c == '_'));
         if boundary_ok {
             return true;
         }

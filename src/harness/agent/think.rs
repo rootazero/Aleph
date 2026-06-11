@@ -926,8 +926,7 @@ impl AgentHarness {
         let output_tokens = response
             .usage
             .as_ref()
-            .map(|u| u.output_tokens as usize)
-            .unwrap_or(0);
+            .map_or(0, |u| u.output_tokens as usize);
 
         // Calibrate the context-budget token estimator against the provider's
         // ground-truth prompt size. `last_pressure` (set by `before_turn`, or

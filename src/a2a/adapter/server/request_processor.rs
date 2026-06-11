@@ -174,9 +174,7 @@ impl A2ARequestProcessor {
         let task_id = request
             .params
             .get("taskId")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            .and_then(|v| v.as_str()).map_or_else(|| uuid::Uuid::new_v4().to_string(), String::from);
 
         let session_id = request
             .params

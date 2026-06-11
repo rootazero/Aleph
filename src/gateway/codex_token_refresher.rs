@@ -145,7 +145,7 @@ impl CodexTokenRefresher {
                 return;
             };
             let mut pc = pc.clone();
-            if pc.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
+            if pc.api_key.as_ref().map_or(true, |k| k.is_empty()) {
                 match self.vault.get_secret(&format!("ai:{PROVIDER_NAME}")) {
                     Ok(Some(secret)) => pc.api_key = Some(secret.expose().to_string()),
                     _ => {

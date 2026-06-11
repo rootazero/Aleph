@@ -89,8 +89,7 @@ pub fn resolve_profile_order(
             let type_score = store
                 .profiles
                 .get(&profile_id)
-                .map(|c| c.type_score())
-                .unwrap_or(3);
+                .map_or(3, |c| c.type_score());
             let last_used = store
                 .get_usage_stats(&profile_id)
                 .and_then(|s| s.last_used)

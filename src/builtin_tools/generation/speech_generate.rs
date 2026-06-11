@@ -202,8 +202,7 @@ impl SpeechGenerateTool {
         let format = output
             .metadata
             .content_type
-            .as_ref()
-            .map(|ct| {
+            .as_ref().map_or_else(|| args.format.as_deref().unwrap_or("mp3"), |ct| {
                 // Extract format from content type (e.g., "audio/mpeg" -> "mp3")
                 match ct.as_str() {
                     "audio/mpeg" => "mp3",
@@ -214,7 +213,6 @@ impl SpeechGenerateTool {
                     _ => "mp3",
                 }
             })
-            .unwrap_or_else(|| args.format.as_deref().unwrap_or("mp3"))
             .to_string();
 
         info!(

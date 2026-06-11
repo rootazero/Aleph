@@ -245,12 +245,12 @@ impl SimpleExecutionEngine {
         // Helper to get next seq
         let get_seq = || async {
             let runs = self.active_runs.read().await;
-            runs.get(run_id).map(|r| r.next_seq()).unwrap_or(0)
+            runs.get(run_id).map_or(0, |r| r.next_seq())
         };
 
         let get_chunk = || async {
             let runs = self.active_runs.read().await;
-            runs.get(run_id).map(|r| r.next_chunk()).unwrap_or(0)
+            runs.get(run_id).map_or(0, |r| r.next_chunk())
         };
 
         // Emit reasoning

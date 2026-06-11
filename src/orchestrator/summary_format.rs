@@ -340,8 +340,7 @@ fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
     let cutoff = s
         .char_indices()
         .nth(max_chars.saturating_sub(1))
-        .map(|(i, _)| i)
-        .unwrap_or(s.len());
+        .map_or(s.len(), |(i, _)| i);
     format!("{}\u{2026}", &s[..cutoff])
 }
 

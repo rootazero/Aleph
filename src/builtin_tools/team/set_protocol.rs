@@ -85,8 +85,7 @@ impl AlephTool for TeamSetProtocolTool {
         let will_be_set = args
             .protocol
             .as_deref()
-            .map(|p| !p.trim().is_empty())
-            .unwrap_or(false);
+            .is_some_and(|p| !p.trim().is_empty());
 
         self.store
             .set_protocol(&args.team_id, args.protocol.clone())

@@ -270,12 +270,10 @@ pub struct SessionEventRecord {
 pub fn now_ms() -> Timestamp {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or_else(|e| {
+        .duration_since(UNIX_EPOCH).map_or_else(|e| {
             tracing::warn!(error = %e, "System clock went backwards — returning 0");
             0
-        })
+        }, |d| d.as_millis() as i64)
 }
 
 #[cfg(test)]

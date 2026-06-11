@@ -640,9 +640,7 @@ fn generate_preview_message(
             (_, serde_json::Value::Null) => {
                 let old_str = diff
                     .old_value
-                    .as_ref()
-                    .map(value_to_string)
-                    .unwrap_or_else(|| "null".to_string());
+                    .as_ref().map_or_else(|| "null".to_string(), value_to_string);
                 format!("• 删除字段: {} (原值: {})", diff.path, old_str)
             }
             // Field modified

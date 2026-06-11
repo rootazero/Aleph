@@ -223,8 +223,6 @@ impl TranscriptIndexer {
         }
         let skip = char_count - overlap_chars;
         text.char_indices()
-            .nth(skip)
-            .map(|(byte_pos, _)| text[byte_pos..].to_string())
-            .unwrap_or_else(|| text.to_string())
+            .nth(skip).map_or_else(|| text.to_string(), |(byte_pos, _)| text[byte_pos..].to_string())
     }
 }

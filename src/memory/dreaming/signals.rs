@@ -186,8 +186,7 @@ impl SignalSnapshot {
         self.signals
             .iter()
             .find(|s| s.name == name)
-            .map(|s| s.score)
-            .unwrap_or(0.0)
+            .map_or(0.0, |s| s.score)
     }
 }
 

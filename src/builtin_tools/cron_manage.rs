@@ -92,9 +92,7 @@ fn validate_schedule(schedule: &ScheduleInput) -> Result<()> {
         ScheduleInput::At { at_ms, .. } => {
             let now_ms = chrono::Utc::now().timestamp_millis();
             if *at_ms <= now_ms {
-                let at_human = chrono::DateTime::from_timestamp_millis(*at_ms)
-                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-                    .unwrap_or_else(|| format!("{at_ms}ms"));
+                let at_human = chrono::DateTime::from_timestamp_millis(*at_ms).map_or_else(|| format!("{at_ms}ms"), |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string());
                 return Err(crate::error::AlephError::tool(format!(
                     "Cannot schedule a one-shot task in the past. at_ms={at_ms} resolves to \
                      {at_human}, but current time is {now_ms}ms. Provide a future timestamp."

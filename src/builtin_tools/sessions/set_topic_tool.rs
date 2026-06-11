@@ -84,8 +84,7 @@ impl AlephTool for SessionSetTopicTool {
             &topic[..topic
                 .char_indices()
                 .nth(100)
-                .map(|(i, _)| i)
-                .unwrap_or(topic.len())]
+                .map_or(topic.len(), |(i, _)| i)]
         } else {
             topic
         };

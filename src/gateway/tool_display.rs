@@ -184,8 +184,7 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
         let boundary = s
             .char_indices()
             .nth(end_chars)
-            .map(|(i, _)| i)
-            .unwrap_or(s.len());
+            .map_or(s.len(), |(i, _)| i);
         format!("{}...", &s[..boundary])
     }
 }

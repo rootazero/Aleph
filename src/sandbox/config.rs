@@ -409,13 +409,11 @@ pub struct SandboxConfig {
 }
 
 fn default_workspace_root() -> PathBuf {
-    dirs::home_dir()
-        .map(|home| home.join(".aleph").join("workspaces"))
-        .unwrap_or_else(|| {
+    dirs::home_dir().map_or_else(|| {
             // Fall back to a known absolute path to avoid creating workspaces
             // in an arbitrary working directory.
             PathBuf::from("/tmp/.aleph/workspaces")
-        })
+        }, |home| home.join(".aleph").join("workspaces"))
 }
 
 fn default_enabled() -> bool {

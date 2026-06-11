@@ -101,8 +101,7 @@ impl PolicyEngine {
                 // to "expired" (deny).
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(i64::MAX);
+                    .map_or(i64::MAX, |d| d.as_secs() as i64);
                 if scope.is_expired(now) {
                     return PermissionResult::Denied {
                         reason: "Guest token expired".to_string(),

@@ -210,11 +210,9 @@ fn classify_anthropic_error_response(
             format!("Anthropic authentication failed ({status}): {detail}"),
         ),
         429 => {
-            let suggestion = retry_after
-                .map(|ra| format!("Rate limited. Retry after {ra} seconds."))
-                .unwrap_or_else(|| {
+            let suggestion = retry_after.map_or_else(|| {
                     "Rate limited. Wait before retrying or upgrade your API plan.".to_string()
-                });
+                }, |ra| format!("Rate limited. Retry after {ra} seconds."));
             AlephError::RateLimitError {
                 message: format!("Anthropic API rate limited (429): {detail}"),
                 suggestion: Some(suggestion),
@@ -258,8 +256,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         let is_oauth = config
             .api_key
             .as_deref()
-            .map(Self::is_oauth_token)
-            .unwrap_or(false);
+            .is_some_and(Self::is_oauth_token);
         let raw_model = payload
             .model
             .as_deref()

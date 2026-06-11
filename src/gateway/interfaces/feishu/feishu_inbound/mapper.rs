@@ -96,9 +96,7 @@ fn build_conversation_id(
         GroupSessionScope::Group => chat_id.to_string(),
         GroupSessionScope::User => format!("{chat_id}:{sender_id}"),
         GroupSessionScope::Thread => root_id
-            .as_ref()
-            .map(|r| format!("{chat_id}:{r}"))
-            .unwrap_or_else(|| chat_id.to_string()),
+            .as_ref().map_or_else(|| chat_id.to_string(), |r| format!("{chat_id}:{r}")),
     }
 }
 
@@ -113,20 +111,16 @@ fn extract_message_text(message_type: &str, content: &str, mentions: &[Mention])
         "text" => events::extract_text_content(content, mentions).unwrap_or_default(),
         "post" => events::parse_post_content(content),
         "image" => "[Image]".to_string(),
-        "file" => serde_json::from_str::<serde_json::Value>(content)
-            .map(|v| v["file_name"].as_str().unwrap_or("[File]").to_string())
-            .unwrap_or_else(|_| "[File]".to_string()),
+        "file" => serde_json::from_str::<serde_json::Value>(content).map_or_else(|_| "[File]".to_string(), |v| v["file_name"].as_str().unwrap_or("[File]").to_string()),
         "audio" => "[Audio]".to_string(),
         "video" => "[Video]".to_string(),
         "sticker" => "[Sticker]".to_string(),
-        "merge_forward" => serde_json::from_str::<serde_json::Value>(content)
-            .map(|v| {
+        "merge_forward" => serde_json::from_str::<serde_json::Value>(content).map_or_else(|_| "[Forwarded Messages]".to_string(), |v| {
                 v["title"]
                     .as_str()
                     .unwrap_or("[Forwarded Messages]")
                     .to_string()
-            })
-            .unwrap_or_else(|_| "[Forwarded Messages]".to_string()),
+            }),
         _ => format!("[{message_type} message]"),
     }
 }

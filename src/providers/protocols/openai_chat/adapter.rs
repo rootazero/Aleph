@@ -272,11 +272,9 @@ impl ProtocolAdapter for OpenAiProtocol {
             let error_text = response.text().await.unwrap_or_default();
             if status.as_u16() == 429 {
                 let suggestion = retry_after
-                    .as_ref()
-                    .map(|ra| format!("Rate limited. Retry after {ra} seconds."))
-                    .unwrap_or_else(|| {
+                    .as_ref().map_or_else(|| {
                         "Rate limited. Wait before retrying or upgrade your API plan.".to_string()
-                    });
+                    }, |ra| format!("Rate limited. Retry after {ra} seconds."));
                 return Err(AlephError::RateLimitError {
                     message: format!("OpenAI Chat API rate limited (429): {error_text}"),
                     suggestion: Some(suggestion),

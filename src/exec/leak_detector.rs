@@ -141,8 +141,7 @@ impl LeakDetector {
                     let byte_offset = matched
                         .char_indices()
                         .nth(20)
-                        .map(|(i, _)| i)
-                        .unwrap_or(matched.len());
+                        .map_or(matched.len(), |(i, _)| i);
                     format!("{}...", &matched[..byte_offset])
                 } else {
                     matched.to_string()

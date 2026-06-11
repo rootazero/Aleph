@@ -112,8 +112,7 @@ impl ImageGenerateTool {
                 .prompt
                 .char_indices()
                 .nth(30)
-                .map(|(i, _)| i)
-                .unwrap_or(args.prompt.len());
+                .map_or(args.prompt.len(), |(i, _)| i);
             format!("{}...", &args.prompt[..end_byte])
         } else {
             args.prompt.clone()

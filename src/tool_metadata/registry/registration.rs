@@ -329,9 +329,7 @@ impl ToolRegistrar {
             // Use system_prompt as description if available, otherwise generic
             let description = rule
                 .system_prompt
-                .as_ref()
-                .map(|s| truncate_description(s, 100))
-                .unwrap_or_else(|| format!("Custom command /{command_name}"));
+                .as_ref().map_or_else(|| format!("Custom command /{command_name}"), |s| truncate_description(s, 100));
 
             let mut tool = UnifiedTool::new(
                 &id,

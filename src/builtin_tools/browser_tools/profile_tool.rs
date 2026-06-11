@@ -78,9 +78,7 @@ impl AlephTool for BrowserProfileTool {
                     .map(|(name, state)| {
                         let driver = self
                             .manager
-                            .get_driver(&name)
-                            .map(|d| format!("{d:?}"))
-                            .unwrap_or_else(|| "unknown".to_string());
+                            .get_driver(&name).map_or_else(|| "unknown".to_string(), |d| format!("{d:?}"));
                         ProfileInfo {
                             name,
                             state: format!("{state:?}"),

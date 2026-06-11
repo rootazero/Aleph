@@ -309,8 +309,7 @@ impl Channel for MsTeamsChannel {
                 }
                 if status_handle
                     .try_read()
-                    .map(|s| *s == ChannelStatus::Disconnected)
-                    .unwrap_or(false)
+                    .is_ok_and(|s| *s == ChannelStatus::Disconnected)
                 {
                     break;
                 }
@@ -693,8 +692,7 @@ impl MsTeamsChannel {
         let bot_was_added = activity
             .members_added
             .as_ref()
-            .map(|members| members.iter().any(|m| m.id == bot_id))
-            .unwrap_or(false);
+            .is_some_and(|members| members.iter().any(|m| m.id == bot_id));
 
         if !bot_was_added {
             return;
@@ -772,9 +770,7 @@ impl MsTeamsChannel {
         let target_message_id = activity.reply_to_id.as_deref();
         let from = activity.from.as_ref();
 
-        let from_info = from
-            .map(|f| format!("{} ({})", f.name.as_deref().unwrap_or("unknown"), f.id))
-            .unwrap_or_else(|| "unknown".to_string());
+        let from_info = from.map_or_else(|| "unknown".to_string(), |f| format!("{} ({})", f.name.as_deref().unwrap_or("unknown"), f.id));
 
         if let Some(reactions) = reactions_added {
             for reaction in reactions {

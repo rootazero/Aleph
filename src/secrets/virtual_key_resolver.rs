@@ -31,7 +31,7 @@ impl VirtualKeyResolver {
 #[async_trait]
 impl AsyncSecretResolver for VirtualKeyResolver {
     async fn resolve(&self, name: &str) -> Result<DecryptedSecret, SecretError> {
-        let resolved = self.aliases.get(name).map(String::as_str).unwrap_or(name);
+        let resolved = self.aliases.get(name).map_or(name, String::as_str);
         self.inner.resolve(resolved).await
     }
 }

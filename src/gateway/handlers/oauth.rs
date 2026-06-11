@@ -118,13 +118,9 @@ fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
     ProviderConfig {
         protocol: preset.map(|p| p.protocol.to_string()),
         api_key: None,
-        models: vec![preset
-            .map(|p| p.default_model.to_string())
-            .unwrap_or_else(|| "gpt-5.3-codex".to_string())],
+        models: vec![preset.map_or_else(|| "gpt-5.3-codex".to_string(), |p| p.default_model.to_string())],
         base_url: preset.map(|p| p.base_url.to_string()),
-        color: preset
-            .map(|p| p.color.to_string())
-            .unwrap_or_else(|| "#808080".to_string()),
+        color: preset.map_or_else(|| "#808080".to_string(), |p| p.color.to_string()),
         timeout_seconds: 300,
         enabled: true,
         max_tokens: None,
@@ -454,8 +450,7 @@ pub async fn handle_oauth_status(
         .read()
         .await
         .as_ref()
-        .map(|c| c.is_expired())
-        .unwrap_or(true);
+        .map_or(true, |c| c.is_expired());
 
     if is_expired {
         debug!("OAuth token expired, attempting refresh");

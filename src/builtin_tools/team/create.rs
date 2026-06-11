@@ -191,9 +191,7 @@ impl TeamCreateTool {
             let leader_model = self
                 .registry
                 .get(&self.current_agent_id)
-                .await
-                .map(|inst| inst.config().model.clone())
-                .unwrap_or_else(|| "claude-sonnet-4-5".to_string());
+                .await.map_or_else(|| "claude-sonnet-4-5".to_string(), |inst| inst.config().model.clone());
             return self
                 .create_inline_agent(create_spec, &spec.role, &leader_model)
                 .await;

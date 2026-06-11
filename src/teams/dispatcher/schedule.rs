@@ -36,8 +36,7 @@ pub fn is_dispatcher_managed(task: &CoordTask) -> bool {
     task.metadata
         .get(MANAGED_BY_KEY)
         .and_then(|v| v.as_str())
-        .map(|s| s == MANAGED_BY_DISPATCHER)
-        .unwrap_or(false)
+        .is_some_and(|s| s == MANAGED_BY_DISPATCHER)
 }
 
 /// Terminal status for a successful member run: review-gated tasks

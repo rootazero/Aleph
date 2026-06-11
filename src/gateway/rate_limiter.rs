@@ -364,15 +364,14 @@ impl RateLimiter {
             let retry_after = sw
                 .timestamps
                 .front()
-                .map(|oldest| {
+                .map_or(Duration::ZERO, |oldest| {
                     let expires_at = *oldest + window_dur;
                     if expires_at > now {
                         expires_at.duration_since(now)
                     } else {
                         Duration::ZERO
                     }
-                })
-                .unwrap_or(Duration::ZERO);
+                });
             return Err(RateLimitError::Exceeded {
                 scope: key.scope.clone(),
                 retry_after_ms: retry_after.as_millis() as u64,

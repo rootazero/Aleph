@@ -134,18 +134,14 @@ impl MatrixConfig {
     #[must_use]
     pub fn default_state_store_path() -> String {
         dirs::data_dir()
-            .map(|p| p.join("aleph").join("state").join("matrix_sync.db"))
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "./matrix_sync.db".to_string())
+            .map(|p| p.join("aleph").join("state").join("matrix_sync.db")).map_or_else(|| "./matrix_sync.db".to_string(), |p| p.to_string_lossy().to_string())
     }
 
     /// Return the default dedupe store path.
     #[must_use]
     pub fn default_dedupe_store_path() -> String {
         dirs::data_dir()
-            .map(|p| p.join("aleph").join("state").join("matrix_dedupe.db"))
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "./matrix_dedupe.db".to_string())
+            .map(|p| p.join("aleph").join("state").join("matrix_dedupe.db")).map_or_else(|| "./matrix_dedupe.db".to_string(), |p| p.to_string_lossy().to_string())
     }
 
     /// Resolve state store path.

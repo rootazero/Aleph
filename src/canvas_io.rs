@@ -165,7 +165,7 @@ pub fn list_at(dir: &Path) -> Result<Vec<CanvasMeta>, AlephError> {
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        let size_bytes = entry.metadata().map_or(0, |m| m.len());
         out.push(CanvasMeta {
             name: stem.to_string(),
             path: path.clone(),

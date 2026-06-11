@@ -219,7 +219,7 @@ fn spawn_reader(
                 }
             }
 
-            let exit_code = child.wait().map(|s| s.exit_code()).unwrap_or(0);
+            let exit_code = child.wait().map_or(0, |s| s.exit_code());
             session.closed.store(true, Ordering::SeqCst);
             if let Some(bus) = &bus {
                 let ev = TopicEvent::new(

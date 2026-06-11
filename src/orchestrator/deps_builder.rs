@@ -248,8 +248,7 @@ pub fn build_failover_chain(
             let pin_tier = config
                 .providers
                 .get(&name)
-                .map(provider_tier)
-                .unwrap_or(EndpointTier::Cloud);
+                .map_or(EndpointTier::Cloud, provider_tier);
             let pinned = FailoverProvider::new(
                 Arc::new(StaticDefault::new(provider)),
                 vec![FailoverNode {
@@ -319,8 +318,7 @@ fn assemble_fallbacks(
         tier: config
             .providers
             .get(name)
-            .map(provider_tier)
-            .unwrap_or(EndpointTier::Cloud),
+            .map_or(EndpointTier::Cloud, provider_tier),
         provider: provider.clone(),
     };
 
@@ -507,8 +505,7 @@ fn resolve_chain_provider_keys(config: &Config, primary_provider_key: &str) -> V
         config
             .providers
             .get(name)
-            .map(|p| p.enabled)
-            .unwrap_or(false)
+            .is_some_and(|p| p.enabled)
     };
     let mut fallbacks: Vec<String> = Vec::new();
     if let Some(fb) = config.fallback_provider.as_ref() {
@@ -558,8 +555,7 @@ fn derive_chain_min_budget(config: &Config, primary_provider_key: &str) -> Chain
         let budget = derive_token_budget(provider, model);
         let is_smaller = best
             .as_ref()
-            .map(|b| budget.usable < b.budget.usable)
-            .unwrap_or(true);
+            .map_or(true, |b| budget.usable < b.budget.usable);
         if is_smaller {
             best = Some(ChainMinBudget {
                 budget,

@@ -226,8 +226,7 @@ pub fn parse_cc_plugin_toml_content(
     };
 
     let (aleph_ext, permissions) = aleph_extensions
-        .map(|(ext, perms)| (Some(ext), perms))
-        .unwrap_or((None, Vec::new()));
+        .map_or((None, Vec::new()), |(ext, perms)| (Some(ext), perms));
 
     let manifest = PluginManifest {
         id: plugin_id,

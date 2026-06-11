@@ -99,13 +99,11 @@ pub(crate) fn parse_gemini_sse_chunk(
                     // Prefer native ID (Gemini 3+), fallback to synthetic
                     let id = fc
                         .get("id")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| {
+                        .and_then(|v| v.as_str()).map_or_else(|| {
                             let synthetic = format!("gemini_fc_{}", *fc_counter);
                             *fc_counter += 1;
                             synthetic
-                        });
+                        }, |s| s.to_string());
 
                     // Gemini 3 attaches `thoughtSignature` as a Part-level
                     // sibling of `functionCall` (read off `part`, not `fc`).

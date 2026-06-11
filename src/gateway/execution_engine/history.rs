@@ -17,8 +17,7 @@ pub(super) async fn build_loop_history(
     // Skip the last message if it's the current user input we just stored
     let history_slice = if session_history
         .last()
-        .map(|m| m.role == MessageRole::User && m.content == current_input)
-        .unwrap_or(false)
+        .is_some_and(|m| m.role == MessageRole::User && m.content == current_input)
     {
         // safe: last() returned Some, so len() >= 1
         &session_history[..session_history.len().saturating_sub(1)]

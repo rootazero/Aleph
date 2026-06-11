@@ -25,9 +25,7 @@ impl GeminiProtocol {
         let raw_base_url = config
             .base_url
             .as_ref()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_string());
+            .filter(|s| !s.is_empty()).map_or_else(|| "https://generativelanguage.googleapis.com".to_string(), |s| s.to_string());
 
         // Normalize URL: strip trailing slashes and /v1 suffix
         // (user may have /v1 from switching between OpenAI/Anthropic protocols)

@@ -185,7 +185,7 @@ pub async fn handle_usage_db(
 
             let (input_tokens, output_tokens, total, message_count, created_at, last_active_at) =
                 session_meta
-                    .map(|s| {
+                    .map_or((0, 0, 0, 0, None, None), |s| {
                         (
                             s.input_tokens as u64,
                             s.output_tokens as u64,
@@ -196,8 +196,7 @@ pub async fn handle_usage_db(
                             chrono::DateTime::from_timestamp(s.last_active_at, 0)
                                 .map(|dt| dt.to_rfc3339()),
                         )
-                    })
-                    .unwrap_or((0, 0, 0, 0, None, None));
+                    });
 
             JsonRpcResponse::success(
                 request.id,
@@ -242,8 +241,7 @@ pub async fn handle_preview_db(
     let limit = params
         .get("limit")
         .and_then(|v| v.as_u64())
-        .map(|n| n as usize)
-        .unwrap_or(10);
+        .map_or(10, |n| n as usize);
 
     let session_key = match SessionKey::from_key_string(session_key_str) {
         Some(k) => k,

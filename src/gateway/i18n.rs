@@ -319,8 +319,7 @@ fn truncate_error(s: &str, max_chars: usize) -> &str {
     let end = s
         .char_indices()
         .nth(max_chars)
-        .map(|(i, _)| i)
-        .unwrap_or(s.len());
+        .map_or(s.len(), |(i, _)| i);
     &s[..end]
 }
 

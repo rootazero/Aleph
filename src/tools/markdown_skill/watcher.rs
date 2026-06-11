@@ -176,10 +176,9 @@ impl SkillWatcher {
     fn is_skill_file(path: &Path) -> bool {
         path.file_name()
             .and_then(|n| n.to_str())
-            .map(|name| {
+            .is_some_and(|name| {
                 name.eq_ignore_ascii_case("SKILL.md") || name.to_lowercase().ends_with(".skill.md")
             })
-            .unwrap_or(false)
     }
 
     /// Handle skill reload events

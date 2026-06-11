@@ -237,8 +237,7 @@ impl SkillSystem {
     fn api_key_present(manifest: &SkillManifest) -> bool {
         manifest
             .primary_env()
-            .map(|env| std::env::var(env).is_ok())
-            .unwrap_or(false)
+            .is_some_and(|env| std::env::var(env).is_ok())
     }
 
     /// Build status entries for all registered skills.
@@ -675,8 +674,7 @@ fn scan_directory(dir: &Path, source: SkillSource) -> Vec<SkillManifest> {
 fn is_skill_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.eq_ignore_ascii_case("SKILL.md"))
-        .unwrap_or(false)
+        .is_some_and(|n| n.eq_ignore_ascii_case("SKILL.md"))
 }
 
 /// Return the standard skill directories used when no project context is available.

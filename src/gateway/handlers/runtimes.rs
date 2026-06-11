@@ -33,7 +33,7 @@ fn build_list(ledger: &CapabilityLedger) -> RuntimesListResponse {
         .iter()
         .map(|spec| {
             let entry = ledger.entries.get(spec.name);
-            let status = entry.map(|e| e.status).unwrap_or(CapabilityStatus::Missing);
+            let status = entry.map_or(CapabilityStatus::Missing, |e| e.status);
             let bin_path = entry
                 .filter(|e| !e.bin_path.as_os_str().is_empty())
                 .map(|e| e.bin_path.to_string_lossy().to_string());
@@ -76,8 +76,7 @@ pub async fn handle_refresh(
         if probe_result.found {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+                .map_or(0, |d| d.as_secs());
             guard.update(crate::runtimes::ledger::CapabilityEntry {
                 name: spec.name.to_string(),
                 bin_path: probe_result.bin_path.unwrap_or_default(),

@@ -628,8 +628,7 @@ where
                             Ok(Some(goal)) => {
                                 let now_ms = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_millis() as u64)
-                                    .unwrap_or(0);
+                                    .map_or(0, |d| d.as_millis() as u64);
                                 if crate::tasks::goal_pursuit::should_continue(&goal, 0) {
                                     let bumped = goal.clone().spent_continuation(now_ms);
                                     if let Err(e) = store.put(&bumped) {

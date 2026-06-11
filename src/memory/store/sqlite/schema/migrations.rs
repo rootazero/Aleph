@@ -10,7 +10,7 @@ pub fn migrate_recall_signals_note_path(conn: &Connection) -> Result<(), AlephEr
     let has_fact_id = stmt
         .query_map([], |row| row.get::<_, String>(1))
         .map_err(|e| AlephError::config(format!("table_info query: {e}")))?
-        .any(|name| name.map(|n| n == "fact_id").unwrap_or(false));
+        .any(|name| name.is_ok_and(|n| n == "fact_id"));
 
     if has_fact_id {
         conn.execute_batch("ALTER TABLE recall_signals RENAME COLUMN fact_id TO note_path")
@@ -38,7 +38,7 @@ pub fn migrate_dream_reports_drop_legacy_fields(conn: &Connection) -> Result<(),
     let has_legacy = stmt
         .query_map([], |row| row.get::<_, String>(1))
         .map_err(|e| AlephError::config(format!("table_info query: {e}")))?
-        .any(|name| name.map(|n| n == "facts_collected").unwrap_or(false));
+        .any(|name| name.is_ok_and(|n| n == "facts_collected"));
     drop(stmt);
 
     if !has_legacy {

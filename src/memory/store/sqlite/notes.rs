@@ -200,8 +200,7 @@ impl NoteStore for SqliteMemoryBackend {
         for (to_note, (to_raw, relation)) in &desired {
             let unchanged = existing
                 .get(to_note)
-                .map(|(er, erel)| er == to_raw && erel == relation)
-                .unwrap_or(false);
+                .is_some_and(|(er, erel)| er == to_raw && erel == relation);
             if unchanged {
                 continue;
             }

@@ -244,7 +244,7 @@ impl GraphTokenManager {
     pub async fn refresh_if_needed(&self) -> Result<(), ChannelError> {
         let needs_refresh = {
             let guard = self.cached.read().await;
-            guard.as_ref().map(|t| t.needs_refresh()).unwrap_or(true)
+            guard.as_ref().map_or(true, |t| t.needs_refresh())
         };
 
         if needs_refresh {

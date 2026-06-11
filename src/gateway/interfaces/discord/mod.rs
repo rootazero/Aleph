@@ -578,14 +578,14 @@ impl EventHandler for Handler {
         tracing::debug!(
             "Thread created: {} in channel {}",
             channel_id,
-            new_channel.parent_id.map(|p| p.get()).unwrap_or(0)
+            new_channel.parent_id.map_or(0, |p| p.get())
         );
 
         let binding = ThreadBinding::new(
             channel_id,
             ConversationId::new(channel_id.to_string()),
             new_channel.guild_id.get(),
-            new_channel.parent_id.map(|p| p.get()).unwrap_or(0),
+            new_channel.parent_id.map_or(0, |p| p.get()),
             new_channel.name.clone(),
         );
 

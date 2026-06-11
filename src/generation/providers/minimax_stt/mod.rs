@@ -329,9 +329,7 @@ async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String, String)> 
         )
     })?;
     let filename = path_buf
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "audio".to_string());
+        .file_name().map_or_else(|| "audio".to_string(), |s| s.to_string_lossy().into_owned());
     let mime = mime_from_extension(path_buf.extension().and_then(|s| s.to_str()));
     Ok((bytes, filename, mime))
 }

@@ -79,7 +79,7 @@ fn extract_section<'a>(raw: &'a str, name: &str) -> Option<&'a str> {
     let header = format!("\n## {name}\n");
     let start = raw.find(&header)? + header.len();
     let after = &raw[start..];
-    let end = after.find("\n## ").map(|e| start + e).unwrap_or(raw.len());
+    let end = after.find("\n## ").map_or(raw.len(), |e| start + e);
     Some(&raw[start..end])
 }
 

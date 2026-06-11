@@ -375,7 +375,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         // Close the hot-floating loop across the multi-agent ("smart recall")
         // path too. `namespace` is signal metadata only (not part of the dedup
         // key), so the first workspace id is a fine representative label.
-        let namespace = agent_ids.first().map(String::as_str).unwrap_or("owner");
+        let namespace = agent_ids.first().map_or("owner", String::as_str);
         self.record_recall(query, namespace, &ranked).await;
         Ok(ranked)
     }

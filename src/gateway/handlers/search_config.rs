@@ -336,9 +336,7 @@ pub async fn handle_test(
         let cfg = config.read().await;
         cfg.search
             .as_ref()
-            .and_then(|s| s.backends.get(&params.name))
-            .map(|b| b.provider_type.clone())
-            .unwrap_or_else(|| params.name.clone())
+            .and_then(|s| s.backends.get(&params.name)).map_or_else(|| params.name.clone(), |b| b.provider_type.clone())
     };
 
     // Create a temporary search provider and test it

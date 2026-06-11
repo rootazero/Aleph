@@ -129,7 +129,6 @@ impl RerankConfig {
     pub fn default_model(&self) -> &str {
         self.models
             .first()
-            .map(|s| s.as_str())
-            .unwrap_or("jina-reranker-v2-base-multilingual")
+            .map_or("jina-reranker-v2-base-multilingual", |s| s.as_str())
     }
 }

@@ -278,7 +278,7 @@ impl TelegramInboundContext {
         let chat_type = ChatType::from_chat(&tg_msg.chat);
         let chat_id = tg_msg.chat.id.0;
         let thread_id = tg_msg.thread_id.map(|t| t.0 .0 as i64);
-        let sender_id = tg_msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+        let sender_id = tg_msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
 
         let conversation_key =
             ConversationKey::parse_from_conv_id(inbound.conversation_id.as_str());

@@ -64,7 +64,7 @@ pub async fn execute_batch_move(
 
                     match fs::rename(&path, &dest_path) {
                         Ok(_) => {
-                            let size = fs::metadata(&dest_path).map(|m| m.len()).unwrap_or(0);
+                            let size = fs::metadata(&dest_path).map_or(0, |m| m.len());
                             moved_files.push(FileInfo {
                                 name: file_name.to_string_lossy().to_string(),
                                 path: dest_path.to_string_lossy().to_string(),
@@ -214,8 +214,7 @@ pub async fn execute_organize(
         let category = categories
             .iter()
             .find(|(_, exts)| exts.contains(&ext.as_str()))
-            .map(|(name, _)| *name)
-            .unwrap_or("Others");
+            .map_or("Others", |(name, _)| *name);
 
         // Create the category directory. Sorting files into category folders
         // is `organize`'s whole purpose, so it always creates them — each is a
@@ -240,7 +239,7 @@ pub async fn execute_organize(
         match fs::rename(&path, &dest_path) {
             Ok(_) => {
                 *category_counts.entry(category.to_string()).or_insert(0) += 1;
-                let size = fs::metadata(&dest_path).map(|m| m.len()).unwrap_or(0);
+                let size = fs::metadata(&dest_path).map_or(0, |m| m.len());
                 moved_files.push(FileInfo {
                     name: file_name.to_string_lossy().to_string(),
                     path: dest_path.to_string_lossy().to_string(),

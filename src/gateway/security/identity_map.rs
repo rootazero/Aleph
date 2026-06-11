@@ -70,8 +70,7 @@ impl IdentityMap {
             if self
                 .internal_to_external
                 .get(&user_id)
-                .map(|v| v.is_empty())
-                .unwrap_or(false)
+                .is_some_and(|v| v.is_empty())
             {
                 self.internal_to_external.remove(&user_id);
             }

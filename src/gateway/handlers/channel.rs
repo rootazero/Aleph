@@ -49,7 +49,7 @@ pub fn inject_channel_secrets(channel_id: &str, config: &mut Value, vault: &Shar
     for &field in CHANNEL_SECRET_FIELDS {
         // Skip if already present and non-empty in config
         if let Some(existing) = obj.get(field) {
-            if existing.as_str().map(|s| !s.is_empty()).unwrap_or(false) {
+            if existing.as_str().is_some_and(|s| !s.is_empty()) {
                 continue;
             }
         }
@@ -361,9 +361,7 @@ pub async fn handle_start(
         // Resolve channel type: explicit "type" field, or fall back to the channel id
         let channel_type = channel_config
             .get("type")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| channel_id.as_str().to_string());
+            .and_then(|v| v.as_str()).map_or_else(|| channel_id.as_str().to_string(), |s| s.to_string());
 
         // Strip the "type" field from config before passing to constructor
         let mut clean_config = channel_config.clone();

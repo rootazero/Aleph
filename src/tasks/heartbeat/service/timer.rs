@@ -208,7 +208,7 @@ async fn collect_due_tasks(
         if task.state.running_at_ms.is_some() {
             continue;
         }
-        let is_due = task.state.next_due_ms.map(|t| t <= now_ms).unwrap_or(false);
+        let is_due = task.state.next_due_ms.is_some_and(|t| t <= now_ms);
         let wake_reason = wake_requests
             .iter()
             .find(|w| w.task_id == task.id)

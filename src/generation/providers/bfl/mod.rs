@@ -124,9 +124,7 @@ impl BflProvider {
         id: &str,
         override_url: Option<&str>,
     ) -> GenerationResult<types::BflResult> {
-        let url = override_url
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| self.get_result_url(id));
+        let url = override_url.map_or_else(|| self.get_result_url(id), |s| s.to_string());
         for attempt in 1..=MAX_POLL_ATTEMPTS {
             debug!(attempt, max = MAX_POLL_ATTEMPTS, id, "polling BFL result");
             let response = self

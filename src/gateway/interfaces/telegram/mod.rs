@@ -458,7 +458,7 @@ impl Channel for TelegramChannel {
                     let sticker_pipeline =
                         sticker::StickerPipeline::new(state_db_for_sticker.clone());
                     async move {
-                        let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+                        let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
                         let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
                         let chat_id = msg.chat.id.0;
 
@@ -586,7 +586,7 @@ impl Channel for TelegramChannel {
                         let (raw_chat_id, thread_id_val) = q
                             .message
                             .as_ref()
-                            .map(|m| {
+                            .map_or((0, None), |m| {
                                 let chat = m.chat().id.0;
                                 let tid = match m {
                                     teloxide::types::MaybeInaccessibleMessage::Regular(msg) => {
@@ -595,8 +595,7 @@ impl Channel for TelegramChannel {
                                     _ => None,
                                 };
                                 (chat, tid)
-                            })
-                            .unwrap_or((0, None));
+                            });
 
                         let conv_id_str = if let Some(tid) = thread_id_val {
                             format!("{raw_chat_id}:topic:{tid}")

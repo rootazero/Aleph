@@ -140,12 +140,10 @@ impl RateLimits {
         };
         let rpm_permille = rpm
             .filter(|&l| l > 0)
-            .map(|l| rpm_used as u64 * 1000 / l as u64)
-            .unwrap_or(0);
+            .map_or(0, |l| rpm_used as u64 * 1000 / l as u64);
         let tpm_permille = tpm
             .filter(|&l| l > 0)
-            .map(|l| tpm_used * 1000 / l as u64)
-            .unwrap_or(0);
+            .map_or(0, |l| tpm_used * 1000 / l as u64);
         let permille = rpm_permille.max(tpm_permille);
         let over = permille >= 1000;
         (permille.min(u16::MAX as u64) as u16, over)

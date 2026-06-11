@@ -40,8 +40,7 @@ pub fn deterministic_truncate(messages: &[(String, String)], max_chars: usize) -
             .char_indices()
             .take_while(|(i, _)| *i <= max_chars)
             .last()
-            .map(|(i, c)| i + c.len_utf8())
-            .unwrap_or(0);
+            .map_or(0, |(i, c)| i + c.len_utf8());
         format!("{}\n[Truncated]", &result[..boundary])
     } else {
         result

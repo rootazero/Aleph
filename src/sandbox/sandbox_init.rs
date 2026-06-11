@@ -268,8 +268,7 @@ fn is_loopback(host: &str) -> bool {
         || host.eq_ignore_ascii_case("localhost")
         || host
             .parse::<std::net::IpAddr>()
-            .map(|ip| ip.is_loopback())
-            .unwrap_or(false)
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 // ---------------------------------------------------------------------------

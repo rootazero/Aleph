@@ -82,8 +82,7 @@ pub fn guess_chat_type(msg: &serde_json::Value, account_id: &str) -> (String, St
 
     let has_room = room_id
         .and_then(|v| v.as_str())
-        .map(|s| !s.is_empty())
-        .unwrap_or(false);
+        .is_some_and(|s| !s.is_empty());
     let is_group = has_room
         || (to_user_id == account_id
             && !from_user_id.is_empty()

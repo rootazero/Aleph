@@ -53,9 +53,7 @@ impl SkillsConfig {
             path.to_path_buf()
         } else {
             // Relative to config directory (platform-aware)
-            crate::utils::paths::get_config_dir()
-                .map(|d| d.join(&self.skills_dir))
-                .unwrap_or_else(|_| path.to_path_buf())
+            crate::utils::paths::get_config_dir().map_or_else(|_| path.to_path_buf(), |d| d.join(&self.skills_dir))
         }
     }
 }

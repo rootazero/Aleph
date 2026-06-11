@@ -178,9 +178,7 @@ impl ProtocolAdapter for GeminiProtocol {
             // Parse Gemini's error envelope for a clean message; fall back to raw text.
             let parsed = parse_gemini_error_body(&error_text);
             let detail = parsed
-                .as_ref()
-                .map(|e| format!("{} ({})", e.message, e.status))
-                .unwrap_or_else(|| error_text.clone());
+                .as_ref().map_or_else(|| error_text.clone(), |e| format!("{} ({})", e.message, e.status));
             // Prefer the `Retry-After` header; otherwise fall back to the
             // `google.rpc.RetryInfo` carried in the error details — Gemini
             // commonly returns the authoritative backoff there and omits the
@@ -189,11 +187,9 @@ impl ProtocolAdapter for GeminiProtocol {
                 header_retry_after.or_else(|| parsed.as_ref().and_then(|e| e.retry_delay_secs()));
             if status.as_u16() == 429 {
                 let suggestion = retry_after
-                    .as_ref()
-                    .map(|ra| format!("Rate limited. Retry after {ra} seconds."))
-                    .unwrap_or_else(|| {
+                    .as_ref().map_or_else(|| {
                         "Rate limited. Wait before retrying or upgrade your API plan.".to_string()
-                    });
+                    }, |ra| format!("Rate limited. Retry after {ra} seconds."));
                 return Err(AlephError::RateLimitError {
                     message: format!("Gemini API rate limited (429): {detail}"),
                     suggestion: Some(suggestion),

@@ -138,7 +138,7 @@ impl AuthProfileManager {
                     .get_override(profile_id)
                     .and_then(|o| o.max_budget_usd)
                     .unwrap_or(0.0);
-                let used = usage.map(|u| u.total_cost_usd).unwrap_or(0.0);
+                let used = usage.map_or(0.0, |u| u.total_cost_usd);
                 debug!(
                     profile_id = %profile_id,
                     budget = %budget,
@@ -322,7 +322,7 @@ impl AuthProfileManager {
                     in_cooldown,
                     cooldown_remaining_ms,
                     disabled: config.disabled,
-                    failure_count: status.map(|s| s.failure_count).unwrap_or(0),
+                    failure_count: status.map_or(0, |s| s.failure_count),
                     last_failure_reason: status.and_then(|s| s.last_failure_reason),
                     uses_env_var: config.uses_env_var(),
                     key_resolvable,

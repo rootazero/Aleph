@@ -64,8 +64,7 @@ pub fn blend_scores(
             let rerank_score = reranked
                 .iter()
                 .find(|r| r.index == i)
-                .map(|r| r.relevance_score)
-                .unwrap_or(0.0);
+                .map_or(0.0, |r| r.relevance_score);
 
             let final_score = weight * rerank_score + original_weight * orig_score;
             (doc.clone(), final_score)

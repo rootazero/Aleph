@@ -446,9 +446,7 @@ fn parse_mode(s: &str) -> Result<AdapterMode> {
 
 fn resolve_cwd(cwd: Option<&str>) -> String {
     cwd.map(|s| s.to_string()).unwrap_or_else(|| {
-        dirs::home_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| ".".to_string())
+        dirs::home_dir().map_or_else(|| ".".to_string(), |p| p.to_string_lossy().into_owned())
     })
 }
 

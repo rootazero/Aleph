@@ -533,11 +533,13 @@ fn legacy_trace_to_agent_trace(step_index: u32, role: &str, content_json: &str) 
 fn extract_legacy_trace_text(content_json: &str) -> String {
     match serde_json::from_str::<Value>(content_json) {
         Ok(Value::String(text)) => text,
-        Ok(Value::Object(map)) => ["content", "text", "output", "message", "result"]
-            .iter()
-            .find_map(|key| map.get(*key).and_then(Value::as_str))
-            .map(str::to_owned)
-            .unwrap_or_else(|| Value::Object(map).to_string()),
+        Ok(Value::Object(map)) => {
+            let text = ["content", "text", "output", "message", "result"]
+                .iter()
+                .find_map(|key| map.get(*key).and_then(Value::as_str))
+                .map(std::borrow::ToOwned::to_owned);
+            text.unwrap_or_else(|| Value::Object(map).to_string())
+        }
         Ok(value) => value.to_string(),
         Err(_) => content_json.to_string(),
     }

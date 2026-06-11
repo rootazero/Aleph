@@ -80,8 +80,7 @@ pub async fn handle_list(request: JsonRpcRequest, db: Arc<StateDatabase>) -> Jso
             } else {
                 tasks
                     .last()
-                    .map(|t| json!(t.last_timestamp))
-                    .unwrap_or(Value::Null)
+                    .map_or(Value::Null, |t| json!(t.last_timestamp))
             };
             let traces: Vec<Value> = tasks
                 .into_iter()
@@ -172,12 +171,10 @@ pub async fn handle_get(request: JsonRpcRequest, db: Arc<StateDatabase>) -> Json
         _ => {
             let first_ts = traces
                 .first()
-                .map(|t| t.timestamp.max(0) as u64)
-                .unwrap_or(0);
+                .map_or(0, |t| t.timestamp.max(0) as u64);
             let last_ts = traces
                 .last()
-                .map(|t| t.timestamp.max(0) as u64)
-                .unwrap_or(0);
+                .map_or(0, |t| t.timestamp.max(0) as u64);
             AgentTraceTaskSummary {
                 task_id: task_id.clone(),
                 session_id: String::new(),

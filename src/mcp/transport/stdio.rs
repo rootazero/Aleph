@@ -367,7 +367,7 @@ enum ServerMessage {
 /// `method` and no `id`, and a message with both is a server-initiated request.
 fn classify_line(line: &str) -> std::result::Result<ServerMessage, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(line)?;
-    let has_id = value.get("id").map(|v| !v.is_null()).unwrap_or(false);
+    let has_id = value.get("id").is_some_and(|v| !v.is_null());
     let has_method = value.get("method").is_some();
     match (has_id, has_method) {
         (true, false) => Ok(ServerMessage::Response(serde_json::from_value(value)?)),

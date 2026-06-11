@@ -62,7 +62,7 @@ fn default_provider_enabled() -> bool {
 impl EmbeddingProviderConfig {
     #[must_use]
     pub fn default_model(&self) -> &str {
-        self.models.first().map(|s| s.as_str()).unwrap_or("")
+        self.models.first().map_or("", |s| s.as_str())
     }
 
     #[must_use]

@@ -128,7 +128,7 @@ impl InitializationCoordinator {
         // pre-existing user data.
         let pre_existing = PreExistingState {
             database: self.config_dir.join("memory.db").exists(),
-            runtimes_dir: get_runtimes_dir().map(|d| d.exists()).unwrap_or(false),
+            runtimes_dir: get_runtimes_dir().is_ok_and(|d| d.exists()),
             skills_dir: self.config_dir.join("skills").exists(),
         };
 

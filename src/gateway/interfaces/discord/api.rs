@@ -98,9 +98,7 @@ pub async fn validate_token(token: &str) -> Result<BotIdentity, String> {
     });
 
     let discriminator = user
-        .discriminator
-        .map(|d| format!("{d:04}"))
-        .unwrap_or_else(|| "0".to_string());
+        .discriminator.map_or_else(|| "0".to_string(), |d| format!("{d:04}"));
 
     Ok(BotIdentity {
         valid: true,
@@ -201,8 +199,7 @@ pub async fn audit_guild_permissions(
     let mut combined_perms: u64 = guild
         .roles
         .get(&everyone_role_id)
-        .map(|r| r.permissions.bits())
-        .unwrap_or(0);
+        .map_or(0, |r| r.permissions.bits());
 
     // OR in permissions from each role the bot has
     for role_id in &member.roles {

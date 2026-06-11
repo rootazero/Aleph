@@ -211,9 +211,7 @@ impl SkillRegistration {
     #[must_use]
     pub fn base_dir(&self) -> PathBuf {
         self.source_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."))
+            .parent().map_or_else(|| PathBuf::from("."), |p| p.to_path_buf())
     }
 }
 

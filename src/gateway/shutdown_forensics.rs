@@ -117,8 +117,7 @@ pub fn snapshot_shutdown_context(
     let uptime_secs = BOOT_INSTANT.get().map(|b| b.elapsed().as_secs());
     let at_unix_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     ShutdownContext {
         signal: signal_label.into(),
         signal_num,

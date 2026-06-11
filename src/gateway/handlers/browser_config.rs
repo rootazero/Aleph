@@ -45,11 +45,10 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
     let default_driver = browser
         .profiles
         .get("default")
-        .map(|p| match p.driver {
+        .map_or("managed", |p| match p.driver {
             BrowserDriver::Managed => "managed",
             BrowserDriver::ExistingSession => "existing_session",
         })
-        .unwrap_or("managed")
         .to_string();
 
     // Headless detection: read from playwright_cli.headless

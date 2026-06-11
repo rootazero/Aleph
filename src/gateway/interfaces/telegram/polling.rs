@@ -77,7 +77,7 @@ pub(crate) async fn run_polling_loop(
     //     a potentially huge backlog accumulated before the bot was connected.
     //   offset >  0 (restart): do NOT drop — resume from the persisted offset
     //     so no messages are lost between restarts.
-    let persisted_offset = offset_tracker.as_ref().map(|t| t.load()).unwrap_or(0);
+    let persisted_offset = offset_tracker.as_ref().map_or(0, |t| t.load());
 
     if persisted_offset > 0 {
         // Restart path: clear webhook but keep pending updates

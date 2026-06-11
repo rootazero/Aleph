@@ -239,7 +239,7 @@ impl MessagesDb {
             };
 
             // Determine if this is a group message
-            let is_group = chat_info.as_ref().map(|c| c.is_group).unwrap_or(false);
+            let is_group = chat_info.as_ref().is_some_and(|c| c.is_group);
 
             let inbound = InboundMessage {
                 id: MessageId::new(&raw.guid),

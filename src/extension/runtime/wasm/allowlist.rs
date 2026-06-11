@@ -134,8 +134,7 @@ fn extract_raw_path(url_str: &str) -> &str {
     // Skip past the scheme ("https://")
     let after_scheme = url_str
         .find("://")
-        .map(|i| &url_str[i + 3..])
-        .unwrap_or(url_str);
+        .map_or(url_str, |i| &url_str[i + 3..]);
 
     // Skip past the authority (host[:port]) — find the first '/'
     let path_start = after_scheme.find('/').unwrap_or(after_scheme.len());
@@ -144,9 +143,8 @@ fn extract_raw_path(url_str: &str) -> &str {
     // Trim query string and fragment
     let path = path_and_rest
         .split_once('?')
-        .map(|(p, _)| p)
-        .unwrap_or(path_and_rest);
-    let path = path.split_once('#').map(|(p, _)| p).unwrap_or(path);
+        .map_or(path_and_rest, |(p, _)| p);
+    let path = path.split_once('#').map_or(path, |(p, _)| p);
 
     path
 }

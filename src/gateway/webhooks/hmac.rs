@@ -165,8 +165,7 @@ fn verify_stripe_signature(
     };
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs() as i64);
     if (now_secs - ts_secs).abs() > TOLERANCE_SECS {
         warn!("Stripe signature timestamp outside tolerance — rejecting as replay");
         return VerificationResult::Invalid;

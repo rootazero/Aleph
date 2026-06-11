@@ -200,8 +200,7 @@ impl MessageCoalescer {
                     let conversation_id = buf
                         .messages
                         .first()
-                        .map(|m| m.conversation_id.as_str())
-                        .unwrap_or("unknown");
+                        .map_or("unknown", |m| m.conversation_id.as_str());
                     tracing::info!(
                         conversation_id = %conversation_id,
                         fragment_count = fragment_count,

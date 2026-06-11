@@ -102,7 +102,7 @@ impl MicLevelReporter {
                     continue;
                 };
                 let should_emit = !self.config.emit_on_change_only
-                    || last_state.map(|s| s != snap.state).unwrap_or(true);
+                    || last_state.map_or(true, |s| s != snap.state);
                 if should_emit {
                     debug!(state = ?snap.state, level = ?snap.level, "mic_level: publish");
                     self.publish(&snap);

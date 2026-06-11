@@ -111,21 +111,17 @@ impl OpenAiResponsesProtocol {
             let base_url = config
                 .base_url
                 .as_ref()
-                .filter(|s| !s.is_empty())
-                .map(|s| s.trim_end_matches('/').to_string())
-                .unwrap_or_else(|| "https://chatgpt.com".to_string());
+                .filter(|s| !s.is_empty()).map_or_else(|| "https://chatgpt.com".to_string(), |s| s.trim_end_matches('/').to_string());
             format!("{base_url}{endpoint_path}")
         } else {
             // Standard OpenAI style: strip trailing /v1 to allow normalization
             let base_url = config
                 .base_url
                 .as_ref()
-                .filter(|s| !s.is_empty())
-                .map(|s| {
+                .filter(|s| !s.is_empty()).map_or_else(|| "https://api.openai.com".to_string(), |s| {
                     let trimmed = s.trim_end_matches('/');
                     trimmed.trim_end_matches("/v1").to_string()
-                })
-                .unwrap_or_else(|| "https://api.openai.com".to_string());
+                });
             format!("{base_url}{endpoint_path}")
         }
     }
@@ -210,7 +206,7 @@ impl OpenAiResponsesProtocol {
                 // user opted in (logprobs=true) but gave no count, emit 0 (the chosen
                 // token's logprob, no alternatives) rather than omitting the field,
                 // which would drop the opt-in entirely.
-                Some(config.top_logprobs.map(u32::from).unwrap_or(0))
+                Some(config.top_logprobs.map_or(0, u32::from))
             } else {
                 None
             },
@@ -356,11 +352,9 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
             let error_text = response.text().await.unwrap_or_default();
             if status.as_u16() == 429 {
                 let suggestion = retry_after
-                    .as_ref()
-                    .map(|ra| format!("Rate limited. Retry after {ra} seconds."))
-                    .unwrap_or_else(|| {
+                    .as_ref().map_or_else(|| {
                         "Rate limited. Wait before retrying or upgrade your API plan.".to_string()
-                    });
+                    }, |ra| format!("Rate limited. Retry after {ra} seconds."));
                 return Err(AlephError::RateLimitError {
                     message: format!("OpenAI Responses API rate limited (429): {error_text}"),
                     suggestion: Some(suggestion),
@@ -687,9 +681,7 @@ fn parse_sse_event_multi(
 
         StreamEvent::Failed { response } => {
             let msg = response
-                .error
-                .map(|e| format!("{}: {}", e.code, e.message))
-                .unwrap_or_else(|| "Unknown error".to_string());
+                .error.map_or_else(|| "Unknown error".to_string(), |e| format!("{}: {}", e.code, e.message));
             warn!(error = %msg, "Responses API stream failed");
             out.push_back(Ok(ProviderDelta::Error(msg)));
         }

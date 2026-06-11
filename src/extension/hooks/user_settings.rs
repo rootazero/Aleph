@@ -218,9 +218,7 @@ fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
 
             let kind = g
                 .kind
-                .as_deref()
-                .map(HookKind::from_str_or_default)
-                .unwrap_or_else(|| default_kind_for_event(event));
+                .as_deref().map_or_else(|| default_kind_for_event(event), HookKind::from_str_or_default);
             let priority = g
                 .priority
                 .as_deref()

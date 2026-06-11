@@ -42,7 +42,7 @@ impl SessionManager {
                 "UPDATE sessions SET last_active_at = ?, state = 'active' WHERE key = ? AND state IN ('created', 'idle')",
                 params![now, &key_str],
             );
-            if state_update.map(|n| n == 0).unwrap_or(false) {
+            if state_update.is_ok_and(|n| n == 0) {
                 // State was not 'created' or 'idle' (e.g., already 'active' or 'running')
                 // Just update last_active_at
                 conn.execute(
@@ -155,8 +155,7 @@ impl SessionManager {
                     |row| {
                         let state_str: Option<String> = row.get(0)?;
                         Ok(state_str
-                            .map(|s| s != "stopped" && s != "error")
-                            .unwrap_or(true))
+                            .map_or(true, |s| s != "stopped" && s != "error"))
                     },
                 )
                 .unwrap_or(true);

@@ -257,8 +257,7 @@ pub async fn handle_compact_db(
     let before_msgs = manager
         .get_history(&key, None)
         .await
-        .map(|m| m.len())
-        .unwrap_or(0);
+        .map_or(0, |m| m.len());
 
     match manager
         .compact(
@@ -379,8 +378,7 @@ pub async fn handle_set_topic_db(
         &topic[..topic
             .char_indices()
             .nth(100)
-            .map(|(i, _)| i)
-            .unwrap_or(topic.len())]
+            .map_or(topic.len(), |(i, _)| i)]
     } else {
         topic
     };

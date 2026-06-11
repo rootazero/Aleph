@@ -153,8 +153,7 @@ impl CapabilityLedger {
     pub fn status(&self, name: &str) -> CapabilityStatus {
         self.entries
             .get(name)
-            .map(|e| e.status)
-            .unwrap_or(CapabilityStatus::Missing)
+            .map_or(CapabilityStatus::Missing, |e| e.status)
     }
 
     /// Return the executable path *only* if the capability is `Ready`.
@@ -353,8 +352,7 @@ pub fn build_enhanced_path() -> std::io::Result<String> {
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 // ---------------------------------------------------------------------------

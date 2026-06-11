@@ -91,8 +91,7 @@ impl WhatsAppChunker {
                         .char_indices()
                         .take_while(|(i, _)| *i < limit)
                         .last()
-                        .map(|(i, c)| i + c.len_utf8())
-                        .unwrap_or(remaining.len());
+                        .map_or(remaining.len(), |(i, c)| i + c.len_utf8());
                     let (chunk, rest) = remaining.split_at(split_at);
                     chunks.push(chunk.to_string());
                     remaining = rest;

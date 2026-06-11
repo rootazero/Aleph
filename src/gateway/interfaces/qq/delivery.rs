@@ -109,8 +109,7 @@ pub fn chunk_text(text: &str, max_len: usize) -> Vec<String> {
             text[start..end]
                 .rfind('\n')
                 .or_else(|| text[start..end].rfind(' '))
-                .map(|i| start + i + 1)
-                .unwrap_or(end)
+                .map_or(end, |i| start + i + 1)
         } else {
             end
         };

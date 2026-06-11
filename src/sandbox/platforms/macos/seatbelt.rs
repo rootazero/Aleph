@@ -517,8 +517,7 @@ impl SeatbeltDriver {
     /// Check if `sandbox-exec` is available and executable.
     fn check_sandbox_exec(&self) -> bool {
         std::fs::metadata(SANDBOX_EXEC_PATH)
-            .map(|m| m.is_file())
-            .unwrap_or(false)
+            .is_ok_and(|m| m.is_file())
     }
 
     /// Generate SBPL profile from SandboxPolicy.
