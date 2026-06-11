@@ -1,6 +1,10 @@
 # Rust
 /target/
 **/target/
+# Per-machine local cargo settings (e.g. a shared absolute target-dir for
+# parallel worktree builds). Machine-specific — must never be committed, or it
+# breaks CI runners that lack the hardcoded path.
+.cargo/config.toml
 **/*.rs.bk
 *.pdb
 *.rlib
