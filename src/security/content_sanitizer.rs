@@ -514,7 +514,9 @@ pub fn sanitize_label(raw: &str) -> String {
     let mut neutralized = scrubbed;
     for marker in STRUCTURAL_MARKERS {
         if neutralized.contains(marker) {
-            let replacement = format!("{} {}", &marker[..1], &marker[1..]);
+            let first = marker.get(..1).unwrap_or(marker);
+            let rest = marker.get(1..).unwrap_or("");
+            let replacement = format!("{first} {rest}");
             neutralized = neutralized.replace(marker, &replacement);
         }
     }
