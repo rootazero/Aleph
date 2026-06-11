@@ -2,7 +2,7 @@ use crate::sync_primitives::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::a2a::port::*;
+use crate::a2a::port::{RegisteredAgent, AgentResolver, A2AResult, AgentHealth};
 
 /// How the routing decision was made
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

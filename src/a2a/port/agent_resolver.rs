@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::a2a::domain::*;
+use crate::a2a::domain::{AgentCard, TrustLevel};
 
 use super::task_manager::A2AResult;
 

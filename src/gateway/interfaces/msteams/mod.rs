@@ -37,7 +37,7 @@ use crate::sync_primitives::Arc;
 use self::api::BotFrameworkClient;
 use self::auth::{validate_service_url, JwtValidator, TokenCache};
 use self::graph::{GraphChannel, GraphGroup, GraphUser};
-use self::types::*;
+use self::types::{Activity, ActivityAttachment, inject_ai_entity, strip_mentions, extract_quote_info, build_welcome_card};
 
 // ── ConversationReference ────────────────────────────────────────────────────
 

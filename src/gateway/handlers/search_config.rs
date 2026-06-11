@@ -340,7 +340,7 @@ pub async fn handle_test(
     };
 
     // Create a temporary search provider and test it
-    use crate::search::providers::*;
+    use crate::search::providers::{TavilyProvider, BraveProvider, SearxngProvider, GoogleProvider, BingProvider, ExaProvider, JinaProvider, DuckDuckGoProvider};
     use crate::search::{SearchOptions, SearchProvider};
 
     let test_result: SearchTestResult = match provider_type.as_str() {

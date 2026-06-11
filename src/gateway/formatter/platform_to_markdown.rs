@@ -1,6 +1,6 @@
 //! Platform -> Markdown format conversions (normalize).
 
-use super::helpers::*;
+use super::helpers::{replace_html_tag, replace_pre_code_blocks, replace_html_links, replace_paired_marker_positional, replace_slack_links, replace_paired_marker};
 
 /// Telegram HTML -> Markdown.
 pub(super) fn telegram_html_to_markdown(html: &str) -> String {

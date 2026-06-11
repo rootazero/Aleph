@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 
-use crate::a2a::domain::*;
+use crate::a2a::domain::{A2ATask, A2AError, TaskState, A2AMessage, TaskStatus, ListTasksParams, ListTasksResult, Artifact};
 use crate::a2a::port::{A2AResult, A2ATaskManager};
 use crate::sync_primitives::AsyncRwLock;
 

@@ -9,7 +9,7 @@
 
 use crate::sync_primitives::{AtomicU32, Ordering};
 
-use crate::extension::runtime::wasm::capabilities::*;
+use crate::extension::runtime::wasm::capabilities::WasmCapabilities;
 use crate::extension::runtime::wasm::limits::WasmResourceLimits;
 
 /// Errors from capability checks

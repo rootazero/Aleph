@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde_json::json;
 
-use super::super::types::*;
+use super::super::types::{InstallParams, PluginInfoJson, InstallFromZipParams};
 use crate::extension::manifest::adapter::AdapterRegistry;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::plugins::handlers::get_extension_manager;

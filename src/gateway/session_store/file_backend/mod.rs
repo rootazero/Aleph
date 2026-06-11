@@ -6,7 +6,7 @@ use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_manager::{SessionIdentityMeta, SessionState};
 use crate::gateway::session_store::error::SessionStoreError;
-use crate::gateway::session_store::types::*;
+use crate::gateway::session_store::types::{SessionMetadata, SessionChangedEvent, MessageRecord, SessionFilter, DeleteResult, SearchHit, CompactStrategy, CompactResult, CheckpointSummary, TruncateResult, SessionPatch, SessionPreview};
 use crate::gateway::session_store::SessionStore;
 use crate::sync_primitives::Arc;
 

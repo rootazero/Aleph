@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::a2a::domain::*;
+use crate::a2a::domain::{Credentials, TrustLevel, SecurityScheme};
 
 use super::task_manager::A2AResult;
 

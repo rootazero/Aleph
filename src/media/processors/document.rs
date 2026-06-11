@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use crate::media::error::MediaError;
 use crate::media::provider::MediaProvider;
-use crate::media::types::*;
+use crate::media::types::{MediaType, DocFormat, MediaInput, MediaOutput};
 
 /// Document provider for plain text formats (TXT, Markdown, HTML).
 ///

@@ -2,7 +2,7 @@ use std::pin::Pin;
 
 use futures::Stream;
 
-use crate::a2a::domain::*;
+use crate::a2a::domain::{A2AMessage, A2ATask, UpdateEvent};
 
 use super::task_manager::A2AResult;
 

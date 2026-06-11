@@ -13,7 +13,7 @@ use crate::providers::protocols::openai_common::tools::{
     desanitize_tool_name as desanitize_tool_name_pub, ensure_properties_recursive,
     sanitize_tool_name as sanitize_tool_name_pub,
 };
-use crate::providers::responses::types::*;
+use crate::providers::responses::types::{InputItem, InputContentPart, MessageContent, ReasoningConfig, FunctionToolDef, ResponseResource, OutputItem, StreamEvent};
 use crate::tool_metadata::ToolDefinition;
 
 /// Convert `UnifiedMessages` to Responses API `InputItems`

@@ -4,7 +4,7 @@
 //! (defined in helpers.rs). Each platform function only decides how to *render*
 //! the parsed blocks, keeping parsing logic universal.
 
-use super::helpers::*;
+use super::helpers::{parse_markdown_blocks, BlockElement, escape_html, render_table_aligned, repair_html_tags, replace_paired_marker, replace_single_asterisk_italic, replace_links, strip_single_asterisk};
 
 // ---------------------------------------------------------------------------
 // Telegram HTML

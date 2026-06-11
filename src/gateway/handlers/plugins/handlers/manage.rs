@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use super::super::types::*;
+use super::super::types::{PluginInfoJson, UninstallParams, ToggleParams};
 use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::plugins::handlers::get_extension_manager;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};

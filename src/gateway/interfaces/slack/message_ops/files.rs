@@ -13,7 +13,7 @@
 //! `url`, so the pipeline preserves them via its file-id passthrough instead
 //! of re-fetching unauthenticated.
 
-use super::*;
+use super::Duration;
 use crate::gateway::channel::Attachment;
 
 /// Per-file download timeout — keeps a slow file from stalling the socket loop.

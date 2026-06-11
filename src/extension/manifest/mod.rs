@@ -124,7 +124,7 @@ pub fn validate_plugin_name(name: &str) -> ExtensionResult<()> {
 
 /// Module containing legacy plugin manifest types for .claude-plugin/plugin.json format
 pub mod legacy {
-    use super::*;
+    use super::{Serialize, Deserialize, PathBuf, Path, ExtensionResult, ExtensionError};
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct LegacyPluginManifest {

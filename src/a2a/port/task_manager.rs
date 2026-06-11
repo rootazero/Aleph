@@ -1,4 +1,4 @@
-use crate::a2a::domain::*;
+use crate::a2a::domain::{A2AError, A2ATask, TaskState, A2AMessage, ListTasksParams, ListTasksResult, Artifact};
 
 /// Convenience alias for A2A operations
 pub type A2AResult<T> = std::result::Result<T, A2AError>;

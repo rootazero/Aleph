@@ -13,7 +13,7 @@ use chrono::Utc;
 use futures::Stream;
 use tracing::{error, info};
 
-use crate::a2a::domain::*;
+use crate::a2a::domain::{A2AMessage, A2ATask, A2AError, TaskState, A2ARole, UpdateEvent, TaskStatusUpdateEvent, TaskStatus};
 use crate::a2a::port::{A2AMessageHandler, A2AResult, A2AStreamingHandler, A2ATaskManager};
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::event_emitter::NoOpEventEmitter;

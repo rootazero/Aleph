@@ -12,7 +12,7 @@ use crate::sync_primitives::{Arc, RwLock};
 
 use super::aggregate::SharedArena;
 use super::handle::ArenaHandle;
-use super::types::*;
+use super::types::{ArenaId, ArenaManifest, AgentId, ArenaStatus, ArenaSlot, SettleReport, SharedFact};
 
 /// Manages `SharedArena` creation, handle distribution, and settling lifecycle.
 pub struct ArenaManager {

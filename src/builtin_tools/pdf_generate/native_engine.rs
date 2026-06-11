@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use printpdf::*;
+use printpdf::{PdfDocument, Mm, PdfSaveOptions, PdfPage, Op, PdfFontHandle, Pt, Point, TextItem, ParsedFont, BuiltinFont};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use tracing::{debug, info, warn};
 

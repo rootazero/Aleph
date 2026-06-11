@@ -21,7 +21,7 @@ const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 
 use crate::error::{AlephError, Result};
 
-use super::types::*;
+use super::types::{SkillSearchResult, SearchApiResponse, SortOrder, BrowseResponse, BrowseApiResponse, SkillDetail, DetailApiResponse, VersionInfo, VersionsResponse};
 
 const DEFAULT_REGISTRY: &str = "https://clawhub.ai";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
