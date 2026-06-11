@@ -29,6 +29,7 @@ pub mod embedding_resolver;
 pub mod embedding_signature;
 pub mod events;
 pub mod extensions;
+pub mod flush;
 pub mod ingestion;
 pub mod insights;
 pub mod namespace;
