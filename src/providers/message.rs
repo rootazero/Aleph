@@ -103,7 +103,7 @@ impl UnifiedMessage {
 
     /// Create a user message with pre-built content blocks (for multimodal)
     #[must_use]
-    pub fn user_with_content(content: Vec<ContentBlock>) -> Self {
+    pub const fn user_with_content(content: Vec<ContentBlock>) -> Self {
         Self::User { content }
     }
 
@@ -178,7 +178,7 @@ impl UnifiedMessage {
     }
 
     /// Get mutable access to content blocks (for PII filtering)
-    pub fn content_blocks_mut(&mut self) -> &mut Vec<ContentBlock> {
+    pub const fn content_blocks_mut(&mut self) -> &mut Vec<ContentBlock> {
         match self {
             Self::User { content } => content,
             Self::Assistant { content } => content,
@@ -237,19 +237,19 @@ impl UnifiedMessage {
 
     /// Returns true if this is an Assistant message.
     #[must_use]
-    pub fn is_assistant(&self) -> bool {
+    pub const fn is_assistant(&self) -> bool {
         matches!(self, Self::Assistant { .. })
     }
 
     /// Returns true if this is a User message.
     #[must_use]
-    pub fn is_user(&self) -> bool {
+    pub const fn is_user(&self) -> bool {
         matches!(self, Self::User { .. })
     }
 
     /// Returns true if this is a ToolResult message.
     #[must_use]
-    pub fn is_tool_result(&self) -> bool {
+    pub const fn is_tool_result(&self) -> bool {
         matches!(self, Self::ToolResult { .. })
     }
 

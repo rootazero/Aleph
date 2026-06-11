@@ -50,7 +50,7 @@ pub struct VaultStoreTool {
 }
 
 impl VaultStoreTool {
-    pub fn new(manager: Arc<SharedTokenManager>) -> Self {
+    pub const fn new(manager: Arc<SharedTokenManager>) -> Self {
         Self { manager }
     }
 }

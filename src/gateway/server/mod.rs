@@ -495,13 +495,13 @@ impl GatewayServer {
 
     /// Get a reference to the subscription manager
     #[must_use]
-    pub fn subscription_manager(&self) -> &Arc<SubscriptionManager> {
+    pub const fn subscription_manager(&self) -> &Arc<SubscriptionManager> {
         &self.subscription_manager
     }
 
     /// Get a reference to the handler registry for registering custom handlers
     #[must_use]
-    pub fn handlers(&self) -> &Arc<HandlerRegistry> {
+    pub const fn handlers(&self) -> &Arc<HandlerRegistry> {
         &self.handlers
     }
 
@@ -515,7 +515,7 @@ impl GatewayServer {
 
     /// Get a reference to the event bus for publishing events
     #[must_use]
-    pub fn event_bus(&self) -> &Arc<GatewayEventBus> {
+    pub const fn event_bus(&self) -> &Arc<GatewayEventBus> {
         &self.event_bus
     }
 

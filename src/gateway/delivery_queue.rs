@@ -106,7 +106,7 @@ pub struct DeliveryRecord {
 /// [`ConfigError`](ChannelError::ConfigError) are permanent. None of those are
 /// retried.
 #[must_use]
-pub fn should_enqueue(err: &ChannelError) -> bool {
+pub const fn should_enqueue(err: &ChannelError) -> bool {
     matches!(
         err,
         ChannelError::NotConnected(_) | ChannelError::RateLimited { .. }
@@ -180,7 +180,7 @@ impl DeliveryStore {
     }
 
     /// Access the queue tuning this store was built with.
-    pub fn config(&self) -> &DeliveryQueueConfig {
+    pub const fn config(&self) -> &DeliveryQueueConfig {
         &self.config
     }
 

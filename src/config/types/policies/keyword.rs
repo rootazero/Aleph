@@ -18,7 +18,7 @@ pub struct PolicyWeightedKeyword {
     pub weight: f32,
 }
 
-fn default_weight() -> f32 {
+const fn default_weight() -> f32 {
     1.0
 }
 
@@ -46,7 +46,7 @@ fn default_match_mode() -> String {
     "weighted".to_string()
 }
 
-fn default_min_score() -> f32 {
+const fn default_min_score() -> f32 {
     0.5
 }
 
@@ -67,11 +67,11 @@ pub struct KeywordPolicy {
     pub rules: Vec<PolicyKeywordRule>,
 }
 
-fn default_enabled() -> bool {
+const fn default_enabled() -> bool {
     true
 }
 
-fn default_global_min_score() -> f32 {
+const fn default_global_min_score() -> f32 {
     0.6
 }
 

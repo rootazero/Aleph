@@ -12,7 +12,7 @@ pub enum MediaPlaceholderType {
 
 impl MediaPlaceholderType {
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             MediaPlaceholderType::Image => "image",
             MediaPlaceholderType::Audio => "audio",

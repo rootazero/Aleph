@@ -91,7 +91,7 @@ impl JsonRpcRequest {
 
     /// Check if this is a notification (no response expected)
     #[must_use]
-    pub fn is_notification(&self) -> bool {
+    pub const fn is_notification(&self) -> bool {
         self.id.is_none()
     }
 
@@ -172,13 +172,13 @@ impl JsonRpcResponse {
 
     /// Check if this is a successful response
     #[must_use]
-    pub fn is_success(&self) -> bool {
+    pub const fn is_success(&self) -> bool {
         self.error.is_none()
     }
 
     /// Check if this is an error response
     #[must_use]
-    pub fn is_error(&self) -> bool {
+    pub const fn is_error(&self) -> bool {
         self.error.is_some()
     }
 
@@ -278,7 +278,7 @@ pub struct ToolCallResult {
 impl ToolCallResult {
     /// Create a successful result.
     #[must_use]
-    pub fn success(output: Value, execution_time_ms: u64) -> Self {
+    pub const fn success(output: Value, execution_time_ms: u64) -> Self {
         Self {
             output,
             execution_time_ms,
@@ -289,7 +289,7 @@ impl ToolCallResult {
 
     /// Create a failed result.
     #[must_use]
-    pub fn failure(error: String, execution_time_ms: u64) -> Self {
+    pub const fn failure(error: String, execution_time_ms: u64) -> Self {
         Self {
             output: Value::Null,
             execution_time_ms,

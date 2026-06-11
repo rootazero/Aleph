@@ -62,7 +62,7 @@ pub struct SendParams {
     pub model_override: Option<crate::gateway::model_override::ModelOverride>,
 }
 
-fn default_stream() -> bool {
+const fn default_stream() -> bool {
     true
 }
 
@@ -128,7 +128,7 @@ pub struct ClearParams {
     pub keep_system: bool,
 }
 
-fn default_keep_system() -> bool {
+const fn default_keep_system() -> bool {
     true
 }
 

@@ -87,7 +87,7 @@ impl MatrixSdkClient {
     }
 
     #[must_use]
-    pub fn inner(&self) -> &Client {
+    pub const fn inner(&self) -> &Client {
         &self.inner
     }
 }

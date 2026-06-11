@@ -49,7 +49,7 @@ impl ExecApprovalsStorage {
 
     /// Create storage with custom path
     #[must_use]
-    pub fn with_path(path: PathBuf) -> Self {
+    pub const fn with_path(path: PathBuf) -> Self {
         Self { path }
     }
 

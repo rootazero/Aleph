@@ -22,7 +22,7 @@ impl Default for ReasoningExtractor {
 
 impl ReasoningExtractor {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             state: ExtractorState::Answer,
             pending: String::new(),

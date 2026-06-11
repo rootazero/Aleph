@@ -72,7 +72,7 @@ impl PolicyTier {
     /// model should be maximally cautious about destructive / exfiltration-prone
     /// actions.
     #[must_use]
-    pub fn is_danger(self) -> bool {
+    pub const fn is_danger(self) -> bool {
         matches!(self, PolicyTier::DangerFullAccess)
     }
 }
@@ -128,7 +128,7 @@ impl NetworkState {
     /// True when egress is fully blocked. Used to gate the
     /// `ALEPH_SANDBOX_NETWORK_DISABLED=1` env var on spawned children.
     #[must_use]
-    pub fn is_denied(&self) -> bool {
+    pub const fn is_denied(&self) -> bool {
         matches!(self, Self::Denied)
     }
 }

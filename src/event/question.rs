@@ -48,7 +48,7 @@ pub struct QuestionInfo {
     pub custom: bool,
 }
 
-fn default_custom_enabled() -> bool {
+const fn default_custom_enabled() -> bool {
     true
 }
 
@@ -82,14 +82,14 @@ impl QuestionInfo {
 
     /// Enable multiple selection
     #[must_use]
-    pub fn with_multiple(mut self, multiple: bool) -> Self {
+    pub const fn with_multiple(mut self, multiple: bool) -> Self {
         self.multiple = multiple;
         self
     }
 
     /// Enable/disable custom input
     #[must_use]
-    pub fn with_custom(mut self, custom: bool) -> Self {
+    pub const fn with_custom(mut self, custom: bool) -> Self {
         self.custom = custom;
         self
     }
@@ -152,7 +152,7 @@ pub struct Answer(Vec<String>);
 impl Answer {
     /// Create a new Answer
     #[must_use]
-    pub fn new(selections: Vec<String>) -> Self {
+    pub const fn new(selections: Vec<String>) -> Self {
         Self(selections)
     }
 
@@ -175,13 +175,13 @@ impl Answer {
 
     /// Check if empty
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     /// Get the number of selections
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.0.len()
     }
 }
@@ -210,7 +210,7 @@ pub struct QuestionReply {
 impl QuestionReply {
     /// Create a new reply
     #[must_use]
-    pub fn new(answers: Vec<Answer>) -> Self {
+    pub const fn new(answers: Vec<Answer>) -> Self {
         Self { answers }
     }
 
@@ -258,7 +258,7 @@ pub enum QuestionEvent {
 impl QuestionEvent {
     /// Create an Asked event
     #[must_use]
-    pub fn asked(request: QuestionRequest) -> Self {
+    pub const fn asked(request: QuestionRequest) -> Self {
         Self::Asked(request)
     }
 

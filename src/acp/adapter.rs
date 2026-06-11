@@ -19,7 +19,7 @@ pub enum AdapterMode {
 impl AdapterMode {
     /// Return a stable string representation (matches serde rename).
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             AdapterMode::NativeAcp => "native_acp",
             AdapterMode::Oneshot => "oneshot",
@@ -28,7 +28,7 @@ impl AdapterMode {
 
     /// Convert to the serde-friendly config enum.
     #[must_use]
-    pub fn to_serde(&self) -> crate::config::types::acp::AdapterModeSerde {
+    pub const fn to_serde(&self) -> crate::config::types::acp::AdapterModeSerde {
         match self {
             AdapterMode::NativeAcp => crate::config::types::acp::AdapterModeSerde::NativeAcp,
             AdapterMode::Oneshot => crate::config::types::acp::AdapterModeSerde::Oneshot,
@@ -37,7 +37,7 @@ impl AdapterMode {
 
     /// Convert from the serde-friendly config enum.
     #[must_use]
-    pub fn from_serde(s: &crate::config::types::acp::AdapterModeSerde) -> Self {
+    pub const fn from_serde(s: &crate::config::types::acp::AdapterModeSerde) -> Self {
         match s {
             crate::config::types::acp::AdapterModeSerde::NativeAcp => AdapterMode::NativeAcp,
             crate::config::types::acp::AdapterModeSerde::Oneshot => AdapterMode::Oneshot,

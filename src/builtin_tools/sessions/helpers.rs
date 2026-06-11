@@ -28,7 +28,7 @@ pub enum SessionKind {
 impl SessionKind {
     /// Returns the string representation of the session kind.
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Main => "main",
             Self::DirectMessage => "dm",
@@ -63,7 +63,7 @@ impl std::fmt::Display for SessionKind {
 /// assert_eq!(classify_session_kind(&key), SessionKind::Main);
 /// ```
 #[must_use]
-pub fn classify_session_kind(key: &SessionKey) -> SessionKind {
+pub const fn classify_session_kind(key: &SessionKey) -> SessionKind {
     match key {
         SessionKey::Main { .. } => SessionKind::Main,
         SessionKey::DirectMessage { .. } => SessionKind::DirectMessage,

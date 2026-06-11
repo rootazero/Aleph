@@ -210,7 +210,7 @@ pub struct WorktreeSandbox {
 
 impl WorktreeSandbox {
     #[must_use]
-    pub fn new(worktree_path: std::path::PathBuf) -> Self {
+    pub const fn new(worktree_path: std::path::PathBuf) -> Self {
         Self { worktree_path }
     }
 }

@@ -46,7 +46,7 @@ impl AudioGenerateTool {
     pub const DESCRIPTION: &'static str =
         "Generate audio or music from a text description. Provide a prompt describing the genre, mood, instruments, tempo, and style.";
 
-    pub fn new(registry: Arc<RwLock<GenerationProviderRegistry>>) -> Self {
+    pub const fn new(registry: Arc<RwLock<GenerationProviderRegistry>>) -> Self {
         Self { registry }
     }
 

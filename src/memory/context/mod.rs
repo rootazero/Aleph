@@ -137,7 +137,7 @@ impl MemoryEntry {
 
     /// Set similarity score (used during retrieval)
     #[must_use]
-    pub fn with_score(mut self, score: f32) -> Self {
+    pub const fn with_score(mut self, score: f32) -> Self {
         self.similarity_score = Some(score);
         self
     }

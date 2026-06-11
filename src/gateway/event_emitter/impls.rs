@@ -55,7 +55,7 @@ impl GatewayEventEmitter {
     }
 
     /// Get the current output mode
-    pub fn output_mode(&self) -> &OutputMode {
+    pub const fn output_mode(&self) -> &OutputMode {
         &self.output_mode
     }
 }
@@ -192,7 +192,7 @@ pub struct NoOpEventEmitter {
 
 impl NoOpEventEmitter {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             seq_counter: AtomicU64::new(0),
         }

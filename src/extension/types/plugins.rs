@@ -50,7 +50,7 @@ pub enum PluginOrigin {
 impl PluginOrigin {
     /// Get the priority of this origin (higher = takes precedence)
     #[must_use]
-    pub fn priority(&self) -> u8 {
+    pub const fn priority(&self) -> u8 {
         match self {
             PluginOrigin::Config => 4,
             PluginOrigin::Workspace => 3,
@@ -110,13 +110,13 @@ pub enum PluginStatus {
 impl PluginStatus {
     /// Check if this plugin is actively running
     #[must_use]
-    pub fn is_active(&self) -> bool {
+    pub const fn is_active(&self) -> bool {
         matches!(self, PluginStatus::Loaded)
     }
 
     /// Stable lowercase label for client display / serialization.
     #[must_use]
-    pub fn label(&self) -> &'static str {
+    pub const fn label(&self) -> &'static str {
         match self {
             PluginStatus::Loaded => "loaded",
             PluginStatus::Disabled => "disabled",
@@ -150,13 +150,13 @@ pub struct LoadSummary {
 impl LoadSummary {
     /// Check if loading was successful (no errors)
     #[must_use]
-    pub fn is_success(&self) -> bool {
+    pub const fn is_success(&self) -> bool {
         self.errors.is_empty()
     }
 
     /// Total components loaded
     #[must_use]
-    pub fn total_loaded(&self) -> usize {
+    pub const fn total_loaded(&self) -> usize {
         self.skills_loaded + self.commands_loaded + self.agents_loaded + self.plugins_loaded
     }
 }
@@ -183,7 +183,7 @@ pub enum PluginScope {
 impl PluginScope {
     /// Get the resolution priority of this scope (higher = takes precedence).
     #[must_use]
-    pub fn priority(&self) -> u8 {
+    pub const fn priority(&self) -> u8 {
         match self {
             Self::Local => 3,
             Self::Project => 2,
@@ -247,7 +247,7 @@ pub struct PluginRecord {
 impl PluginRecord {
     /// Create a new plugin record with default values
     #[must_use]
-    pub fn new(id: String, name: String, kind: PluginKind, origin: PluginOrigin) -> Self {
+    pub const fn new(id: String, name: String, kind: PluginKind, origin: PluginOrigin) -> Self {
         Self {
             id,
             name,

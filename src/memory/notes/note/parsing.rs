@@ -116,7 +116,7 @@ where
     })
 }
 
-pub(super) fn default_confidence() -> f32 {
+pub(super) const fn default_confidence() -> f32 {
     1.0
 }
 

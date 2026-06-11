@@ -29,7 +29,7 @@ pub struct SandboxHookContext<'a> {
 
 impl<'a> SandboxHookContext<'a> {
     #[must_use]
-    pub fn new(tool_name: &'a str, command: &'a SandboxCommand) -> Self {
+    pub const fn new(tool_name: &'a str, command: &'a SandboxCommand) -> Self {
         Self { tool_name, command }
     }
 }

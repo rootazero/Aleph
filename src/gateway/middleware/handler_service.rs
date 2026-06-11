@@ -18,7 +18,7 @@ pub struct HandlerLayer;
 
 impl HandlerLayer {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -45,7 +45,7 @@ pub struct HandlerService<S> {
 
 impl HandlerService<()> {
     #[must_use]
-    pub fn new(handlers: Arc<HandlerRegistry>) -> Self {
+    pub const fn new(handlers: Arc<HandlerRegistry>) -> Self {
         Self {
             _marker: (),
             handlers,
@@ -54,7 +54,7 @@ impl HandlerService<()> {
 }
 
 impl<S> HandlerService<S> {
-    pub fn with_inner(inner: S, handlers: Arc<HandlerRegistry>) -> Self {
+    pub const fn with_inner(inner: S, handlers: Arc<HandlerRegistry>) -> Self {
         Self {
             _marker: inner,
             handlers,

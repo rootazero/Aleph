@@ -180,7 +180,7 @@ impl NoteManageTool {
     /// Enable per-project memory namespacing for this tool. Wired from
     /// `MemoryConfig.project_scoped` at construction; default-off otherwise.
     #[must_use]
-    pub fn with_project_scoping(mut self, enabled: bool) -> Self {
+    pub const fn with_project_scoping(mut self, enabled: bool) -> Self {
         self.project_scoped = enabled;
         self
     }
@@ -259,7 +259,7 @@ impl NoteManageTool {
     }
 
     /// Default agent ID (used when args.agent_id is absent).
-    fn agent_id(&self) -> &str {
+    const fn agent_id(&self) -> &str {
         "default"
     }
 

@@ -81,7 +81,7 @@ pub struct AgentListTool {
 
 impl AgentListTool {
     #[must_use]
-    pub fn new(registry: Arc<AgentRegistry>, workspace_mgr: Arc<AgentEnvStore>) -> Self {
+    pub const fn new(registry: Arc<AgentRegistry>, workspace_mgr: Arc<AgentEnvStore>) -> Self {
         Self {
             registry,
             workspace_mgr,

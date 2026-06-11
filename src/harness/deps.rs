@@ -178,13 +178,13 @@ impl Default for StallConfig {
 
 impl StallConfig {
     #[must_use]
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
     #[must_use]
-    pub fn with_check_interval(mut self, interval: Duration) -> Self {
+    pub const fn with_check_interval(mut self, interval: Duration) -> Self {
         self.check_interval = interval;
         self
     }

@@ -92,7 +92,7 @@ pub fn default_output_mode() -> String {
     "typewriter".to_string()
 }
 
-pub fn default_typing_speed() -> u32 {
+pub const fn default_typing_speed() -> u32 {
     200 // 200 characters per second
 }
 

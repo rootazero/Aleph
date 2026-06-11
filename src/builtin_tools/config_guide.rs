@@ -35,7 +35,7 @@ pub enum GuideTopic {
 }
 
 impl GuideTopic {
-    fn filename(&self) -> &'static str {
+    const fn filename(&self) -> &'static str {
         match self {
             Self::Overview => "overview.md",
             Self::Providers => "providers.md",
@@ -66,7 +66,7 @@ pub struct ReadConfigGuideTool {
 
 impl ReadConfigGuideTool {
     #[must_use]
-    pub fn new(guides_dir: PathBuf) -> Self {
+    pub const fn new(guides_dir: PathBuf) -> Self {
         Self { guides_dir }
     }
 

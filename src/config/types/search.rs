@@ -68,19 +68,19 @@ pub struct SearchConfigInternal {
 /// silently fails until quotas reset) is severe and the privacy
 /// posture (DDG over HTTPS, no API key) is no worse than the existing
 /// DDG provider users already have access to.
-pub fn default_web_fetch_fallback() -> bool {
+pub const fn default_web_fetch_fallback() -> bool {
     true
 }
 
-pub fn default_search_max_results() -> usize {
+pub const fn default_search_max_results() -> usize {
     5
 }
 
-pub fn default_search_max_results_u64() -> u64 {
+pub const fn default_search_max_results_u64() -> u64 {
     5
 }
 
-pub fn default_search_timeout() -> u64 {
+pub const fn default_search_timeout() -> u64 {
     10
 }
 
@@ -115,11 +115,11 @@ pub struct PIIConfig {
     pub scrub_credit_card: bool,
 }
 
-pub fn default_true() -> bool {
+pub const fn default_true() -> bool {
     true
 }
 
-pub fn default_false() -> bool {
+pub const fn default_false() -> bool {
     false
 }
 

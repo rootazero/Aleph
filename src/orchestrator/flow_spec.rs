@@ -58,7 +58,7 @@ pub struct FlowSpec {
     pub overrides: FlowOverrides,
 }
 
-fn default_flow_priority() -> u8 {
+const fn default_flow_priority() -> u8 {
     128
 }
 

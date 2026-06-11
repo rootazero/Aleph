@@ -32,7 +32,7 @@ pub enum ArtifactType {
 impl ArtifactType {
     /// Canonical string representation for storage.
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Report => "report",
             Self::Code => "code",
@@ -75,7 +75,7 @@ pub enum TaskStatus {
 
 impl TaskStatus {
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Pending => "pending",
             Self::InProgress => "in_progress",
@@ -166,7 +166,7 @@ pub struct NewArtifact {
     pub metadata: serde_json::Value,
 }
 
-fn default_priority() -> i32 {
+const fn default_priority() -> i32 {
     0
 }
 

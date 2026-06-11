@@ -170,7 +170,7 @@ pub struct ArenaPermissions {
 impl ArenaPermissions {
     /// Create permissions appropriate for the given role.
     #[must_use]
-    pub fn from_role(role: ParticipantRole) -> Self {
+    pub const fn from_role(role: ParticipantRole) -> Self {
         match role {
             ParticipantRole::Coordinator => Self {
                 can_write_own_slot: true,
@@ -587,7 +587,7 @@ impl SharedFact {
 
     /// Get the confidence score.
     #[must_use]
-    pub fn confidence(&self) -> f32 {
+    pub const fn confidence(&self) -> f32 {
         self.confidence
     }
 }

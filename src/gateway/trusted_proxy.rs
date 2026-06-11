@@ -59,7 +59,7 @@ impl TrustedProxies {
 
     /// Whether the allowlist is empty (no proxies trusted).
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.nets.is_empty()
     }
 

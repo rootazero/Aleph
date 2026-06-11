@@ -58,12 +58,12 @@ impl LaneDeliveryTracker {
     }
 
     #[must_use]
-    pub fn chat_id(&self) -> i64 {
+    pub const fn chat_id(&self) -> i64 {
         self.chat_id
     }
 
     #[must_use]
-    pub fn thread_id(&self) -> Option<i64> {
+    pub const fn thread_id(&self) -> Option<i64> {
         self.thread_id
     }
 

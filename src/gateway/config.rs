@@ -202,19 +202,19 @@ impl Default for BootstrapConfig {
     }
 }
 
-fn default_memory_monitor_secs() -> u64 {
+const fn default_memory_monitor_secs() -> u64 {
     crate::gateway::memory_monitor::DEFAULT_INTERVAL_SECS
 }
 
-fn default_ping_interval_secs() -> u64 {
+const fn default_ping_interval_secs() -> u64 {
     30
 }
 
-fn default_idle_timeout_secs() -> u64 {
+const fn default_idle_timeout_secs() -> u64 {
     90
 }
 
-fn default_true_flag() -> bool {
+const fn default_true_flag() -> bool {
     true
 }
 
@@ -258,7 +258,7 @@ pub enum AuthMode {
 impl AuthMode {
     /// Whether this mode requires authentication
     #[must_use]
-    pub fn is_auth_required(&self) -> bool {
+    pub const fn is_auth_required(&self) -> bool {
         matches!(self, AuthMode::Token)
     }
 }
@@ -292,7 +292,7 @@ impl Default for AuthConfig {
 impl AuthConfig {
     /// Whether authentication is required
     #[must_use]
-    pub fn is_auth_required(&self) -> bool {
+    pub const fn is_auth_required(&self) -> bool {
         matches!(self.mode, AuthMode::Token)
     }
 }
@@ -464,11 +464,11 @@ impl Default for WebhookConfig {
 }
 
 // Helper functions for serde defaults
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_false() -> bool {
+const fn default_false() -> bool {
     false
 }
 

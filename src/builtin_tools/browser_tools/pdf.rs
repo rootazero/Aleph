@@ -36,7 +36,7 @@ pub struct BrowserPdfTool {
 }
 
 impl BrowserPdfTool {
-    pub fn new(manager: Arc<ProfileManager>) -> Self {
+    pub const fn new(manager: Arc<ProfileManager>) -> Self {
         Self { manager }
     }
 }

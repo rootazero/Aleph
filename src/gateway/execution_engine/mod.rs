@@ -145,7 +145,7 @@ pub const CHANNEL_TOOL_PERMISSIONS_KEY: &str = "channel_tool_permissions";
 impl BusyInputMode {
     /// Wire string stored in run metadata. Inverse of [`BusyInputMode::from_wire`].
     #[must_use]
-    pub fn as_wire(self) -> &'static str {
+    pub const fn as_wire(self) -> &'static str {
         match self {
             BusyInputMode::Steer => "steer",
             BusyInputMode::Interrupt => "interrupt",

@@ -92,7 +92,7 @@ impl ExecutionResult {
 
     /// Builder: set execution time in milliseconds
     #[must_use]
-    pub fn with_execution_time_ms(mut self, ms: u64) -> Self {
+    pub const fn with_execution_time_ms(mut self, ms: u64) -> Self {
         self.execution_time_ms = ms;
         self
     }
@@ -195,7 +195,7 @@ impl ToolCallRecord {
 
     /// Builder: set execution time in milliseconds
     #[must_use]
-    pub fn with_execution_time_ms(mut self, ms: u64) -> Self {
+    pub const fn with_execution_time_ms(mut self, ms: u64) -> Self {
         self.execution_time_ms = ms;
         self
     }
@@ -303,7 +303,7 @@ impl TaskExecutionResult {
     }
 
     /// Builder: set execution time in milliseconds
-    pub fn with_execution_time_ms(mut self, ms: u64) -> Self {
+    pub const fn with_execution_time_ms(mut self, ms: u64) -> Self {
         self.execution_time_ms = ms;
         self
     }
@@ -343,7 +343,7 @@ impl ExecutionContext {
     ///
     /// Note: stream defaults to true for optimal user experience
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             app_context: None,
             window_title: None,
@@ -372,14 +372,14 @@ impl ExecutionContext {
 
     /// Builder: set streaming mode
     #[must_use]
-    pub fn with_stream(mut self, stream: bool) -> Self {
+    pub const fn with_stream(mut self, stream: bool) -> Self {
         self.stream = stream;
         self
     }
 
     /// Check if this context has any application information
     #[must_use]
-    pub fn has_app_info(&self) -> bool {
+    pub const fn has_app_info(&self) -> bool {
         self.app_context.is_some() || self.window_title.is_some()
     }
 
@@ -465,7 +465,7 @@ impl ExecutorError {
     /// Check if this error is recoverable
     ///
     /// Recoverable errors may be worth retrying.
-    pub fn is_recoverable(&self) -> bool {
+    pub const fn is_recoverable(&self) -> bool {
         match self {
             ExecutorError::ExecutionFailed(_) => true, // May be transient
             ExecutorError::ToolError(_) => true,       // Tool may work on retry
@@ -476,12 +476,12 @@ impl ExecutorError {
     }
 
     /// Check if this error is due to timeout
-    pub fn is_timeout(&self) -> bool {
+    pub const fn is_timeout(&self) -> bool {
         matches!(self, ExecutorError::Timeout)
     }
 
     /// Check if this error is due to cancellation
-    pub fn is_cancelled(&self) -> bool {
+    pub const fn is_cancelled(&self) -> bool {
         matches!(self, ExecutorError::Cancelled)
     }
 }

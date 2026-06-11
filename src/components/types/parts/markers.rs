@@ -39,7 +39,7 @@ impl CompactionMarker {
 
     /// Create a basic compaction marker with explicit timestamp
     #[must_use]
-    pub fn with_timestamp(timestamp: i64, auto: bool) -> Self {
+    pub const fn with_timestamp(timestamp: i64, auto: bool) -> Self {
         Self {
             timestamp,
             auto,

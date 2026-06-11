@@ -119,7 +119,7 @@ pub enum TrustLevel {
     Disabled,
 }
 
-fn default_trust_level() -> TrustLevel {
+const fn default_trust_level() -> TrustLevel {
     TrustLevel::Confirm
 }
 
@@ -177,7 +177,7 @@ pub struct AcpAdapterEntry {
     pub trust_level: TrustLevel,
 }
 
-fn default_timeout() -> u64 {
+const fn default_timeout() -> u64 {
     300
 }
 

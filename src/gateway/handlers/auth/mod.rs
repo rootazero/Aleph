@@ -120,7 +120,7 @@ pub struct TransportPolicy {
 impl TransportPolicy {
     /// Static defaults that mirror [`super::super::server::GatewayConfig`].
     #[must_use]
-    pub fn defaults() -> Self {
+    pub const fn defaults() -> Self {
         Self {
             ping_interval_secs: 30,
             idle_timeout_secs: 90,

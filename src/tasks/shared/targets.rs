@@ -31,7 +31,7 @@ pub struct GatewayDeliveryTarget {
 }
 
 impl GatewayDeliveryTarget {
-    pub fn new(channel_registry: ChannelRegistryCell) -> Self {
+    pub const fn new(channel_registry: ChannelRegistryCell) -> Self {
         Self { channel_registry }
     }
 }

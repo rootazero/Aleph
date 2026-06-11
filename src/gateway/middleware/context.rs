@@ -48,7 +48,7 @@ impl GatewayRequestContext {
 
     /// Set trace flags.
     #[must_use]
-    pub fn with_trace_flags(mut self, flags: TraceFlags) -> Self {
+    pub const fn with_trace_flags(mut self, flags: TraceFlags) -> Self {
         self.trace_flags = flags;
         self
     }
@@ -77,7 +77,7 @@ pub struct TraceFlags {
 impl TraceFlags {
     /// Standard trace flags suitable for most requests.
     #[must_use]
-    pub fn standard() -> Self {
+    pub const fn standard() -> Self {
         Self {
             detailed_timing: true,
             include_params: false,

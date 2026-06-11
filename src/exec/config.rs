@@ -49,7 +49,7 @@ pub struct ExecApprovalsFile {
     pub agents: HashMap<String, AgentExecConfig>,
 }
 
-fn default_version() -> u8 {
+const fn default_version() -> u8 {
     1
 }
 

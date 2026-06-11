@@ -36,7 +36,7 @@ pub struct SearchParams {
     pub limit: usize,
 }
 
-fn default_limit() -> usize {
+const fn default_limit() -> usize {
     20
 }
 

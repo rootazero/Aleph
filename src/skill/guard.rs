@@ -156,7 +156,7 @@ pub fn merge_verdicts(verdicts: impl IntoIterator<Item = ScanVerdict>) -> ScanVe
 /// Trust × verdict install policy. `Dangerous` is blocked for everyone except
 /// `Builtin`; `Caution` is allowed for `Trusted`+; `Safe` always allowed.
 #[must_use]
-pub fn install_allowed(level: ThreatLevel, trust: TrustLevel) -> bool {
+pub const fn install_allowed(level: ThreatLevel, trust: TrustLevel) -> bool {
     match (level, trust) {
         (ThreatLevel::Safe, _) => true,
         (ThreatLevel::Caution, TrustLevel::Community) => false,

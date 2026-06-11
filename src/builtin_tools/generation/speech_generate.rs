@@ -88,7 +88,7 @@ impl SpeechGenerateTool {
     pub const DESCRIPTION: &'static str = "Convert text to speech audio. Use this when you need to generate spoken audio from text content.";
 
     /// Create a new SpeechGenerateTool with the given provider registry
-    pub fn new(registry: Arc<RwLock<GenerationProviderRegistry>>) -> Self {
+    pub const fn new(registry: Arc<RwLock<GenerationProviderRegistry>>) -> Self {
         Self { registry }
     }
 

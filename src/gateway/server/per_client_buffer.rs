@@ -75,7 +75,7 @@ impl PerClientBuffer {
         }
     }
 
-    pub fn metrics(&self) -> &PerClientBufferMetrics {
+    pub const fn metrics(&self) -> &PerClientBufferMetrics {
         &self.metrics
     }
 }

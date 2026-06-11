@@ -52,7 +52,7 @@ pub struct FileWriteCommand {
 
 impl FileWriteCommand {
     #[must_use]
-    pub fn new(workspace_dir: PathBuf) -> Self {
+    pub const fn new(workspace_dir: PathBuf) -> Self {
         Self { workspace_dir }
     }
 }
@@ -116,7 +116,7 @@ pub struct FileReadCommand {
 
 impl FileReadCommand {
     #[must_use]
-    pub fn new(workspace_dir: PathBuf) -> Self {
+    pub const fn new(workspace_dir: PathBuf) -> Self {
         Self { workspace_dir }
     }
 }

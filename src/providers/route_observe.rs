@@ -65,7 +65,7 @@ pub struct RouteObservability {
     pub route: Option<Arc<RouteHandle>>,
 }
 
-fn tier_str(tier: EndpointTier) -> &'static str {
+const fn tier_str(tier: EndpointTier) -> &'static str {
     match tier {
         EndpointTier::Local => "local",
         EndpointTier::Cloud => "cloud",
@@ -73,7 +73,7 @@ fn tier_str(tier: EndpointTier) -> &'static str {
     }
 }
 
-fn mode_str(mode: RouteMode) -> &'static str {
+const fn mode_str(mode: RouteMode) -> &'static str {
     match mode {
         RouteMode::Auto => "auto",
         RouteMode::AlwaysLocal => "always_local",
@@ -81,7 +81,7 @@ fn mode_str(mode: RouteMode) -> &'static str {
     }
 }
 
-fn lb_str(strategy: LoadBalanceStrategy) -> &'static str {
+const fn lb_str(strategy: LoadBalanceStrategy) -> &'static str {
     match strategy {
         LoadBalanceStrategy::Ordered => "ordered",
         LoadBalanceStrategy::RoundRobin => "round_robin",

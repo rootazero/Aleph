@@ -71,7 +71,7 @@ impl ToolDefinition {
 
     /// Set requires_confirmation flag
     #[must_use]
-    pub fn with_confirmation(mut self, requires: bool) -> Self {
+    pub const fn with_confirmation(mut self, requires: bool) -> Self {
         self.requires_confirmation = requires;
         self
     }
@@ -85,7 +85,7 @@ impl ToolDefinition {
 
     /// Set strict mode flag
     #[must_use]
-    pub fn with_strict(mut self, strict: bool) -> Self {
+    pub const fn with_strict(mut self, strict: bool) -> Self {
         self.strict = strict;
         self
     }
@@ -258,7 +258,7 @@ pub struct StructuredToolMeta {
 impl StructuredToolMeta {
     /// Check if this metadata is empty
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.capabilities.is_empty()
             && self.not_suitable_for.is_empty()
             && self.differentiation.is_empty()

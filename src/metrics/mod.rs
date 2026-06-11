@@ -123,7 +123,7 @@ impl StageTimer {
     /// # Returns
     ///
     /// Self for chaining
-    pub fn with_target(mut self, target_ms: u64) -> Self {
+    pub const fn with_target(mut self, target_ms: u64) -> Self {
         self.target_ms = Some(target_ms);
         self
     }

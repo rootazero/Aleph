@@ -45,7 +45,7 @@ pub enum InteractionParadigm {
 impl InteractionParadigm {
     /// Returns a human-readable description for use in prompts
     #[must_use]
-    pub fn description(&self) -> &'static str {
+    pub const fn description(&self) -> &'static str {
         match self {
             Self::CLI => "Command-line interface with terminal output supporting ANSI formatting",
             Self::WebRich => "Web-based rich interface with full interactive capabilities",
@@ -117,7 +117,7 @@ pub enum Capability {
 impl Capability {
     /// Returns a (name, hint) tuple for prompt generation
     #[must_use]
-    pub fn prompt_hint(&self) -> (&'static str, &'static str) {
+    pub const fn prompt_hint(&self) -> (&'static str, &'static str) {
         match self {
             Self::RichText => ("rich_text", "You can use markdown formatting for emphasis"),
             Self::InlineButtons => (
@@ -172,21 +172,21 @@ impl InteractionConstraints {
 
     /// Set maximum output characters
     #[must_use]
-    pub fn max_output_chars(mut self, limit: usize) -> Self {
+    pub const fn max_output_chars(mut self, limit: usize) -> Self {
         self.max_output_chars = Some(limit);
         self
     }
 
     /// Set streaming support
     #[must_use]
-    pub fn supports_streaming(mut self, supports: bool) -> Self {
+    pub const fn supports_streaming(mut self, supports: bool) -> Self {
         self.supports_streaming = supports;
         self
     }
 
     /// Set compact preference
     #[must_use]
-    pub fn prefer_compact(mut self, prefer: bool) -> Self {
+    pub const fn prefer_compact(mut self, prefer: bool) -> Self {
         self.prefer_compact = prefer;
         self
     }
@@ -239,7 +239,7 @@ impl InteractionManifest {
 
     /// Set constraints
     #[must_use]
-    pub fn with_constraints(mut self, constraints: InteractionConstraints) -> Self {
+    pub const fn with_constraints(mut self, constraints: InteractionConstraints) -> Self {
         self.constraints = constraints;
         self
     }

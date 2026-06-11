@@ -80,7 +80,7 @@ pub struct RpcPrompter {
 
 impl RpcPrompter {
     /// Create a new RPC prompter
-    pub(crate) fn new(
+    pub(crate) const fn new(
         step_tx: mpsc::Sender<WizardStep>,
         answers: Arc<RwLock<HashMap<String, PendingAnswer>>>,
         finish_data: Arc<RwLock<Option<Value>>>,

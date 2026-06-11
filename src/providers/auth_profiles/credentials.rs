@@ -69,7 +69,7 @@ impl AuthProfileCredential {
 
     /// Get the credential type name
     #[must_use]
-    pub fn credential_type(&self) -> &'static str {
+    pub const fn credential_type(&self) -> &'static str {
         match self {
             Self::ApiKey(_) => "api_key",
             Self::Token(_) => "token",
@@ -121,7 +121,7 @@ impl AuthProfileCredential {
     /// Type score for ordering (lower = higher priority)
     /// OAuth > Token > API Key
     #[must_use]
-    pub fn type_score(&self) -> u8 {
+    pub const fn type_score(&self) -> u8 {
         match self {
             Self::OAuth(_) => 0,
             Self::Token(_) => 1,

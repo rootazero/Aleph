@@ -85,7 +85,7 @@ impl ListSkillsTool {
 
     /// Create a ListSkillsTool with multiple directories
     #[must_use]
-    pub fn with_directories(skills_dirs: Vec<PathBuf>) -> Self {
+    pub const fn with_directories(skills_dirs: Vec<PathBuf>) -> Self {
         Self { skills_dirs }
     }
 

@@ -34,7 +34,7 @@ pub struct MemoryManifestSection {
     pub on_capture_timeout_action: String,
 }
 
-fn default_priority() -> i32 {
+const fn default_priority() -> i32 {
     100
 }
 

@@ -60,7 +60,7 @@ pub enum PlanItemStatus {
 impl PlanItemStatus {
     /// Markdown checkbox glyph (without the leading `- `) for this state.
     #[must_use]
-    pub fn glyph(self) -> &'static str {
+    pub const fn glyph(self) -> &'static str {
         match self {
             Self::Pending => "[ ]",
             Self::InProgress => "[~]",
@@ -240,7 +240,7 @@ impl ScratchpadManager {
 
     /// Get the project directory path
     #[must_use]
-    pub fn project_dir(&self) -> &PathBuf {
+    pub const fn project_dir(&self) -> &PathBuf {
         &self.project_dir
     }
 

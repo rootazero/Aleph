@@ -4,13 +4,13 @@ use serde::Deserialize;
 fn default_domain() -> String {
     "feishu".to_string()
 }
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 fn default_render_mode() -> String {
     "auto".to_string()
 }
-fn default_webhook_port() -> u16 {
+const fn default_webhook_port() -> u16 {
     3000
 }
 fn default_webhook_host() -> String {

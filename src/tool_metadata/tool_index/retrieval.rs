@@ -81,7 +81,7 @@ impl HydratedTool {
 
     /// Check if schema is cached
     #[must_use]
-    pub fn has_schema(&self) -> bool {
+    pub const fn has_schema(&self) -> bool {
         self.cached_schema.is_some()
     }
 
@@ -105,7 +105,7 @@ pub struct ToolRetrieval {
 
 impl ToolRetrieval {
     /// Create a new ToolRetrieval with custom config
-    pub fn new(db: MemoryBackend, config: ToolRetrievalConfig) -> Self {
+    pub const fn new(db: MemoryBackend, config: ToolRetrievalConfig) -> Self {
         Self { db, config }
     }
 
@@ -245,7 +245,7 @@ impl ToolRetrieval {
 
     /// Get the current config
     #[must_use]
-    pub fn config(&self) -> &ToolRetrievalConfig {
+    pub const fn config(&self) -> &ToolRetrievalConfig {
         &self.config
     }
 }

@@ -69,7 +69,7 @@ pub struct AgentInfoTool {
 }
 
 impl AgentInfoTool {
-    pub fn new(registry: Arc<AgentRegistry>) -> Self {
+    pub const fn new(registry: Arc<AgentRegistry>) -> Self {
         Self { registry }
     }
 }

@@ -71,11 +71,11 @@ pub struct CoworkConfigToml {
 // Default Functions
 // =============================================================================
 
-pub fn default_require_confirmation() -> bool {
+pub const fn default_require_confirmation() -> bool {
     REQUIRE_CONFIRMATION
 }
 
-pub fn default_max_parallelism() -> usize {
+pub const fn default_max_parallelism() -> usize {
     MAX_PARALLELISM
 }
 

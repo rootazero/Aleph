@@ -286,7 +286,7 @@ pub async fn handle_path(request: JsonRpcRequest, watcher: Arc<ConfigWatcher>) -
 // ============================================================================
 
 /// Default value for include_plugins (true)
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 

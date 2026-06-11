@@ -105,7 +105,7 @@ pub struct A2ADelegateTool {
 }
 
 impl A2ADelegateTool {
-    pub fn new(handle: A2AToolHandle) -> Self {
+    pub const fn new(handle: A2AToolHandle) -> Self {
         Self { handle }
     }
 }
@@ -227,7 +227,7 @@ pub struct A2AAgentsTool {
 }
 
 impl A2AAgentsTool {
-    pub fn new(handle: A2AToolHandle) -> Self {
+    pub const fn new(handle: A2AToolHandle) -> Self {
         Self { handle }
     }
 }

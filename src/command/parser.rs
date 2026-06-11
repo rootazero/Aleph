@@ -68,7 +68,7 @@ pub struct CommandParser {
 impl CommandParser {
     /// Create a new command parser backed by ToolCatalog
     #[must_use]
-    pub fn new(tool_registry: Arc<ToolCatalog>) -> Self {
+    pub const fn new(tool_registry: Arc<ToolCatalog>) -> Self {
         Self { tool_registry }
     }
 
@@ -98,7 +98,7 @@ impl CommandParser {
 
     /// Get a reference to the underlying ToolCatalog
     #[must_use]
-    pub fn tool_registry(&self) -> &Arc<ToolCatalog> {
+    pub const fn tool_registry(&self) -> &Arc<ToolCatalog> {
         &self.tool_registry
     }
 }

@@ -49,11 +49,11 @@ pub struct CommandPolicyConfigSchema {
     pub custom_rules: Vec<CustomRuleSchema>,
 }
 
-fn default_enabled() -> bool {
+const fn default_enabled() -> bool {
     true
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 

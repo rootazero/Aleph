@@ -150,7 +150,7 @@ pub(crate) enum LifecycleVerdict {
     Keep,
 }
 
-pub(crate) fn classify(
+pub(crate) const fn classify(
     state: SkillState,
     age_days: i64,
     stale_after_days: u32,

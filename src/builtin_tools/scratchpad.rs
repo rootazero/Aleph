@@ -92,7 +92,7 @@ pub struct ScratchpadTool {
 
 impl ScratchpadTool {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { session_key: None }
     }
 

@@ -112,7 +112,7 @@ pub enum GoogleMeetAction {
 
 impl GoogleMeetAction {
     /// JSON-RPC method name forwarded to the bridge.
-    fn rpc_method(self) -> &'static str {
+    const fn rpc_method(self) -> &'static str {
         match self {
             Self::Join => "googlemeet.join",
             Self::Create => "googlemeet.create",
@@ -207,7 +207,7 @@ pub struct GoogleMeetTool {
 impl GoogleMeetTool {
     /// Construct with an optional configured bridge.
     #[must_use]
-    pub fn new(bridge: Option<Arc<GoogleMeetBridge>>) -> Self {
+    pub const fn new(bridge: Option<Arc<GoogleMeetBridge>>) -> Self {
         Self { bridge }
     }
 

@@ -67,13 +67,13 @@ pub struct ReaperConfig {
     pub dedup_retention_secs: u64,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
-fn default_interval_secs() -> u64 {
+const fn default_interval_secs() -> u64 {
     DEFAULT_INTERVAL_SECS
 }
-fn default_dedup_retention_secs() -> u64 {
+const fn default_dedup_retention_secs() -> u64 {
     DEFAULT_DEDUP_RETENTION_SECS
 }
 

@@ -9,7 +9,7 @@ pub struct DmPolicyEngine {
 
 impl DmPolicyEngine {
     #[must_use]
-    pub fn new(access: AccessConfig, paired_numbers: Vec<String>) -> Self {
+    pub const fn new(access: AccessConfig, paired_numbers: Vec<String>) -> Self {
         Self {
             access,
             paired_numbers,

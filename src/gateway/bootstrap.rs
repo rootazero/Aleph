@@ -60,7 +60,7 @@ impl BootstrapNonceManager {
     }
 
     #[must_use]
-    pub fn ttl(&self) -> Duration {
+    pub const fn ttl(&self) -> Duration {
         self.ttl
     }
 

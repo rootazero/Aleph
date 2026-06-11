@@ -126,7 +126,7 @@ impl MessagesDb {
     }
 
     /// Configure attachment handling (from `IMessageConfig`).
-    pub fn set_attachment_policy(&mut self, include_attachments: bool, max_attachment_size: u64) {
+    pub const fn set_attachment_policy(&mut self, include_attachments: bool, max_attachment_size: u64) {
         self.include_attachments = include_attachments;
         self.max_attachment_size = max_attachment_size;
     }
@@ -135,12 +135,12 @@ impl MessagesDb {
     /// from messages with `ROWID > rowid`. Used to recover messages received
     /// while the daemon was offline (catch-up), restoring from a persisted
     /// cursor instead of skipping straight to the newest message.
-    pub fn resume_from_rowid(&mut self, rowid: i64) {
+    pub const fn resume_from_rowid(&mut self, rowid: i64) {
         self.last_message_rowid = rowid;
     }
 
     /// The highest message ROWID processed so far (the catch-up watermark).
-    pub fn last_rowid(&self) -> i64 {
+    pub const fn last_rowid(&self) -> i64 {
         self.last_message_rowid
     }
 
@@ -403,7 +403,7 @@ impl MessagesDb {
     }
 
     /// Reset the last message marker (useful for testing)
-    pub fn reset_marker(&mut self) {
+    pub const fn reset_marker(&mut self) {
         self.last_message_rowid = 0;
     }
 

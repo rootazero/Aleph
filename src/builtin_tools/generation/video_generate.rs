@@ -57,7 +57,7 @@ impl VideoGenerateTool {
     pub const DESCRIPTION: &'static str =
         "Generate a video from a text description. Provide a detailed prompt describing the scene, motion, style, and camera movement.";
 
-    pub fn new(registry: Arc<RwLock<GenerationProviderRegistry>>) -> Self {
+    pub const fn new(registry: Arc<RwLock<GenerationProviderRegistry>>) -> Self {
         Self { registry }
     }
 

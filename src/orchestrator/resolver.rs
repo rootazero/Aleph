@@ -11,7 +11,7 @@ pub const MAX_FLOW_DEPTH: u8 = 4;
 
 /// Allows `depth ∈ [0, MAX_FLOW_DEPTH]`; rejects strictly greater.
 /// Called at every dispatch + `flow_run` invocation (see design §7).
-pub fn depth_guard(depth: u8) -> Result<(), FlowError> {
+pub const fn depth_guard(depth: u8) -> Result<(), FlowError> {
     if depth > MAX_FLOW_DEPTH {
         Err(FlowError::RecursionLimit {
             max: MAX_FLOW_DEPTH,

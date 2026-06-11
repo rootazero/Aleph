@@ -39,11 +39,11 @@ pub struct GroupChatConfig {
     pub coordinator_visible: bool,
 }
 
-fn default_max_personas_per_session() -> usize {
+const fn default_max_personas_per_session() -> usize {
     6
 }
 
-fn default_max_rounds() -> usize {
+const fn default_max_rounds() -> usize {
     10
 }
 

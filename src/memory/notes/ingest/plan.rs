@@ -107,7 +107,7 @@ impl ApplyReport {
     /// batch processed (give a transiently-failed extraction a retry instead of
     /// discarding the knowledge forever).
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.touched_paths.is_empty()
     }
 }

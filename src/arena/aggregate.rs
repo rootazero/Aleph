@@ -66,25 +66,25 @@ impl SharedArena {
 
     /// Returns a reference to the arena manifest.
     #[must_use]
-    pub fn manifest(&self) -> &ArenaManifest {
+    pub const fn manifest(&self) -> &ArenaManifest {
         &self.manifest
     }
 
     /// Returns the current arena status.
     #[must_use]
-    pub fn status(&self) -> ArenaStatus {
+    pub const fn status(&self) -> ArenaStatus {
         self.status
     }
 
     /// Returns a reference to the arena progress.
     #[must_use]
-    pub fn progress(&self) -> &ArenaProgress {
+    pub const fn progress(&self) -> &ArenaProgress {
         &self.progress
     }
 
     /// Returns a reference to the agent slots.
     #[must_use]
-    pub fn slots(&self) -> &HashMap<AgentId, ArenaSlot> {
+    pub const fn slots(&self) -> &HashMap<AgentId, ArenaSlot> {
         &self.slots
     }
 

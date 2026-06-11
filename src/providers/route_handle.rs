@@ -39,7 +39,7 @@ const LB_LEAST_BUSY: u8 = 2;
 const LB_LATENCY_AWARE: u8 = 3;
 const LB_USAGE_BASED: u8 = 4;
 
-fn mode_to_u8(mode: RouteMode) -> u8 {
+const fn mode_to_u8(mode: RouteMode) -> u8 {
     match mode {
         RouteMode::Auto => MODE_AUTO,
         RouteMode::AlwaysLocal => MODE_ALWAYS_LOCAL,
@@ -47,7 +47,7 @@ fn mode_to_u8(mode: RouteMode) -> u8 {
     }
 }
 
-fn u8_to_mode(raw: u8) -> RouteMode {
+const fn u8_to_mode(raw: u8) -> RouteMode {
     match raw {
         MODE_ALWAYS_LOCAL => RouteMode::AlwaysLocal,
         MODE_ALWAYS_CLOUD => RouteMode::AlwaysCloud,
@@ -56,7 +56,7 @@ fn u8_to_mode(raw: u8) -> RouteMode {
     }
 }
 
-fn lb_to_u8(s: LoadBalanceStrategy) -> u8 {
+const fn lb_to_u8(s: LoadBalanceStrategy) -> u8 {
     match s {
         LoadBalanceStrategy::Ordered => LB_ORDERED,
         LoadBalanceStrategy::RoundRobin => LB_ROUND_ROBIN,
@@ -66,7 +66,7 @@ fn lb_to_u8(s: LoadBalanceStrategy) -> u8 {
     }
 }
 
-fn u8_to_lb(raw: u8) -> LoadBalanceStrategy {
+const fn u8_to_lb(raw: u8) -> LoadBalanceStrategy {
     match raw {
         LB_ROUND_ROBIN => LoadBalanceStrategy::RoundRobin,
         LB_LEAST_BUSY => LoadBalanceStrategy::LeastBusy,

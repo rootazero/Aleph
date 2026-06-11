@@ -108,13 +108,13 @@ pub enum PermissionReply {
 impl PermissionReply {
     /// Check if this reply allows the operation
     #[must_use]
-    pub fn is_allowed(&self) -> bool {
+    pub const fn is_allowed(&self) -> bool {
         matches!(self, Self::Once | Self::Always)
     }
 
     /// Check if this reply should persist the rule
     #[must_use]
-    pub fn should_persist(&self) -> bool {
+    pub const fn should_persist(&self) -> bool {
         matches!(self, Self::Always)
     }
 }
@@ -140,7 +140,7 @@ pub enum PermissionEvent {
 impl PermissionEvent {
     /// Create an Asked event
     #[must_use]
-    pub fn asked(request: PermissionRequest) -> Self {
+    pub const fn asked(request: PermissionRequest) -> Self {
         Self::Asked(request)
     }
 

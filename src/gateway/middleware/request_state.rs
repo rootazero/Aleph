@@ -52,19 +52,19 @@ pub enum RequestState {
 impl RequestState {
     /// Returns true if this is a terminal state.
     #[must_use]
-    pub fn is_terminal(self) -> bool {
+    pub const fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
     }
 
     /// Returns the state as a u8 for atomic storage.
     #[must_use]
-    pub fn as_u8(self) -> u8 {
+    pub const fn as_u8(self) -> u8 {
         self as u8
     }
 
     /// Try to create a RequestState from a u8 value.
     #[must_use]
-    pub fn from_u8(value: u8) -> Option<Self> {
+    pub const fn from_u8(value: u8) -> Option<Self> {
         match value {
             0 => Some(Self::Pending),
             1 => Some(Self::Validating),
@@ -79,7 +79,7 @@ impl RequestState {
 
     /// Returns the name of the state for metrics.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
             Self::Validating => "validating",
@@ -93,7 +93,7 @@ impl RequestState {
 
     /// Check if transition from current state to target is valid.
     #[must_use]
-    pub fn can_transition_to(self, target: RequestState) -> bool {
+    pub const fn can_transition_to(self, target: RequestState) -> bool {
         use RequestState::*;
         match self {
             // From Pending

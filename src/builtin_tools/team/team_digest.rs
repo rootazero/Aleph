@@ -16,7 +16,7 @@ use crate::tools::AlephTool;
 // Args / Output
 // =============================================================================
 
-fn default_24() -> u64 {
+const fn default_24() -> u64 {
     24
 }
 

@@ -241,7 +241,7 @@ impl SessionKey {
 
     /// Get the epoch of this session key (only Main and DirectMessage have epochs)
     #[must_use]
-    pub fn epoch(&self) -> u32 {
+    pub const fn epoch(&self) -> u32 {
         match self {
             Self::Main { epoch, .. } | Self::DirectMessage { epoch, .. } => *epoch,
             _ => 0,

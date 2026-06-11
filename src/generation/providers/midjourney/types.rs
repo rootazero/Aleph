@@ -46,7 +46,7 @@ pub enum MidjourneyMode {
 impl MidjourneyMode {
     /// Get the API path prefix for this mode
     #[must_use]
-    pub fn as_path(&self) -> &'static str {
+    pub const fn as_path(&self) -> &'static str {
         match self {
             MidjourneyMode::Fast => "mj-fast",
             MidjourneyMode::Relax => "mj-relax",

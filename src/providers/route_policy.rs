@@ -80,7 +80,7 @@ impl RouteTargets {
 
     /// Whether any pin is set (the common no-op fast path checks this first).
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.local_provider.is_none() && self.cloud_provider.is_none()
     }
 }
@@ -201,7 +201,7 @@ pub enum CandidateAction {
 /// The `Unknown` (live-primary) slot is always allowed: route mode shapes the
 /// *fallbacks* around the operator's configured default, never overrides it.
 #[must_use]
-pub fn classify_candidate(
+pub const fn classify_candidate(
     mode: RouteMode,
     tier: EndpointTier,
     allow_cloud_escalation: bool,

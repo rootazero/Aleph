@@ -138,7 +138,7 @@ impl<S: NoteStore> NoteIndexer<S> {
 
     /// Getter for the underlying store.
     #[must_use]
-    pub fn store(&self) -> &Arc<S> {
+    pub const fn store(&self) -> &Arc<S> {
         &self.store
     }
 

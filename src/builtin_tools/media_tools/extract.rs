@@ -34,7 +34,7 @@ pub struct DocumentExtractOutput {
 }
 
 impl DocumentExtractOutput {
-    fn ok(text: String) -> Self {
+    const fn ok(text: String) -> Self {
         Self {
             success: true,
             text: Some(text),
@@ -43,7 +43,7 @@ impl DocumentExtractOutput {
         }
     }
 
-    fn ok_data(text: String, data: Value) -> Self {
+    const fn ok_data(text: String, data: Value) -> Self {
         Self {
             success: true,
             text: Some(text),
@@ -69,7 +69,7 @@ pub struct DocumentExtractTool {
 
 impl DocumentExtractTool {
     #[must_use]
-    pub fn new(pipeline: Arc<MediaPipeline>) -> Self {
+    pub const fn new(pipeline: Arc<MediaPipeline>) -> Self {
         Self { pipeline }
     }
 }

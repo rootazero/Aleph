@@ -38,7 +38,7 @@ impl InProcessActorSessionService {
         }
     }
 
-    pub fn with_idle_timeout(mut self, t: Duration) -> Self {
+    pub const fn with_idle_timeout(mut self, t: Duration) -> Self {
         self.idle_timeout = t;
         self
     }

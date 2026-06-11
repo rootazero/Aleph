@@ -387,7 +387,7 @@ impl PluginLoader {
 
     /// Check if WASM runtime is initialized.
     #[must_use]
-    pub fn is_wasm_runtime_active(&self) -> bool {
+    pub const fn is_wasm_runtime_active(&self) -> bool {
         self.wasm_runtime.is_some()
     }
 

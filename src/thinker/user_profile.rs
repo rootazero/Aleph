@@ -136,7 +136,7 @@ impl UserProfile {
 
     /// Returns true if the profile has no meaningful content (empty name).
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.name.is_empty()
     }
 

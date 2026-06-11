@@ -86,13 +86,13 @@ impl McpStartupReport {
 
     /// Check if all servers started successfully
     #[must_use]
-    pub fn all_succeeded(&self) -> bool {
+    pub const fn all_succeeded(&self) -> bool {
         self.failed_servers.is_empty()
     }
 
     /// Get total number of servers (succeeded + failed)
     #[must_use]
-    pub fn total_count(&self) -> usize {
+    pub const fn total_count(&self) -> usize {
         self.succeeded_servers.len() + self.failed_servers.len()
     }
 }

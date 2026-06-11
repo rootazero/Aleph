@@ -57,7 +57,7 @@ impl GroupChatExecutor {
 
     /// Set whether the coordinator's plan is included as a message.
     #[must_use]
-    pub fn with_coordinator_visible(mut self, visible: bool) -> Self {
+    pub const fn with_coordinator_visible(mut self, visible: bool) -> Self {
         self.coordinator_visible = visible;
         self
     }

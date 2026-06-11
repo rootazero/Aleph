@@ -75,7 +75,7 @@ impl AllowList {
 
     /// True if the allowlist permits nothing.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.exact.is_empty() && self.wildcard_suffix.is_empty()
     }
 

@@ -62,7 +62,7 @@ impl FlagUserCorrectionTool {
         }
     }
 
-    fn severity_token(s: &Severity) -> &'static str {
+    const fn severity_token(s: &Severity) -> &'static str {
         match s {
             Severity::Low => "low",
             Severity::Med => "med",

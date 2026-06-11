@@ -15,7 +15,7 @@ pub struct VaultSecretResolver {
 }
 
 impl VaultSecretResolver {
-    pub fn new(inner: Arc<SharedTokenManager>) -> Self {
+    pub const fn new(inner: Arc<SharedTokenManager>) -> Self {
         Self { inner }
     }
 }

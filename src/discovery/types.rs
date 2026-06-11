@@ -20,13 +20,13 @@ pub enum DiscoverySource {
 impl DiscoverySource {
     /// Whether this source is read-only (Claude Code directories)
     #[must_use]
-    pub fn is_read_only(&self) -> bool {
+    pub const fn is_read_only(&self) -> bool {
         matches!(self, Self::ClaudeGlobal | Self::Project)
     }
 
     /// Whether this source is from Claude Code
     #[must_use]
-    pub fn is_claude_source(&self) -> bool {
+    pub const fn is_claude_source(&self) -> bool {
         matches!(self, Self::ClaudeGlobal | Self::Project)
     }
 }
@@ -45,7 +45,7 @@ pub struct ScanDirectory {
 impl ScanDirectory {
     /// Create a new scan directory
     #[must_use]
-    pub fn new(path: PathBuf, source: DiscoverySource, priority: u32) -> Self {
+    pub const fn new(path: PathBuf, source: DiscoverySource, priority: u32) -> Self {
         Self {
             path,
             source,
@@ -91,7 +91,7 @@ impl DiscoveredPath {
 
     /// Create with explicit name
     #[must_use]
-    pub fn with_name(path: PathBuf, source: DiscoverySource, priority: u32, name: String) -> Self {
+    pub const fn with_name(path: PathBuf, source: DiscoverySource, priority: u32, name: String) -> Self {
         Self {
             path,
             source,

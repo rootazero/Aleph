@@ -59,7 +59,7 @@ fn normalize_pin(raw: Option<String>) -> Option<String> {
     raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
-fn mode_to_str(mode: RouteMode) -> &'static str {
+const fn mode_to_str(mode: RouteMode) -> &'static str {
     match mode {
         RouteMode::Auto => "auto",
         RouteMode::AlwaysLocal => "always_local",
@@ -76,7 +76,7 @@ fn mode_from_str(raw: &str) -> Option<RouteMode> {
     }
 }
 
-fn lb_to_str(s: LoadBalanceStrategy) -> &'static str {
+const fn lb_to_str(s: LoadBalanceStrategy) -> &'static str {
     match s {
         LoadBalanceStrategy::Ordered => "ordered",
         LoadBalanceStrategy::RoundRobin => "round_robin",
@@ -97,7 +97,7 @@ fn lb_from_str(raw: &str) -> Option<LoadBalanceStrategy> {
     }
 }
 
-fn tier_to_str(tier: EndpointTier) -> &'static str {
+const fn tier_to_str(tier: EndpointTier) -> &'static str {
     match tier {
         EndpointTier::Local => "local",
         EndpointTier::Cloud => "cloud",

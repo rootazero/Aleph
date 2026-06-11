@@ -46,7 +46,7 @@ pub struct FileOpsArgs {
     pub create_parents: bool,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 

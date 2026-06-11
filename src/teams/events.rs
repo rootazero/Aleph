@@ -58,7 +58,7 @@ pub enum TeamEventType {
 
 impl TeamEventType {
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::MessageSent => "message_sent",
             Self::MessageRead => "message_read",

@@ -62,7 +62,7 @@ impl FilterResult {
 
     /// True if any PII was detected (blocked or warned)
     #[must_use]
-    pub fn has_detections(&self) -> bool {
+    pub const fn has_detections(&self) -> bool {
         self.blocked_count > 0 || self.warned_count > 0
     }
 }

@@ -26,7 +26,7 @@ pub struct ProbeResult {
 }
 
 impl ProbeResult {
-    fn not_found() -> Self {
+    const fn not_found() -> Self {
         Self {
             found: false,
             bin_path: None,

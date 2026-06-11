@@ -56,18 +56,18 @@ impl Default for TaskRoutingConfig {
     }
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 fn default_classify_model() -> String {
     "fast".into()
 }
-fn default_escalation_threshold() -> usize {
+const fn default_escalation_threshold() -> usize {
     3
 }
-fn default_max_parallel() -> usize {
+const fn default_max_parallel() -> usize {
     4
 }
-fn default_adversarial_rounds() -> usize {
+const fn default_adversarial_rounds() -> usize {
     3
 }

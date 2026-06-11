@@ -32,7 +32,7 @@ pub enum McpErrorKind {
 impl McpErrorKind {
     /// Stable lowercase tag for structured logging and tests.
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             McpErrorKind::AuthExpired => "auth_expired",
             McpErrorKind::SessionExpired => "session_expired",
@@ -45,7 +45,7 @@ impl McpErrorKind {
     /// recoverable kinds return guidance; `None` means "no useful hint, do not
     /// add noise to the error".
     #[must_use]
-    pub fn guidance(&self) -> Option<&'static str> {
+    pub const fn guidance(&self) -> Option<&'static str> {
         match self {
             McpErrorKind::AuthExpired => Some(
                 "the MCP server rejected credentials — re-authenticate with the mcp_login tool",

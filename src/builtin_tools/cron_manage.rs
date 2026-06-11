@@ -79,7 +79,7 @@ pub enum ScheduleInput {
     },
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -231,7 +231,7 @@ pub struct CronManageTool {
 }
 
 impl CronManageTool {
-    pub fn new(service: SharedCronService) -> Self {
+    pub const fn new(service: SharedCronService) -> Self {
         Self {
             service,
             source_channel_id: None,
@@ -239,7 +239,7 @@ impl CronManageTool {
     }
 
     /// Create with a source channel context so scheduled jobs can push results back to the right channel
-    pub fn with_channel(service: SharedCronService, channel_id: Option<String>) -> Self {
+    pub const fn with_channel(service: SharedCronService, channel_id: Option<String>) -> Self {
         Self {
             service,
             source_channel_id: channel_id,

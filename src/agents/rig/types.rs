@@ -51,21 +51,21 @@ impl AgentConfig {
 
     /// Builder: set max turns
     #[must_use]
-    pub fn max_turns(mut self, max: usize) -> Self {
+    pub const fn max_turns(mut self, max: usize) -> Self {
         self.max_turns = max;
         self
     }
 
     /// Builder: set turn timeout
     #[must_use]
-    pub fn turn_timeout_ms(mut self, timeout: u64) -> Self {
+    pub const fn turn_timeout_ms(mut self, timeout: u64) -> Self {
         self.turn_timeout_ms = timeout;
         self
     }
 
     /// Builder: set stop on error
     #[must_use]
-    pub fn stop_on_error(mut self, stop: bool) -> Self {
+    pub const fn stop_on_error(mut self, stop: bool) -> Self {
         self.stop_on_error = stop;
         self
     }
@@ -141,7 +141,7 @@ impl ToolCallInfo {
 
     /// Set the goal relation
     #[must_use]
-    pub fn with_goal_relation(mut self, relation: GoalRelation) -> Self {
+    pub const fn with_goal_relation(mut self, relation: GoalRelation) -> Self {
         self.goal_relation = Some(relation);
         self
     }
@@ -276,7 +276,7 @@ pub struct AgentResult {
 impl AgentResult {
     /// Create a successful result
     #[must_use]
-    pub fn success(
+    pub const fn success(
         response: String,
         tool_calls_made: usize,
         turns: usize,

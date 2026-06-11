@@ -243,7 +243,7 @@ pub fn partial_to_generation_preset(
 // Helpers
 // =============================================================================
 
-fn default_enabled() -> bool {
+const fn default_enabled() -> bool {
     true
 }
 

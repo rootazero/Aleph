@@ -99,42 +99,42 @@ impl<'a> RequestPayload<'a> {
 
     /// Add system prompt (single-string form, legacy).
     #[must_use]
-    pub fn with_system(mut self, prompt: Option<&'a str>) -> Self {
+    pub const fn with_system(mut self, prompt: Option<&'a str>) -> Self {
         self.system_prompt = prompt;
         self
     }
 
     /// Attach the stable/dynamic split. Cache-first providers prefer this.
     #[must_use]
-    pub fn with_system_blocks(mut self, blocks: Option<&'a [SystemPromptPart]>) -> Self {
+    pub const fn with_system_blocks(mut self, blocks: Option<&'a [SystemPromptPart]>) -> Self {
         self.system_blocks = blocks;
         self
     }
 
     /// Add tools
     #[must_use]
-    pub fn with_tools(mut self, tools: Option<&'a [ToolDefinition]>) -> Self {
+    pub const fn with_tools(mut self, tools: Option<&'a [ToolDefinition]>) -> Self {
         self.tools = tools;
         self
     }
 
     /// Set thinking level
     #[must_use]
-    pub fn with_think_level(mut self, level: Option<ThinkLevel>) -> Self {
+    pub const fn with_think_level(mut self, level: Option<ThinkLevel>) -> Self {
         self.think_level = level;
         self
     }
 
     /// Set temperature
     #[must_use]
-    pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
+    pub const fn with_temperature(mut self, temperature: Option<f32>) -> Self {
         self.temperature = temperature;
         self
     }
 
     /// Set max_tokens
     #[must_use]
-    pub fn with_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
+    pub const fn with_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
         self.max_tokens = max_tokens;
         self
     }
@@ -277,7 +277,7 @@ impl ProviderResponse {
 
     /// Whether this response contains native tool calls
     #[must_use]
-    pub fn has_tool_calls(&self) -> bool {
+    pub const fn has_tool_calls(&self) -> bool {
         !self.tool_calls.is_empty()
     }
 

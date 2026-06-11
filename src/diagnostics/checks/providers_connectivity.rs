@@ -43,7 +43,7 @@ pub struct ProvidersConnectivityCheck {
 }
 
 impl ProvidersConnectivityCheck {
-    pub fn new(config: Arc<RwLock<Config>>, vault: Arc<SharedTokenManager>) -> Self {
+    pub const fn new(config: Arc<RwLock<Config>>, vault: Arc<SharedTokenManager>) -> Self {
         Self { config, vault }
     }
 

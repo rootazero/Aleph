@@ -69,35 +69,35 @@ impl Default for MetricsPolicy {
     }
 }
 
-fn default_hotkey_to_clipboard_ms() -> u64 {
+const fn default_hotkey_to_clipboard_ms() -> u64 {
     50
 }
 
-fn default_clipboard_to_memory_ms() -> u64 {
+const fn default_clipboard_to_memory_ms() -> u64 {
     100
 }
 
-fn default_memory_to_ai_ms() -> u64 {
+const fn default_memory_to_ai_ms() -> u64 {
     500
 }
 
-fn default_ai_to_paste_ms() -> u64 {
+const fn default_ai_to_paste_ms() -> u64 {
     50
 }
 
-fn default_paste_to_complete_ms() -> u64 {
+const fn default_paste_to_complete_ms() -> u64 {
     100
 }
 
-fn default_warning_multiplier() -> f64 {
+const fn default_warning_multiplier() -> f64 {
     2.0
 }
 
-fn default_enable_logging() -> bool {
+const fn default_enable_logging() -> bool {
     true
 }
 
-fn default_enable_warnings() -> bool {
+const fn default_enable_warnings() -> bool {
     true
 }
 
@@ -138,7 +138,7 @@ impl MetricsPolicy {
     }
 
     /// Get total target latency for the full pipeline
-    pub fn total_target_ms(&self) -> u64 {
+    pub const fn total_target_ms(&self) -> u64 {
         self.target_hotkey_to_clipboard_ms
             .saturating_add(self.target_clipboard_to_memory_ms)
             .saturating_add(self.target_memory_to_ai_ms)

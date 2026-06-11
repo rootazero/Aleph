@@ -21,7 +21,7 @@ pub struct ServiceState<C: Clock> {
 
 impl<C: Clock> ServiceState<C> {
     /// Create a new service state.
-    pub fn new(
+    pub const fn new(
         store: Arc<tokio::sync::Mutex<CronStore>>,
         clock: Arc<C>,
         config: CronConfig,

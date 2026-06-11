@@ -43,7 +43,7 @@ pub struct DefaultProbeExecutor {
 
 impl DefaultProbeExecutor {
     #[must_use]
-    pub fn new(registry: Arc<BuiltinToolRegistry>) -> Self {
+    pub const fn new(registry: Arc<BuiltinToolRegistry>) -> Self {
         Self { registry }
     }
 }

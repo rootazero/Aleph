@@ -8,7 +8,7 @@ use crate::sync_primitives::{Arc, Mutex};
 /// kind label used for structured log output. Lets ops grep the search
 /// log by failure mode (`kind=auth`, `kind=rate-limit`, ...) without
 /// having to parse free-form error messages.
-pub(super) fn classify_search_error(e: &AlephError) -> &'static str {
+pub(super) const fn classify_search_error(e: &AlephError) -> &'static str {
     match e {
         AlephError::AuthenticationError { .. } => "auth",
         AlephError::RateLimitError { .. } => "rate-limit",
@@ -71,7 +71,7 @@ impl SearchRegistry {
     /// Used by the panel / `aleph doctor` to surface the user-visible
     /// "fallback enabled" indicator without leaking the inner Arc.
     #[must_use]
-    pub fn has_web_fetch_fallback(&self) -> bool {
+    pub const fn has_web_fetch_fallback(&self) -> bool {
         self.web_fetch_fallback.is_some()
     }
 

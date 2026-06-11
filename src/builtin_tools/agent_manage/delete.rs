@@ -54,7 +54,7 @@ pub struct AgentDeleteTool {
 
 impl AgentDeleteTool {
     #[must_use]
-    pub fn new(
+    pub const fn new(
         registry: Arc<AgentRegistry>,
         workspace_mgr: Arc<AgentEnvStore>,
         event_bus: Option<Arc<GatewayEventBus>>,

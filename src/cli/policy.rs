@@ -42,7 +42,7 @@ pub enum HttpMethod {
 
 impl HttpMethod {
     #[must_use]
-    pub fn as_reqwest(&self) -> reqwest::Method {
+    pub const fn as_reqwest(&self) -> reqwest::Method {
         match self {
             HttpMethod::Get => reqwest::Method::GET,
             HttpMethod::Post => reqwest::Method::POST,

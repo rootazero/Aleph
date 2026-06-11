@@ -53,15 +53,15 @@ impl Default for CompressionPolicy {
     }
 }
 
-fn default_idle_timeout_seconds() -> u32 {
+const fn default_idle_timeout_seconds() -> u32 {
     300
 }
 
-fn default_turn_threshold() -> u32 {
+const fn default_turn_threshold() -> u32 {
     20
 }
 
-fn default_background_interval_seconds() -> u32 {
+const fn default_background_interval_seconds() -> u32 {
     3600
 }
 
@@ -103,39 +103,39 @@ impl Default for AiRetrievalPolicy {
     }
 }
 
-fn default_ai_timeout_ms() -> u64 {
+const fn default_ai_timeout_ms() -> u64 {
     3000
 }
 
-fn default_max_candidates() -> u32 {
+const fn default_max_candidates() -> u32 {
     20
 }
 
-fn default_fallback_count() -> u32 {
+const fn default_fallback_count() -> u32 {
     3
 }
 
-fn default_content_truncate_length() -> u64 {
+const fn default_content_truncate_length() -> u64 {
     300
 }
 
 impl CompressionPolicy {
     /// Get idle timeout as std::time::Duration
     #[must_use]
-    pub fn idle_timeout_duration(&self) -> std::time::Duration {
+    pub const fn idle_timeout_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.idle_timeout_seconds as u64)
     }
 
     /// Get background interval as std::time::Duration
     #[must_use]
-    pub fn background_interval_duration(&self) -> std::time::Duration {
+    pub const fn background_interval_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.background_interval_seconds as u64)
     }
 }
 
 impl AiRetrievalPolicy {
     /// Get timeout as std::time::Duration
-    pub fn timeout_duration(&self) -> std::time::Duration {
+    pub const fn timeout_duration(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.timeout_ms)
     }
 }

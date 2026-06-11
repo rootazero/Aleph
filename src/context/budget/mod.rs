@@ -201,7 +201,7 @@ struct CompactionCircuitBreaker {
 }
 
 impl CompactionCircuitBreaker {
-    fn new(max: usize) -> Self {
+    const fn new(max: usize) -> Self {
         Self {
             max_consecutive: max,
             consecutive_count: 0,
@@ -209,20 +209,20 @@ impl CompactionCircuitBreaker {
     }
 
     /// Record that compaction was triggered. Returns true if the breaker has tripped.
-    fn record_compaction(&mut self) -> bool {
+    const fn record_compaction(&mut self) -> bool {
         self.consecutive_count += 1;
         self.consecutive_count >= self.max_consecutive
     }
 
     /// Reset the counter (called when pressure drops below warning, or after
     /// a compaction that actually reduced pressure).
-    fn reset(&mut self) {
+    const fn reset(&mut self) {
         self.consecutive_count = 0;
     }
 
     /// Record that a compaction succeeded in reducing pressure.
     /// Resets the counter so the breaker re-arms.
-    fn record_success(&mut self) {
+    const fn record_success(&mut self) {
         self.consecutive_count = 0;
     }
 }
@@ -318,31 +318,31 @@ impl ContextBudget {
 
     /// Total token budget.
     #[must_use]
-    pub fn token_budget(&self) -> u64 {
+    pub const fn token_budget(&self) -> u64 {
         self.token_budget
     }
 
     /// Characters-per-token ratio.
     #[must_use]
-    pub fn token_estimate_ratio(&self) -> f64 {
+    pub const fn token_estimate_ratio(&self) -> f64 {
         self.token_estimate_ratio
     }
 
     /// Warning threshold fraction.
     #[must_use]
-    pub fn warning_threshold(&self) -> f64 {
+    pub const fn warning_threshold(&self) -> f64 {
         self.warning_threshold
     }
 
     /// Fresh tail count for compaction.
     #[must_use]
-    pub fn fresh_tail_count(&self) -> usize {
+    pub const fn fresh_tail_count(&self) -> usize {
         self.fresh_tail_count
     }
 
     /// Last computed pressure snapshot from `before_turn()`.
     #[must_use]
-    pub fn last_pressure(&self) -> Option<&ContextPressure> {
+    pub const fn last_pressure(&self) -> Option<&ContextPressure> {
         self.last_pressure.as_ref()
     }
 
@@ -534,14 +534,14 @@ impl ContextBudget {
     /// Current calibration multiplier, if any observation has been recorded.
     /// Exposed for diagnostics/tests; `None` means the estimate is uncalibrated.
     #[must_use]
-    pub fn calibration(&self) -> Option<f64> {
+    pub const fn calibration(&self) -> Option<f64> {
         self.calibration
     }
 
     /// Record that a session-split completed. Increments the per-run split
     /// counter; once it reaches `max_splits`, further breaker trips fall back
     /// to `FinalReply`.
-    pub fn record_split(&mut self) {
+    pub const fn record_split(&mut self) {
         self.split_count = self.split_count.saturating_add(1);
     }
 

@@ -60,7 +60,7 @@ impl QQChannel {
         Self::with_mode(id, config, true)
     }
 
-    fn capabilities() -> ChannelCapabilities {
+    const fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
             attachments: true,
             images: true,

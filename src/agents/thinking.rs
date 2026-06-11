@@ -77,7 +77,7 @@ impl ThinkLevel {
     ///
     /// Returns `None` if already at the lowest level (Off).
     #[must_use]
-    pub fn fallback(&self) -> Option<ThinkLevel> {
+    pub const fn fallback(&self) -> Option<ThinkLevel> {
         match self {
             ThinkLevel::XHigh => Some(ThinkLevel::High),
             ThinkLevel::High => Some(ThinkLevel::Medium),
@@ -90,7 +90,7 @@ impl ThinkLevel {
 
     /// Get numeric weight for comparison (higher = more thinking)
     #[must_use]
-    pub fn weight(&self) -> u8 {
+    pub const fn weight(&self) -> u8 {
         match self {
             ThinkLevel::Off => 0,
             ThinkLevel::Minimal => 1,
@@ -115,7 +115,7 @@ impl ThinkLevel {
 
     /// Get display name for UI
     #[must_use]
-    pub fn display_name(&self) -> &'static str {
+    pub const fn display_name(&self) -> &'static str {
         match self {
             ThinkLevel::Off => "Off",
             ThinkLevel::Minimal => "Minimal",
@@ -128,7 +128,7 @@ impl ThinkLevel {
 
     /// Get description for UI
     #[must_use]
-    pub fn description(&self) -> &'static str {
+    pub const fn description(&self) -> &'static str {
         match self {
             ThinkLevel::Off => "No extended thinking, fastest responses",
             ThinkLevel::Minimal => "Brief internal reasoning",
@@ -143,7 +143,7 @@ impl ThinkLevel {
     ///
     /// These are approximate values that can be adjusted per provider.
     #[must_use]
-    pub fn token_budget(&self) -> u32 {
+    pub const fn token_budget(&self) -> u32 {
         match self {
             ThinkLevel::Off => 0,
             ThinkLevel::Minimal => 1024,
@@ -391,7 +391,7 @@ impl ThinkingFallbackState {
 
     /// Create with custom max attempts
     #[must_use]
-    pub fn with_max_attempts(mut self, max: u32) -> Self {
+    pub const fn with_max_attempts(mut self, max: u32) -> Self {
         self.max_attempts = max;
         self
     }

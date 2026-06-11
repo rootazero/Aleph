@@ -223,15 +223,15 @@ pub struct DockerConfig {
 }
 
 // Default functions
-fn default_sandbox() -> SandboxMode {
+const fn default_sandbox() -> SandboxMode {
     SandboxMode::Host
 }
 
-fn default_confirmation() -> ConfirmationMode {
+const fn default_confirmation() -> ConfirmationMode {
     ConfirmationMode::Write
 }
 
-fn default_network() -> NetworkMode {
+const fn default_network() -> NetworkMode {
     NetworkMode::Internet
 }
 

@@ -67,7 +67,7 @@ impl McpToolFilter {
     /// `true` when this filter would drop nothing (no patterns configured), so
     /// callers can skip the per-tool scan entirely.
     #[must_use]
-    pub fn is_noop(&self) -> bool {
+    pub const fn is_noop(&self) -> bool {
         self.allow.is_empty() && self.deny.is_empty()
     }
 }
@@ -131,7 +131,7 @@ pub struct McpToolResult {
 impl McpToolResult {
     /// Create a successful result
     #[must_use]
-    pub fn success(content: Value) -> Self {
+    pub const fn success(content: Value) -> Self {
         Self {
             success: true,
             content,
@@ -224,14 +224,14 @@ impl McpRemoteServerConfig {
 
     /// Set transport preference
     #[must_use]
-    pub fn with_transport(mut self, transport: TransportPreference) -> Self {
+    pub const fn with_transport(mut self, transport: TransportPreference) -> Self {
         self.transport = transport;
         self
     }
 
     /// Set request timeout
     #[must_use]
-    pub fn with_timeout(mut self, seconds: u64) -> Self {
+    pub const fn with_timeout(mut self, seconds: u64) -> Self {
         self.timeout_seconds = Some(seconds);
         self
     }

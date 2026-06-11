@@ -316,7 +316,7 @@ impl PromptBuilder {
     /// Attach the resolved Think→Act iteration cap so
     /// `SessionBudgetLayer` can surface it. The harness bridge sources
     /// the value from `resolve_max_iterations(...)` once per run.
-    pub fn with_iteration_cap(mut self, cap: u32) -> Self {
+    pub const fn with_iteration_cap(mut self, cap: u32) -> Self {
         self.iteration_cap = Some(cap);
         self
     }
@@ -509,12 +509,12 @@ impl PromptBuilder {
     }
 
     /// Access the underlying config (for reading).
-    pub fn config(&self) -> &PromptConfig {
+    pub const fn config(&self) -> &PromptConfig {
         &self.config
     }
 
     /// Access the underlying config mutably (for dynamic modifications).
-    pub fn config_mut(&mut self) -> &mut PromptConfig {
+    pub const fn config_mut(&mut self) -> &mut PromptConfig {
         &mut self.config
     }
 

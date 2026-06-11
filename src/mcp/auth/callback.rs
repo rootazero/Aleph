@@ -59,14 +59,14 @@ impl CallbackServer {
 
     /// Create a callback server with custom port
     #[must_use]
-    pub fn with_port(mut self, port: u16) -> Self {
+    pub const fn with_port(mut self, port: u16) -> Self {
         self.port = port;
         self
     }
 
     /// Create a callback server with custom timeout
     #[must_use]
-    pub fn with_timeout(mut self, duration: Duration) -> Self {
+    pub const fn with_timeout(mut self, duration: Duration) -> Self {
         self.timeout_duration = duration;
         self
     }

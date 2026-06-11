@@ -112,7 +112,7 @@ impl MarketplaceManager {
     /// Use this when saving back to the config file so the built-in is not
     /// persisted as a user entry.
     #[must_use]
-    pub fn get_config(&self) -> &HashMap<String, MarketplaceConfig> {
+    pub const fn get_config(&self) -> &HashMap<String, MarketplaceConfig> {
         &self.marketplaces
     }
 

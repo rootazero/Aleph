@@ -444,7 +444,7 @@ impl AuthProfileManager {
 
     /// Get reference to configs (for testing)
     #[must_use]
-    pub fn configs(&self) -> &Arc<RwLock<ProfilesConfig>> {
+    pub const fn configs(&self) -> &Arc<RwLock<ProfilesConfig>> {
         &self.configs
     }
 }

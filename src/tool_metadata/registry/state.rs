@@ -15,7 +15,7 @@ pub struct ToolState {
 
 impl ToolState {
     /// Create a new state manager with the given storage
-    pub fn new(tools: ToolStorage) -> Self {
+    pub const fn new(tools: ToolStorage) -> Self {
         Self { tools }
     }
 

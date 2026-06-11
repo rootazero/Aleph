@@ -34,13 +34,13 @@ pub struct AuditQuery {
 }
 
 impl AuditQuery {
-    pub fn new(storage: ApprovalAuditStorage) -> Self {
+    pub const fn new(storage: ApprovalAuditStorage) -> Self {
         Self { storage }
     }
 
     /// Calculate risk score based on capabilities
     #[must_use]
-    pub fn calculate_risk_score(capabilities: &SandboxCapabilities, escalation_count: u32) -> u32 {
+    pub const fn calculate_risk_score(capabilities: &SandboxCapabilities, escalation_count: u32) -> u32 {
         let mut score: u32 = 10; // Base score
 
         // Check filesystem capabilities

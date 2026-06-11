@@ -33,15 +33,15 @@ pub struct SsrfPolicy {
     pub strip_auth_on_cross_origin: bool,
 }
 
-fn default_enabled() -> bool {
+const fn default_enabled() -> bool {
     true
 }
 
-fn default_max_redirects() -> u8 {
+const fn default_max_redirects() -> u8 {
     5
 }
 
-fn default_strip_auth() -> bool {
+const fn default_strip_auth() -> bool {
     true
 }
 

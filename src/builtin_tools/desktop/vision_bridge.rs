@@ -66,7 +66,7 @@ impl Augmentation {
     /// True when neither layer was produced — the caller can skip attaching
     /// empty fields to the tool output.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.ocr_text.is_none() && self.description.is_none()
     }
 }
@@ -100,7 +100,7 @@ impl VisionBridge {
     }
 
     /// Override the cache TTL (primarily for tests).
-    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+    pub const fn with_ttl(mut self, ttl: Duration) -> Self {
         self.ttl = ttl;
         self
     }

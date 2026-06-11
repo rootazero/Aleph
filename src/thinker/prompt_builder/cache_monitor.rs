@@ -20,7 +20,7 @@ struct MonitorState {
 }
 
 impl MonitorState {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             stable_hash: None,
             consecutive_misses: 0,

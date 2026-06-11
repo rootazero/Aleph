@@ -158,7 +158,7 @@ pub struct InlineKeyboard {
 impl InlineKeyboard {
     /// Create empty keyboard
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { rows: Vec::new() }
     }
 

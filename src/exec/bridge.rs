@@ -85,7 +85,7 @@ impl ApprovalBridge {
 
     /// Get the response text for a decision
     #[must_use]
-    pub fn decision_response_text(decision: &ApprovalDecisionType) -> &'static str {
+    pub const fn decision_response_text(decision: &ApprovalDecisionType) -> &'static str {
         match decision {
             ApprovalDecisionType::AllowOnce => "✅ Allowed (once)",
             ApprovalDecisionType::AllowSession => "✅ Allowed (session)",

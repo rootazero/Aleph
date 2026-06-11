@@ -42,7 +42,7 @@ pub struct ConflictResolver {
 
 impl ConflictResolver {
     /// Create a new conflict resolver with the given storage
-    pub fn new(tools: ToolStorage) -> Self {
+    pub const fn new(tools: ToolStorage) -> Self {
         Self { tools }
     }
 

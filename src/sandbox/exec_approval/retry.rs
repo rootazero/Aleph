@@ -6,25 +6,25 @@ pub struct RetryHandler {
 
 impl RetryHandler {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { attempts: 0 }
     }
 
     #[must_use]
-    pub fn attempts(&self) -> u8 {
+    pub const fn attempts(&self) -> u8 {
         self.attempts
     }
 
     #[must_use]
-    pub fn should_retry(&self) -> bool {
+    pub const fn should_retry(&self) -> bool {
         self.attempts < 2
     }
 
-    pub fn record_attempt(&mut self) {
+    pub const fn record_attempt(&mut self) {
         self.attempts += 1;
     }
 
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.attempts = 0;
     }
 

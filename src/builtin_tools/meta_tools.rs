@@ -84,7 +84,7 @@ impl ListToolsTool {
     pub const DESCRIPTION: &'static str = "List available tools by category. Use this to discover what tools are available before calling get_tool_schema for specific tools.";
 
     /// Create a new ListToolsTool with registry reference
-    pub fn new(registry: Arc<RwLock<ToolCatalog>>) -> Self {
+    pub const fn new(registry: Arc<RwLock<ToolCatalog>>) -> Self {
         Self { registry }
     }
 
@@ -219,7 +219,7 @@ impl GetToolSchemaTool {
     pub const DESCRIPTION: &'static str = "Get the full JSON Schema definition for a specific tool. Use this before calling a tool that's not in your full-schema set.";
 
     /// Create a new GetToolSchemaTool with registry reference
-    pub fn new(registry: Arc<RwLock<ToolCatalog>>) -> Self {
+    pub const fn new(registry: Arc<RwLock<ToolCatalog>>) -> Self {
         Self { registry }
     }
 
@@ -391,7 +391,7 @@ impl SearchToolsTool {
     pub const DESCRIPTION: &'static str = "Search the available tools by a free-text keyword/intent (e.g. \"screenshot\", \"create pull request\"). Use this to find the right tool when you don't know its exact name, then call get_tool_schema for its parameters.";
 
     /// Create a new SearchToolsTool with registry reference
-    pub fn new(registry: Arc<RwLock<ToolCatalog>>) -> Self {
+    pub const fn new(registry: Arc<RwLock<ToolCatalog>>) -> Self {
         Self { registry }
     }
 

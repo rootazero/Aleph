@@ -24,7 +24,7 @@ struct PollingState {
 }
 
 impl PollingState {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             attempt: 0,
             healthy_since: None,

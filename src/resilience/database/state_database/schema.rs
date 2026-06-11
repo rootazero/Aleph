@@ -6,7 +6,7 @@ use super::StateDatabase;
 
 impl StateDatabase {
     /// SQL for creating the database schema
-    pub(super) fn schema_sql() -> &'static str {
+    pub(super) const fn schema_sql() -> &'static str {
         r#"
             -- Metadata table for schema versioning
             CREATE TABLE IF NOT EXISTS schema_info (

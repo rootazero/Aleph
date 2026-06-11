@@ -52,7 +52,7 @@ impl Knowledge {
 
     /// Create with specific confidence
     #[must_use]
-    pub fn with_confidence(mut self, confidence: f32) -> Self {
+    pub const fn with_confidence(mut self, confidence: f32) -> Self {
         self.confidence = confidence.clamp(0.0, 1.0);
         self
     }

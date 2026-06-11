@@ -189,7 +189,7 @@ pub struct RateLimitHook {
 
 impl RateLimitHook {
     #[must_use]
-    pub fn new(limiter: Arc<SandboxRateLimiter>) -> Self {
+    pub const fn new(limiter: Arc<SandboxRateLimiter>) -> Self {
         Self { limiter }
     }
 }

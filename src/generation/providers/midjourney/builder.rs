@@ -64,7 +64,7 @@ impl MidjourneyProviderBuilder {
     ///
     /// * `mode` - Fast or Relax mode
     #[must_use]
-    pub fn mode(mut self, mode: MidjourneyMode) -> Self {
+    pub const fn mode(mut self, mode: MidjourneyMode) -> Self {
         self.mode = mode;
         self
     }
@@ -95,7 +95,7 @@ impl MidjourneyProviderBuilder {
     ///
     /// * `secs` - Timeout duration in seconds
     #[must_use]
-    pub fn timeout_secs(mut self, secs: u64) -> Self {
+    pub const fn timeout_secs(mut self, secs: u64) -> Self {
         self.timeout_secs = secs;
         self
     }

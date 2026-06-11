@@ -49,7 +49,7 @@ pub struct IdentityResolver {
 impl IdentityResolver {
     /// Create a new resolver with global path
     #[must_use]
-    pub fn new(global_path: PathBuf) -> Self {
+    pub const fn new(global_path: PathBuf) -> Self {
         Self {
             global_path,
             session_override: None,
@@ -83,13 +83,13 @@ impl IdentityResolver {
 
     /// Check if session has an override
     #[must_use]
-    pub fn has_session_override(&self) -> bool {
+    pub const fn has_session_override(&self) -> bool {
         self.session_override.is_some()
     }
 
     /// Get the global soul path
     #[must_use]
-    pub fn global_path(&self) -> &PathBuf {
+    pub const fn global_path(&self) -> &PathBuf {
         &self.global_path
     }
 

@@ -344,7 +344,7 @@ impl AgentHarness {
     /// Returns the root context for top-level agents (the `HarnessDeps`
     /// default). The subagent spawner overrides this with the descended
     /// chain when assembling a child harness. Stage 4 seam (#11).
-    pub fn chain_context(&self) -> &crate::harness::chain_context::ChainContext {
+    pub const fn chain_context(&self) -> &crate::harness::chain_context::ChainContext {
         &self.deps.chain_context
     }
 

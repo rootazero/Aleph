@@ -137,7 +137,7 @@ pub enum ToolSource {
 impl ToolSource {
     /// Get a short type label for UI display
     #[must_use]
-    pub fn label(&self) -> &'static str {
+    pub const fn label(&self) -> &'static str {
         match self {
             ToolSource::Native => "Native",
             ToolSource::Builtin => "Builtin",
@@ -150,7 +150,7 @@ impl ToolSource {
 
     /// Get an icon hint for UI (SF Symbol name suggestion)
     #[must_use]
-    pub fn icon_hint(&self) -> &'static str {
+    pub const fn icon_hint(&self) -> &'static str {
         match self {
             ToolSource::Native => "star.fill",
             ToolSource::Builtin => "command.circle.fill",
@@ -166,7 +166,7 @@ impl ToolSource {
     /// Higher priority tools win name conflicts and lower priority tools
     /// are renamed with a suffix.
     #[must_use]
-    pub fn priority(&self) -> ToolPriority {
+    pub const fn priority(&self) -> ToolPriority {
         match self {
             ToolSource::Builtin => ToolPriority::Builtin,
             ToolSource::Native => ToolPriority::Native,
@@ -182,7 +182,7 @@ impl ToolSource {
     /// When a tool loses a name conflict, it's renamed to `{name}-{suffix}`.
     /// For example, an MCP tool named "search" becomes "search-mcp".
     #[must_use]
-    pub fn suffix(&self) -> &'static str {
+    pub const fn suffix(&self) -> &'static str {
         match self {
             ToolSource::Builtin => "system",
             ToolSource::Native => "native",
@@ -195,25 +195,25 @@ impl ToolSource {
 
     /// Check if this source is a builtin command
     #[must_use]
-    pub fn is_builtin(&self) -> bool {
+    pub const fn is_builtin(&self) -> bool {
         matches!(self, ToolSource::Builtin)
     }
 
     /// Check if this source is an MCP tool
     #[must_use]
-    pub fn is_mcp(&self) -> bool {
+    pub const fn is_mcp(&self) -> bool {
         matches!(self, ToolSource::Mcp { .. })
     }
 
     /// Check if this source is a skill
     #[must_use]
-    pub fn is_skill(&self) -> bool {
+    pub const fn is_skill(&self) -> bool {
         matches!(self, ToolSource::Skill { .. })
     }
 
     /// Check if this source is a plugin tool
     #[must_use]
-    pub fn is_plugin(&self) -> bool {
+    pub const fn is_plugin(&self) -> bool {
         matches!(self, ToolSource::Plugin { .. })
     }
 
@@ -221,7 +221,7 @@ impl ToolSource {
     ///
     /// Order: Builtin (0) > Native (1) > Custom (2) > Mcp (3) > Plugin (4) > Skill (5).
     #[must_use]
-    pub fn display_priority(&self) -> u8 {
+    pub const fn display_priority(&self) -> u8 {
         match self {
             ToolSource::Builtin => 0,
             ToolSource::Native => 1,

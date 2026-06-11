@@ -52,12 +52,12 @@ impl GroupChatOrchestrator {
     }
 
     /// Returns a reference to the current configuration.
-    pub fn config(&self) -> &GroupChatConfig {
+    pub const fn config(&self) -> &GroupChatConfig {
         &self.config
     }
 
     /// Returns a reference to the persona registry.
-    pub fn persona_registry(&self) -> &PersonaRegistry {
+    pub const fn persona_registry(&self) -> &PersonaRegistry {
         &self.persona_registry
     }
 
@@ -193,7 +193,7 @@ impl GroupChatOrchestrator {
     }
 
     /// Returns a reference to the optional database.
-    pub fn database(&self) -> Option<&Arc<StateDatabase>> {
+    pub const fn database(&self) -> Option<&Arc<StateDatabase>> {
         self.db.as_ref()
     }
 

@@ -59,7 +59,7 @@ impl ToolErrorKind {
     /// part of the LLM-facing wire surface, do not reword without
     /// updating prompt-side tests.
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Unauthorized => "unauthorized",
             Self::RateLimited => "rate_limited",
@@ -82,7 +82,7 @@ impl ToolErrorKind {
     /// trying again". Used by `tools::retry::execute_with_one_shot_backoff`
     /// and surfaced to the LLM in the error hint.
     #[must_use]
-    pub fn is_transient(self) -> bool {
+    pub const fn is_transient(self) -> bool {
         matches!(
             self,
             Self::Timeout | Self::Transport | Self::RateLimited | Self::UpstreamServerError

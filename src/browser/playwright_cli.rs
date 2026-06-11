@@ -179,7 +179,7 @@ impl PlaywrightCliDriver {
         })
     }
 
-    pub fn config(&self) -> &PlaywrightCliConfig {
+    pub const fn config(&self) -> &PlaywrightCliConfig {
         &self.config
     }
 }

@@ -314,7 +314,7 @@ impl CacheState {
 
     /// Get the cached token count
     #[must_use]
-    pub fn tokens_cached(&self) -> Option<u64> {
+    pub const fn tokens_cached(&self) -> Option<u64> {
         match self {
             CacheState::None => None,
             CacheState::Ephemeral { tokens_cached, .. } => *tokens_cached,

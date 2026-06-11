@@ -228,7 +228,7 @@ fn is_local_host(host: &str) -> bool {
 
 /// Resolve capabilities for a given endpoint class.
 #[must_use]
-pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
+pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
     match class {
         EndpointClass::OpenAiPublic => ProviderCapabilities {
             supports_responses_store: true,

@@ -577,7 +577,7 @@ impl SamplingChunk {
 
     /// Create a final chunk
     #[must_use]
-    pub fn final_chunk(model: Option<String>, stop_reason: StopReason) -> Self {
+    pub const fn final_chunk(model: Option<String>, stop_reason: StopReason) -> Self {
         Self {
             delta: String::new(),
             is_final: true,
@@ -651,7 +651,7 @@ impl ApprovalRequest {
 
     /// Set timeout
     #[must_use]
-    pub fn with_timeout(mut self, seconds: u32) -> Self {
+    pub const fn with_timeout(mut self, seconds: u32) -> Self {
         self.timeout_seconds = Some(seconds);
         self
     }
@@ -671,7 +671,7 @@ pub struct ApprovalResponse {
 impl ApprovalResponse {
     /// Create an approved response
     #[must_use]
-    pub fn approved() -> Self {
+    pub const fn approved() -> Self {
         Self {
             approved: true,
             reason: None,
@@ -680,7 +680,7 @@ impl ApprovalResponse {
 
     /// Create a rejected response with optional reason
     #[must_use]
-    pub fn rejected(reason: Option<String>) -> Self {
+    pub const fn rejected(reason: Option<String>) -> Self {
         Self {
             approved: false,
             reason,

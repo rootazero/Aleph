@@ -207,7 +207,7 @@ impl SqliteEventStore {
 
     /// Wrap an existing shared connection — for composing with other stores
     /// that already share a `Connection`.
-    pub fn with_shared(conn: Arc<Mutex<Connection>>) -> Self {
+    pub const fn with_shared(conn: Arc<Mutex<Connection>>) -> Self {
         Self { conn }
     }
 }
@@ -456,7 +456,7 @@ fn session_id_to_string(id: &SessionId) -> Result<String, SessionError> {
 
 /// Extract the `turn_id` from any `SessionEvent` variant that carries one,
 /// so it can be indexed for per-turn replay/trim.
-fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
+const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
     match event {
         SessionEvent::TurnStarted { turn_id, .. }
         | SessionEvent::TurnEnded { turn_id, .. }
@@ -488,7 +488,7 @@ fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
 ///
 /// Kept as a `&'static str` to avoid per-append allocation and to give the
 /// storage layer a stable taxonomy independent of serde rename decisions.
-fn event_type_tag(event: &SessionEvent) -> &'static str {
+const fn event_type_tag(event: &SessionEvent) -> &'static str {
     match event {
         SessionEvent::SessionCreated { .. } => "session_created",
         SessionEvent::SessionWoken { .. } => "session_woken",

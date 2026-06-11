@@ -20,7 +20,7 @@ pub enum DeviceType {
 
 impl DeviceType {
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             DeviceType::MacOS => "macos",
             DeviceType::IOS => "ios",
@@ -66,7 +66,7 @@ pub enum DeviceRole {
 
 impl DeviceRole {
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             DeviceRole::Operator => "operator",
             DeviceRole::Node => "node",
@@ -111,7 +111,7 @@ pub struct Device {
 impl Device {
     /// Check if device is active (not revoked)
     #[must_use]
-    pub fn is_active(&self) -> bool {
+    pub const fn is_active(&self) -> bool {
         self.revoked_at.is_none()
     }
 

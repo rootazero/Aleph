@@ -61,7 +61,7 @@ pub struct GoalTool {
 }
 
 impl GoalTool {
-    pub fn new(store: Arc<GoalStore>) -> Self {
+    pub const fn new(store: Arc<GoalStore>) -> Self {
         Self {
             store,
             session_key: None,

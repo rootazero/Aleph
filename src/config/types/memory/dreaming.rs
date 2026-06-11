@@ -66,23 +66,23 @@ impl Default for DreamingConfig {
 
 impl DreamingConfig {
     #[must_use]
-    pub fn weekly_enabled(&self) -> bool {
+    pub const fn weekly_enabled(&self) -> bool {
         self.weekly_enabled
     }
     #[must_use]
-    pub fn weekly_interval_days(&self) -> u32 {
+    pub const fn weekly_interval_days(&self) -> u32 {
         self.weekly_interval_days
     }
     #[must_use]
-    pub fn drift_max_pairs_per_run(&self) -> usize {
+    pub const fn drift_max_pairs_per_run(&self) -> usize {
         self.drift_max_pairs_per_run
     }
     #[must_use]
-    pub fn synthesis_min_cluster_size(&self) -> usize {
+    pub const fn synthesis_min_cluster_size(&self) -> usize {
         self.synthesis_min_cluster_size
     }
     #[must_use]
-    pub fn synthesis_max_insights(&self) -> usize {
+    pub const fn synthesis_max_insights(&self) -> usize {
         self.synthesis_max_insights
     }
 }

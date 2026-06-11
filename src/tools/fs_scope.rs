@@ -50,7 +50,7 @@ impl FsScope {
     /// Scope for a normal (non-isolated) run: relative paths land in the
     /// workspace artifact directory, no absolute remap.
     #[must_use]
-    pub fn workspace(base: PathBuf) -> Self {
+    pub const fn workspace(base: PathBuf) -> Self {
         Self { base, rebase: None }
     }
 

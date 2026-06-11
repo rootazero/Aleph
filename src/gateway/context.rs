@@ -102,7 +102,7 @@ impl GatewayContext {
 
     /// Get a reference to the agent registry.
     #[must_use]
-    pub fn agent_registry(&self) -> &Arc<AgentRegistry> {
+    pub const fn agent_registry(&self) -> &Arc<AgentRegistry> {
         &self.agent_registry
     }
 
@@ -114,14 +114,14 @@ impl GatewayContext {
 
     /// Get a reference to the A2A policy.
     #[must_use]
-    pub fn a2a_policy(&self) -> &Arc<AgentToAgentPolicy> {
+    pub const fn a2a_policy(&self) -> &Arc<AgentToAgentPolicy> {
         &self.a2a_policy
     }
 
     /// Get a reference to the ACP adapter pool, if configured.
     /// Returns `None` for the test / minimal setups that don't run ACP.
     #[must_use]
-    pub fn acp_manager(&self) -> Option<&Arc<AcpAdapterManager>> {
+    pub const fn acp_manager(&self) -> Option<&Arc<AcpAdapterManager>> {
         self.acp_manager.as_ref()
     }
 }

@@ -53,7 +53,7 @@ impl McpManagerHandle {
     /// Create a new handle
     ///
     /// This is typically called by the McpManager when spawning.
-    pub(crate) fn new(
+    pub(crate) const fn new(
         tx: mpsc::Sender<McpCommand>,
         event_tx: broadcast::Sender<McpManagerEvent>,
     ) -> Self {

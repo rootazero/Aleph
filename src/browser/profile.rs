@@ -81,19 +81,19 @@ pub struct ProfileConfig {
     pub tab_idle_timeout_secs: u64,
 }
 
-fn default_cdp_port() -> u16 {
+const fn default_cdp_port() -> u16 {
     18800
 }
 
-fn default_idle_timeout() -> u64 {
+const fn default_idle_timeout() -> u64 {
     1800
 }
 
-fn default_max_tabs() -> usize {
+const fn default_max_tabs() -> usize {
     super::tab_registry::DEFAULT_MAX_TABS_PER_PROFILE
 }
 
-fn default_tab_idle_timeout() -> u64 {
+const fn default_tab_idle_timeout() -> u64 {
     super::tab_registry::DEFAULT_TAB_IDLE_TIMEOUT_SECS
 }
 
@@ -131,18 +131,18 @@ pub enum ProfileState {
 impl ProfileState {
     /// Whether the profile can transition to Starting.
     #[must_use]
-    pub fn can_start(&self) -> bool {
+    pub const fn can_start(&self) -> bool {
         matches!(self, Self::Idle)
     }
 
     /// Whether the browser process is currently running.
     #[must_use]
-    pub fn is_running(&self) -> bool {
+    pub const fn is_running(&self) -> bool {
         matches!(self, Self::Running { .. })
     }
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -175,10 +175,10 @@ pub struct PlaywrightCliConfig {
     pub persistent_sessions: bool,
 }
 
-fn default_nav_timeout() -> u64 {
+const fn default_nav_timeout() -> u64 {
     30
 }
-fn default_action_timeout() -> u64 {
+const fn default_action_timeout() -> u64 {
     10
 }
 

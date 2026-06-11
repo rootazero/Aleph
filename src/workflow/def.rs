@@ -50,7 +50,7 @@ pub enum WorkflowStepKind {
 impl WorkflowStepKind {
     /// Whether this is the default agent kind (used to skip serialisation).
     #[must_use]
-    pub fn is_agent(&self) -> bool {
+    pub const fn is_agent(&self) -> bool {
         matches!(self, WorkflowStepKind::Agent)
     }
 }
@@ -100,14 +100,14 @@ pub struct WorkflowStepDef {
 }
 
 /// serde `skip_serializing_if` helper — keeps non-reviewed steps byte-identical.
-fn is_false(v: &bool) -> bool {
+const fn is_false(v: &bool) -> bool {
     !*v
 }
 
 impl WorkflowStepDef {
     /// Whether this step pauses the run to ask the user a question.
     #[must_use]
-    pub fn is_clarify(&self) -> bool {
+    pub const fn is_clarify(&self) -> bool {
         matches!(self.kind, WorkflowStepKind::Clarify)
     }
 }

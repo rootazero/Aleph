@@ -37,7 +37,7 @@ struct SessionQueue {
 }
 
 impl SessionQueue {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             pending: VecDeque::new(),
             active_run_id: None,
@@ -45,7 +45,7 @@ impl SessionQueue {
     }
 
     /// Whether the session is idle (no active run).
-    fn is_idle(&self) -> bool {
+    const fn is_idle(&self) -> bool {
         self.active_run_id.is_none()
     }
 }

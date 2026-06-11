@@ -43,7 +43,7 @@ pub enum RetryCategory {
 impl RetryCategory {
     /// Stable lowercase wire token used in SQLite/JSON.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             RetryCategory::RateLimit => "rate_limit",
             RetryCategory::Overloaded => "overloaded",

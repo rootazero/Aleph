@@ -43,7 +43,7 @@ pub struct LifecycleResolveShutdownTool {
 
 impl LifecycleResolveShutdownTool {
     #[must_use]
-    pub fn new(router: Arc<MessageRouter>, current_agent_id: String) -> Self {
+    pub const fn new(router: Arc<MessageRouter>, current_agent_id: String) -> Self {
         Self {
             router,
             current_agent_id,

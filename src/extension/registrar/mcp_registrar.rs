@@ -20,7 +20,7 @@ pub struct McpRegistrar {
 
 impl McpRegistrar {
     #[must_use]
-    pub fn new(plugin_id: String, permissions: Vec<PluginPermission>) -> Self {
+    pub const fn new(plugin_id: String, permissions: Vec<PluginPermission>) -> Self {
         Self {
             plugin_id,
             permissions,

@@ -105,7 +105,7 @@ impl std::fmt::Debug for Credentials {
     }
 }
 
-fn is_private_ip(ip: &std::net::IpAddr) -> bool {
+const fn is_private_ip(ip: &std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
         std::net::IpAddr::V6(v6) => {

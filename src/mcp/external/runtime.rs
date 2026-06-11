@@ -28,7 +28,7 @@ impl RuntimeKind {
 
     /// Get the command to check for this runtime
     #[must_use]
-    pub fn check_command(&self) -> Option<&'static str> {
+    pub const fn check_command(&self) -> Option<&'static str> {
         match self {
             Self::Node => Some("node"),
             Self::Python => Some("python3"),
@@ -40,7 +40,7 @@ impl RuntimeKind {
 
     /// Get human-readable name
     #[must_use]
-    pub fn display_name(&self) -> &'static str {
+    pub const fn display_name(&self) -> &'static str {
         match self {
             Self::Node => "Node.js",
             Self::Python => "Python 3",

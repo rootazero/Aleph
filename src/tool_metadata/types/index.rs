@@ -79,7 +79,7 @@ impl ToolIndexEntry {
 
     /// Builder: mark as core tool
     #[must_use]
-    pub fn with_core(mut self, is_core: bool) -> Self {
+    pub const fn with_core(mut self, is_core: bool) -> Self {
         self.is_core = is_core;
         self
     }
@@ -118,7 +118,7 @@ pub enum ToolIndexCategory {
 impl ToolIndexCategory {
     /// Get display name
     #[must_use]
-    pub fn display_name(&self) -> &'static str {
+    pub const fn display_name(&self) -> &'static str {
         match self {
             ToolIndexCategory::Core => "Core",
             ToolIndexCategory::Builtin => "Builtin",
@@ -194,7 +194,7 @@ impl ToolIndex {
 
     /// Get total tool count
     #[must_use]
-    pub fn total_count(&self) -> usize {
+    pub const fn total_count(&self) -> usize {
         self.core.len()
             + self.builtin.len()
             + self.mcp.len()

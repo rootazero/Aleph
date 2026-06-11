@@ -34,7 +34,7 @@ pub struct BrowserOpenTool {
 }
 
 impl BrowserOpenTool {
-    pub fn new(manager: Arc<ProfileManager>) -> Self {
+    pub const fn new(manager: Arc<ProfileManager>) -> Self {
         Self { manager }
     }
 }

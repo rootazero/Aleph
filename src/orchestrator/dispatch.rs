@@ -185,13 +185,13 @@ impl TerminateReason {
     /// `hit_limit: bool`; `Completed` and `Cancelled` return `false`. Use
     /// to populate [`FlowOutcome::hit_limit`] so the two fields never drift.
     #[must_use]
-    pub fn is_hit_limit(&self) -> bool {
+    pub const fn is_hit_limit(&self) -> bool {
         !matches!(self, Self::Completed | Self::Cancelled)
     }
 
     /// Short stable string for logging / metrics — never localized.
     #[must_use]
-    pub fn as_static_str(&self) -> &'static str {
+    pub const fn as_static_str(&self) -> &'static str {
         match self {
             Self::Completed => "completed",
             Self::HitMaxIterations { .. } => "hit_max_iterations",

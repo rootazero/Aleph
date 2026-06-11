@@ -38,13 +38,13 @@ struct OpenFence {
 impl FenceSpan {
     /// Byte offset of the opening fence line start.
     #[must_use]
-    pub fn start(&self) -> usize {
+    pub const fn start(&self) -> usize {
         self.start
     }
 
     /// Byte offset of the closing fence line start (or text end if unclosed).
     #[must_use]
-    pub fn end(&self) -> usize {
+    pub const fn end(&self) -> usize {
         self.end
     }
 
@@ -83,7 +83,7 @@ impl FenceSpan {
     /// safe: the `\n` preceding the closing fence sits at `end - 1`, which is
     /// still inside the span.
     #[must_use]
-    pub fn contains(&self, index: usize) -> bool {
+    pub const fn contains(&self, index: usize) -> bool {
         index > self.start && index < self.end
     }
 

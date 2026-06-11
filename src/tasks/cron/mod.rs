@@ -253,7 +253,7 @@ impl CronService {
 
     /// Access the internal service state (for advanced use cases like timer loops).
     #[must_use]
-    pub fn state(&self) -> &Arc<ServiceState<SystemClock>> {
+    pub const fn state(&self) -> &Arc<ServiceState<SystemClock>> {
         &self.state
     }
 

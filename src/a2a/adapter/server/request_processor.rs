@@ -96,7 +96,7 @@ pub struct A2ARequestProcessor {
 
 impl A2ARequestProcessor {
     #[must_use]
-    pub fn new(state: Arc<A2AServerState>) -> Self {
+    pub const fn new(state: Arc<A2AServerState>) -> Self {
         Self { state }
     }
 

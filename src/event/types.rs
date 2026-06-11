@@ -206,7 +206,7 @@ pub enum AlephEvent {
 impl AlephEvent {
     /// Get the event type discriminant
     #[must_use]
-    pub fn event_type(&self) -> EventType {
+    pub const fn event_type(&self) -> EventType {
         match self {
             Self::InputReceived(_) => EventType::InputReceived,
             Self::PlanRequested(_) => EventType::PlanRequested,
@@ -249,7 +249,7 @@ impl AlephEvent {
 
     /// Get a human-readable name for the event
     #[must_use]
-    pub fn name(&self) -> &'static str {
+    pub const fn name(&self) -> &'static str {
         match self {
             Self::InputReceived(_) => "InputReceived",
             Self::PlanRequested(_) => "PlanRequested",

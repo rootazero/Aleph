@@ -61,7 +61,7 @@ impl TaskStatus {
 
     /// Check if task can be auto-resumed on restart
     #[must_use]
-    pub fn is_recoverable(&self) -> bool {
+    pub const fn is_recoverable(&self) -> bool {
         matches!(self, TaskStatus::Running | TaskStatus::Interrupted)
     }
 }
@@ -269,7 +269,7 @@ impl AgentTask {
 
     /// Builder: set lane
     #[must_use]
-    pub fn with_lane(mut self, lane: Lane) -> Self {
+    pub const fn with_lane(mut self, lane: Lane) -> Self {
         self.lane = lane;
         self
     }
@@ -331,7 +331,7 @@ impl TaskTrace {
 
     /// Stable event kind string for storage/indexing.
     #[must_use]
-    pub fn event_kind(&self) -> &'static str {
+    pub const fn event_kind(&self) -> &'static str {
         self.event.kind()
     }
 }

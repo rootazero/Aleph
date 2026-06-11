@@ -15,7 +15,7 @@ pub struct AssemblyLogWriter {
 }
 
 impl AssemblyLogWriter {
-    pub fn new(backend: MemoryBackend, config: AssemblyLogConfig) -> Self {
+    pub const fn new(backend: MemoryBackend, config: AssemblyLogConfig) -> Self {
         Self { backend, config }
     }
 

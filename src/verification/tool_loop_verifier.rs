@@ -56,7 +56,7 @@ impl ToolLoopVerifier {
     /// [`TOOL_HISTORY_WINDOW`] (8) — i.e. ~3 ignored vetoes before the loop is
     /// cut off. Both tunable via `with_threshold` / `with_halt_threshold`.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             repeat_threshold: 5,
             halt_threshold: TOOL_HISTORY_WINDOW,
@@ -87,13 +87,13 @@ impl ToolLoopVerifier {
 
     /// Current repetition (veto) threshold (always within `[2, TOOL_HISTORY_WINDOW]`).
     #[must_use]
-    pub fn threshold(&self) -> usize {
+    pub const fn threshold(&self) -> usize {
         self.repeat_threshold
     }
 
     /// Current hard-halt threshold (always within `[repeat_threshold, TOOL_HISTORY_WINDOW]`).
     #[must_use]
-    pub fn halt_threshold(&self) -> usize {
+    pub const fn halt_threshold(&self) -> usize {
         self.halt_threshold
     }
 }

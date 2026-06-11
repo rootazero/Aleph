@@ -147,14 +147,14 @@ impl ActivityLogQuery {
 
     /// Set limit
     #[must_use]
-    pub fn with_limit(mut self, limit: usize) -> Self {
+    pub const fn with_limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
         self
     }
 
     /// Set offset
     #[must_use]
-    pub fn with_offset(mut self, offset: usize) -> Self {
+    pub const fn with_offset(mut self, offset: usize) -> Self {
         self.offset = Some(offset);
         self
     }
@@ -168,14 +168,14 @@ impl ActivityLogQuery {
 
     /// Set status filter
     #[must_use]
-    pub fn with_status(mut self, status: ActivityStatus) -> Self {
+    pub const fn with_status(mut self, status: ActivityStatus) -> Self {
         self.status_filter = Some(status);
         self
     }
 
     /// Set time range
     #[must_use]
-    pub fn with_time_range(mut self, start: i64, end: i64) -> Self {
+    pub const fn with_time_range(mut self, start: i64, end: i64) -> Self {
         self.start_time = Some(start);
         self.end_time = Some(end);
         self

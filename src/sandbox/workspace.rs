@@ -71,14 +71,14 @@ impl WorkspaceSandbox {
 
     /// Override the default 60s per-command timeout.
     #[must_use]
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         self.default_timeout = timeout;
         self
     }
 
     /// Override the default 1 MB combined stdout+stderr truncation budget.
     #[must_use]
-    pub fn with_max_output_bytes(mut self, max_output_bytes: usize) -> Self {
+    pub const fn with_max_output_bytes(mut self, max_output_bytes: usize) -> Self {
         self.max_output_bytes = max_output_bytes;
         self
     }

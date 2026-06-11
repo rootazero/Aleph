@@ -46,7 +46,7 @@ pub struct CoalescingConfig {
 
 /// Default hard-deadline ceiling for coalescing (ms). Kept as a free function so
 /// `#[serde(default)]` can backfill it when deserializing older configs.
-fn default_max_window_ms() -> u64 {
+const fn default_max_window_ms() -> u64 {
     5_000
 }
 

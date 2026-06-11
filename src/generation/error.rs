@@ -174,7 +174,7 @@ impl GenerationError {
 
     /// Create a timeout error
     #[must_use]
-    pub fn timeout(duration: Duration) -> Self {
+    pub const fn timeout(duration: Duration) -> Self {
         GenerationError::TimeoutError { duration }
     }
 
@@ -229,7 +229,7 @@ impl GenerationError {
 
     /// Create a cancelled error
     #[must_use]
-    pub fn cancelled() -> Self {
+    pub const fn cancelled() -> Self {
         GenerationError::Cancelled
     }
 
@@ -318,7 +318,7 @@ impl GenerationError {
     /// assert!(!auth_error.is_retryable());
     /// ```
     #[must_use]
-    pub fn is_retryable(&self) -> bool {
+    pub const fn is_retryable(&self) -> bool {
         matches!(
             self,
             GenerationError::RateLimitError { .. }
@@ -353,7 +353,7 @@ impl GenerationError {
     /// assert!(!timeout.needs_user_action());
     /// ```
     #[must_use]
-    pub fn needs_user_action(&self) -> bool {
+    pub const fn needs_user_action(&self) -> bool {
         matches!(
             self,
             GenerationError::AuthenticationError { .. }
@@ -385,7 +385,7 @@ impl GenerationError {
     /// assert!(!auth.should_fallback());
     /// ```
     #[must_use]
-    pub fn should_fallback(&self) -> bool {
+    pub const fn should_fallback(&self) -> bool {
         matches!(
             self,
             GenerationError::UnsupportedFeatureError { .. }
@@ -415,7 +415,7 @@ impl GenerationError {
     /// assert_eq!(error.retry_after(), Some(Duration::from_secs(60)));
     /// ```
     #[must_use]
-    pub fn retry_after(&self) -> Option<Duration> {
+    pub const fn retry_after(&self) -> Option<Duration> {
         match self {
             GenerationError::RateLimitError { retry_after, .. } => *retry_after,
             _ => None,

@@ -122,31 +122,31 @@ impl Default for StreamingOptions {
     }
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_false() -> bool {
+const fn default_false() -> bool {
     false
 }
 
-fn default_debounce_ms() -> u64 {
+const fn default_debounce_ms() -> u64 {
     800
 }
 
-fn default_min_initial_chars() -> usize {
+const fn default_min_initial_chars() -> usize {
     30
 }
 
-fn default_max_edit_interval_ms() -> u64 {
+const fn default_max_edit_interval_ms() -> u64 {
     200
 }
 
-fn default_stream_buffer_size() -> usize {
+const fn default_stream_buffer_size() -> usize {
     256
 }
 
-fn default_max_retries() -> u32 {
+const fn default_max_retries() -> u32 {
     3
 }
 

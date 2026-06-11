@@ -63,7 +63,7 @@ pub struct FileContent {
 
 impl FileContent {
     /// Validate that exactly one of `bytes` or `uri` is set
-    pub fn validate(&self) -> Result<(), &'static str> {
+    pub const fn validate(&self) -> Result<(), &'static str> {
         match (&self.bytes, &self.uri) {
             (None, None) => Err("FileContent must have either bytes or uri"),
             (Some(_), Some(_)) => Err("FileContent cannot have both bytes and uri"),

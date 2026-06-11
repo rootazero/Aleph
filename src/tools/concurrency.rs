@@ -81,7 +81,7 @@ impl ConcurrencyClaim {
 
     /// The whole-world exclusive claim. Conflicts with everything.
     #[must_use]
-    pub fn global() -> Self {
+    pub const fn global() -> Self {
         ConcurrencyClaim::Exclusive {
             scope: ExclusiveScope::Global,
         }

@@ -24,7 +24,7 @@ pub struct ChannelSettingsResolver {
 
 impl ChannelSettingsResolver {
     #[must_use]
-    pub fn new(config: DiscordChannelConfig) -> Self {
+    pub const fn new(config: DiscordChannelConfig) -> Self {
         Self { config }
     }
 
@@ -97,7 +97,7 @@ impl ChannelSettingsResolver {
         }
     }
 
-    fn merge_features(
+    const fn merge_features(
         _base: &crate::gateway::interfaces::discord::config::DiscordFeatures,
         override_: &crate::gateway::interfaces::discord::config::DiscordFeatures,
     ) -> crate::gateway::interfaces::discord::config::DiscordFeatures {
@@ -126,7 +126,7 @@ impl ChannelSettingsResolver {
         }
     }
 
-    fn merge_reply(
+    const fn merge_reply(
         _base: &crate::gateway::interfaces::discord::config::ReplyConfig,
         override_: &crate::gateway::interfaces::discord::config::ReplyConfig,
     ) -> crate::gateway::interfaces::discord::config::ReplyConfig {

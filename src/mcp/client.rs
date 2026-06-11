@@ -35,13 +35,13 @@ pub struct McpStartupReport {
 impl McpStartupReport {
     /// Check if all servers started successfully
     #[must_use]
-    pub fn all_succeeded(&self) -> bool {
+    pub const fn all_succeeded(&self) -> bool {
         self.failed.is_empty()
     }
 
     /// Get total number of servers attempted
     #[must_use]
-    pub fn total(&self) -> usize {
+    pub const fn total(&self) -> usize {
         self.succeeded.len() + self.failed.len()
     }
 }
@@ -105,7 +105,7 @@ impl McpClient {
     }
 
     /// Get the sampling handler
-    pub fn sampling_handler(&self) -> &Arc<SamplingHandler> {
+    pub const fn sampling_handler(&self) -> &Arc<SamplingHandler> {
         &self.sampling_handler
     }
 

@@ -32,7 +32,7 @@ pub struct MediaConfig {
     pub policy: MediaPolicy,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 

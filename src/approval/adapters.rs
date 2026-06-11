@@ -50,7 +50,7 @@ pub struct ChannelApprovalBridgeAdapter {
 impl ChannelApprovalBridgeAdapter {
     /// Construct a new adapter. Uses the default 2-minute approval timeout.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         bridge: Arc<ChannelApprovalBridge>,
         approval_manager: Arc<ExecApprovalManager>,
     ) -> Self {
@@ -62,7 +62,7 @@ impl ChannelApprovalBridgeAdapter {
     }
 
     /// Override the default approval timeout. Useful for tests.
-    pub fn set_timeout_ms(&mut self, timeout_ms: u64) {
+    pub const fn set_timeout_ms(&mut self, timeout_ms: u64) {
         self.timeout_ms = timeout_ms;
     }
 

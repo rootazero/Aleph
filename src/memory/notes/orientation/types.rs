@@ -17,7 +17,7 @@ pub enum LogAction {
 
 impl LogAction {
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             LogAction::Ingest => "ingest",
             LogAction::Query => "query",

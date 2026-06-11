@@ -34,7 +34,7 @@ pub struct GenerationProbe {
 }
 
 impl GenerationProbe {
-    pub fn new(
+    pub const fn new(
         registry: Arc<RwLock<GenerationProviderRegistry>>,
         gen_type: GenerationType,
     ) -> Self {

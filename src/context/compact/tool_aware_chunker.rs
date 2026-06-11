@@ -77,7 +77,7 @@ impl SemanticUnit {
 
     /// The earliest (smallest) message index in this unit.
     #[must_use]
-    pub fn first_index(&self) -> usize {
+    pub const fn first_index(&self) -> usize {
         match self {
             SemanticUnit::UserMessage { index } => *index,
             SemanticUnit::AssistantText { index } => *index,
@@ -235,7 +235,7 @@ pub struct ToolAwareChunker {
 impl ToolAwareChunker {
     /// Create a new chunker with the given token limit and estimation ratio.
     #[must_use]
-    pub fn new(chunk_token_limit: usize, token_ratio: f64) -> Self {
+    pub const fn new(chunk_token_limit: usize, token_ratio: f64) -> Self {
         Self {
             chunk_token_limit,
             token_ratio,

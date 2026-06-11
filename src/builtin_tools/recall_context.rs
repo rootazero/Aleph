@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::MemoryBackend;
 
-fn default_max_results() -> usize {
+const fn default_max_results() -> usize {
     3
 }
 

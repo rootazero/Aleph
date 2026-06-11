@@ -60,7 +60,7 @@ impl ChannelPermissionLevel {
     /// strings `tier::role_for_permissions` produces, so the gate is uniform
     /// across WS devices and external channels.
     #[must_use]
-    pub fn caller_role_str(self) -> &'static str {
+    pub const fn caller_role_str(self) -> &'static str {
         match self {
             ChannelPermissionLevel::Config => "operator",
             ChannelPermissionLevel::Chat => "guest",
@@ -178,7 +178,7 @@ impl SlashAccessConfig {
     /// Used by boot wiring to skip registering a channel that opts out, keeping
     /// `channel_configs` byte-identical to the pre-tiering allow-all default.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.allow_admin_from.is_empty() && self.group_allow_admin_from.is_empty()
     }
 }

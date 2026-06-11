@@ -38,7 +38,7 @@ impl MediaPipeline {
 
     /// Get the policy.
     #[must_use]
-    pub fn policy(&self) -> &MediaPolicy {
+    pub const fn policy(&self) -> &MediaPolicy {
         &self.policy
     }
 

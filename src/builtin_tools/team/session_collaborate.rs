@@ -15,7 +15,7 @@ use crate::tools::AlephTool;
 // Args / Output
 // =============================================================================
 
-fn default_max_rounds() -> u32 {
+const fn default_max_rounds() -> u32 {
     10
 }
 
@@ -59,7 +59,7 @@ pub struct SessionCollaborateTool {
 
 impl SessionCollaborateTool {
     #[must_use]
-    pub fn new(coordinator: Arc<SessionCoordinator>, current_agent_id: String) -> Self {
+    pub const fn new(coordinator: Arc<SessionCoordinator>, current_agent_id: String) -> Self {
         Self {
             coordinator,
             current_agent_id,

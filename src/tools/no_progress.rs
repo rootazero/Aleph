@@ -91,7 +91,7 @@ struct Tally {
 }
 
 impl Tally {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             count: 0,
             fingerprint: None,

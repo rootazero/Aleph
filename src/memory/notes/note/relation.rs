@@ -20,7 +20,7 @@ pub struct Relation {
     pub confidence: f32,
 }
 
-pub(crate) fn default_relation_confidence() -> f32 {
+pub(crate) const fn default_relation_confidence() -> f32 {
     1.0
 }
 
@@ -28,7 +28,7 @@ impl Relation {
     /// Clamp `confidence` into `[0,1]` (P7 boundary hardening). Applied when a
     /// relation enters the system from markdown or from an ingest op.
     #[must_use]
-    pub fn clamped(mut self) -> Self {
+    pub const fn clamped(mut self) -> Self {
         self.confidence = self.confidence.clamp(0.0, 1.0);
         self
     }

@@ -8,7 +8,7 @@ pub struct GraphQueryParams {
     #[serde(default)]
     pub agent_id: Option<String>,
 }
-fn default_limit() -> usize {
+const fn default_limit() -> usize {
     100
 }
 
@@ -23,10 +23,10 @@ pub struct GraphNeighborsParams {
     #[serde(default)]
     pub agent_id: Option<String>,
 }
-fn default_depth() -> u8 {
+const fn default_depth() -> u8 {
     2
 }
-fn default_neighbor_limit() -> usize {
+const fn default_neighbor_limit() -> usize {
     200
 }
 
@@ -58,7 +58,7 @@ pub struct GraphSearchParams {
     #[serde(default)]
     pub agent_id: Option<String>,
 }
-fn default_search_limit() -> usize {
+const fn default_search_limit() -> usize {
     20
 }
 

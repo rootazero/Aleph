@@ -19,7 +19,7 @@ use crate::tools::AlephTool;
 // Args / Output
 // =============================================================================
 
-fn default_msg_type() -> MessageType {
+const fn default_msg_type() -> MessageType {
     MessageType::Message
 }
 

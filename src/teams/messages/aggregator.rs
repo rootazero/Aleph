@@ -107,7 +107,7 @@ fn msg_type_key(t: &MessageType) -> String {
 /// Message types that the aggregator will batch. Anything decision-loaded
 /// (approvals, shutdowns) bypasses — those need to land synchronously and
 /// individually so their replies can be threaded.
-fn is_batchable(t: &MessageType) -> bool {
+const fn is_batchable(t: &MessageType) -> bool {
     matches!(
         t,
         MessageType::Message | MessageType::SystemNotification | MessageType::Idle
@@ -127,7 +127,7 @@ struct Bucket {
 }
 
 impl Bucket {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             pending: Vec::new(),
             timer_running: false,

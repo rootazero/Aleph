@@ -5,19 +5,19 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_sync_timeout() -> u64 {
+const fn default_sync_timeout() -> u64 {
     30000
 }
 
-fn default_initial_sync_limit() -> u64 {
+const fn default_initial_sync_limit() -> u64 {
     10
 }
 
-fn default_media_max_mb() -> u64 {
+const fn default_media_max_mb() -> u64 {
     25
 }
 
@@ -160,7 +160,7 @@ impl MatrixConfig {
 
     /// Maximum inbound media download size in bytes (`media_max_mb` × 1 MiB).
     #[must_use]
-    pub fn media_max_bytes(&self) -> u64 {
+    pub const fn media_max_bytes(&self) -> u64 {
         self.media_max_mb.saturating_mul(1024 * 1024)
     }
 

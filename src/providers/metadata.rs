@@ -41,7 +41,7 @@ pub enum Modality {
 impl Modality {
     /// Stable, lowercase identifier for serialization.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Modality::Chat => "chat",
             Modality::Image => "image",

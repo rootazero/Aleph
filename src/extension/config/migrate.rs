@@ -22,7 +22,7 @@ pub struct MigrationResult {
 impl MigrationResult {
     /// Check if a backup was created during migration.
     #[must_use]
-    pub fn had_backup(&self) -> bool {
+    pub const fn had_backup(&self) -> bool {
         self.backup.is_some()
     }
 }

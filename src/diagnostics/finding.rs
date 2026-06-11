@@ -21,7 +21,7 @@ pub enum Severity {
 
 impl Severity {
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Severity::Info => "info",
             Severity::Warning => "warning",
@@ -105,7 +105,7 @@ impl Finding {
 
     /// Mark this finding as mechanically repairable by the engine.
     #[must_use]
-    pub fn repairable(mut self) -> Self {
+    pub const fn repairable(mut self) -> Self {
         self.repairable = true;
         self
     }

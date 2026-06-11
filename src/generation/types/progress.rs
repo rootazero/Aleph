@@ -55,7 +55,7 @@ impl GenerationProgress {
 
     /// Set the ETA
     #[must_use]
-    pub fn with_eta(mut self, eta: Duration) -> Self {
+    pub const fn with_eta(mut self, eta: Duration) -> Self {
         self.eta = Some(eta);
         self
     }

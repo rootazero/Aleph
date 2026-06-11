@@ -26,7 +26,7 @@ use crate::sync_primitives::Arc;
 /// Maps an `ExecApprovalManager` decision into an `ApprovalOutcome`. `None` =
 /// timed out / channel closed. `AllowAlways` collapses to a session grant in
 /// Phase 2b (permanent device elevation deferred to Phase 3).
-fn decision_to_outcome(decision: Option<ApprovalDecisionType>) -> ApprovalOutcome {
+const fn decision_to_outcome(decision: Option<ApprovalDecisionType>) -> ApprovalOutcome {
     match decision {
         Some(ApprovalDecisionType::AllowOnce) => ApprovalOutcome::Approved,
         Some(ApprovalDecisionType::AllowSession) => ApprovalOutcome::ApprovedForSession,
@@ -43,7 +43,7 @@ pub struct OperatorApprovalRequester {
 
 impl OperatorApprovalRequester {
     #[must_use]
-    pub fn new(manager: Arc<ExecApprovalManager>, event_bus: Arc<GatewayEventBus>) -> Self {
+    pub const fn new(manager: Arc<ExecApprovalManager>, event_bus: Arc<GatewayEventBus>) -> Self {
         Self { manager, event_bus }
     }
 }

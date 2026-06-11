@@ -35,19 +35,19 @@ pub struct OrchestratorGuards {
     pub no_progress_threshold: u32,
 }
 
-fn default_max_rounds() -> u32 {
+const fn default_max_rounds() -> u32 {
     12
 }
-fn default_max_tool_calls() -> u32 {
+const fn default_max_tool_calls() -> u32 {
     30
 }
-fn default_max_tokens() -> u64 {
+const fn default_max_tokens() -> u64 {
     100_000
 }
-fn default_timeout_seconds() -> u64 {
+const fn default_timeout_seconds() -> u64 {
     172_800
 }
-fn default_no_progress_threshold() -> u32 {
+const fn default_no_progress_threshold() -> u32 {
     2
 }
 
@@ -65,22 +65,22 @@ impl Default for OrchestratorGuards {
 
 impl OrchestratorGuards {
     /// Check if max rounds exceeded
-    pub fn is_rounds_exceeded(&self, current: u32) -> bool {
+    pub const fn is_rounds_exceeded(&self, current: u32) -> bool {
         current >= self.max_rounds
     }
 
     /// Check if max tool calls exceeded
-    pub fn is_tool_calls_exceeded(&self, current: u32) -> bool {
+    pub const fn is_tool_calls_exceeded(&self, current: u32) -> bool {
         current >= self.max_tool_calls
     }
 
     /// Check if max tokens exceeded
-    pub fn is_tokens_exceeded(&self, current: u64) -> bool {
+    pub const fn is_tokens_exceeded(&self, current: u64) -> bool {
         current >= self.max_tokens
     }
 
     /// Get timeout as Duration
-    pub fn timeout(&self) -> std::time::Duration {
+    pub const fn timeout(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.timeout_seconds)
     }
 }

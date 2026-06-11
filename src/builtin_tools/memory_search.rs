@@ -48,7 +48,7 @@ pub struct MemorySearchArgs {
     pub scope: Option<String>,
 }
 
-fn default_max_results() -> usize {
+const fn default_max_results() -> usize {
     10
 }
 

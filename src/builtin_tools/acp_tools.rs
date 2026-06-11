@@ -56,7 +56,7 @@ pub struct AcpDelegateTool {
 }
 
 impl AcpDelegateTool {
-    pub fn new(manager: Arc<AcpAdapterManager>) -> Self {
+    pub const fn new(manager: Arc<AcpAdapterManager>) -> Self {
         Self { manager }
     }
 }
@@ -187,7 +187,7 @@ pub struct AcpSwitchTool {
 }
 
 impl AcpSwitchTool {
-    pub fn new(manager: Arc<AcpAdapterManager>) -> Self {
+    pub const fn new(manager: Arc<AcpAdapterManager>) -> Self {
         Self { manager }
     }
 }
@@ -313,7 +313,7 @@ pub struct AcpSessionControlTool {
 }
 
 impl AcpSessionControlTool {
-    pub fn new(manager: Arc<AcpAdapterManager>) -> Self {
+    pub const fn new(manager: Arc<AcpAdapterManager>) -> Self {
         Self { manager }
     }
 }

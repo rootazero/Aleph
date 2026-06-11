@@ -211,21 +211,21 @@ impl AgentDef {
 
     /// Set max iterations
     #[must_use]
-    pub fn with_max_iterations(mut self, max: u32) -> Self {
+    pub const fn with_max_iterations(mut self, max: u32) -> Self {
         self.max_iterations = Some(max);
         self
     }
 
     /// Set context mode
     #[must_use]
-    pub fn with_context_mode(mut self, mode: ContextMode) -> Self {
+    pub const fn with_context_mode(mut self, mode: ContextMode) -> Self {
         self.context_mode = mode;
         self
     }
 
     /// Set token budget
     #[must_use]
-    pub fn with_token_budget(mut self, budget: u32) -> Self {
+    pub const fn with_token_budget(mut self, budget: u32) -> Self {
         self.token_budget = Some(budget);
         self
     }
@@ -258,7 +258,7 @@ impl AgentDef {
 
     /// B1 — set subagent worktree isolation.
     #[must_use]
-    pub fn with_isolation(mut self, mode: IsolationMode) -> Self {
+    pub const fn with_isolation(mut self, mode: IsolationMode) -> Self {
         self.isolation = Some(mode);
         self
     }

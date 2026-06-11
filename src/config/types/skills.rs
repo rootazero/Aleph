@@ -22,7 +22,7 @@ pub struct SkillsConfig {
     pub skills_dir: String,
 }
 
-pub fn default_skills_enabled() -> bool {
+pub const fn default_skills_enabled() -> bool {
     true
 }
 

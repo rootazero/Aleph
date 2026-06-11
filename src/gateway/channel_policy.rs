@@ -85,7 +85,7 @@ pub struct PolicyDecision {
 
 impl PolicyDecision {
     #[must_use]
-    pub fn allowed() -> Self {
+    pub const fn allowed() -> Self {
         Self {
             allowed: true,
             reason: None,
@@ -163,12 +163,12 @@ pub struct WhatsAppPolicy {
 
 impl WhatsAppPolicy {
     #[must_use]
-    pub fn new(config: ChannelAccessConfig) -> Self {
+    pub const fn new(config: ChannelAccessConfig) -> Self {
         Self { config }
     }
 
     #[must_use]
-    pub fn config(&self) -> &ChannelAccessConfig {
+    pub const fn config(&self) -> &ChannelAccessConfig {
         &self.config
     }
 

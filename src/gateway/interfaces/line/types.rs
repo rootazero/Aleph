@@ -110,7 +110,7 @@ impl LineMessage {
     }
 
     #[must_use]
-    pub fn is_image(&self) -> bool {
+    pub const fn is_image(&self) -> bool {
         matches!(self, LineMessage::Image(_))
     }
 }
@@ -201,7 +201,7 @@ pub struct LineReplyToken(String);
 
 impl LineReplyToken {
     #[must_use]
-    pub fn new(token: String) -> Self {
+    pub const fn new(token: String) -> Self {
         Self(token)
     }
 

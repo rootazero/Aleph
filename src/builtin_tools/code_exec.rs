@@ -58,7 +58,7 @@ pub enum Language {
 }
 
 impl Language {
-    fn runtime(&self) -> &'static str {
+    const fn runtime(&self) -> &'static str {
         match self {
             Language::Python => "python3",
             Language::JavaScript => "node",
@@ -66,7 +66,7 @@ impl Language {
         }
     }
 
-    fn code_flag(&self) -> &'static str {
+    const fn code_flag(&self) -> &'static str {
         match self {
             Language::Python => "-c",
             Language::JavaScript => "-e",
@@ -162,7 +162,7 @@ pub struct CodeExecOutput {
     pub stderr_truncated_bytes: u64,
 }
 
-fn is_zero(v: &u64) -> bool {
+const fn is_zero(v: &u64) -> bool {
     *v == 0
 }
 
@@ -492,7 +492,7 @@ fn resolve_exit_code(exit_code: Option<i32>, signal: Option<i32>) -> (i32, Optio
 /// Map a Unix signal number to its conventional name. Covers the signals a
 /// sandboxed build/test/script realistically dies from; anything else is
 /// reported by number with an `unknown` label.
-fn signal_name(sig: i32) -> &'static str {
+const fn signal_name(sig: i32) -> &'static str {
     match sig {
         1 => "SIGHUP",
         2 => "SIGINT",
@@ -512,7 +512,7 @@ fn signal_name(sig: i32) -> &'static str {
 
 /// A short, model-facing cause hint for the signals with a common,
 /// actionable interpretation. Empty for signals where naming it is enough.
-fn signal_hint(sig: i32) -> &'static str {
+const fn signal_hint(sig: i32) -> &'static str {
     match sig {
         6 => " — an abort (assertion failure, Rust panic with abort, or abort())",
         9 => " — typically an out-of-memory kill or an enforced memory/CPU resource limit",

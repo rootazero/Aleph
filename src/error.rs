@@ -598,7 +598,7 @@ impl AlephError {
     ///
     /// Used when an operation is cancelled by the user via CancellationToken.
     #[must_use]
-    pub fn cancelled() -> Self {
+    pub const fn cancelled() -> Self {
         AlephError::Cancelled
     }
 
@@ -642,7 +642,7 @@ impl AlephError {
     /// (`docs/superpowers/specs/2026-05-05-harness-stage1-error-class-plan.md`)
     /// for the rationale.
     #[must_use]
-    pub fn class(&self) -> ErrorClass {
+    pub const fn class(&self) -> ErrorClass {
         match self {
             // Transient — retry typically resolves
             AlephError::NetworkError { .. } => ErrorClass::Transient,
@@ -700,7 +700,7 @@ impl AlephError {
     /// for retry decisions; this method is retained for backwards compatibility
     /// with existing call sites that have not yet migrated.
     #[must_use]
-    pub fn is_transient(&self) -> bool {
+    pub const fn is_transient(&self) -> bool {
         matches!(
             self,
             AlephError::RateLimitError { .. }

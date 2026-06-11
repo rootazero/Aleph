@@ -21,7 +21,7 @@ impl TargetOs {
     ///
     /// Panics on unsupported OSes at compile time via `cfg!` gating.
     #[must_use]
-    pub fn current() -> Self {
+    pub const fn current() -> Self {
         #[cfg(target_os = "macos")]
         {
             Self::MacOs

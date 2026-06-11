@@ -41,7 +41,7 @@ impl ListFilter {
 
     /// Set result limit
     #[must_use]
-    pub fn with_limit(mut self, limit: usize) -> Self {
+    pub const fn with_limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
         self
     }

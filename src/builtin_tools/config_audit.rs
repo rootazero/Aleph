@@ -199,7 +199,7 @@ pub struct ConfigAuditTool {
 }
 
 impl ConfigAuditTool {
-    pub fn new(config: Arc<RwLock<Config>>) -> Self {
+    pub const fn new(config: Arc<RwLock<Config>>) -> Self {
         Self {
             config: Some(config),
         }

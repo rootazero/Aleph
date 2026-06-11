@@ -25,19 +25,19 @@ pub enum RiskLevel {
 impl RiskLevel {
     /// Check if this risk level requires user approval
     #[must_use]
-    pub fn requires_approval(&self) -> bool {
+    pub const fn requires_approval(&self) -> bool {
         matches!(self, RiskLevel::Danger)
     }
 
     /// Check if this risk level should be blocked
     #[must_use]
-    pub fn is_blocked(&self) -> bool {
+    pub const fn is_blocked(&self) -> bool {
         matches!(self, RiskLevel::Blocked)
     }
 
     /// Check if this risk level is safe for auto-execution
     #[must_use]
-    pub fn is_auto_safe(&self) -> bool {
+    pub const fn is_auto_safe(&self) -> bool {
         matches!(self, RiskLevel::Safe | RiskLevel::Caution)
     }
 }

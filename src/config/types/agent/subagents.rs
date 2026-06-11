@@ -70,7 +70,7 @@ pub fn default_allow_agents() -> Vec<String> {
 }
 
 /// Default spawn timeout - 5 minutes
-pub fn default_spawn_timeout() -> u32 {
+pub const fn default_spawn_timeout() -> u32 {
     300
 }
 

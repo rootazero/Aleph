@@ -92,7 +92,7 @@ impl ImageGenerateTool {
     pub const DESCRIPTION: &'static str = "Generate an image from a text description. Use this when you need to create visual content based on a prompt.";
 
     /// Create a new ImageGenerateTool with the given provider registry
-    pub fn new(registry: Arc<RwLock<GenerationProviderRegistry>>) -> Self {
+    pub const fn new(registry: Arc<RwLock<GenerationProviderRegistry>>) -> Self {
         Self { registry }
     }
 

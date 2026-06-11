@@ -82,7 +82,7 @@ impl TokenManager {
     }
 
     /// Create with a specific secret (for testing or persistence)
-    pub fn with_secret(store: Arc<SecurityStore>, secret: [u8; 32]) -> Self {
+    pub const fn with_secret(store: Arc<SecurityStore>, secret: [u8; 32]) -> Self {
         Self {
             store,
             secret,
@@ -244,7 +244,7 @@ impl TokenManager {
 
     /// Get the HMAC secret (for persistence)
     #[must_use]
-    pub fn secret(&self) -> &[u8; 32] {
+    pub const fn secret(&self) -> &[u8; 32] {
         &self.secret
     }
 

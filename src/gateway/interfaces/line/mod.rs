@@ -64,7 +64,7 @@ impl LineChannel {
         channel
     }
 
-    fn capabilities() -> ChannelCapabilities {
+    const fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
             attachments: true,
             images: true,

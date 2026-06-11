@@ -125,7 +125,7 @@ pub struct MsTeamsConfig {
 fn default_tenant() -> String {
     "common".into()
 }
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 fn default_webhook_path() -> String {

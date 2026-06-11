@@ -5,11 +5,11 @@
 
 use serde::{Deserialize, Serialize};
 
-fn default_port() -> u16 {
+const fn default_port() -> u16 {
     5222
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 

@@ -51,7 +51,7 @@ pub struct ArenaCreateTool {
 }
 
 impl ArenaCreateTool {
-    pub fn new(manager: Arc<RwLock<ArenaManager>>) -> Self {
+    pub const fn new(manager: Arc<RwLock<ArenaManager>>) -> Self {
         Self { manager }
     }
 }
@@ -156,7 +156,7 @@ pub struct ArenaQueryTool {
 }
 
 impl ArenaQueryTool {
-    pub fn new(manager: Arc<RwLock<ArenaManager>>) -> Self {
+    pub const fn new(manager: Arc<RwLock<ArenaManager>>) -> Self {
         Self { manager }
     }
 }
@@ -307,7 +307,7 @@ pub struct ArenaSettleTool {
 }
 
 impl ArenaSettleTool {
-    pub fn new(manager: Arc<RwLock<ArenaManager>>) -> Self {
+    pub const fn new(manager: Arc<RwLock<ArenaManager>>) -> Self {
         Self { manager }
     }
 }

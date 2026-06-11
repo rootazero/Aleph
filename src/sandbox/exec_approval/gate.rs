@@ -27,7 +27,7 @@ pub enum ApprovalOutcome {
 
 impl ApprovalOutcome {
     #[must_use]
-    pub fn is_approved(&self) -> bool {
+    pub const fn is_approved(&self) -> bool {
         matches!(
             self,
             ApprovalOutcome::Approved | ApprovalOutcome::ApprovedForSession
@@ -37,7 +37,7 @@ impl ApprovalOutcome {
     /// True only for a session-scoped grant — the caller should remember it so
     /// subsequent calls to the same tool skip the prompt.
     #[must_use]
-    pub fn is_session_grant(&self) -> bool {
+    pub const fn is_session_grant(&self) -> bool {
         matches!(self, ApprovalOutcome::ApprovedForSession)
     }
 }
@@ -110,7 +110,7 @@ impl ApprovalGate {
         decision
     }
 
-    pub fn should_request_approval(&self, decision: &ApprovalDecision) -> bool {
+    pub const fn should_request_approval(&self, decision: &ApprovalDecision) -> bool {
         match decision.action {
             ApprovalAction::AskUser => true,
             ApprovalAction::Block { action: _ } => false,

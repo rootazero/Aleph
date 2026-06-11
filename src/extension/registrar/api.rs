@@ -27,7 +27,7 @@ pub struct CapabilityApi<'a> {
 
 impl<'a> CapabilityApi<'a> {
     /// Create a new `CapabilityApi` for a specific plugin.
-    pub fn new(
+    pub const fn new(
         registry: &'a mut PluginRegistry,
         plugin_id: String,
         permissions: Vec<PluginPermission>,
@@ -124,7 +124,7 @@ impl<'a> CapabilityApi<'a> {
 
     /// Get a reference to the underlying registry (for inspection in tests).
     #[must_use]
-    pub fn registry(&self) -> &PluginRegistry {
+    pub const fn registry(&self) -> &PluginRegistry {
         self.registry
     }
 }

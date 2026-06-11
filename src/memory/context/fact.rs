@@ -198,21 +198,21 @@ impl MemoryFact {
 
     /// Set similarity score (used during retrieval)
     #[must_use]
-    pub fn with_score(mut self, score: f32) -> Self {
+    pub const fn with_score(mut self, score: f32) -> Self {
         self.similarity_score = Some(score);
         self
     }
 
     /// Set specificity level
     #[must_use]
-    pub fn with_specificity(mut self, specificity: FactSpecificity) -> Self {
+    pub const fn with_specificity(mut self, specificity: FactSpecificity) -> Self {
         self.specificity = specificity;
         self
     }
 
     /// Set temporal scope
     #[must_use]
-    pub fn with_temporal_scope(mut self, scope: TemporalScope) -> Self {
+    pub const fn with_temporal_scope(mut self, scope: TemporalScope) -> Self {
         self.temporal_scope = scope;
         self
     }
@@ -227,21 +227,21 @@ impl MemoryFact {
 
     /// Set fact source
     #[must_use]
-    pub fn with_fact_source(mut self, source: FactSource) -> Self {
+    pub const fn with_fact_source(mut self, source: FactSource) -> Self {
         self.fact_source = source;
         self
     }
 
     /// Set memory layer
     #[must_use]
-    pub fn with_layer(mut self, layer: MemoryLayer) -> Self {
+    pub const fn with_layer(mut self, layer: MemoryLayer) -> Self {
         self.layer = layer;
         self
     }
 
     /// Set memory category
     #[must_use]
-    pub fn with_category(mut self, category: MemoryCategory) -> Self {
+    pub const fn with_category(mut self, category: MemoryCategory) -> Self {
         self.category = category;
         self
     }
@@ -262,14 +262,14 @@ impl MemoryFact {
 
     /// Set access count (builder pattern, useful for tests)
     #[must_use]
-    pub fn with_access_count(mut self, count: u32) -> Self {
+    pub const fn with_access_count(mut self, count: u32) -> Self {
         self.access_count = count;
         self
     }
 
     /// Set created_at timestamp (builder pattern, useful for tests)
     #[must_use]
-    pub fn with_created_at(mut self, ts: i64) -> Self {
+    pub const fn with_created_at(mut self, ts: i64) -> Self {
         self.created_at = ts;
         self
     }
@@ -288,14 +288,14 @@ impl MemoryFact {
 
     /// Set the timestamp when this fact became true
     #[must_use]
-    pub fn with_valid_from(mut self, ts: i64) -> Self {
+    pub const fn with_valid_from(mut self, ts: i64) -> Self {
         self.valid_from = Some(ts);
         self
     }
 
     /// Set the timestamp when this fact stopped being true
     #[must_use]
-    pub fn with_valid_to(mut self, ts: i64) -> Self {
+    pub const fn with_valid_to(mut self, ts: i64) -> Self {
         self.valid_to = Some(ts);
         self
     }
@@ -313,7 +313,7 @@ impl MemoryFact {
 
     /// Returns true if this fact has no end to its validity window
     #[must_use]
-    pub fn is_currently_valid(&self) -> bool {
+    pub const fn is_currently_valid(&self) -> bool {
         self.valid_to.is_none()
     }
 }

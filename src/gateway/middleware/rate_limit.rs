@@ -18,7 +18,7 @@ pub struct RateLimitLayer {
 
 impl RateLimitLayer {
     #[must_use]
-    pub fn new(limiter: Arc<RateLimiter>) -> Self {
+    pub const fn new(limiter: Arc<RateLimiter>) -> Self {
         Self { limiter }
     }
 }
@@ -41,7 +41,7 @@ pub struct RateLimitService<S> {
 }
 
 impl<S> RateLimitService<S> {
-    pub fn new(inner: S, limiter: Arc<RateLimiter>) -> Self {
+    pub const fn new(inner: S, limiter: Arc<RateLimiter>) -> Self {
         Self { inner, limiter }
     }
 }

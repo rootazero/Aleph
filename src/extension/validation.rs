@@ -21,7 +21,7 @@ pub struct ValidationResult {
 
 impl ValidationResult {
     #[must_use]
-    pub fn is_valid(&self) -> bool {
+    pub const fn is_valid(&self) -> bool {
         self.errors.is_empty()
     }
 }

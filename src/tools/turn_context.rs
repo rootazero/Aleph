@@ -42,7 +42,7 @@ impl TurnContext {
     /// True when the turn has a reachable channel to deliver a prompt to.
     /// HITL tools must deny / fail gracefully when this is false.
     #[must_use]
-    pub fn is_channel_routable(&self) -> bool {
+    pub const fn is_channel_routable(&self) -> bool {
         !self.channel_id.is_empty() && !self.conversation_id.is_empty()
     }
 

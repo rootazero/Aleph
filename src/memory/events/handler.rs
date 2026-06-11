@@ -28,7 +28,7 @@ pub struct MemoryCommandHandler {
 
 impl MemoryCommandHandler {
     #[must_use]
-    pub fn new(db: Arc<StateDatabase>) -> Self {
+    pub const fn new(db: Arc<StateDatabase>) -> Self {
         Self {
             db,
             note_indexer: None,

@@ -35,23 +35,23 @@ pub struct HeartbeatConfig {
     pub dedup: DedupConfig,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_tick_interval() -> u64 {
+const fn default_tick_interval() -> u64 {
     10
 }
 
-fn default_max_concurrent() -> usize {
+const fn default_max_concurrent() -> usize {
     3
 }
 
-fn default_job_timeout() -> u64 {
+const fn default_job_timeout() -> u64 {
     120
 }
 
-fn default_history_retention() -> u32 {
+const fn default_history_retention() -> u32 {
     30
 }
 
@@ -153,7 +153,7 @@ impl HeartbeatTask {
 
     /// Convenience accessor for consecutive error count
     #[must_use]
-    pub fn consecutive_errors(&self) -> u32 {
+    pub const fn consecutive_errors(&self) -> u32 {
         self.state.consecutive_errors
     }
 }

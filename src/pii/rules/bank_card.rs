@@ -14,7 +14,7 @@ fn bank_card_regex() -> &'static Regex {
 pub struct BankCardRule;
 
 impl BankCardRule {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 

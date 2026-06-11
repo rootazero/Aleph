@@ -114,7 +114,7 @@ impl SandboxCapabilities {
 
 /// `Option<u64>` subset check where smaller-or-equal-or-Some is "tighter".
 /// `None` = unlimited.
-fn limit_within(child: Option<u64>, baseline: Option<u64>) -> bool {
+const fn limit_within(child: Option<u64>, baseline: Option<u64>) -> bool {
     match (child, baseline) {
         (_, None) => true,            // unlimited baseline accepts anything
         (None, Some(_)) => false,     // unlimited child violates limited baseline

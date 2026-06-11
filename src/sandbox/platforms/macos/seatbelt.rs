@@ -510,7 +510,7 @@ impl SeatbeltDriver {
     /// Construct with boot-time options (e.g. the config-driven
     /// `deny_read_globs` security floor).
     #[must_use]
-    pub fn with_options(options: SeatbeltOptions) -> Self {
+    pub const fn with_options(options: SeatbeltOptions) -> Self {
         Self { options }
     }
 

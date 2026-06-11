@@ -90,11 +90,11 @@ fn default_cdn_url() -> String {
     WEIXIN_CDN_BASE_URL.to_string()
 }
 
-fn default_chunk_delay() -> f64 {
+const fn default_chunk_delay() -> f64 {
     0.35
 }
 
-fn default_chunk_retries() -> u32 {
+const fn default_chunk_retries() -> u32 {
     2
 }
 

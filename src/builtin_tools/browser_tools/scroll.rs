@@ -55,7 +55,7 @@ pub struct BrowserScrollTool {
 }
 
 impl BrowserScrollTool {
-    pub fn new(manager: Arc<ProfileManager>) -> Self {
+    pub const fn new(manager: Arc<ProfileManager>) -> Self {
         Self { manager }
     }
 }

@@ -15,7 +15,7 @@ pub struct TraceLayer;
 
 impl TraceLayer {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -40,7 +40,7 @@ pub struct TraceService<S> {
 }
 
 impl<S> TraceService<S> {
-    pub fn new(inner: S) -> Self {
+    pub const fn new(inner: S) -> Self {
         Self { inner }
     }
 }

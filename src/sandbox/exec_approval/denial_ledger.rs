@@ -66,7 +66,7 @@ impl DenialReason {
     /// Short, model-facing explanation appended to the refusal so the agent
     /// stops re-attempting and changes approach instead of looping.
     #[must_use]
-    pub fn agent_hint(self) -> &'static str {
+    pub const fn agent_hint(self) -> &'static str {
         match self {
             DenialReason::UserRejected => {
                 "The user already declined this exact action this session; do not re-request it — try a different approach or ask the user directly."

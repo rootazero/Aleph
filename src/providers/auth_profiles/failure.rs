@@ -26,7 +26,7 @@ pub enum AuthProfileFailureReason {
 impl AuthProfileFailureReason {
     /// Classify HTTP status code into failure reason
     #[must_use]
-    pub fn from_status(status: u16) -> Self {
+    pub const fn from_status(status: u16) -> Self {
         match status {
             400 => Self::Format,
             401 => Self::Auth,

@@ -21,7 +21,7 @@ impl SqliteSnapshotStore {
     /// callers that already hold the coord-task connection can build one in
     /// the same boot path. The schema is created via the coord-task store's
     /// `migrate` (which now adds `coord_team_snapshots`).
-    pub fn new_from_shared(conn: Arc<Mutex<Connection>>) -> Self {
+    pub const fn new_from_shared(conn: Arc<Mutex<Connection>>) -> Self {
         Self { conn }
     }
 

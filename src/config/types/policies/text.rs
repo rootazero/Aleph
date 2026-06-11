@@ -56,23 +56,23 @@ impl Default for TextFormatPolicy {
     }
 }
 
-fn default_text_truncate_length() -> u64 {
+const fn default_text_truncate_length() -> u64 {
     200
 }
 
-fn default_search_snippet_length() -> u64 {
+const fn default_search_snippet_length() -> u64 {
     300
 }
 
-fn default_mcp_result_length() -> u64 {
+const fn default_mcp_result_length() -> u64 {
     2000
 }
 
-fn default_system_prompt_length() -> u64 {
+const fn default_system_prompt_length() -> u64 {
     5000
 }
 
-fn default_user_message_length() -> u64 {
+const fn default_user_message_length() -> u64 {
     8000
 }
 

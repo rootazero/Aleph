@@ -85,7 +85,7 @@ impl ReadSkillTool {
 
     /// Create a ReadSkillTool with multiple directories
     #[must_use]
-    pub fn with_directories(skills_dirs: Vec<PathBuf>) -> Self {
+    pub const fn with_directories(skills_dirs: Vec<PathBuf>) -> Self {
         Self {
             skills_dirs,
             max_file_size: 5 * 1024 * 1024,
@@ -116,7 +116,7 @@ impl ReadSkillTool {
 
     /// Create with custom max file size
     #[must_use]
-    pub fn with_max_size(mut self, max_size: u64) -> Self {
+    pub const fn with_max_size(mut self, max_size: u64) -> Self {
         self.max_file_size = max_size;
         self
     }

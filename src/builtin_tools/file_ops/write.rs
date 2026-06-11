@@ -21,7 +21,7 @@ use crate::tools::AlephTool;
 // Helper for serde default
 // ---------------------------------------------------------------------------
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 

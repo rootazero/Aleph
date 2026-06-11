@@ -178,21 +178,21 @@ impl SubagentTool {
 
     /// B3 — wire the stall watchdog config inherited by subagents.
     #[must_use]
-    pub fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
+    pub const fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
         self.stall_config = Some(config);
         self
     }
 
     /// B3 — wire the consecutive-failure cap inherited by subagents.
     #[must_use]
-    pub fn with_consecutive_failure_cap(mut self, cap: usize) -> Self {
+    pub const fn with_consecutive_failure_cap(mut self, cap: usize) -> Self {
         self.consecutive_failure_cap = Some(cap);
         self
     }
 
     /// B3 — wire the per-turn wall-clock timeout inherited by subagents.
     #[must_use]
-    pub fn with_turn_timeout(mut self, timeout: std::time::Duration) -> Self {
+    pub const fn with_turn_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.turn_timeout = Some(timeout);
         self
     }

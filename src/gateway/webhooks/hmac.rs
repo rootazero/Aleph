@@ -29,7 +29,7 @@ pub enum VerificationResult {
 impl VerificationResult {
     /// Returns true if the signature is valid or verification is disabled
     #[must_use]
-    pub fn is_ok(&self) -> bool {
+    pub const fn is_ok(&self) -> bool {
         matches!(
             self,
             VerificationResult::Valid | VerificationResult::Disabled

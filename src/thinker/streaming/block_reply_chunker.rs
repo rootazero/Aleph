@@ -42,7 +42,7 @@ impl Default for ChunkerConfig {
 impl ChunkerConfig {
     /// Create config with Moltbot-style defaults (800-1200 chars)
     #[must_use]
-    pub fn moltbot_defaults() -> Self {
+    pub const fn moltbot_defaults() -> Self {
         Self {
             min_block_size: 800,
             max_block_size: 1200,
@@ -79,7 +79,7 @@ impl Default for BlockReplyChunker {
 impl BlockReplyChunker {
     /// Create a new chunker with configuration
     #[must_use]
-    pub fn new(config: ChunkerConfig) -> Self {
+    pub const fn new(config: ChunkerConfig) -> Self {
         Self {
             config,
             buffer: String::new(),
@@ -181,7 +181,7 @@ impl BlockReplyChunker {
     }
 
     /// Snap a byte index to the nearest char boundary at or before `index`.
-    fn snap_char_boundary(s: &str, index: usize) -> usize {
+    const fn snap_char_boundary(s: &str, index: usize) -> usize {
         if index >= s.len() {
             return s.len();
         }
@@ -322,13 +322,13 @@ impl BlockReplyChunker {
 
     /// Get current buffer length
     #[must_use]
-    pub fn buffer_len(&self) -> usize {
+    pub const fn buffer_len(&self) -> usize {
         self.buffer.len()
     }
 
     /// Check if buffer is empty
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
 

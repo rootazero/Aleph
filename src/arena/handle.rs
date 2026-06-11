@@ -28,7 +28,7 @@ pub struct ArenaHandle {
 
 impl ArenaHandle {
     /// Create a new handle for the given agent with the specified role and permissions.
-    pub fn new(
+    pub const fn new(
         arena: Arc<RwLock<SharedArena>>,
         agent_id: AgentId,
         role: ParticipantRole,
@@ -50,7 +50,7 @@ impl ArenaHandle {
 
     /// Returns the participant role for this handle.
     #[must_use]
-    pub fn role(&self) -> &ParticipantRole {
+    pub const fn role(&self) -> &ParticipantRole {
         &self.role
     }
 

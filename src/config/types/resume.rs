@@ -25,19 +25,19 @@ pub struct ResumeConfig {
     pub max_concurrent: usize,
 }
 
-fn default_resume_enabled() -> bool {
+const fn default_resume_enabled() -> bool {
     true
 }
 
-fn default_resume_max_age_secs() -> u64 {
+const fn default_resume_max_age_secs() -> u64 {
     86_400
 }
 
-fn default_resume_max_attempts() -> u32 {
+const fn default_resume_max_attempts() -> u32 {
     3
 }
 
-fn default_resume_max_concurrent() -> usize {
+const fn default_resume_max_concurrent() -> usize {
     4
 }
 

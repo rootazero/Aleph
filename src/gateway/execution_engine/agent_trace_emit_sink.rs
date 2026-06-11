@@ -42,7 +42,7 @@ use crate::harness::TraceSink;
 /// overflow → handled: history compacted → next: retried) and a structural
 /// goal-loop veto (problem: checklist incomplete → next: forced continue).
 /// Everything else is dropped — it carries no user-facing meaning.
-pub(crate) fn is_step_event(event: &LoopTraceEvent) -> bool {
+pub(crate) const fn is_step_event(event: &LoopTraceEvent) -> bool {
     matches!(
         event,
         LoopTraceEvent::TurnStarted { .. }

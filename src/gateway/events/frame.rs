@@ -444,7 +444,7 @@ impl GatewayEventFrame {
     /// The frontend subscribes to `stream.*` and converts the method prefix
     /// from `stream.` to `run.` for internal event dispatch.
     #[must_use]
-    pub fn stream_method(&self) -> Option<&'static str> {
+    pub const fn stream_method(&self) -> Option<&'static str> {
         match self {
             GatewayEventFrame::RunAccepted { .. } => Some("stream.run_accepted"),
             GatewayEventFrame::Reasoning { .. } => Some("stream.reasoning"),

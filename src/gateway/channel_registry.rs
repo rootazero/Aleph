@@ -131,7 +131,7 @@ impl ChannelRegistry {
     /// Defaults to [`SendRetryPolicy::default`] (2 retries, 30s cap). Pass a
     /// policy with `max_rate_limit_retries: 0` to restore the historical
     /// drop-on-rate-limit behavior.
-    pub fn with_send_retry_policy(mut self, policy: SendRetryPolicy) -> Self {
+    pub const fn with_send_retry_policy(mut self, policy: SendRetryPolicy) -> Self {
         self.send_retry = policy;
         self
     }

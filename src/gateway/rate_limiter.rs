@@ -141,7 +141,7 @@ impl Default for RateLimitConfig {
 
 impl RateLimitConfig {
     /// Look up the [`WindowConfig`] for a given scope.
-    fn config_for(&self, scope: &RateLimitScope) -> &WindowConfig {
+    const fn config_for(&self, scope: &RateLimitScope) -> &WindowConfig {
         match scope {
             RateLimitScope::Auth | RateLimitScope::WebhookAuth => &self.auth,
             RateLimitScope::RpcDefault => &self.rpc_default,
@@ -218,7 +218,7 @@ impl RateLimitError {
 
     /// Return the retry-after value in seconds (for HTTP Retry-After header).
     #[must_use]
-    pub fn retry_after_secs(&self) -> u64 {
+    pub const fn retry_after_secs(&self) -> u64 {
         let ms = match self {
             Self::Exceeded { retry_after_ms, .. } => *retry_after_ms,
             Self::LockedOut {
@@ -241,7 +241,7 @@ struct SlidingWindow {
 }
 
 impl SlidingWindow {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             timestamps: VecDeque::new(),
             lockout_until: None,

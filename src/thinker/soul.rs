@@ -204,7 +204,7 @@ impl SoulManifest {
 
     /// Check if this is an empty/default soul
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.identity.is_empty() && self.directives.is_empty()
     }
 

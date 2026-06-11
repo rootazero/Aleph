@@ -36,7 +36,7 @@ use super::DreamStage;
 
 /// Phase C2.7 — minimum confidence floor by severity. Critical / High notes
 /// must remain trustworthy even after long periods of no recall.
-fn severity_floor(sev: Severity) -> f32 {
+const fn severity_floor(sev: Severity) -> f32 {
     match sev {
         Severity::Low => 0.0,
         Severity::Med => 0.5,

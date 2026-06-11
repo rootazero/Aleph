@@ -4,11 +4,11 @@
 
 use serde::{Deserialize, Serialize};
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_directory_ttl() -> u64 {
+const fn default_directory_ttl() -> u64 {
     3600
 }
 
@@ -73,7 +73,7 @@ pub struct SlackConfig {
     pub media_max_mb: u64,
 }
 
-fn default_media_max_mb() -> u64 {
+const fn default_media_max_mb() -> u64 {
     20
 }
 

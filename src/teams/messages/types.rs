@@ -21,7 +21,7 @@ pub enum RecipientRole {
 
 impl RecipientRole {
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::To => "to",
             Self::Cc => "cc",
@@ -73,7 +73,7 @@ pub enum MessageType {
 
 impl MessageType {
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Message => "message",
             Self::SystemNotification => "system_notification",

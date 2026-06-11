@@ -44,7 +44,7 @@ pub struct CenterApprovalRequester {
 }
 
 impl CenterApprovalRequester {
-    pub fn new(slot: ApprovalSlot) -> Self {
+    pub const fn new(slot: ApprovalSlot) -> Self {
         Self { slot }
     }
 }

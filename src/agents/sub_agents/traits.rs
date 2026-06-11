@@ -282,7 +282,7 @@ impl SubAgentRequest {
 
     /// Set max iterations
     #[must_use]
-    pub fn with_max_iterations(mut self, max: u32) -> Self {
+    pub const fn with_max_iterations(mut self, max: u32) -> Self {
         self.max_iterations = Some(max);
         self
     }
@@ -417,7 +417,7 @@ impl SubAgentResult {
 
     /// Add iterations used
     #[must_use]
-    pub fn with_iterations(mut self, iterations: u32) -> Self {
+    pub const fn with_iterations(mut self, iterations: u32) -> Self {
         self.iterations_used = iterations;
         self
     }

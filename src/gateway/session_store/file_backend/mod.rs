@@ -43,7 +43,7 @@ pub struct FileSessionStore {
 }
 
 impl FileSessionStore {
-    pub fn config(&self) -> &FileSessionStoreConfig {
+    pub const fn config(&self) -> &FileSessionStoreConfig {
         &self.config
     }
 }

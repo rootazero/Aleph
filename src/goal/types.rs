@@ -87,14 +87,14 @@ impl Goal {
     /// Record that one autonomous continuation was enqueued for this goal.
     /// Bumps `updated_at_ms` since this is a lifecycle event.
     #[must_use]
-    pub fn spent_continuation(mut self, now_ms: u64) -> Self {
+    pub const fn spent_continuation(mut self, now_ms: u64) -> Self {
         self.continuations_used = self.continuations_used.saturating_add(1);
         self.updated_at_ms = now_ms;
         self
     }
 
     #[must_use]
-    pub fn with_status(mut self, status: GoalStatus, now_ms: u64) -> Self {
+    pub const fn with_status(mut self, status: GoalStatus, now_ms: u64) -> Self {
         self.status = status;
         self.updated_at_ms = now_ms;
         self
@@ -110,7 +110,7 @@ impl Goal {
     /// Lifecycle transition（闸门确认/复位）——bump `updated_at_ms`，
     /// 与 `with_status`/`with_note` 同型。返回新 `Goal`（§不可变性）。
     #[must_use]
-    pub fn with_gate_outcome(mut self, outcome: GateOutcome, now_ms: u64) -> Self {
+    pub const fn with_gate_outcome(mut self, outcome: GateOutcome, now_ms: u64) -> Self {
         self.gate_outcome = outcome;
         self.updated_at_ms = now_ms;
         self
@@ -119,7 +119,7 @@ impl Goal {
     /// Configuration, not a lifecycle transition — deliberately does not bump
     /// `updated_at_ms` (unlike `with_status`/`with_note`).
     #[must_use]
-    pub fn with_budget(mut self, token_budget: Option<u64>) -> Self {
+    pub const fn with_budget(mut self, token_budget: Option<u64>) -> Self {
         self.token_budget = token_budget;
         self
     }
@@ -127,13 +127,13 @@ impl Goal {
     /// Configuration, not a lifecycle transition — deliberately does not bump
     /// `updated_at_ms` (unlike `with_status`/`with_note`).
     #[must_use]
-    pub fn with_pursuit(mut self, pursuit: PursuitMode) -> Self {
+    pub const fn with_pursuit(mut self, pursuit: PursuitMode) -> Self {
         self.pursuit = pursuit;
         self
     }
 
     #[must_use]
-    pub fn tokens_used(&self, now_total_tokens: u64) -> u64 {
+    pub const fn tokens_used(&self, now_total_tokens: u64) -> u64 {
         now_total_tokens.saturating_sub(self.tokens_at_start)
     }
 

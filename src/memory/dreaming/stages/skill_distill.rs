@@ -273,7 +273,7 @@ pub fn parse_distill_response(text: &str) -> Vec<DistillAction> {
 
 /// Clamp `confidence` into `[0.0, 1.0]` for `New` and `Supersede` variants
 /// to defend against out-of-range values from the LLM.
-fn clamp_action(mut a: DistillAction) -> DistillAction {
+const fn clamp_action(mut a: DistillAction) -> DistillAction {
     use DistillAction::*;
     match &mut a {
         New { confidence, .. } | Supersede { confidence, .. } => {

@@ -5,15 +5,15 @@
 
 use serde::{Deserialize, Serialize};
 
-fn default_imap_port() -> u16 {
+const fn default_imap_port() -> u16 {
     993
 }
 
-fn default_smtp_port() -> u16 {
+const fn default_smtp_port() -> u16 {
     587
 }
 
-fn default_poll_interval() -> u64 {
+const fn default_poll_interval() -> u64 {
     30
 }
 
@@ -21,7 +21,7 @@ fn default_folders() -> Vec<String> {
     vec!["INBOX".to_string()]
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 

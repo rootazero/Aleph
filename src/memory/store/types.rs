@@ -113,28 +113,28 @@ impl SearchFilter {
 
     /// Set note type filter.
     #[must_use]
-    pub fn with_note_type(mut self, ft: NoteType) -> Self {
+    pub const fn with_note_type(mut self, ft: NoteType) -> Self {
         self.note_type = Some(ft);
         self
     }
 
     /// Set memory layer filter.
     #[must_use]
-    pub fn with_layer(mut self, layer: MemoryLayer) -> Self {
+    pub const fn with_layer(mut self, layer: MemoryLayer) -> Self {
         self.layer = Some(layer);
         self
     }
 
     /// Set memory category filter.
     #[must_use]
-    pub fn with_category(mut self, category: MemoryCategory) -> Self {
+    pub const fn with_category(mut self, category: MemoryCategory) -> Self {
         self.category = Some(category);
         self
     }
 
     /// Restrict to valid facts only.
     #[must_use]
-    pub fn with_valid_only(mut self) -> Self {
+    pub const fn with_valid_only(mut self) -> Self {
         self.is_valid = Some(true);
         self
     }
@@ -147,21 +147,21 @@ impl SearchFilter {
 
     /// Set minimum confidence threshold.
     #[must_use]
-    pub fn with_min_confidence(mut self, min: f32) -> Self {
+    pub const fn with_min_confidence(mut self, min: f32) -> Self {
         self.min_confidence = Some(min);
         self
     }
 
     /// Set created-after timestamp.
     #[must_use]
-    pub fn with_created_after(mut self, ts: i64) -> Self {
+    pub const fn with_created_after(mut self, ts: i64) -> Self {
         self.created_after = Some(ts);
         self
     }
 
     /// Set created-before timestamp.
     #[must_use]
-    pub fn with_created_before(mut self, ts: i64) -> Self {
+    pub const fn with_created_before(mut self, ts: i64) -> Self {
         self.created_before = Some(ts);
         self
     }
@@ -187,14 +187,14 @@ impl SearchFilter {
 
     /// Filter to facts valid at the given Unix timestamp (point-in-time query).
     #[must_use]
-    pub fn with_as_of(mut self, ts: i64) -> Self {
+    pub const fn with_as_of(mut self, ts: i64) -> Self {
         self.as_of = Some(ts);
         self
     }
 
     /// Include historically-valid facts (those with a non-NULL valid_to).
     #[must_use]
-    pub fn with_include_historical(mut self) -> Self {
+    pub const fn with_include_historical(mut self) -> Self {
         self.include_historical = true;
         self
     }

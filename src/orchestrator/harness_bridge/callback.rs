@@ -32,7 +32,7 @@ pub(super) struct BroadcastCallback {
 }
 
 impl BroadcastCallback {
-    pub(super) fn new(tx: broadcast::Sender<FlowStreamEvent>) -> Self {
+    pub(super) const fn new(tx: broadcast::Sender<FlowStreamEvent>) -> Self {
         Self { tx }
     }
 }

@@ -15,7 +15,7 @@ pub struct ToolDiscovery {
 
 impl ToolDiscovery {
     /// Create a new discovery handler with the given storage
-    pub fn new(tools: ToolStorage) -> Self {
+    pub const fn new(tools: ToolStorage) -> Self {
         Self { tools }
     }
 

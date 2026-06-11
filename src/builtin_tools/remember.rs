@@ -56,7 +56,7 @@ pub struct RememberTool {
 }
 
 impl RememberTool {
-    pub fn new(store: Arc<CuratedMemoryStore>) -> Self {
+    pub const fn new(store: Arc<CuratedMemoryStore>) -> Self {
         Self { store }
     }
 

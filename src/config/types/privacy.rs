@@ -110,7 +110,7 @@ fn default_placeholder() -> String {
     "[CUSTOM_PII]".to_string()
 }
 
-fn default_medium() -> CustomPiiSeverity {
+const fn default_medium() -> CustomPiiSeverity {
     CustomPiiSeverity::Medium
 }
 
@@ -189,19 +189,19 @@ pub struct PrivacyConfig {
 // Default Functions
 // =============================================================================
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_block() -> PiiAction {
+const fn default_block() -> PiiAction {
     PiiAction::Block
 }
 
-fn default_warn() -> PiiAction {
+const fn default_warn() -> PiiAction {
     PiiAction::Warn
 }
 
-fn default_off() -> PiiAction {
+const fn default_off() -> PiiAction {
     PiiAction::Off
 }
 

@@ -62,7 +62,7 @@ pub enum GateResult {
 impl GateResult {
     /// Returns `true` when the result is `Pass`.
     #[must_use]
-    pub fn is_pass(&self) -> bool {
+    pub const fn is_pass(&self) -> bool {
         matches!(self, GateResult::Pass)
     }
 }
@@ -109,7 +109,7 @@ pub struct DreamGate {
 impl DreamGate {
     /// Create a new gate with the given configuration.
     #[must_use]
-    pub fn new(config: DreamGateConfig) -> Self {
+    pub const fn new(config: DreamGateConfig) -> Self {
         Self {
             config,
             last_consolidation: AtomicI64::new(0),
@@ -136,7 +136,7 @@ impl DreamGate {
     }
 
     /// Gate 2: Ensure enough pending facts exist to justify a pipeline run.
-    pub fn check_count_gate(&self, pending_facts: usize) -> GateResult {
+    pub const fn check_count_gate(&self, pending_facts: usize) -> GateResult {
         if pending_facts < self.config.min_pending_facts {
             GateResult::Blocked(BlockReason::InsufficientFacts {
                 count: pending_facts,
@@ -225,7 +225,7 @@ impl DreamGate {
     }
 
     /// Return a reference to the gate configuration.
-    pub fn config(&self) -> &DreamGateConfig {
+    pub const fn config(&self) -> &DreamGateConfig {
         &self.config
     }
 }

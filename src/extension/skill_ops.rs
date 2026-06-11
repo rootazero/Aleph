@@ -197,7 +197,7 @@ impl ExtensionManager {
     }
 
     /// Get the discovery manager
-    pub fn discovery(&self) -> &crate::discovery::DiscoveryManager {
+    pub const fn discovery(&self) -> &crate::discovery::DiscoveryManager {
         &self.discovery
     }
 
@@ -232,7 +232,7 @@ impl ExtensionManager {
     }
 
     /// Get the Skill System v2 instance.
-    pub fn skill_system(&self) -> &crate::skill::SkillSystem {
+    pub const fn skill_system(&self) -> &crate::skill::SkillSystem {
         &self.skill_system
     }
 }

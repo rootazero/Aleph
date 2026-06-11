@@ -73,7 +73,7 @@ pub fn cpu_quota_max_line(pct: u32) -> String {
 
 /// Convert a megabyte ceiling to a byte count for `memory.max`.
 /// Saturating to avoid wrap on absurdly large `mb` inputs.
-pub fn memory_max_bytes(mb: u64) -> u64 {
+pub const fn memory_max_bytes(mb: u64) -> u64 {
     mb.saturating_mul(1024 * 1024)
 }
 
@@ -332,11 +332,11 @@ impl Drop for CgroupV2Scope {
 
 #[cfg(not(target_os = "linux"))]
 impl CgroupV2Scope {
-    pub fn try_create(_limits: CgroupV2Limits) -> Option<Self> {
+    pub const fn try_create(_limits: CgroupV2Limits) -> Option<Self> {
         None
     }
 
-    pub fn attach_current_pid(&self) -> std::io::Result<()> {
+    pub const fn attach_current_pid(&self) -> std::io::Result<()> {
         Ok(())
     }
 }

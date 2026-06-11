@@ -77,7 +77,7 @@ impl CachedDiscovery {
     }
 
     /// Attach a static fallback list (typically `preset.fallback_models`).
-    pub fn with_fallback(mut self, fallback: &'static [&'static str]) -> Self {
+    pub const fn with_fallback(mut self, fallback: &'static [&'static str]) -> Self {
         self.fallback = fallback;
         self
     }

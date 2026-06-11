@@ -8,23 +8,23 @@ fn default_api_url() -> String {
     "http://localhost:8080".to_string()
 }
 
-fn default_poll_interval() -> u64 {
+const fn default_poll_interval() -> u64 {
     2
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_reconnect_delay() -> u64 {
+const fn default_reconnect_delay() -> u64 {
     500
 }
 
-fn default_max_retries() -> u32 {
+const fn default_max_retries() -> u32 {
     10
 }
 
-fn default_backoff_multiplier() -> f32 {
+const fn default_backoff_multiplier() -> f32 {
     1.5
 }
 

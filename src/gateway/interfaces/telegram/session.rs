@@ -36,7 +36,7 @@ impl Default for SessionConfig {
 
 impl SessionConfig {
     #[must_use]
-    pub fn timeout(&self) -> Duration {
+    pub const fn timeout(&self) -> Duration {
         Duration::from_secs(self.timeout_minutes * 60)
     }
 }
@@ -52,7 +52,7 @@ pub struct TelegramSessionManager {
 
 impl TelegramSessionManager {
     #[must_use]
-    pub fn new(db: Arc<StateDatabase>, config: SessionConfig) -> Self {
+    pub const fn new(db: Arc<StateDatabase>, config: SessionConfig) -> Self {
         Self { db, config }
     }
 

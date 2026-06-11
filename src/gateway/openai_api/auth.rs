@@ -38,7 +38,7 @@ pub enum ApiError {
 impl ApiError {
     /// Returns the HTTP status code for this error.
     #[must_use]
-    pub fn status_code(&self) -> u16 {
+    pub const fn status_code(&self) -> u16 {
         match self {
             ApiError::Unauthorized(_) => 401,
             ApiError::BadRequest(_) => 400,
@@ -53,7 +53,7 @@ impl ApiError {
 
     /// Returns a machine-readable error code string.
     #[must_use]
-    pub fn code(&self) -> &'static str {
+    pub const fn code(&self) -> &'static str {
         match self {
             ApiError::Unauthorized(_) => "invalid_api_key",
             ApiError::BadRequest(_) => "invalid_request_error",

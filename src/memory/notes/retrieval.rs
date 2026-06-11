@@ -23,7 +23,7 @@ const RERANK_OVERFETCH: usize = 3;
 /// and distillation confidence remain the dominant ranking signals. A wider range
 /// (e.g. 2.0× for Critical) lets a low-confidence Critical note outrank a
 /// semantically-closer Low/Med note — the opposite of what re-ranking should do.
-pub(crate) fn severity_boost(s: Severity) -> f32 {
+pub(crate) const fn severity_boost(s: Severity) -> f32 {
     match s {
         Severity::Low => 1.0,
         Severity::Med => 1.05,

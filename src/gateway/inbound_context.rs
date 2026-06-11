@@ -23,7 +23,7 @@ pub struct ReplyRoute {
 impl ReplyRoute {
     /// Create a new reply route
     #[must_use]
-    pub fn new(channel_id: ChannelId, conversation_id: ConversationId) -> Self {
+    pub const fn new(channel_id: ChannelId, conversation_id: ConversationId) -> Self {
         Self {
             channel_id,
             conversation_id,
@@ -90,14 +90,14 @@ impl InboundContext {
 
     /// Mark as authorized
     #[must_use]
-    pub fn authorize(mut self) -> Self {
+    pub const fn authorize(mut self) -> Self {
         self.is_authorized = true;
         self
     }
 
     /// Mark as mentioned
     #[must_use]
-    pub fn with_mention(mut self, mentioned: bool) -> Self {
+    pub const fn with_mention(mut self, mentioned: bool) -> Self {
         self.is_mentioned = mentioned;
         self
     }
@@ -111,7 +111,7 @@ impl InboundContext {
 
     /// Set voice reply hint
     #[must_use]
-    pub fn with_voice_reply_hint(mut self, hint: bool) -> Self {
+    pub const fn with_voice_reply_hint(mut self, hint: bool) -> Self {
         self.voice_reply_hint = hint;
         self
     }

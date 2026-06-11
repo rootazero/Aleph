@@ -101,7 +101,7 @@ impl PairingRequest {
 
     /// Get the expiry timestamp (ms since UNIX epoch)
     #[must_use]
-    pub fn expires_at(&self) -> i64 {
+    pub const fn expires_at(&self) -> i64 {
         match self {
             PairingRequest::Device { expires_at, .. } => *expires_at,
             PairingRequest::Channel { expires_at, .. } => *expires_at,

@@ -27,7 +27,7 @@ pub enum MessageRole {
 impl MessageRole {
     /// Get the role as a string for API calls
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             MessageRole::System => "system",
             MessageRole::User => "user",
@@ -100,7 +100,7 @@ impl ChatMessage {
 
     /// Create an assistant message with tool calls
     #[must_use]
-    pub fn assistant_with_tool_calls(
+    pub const fn assistant_with_tool_calls(
         content: Option<String>,
         tool_calls: Vec<ToolCallInfo>,
     ) -> Self {
@@ -366,13 +366,13 @@ impl ConversationHistory {
 
     /// Get the number of messages
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.messages.len()
     }
 
     /// Check if conversation is empty
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.messages.is_empty()
     }
 

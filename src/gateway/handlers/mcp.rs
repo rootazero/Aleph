@@ -42,7 +42,7 @@ pub struct LogsParams {
     pub max_lines: u32,
 }
 
-fn default_max_lines() -> u32 {
+const fn default_max_lines() -> u32 {
     100
 }
 

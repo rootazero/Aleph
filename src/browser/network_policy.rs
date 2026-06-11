@@ -44,7 +44,7 @@ pub struct SsrfConfig {
     pub redact_secrets_in_content: bool,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -137,7 +137,7 @@ pub struct BrowserSsrfGuard {
 
 impl BrowserSsrfGuard {
     #[must_use]
-    pub fn new(config: SsrfConfig) -> Self {
+    pub const fn new(config: SsrfConfig) -> Self {
         Self { config }
     }
 

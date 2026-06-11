@@ -29,7 +29,7 @@ use super::distill::strip_ansi;
 /// Control characters we KEEP — the whitespace trio that carries real
 /// structure in command output.
 #[inline]
-fn is_kept_control(c: char) -> bool {
+const fn is_kept_control(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r')
 }
 

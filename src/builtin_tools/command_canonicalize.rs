@@ -149,7 +149,7 @@ fn try_extract_safe_script(remainder: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
-fn passthrough(cmd: &str) -> CanonicalShellCmd<'_> {
+const fn passthrough(cmd: &str) -> CanonicalShellCmd<'_> {
     CanonicalShellCmd {
         script: Cow::Borrowed(cmd),
         unwrapped_from: None,

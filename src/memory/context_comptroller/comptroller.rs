@@ -13,7 +13,7 @@ pub struct ContextComptroller {
 
 impl ContextComptroller {
     #[must_use]
-    pub fn new(config: ComptrollerConfig) -> Self {
+    pub const fn new(config: ComptrollerConfig) -> Self {
         Self { config }
     }
 

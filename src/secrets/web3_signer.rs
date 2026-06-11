@@ -93,7 +93,7 @@ pub struct EvmSigner<'a, R: SecretResolver> {
 }
 
 impl<'a, R: SecretResolver> EvmSigner<'a, R> {
-    pub fn new(resolver: &'a R) -> Self {
+    pub const fn new(resolver: &'a R) -> Self {
         Self { resolver }
     }
 

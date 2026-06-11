@@ -51,7 +51,7 @@ impl ToolSourceType {
     ///
     /// Used for UI display in command completion and settings.
     #[must_use]
-    pub fn default_icon(&self) -> &'static str {
+    pub const fn default_icon(&self) -> &'static str {
         match self {
             ToolSourceType::Native | ToolSourceType::Builtin => "command.circle.fill",
             ToolSourceType::Mcp => "bolt.fill",
@@ -63,7 +63,7 @@ impl ToolSourceType {
 
     /// Get badge label for this source type
     #[must_use]
-    pub fn badge_label(&self) -> &'static str {
+    pub const fn badge_label(&self) -> &'static str {
         match self {
             ToolSourceType::Native | ToolSourceType::Builtin => "System",
             ToolSourceType::Mcp => "MCP",

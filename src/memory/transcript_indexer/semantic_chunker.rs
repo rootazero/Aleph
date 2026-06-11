@@ -192,7 +192,7 @@ impl SemanticChunker {
     }
 
     /// Estimate token count (rough approximation: 1 token ≈ 4 characters)
-    fn estimate_tokens(&self, text: &str) -> usize {
+    const fn estimate_tokens(&self, text: &str) -> usize {
         text.len() / 4
     }
 }

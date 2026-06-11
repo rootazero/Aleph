@@ -58,31 +58,31 @@ pub struct SubAgentConfig {
     pub max_history_summary_len: usize,
 }
 
-fn default_execution_timeout_ms() -> u64 {
+const fn default_execution_timeout_ms() -> u64 {
     300_000 // 5 minutes
 }
 
-fn default_result_ttl_ms() -> u64 {
+const fn default_result_ttl_ms() -> u64 {
     3_600_000 // 1 hour
 }
 
-fn default_max_concurrent() -> usize {
+const fn default_max_concurrent() -> usize {
     5
 }
 
-fn default_progress_events_enabled() -> bool {
+const fn default_progress_events_enabled() -> bool {
     true
 }
 
-fn default_track_tool_calls() -> bool {
+const fn default_track_tool_calls() -> bool {
     true
 }
 
-fn default_max_context_steps() -> usize {
+const fn default_max_context_steps() -> usize {
     10
 }
 
-fn default_max_history_summary_len() -> usize {
+const fn default_max_history_summary_len() -> usize {
     500
 }
 

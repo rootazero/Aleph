@@ -100,14 +100,14 @@ impl DiscoveryConfig {
 
     /// Disable Claude Code directory scanning
     #[must_use]
-    pub fn without_claude_dirs(mut self) -> Self {
+    pub const fn without_claude_dirs(mut self) -> Self {
         self.scan_claude_dirs = false;
         self
     }
 
     /// Disable project-level directory scanning
     #[must_use]
-    pub fn without_project_dirs(mut self) -> Self {
+    pub const fn without_project_dirs(mut self) -> Self {
         self.scan_project_dirs = false;
         self
     }

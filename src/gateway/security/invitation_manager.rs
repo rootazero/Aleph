@@ -218,7 +218,7 @@ impl InvitationManager {
 
     /// Get the secret (for persistence or testing)
     #[must_use]
-    pub fn secret(&self) -> &[u8; 32] {
+    pub const fn secret(&self) -> &[u8; 32] {
         &self.secret
     }
 }

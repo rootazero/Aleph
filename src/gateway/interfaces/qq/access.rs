@@ -12,7 +12,7 @@ pub enum AccessDecision {
 
 impl AccessController {
     #[must_use]
-    pub fn new(config: QQAccountConfig) -> Self {
+    pub const fn new(config: QQAccountConfig) -> Self {
         Self { config }
     }
 

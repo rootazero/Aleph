@@ -39,7 +39,7 @@ pub struct MemoryTimelineTool {
 
 impl MemoryTimelineTool {
     #[must_use]
-    pub fn new(traveler: Arc<MemoryTimeTraveler>) -> Self {
+    pub const fn new(traveler: Arc<MemoryTimeTraveler>) -> Self {
         Self { traveler }
     }
 

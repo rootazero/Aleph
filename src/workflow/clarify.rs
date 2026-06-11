@@ -79,7 +79,7 @@ impl ClarifyTaskMeta {
 
     /// Whether this is a pick-one (menu) clarification.
     #[must_use]
-    pub fn is_select(&self) -> bool {
+    pub const fn is_select(&self) -> bool {
         !self.choices.is_empty()
     }
 

@@ -417,7 +417,7 @@ pub async fn handle_status(
 }
 
 /// Map a `WizardSessionError` to the appropriate JSON-RPC error code.
-fn wizard_error_code(e: &WizardSessionError) -> i32 {
+const fn wizard_error_code(e: &WizardSessionError) -> i32 {
     match e {
         WizardSessionError::SessionNotFound { .. } => RESOURCE_NOT_FOUND,
         _ => INTERNAL_ERROR,

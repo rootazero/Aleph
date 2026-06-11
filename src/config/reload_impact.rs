@@ -86,7 +86,7 @@ impl ReloadImpact {
     }
 
     /// Actionable, model-facing guidance the agent can relay to the user.
-    pub fn agent_hint(&self) -> &'static str {
+    pub const fn agent_hint(&self) -> &'static str {
         match self {
             Self::Live => {
                 "Applied live — the change takes effect on the next prompt; no restart needed."
@@ -103,7 +103,7 @@ impl ReloadImpact {
     }
 
     /// User-facing Chinese guidance, for the `dry_run` preview message.
-    pub fn user_hint_zh(&self) -> &'static str {
+    pub const fn user_hint_zh(&self) -> &'static str {
         match self {
             Self::Live => "此改动将即时生效（下一轮对话），无需重启。",
             Self::Restart => "此改动会写入 config.toml，但需重启 aleph-server 后才会生效（运行时在启动时已捕获该配置段）。",

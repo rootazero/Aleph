@@ -112,7 +112,7 @@ impl HeartbeatStore {
     }
 
     /// Mark the store as dirty (needs persistence).
-    pub fn mark_dirty(&mut self) {
+    pub const fn mark_dirty(&mut self) {
         self.dirty = true;
     }
 
@@ -124,7 +124,7 @@ impl HeartbeatStore {
     }
 
     /// Get a mutable reference to the tasks vec. Auto-marks dirty.
-    pub fn tasks_mut(&mut self) -> &mut Vec<HeartbeatTask> {
+    pub const fn tasks_mut(&mut self) -> &mut Vec<HeartbeatTask> {
         self.dirty = true;
         &mut self.tasks
     }
@@ -154,7 +154,7 @@ impl HeartbeatStore {
     }
 
     /// Number of tasks in the store.
-    pub fn task_count(&self) -> usize {
+    pub const fn task_count(&self) -> usize {
         self.tasks.len()
     }
 

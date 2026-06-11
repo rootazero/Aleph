@@ -99,7 +99,7 @@ impl UsageStats {
 
     /// Total observed activity events (use + view + patch).
     #[must_use]
-    pub fn activity_count(&self) -> u64 {
+    pub const fn activity_count(&self) -> u64 {
         self.use_count
             .saturating_add(self.view_count)
             .saturating_add(self.patch_count)

@@ -13,7 +13,7 @@ pub struct DmPolicyEngine {
 
 impl DmPolicyEngine {
     #[must_use]
-    pub fn new(config: FeishuConfig) -> Self {
+    pub const fn new(config: FeishuConfig) -> Self {
         Self { config }
     }
 

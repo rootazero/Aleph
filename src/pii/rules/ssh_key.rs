@@ -22,7 +22,7 @@ fn ssh_key_regex() -> &'static Regex {
 pub struct SshKeyRule;
 
 impl SshKeyRule {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }

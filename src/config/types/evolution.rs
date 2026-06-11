@@ -123,7 +123,7 @@ pub struct ToolGenerationConfig {
 // Default Functions
 // =============================================================================
 
-fn default_evolution_enabled() -> bool {
+const fn default_evolution_enabled() -> bool {
     true // Enable evolution tracking by default
 }
 
@@ -131,7 +131,7 @@ fn default_db_path() -> String {
     "evolution.db".to_string()
 }
 
-fn default_auto_commit() -> bool {
+const fn default_auto_commit() -> bool {
     false // Conservative: don't auto-commit by default
 }
 
@@ -143,23 +143,23 @@ fn default_branch() -> String {
     "main".to_string()
 }
 
-fn default_min_success_count() -> u32 {
+const fn default_min_success_count() -> u32 {
     3 // Require 3 successful executions
 }
 
-fn default_min_success_rate() -> f32 {
+const fn default_min_success_rate() -> f32 {
     0.8 // 80% success rate
 }
 
-fn default_min_age_days() -> u32 {
+const fn default_min_age_days() -> u32 {
     1 // Pattern must be at least 1 day old
 }
 
-fn default_max_idle_days() -> u32 {
+const fn default_max_idle_days() -> u32 {
     30 // Don't solidify patterns not used in 30 days
 }
 
-fn default_min_confidence() -> f32 {
+const fn default_min_confidence() -> f32 {
     0.7 // 70% confidence threshold
 }
 
@@ -171,15 +171,15 @@ fn default_runtime() -> String {
     "python".to_string()
 }
 
-fn default_require_self_test() -> bool {
+const fn default_require_self_test() -> bool {
     true // Always self-test before registration
 }
 
-fn default_require_first_run_confirmation() -> bool {
+const fn default_require_first_run_confirmation() -> bool {
     true // Always confirm first run
 }
 
-fn default_max_pending_suggestions() -> u32 {
+const fn default_max_pending_suggestions() -> u32 {
     10 // Don't accumulate too many pending suggestions
 }
 

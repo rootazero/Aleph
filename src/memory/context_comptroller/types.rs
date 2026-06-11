@@ -9,12 +9,12 @@ pub struct TokenBudget {
 
 impl TokenBudget {
     #[must_use]
-    pub fn new(total: usize) -> Self {
+    pub const fn new(total: usize) -> Self {
         Self { total, used: 0 }
     }
 
     #[must_use]
-    pub fn remaining(&self) -> usize {
+    pub const fn remaining(&self) -> usize {
         self.total.saturating_sub(self.used)
     }
 

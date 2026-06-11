@@ -15,7 +15,7 @@ fn email_regex() -> &'static Regex {
 pub struct EmailRule;
 
 impl EmailRule {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 

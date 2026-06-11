@@ -14,7 +14,7 @@ pub struct ToolQuery {
 
 impl ToolQuery {
     /// Create a new query handler with the given storage
-    pub fn new(tools: ToolStorage) -> Self {
+    pub const fn new(tools: ToolStorage) -> Self {
         Self { tools }
     }
 

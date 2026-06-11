@@ -25,7 +25,7 @@ impl ProfileSection {
     ];
 
     #[must_use]
-    pub fn heading(&self) -> &'static str {
+    pub const fn heading(&self) -> &'static str {
         match self {
             ProfileSection::Identity => "Identity",
             ProfileSection::CommunicationStyle => "Communication Style",

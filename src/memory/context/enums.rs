@@ -56,7 +56,7 @@ pub enum NoteType {
 impl NoteType {
     /// Convert to string representation
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             NoteType::Preference => "preference",
             NoteType::Plan => "plan",
@@ -82,7 +82,7 @@ impl NoteType {
     /// Matches the names in `CATEGORY_DIRS` (uses hyphens for subagent variants,
     /// not underscores as `as_str()` does).
     #[must_use]
-    pub fn to_category_dir(&self) -> &'static str {
+    pub const fn to_category_dir(&self) -> &'static str {
         match self {
             NoteType::Preference => "preference",
             NoteType::Plan => "plan",
@@ -111,7 +111,7 @@ impl NoteType {
 
     /// Get default aleph:// path for this fact type
     #[must_use]
-    pub fn default_path(&self) -> &str {
+    pub const fn default_path(&self) -> &str {
         match self {
             NoteType::Preference => "aleph://user/preferences/",
             NoteType::Personal => "aleph://user/personal/",
@@ -134,7 +134,7 @@ impl NoteType {
 
     /// Map fact type to standardized memory category.
     #[must_use]
-    pub fn default_category(&self) -> MemoryCategory {
+    pub const fn default_category(&self) -> MemoryCategory {
         match self {
             NoteType::Preference => MemoryCategory::Preferences,
             NoteType::Plan | NoteType::Personal => MemoryCategory::Profile,
@@ -208,7 +208,7 @@ pub enum FactSource {
 
 impl FactSource {
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Extracted => "extracted",
             Self::Summary => "summary",
@@ -274,7 +274,7 @@ pub enum MemoryLayer {
 
 impl MemoryLayer {
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::L0Abstract => "l0_abstract",
             Self::L1Overview => "l1_overview",
@@ -336,7 +336,7 @@ pub enum CognitiveLayer {
 impl CognitiveLayer {
     /// Stable machine tag (also the serde representation).
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Working => "working",
             Self::Episodic => "episodic",
@@ -371,7 +371,7 @@ pub enum MemoryCategory {
 
 impl MemoryCategory {
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Profile => "profile",
             Self::Preferences => "preferences",
@@ -431,7 +431,7 @@ pub enum FactSpecificity {
 
 impl FactSpecificity {
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Abstract => "abstract",
             Self::Principle => "principle",
@@ -486,7 +486,7 @@ pub enum TemporalScope {
 
 impl TemporalScope {
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Permanent => "permanent",
             Self::Contextual => "contextual",

@@ -22,7 +22,7 @@ pub struct SecurityKernelHook {
 
 impl SecurityKernelHook {
     #[must_use]
-    pub fn new(kernel: SecurityKernel) -> Self {
+    pub const fn new(kernel: SecurityKernel) -> Self {
         Self { kernel }
     }
 

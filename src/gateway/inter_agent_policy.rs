@@ -19,7 +19,7 @@ pub struct AgentToAgentPolicy {
     pub allow_patterns: Vec<String>,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -32,7 +32,7 @@ impl Default for AgentToAgentPolicy {
 impl AgentToAgentPolicy {
     /// Create a new A2A policy with specified settings
     #[must_use]
-    pub fn new(enabled: bool, allow_patterns: Vec<String>) -> Self {
+    pub const fn new(enabled: bool, allow_patterns: Vec<String>) -> Self {
         Self {
             enabled,
             allow_patterns,
@@ -54,7 +54,7 @@ impl AgentToAgentPolicy {
     ///
     /// Same-agent communication is still allowed even when disabled.
     #[must_use]
-    pub fn disabled() -> Self {
+    pub const fn disabled() -> Self {
         Self {
             enabled: false,
             allow_patterns: vec![],
@@ -132,12 +132,12 @@ impl AgentToAgentPolicy {
 
     /// Check if the policy has any allow patterns
     #[must_use]
-    pub fn has_patterns(&self) -> bool {
+    pub const fn has_patterns(&self) -> bool {
         !self.allow_patterns.is_empty()
     }
 
     /// Set enabled status
-    pub fn set_enabled(&mut self, enabled: bool) {
+    pub const fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }
 }

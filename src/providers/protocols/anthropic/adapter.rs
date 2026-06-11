@@ -150,7 +150,7 @@ fn queue_has_terminal(pending: &VecDeque<Result<ProviderDelta>>) -> bool {
 /// a healthy stream, so a close with neither flag set means the body was cut
 /// mid-flight. Pure predicate, lifted out of the `stream_deltas` unfold so the
 /// guard is unit-testable.
-fn stream_was_truncated(saw_terminal: bool, tail_terminal: bool) -> bool {
+const fn stream_was_truncated(saw_terminal: bool, tail_terminal: bool) -> bool {
     !saw_terminal && !tail_terminal
 }
 

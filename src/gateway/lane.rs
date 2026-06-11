@@ -116,7 +116,7 @@ impl Lane {
     /// Whether this lane's methods should be idempotency-guarded.
     /// Query lane is read-only and doesn't need protection.
     #[must_use]
-    pub fn needs_idempotency(&self) -> bool {
+    pub const fn needs_idempotency(&self) -> bool {
         !matches!(self, Lane::Query)
     }
 }
@@ -155,7 +155,7 @@ pub enum ChannelClass {
 impl ChannelClass {
     /// Whether requests of this class may draw from the reserved desktop
     /// pool before falling back to the shared pool.
-    fn uses_desktop_pool(self) -> bool {
+    const fn uses_desktop_pool(self) -> bool {
         matches!(self, ChannelClass::Desktop)
     }
 }

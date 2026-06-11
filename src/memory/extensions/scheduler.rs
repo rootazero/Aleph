@@ -33,7 +33,7 @@ impl MemoryProducerScheduler {
         }
     }
 
-    pub fn with_tick_duration(mut self, d: Duration) -> Self {
+    pub const fn with_tick_duration(mut self, d: Duration) -> Self {
         self.tick_duration = d;
         self
     }

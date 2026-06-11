@@ -71,7 +71,7 @@ pub struct InstallResult {
     pub exit_code: Option<i32>,
 }
 
-fn install_kind_rank(kind: &InstallKind, prefer_brew: bool) -> u8 {
+const fn install_kind_rank(kind: &InstallKind, prefer_brew: bool) -> u8 {
     if prefer_brew {
         match kind {
             InstallKind::Brew => 0,

@@ -80,7 +80,7 @@ pub struct McpManagerConfig {
     pub tool_filter: Option<McpToolFilter>,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -162,14 +162,14 @@ impl McpManagerConfig {
 
     /// Set auto-start flag
     #[must_use]
-    pub fn with_auto_start(mut self, auto_start: bool) -> Self {
+    pub const fn with_auto_start(mut self, auto_start: bool) -> Self {
         self.auto_start = auto_start;
         self
     }
 
     /// Set timeout in seconds
     #[must_use]
-    pub fn with_timeout(mut self, seconds: u64) -> Self {
+    pub const fn with_timeout(mut self, seconds: u64) -> Self {
         self.timeout_seconds = Some(seconds);
         self
     }
@@ -320,12 +320,12 @@ impl ServerHealth {
     }
 
     /// Mark as dead (max restarts exceeded)
-    pub fn mark_dead(&mut self) {
+    pub const fn mark_dead(&mut self) {
         self.status = HealthStatus::Dead;
     }
 
     /// Mark as stopped
-    pub fn mark_stopped(&mut self) {
+    pub const fn mark_stopped(&mut self) {
         self.status = HealthStatus::Stopped;
         self.consecutive_failures = 0;
     }
@@ -738,7 +738,7 @@ impl McpManagerEvent {
 
     /// Check if this is a lifecycle event (start/stop/crash)
     #[must_use]
-    pub fn is_lifecycle_event(&self) -> bool {
+    pub const fn is_lifecycle_event(&self) -> bool {
         matches!(
             self,
             Self::ServerStarted { .. }
@@ -750,7 +750,7 @@ impl McpManagerEvent {
 
     /// Check if this is a capability change event
     #[must_use]
-    pub fn is_capability_event(&self) -> bool {
+    pub const fn is_capability_event(&self) -> bool {
         matches!(
             self,
             Self::ToolsChanged { .. } | Self::ResourcesChanged { .. } | Self::PromptsChanged { .. }

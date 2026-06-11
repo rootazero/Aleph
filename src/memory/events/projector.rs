@@ -36,7 +36,7 @@ pub struct EventProjector {
 impl EventProjector {
     /// Create a new projector backed by the given event store.
     #[must_use]
-    pub fn new(db: Arc<StateDatabase>) -> Self {
+    pub const fn new(db: Arc<StateDatabase>) -> Self {
         Self { db }
     }
 

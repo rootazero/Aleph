@@ -96,7 +96,7 @@ impl DiagnosticEngine {
     }
 }
 
-fn posture_label(p: Posture) -> &'static str {
+const fn posture_label(p: Posture) -> &'static str {
     match p {
         Posture::Inspect => "inspect",
         Posture::Lint => "lint",

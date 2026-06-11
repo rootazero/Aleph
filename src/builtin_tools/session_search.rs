@@ -36,7 +36,7 @@ pub struct SessionSearchArgs {
     pub max_results: usize,
 }
 
-fn default_max_results() -> usize {
+const fn default_max_results() -> usize {
     5
 }
 

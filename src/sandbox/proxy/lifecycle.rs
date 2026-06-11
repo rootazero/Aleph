@@ -30,7 +30,7 @@ pub struct ProxyHandle {
 impl ProxyHandle {
     /// Local address the proxy is bound to (127.0.0.1:port).
     #[must_use]
-    pub fn local_addr(&self) -> SocketAddr {
+    pub const fn local_addr(&self) -> SocketAddr {
         self.addr
     }
 

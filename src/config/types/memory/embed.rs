@@ -55,7 +55,7 @@ pub struct EmbeddingProviderConfig {
     pub enabled: bool,
 }
 
-fn default_provider_enabled() -> bool {
+const fn default_provider_enabled() -> bool {
     true
 }
 

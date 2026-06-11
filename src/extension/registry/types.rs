@@ -71,7 +71,7 @@ pub struct ServiceRegistration {
     pub auto_start: bool,
 }
 
-fn default_service_auto_start() -> bool {
+const fn default_service_auto_start() -> bool {
     true
 }
 
@@ -301,7 +301,7 @@ impl AgentRegistration {
 
     /// Check if agent is a primary agent
     #[must_use]
-    pub fn is_primary(&self) -> bool {
+    pub const fn is_primary(&self) -> bool {
         matches!(
             self.mode,
             crate::extension::types::AgentMode::Primary | crate::extension::types::AgentMode::All
@@ -310,7 +310,7 @@ impl AgentRegistration {
 
     /// Check if agent can be used as a sub-agent
     #[must_use]
-    pub fn is_subagent(&self) -> bool {
+    pub const fn is_subagent(&self) -> bool {
         matches!(
             self.mode,
             crate::extension::types::AgentMode::Subagent | crate::extension::types::AgentMode::All

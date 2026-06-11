@@ -39,7 +39,7 @@ impl Default for RetryConfig {
 impl RetryConfig {
     /// Create a new RetryConfig with custom values.
     #[must_use]
-    pub fn new(base_delay: Duration, max_delay: Duration, max_attempts: u32) -> Self {
+    pub const fn new(base_delay: Duration, max_delay: Duration, max_attempts: u32) -> Self {
         Self {
             base_delay,
             max_delay,
@@ -121,7 +121,7 @@ pub fn compute_retry_delay(attempt: u32, config: &RetryConfig) -> Duration {
 /// * `attempt` - The current attempt number (0-indexed, before first attempt = 0)
 /// * `config` - The retry configuration
 #[must_use]
-pub fn should_retry(attempt: u32, config: &RetryConfig) -> bool {
+pub const fn should_retry(attempt: u32, config: &RetryConfig) -> bool {
     attempt < config.max_attempts
 }
 

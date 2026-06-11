@@ -370,7 +370,7 @@ impl AnthropicProtocol {
     }
 
     /// Map ThinkLevel to budget_tokens
-    pub(super) fn map_think_level(level: &ThinkLevel) -> Option<u32> {
+    pub(super) const fn map_think_level(level: &ThinkLevel) -> Option<u32> {
         match level {
             ThinkLevel::Off => None,
             ThinkLevel::Minimal => Some(1024),

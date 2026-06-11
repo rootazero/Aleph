@@ -28,7 +28,7 @@ impl Default for WebhookTarget {
 
 impl WebhookTarget {
     #[must_use]
-    pub fn new(policy: SsrfPolicy) -> Self {
+    pub const fn new(policy: SsrfPolicy) -> Self {
         Self { policy }
     }
 }

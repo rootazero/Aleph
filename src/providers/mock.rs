@@ -103,7 +103,7 @@ impl MockProvider {
     ///
     /// * `delay` - Duration to sleep before returning
     #[must_use]
-    pub fn with_delay(mut self, delay: Duration) -> Self {
+    pub const fn with_delay(mut self, delay: Duration) -> Self {
         self.delay = Some(delay);
         self
     }

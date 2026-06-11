@@ -30,7 +30,7 @@ pub enum TeamStatus {
 
 impl TeamStatus {
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Active => "active",
             Self::Disbanded => "disbanded",
@@ -95,7 +95,7 @@ pub enum TeamMemberKind {
 
 impl TeamMemberKind {
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Agent => "agent",
             Self::AcpSession => "acp_session",

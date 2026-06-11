@@ -59,7 +59,7 @@ impl ResourceContent {
 
     /// Check if this is text content
     #[must_use]
-    pub fn is_text(&self) -> bool {
+    pub const fn is_text(&self) -> bool {
         matches!(self, Self::Text(_))
     }
 
@@ -88,7 +88,7 @@ impl McpResourceManager {
     /// # Arguments
     ///
     /// * `client` - The MCP client that manages server connections
-    pub fn new(client: Arc<McpClient>) -> Self {
+    pub const fn new(client: Arc<McpClient>) -> Self {
         Self { client }
     }
 

@@ -9,12 +9,12 @@ fn default_db_path() -> String {
 }
 
 /// Default poll interval (1 second)
-fn default_poll_interval() -> u64 {
+const fn default_poll_interval() -> u64 {
     1000
 }
 
 /// Default DM policy
-fn default_dm_policy() -> DmPolicy {
+const fn default_dm_policy() -> DmPolicy {
     DmPolicy::Pairing
 }
 
@@ -118,11 +118,11 @@ pub struct IMessageConfig {
     pub inbound_debounce_ms: u64,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_debounce() -> u64 {
+const fn default_debounce() -> u64 {
     500
 }
 

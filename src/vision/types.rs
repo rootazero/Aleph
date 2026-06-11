@@ -45,7 +45,7 @@ pub enum ImageFormat {
 impl ImageFormat {
     /// Return the MIME type string for this format.
     #[must_use]
-    pub fn mime_type(&self) -> &'static str {
+    pub const fn mime_type(&self) -> &'static str {
         match self {
             Self::Png => "image/png",
             Self::Jpeg => "image/jpeg",
@@ -55,7 +55,7 @@ impl ImageFormat {
 
     /// Return the canonical file extension (without leading dot).
     #[must_use]
-    pub fn extension(&self) -> &'static str {
+    pub const fn extension(&self) -> &'static str {
         match self {
             Self::Png => "png",
             Self::Jpeg => "jpeg",
@@ -109,7 +109,7 @@ impl Rect {
 
     /// Create a new Rect without validation (use with caution).
     #[must_use]
-    pub fn new_unchecked(x: f64, y: f64, width: f64, height: f64) -> Self {
+    pub const fn new_unchecked(x: f64, y: f64, width: f64, height: f64) -> Self {
         Self {
             x,
             y,
@@ -229,7 +229,7 @@ pub fn validate_confidence(confidence: f64) -> Result<f64, &'static str> {
 impl VisionCapabilities {
     /// A provider that supports all capabilities.
     #[must_use]
-    pub fn all() -> Self {
+    pub const fn all() -> Self {
         Self {
             image_understanding: true,
             ocr: true,
@@ -239,7 +239,7 @@ impl VisionCapabilities {
 
     /// A provider that supports no capabilities (useful as a default).
     #[must_use]
-    pub fn none() -> Self {
+    pub const fn none() -> Self {
         Self {
             image_understanding: false,
             ocr: false,

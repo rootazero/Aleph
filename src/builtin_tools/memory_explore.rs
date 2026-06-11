@@ -21,11 +21,11 @@ use crate::tools::AlephTool;
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
-fn default_max_hops() -> usize {
+const fn default_max_hops() -> usize {
     2
 }
 
-fn default_max_per_hop() -> usize {
+const fn default_max_per_hop() -> usize {
     5
 }
 

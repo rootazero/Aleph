@@ -136,7 +136,7 @@ impl SqliteMemoryBackend {
     /// Override retrieval fusion tuning. Consumes and returns `self` so it
     /// can be chained right after `new()` at the live construction site,
     /// before the backend is wrapped in `Arc` and shared.
-    pub fn with_retrieval_tuning(mut self, rrf_k: u32, bm25_bonus_weight: f32) -> Self {
+    pub const fn with_retrieval_tuning(mut self, rrf_k: u32, bm25_bonus_weight: f32) -> Self {
         self.tuning = RetrievalTuning {
             rrf_k,
             bm25_bonus_weight,

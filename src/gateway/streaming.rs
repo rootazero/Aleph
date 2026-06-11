@@ -148,12 +148,12 @@ impl StreamingController {
 
     /// Whether mid-stream edits are currently suppressed (flood fallback mode).
     #[must_use]
-    pub fn is_suppressed(&self) -> bool {
+    pub const fn is_suppressed(&self) -> bool {
         self.suppressed
     }
 
     /// Clear flood-control backoff state back to the configured baseline.
-    fn reset_backoff(&mut self) {
+    const fn reset_backoff(&mut self) {
         self.flood_strikes = 0;
         self.effective_debounce = self.config.debounce_interval;
         self.suppressed = false;
@@ -161,7 +161,7 @@ impl StreamingController {
 
     /// Returns the message ID of the sent message, if any.
     #[must_use]
-    pub fn message_id(&self) -> Option<&MessageId> {
+    pub const fn message_id(&self) -> Option<&MessageId> {
         self.sent_message_id.as_ref()
     }
 

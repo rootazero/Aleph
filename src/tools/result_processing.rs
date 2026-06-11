@@ -219,7 +219,7 @@ pub fn truncate_with_budget(text: &str, budget_tokens: usize) -> String {
     )
 }
 
-fn floor_char_boundary(s: &str, idx: usize) -> usize {
+const fn floor_char_boundary(s: &str, idx: usize) -> usize {
     if idx >= s.len() {
         return s.len();
     }
@@ -230,7 +230,7 @@ fn floor_char_boundary(s: &str, idx: usize) -> usize {
     i
 }
 
-fn ceil_char_boundary(s: &str, idx: usize) -> usize {
+const fn ceil_char_boundary(s: &str, idx: usize) -> usize {
     if idx >= s.len() {
         return s.len();
     }

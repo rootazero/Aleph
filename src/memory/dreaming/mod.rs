@@ -458,7 +458,7 @@ enum DreamRunStatus {
 }
 
 impl DreamRunStatus {
-    fn as_str(&self) -> &'static str {
+    const fn as_str(&self) -> &'static str {
         match self {
             DreamRunStatus::Success => "success",
             DreamRunStatus::Cancelled => "cancelled",

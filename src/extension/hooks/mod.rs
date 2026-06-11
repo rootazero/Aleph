@@ -132,7 +132,7 @@ impl HookContext {
 
     /// Set whether the tool errored
     #[must_use]
-    pub fn with_tool_error(mut self, is_error: bool) -> Self {
+    pub const fn with_tool_error(mut self, is_error: bool) -> Self {
         self.tool_error = Some(is_error);
         self
     }

@@ -62,7 +62,7 @@ pub struct SessionsSendArgs {
     pub timeout_seconds: u32,
 }
 
-fn default_timeout() -> u32 {
+const fn default_timeout() -> u32 {
     30
 }
 
@@ -103,7 +103,7 @@ pub struct SessionsSendOutput {
 impl SessionsSendOutput {
     /// Create an Ok response with reply
     #[must_use]
-    pub fn ok(run_id: String, session_key: String, reply: String) -> Self {
+    pub const fn ok(run_id: String, session_key: String, reply: String) -> Self {
         Self {
             run_id,
             status: SessionsSendStatus::Ok,
@@ -115,7 +115,7 @@ impl SessionsSendOutput {
 
     /// Create an Accepted response (fire-and-forget)
     #[must_use]
-    pub fn accepted(run_id: String, session_key: String) -> Self {
+    pub const fn accepted(run_id: String, session_key: String) -> Self {
         Self {
             run_id,
             status: SessionsSendStatus::Accepted,
@@ -127,7 +127,7 @@ impl SessionsSendOutput {
 
     /// Create a Timeout response
     #[must_use]
-    pub fn timeout(run_id: String, session_key: String) -> Self {
+    pub const fn timeout(run_id: String, session_key: String) -> Self {
         Self {
             run_id,
             status: SessionsSendStatus::Timeout,
@@ -139,7 +139,7 @@ impl SessionsSendOutput {
 
     /// Create a Forbidden response
     #[must_use]
-    pub fn forbidden(run_id: String, error: String) -> Self {
+    pub const fn forbidden(run_id: String, error: String) -> Self {
         Self {
             run_id,
             status: SessionsSendStatus::Forbidden,
@@ -151,7 +151,7 @@ impl SessionsSendOutput {
 
     /// Create an Error response
     #[must_use]
-    pub fn error(run_id: String, error: String) -> Self {
+    pub const fn error(run_id: String, error: String) -> Self {
         Self {
             run_id,
             status: SessionsSendStatus::Error,

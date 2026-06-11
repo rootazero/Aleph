@@ -23,7 +23,7 @@ pub struct DebugToolCallParams {
     pub timeout_ms: u64,
 }
 
-fn default_timeout() -> u64 {
+const fn default_timeout() -> u64 {
     30000
 }
 

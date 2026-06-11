@@ -34,7 +34,7 @@ pub enum EmbeddingLocality {
 impl EmbeddingLocality {
     /// Classify a preset by storage locality.
     #[must_use]
-    pub fn of(preset: &EmbeddingPreset) -> Self {
+    pub const fn of(preset: &EmbeddingPreset) -> Self {
         match preset {
             EmbeddingPreset::Ollama => Self::Local,
             EmbeddingPreset::OpenAi | EmbeddingPreset::SiliconFlow | EmbeddingPreset::Custom => {
@@ -60,7 +60,7 @@ pub enum ResolutionReason {
 impl ResolutionReason {
     /// Stable machine-readable tag (for structured logs / model-perceivable hints).
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::ExactMatch => "exact_match",
             Self::AutoLocalFirst => "auto_local_first",

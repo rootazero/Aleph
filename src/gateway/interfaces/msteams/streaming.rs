@@ -60,7 +60,7 @@ pub struct MsTeamsStreamHandler {
 }
 
 impl MsTeamsStreamHandler {
-    pub(super) fn new(
+    pub(super) const fn new(
         client: Arc<BotFrameworkClient>,
         conversation_refs: Arc<RwLock<HashMap<String, super::ConversationReference>>>,
     ) -> Self {
@@ -257,7 +257,7 @@ struct PendingStream {
 }
 
 impl PendingStream {
-    fn new(idle_task: tokio::task::JoinHandle<()>) -> Self {
+    const fn new(idle_task: tokio::task::JoinHandle<()>) -> Self {
         Self {
             buffer: String::new(),
             sequence: 0,
@@ -299,12 +299,12 @@ impl<H: NativeStreamHandler> StreamCoalescer<H> {
         }
     }
 
-    pub fn min_chars(mut self, min_chars: usize) -> Self {
+    pub const fn min_chars(mut self, min_chars: usize) -> Self {
         self.min_chars = min_chars;
         self
     }
 
-    pub fn idle_timeout(mut self, timeout: std::time::Duration) -> Self {
+    pub const fn idle_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.idle_timeout = timeout;
         self
     }

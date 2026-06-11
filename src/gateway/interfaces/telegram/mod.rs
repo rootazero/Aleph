@@ -181,7 +181,7 @@ impl TelegramChannel {
     }
 
     /// Get Telegram-specific capabilities
-    fn capabilities() -> ChannelCapabilities {
+    const fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
             attachments: true,
             images: true,
@@ -956,7 +956,7 @@ impl Channel for TelegramChannel {
 
 impl TelegramChannel {
     /// Take the callback receiver (can only be called once)
-    pub fn take_callback_receiver(&mut self) -> Option<mpsc::Receiver<CallbackQuery>> {
+    pub const fn take_callback_receiver(&mut self) -> Option<mpsc::Receiver<CallbackQuery>> {
         self.callback_rx.take()
     }
 }

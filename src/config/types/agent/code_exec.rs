@@ -132,7 +132,7 @@ impl CodeExecConfigToml {
 // Default Functions
 // =============================================================================
 
-fn default_code_exec_enabled() -> bool {
+const fn default_code_exec_enabled() -> bool {
     DEFAULT_CODE_EXEC_ENABLED
 }
 
@@ -140,15 +140,15 @@ fn default_code_exec_runtime() -> String {
     DEFAULT_CODE_EXEC_RUNTIME.to_string()
 }
 
-fn default_code_exec_timeout() -> u64 {
+const fn default_code_exec_timeout() -> u64 {
     DEFAULT_CODE_EXEC_TIMEOUT
 }
 
-fn default_code_exec_sandbox() -> bool {
+const fn default_code_exec_sandbox() -> bool {
     DEFAULT_SANDBOX_ENABLED
 }
 
-fn default_code_exec_network() -> bool {
+const fn default_code_exec_network() -> bool {
     DEFAULT_ALLOW_NETWORK
 }
 

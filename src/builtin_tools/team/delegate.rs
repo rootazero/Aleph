@@ -45,7 +45,7 @@ pub struct TeamDelegateArgs {
     pub timeout_secs: u64,
 }
 
-fn default_timeout() -> u64 {
+const fn default_timeout() -> u64 {
     300
 }
 

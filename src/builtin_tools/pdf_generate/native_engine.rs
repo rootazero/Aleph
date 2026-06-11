@@ -299,7 +299,7 @@ struct DocBuilder {
 }
 
 impl DocBuilder {
-    fn new(page_width: Mm, page_height: Mm) -> Self {
+    const fn new(page_width: Mm, page_height: Mm) -> Self {
         Self {
             pages: Vec::new(),
             ops: Vec::new(),
@@ -390,7 +390,7 @@ fn check_page_break(
 
 /// Check if a character is CJK (Chinese, Japanese, Korean) or full-width
 #[must_use]
-pub fn is_cjk(c: char) -> bool {
+pub const fn is_cjk(c: char) -> bool {
     matches!(c,
         '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
         | '\u{3400}'..='\u{4DBF}' // CJK Unified Ideographs Extension A

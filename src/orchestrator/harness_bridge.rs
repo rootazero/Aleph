@@ -1295,7 +1295,7 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
 /// Returns an empty string when no user-side text is available; callers treat
 /// the empty case as "skip retrieval".
 fn last_user_query(input: &FlowInput) -> String {
-    fn text_of(content: &crate::session::events::MessageContent) -> &str {
+    const fn text_of(content: &crate::session::events::MessageContent) -> &str {
         content.text.as_str()
     }
     match input {

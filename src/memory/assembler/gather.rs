@@ -362,7 +362,7 @@ fn raw_to_candidate(r: RawMemory) -> Candidate {
 ///
 /// Only `SessionCompressed` has a meaningful 1:1 mapping. All other variants
 /// are transcript/tool-output-like content and map to `Extracted`.
-fn raw_source_to_fact_source(src: &RawMemorySource) -> FactSource {
+const fn raw_source_to_fact_source(src: &RawMemorySource) -> FactSource {
     match src {
         RawMemorySource::SessionCompressed => FactSource::SessionCompressed,
         _ => FactSource::Extracted,

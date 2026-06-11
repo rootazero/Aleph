@@ -60,7 +60,7 @@ pub enum SandboxLevel {
 impl SandboxLevel {
     /// Returns a human-readable description for use in prompts
     #[must_use]
-    pub fn description(&self) -> &'static str {
+    pub const fn description(&self) -> &'static str {
         match self {
             Self::None => "Full system access with no sandboxing restrictions",
             Self::Standard => "Standard sandbox with workspace-scoped filesystem access",
@@ -91,13 +91,13 @@ pub enum ToolPermission {
 impl ToolPermission {
     /// Check if the permission allows execution
     #[must_use]
-    pub fn is_allowed(&self) -> bool {
+    pub const fn is_allowed(&self) -> bool {
         matches!(self, Self::Allowed)
     }
 
     /// Check if the permission requires approval
     #[must_use]
-    pub fn requires_approval(&self) -> bool {
+    pub const fn requires_approval(&self) -> bool {
         matches!(self, Self::RequiresApproval { .. })
     }
 }

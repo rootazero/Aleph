@@ -20,7 +20,7 @@ use crate::gateway::events::GatewayEventFrame;
 /// Map an `ExecApprovalManager` decision into the wire outcome string consumed
 /// by the node's `outcome_from_str`. `AllowAlways` collapses to a session grant
 /// (permanent device elevation is out of scope, same as Phase 2b).
-fn decision_to_wire(decision: Option<ApprovalDecisionType>) -> &'static str {
+const fn decision_to_wire(decision: Option<ApprovalDecisionType>) -> &'static str {
     match decision {
         Some(ApprovalDecisionType::AllowOnce) => "approved",
         Some(ApprovalDecisionType::AllowSession) => "approved_session",

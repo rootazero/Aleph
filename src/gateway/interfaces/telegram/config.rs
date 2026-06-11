@@ -121,19 +121,19 @@ pub struct WebhookConfig {
     pub secret_token: Option<String>,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_polling_interval() -> u64 {
+const fn default_polling_interval() -> u64 {
     1
 }
 
-fn default_max_retries() -> u32 {
+const fn default_max_retries() -> u32 {
     3
 }
 
-fn default_webhook_port() -> u16 {
+const fn default_webhook_port() -> u16 {
     8443
 }
 

@@ -208,7 +208,7 @@ fn try_match_self_closing_bytes(bytes: &[u8], pos: usize, tag: &[u8]) -> Option<
 }
 
 /// Length of a UTF-8 character from its leading byte.
-fn utf8_char_len(b: u8) -> usize {
+const fn utf8_char_len(b: u8) -> usize {
     if b < 0x80 {
         1
     } else if b < 0xE0 {

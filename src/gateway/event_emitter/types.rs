@@ -221,7 +221,7 @@ pub enum UncertaintyAction {
 impl UncertaintyAction {
     /// Get human-readable description
     #[must_use]
-    pub fn description(&self) -> &'static str {
+    pub const fn description(&self) -> &'static str {
         match self {
             Self::ProceedWithCaution => "Proceeding with caution despite uncertainty",
             Self::AskForClarification => "Asking user for clarification",

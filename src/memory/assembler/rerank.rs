@@ -63,7 +63,7 @@ pub(crate) fn build_prompt(query: &str, candidates: &[Candidate], total_budget: 
         .replace("{query}", query)
 }
 
-fn slot_name(k: SlotKind) -> &'static str {
+const fn slot_name(k: SlotKind) -> &'static str {
     match k {
         SlotKind::UserProfile => "user_profile",
         SlotKind::SessionRecent => "session_recent",

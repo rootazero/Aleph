@@ -16,25 +16,25 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-fn default_recency_half_life_days() -> f32 {
+const fn default_recency_half_life_days() -> f32 {
     90.0
 }
 
 /// Default-on switch for `recency_enabled` / `reinforcement_enabled` so the
 /// hot-surfacing + time-decay ranking is active without explicit config.
-fn default_scoring_enabled() -> bool {
+const fn default_scoring_enabled() -> bool {
     true
 }
 
-fn default_recency_weight() -> f32 {
+const fn default_recency_weight() -> f32 {
     0.3
 }
 
-fn default_mmr_lambda() -> f32 {
+const fn default_mmr_lambda() -> f32 {
     0.7
 }
 
-fn default_reinforcement_weight() -> f32 {
+const fn default_reinforcement_weight() -> f32 {
     0.3
 }
 
@@ -86,7 +86,7 @@ pub struct RetrievalScoringConfig {
 impl RetrievalScoringConfig {
     /// True when at least one refinement is active — lets the retrieval engine
     /// skip the over-fetch + reordering work entirely in the default config.
-    pub fn is_active(&self) -> bool {
+    pub const fn is_active(&self) -> bool {
         self.recency_enabled || self.mmr_enabled || self.reinforcement_enabled
     }
 }

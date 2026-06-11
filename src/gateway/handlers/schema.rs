@@ -19,7 +19,7 @@ pub struct NoParams;
 impl NoParams {
     /// Create an empty params object for handlers that don't need any.
     #[must_use]
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self
     }
 }
@@ -141,7 +141,7 @@ pub struct HandlerInfo {
 impl HandlerInfo {
     /// Generate a JSON Schema object for this handler's parameters.
     #[must_use]
-    pub fn params_schema_json(&self) -> &Value {
+    pub const fn params_schema_json(&self) -> &Value {
         &self.params_schema
     }
 }
@@ -154,7 +154,7 @@ pub struct TypedHandler<H: HandlerSchema> {
 impl<H: HandlerSchema> TypedHandler<H> {
     /// Create a new typed handler wrapper.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             _marker: std::marker::PhantomData,
         }
@@ -212,7 +212,7 @@ pub struct TypedHandlerRegistry {
 impl TypedHandlerRegistry {
     /// Create a new empty registry.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             handlers: Vec::new(),
         }
@@ -254,13 +254,13 @@ impl TypedHandlerRegistry {
 
     /// Get the total number of registered handlers.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.handlers.len()
     }
 
     /// Check if the registry is empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.handlers.is_empty()
     }
 

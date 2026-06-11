@@ -18,7 +18,7 @@ pub struct DesktopSurface {
 
 impl DesktopSurface {
     #[must_use]
-    pub fn new(event_bus: Arc<GatewayEventBus>) -> Self {
+    pub const fn new(event_bus: Arc<GatewayEventBus>) -> Self {
         Self { event_bus }
     }
 }

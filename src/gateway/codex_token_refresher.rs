@@ -91,7 +91,7 @@ pub struct CodexTokenRefresher {
 }
 
 impl CodexTokenRefresher {
-    pub fn new(
+    pub const fn new(
         oauth_state: SharedOAuthState,
         config: Arc<RwLock<Config>>,
         vault: Arc<SharedTokenManager>,

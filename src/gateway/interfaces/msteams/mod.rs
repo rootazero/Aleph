@@ -140,7 +140,7 @@ impl MsTeamsChannel {
         Arc::new(BotFrameworkClient::new(token_cache))
     }
 
-    fn capabilities() -> ChannelCapabilities {
+    const fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
             attachments: true,
             images: true,

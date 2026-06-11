@@ -58,7 +58,7 @@ pub struct WasmCapabilityKernel {
 
 impl WasmCapabilityKernel {
     #[must_use]
-    pub fn new(
+    pub const fn new(
         plugin_id: String,
         capabilities: WasmCapabilities,
         limits: WasmResourceLimits,
@@ -178,7 +178,7 @@ impl WasmCapabilityKernel {
         &self.plugin_id
     }
 
-    pub fn capabilities(&self) -> &WasmCapabilities {
+    pub const fn capabilities(&self) -> &WasmCapabilities {
         &self.capabilities
     }
 

@@ -43,7 +43,7 @@ pub struct NodeInvokeManyTool {
 }
 
 impl NodeInvokeManyTool {
-    pub fn new(node_registry: Arc<NodeRegistry>) -> Self {
+    pub const fn new(node_registry: Arc<NodeRegistry>) -> Self {
         Self { node_registry }
     }
 }

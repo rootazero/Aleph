@@ -162,14 +162,14 @@ impl ReplyEmitter {
         &self.run_id
     }
 
-    pub fn route(&self) -> &ReplyRoute {
+    pub const fn route(&self) -> &ReplyRoute {
         &self.route
     }
 
     /// Overflow threshold in characters. Returns 0 when overflow detection
     /// is disabled (channel has no max_message_length or streaming is off).
     /// Subtracts a safety margin (~300) for HTML tag overhead.
-    pub(crate) fn overflow_threshold(&self) -> usize {
+    pub(crate) const fn overflow_threshold(&self) -> usize {
         let max = self.config.max_message_length;
         if max == 0 {
             return 0;

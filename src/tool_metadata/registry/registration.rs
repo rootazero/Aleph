@@ -19,7 +19,7 @@ pub struct ToolRegistrar {
 
 impl ToolRegistrar {
     /// Create a new registrar with the given storage
-    pub fn new(tools: ToolStorage) -> Self {
+    pub const fn new(tools: ToolStorage) -> Self {
         Self { tools }
     }
 

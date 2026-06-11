@@ -69,11 +69,11 @@ impl Default for WebFetchPolicy {
     }
 }
 
-fn default_max_content_length() -> u64 {
+const fn default_max_content_length() -> u64 {
     10000
 }
 
-fn default_min_content_length() -> u64 {
+const fn default_min_content_length() -> u64 {
     100
 }
 
@@ -81,19 +81,19 @@ fn default_user_agent() -> String {
     "Aleph/1.0".to_string()
 }
 
-fn default_timeout_seconds() -> u64 {
+const fn default_timeout_seconds() -> u64 {
     30
 }
 
-fn default_follow_redirects() -> bool {
+const fn default_follow_redirects() -> bool {
     true
 }
 
-fn default_max_redirects() -> u64 {
+const fn default_max_redirects() -> u64 {
     10
 }
 
-fn default_enable_readability() -> bool {
+const fn default_enable_readability() -> bool {
     true
 }
 
@@ -110,12 +110,12 @@ fn default_content_selectors() -> Vec<String> {
 
 impl WebFetchPolicy {
     /// Get timeout as std::time::Duration
-    pub fn timeout_duration(&self) -> std::time::Duration {
+    pub const fn timeout_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.timeout_seconds)
     }
 
     /// Check if content length is within acceptable range
-    pub fn is_content_acceptable(&self, length: usize) -> bool {
+    pub const fn is_content_acceptable(&self, length: usize) -> bool {
         let len = length as u64;
         len >= self.min_content_length && len <= self.max_content_length
     }

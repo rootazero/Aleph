@@ -46,7 +46,7 @@ impl MetricsLayer {
     }
 
     #[must_use]
-    pub fn with_threshold(mut self, threshold: u64) -> Self {
+    pub const fn with_threshold(mut self, threshold: u64) -> Self {
         self.processing_threshold = threshold;
         self
     }
@@ -127,7 +127,7 @@ pub struct MetricsService<S> {
 }
 
 impl<S> MetricsService<S> {
-    pub fn new(
+    pub const fn new(
         inner: S,
         requests_total: Arc<AtomicU64>,
         requests_in_flight: Arc<AtomicU64>,

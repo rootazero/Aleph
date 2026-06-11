@@ -76,7 +76,7 @@ impl ThreadBindingHandler {
 
     /// Enable or disable sub-agent participation
     #[must_use]
-    pub fn with_sub_agents(mut self, allow: bool) -> Self {
+    pub const fn with_sub_agents(mut self, allow: bool) -> Self {
         self.allow_sub_agents = allow;
         self
     }

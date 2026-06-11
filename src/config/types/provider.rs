@@ -251,7 +251,7 @@ pub fn default_timeout_seconds() -> u64 {
         .unwrap_or(300)
 }
 
-pub fn default_provider_enabled() -> bool {
+pub const fn default_provider_enabled() -> bool {
     false // Providers are disabled by default, user must explicitly enable them
 }
 

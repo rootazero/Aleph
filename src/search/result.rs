@@ -59,7 +59,7 @@ impl SearchResult {
 
     /// Check if result has full content
     #[must_use]
-    pub fn has_full_content(&self) -> bool {
+    pub const fn has_full_content(&self) -> bool {
         self.full_content.is_some()
     }
 }

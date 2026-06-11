@@ -215,21 +215,21 @@ impl AgentRuntime {
 
     /// Stage A (P1) — wire the stall watchdog config.
     #[must_use]
-    pub fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
+    pub const fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
         self.stall_config = Some(config);
         self
     }
 
     /// Stage A (P1) — wire the consecutive-failure cap.
     #[must_use]
-    pub fn with_consecutive_failure_cap(mut self, cap: usize) -> Self {
+    pub const fn with_consecutive_failure_cap(mut self, cap: usize) -> Self {
         self.consecutive_failure_cap = Some(cap);
         self
     }
 
     /// Stage A (P1) — wire the per-turn wall-clock timeout.
     #[must_use]
-    pub fn with_turn_timeout(mut self, timeout: std::time::Duration) -> Self {
+    pub const fn with_turn_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.turn_timeout = Some(timeout);
         self
     }
@@ -467,7 +467,7 @@ pub fn truncate_for_log(s: &str, max_len: usize) -> String {
 
 /// Format a TranscriptOutcome for log output.
 #[must_use]
-pub fn format_outcome(outcome: &TranscriptOutcome) -> &str {
+pub const fn format_outcome(outcome: &TranscriptOutcome) -> &str {
     match outcome {
         TranscriptOutcome::Success => "success",
         TranscriptOutcome::Error(_) => "error",

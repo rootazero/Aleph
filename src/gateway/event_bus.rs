@@ -102,7 +102,7 @@ impl TopicEvent {
     /// `state_versions.bump_*()` so subscribers can advance their cached
     /// version baseline without a separate round-trip.
     #[must_use]
-    pub fn with_state_version(
+    pub const fn with_state_version(
         mut self,
         version: crate::gateway::state_version::StateVersion,
     ) -> Self {
@@ -275,7 +275,7 @@ impl TopicFilter {
     /// Create a filter with full subscription entries (patterns + optional
     /// `where_clause` predicates).
     #[must_use]
-    pub fn with_subscriptions(subscriptions: Vec<TopicSubscription>) -> Self {
+    pub const fn with_subscriptions(subscriptions: Vec<TopicSubscription>) -> Self {
         Self { subscriptions }
     }
 

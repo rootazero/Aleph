@@ -23,7 +23,7 @@ pub enum PageSize {
 impl PageSize {
     /// Get page dimensions in millimeters
     #[must_use]
-    pub fn dimensions_mm(&self) -> (f32, f32) {
+    pub const fn dimensions_mm(&self) -> (f32, f32) {
         match self {
             PageSize::A4 => (210.0, 297.0),
             PageSize::Letter => (215.9, 279.4),
@@ -167,17 +167,17 @@ pub struct PdfGenerateArgs {
 }
 
 #[must_use]
-pub fn default_font_size() -> f32 {
+pub const fn default_font_size() -> f32 {
     12.0
 }
 
 #[must_use]
-pub fn default_line_spacing() -> f32 {
+pub const fn default_line_spacing() -> f32 {
     1.5
 }
 
 #[must_use]
-pub fn default_margin() -> f32 {
+pub const fn default_margin() -> f32 {
     20.0
 }
 

@@ -41,19 +41,19 @@ pub struct Replacement {
 
 impl GuardrailDecision {
     #[must_use]
-    pub fn is_block(&self) -> bool {
+    pub const fn is_block(&self) -> bool {
         matches!(self, GuardrailDecision::Block { .. })
     }
     #[must_use]
-    pub fn is_allow(&self) -> bool {
+    pub const fn is_allow(&self) -> bool {
         matches!(self, GuardrailDecision::Allow)
     }
     #[must_use]
-    pub fn is_sanitize(&self) -> bool {
+    pub const fn is_sanitize(&self) -> bool {
         matches!(self, GuardrailDecision::Sanitize(_))
     }
     #[must_use]
-    pub fn is_warn(&self) -> bool {
+    pub const fn is_warn(&self) -> bool {
         matches!(self, GuardrailDecision::Warn { .. })
     }
 }

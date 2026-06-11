@@ -110,7 +110,7 @@ impl HookExecutor {
 
     /// Set the command timeout
     #[must_use]
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         self.command_timeout = timeout;
         self
     }
@@ -194,7 +194,7 @@ impl HookExecutor {
 
     /// Get the number of hooks
     #[must_use]
-    pub fn hook_count(&self) -> usize {
+    pub const fn hook_count(&self) -> usize {
         self.hooks.len()
     }
 

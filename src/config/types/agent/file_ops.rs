@@ -113,19 +113,19 @@ impl FileOpsConfigToml {
 // Default Functions
 // =============================================================================
 
-pub fn default_file_ops_enabled() -> bool {
+pub const fn default_file_ops_enabled() -> bool {
     DEFAULT_FILE_OPS_ENABLED
 }
 
-pub fn default_max_file_size() -> u64 {
+pub const fn default_max_file_size() -> u64 {
     DEFAULT_MAX_FILE_SIZE
 }
 
-pub fn default_require_confirmation_for_write() -> bool {
+pub const fn default_require_confirmation_for_write() -> bool {
     DEFAULT_REQUIRE_CONFIRMATION_FOR_WRITE
 }
 
-pub fn default_require_confirmation_for_delete() -> bool {
+pub const fn default_require_confirmation_for_delete() -> bool {
     DEFAULT_REQUIRE_CONFIRMATION_FOR_DELETE
 }
 

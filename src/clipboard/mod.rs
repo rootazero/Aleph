@@ -37,13 +37,13 @@ pub struct ImageData {
 impl ImageData {
     /// Create a new ImageData instance
     #[must_use]
-    pub fn new(data: Vec<u8>, format: ImageFormat) -> Self {
+    pub const fn new(data: Vec<u8>, format: ImageFormat) -> Self {
         Self { data, format }
     }
 
     /// Get the size of the image data in bytes
     #[must_use]
-    pub fn size_bytes(&self) -> usize {
+    pub const fn size_bytes(&self) -> usize {
         self.data.len()
     }
 

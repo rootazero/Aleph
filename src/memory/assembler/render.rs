@@ -101,7 +101,7 @@ fn is_episodic_category(category: &str) -> bool {
     )
 }
 
-fn slot_tag(kind: SlotKind) -> &'static str {
+const fn slot_tag(kind: SlotKind) -> &'static str {
     match kind {
         SlotKind::UserProfile => "user_profile",
         SlotKind::SessionRecent => "session_recent",
@@ -118,7 +118,7 @@ fn slot_tag(kind: SlotKind) -> &'static str {
 /// user taught it, to honour them, to proactively say when it is applying one,
 /// and to verify any named file/flag/path still exists before relying on it.
 /// The text is a fixed constant (no user input), so it needs no escaping.
-fn slot_directive(kind: SlotKind) -> Option<&'static str> {
+const fn slot_directive(kind: SlotKind) -> Option<&'static str> {
     match kind {
         SlotKind::Feedback => Some(
             "These are rules and corrections the user has taught you. Treat them as standing \

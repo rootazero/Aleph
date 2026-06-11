@@ -1,7 +1,7 @@
 //! Embedded CSS stylesheets for browser-based PDF rendering.
 
 /// GitHub-flavored Markdown CSS for PDF output.
-pub fn github_markdown_css() -> &'static str {
+pub const fn github_markdown_css() -> &'static str {
     r#"
     * { margin: 0; padding: 0; box-sizing: border-box; }
 

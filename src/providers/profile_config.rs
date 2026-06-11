@@ -81,7 +81,7 @@ pub enum ProfileTier {
 impl ProfileTier {
     /// Get priority score (lower = higher priority)
     #[must_use]
-    pub fn priority(&self) -> u8 {
+    pub const fn priority(&self) -> u8 {
         match self {
             Self::Primary => 0,
             Self::Backup => 1,

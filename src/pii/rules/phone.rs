@@ -22,7 +22,7 @@ fn timestamp_context_regex() -> &'static Regex {
 pub struct PhoneRule;
 
 impl PhoneRule {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 

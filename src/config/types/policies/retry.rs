@@ -77,19 +77,19 @@ impl Default for RetryPolicy {
     }
 }
 
-fn default_max_retries() -> u32 {
+const fn default_max_retries() -> u32 {
     DEFAULT_MAX_RETRIES
 }
 
-fn default_initial_backoff_ms() -> u64 {
+const fn default_initial_backoff_ms() -> u64 {
     1000
 }
 
-fn default_backoff_multiplier() -> f64 {
+const fn default_backoff_multiplier() -> f64 {
     2.0
 }
 
-fn default_max_backoff_ms() -> u64 {
+const fn default_max_backoff_ms() -> u64 {
     32000
 }
 
@@ -97,26 +97,26 @@ fn default_retryable_status_codes() -> Vec<u16> {
     vec![500, 502, 503, 504]
 }
 
-fn default_retry_on_timeout() -> bool {
+const fn default_retry_on_timeout() -> bool {
     true
 }
 
-fn default_retry_on_network_error() -> bool {
+const fn default_retry_on_network_error() -> bool {
     true
 }
 
-fn default_jitter_factor() -> f64 {
+const fn default_jitter_factor() -> f64 {
     0.25
 }
 
 impl RetryPolicy {
     /// Get initial backoff as std::time::Duration
-    pub fn initial_backoff_duration(&self) -> std::time::Duration {
+    pub const fn initial_backoff_duration(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.initial_backoff_ms)
     }
 
     /// Get max backoff as std::time::Duration
-    pub fn max_backoff_duration(&self) -> std::time::Duration {
+    pub const fn max_backoff_duration(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.max_backoff_ms)
     }
 

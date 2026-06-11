@@ -127,7 +127,7 @@ fn scan_line(line: &str, push: &mut impl FnMut(String)) {
 }
 
 #[inline]
-fn is_ident_byte(b: u8) -> bool {
+const fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
 }
 

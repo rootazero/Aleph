@@ -37,7 +37,7 @@ fn api_key_regex() -> &'static Regex {
 pub struct ApiKeyRule;
 
 impl ApiKeyRule {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }

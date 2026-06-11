@@ -317,7 +317,7 @@ fn scan(
 /// Ported from codex's `apply-patch` `seek_sequence::normalise`. The mapping is
 /// strictly 1 char → 1 char so callers can map folded match positions back to
 /// original byte offsets.
-fn fold_char(c: char) -> char {
+const fn fold_char(c: char) -> char {
     match c {
         // Dash / hyphen code points → ASCII '-'
         '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'

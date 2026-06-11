@@ -316,7 +316,7 @@ impl AuthProfileProviderRegistry {
 
     /// Get a reference to the auth profile store
     #[must_use]
-    pub fn store(&self) -> &Arc<RwLock<AuthProfileStore>> {
+    pub const fn store(&self) -> &Arc<RwLock<AuthProfileStore>> {
         &self.store
     }
 }

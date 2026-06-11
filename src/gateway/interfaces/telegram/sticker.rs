@@ -7,7 +7,7 @@ pub struct StickerPipeline {
 
 impl StickerPipeline {
     #[must_use]
-    pub fn new(db: Option<Arc<StateDatabase>>) -> Self {
+    pub const fn new(db: Option<Arc<StateDatabase>>) -> Self {
         Self { db }
     }
 

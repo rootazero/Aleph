@@ -69,7 +69,7 @@ pub struct ShellSecurityConfig {
     pub custom_danger: Vec<CustomRiskPattern>,
 }
 
-fn default_false() -> bool {
+const fn default_false() -> bool {
     false
 }
 

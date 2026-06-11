@@ -14,7 +14,7 @@ pub struct LaneHandle {
 }
 
 impl LaneHandle {
-    pub fn new(
+    pub const fn new(
         lane_id: LaneId,
         tracker: Arc<Mutex<LaneDeliveryTracker>>,
         delivery: TelegramDelivery,

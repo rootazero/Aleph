@@ -103,15 +103,15 @@ pub struct GenerationConfig {
     pub transcription_providers: HashMap<String, GenerationProviderConfig>,
 }
 
-fn default_auto_paste_threshold_mb() -> u32 {
+const fn default_auto_paste_threshold_mb() -> u32 {
     5 // 5MB threshold
 }
 
-fn default_background_task_threshold_seconds() -> u32 {
+const fn default_background_task_threshold_seconds() -> u32 {
     30 // 30 seconds
 }
 
-fn default_smart_routing_enabled() -> bool {
+const fn default_smart_routing_enabled() -> bool {
     true
 }
 

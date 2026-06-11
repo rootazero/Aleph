@@ -34,7 +34,7 @@ pub struct VaultCheck {
 
 impl VaultCheck {
     #[must_use]
-    pub fn new(vault_path: PathBuf) -> Self {
+    pub const fn new(vault_path: PathBuf) -> Self {
         Self { vault_path }
     }
 

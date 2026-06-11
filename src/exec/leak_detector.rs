@@ -73,7 +73,7 @@ impl ScanResult {
 
     /// Returns true if no findings were detected.
     #[must_use]
-    pub fn is_clean(&self) -> bool {
+    pub const fn is_clean(&self) -> bool {
         self.findings.is_empty()
     }
 }

@@ -17,7 +17,7 @@ fn ip_regex() -> &'static Regex {
 pub struct IpAddressRule;
 
 impl IpAddressRule {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }

@@ -12,7 +12,7 @@ use crate::security::unicode_guard::is_invisible_char;
 
 /// Returns true if the character is a confusable homoglyph that could disguise
 /// ASCII letters in shell commands (e.g., Cyrillic 'а' looks like ASCII 'a').
-fn is_confusable_homoglyph(c: char) -> bool {
+const fn is_confusable_homoglyph(c: char) -> bool {
     matches!(
         c,
         // Cyrillic letters that look like ASCII (homoglyph attack)

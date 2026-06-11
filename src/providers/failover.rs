@@ -648,7 +648,7 @@ impl FailoverProvider {
     /// it. The global default chain omits this — its primary stays `Unknown`
     /// (the operator's configured default is always allowed).
     #[must_use]
-    pub fn with_primary_tier(mut self, tier: EndpointTier) -> Self {
+    pub const fn with_primary_tier(mut self, tier: EndpointTier) -> Self {
         self.primary_tier = tier;
         self
     }

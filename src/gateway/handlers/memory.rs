@@ -78,7 +78,7 @@ pub struct SearchParams {
     pub offset: u32,
 }
 
-fn default_limit() -> u32 {
+const fn default_limit() -> u32 {
     20
 }
 
@@ -268,7 +268,7 @@ pub struct ListFactsParams {
     pub include_invalid: bool,
 }
 
-fn default_facts_limit() -> usize {
+const fn default_facts_limit() -> usize {
     50
 }
 

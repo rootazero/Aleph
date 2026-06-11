@@ -100,11 +100,11 @@ fn default_rerank_models() -> Vec<String> {
     vec!["jina-reranker-v2-base-multilingual".to_string()]
 }
 
-fn default_rerank_timeout() -> u64 {
+const fn default_rerank_timeout() -> u64 {
     5000
 }
 
-fn default_rerank_weight() -> f32 {
+const fn default_rerank_weight() -> f32 {
     0.6
 }
 

@@ -155,15 +155,15 @@ impl Default for SmartRecallConfig {
     }
 }
 
-fn default_smart_recall_score_threshold() -> f32 {
+const fn default_smart_recall_score_threshold() -> f32 {
     0.60
 }
 
-fn default_smart_recall_min_primary_results() -> usize {
+const fn default_smart_recall_min_primary_results() -> usize {
     2
 }
 
-fn default_smart_recall_max_cross_results() -> usize {
+const fn default_smart_recall_max_cross_results() -> usize {
     3
 }
 

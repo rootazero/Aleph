@@ -23,7 +23,7 @@ pub enum SignatureFormat {
 impl SignatureFormat {
     /// Get the header name for this format
     #[must_use]
-    pub fn header_name(&self) -> Option<&'static str> {
+    pub const fn header_name(&self) -> Option<&'static str> {
         match self {
             SignatureFormat::Github => Some("X-Hub-Signature-256"),
             SignatureFormat::Stripe => Some("Stripe-Signature"),
@@ -83,11 +83,11 @@ fn default_session_key_template() -> String {
     "task:webhook:{webhook_id}".to_string()
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_max_body_size() -> usize {
+const fn default_max_body_size() -> usize {
     1024 * 1024 // 1MB
 }
 
@@ -128,7 +128,7 @@ impl WebhookEndpointConfig {
 
     /// Set signature format
     #[must_use]
-    pub fn with_signature_format(mut self, format: SignatureFormat) -> Self {
+    pub const fn with_signature_format(mut self, format: SignatureFormat) -> Self {
         self.signature_format = format;
         self
     }

@@ -41,11 +41,11 @@ fn default_agent_id() -> String {
     "main".to_string()
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_pairing_expiry() -> u64 {
+const fn default_pairing_expiry() -> u64 {
     86400 // 24 hours
 }
 
@@ -71,7 +71,7 @@ impl RoutingConfig {
 
     /// Set DM scope
     #[must_use]
-    pub fn with_dm_scope(mut self, scope: DmScope) -> Self {
+    pub const fn with_dm_scope(mut self, scope: DmScope) -> Self {
         self.dm_scope = scope;
         self
     }

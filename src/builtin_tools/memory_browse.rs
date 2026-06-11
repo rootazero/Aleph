@@ -75,7 +75,7 @@ pub struct MemoryBrowseTool {
 
 impl MemoryBrowseTool {
     #[must_use]
-    pub fn new(memory_dir: PathBuf, agent_id: String) -> Self {
+    pub const fn new(memory_dir: PathBuf, agent_id: String) -> Self {
         Self {
             memory_dir,
             agent_id,

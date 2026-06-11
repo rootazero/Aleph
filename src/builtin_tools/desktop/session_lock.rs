@@ -148,7 +148,7 @@ impl ComputerUseLock {
 
     /// Returns `true` if this handle currently holds the lock.
     #[must_use]
-    pub fn is_held(&self) -> bool {
+    pub const fn is_held(&self) -> bool {
         self.held
     }
 

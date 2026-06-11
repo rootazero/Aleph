@@ -47,7 +47,7 @@ impl ToolError {
     /// For richer, prompt-side classification (rate-limited,
     /// unauthorized, blocked-by-policy, …) see [`Self::kind`].
     #[must_use]
-    pub fn is_retryable(&self) -> bool {
+    pub const fn is_retryable(&self) -> bool {
         matches!(self, Self::Timeout { .. } | Self::Transport { .. })
     }
 

@@ -54,7 +54,7 @@ impl ChatType {
 
     /// Returns `true` for supergroup or group (any chat that supports group policies).
     #[must_use]
-    pub fn is_group(self) -> bool {
+    pub const fn is_group(self) -> bool {
         matches!(self, ChatType::Group | ChatType::Supergroup)
     }
 }
@@ -83,7 +83,7 @@ pub enum AccessLevel {
 impl AccessLevel {
     /// Derive from Telegram member status if available.
     #[must_use]
-    pub fn from_telegram_status(
+    pub const fn from_telegram_status(
         is_creator: bool,
         is_administrator: bool,
         is_in_chat: bool,
@@ -145,7 +145,7 @@ impl ConversationKey {
 
     /// Create a new key from chat_id only (no thread).
     #[must_use]
-    pub fn new(chat_id: i64) -> Self {
+    pub const fn new(chat_id: i64) -> Self {
         Self {
             chat_id,
             thread_id: None,
@@ -154,7 +154,7 @@ impl ConversationKey {
 
     /// Create a new key from chat_id and thread_id.
     #[must_use]
-    pub fn with_thread(chat_id: i64, thread_id: i64) -> Self {
+    pub const fn with_thread(chat_id: i64, thread_id: i64) -> Self {
         Self {
             chat_id,
             thread_id: Some(thread_id),
@@ -302,7 +302,7 @@ impl TelegramInboundContext {
 
     /// Update the access level (called after group policy evaluation).
     #[must_use]
-    pub fn with_access_level(mut self, level: AccessLevel) -> Self {
+    pub const fn with_access_level(mut self, level: AccessLevel) -> Self {
         self.access_level = level;
         self
     }
@@ -335,7 +335,7 @@ impl TelegramInboundContext {
 
     /// Returns the `ConversationId` for this message.
     #[must_use]
-    pub fn conversation_id(&self) -> &ConversationId {
+    pub const fn conversation_id(&self) -> &ConversationId {
         &self.message.conversation_id
     }
 

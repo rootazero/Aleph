@@ -8,7 +8,7 @@ pub struct MessageOps {
 }
 
 impl MessageOps {
-    pub fn new(api: Arc<FeishuApi>) -> Self {
+    pub const fn new(api: Arc<FeishuApi>) -> Self {
         Self { api }
     }
 

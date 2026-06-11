@@ -30,7 +30,7 @@ pub enum ToolRepairType {
 impl ToolRepairInfo {
     /// Check if this was a successful repair (not a fallback to invalid)
     #[must_use]
-    pub fn was_successful(&self) -> bool {
+    pub const fn was_successful(&self) -> bool {
         !matches!(self.repair_type, ToolRepairType::InvalidFallback)
     }
 }
@@ -51,13 +51,13 @@ pub struct ToolUpdateInfo {
 impl ToolUpdateInfo {
     /// Check if this was a new addition (not a replacement)
     #[must_use]
-    pub fn is_new(&self) -> bool {
+    pub const fn is_new(&self) -> bool {
         !self.was_replaced
     }
 
     /// Check if this was a replacement of an existing tool
     #[must_use]
-    pub fn is_replacement(&self) -> bool {
+    pub const fn is_replacement(&self) -> bool {
         self.was_replaced
     }
 }

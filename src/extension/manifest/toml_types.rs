@@ -242,7 +242,7 @@ pub struct ServiceSection {
     pub auto_start: bool,
 }
 
-fn default_service_auto_start() -> bool {
+const fn default_service_auto_start() -> bool {
     true
 }
 
@@ -289,13 +289,13 @@ pub struct WasmHttpToml {
     pub max_response_bytes: usize,
 }
 
-fn default_http_timeout() -> u64 {
+const fn default_http_timeout() -> u64 {
     30
 }
-fn default_max_request_bytes() -> usize {
+const fn default_max_request_bytes() -> usize {
     1_048_576
 }
-fn default_max_response_bytes() -> usize {
+const fn default_max_response_bytes() -> usize {
     10_485_760
 }
 
@@ -356,7 +356,7 @@ pub struct WasmToolInvokeToml {
     pub max_per_execution: u32,
 }
 
-fn default_toml_max_per_execution() -> u32 {
+const fn default_toml_max_per_execution() -> u32 {
     20
 }
 

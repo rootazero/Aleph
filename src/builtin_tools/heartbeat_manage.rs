@@ -44,7 +44,7 @@ pub struct HeartbeatListTool {
 }
 
 impl HeartbeatListTool {
-    pub fn new(service: SharedHeartbeatService) -> Self {
+    pub const fn new(service: SharedHeartbeatService) -> Self {
         Self { service }
     }
 }
@@ -140,7 +140,7 @@ pub struct HeartbeatCreateTool {
 }
 
 impl HeartbeatCreateTool {
-    pub fn new(service: SharedHeartbeatService) -> Self {
+    pub const fn new(service: SharedHeartbeatService) -> Self {
         Self { service }
     }
 }
@@ -241,7 +241,7 @@ pub struct HeartbeatUpdateTool {
 }
 
 impl HeartbeatUpdateTool {
-    pub fn new(service: SharedHeartbeatService) -> Self {
+    pub const fn new(service: SharedHeartbeatService) -> Self {
         Self { service }
     }
 }
@@ -323,7 +323,7 @@ pub struct HeartbeatDeleteTool {
 }
 
 impl HeartbeatDeleteTool {
-    pub fn new(service: SharedHeartbeatService) -> Self {
+    pub const fn new(service: SharedHeartbeatService) -> Self {
         Self { service }
     }
 }
@@ -381,7 +381,7 @@ pub struct HeartbeatToggleTool {
 }
 
 impl HeartbeatToggleTool {
-    pub fn new(service: SharedHeartbeatService) -> Self {
+    pub const fn new(service: SharedHeartbeatService) -> Self {
         Self { service }
     }
 }

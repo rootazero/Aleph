@@ -29,7 +29,7 @@ pub enum TaskState {
 impl TaskState {
     /// Returns true if the task is in a terminal state (no further transitions)
     #[must_use]
-    pub fn is_terminal(&self) -> bool {
+    pub const fn is_terminal(&self) -> bool {
         matches!(
             self,
             Self::Completed | Self::Canceled | Self::Failed | Self::Rejected
@@ -38,7 +38,7 @@ impl TaskState {
 
     /// Returns true if the task can be canceled from this state
     #[must_use]
-    pub fn is_cancelable(&self) -> bool {
+    pub const fn is_cancelable(&self) -> bool {
         matches!(
             self,
             Self::Submitted | Self::Working | Self::InputRequired | Self::AuthRequired

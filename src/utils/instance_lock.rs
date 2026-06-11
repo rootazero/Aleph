@@ -26,7 +26,7 @@ impl InstanceLock {
         &self.path
     }
     #[must_use]
-    pub fn holder_pid(&self) -> u32 {
+    pub const fn holder_pid(&self) -> u32 {
         self.holder_pid
     }
 

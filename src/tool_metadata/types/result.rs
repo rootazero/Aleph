@@ -59,7 +59,7 @@ impl ToolResult {
 
     /// Check if result is successful
     #[must_use]
-    pub fn is_success(&self) -> bool {
+    pub const fn is_success(&self) -> bool {
         self.success
     }
 

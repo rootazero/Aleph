@@ -51,7 +51,7 @@ fn get_high_risk_patterns() -> &'static Vec<Regex> {
 impl RiskEvaluator {
     /// Create a new risk evaluator
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { use_patterns: true }
     }
 

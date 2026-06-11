@@ -625,7 +625,7 @@ impl CompressionService {
     }
 
     /// Get current configuration
-    pub fn get_config(&self) -> &CompressionConfig {
+    pub const fn get_config(&self) -> &CompressionConfig {
         &self.config
     }
 }

@@ -69,7 +69,7 @@ pub struct SessionSwitchCtx {
 impl SessionSwitchCtx {
     /// Convenience: hermes-parity `reset` boolean = `Reset` variant.
     #[must_use]
-    pub fn reset(&self) -> bool {
+    pub const fn reset(&self) -> bool {
         matches!(self.reason, SessionSwitchReason::Reset)
     }
 }

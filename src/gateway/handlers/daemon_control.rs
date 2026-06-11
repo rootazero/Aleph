@@ -59,7 +59,7 @@ struct LogsParams {
     level: Option<String>,
 }
 
-fn default_lines() -> usize {
+const fn default_lines() -> usize {
     50
 }
 

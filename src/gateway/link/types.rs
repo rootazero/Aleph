@@ -92,7 +92,7 @@ pub struct LinkConfig {
     pub routing: LinkRoutingConfig,
 }
 
-fn default_enabled() -> bool {
+const fn default_enabled() -> bool {
     true
 }
 

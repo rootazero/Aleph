@@ -72,7 +72,7 @@ pub struct CronConfig {
     pub default_max_iterations: Option<u32>,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -80,15 +80,15 @@ fn default_db_path() -> String {
     "~/.aleph/data/tasks.db".to_string()
 }
 
-fn default_check_interval() -> u64 {
+const fn default_check_interval() -> u64 {
     60 // 1 minute
 }
 
-fn default_max_concurrent() -> usize {
+const fn default_max_concurrent() -> usize {
     5
 }
 
-fn default_job_timeout() -> u64 {
+const fn default_job_timeout() -> u64 {
     // 15 minutes. Coupled to `default_cron_max_iterations = Some(200)`:
     // a 200-iter run averaging ~3s/turn lands around 10 min, so 15 min
     // gives ~50% headroom before wall-clock kills the job. Raised from
@@ -101,15 +101,15 @@ fn default_job_timeout() -> u64 {
     900
 }
 
-fn default_history_retention() -> u32 {
+const fn default_history_retention() -> u32 {
     30 // 30 days
 }
 
-fn default_max_concurrent_agents() -> Option<usize> {
+const fn default_max_concurrent_agents() -> Option<usize> {
     Some(2)
 }
 
-fn default_cron_max_iterations() -> Option<u32> {
+const fn default_cron_max_iterations() -> Option<u32> {
     Some(200)
 }
 
@@ -236,7 +236,7 @@ impl ErrorReason {
     /// that history consumers filter on — never the Rust `Debug` rendering
     /// (`Transient("…")`), which would make rows unqueryable by category.
     #[must_use]
-    pub fn category(&self) -> &'static str {
+    pub const fn category(&self) -> &'static str {
         match self {
             Self::Transient(_) => "transient",
             Self::Permanent(_) => "permanent",
@@ -269,7 +269,7 @@ pub enum TriggerSource {
 
 impl TriggerSource {
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Schedule => "schedule",
             Self::Chain => "chain",
@@ -291,11 +291,11 @@ impl TriggerSource {
 
 // ── FailureAlertConfig ──────────────────────────────────────────────────
 
-fn default_alert_after() -> u32 {
+const fn default_alert_after() -> u32 {
     2
 }
 
-fn default_alert_cooldown() -> i64 {
+const fn default_alert_cooldown() -> i64 {
     3_600_000 // 1 hour in ms
 }
 
@@ -661,7 +661,7 @@ impl JobRun {
 
     /// Set the trigger source
     #[must_use]
-    pub fn with_trigger(mut self, source: TriggerSource) -> Self {
+    pub const fn with_trigger(mut self, source: TriggerSource) -> Self {
         self.trigger_source = source;
         self
     }

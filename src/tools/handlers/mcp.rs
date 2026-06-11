@@ -54,7 +54,7 @@ impl McpHandler {
 
     /// Attach annotation-derived scheduling/approval flags.
     #[must_use]
-    pub fn with_flags(
+    pub const fn with_flags(
         mut self,
         read_only: bool,
         idempotent: bool,

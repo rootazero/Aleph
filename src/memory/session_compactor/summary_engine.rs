@@ -68,7 +68,7 @@ Create a milestone summary from these session summaries. Preserve:\n\
 Omit: individual operation details, file-level changes, resolved errors.";
 
 /// Select the correct prompt template for a given depth.
-fn depth_prompt(depth: u32) -> &'static str {
+const fn depth_prompt(depth: u32) -> &'static str {
     match depth {
         0 => LEAF_PROMPT,
         1 => D1_PROMPT,

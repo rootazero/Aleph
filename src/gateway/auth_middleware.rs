@@ -68,7 +68,7 @@ pub fn auth_routes(state: Arc<AuthState>) -> Router {
 /// Used by the bootstrap-consume endpoint to refuse non-local peers
 /// regardless of the `Origin` header.
 #[must_use]
-pub fn is_loopback_peer(addr: &SocketAddr) -> bool {
+pub const fn is_loopback_peer(addr: &SocketAddr) -> bool {
     match addr.ip() {
         std::net::IpAddr::V4(v4) => v4.is_loopback(),
         std::net::IpAddr::V6(v6) => v6.is_loopback(),

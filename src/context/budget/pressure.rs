@@ -7,7 +7,7 @@ use crate::providers::message::{ContentBlock, UnifiedMessage};
 // =============================================================================
 
 /// Returns true if the character is in a CJK Unicode range.
-fn is_cjk(c: char) -> bool {
+const fn is_cjk(c: char) -> bool {
     matches!(c,
         '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
         | '\u{3400}'..='\u{4DBF}' // CJK Extension A

@@ -19,7 +19,7 @@ fn default_inbox() -> String {
     "inbox".to_string()
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -68,7 +68,7 @@ pub struct InboxReadTool {
 
 impl InboxReadTool {
     #[must_use]
-    pub fn new(inbox: Arc<Inbox>, current_agent_id: String) -> Self {
+    pub const fn new(inbox: Arc<Inbox>, current_agent_id: String) -> Self {
         Self {
             inbox,
             current_agent_id,

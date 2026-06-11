@@ -127,7 +127,7 @@ impl CacheContext {
 
     /// Check if the context meets caching threshold
     #[must_use]
-    pub fn should_cache(&self) -> bool {
+    pub const fn should_cache(&self) -> bool {
         self.enabled && self.cacheable_tokens >= MIN_CACHE_TOKENS
     }
 

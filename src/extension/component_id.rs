@@ -55,7 +55,7 @@ impl ComponentId {
 
     /// Return true if this component belongs to a plugin.
     #[must_use]
-    pub fn is_plugin(&self) -> bool {
+    pub const fn is_plugin(&self) -> bool {
         self.plugin.is_some()
     }
 }

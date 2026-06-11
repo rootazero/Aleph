@@ -75,7 +75,7 @@ pub struct AskUserTool {
 }
 
 impl AskUserTool {
-    pub fn new(clarification: Arc<ClarificationManager>, channels: Arc<ChannelRegistry>) -> Self {
+    pub const fn new(clarification: Arc<ClarificationManager>, channels: Arc<ChannelRegistry>) -> Self {
         Self {
             clarification,
             channels,

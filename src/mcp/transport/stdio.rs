@@ -206,7 +206,7 @@ impl StdioTransport {
     }
 
     /// Set the request timeout
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }

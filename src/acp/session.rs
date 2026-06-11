@@ -529,7 +529,7 @@ impl AcpSession {
 
     /// Get the current session state.
     #[must_use]
-    pub fn state(&self) -> AcpSessionState {
+    pub const fn state(&self) -> AcpSessionState {
         self.state
     }
 

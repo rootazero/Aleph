@@ -36,7 +36,7 @@ pub struct ToolPermissionsConfig {
     pub overrides: HashMap<String, PermissionAction>,
 }
 
-fn default_allow() -> PermissionAction {
+const fn default_allow() -> PermissionAction {
     PermissionAction::Allow
 }
 
@@ -100,7 +100,7 @@ impl ToolPermissionsConfig {
 /// Return the more restrictive of two permission actions.
 ///
 /// Ordering: Deny (most restrictive) > Ask > Allow (least restrictive).
-fn restrictive_min(a: PermissionAction, b: PermissionAction) -> PermissionAction {
+const fn restrictive_min(a: PermissionAction, b: PermissionAction) -> PermissionAction {
     use PermissionAction::*;
     match (a, b) {
         (Deny, _) | (_, Deny) => Deny,

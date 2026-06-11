@@ -63,7 +63,7 @@ pub enum CapabilityDeclaration {
 impl CapabilityDeclaration {
     /// Returns the tier this capability belongs to.
     #[must_use]
-    pub fn tier(&self) -> Tier {
+    pub const fn tier(&self) -> Tier {
         match self {
             // P0: Always allowed, no permission check
             Self::Tool(_) | Self::Hook(_) | Self::Skill(_) => Tier::Core,
@@ -76,7 +76,7 @@ impl CapabilityDeclaration {
 
     /// Returns a human-readable kind name for this capability.
     #[must_use]
-    pub fn kind_name(&self) -> &'static str {
+    pub const fn kind_name(&self) -> &'static str {
         match self {
             Self::Tool(_) => "tool",
             Self::Hook(_) => "hook",
@@ -90,7 +90,7 @@ impl CapabilityDeclaration {
 
     /// Returns the required permission for this capability, if any.
     #[must_use]
-    pub fn required_permission(&self) -> Option<PluginPermission> {
+    pub const fn required_permission(&self) -> Option<PluginPermission> {
         match self {
             // P0 + P1: no permission needed
             Self::Tool(_) | Self::Hook(_) | Self::Skill(_) | Self::Command(_) | Self::Agent(_) => {

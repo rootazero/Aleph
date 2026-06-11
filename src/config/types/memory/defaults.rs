@@ -1,4 +1,4 @@
-pub fn default_enabled() -> bool {
+pub const fn default_enabled() -> bool {
     true
 }
 
@@ -12,11 +12,11 @@ pub fn default_similarity_threshold() -> f32 {
         .unwrap_or(0.3)
 }
 
-pub fn default_embedding_timeout_ms() -> u64 {
+pub const fn default_embedding_timeout_ms() -> u64 {
     10000
 }
 
-pub fn default_embedding_batch_size() -> u32 {
+pub const fn default_embedding_batch_size() -> u32 {
     32
 }
 
@@ -28,23 +28,23 @@ pub fn default_embedding_batch_size() -> u32 {
 /// allowing roughly 16000 Chinese characters (still under 8192 tokens).
 /// Texts exceeding this are truncated UTF-8-safely before the API call
 /// instead of failing the whole batch.
-pub fn default_embedding_max_input_chars() -> usize {
+pub const fn default_embedding_max_input_chars() -> usize {
     24000
 }
 
-pub fn default_embedding_providers() -> Vec<super::embed::EmbeddingProviderConfig> {
+pub const fn default_embedding_providers() -> Vec<super::embed::EmbeddingProviderConfig> {
     Vec::new()
 }
 
-pub fn default_active_provider_id() -> String {
+pub const fn default_active_provider_id() -> String {
     String::new()
 }
 
-pub fn default_dreaming_enabled() -> bool {
+pub const fn default_dreaming_enabled() -> bool {
     true
 }
 
-pub fn default_dreaming_idle_threshold_seconds() -> u32 {
+pub const fn default_dreaming_idle_threshold_seconds() -> u32 {
     900
 }
 
@@ -56,54 +56,54 @@ pub fn default_dreaming_window_end() -> String {
     "05:00".to_string()
 }
 
-pub fn default_dreaming_max_duration_seconds() -> u32 {
+pub const fn default_dreaming_max_duration_seconds() -> u32 {
     600
 }
 
-pub fn default_weekly_enabled() -> bool {
+pub const fn default_weekly_enabled() -> bool {
     true
 }
 
-pub fn default_weekly_interval_days() -> u32 {
+pub const fn default_weekly_interval_days() -> u32 {
     7
 }
 
-pub fn default_drift_max_pairs_per_run() -> usize {
+pub const fn default_drift_max_pairs_per_run() -> usize {
     20
 }
 
-pub fn default_synthesis_min_cluster_size() -> usize {
+pub const fn default_synthesis_min_cluster_size() -> usize {
     3
 }
 
-pub fn default_synthesis_max_insights() -> usize {
+pub const fn default_synthesis_max_insights() -> usize {
     10
 }
 
-pub fn default_skill_distill_max_per_cycle() -> usize {
+pub const fn default_skill_distill_max_per_cycle() -> usize {
     3
 }
 
 /// Days of inactivity before a skill auto-transitions from
 /// `SkillState::Active` to `SkillState::Stale`. Mirrors hermes-agent's
 /// `DEFAULT_STALE_AFTER_DAYS = 30` in `agent/curator.py`.
-pub fn default_skill_stale_after_days() -> u32 {
+pub const fn default_skill_stale_after_days() -> u32 {
     30
 }
 
-pub fn default_feedback_distill_max_per_cycle() -> usize {
+pub const fn default_feedback_distill_max_per_cycle() -> usize {
     3
 }
 
-pub fn default_feedback_distill_min_candidates() -> usize {
+pub const fn default_feedback_distill_min_candidates() -> usize {
     3
 }
 
-pub fn default_feedback_lookback() -> usize {
+pub const fn default_feedback_lookback() -> usize {
     50
 }
 
-pub fn default_memory_decay_half_life_days() -> f32 {
+pub const fn default_memory_decay_half_life_days() -> f32 {
     // Matches the value `NoteDecayStage` used as a hard-coded constant before
     // this policy was wired in, so activating the config keeps the live decay
     // curve identical for users who never set it (confidence ×e⁻¹≈0.368 after
@@ -111,11 +111,11 @@ pub fn default_memory_decay_half_life_days() -> f32 {
     90.0
 }
 
-pub fn default_memory_decay_access_boost() -> f32 {
+pub const fn default_memory_decay_access_boost() -> f32 {
     0.2
 }
 
-pub fn default_memory_decay_min_strength() -> f32 {
+pub const fn default_memory_decay_min_strength() -> f32 {
     0.1
 }
 
@@ -123,97 +123,97 @@ pub fn default_memory_decay_protected_types() -> Vec<String> {
     vec!["personal".to_string()]
 }
 
-pub fn default_reflection_min_turns() -> u32 {
+pub const fn default_reflection_min_turns() -> u32 {
     5
 }
 
-pub fn default_reflection_min_chars() -> u32 {
+pub const fn default_reflection_min_chars() -> u32 {
     200
 }
 
-pub fn default_reflection_cooldown() -> u32 {
+pub const fn default_reflection_cooldown() -> u32 {
     30
 }
 
-pub fn default_assembler_enabled() -> bool {
+pub const fn default_assembler_enabled() -> bool {
     true
 }
 
-pub fn default_total_budget() -> u32 {
+pub const fn default_total_budget() -> u32 {
     8000
 }
 
-pub fn default_pool_limit() -> usize {
+pub const fn default_pool_limit() -> usize {
     20
 }
 
-pub fn default_rerank_timeout() -> u64 {
+pub const fn default_rerank_timeout() -> u64 {
     800
 }
 
-pub fn default_user_profile_tokens() -> u32 {
+pub const fn default_user_profile_tokens() -> u32 {
     200
 }
 
-pub fn default_session_recent_tokens() -> u32 {
+pub const fn default_session_recent_tokens() -> u32 {
     1500
 }
 
-pub fn default_relevant_notes_tokens() -> u32 {
+pub const fn default_relevant_notes_tokens() -> u32 {
     5000
 }
 
-pub fn default_raw_fragments_tokens() -> u32 {
+pub const fn default_raw_fragments_tokens() -> u32 {
     1000
 }
 
 /// Token budget for the `Feedback` slot — user-taught rules/corrections.
 /// Small on purpose: these notes are short imperative rules, not prose.
-pub fn default_feedback_tokens() -> u32 {
+pub const fn default_feedback_tokens() -> u32 {
     500
 }
 
-pub fn default_assembly_retention_days() -> u32 {
+pub const fn default_assembly_retention_days() -> u32 {
     14
 }
 
-pub fn default_rrf_k() -> u32 {
+pub const fn default_rrf_k() -> u32 {
     60
 }
 
-pub fn default_bm25_bonus() -> f32 {
+pub const fn default_bm25_bonus() -> f32 {
     0.15
 }
 
-pub fn default_qf_enabled() -> bool {
+pub const fn default_qf_enabled() -> bool {
     true
 }
 
-pub fn default_qf_min_sources() -> usize {
+pub const fn default_qf_min_sources() -> usize {
     3
 }
 
-pub fn default_qf_min_answer_chars() -> usize {
+pub const fn default_qf_min_answer_chars() -> usize {
     200
 }
 
-pub fn default_qf_llm_gate_enabled() -> bool {
+pub const fn default_qf_llm_gate_enabled() -> bool {
     true
 }
 
-pub fn default_compound_enabled() -> bool {
+pub const fn default_compound_enabled() -> bool {
     true
 }
 
-pub fn default_max_related_pages() -> usize {
+pub const fn default_max_related_pages() -> usize {
     15
 }
 
-pub fn default_related_preview_char_cap() -> usize {
+pub const fn default_related_preview_char_cap() -> usize {
     800
 }
 
-pub fn default_related_total_byte_cap() -> usize {
+pub const fn default_related_total_byte_cap() -> usize {
     12 * 1024
 }
 
@@ -221,7 +221,7 @@ pub fn default_related_total_byte_cap() -> usize {
 /// near-duplicate notes are collapsed at ingest instead of waiting for the
 /// offline dream consolidator. Operators can set `dedup_enabled = false` in
 /// `[memory.compound_ingest]` to restore byte-identical ingest.
-pub fn default_dedup_enabled() -> bool {
+pub const fn default_dedup_enabled() -> bool {
     true
 }
 
@@ -229,7 +229,7 @@ pub fn default_dedup_enabled() -> bool {
 /// redirected into an `Append` onto the nearest existing note. `0.92` is
 /// deliberately conservative: only near-identical notes collapse, leaving
 /// genuinely distinct facts to spawn their own page.
-pub fn default_dedup_similarity_threshold() -> f32 {
+pub const fn default_dedup_similarity_threshold() -> f32 {
     0.92
 }
 
@@ -239,58 +239,58 @@ pub fn default_dedup_similarity_threshold() -> f32 {
 /// only near-identical title+summary+facts collapse to a no-op, so a Create
 /// carrying genuinely new facts (which embeds below this) is still merged via
 /// Append rather than dropped.
-pub fn default_dedup_noop_threshold() -> f32 {
+pub const fn default_dedup_noop_threshold() -> f32 {
     0.985
 }
 
-pub fn default_replan_on_hash_conflict() -> u32 {
+pub const fn default_replan_on_hash_conflict() -> u32 {
     1
 }
 
-pub fn default_failure_cooldown_seconds() -> u64 {
+pub const fn default_failure_cooldown_seconds() -> u64 {
     300
 }
 
-pub fn default_tx_residue_gc_seconds() -> u64 {
+pub const fn default_tx_residue_gc_seconds() -> u64 {
     3600
 }
 
-pub fn default_orientation_enabled() -> bool {
+pub const fn default_orientation_enabled() -> bool {
     true
 }
 
-pub fn default_orientation_max_tokens() -> usize {
+pub const fn default_orientation_max_tokens() -> usize {
     4000
 }
 
-pub fn default_orientation_log_rotate_lines() -> usize {
+pub const fn default_orientation_log_rotate_lines() -> usize {
     2000
 }
 
-pub fn default_orientation_inject_on_agent_switch() -> bool {
+pub const fn default_orientation_inject_on_agent_switch() -> bool {
     true
 }
 
-pub fn default_profile_enabled() -> bool {
+pub const fn default_profile_enabled() -> bool {
     true
 }
 
-pub fn default_profile_min_interval_minutes() -> u32 {
+pub const fn default_profile_min_interval_minutes() -> u32 {
     30
 }
 
-pub fn default_profile_inject_interval_turns() -> u32 {
+pub const fn default_profile_inject_interval_turns() -> u32 {
     10
 }
 
-pub fn default_profile_max_body_bytes() -> usize {
+pub const fn default_profile_max_body_bytes() -> usize {
     2048
 }
 
-pub fn default_profile_max_bullets() -> usize {
+pub const fn default_profile_max_bullets() -> usize {
     20
 }
 
-pub fn default_profile_bootstrap_on_first() -> bool {
+pub const fn default_profile_bootstrap_on_first() -> bool {
     true
 }

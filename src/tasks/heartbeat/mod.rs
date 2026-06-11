@@ -72,13 +72,13 @@ impl HeartbeatService {
 
     /// Access the shared service state (for the timer loop).
     #[must_use]
-    pub fn state(&self) -> &Arc<HeartbeatServiceState> {
+    pub const fn state(&self) -> &Arc<HeartbeatServiceState> {
         &self.state
     }
 
     /// Access the wake queue (for external wake triggers).
     #[must_use]
-    pub fn wake_queue(&self) -> &Arc<wake::WakeQueue> {
+    pub const fn wake_queue(&self) -> &Arc<wake::WakeQueue> {
         &self.wake_queue
     }
 

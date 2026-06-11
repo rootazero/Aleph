@@ -27,7 +27,7 @@ pub enum LogLevel {
 impl LogLevel {
     /// Convert to tracing::Level
     #[must_use]
-    pub fn to_tracing_level(&self) -> Level {
+    pub const fn to_tracing_level(&self) -> Level {
         match self {
             LogLevel::Error => Level::ERROR,
             LogLevel::Warn => Level::WARN,
@@ -39,7 +39,7 @@ impl LogLevel {
 
     /// Convert to EnvFilter string
     #[must_use]
-    pub fn to_filter_string(&self) -> &'static str {
+    pub const fn to_filter_string(&self) -> &'static str {
         match self {
             LogLevel::Error => "error",
             LogLevel::Warn => "warn",
@@ -51,7 +51,7 @@ impl LogLevel {
 
     /// Parse from string (case-insensitive)
     #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
+    pub const fn parse(s: &str) -> Option<Self> {
         if s.eq_ignore_ascii_case("error") {
             Some(LogLevel::Error)
         } else if s.eq_ignore_ascii_case("warn") || s.eq_ignore_ascii_case("warning") {

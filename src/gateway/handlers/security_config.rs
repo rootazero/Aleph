@@ -33,7 +33,7 @@ pub enum NetworkAccess {
 
 impl NetworkAccess {
     #[must_use]
-    pub fn to_bind_address(&self) -> &str {
+    pub const fn to_bind_address(&self) -> &str {
         match self {
             Self::Localhost => "127.0.0.1",
             Self::AllNetworks => "0.0.0.0",
@@ -165,14 +165,14 @@ pub struct SecurityConfig {
     pub sandbox_rate_limit: rate_limit::SandboxRateLimitConfigSchema,
 }
 
-fn default_network_access() -> NetworkAccess {
+const fn default_network_access() -> NetworkAccess {
     NetworkAccess::Localhost
 }
 
-fn default_true_ssrf() -> bool {
+const fn default_true_ssrf() -> bool {
     true
 }
-fn default_max_redirects() -> u8 {
+const fn default_max_redirects() -> u8 {
     5
 }
 

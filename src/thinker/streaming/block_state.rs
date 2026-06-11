@@ -42,7 +42,7 @@ impl Default for ThinkingTagParser {
 impl ThinkingTagParser {
     /// Create a new parser
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             state: BlockState::Content,
             accumulated_thinking: String::new(),
@@ -54,7 +54,7 @@ impl ThinkingTagParser {
 
     /// Get current state
     #[must_use]
-    pub fn state(&self) -> BlockState {
+    pub const fn state(&self) -> BlockState {
         self.state
     }
 

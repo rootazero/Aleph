@@ -24,7 +24,7 @@ pub enum SortOrder {
 
 impl SortOrder {
     #[must_use]
-    pub fn as_api_str(&self) -> &'static str {
+    pub const fn as_api_str(&self) -> &'static str {
         match self {
             Self::Downloads => "downloads",
             Self::Stars => "stars",

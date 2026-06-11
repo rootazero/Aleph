@@ -36,7 +36,7 @@ pub struct ToolServiceConfig {
     pub per_tool_seconds: HashMap<String, u64>,
 }
 
-pub fn default_tool_service_timeout_seconds() -> u64 {
+pub const fn default_tool_service_timeout_seconds() -> u64 {
     60
 }
 
@@ -51,7 +51,7 @@ impl Default for ToolServiceConfig {
 
 impl ToolServiceConfig {
     /// Resolve the default timeout as a `Duration`.
-    pub fn default_timeout(&self) -> Duration {
+    pub const fn default_timeout(&self) -> Duration {
         Duration::from_secs(self.default_timeout_seconds)
     }
 
@@ -107,7 +107,7 @@ pub struct ToolsConfig {
     pub system_info_enabled: bool,
 }
 
-pub fn default_shell_timeout() -> u64 {
+pub const fn default_shell_timeout() -> u64 {
     30
 }
 
@@ -149,11 +149,11 @@ pub struct McpConfig {
     pub external_servers: Vec<McpExternalServerConfig>,
 }
 
-pub fn default_mcp_enabled() -> bool {
+pub const fn default_mcp_enabled() -> bool {
     true
 }
 
-pub fn default_mcp_timeout() -> u64 {
+pub const fn default_mcp_timeout() -> u64 {
     30
 }
 
@@ -550,11 +550,11 @@ pub struct ScreenCaptureToolConfig {
     pub jpeg_quality: u8,
 }
 
-pub fn default_max_dimension() -> u32 {
+pub const fn default_max_dimension() -> u32 {
     1920
 }
 
-pub fn default_jpeg_quality() -> u8 {
+pub const fn default_jpeg_quality() -> u8 {
     85
 }
 
@@ -584,11 +584,11 @@ pub struct SearchToolConfig {
     pub default_timeout_seconds: u64,
 }
 
-pub fn default_search_tool_max_results() -> usize {
+pub const fn default_search_tool_max_results() -> usize {
     5
 }
 
-pub fn default_search_tool_timeout_seconds() -> u64 {
+pub const fn default_search_tool_timeout_seconds() -> u64 {
     10
 }
 

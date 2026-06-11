@@ -89,11 +89,11 @@ pub struct IntentDetectionConfig {
     pub mcp: bool,
 }
 
-pub fn default_confidence_threshold() -> f64 {
+pub const fn default_confidence_threshold() -> f64 {
     0.7
 }
 
-pub fn default_ai_timeout_ms() -> u64 {
+pub const fn default_ai_timeout_ms() -> u64 {
     3000
 }
 
@@ -127,7 +127,7 @@ pub struct SuggestionParsingConfig {
     pub max_suggestions: usize,
 }
 
-pub fn default_max_suggestions() -> usize {
+pub const fn default_max_suggestions() -> usize {
     5
 }
 
@@ -206,19 +206,19 @@ pub struct SmartMatchingConfig {
     pub keyword_rules: Vec<KeywordRuleConfig>,
 }
 
-pub fn default_command_confidence() -> f64 {
+pub const fn default_command_confidence() -> f64 {
     1.0
 }
 
-pub fn default_regex_threshold() -> f64 {
+pub const fn default_regex_threshold() -> f64 {
     0.9
 }
 
-pub fn default_keyword_threshold() -> f64 {
+pub const fn default_keyword_threshold() -> f64 {
     0.7
 }
 
-pub fn default_ai_threshold() -> f64 {
+pub const fn default_ai_threshold() -> f64 {
     0.6
 }
 

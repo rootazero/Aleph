@@ -38,7 +38,7 @@ pub struct BrowserEmulateTool {
 }
 
 impl BrowserEmulateTool {
-    pub fn new(manager: Arc<ProfileManager>) -> Self {
+    pub const fn new(manager: Arc<ProfileManager>) -> Self {
         Self { manager }
     }
 }

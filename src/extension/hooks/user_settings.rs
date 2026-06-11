@@ -291,7 +291,7 @@ fn parse_event(name: &str) -> Option<HookEvent> {
 /// the hook output actually stops the relevant flow; passive lifecycle
 /// events default to Observer so they don't accidentally short-circuit
 /// when the user just wants logging.
-fn default_kind_for_event(event: HookEvent) -> HookKind {
+const fn default_kind_for_event(event: HookEvent) -> HookKind {
     use HookEvent::*;
     match event {
         BeforeToolCall | BeforeAgentStart | UserPromptSubmit => HookKind::Interceptor,
@@ -304,7 +304,7 @@ fn default_kind_for_event(event: HookEvent) -> HookKind {
 /// the `matcher` against `tool_name` only; on any other event the matcher can
 /// never match and the hook silently never fires. Used to surface that
 /// foot-gun as a load-time warning.
-fn event_supports_matcher(event: HookEvent) -> bool {
+const fn event_supports_matcher(event: HookEvent) -> bool {
     use HookEvent::*;
     matches!(
         event,

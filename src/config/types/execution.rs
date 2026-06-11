@@ -44,11 +44,11 @@ pub struct ExecutionConfig {
     pub progress_push: bool,
 }
 
-fn default_timeout_secs() -> u64 {
+const fn default_timeout_secs() -> u64 {
     172_800
 }
 
-fn default_max_iterations() -> usize {
+const fn default_max_iterations() -> usize {
     1000
 }
 

@@ -155,7 +155,7 @@ impl ResourceGovernor {
 
     /// `true` when this governor should be registered as a hook at all.
     #[must_use]
-    pub fn is_enabled(&self) -> bool {
+    pub const fn is_enabled(&self) -> bool {
         self.enabled
     }
 

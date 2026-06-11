@@ -188,13 +188,13 @@ impl AccessController {
 
     /// Reference to the runtime users list (for callback handler checks).
     #[must_use]
-    pub fn runtime_users(&self) -> &Arc<RwLock<Vec<i64>>> {
+    pub const fn runtime_users(&self) -> &Arc<RwLock<Vec<i64>>> {
         &self.runtime_users
     }
 
     /// Reference to the underlying resolved config.
     #[must_use]
-    pub fn config(&self) -> &ResolvedConfig {
+    pub const fn config(&self) -> &ResolvedConfig {
         &self.resolved_config
     }
 

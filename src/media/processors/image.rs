@@ -19,12 +19,12 @@ pub struct ImageMediaProvider {
 
 impl ImageMediaProvider {
     #[must_use]
-    pub fn new(pipeline: Arc<VisionPipeline>, priority: u8) -> Self {
+    pub const fn new(pipeline: Arc<VisionPipeline>, priority: u8) -> Self {
         Self { pipeline, priority }
     }
 
     /// Convert media image format to vision image format (best effort).
-    fn to_vision_format(fmt: &MediaImageFormat) -> VisionImageFormat {
+    const fn to_vision_format(fmt: &MediaImageFormat) -> VisionImageFormat {
         match fmt {
             MediaImageFormat::Png => VisionImageFormat::Png,
             MediaImageFormat::Jpeg => VisionImageFormat::Jpeg,

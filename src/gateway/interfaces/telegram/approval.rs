@@ -22,7 +22,7 @@ pub struct TelegramChannelApprovalCapability {
 
 impl TelegramChannelApprovalCapability {
     #[must_use]
-    pub fn new(channel: Arc<TelegramChannel>, access: Arc<AccessController>) -> Self {
+    pub const fn new(channel: Arc<TelegramChannel>, access: Arc<AccessController>) -> Self {
         Self { channel, access }
     }
 

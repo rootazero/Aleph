@@ -303,7 +303,7 @@ impl InboundMessageRouter {
 
     /// Tune the bot↔bot pair-loop guard. Defaults (20 events / 60s window /
     /// 60s cooldown, enabled) are applied when this builder is not called.
-    pub fn with_bot_loop_protection(mut self, config: PairLoopGuardConfig) -> Self {
+    pub const fn with_bot_loop_protection(mut self, config: PairLoopGuardConfig) -> Self {
         self.pair_loop_config = config;
         self
     }

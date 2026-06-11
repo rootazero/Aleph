@@ -74,11 +74,11 @@ impl MutationGate {
             .push_back(std::mem::take(&mut self.current_assertions));
     }
 
-    pub fn activate_cooldown(&mut self, cycles: u32) {
+    pub const fn activate_cooldown(&mut self, cycles: u32) {
         self.cooldown = cycles;
     }
 
-    pub fn tick_cooldown(&mut self) {
+    pub const fn tick_cooldown(&mut self) {
         self.cooldown = self.cooldown.saturating_sub(1);
     }
 

@@ -45,7 +45,7 @@ pub enum A2AError {
 impl A2AError {
     /// Returns the JSON-RPC error code for this error
     #[must_use]
-    pub fn error_code(&self) -> i64 {
+    pub const fn error_code(&self) -> i64 {
         match self {
             Self::ParseError(_) => -32700,
             Self::InvalidRequest(_) => -32600,

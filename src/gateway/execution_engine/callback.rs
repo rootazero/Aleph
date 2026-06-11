@@ -11,7 +11,7 @@ pub(super) struct TracePersistence {
 }
 
 impl TracePersistence {
-    pub(super) fn new(db: Arc<crate::resilience::StateDatabase>, task_id: String) -> Self {
+    pub(super) const fn new(db: Arc<crate::resilience::StateDatabase>, task_id: String) -> Self {
         Self {
             db,
             task_id,
@@ -71,7 +71,7 @@ pub(super) struct StreamCallbackState {
 }
 
 impl StreamCallbackState {
-    pub(super) fn new(trace_persistence: Option<Arc<TracePersistence>>) -> Self {
+    pub(super) const fn new(trace_persistence: Option<Arc<TracePersistence>>) -> Self {
         Self {
             seq: AtomicU64::new(0),
             chunk_index: AtomicU32::new(0),
@@ -113,7 +113,7 @@ pub(super) struct CallbackStateFlushHandle {
 }
 
 impl CallbackStateFlushHandle {
-    pub(super) fn new(state: Arc<StreamCallbackState>) -> Self {
+    pub(super) const fn new(state: Arc<StreamCallbackState>) -> Self {
         Self { state }
     }
 }

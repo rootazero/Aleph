@@ -23,7 +23,7 @@ use super::error_cooldown::{ErrorCooldown, ErrorKind};
 ///
 /// Returns `None` for [`LinkPreviewMode::Enabled`] — Telegram's default
 /// behaviour, so the request is left untouched (no API field emitted).
-fn link_preview_options(mode: LinkPreviewMode) -> Option<teloxide::types::LinkPreviewOptions> {
+const fn link_preview_options(mode: LinkPreviewMode) -> Option<teloxide::types::LinkPreviewOptions> {
     use teloxide::types::LinkPreviewOptions;
     match mode {
         LinkPreviewMode::Enabled => None,
@@ -115,7 +115,7 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
 }
 
 /// Map an `ErrorClass` to an `ErrorKind` for cooldown purposes.
-fn error_class_to_kind(ec: &ErrorClass) -> ErrorKind {
+const fn error_class_to_kind(ec: &ErrorClass) -> ErrorKind {
     match ec {
         ErrorClass::Rejected(_) | ErrorClass::HtmlParseError(_) => ErrorKind::Permanent,
         ErrorClass::PreConnect | ErrorClass::PostConnect | ErrorClass::RateLimited(_) => {
@@ -171,7 +171,7 @@ macro_rules! with_thread {
 ///
 /// - `MessageNotModified`: debounce window produced no new tokens.
 /// - `MessageCantBeEdited`: user deleted the message mid-stream.
-fn is_benign_edit_error(err: &teloxide::RequestError) -> bool {
+const fn is_benign_edit_error(err: &teloxide::RequestError) -> bool {
     matches!(
         err,
         teloxide::RequestError::Api(

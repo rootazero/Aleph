@@ -35,7 +35,7 @@ pub struct ToolsChangedSink {
 
 impl ToolsChangedSink {
     /// Construct a new sink wired to the live trackers.
-    pub fn new(state_versions: Arc<StateVersionTracker>, event_bus: Arc<GatewayEventBus>) -> Self {
+    pub const fn new(state_versions: Arc<StateVersionTracker>, event_bus: Arc<GatewayEventBus>) -> Self {
         Self {
             state_versions,
             event_bus,

@@ -223,7 +223,7 @@ impl DeliveryEngine {
 
 /// Check if delivery should be skipped due to agent already sending.
 #[must_use]
-pub fn should_skip_delivery(agent_already_sent: bool, mode: &DeliveryMode) -> DeliveryStatus {
+pub const fn should_skip_delivery(agent_already_sent: bool, mode: &DeliveryMode) -> DeliveryStatus {
     if matches!(mode, DeliveryMode::None) {
         return DeliveryStatus::NotRequested;
     }

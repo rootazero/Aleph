@@ -90,7 +90,7 @@ pub struct WebhookReceiver {
 impl WebhookReceiver {
     /// Create a new WebhookReceiver bound to the given port.
     #[must_use]
-    pub fn new(port: u16) -> Self {
+    pub const fn new(port: u16) -> Self {
         Self {
             port,
             shutdown_tx: None,

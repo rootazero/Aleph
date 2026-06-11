@@ -398,7 +398,7 @@ impl From<DiscordConfig> for DiscordChannelConfig {
 // Helper Functions
 // ============================================================================
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 

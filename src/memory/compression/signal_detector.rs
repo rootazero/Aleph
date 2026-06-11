@@ -163,7 +163,7 @@ impl SignalDetector {
 
     /// Create a signal detector with custom keywords
     #[must_use]
-    pub fn with_keywords(keywords: SignalKeywords) -> Self {
+    pub const fn with_keywords(keywords: SignalKeywords) -> Self {
         Self { keywords }
     }
 

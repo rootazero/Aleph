@@ -96,7 +96,7 @@ pub struct ChannelMessageTool {
 }
 
 impl ChannelMessageTool {
-    pub fn new(channel_registry: Arc<ChannelRegistry>) -> Self {
+    pub const fn new(channel_registry: Arc<ChannelRegistry>) -> Self {
         Self { channel_registry }
     }
 

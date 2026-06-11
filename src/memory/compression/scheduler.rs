@@ -51,7 +51,7 @@ impl Default for SchedulerConfig {
 impl SchedulerConfig {
     /// Create a SchedulerConfig from policy configuration
     #[must_use]
-    pub fn from_policy(policy: &CompressionPolicy) -> Self {
+    pub const fn from_policy(policy: &CompressionPolicy) -> Self {
         Self {
             idle_timeout_seconds: policy.idle_timeout_seconds,
             turn_threshold: policy.turn_threshold,

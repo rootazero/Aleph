@@ -98,7 +98,7 @@ pub struct SecretMapping {
     pub ttl: u64,
 }
 
-fn default_ttl() -> u64 {
+const fn default_ttl() -> u64 {
     3600
 }
 

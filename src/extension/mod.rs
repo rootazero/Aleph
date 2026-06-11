@@ -899,7 +899,7 @@ impl ExtensionManager {
     }
 
     /// Get a reference to the adapter registry for capability-driven parsing.
-    pub fn adapter_registry(&self) -> &AdapterRegistry {
+    pub const fn adapter_registry(&self) -> &AdapterRegistry {
         &self.adapter_registry
     }
 

@@ -15,7 +15,7 @@ pub const PROMPT_RETRO: &str = include_str!("source_prompts/snapshots/retro.txt"
 /// Legacy variants return `None` so the caller falls back to the
 /// existing generic prompt in `FactExtractor`.
 #[must_use]
-pub fn prompt_for(source: &RawMemorySource) -> Option<&'static str> {
+pub const fn prompt_for(source: &RawMemorySource) -> Option<&'static str> {
     match source {
         RawMemorySource::PreCompress => Some(PROMPT_RESCUE),
         RawMemorySource::Delegation { .. } => Some(PROMPT_LESSON),

@@ -33,7 +33,7 @@ impl ConfigBackup {
     /// * `backup_dir` - Directory to store backup files
     /// * `max_count` - Maximum number of backups to keep (oldest are pruned)
     #[must_use]
-    pub fn new(backup_dir: PathBuf, max_count: usize) -> Self {
+    pub const fn new(backup_dir: PathBuf, max_count: usize) -> Self {
         Self {
             backup_dir,
             max_count,

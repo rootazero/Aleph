@@ -63,7 +63,7 @@ pub struct RestartBackoff {
 impl RestartBackoff {
     /// Build a scheduler from an explicit policy.
     #[must_use]
-    pub fn new(policy: BackoffPolicy) -> Self {
+    pub const fn new(policy: BackoffPolicy) -> Self {
         Self { policy, attempt: 0 }
     }
 
@@ -76,13 +76,13 @@ impl RestartBackoff {
 
     /// Consecutive restart attempts recorded since the last [`reset`](Self::reset).
     #[must_use]
-    pub fn attempts(&self) -> u32 {
+    pub const fn attempts(&self) -> u32 {
         self.attempt
     }
 
     /// Whether another restart is permitted under the attempt ceiling.
     #[must_use]
-    pub fn can_retry(&self) -> bool {
+    pub const fn can_retry(&self) -> bool {
         match self.policy.max_attempts {
             Some(max) => self.attempt < max,
             None => true,
@@ -101,7 +101,7 @@ impl RestartBackoff {
     }
 
     /// Reset the attempt counter after a successful (re)connect.
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.attempt = 0;
     }
 

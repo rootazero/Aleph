@@ -92,7 +92,7 @@ pub struct WorkflowManifestStep {
 }
 
 /// serde `skip_serializing_if` helper — keeps non-reviewed steps byte-identical.
-fn is_false(v: &bool) -> bool {
+const fn is_false(v: &bool) -> bool {
     !*v
 }
 

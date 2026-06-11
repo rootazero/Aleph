@@ -29,7 +29,7 @@ pub struct GatewayRouteArgs {
     pub enable_llm_fallback: bool,
 }
 
-fn default_llm_fallback() -> bool {
+const fn default_llm_fallback() -> bool {
     true
 }
 

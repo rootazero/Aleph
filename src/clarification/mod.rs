@@ -146,7 +146,7 @@ pub struct ClarificationResult {
 impl ClarificationResult {
     /// Create a selected result
     #[must_use]
-    pub fn selected(index: u32, value: String) -> Self {
+    pub const fn selected(index: u32, value: String) -> Self {
         Self {
             result_type: ClarificationResultType::Selected,
             selected_index: Some(index),
@@ -156,7 +156,7 @@ impl ClarificationResult {
 
     /// Create a text input result
     #[must_use]
-    pub fn text_input(value: String) -> Self {
+    pub const fn text_input(value: String) -> Self {
         Self {
             result_type: ClarificationResultType::TextInput,
             selected_index: None,
@@ -166,7 +166,7 @@ impl ClarificationResult {
 
     /// Create a cancelled result
     #[must_use]
-    pub fn cancelled() -> Self {
+    pub const fn cancelled() -> Self {
         Self {
             result_type: ClarificationResultType::Cancelled,
             selected_index: None,
@@ -176,7 +176,7 @@ impl ClarificationResult {
 
     /// Create a timeout result
     #[must_use]
-    pub fn timeout() -> Self {
+    pub const fn timeout() -> Self {
         Self {
             result_type: ClarificationResultType::Timeout,
             selected_index: None,
@@ -186,7 +186,7 @@ impl ClarificationResult {
 
     /// Check if the result is successful (selected or text input)
     #[must_use]
-    pub fn is_success(&self) -> bool {
+    pub const fn is_success(&self) -> bool {
         matches!(
             self.result_type,
             ClarificationResultType::Selected | ClarificationResultType::TextInput

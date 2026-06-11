@@ -174,7 +174,7 @@ impl HookPriority {
     }
 
     #[must_use]
-    pub fn as_i32(&self) -> i32 {
+    pub const fn as_i32(&self) -> i32 {
         match self {
             HookPriority::System => -1000,
             HookPriority::High => -100,

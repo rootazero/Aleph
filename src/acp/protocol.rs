@@ -207,13 +207,13 @@ pub struct AcpResponse {
 impl AcpResponse {
     /// Returns true if this is a result response (has id and result/error).
     #[must_use]
-    pub fn is_result(&self) -> bool {
+    pub const fn is_result(&self) -> bool {
         self.id.is_some()
     }
 
     /// Returns true if this is a notification (has method, no id).
     #[must_use]
-    pub fn is_notification(&self) -> bool {
+    pub const fn is_notification(&self) -> bool {
         self.id.is_none() && self.method.is_some()
     }
 
@@ -225,7 +225,7 @@ impl AcpResponse {
     /// test `method` presence before matching ids to avoid mistaking an agent
     /// request for our own response.
     #[must_use]
-    pub fn is_incoming_request(&self) -> bool {
+    pub const fn is_incoming_request(&self) -> bool {
         self.id.is_some() && self.method.is_some()
     }
 
@@ -397,7 +397,7 @@ impl AcpErrorCode {
     /// These strings are part of the gateway contract — never rename without
     /// migrating panel + downstream consumers.
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::HarnessNotFound => "harness_not_found",
             Self::HarnessUnavailable => "harness_unavailable",
@@ -416,7 +416,7 @@ impl AcpErrorCode {
     /// Heuristic for callers deciding whether to retry. Mirrors acpx's
     /// `retryable` flag on `NormalizedOutputError`.
     #[must_use]
-    pub fn is_retryable(&self) -> bool {
+    pub const fn is_retryable(&self) -> bool {
         matches!(
             self,
             Self::SessionDead | Self::Timeout | Self::HarnessUnavailable | Self::SpawnFailed

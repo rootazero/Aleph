@@ -46,19 +46,19 @@ pub struct WindowsSandboxConfig {
     pub max_active_processes: u32,
 }
 
-fn default_windows_use_app_container() -> bool {
+const fn default_windows_use_app_container() -> bool {
     true
 }
 
-fn default_windows_use_restricted_token() -> bool {
+const fn default_windows_use_restricted_token() -> bool {
     true
 }
 
-fn default_windows_use_job_object() -> bool {
+const fn default_windows_use_job_object() -> bool {
     true
 }
 
-fn default_windows_max_active_processes() -> u32 {
+const fn default_windows_max_active_processes() -> u32 {
     8
 }
 
@@ -99,41 +99,41 @@ pub struct SandboxRateLimitConfigSchema {
     pub admin: WindowConfigSchema,
 }
 
-fn default_rate_limit_enabled() -> bool {
+const fn default_rate_limit_enabled() -> bool {
     true
 }
-fn default_max_requests() -> u32 {
+const fn default_max_requests() -> u32 {
     60
 }
-fn default_window_secs() -> u64 {
+const fn default_window_secs() -> u64 {
     60
 }
-fn default_burst_allow() -> u32 {
+const fn default_burst_allow() -> u32 {
     20
 }
 
-fn default_rate_limit_read() -> WindowConfigSchema {
+const fn default_rate_limit_read() -> WindowConfigSchema {
     WindowConfigSchema {
         max_requests: 60,
         window_secs: 60,
         burst_allow: 20,
     }
 }
-fn default_rate_limit_write() -> WindowConfigSchema {
+const fn default_rate_limit_write() -> WindowConfigSchema {
     WindowConfigSchema {
         max_requests: 30,
         window_secs: 60,
         burst_allow: 10,
     }
 }
-fn default_rate_limit_dangerous() -> WindowConfigSchema {
+const fn default_rate_limit_dangerous() -> WindowConfigSchema {
     WindowConfigSchema {
         max_requests: 10,
         window_secs: 60,
         burst_allow: 5,
     }
 }
-fn default_rate_limit_admin() -> WindowConfigSchema {
+const fn default_rate_limit_admin() -> WindowConfigSchema {
     WindowConfigSchema {
         max_requests: 5,
         window_secs: 60,
@@ -182,19 +182,19 @@ pub struct ResourceGovernorConfigSchema {
     pub backoff_ms: u64,
 }
 
-fn default_governor_enabled() -> bool {
+const fn default_governor_enabled() -> bool {
     false
 }
-fn default_governor_min_memory_mb() -> Option<u64> {
+const fn default_governor_min_memory_mb() -> Option<u64> {
     Some(512)
 }
-fn default_governor_max_cpu_percent() -> Option<f32> {
+const fn default_governor_max_cpu_percent() -> Option<f32> {
     None
 }
-fn default_governor_max_wait_secs() -> u64 {
+const fn default_governor_max_wait_secs() -> u64 {
     30
 }
-fn default_governor_backoff_ms() -> u64 {
+const fn default_governor_backoff_ms() -> u64 {
     500
 }
 
@@ -290,23 +290,23 @@ pub struct LinuxSandboxConfig {
     pub max_pids: Option<u32>,
 }
 
-fn default_linux_cgroup_enabled() -> bool {
+const fn default_linux_cgroup_enabled() -> bool {
     true
 }
 
-fn default_linux_max_pids() -> Option<u32> {
+const fn default_linux_max_pids() -> Option<u32> {
     Some(200)
 }
 
-fn default_linux_mount_proc() -> bool {
+const fn default_linux_mount_proc() -> bool {
     true
 }
 
-fn default_linux_no_new_privs() -> bool {
+const fn default_linux_no_new_privs() -> bool {
     true
 }
 
-fn default_linux_include_platform_defaults() -> bool {
+const fn default_linux_include_platform_defaults() -> bool {
     true
 }
 
@@ -416,15 +416,15 @@ fn default_workspace_root() -> PathBuf {
         }, |home| home.join(".aleph").join("workspaces"))
 }
 
-fn default_enabled() -> bool {
+const fn default_enabled() -> bool {
     true
 }
 
-fn default_timeout_seconds() -> u64 {
+const fn default_timeout_seconds() -> u64 {
     60
 }
 
-fn default_max_output_bytes() -> usize {
+const fn default_max_output_bytes() -> usize {
     1024 * 1024
 }
 

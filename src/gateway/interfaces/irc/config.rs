@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-fn default_port() -> u16 {
+const fn default_port() -> u16 {
     6667
 }
 

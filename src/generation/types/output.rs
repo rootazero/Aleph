@@ -25,7 +25,7 @@ pub enum GenerationData {
 impl GenerationData {
     /// Create a Bytes variant
     #[must_use]
-    pub fn bytes(data: Vec<u8>) -> Self {
+    pub const fn bytes(data: Vec<u8>) -> Self {
         GenerationData::Bytes(data)
     }
 
@@ -41,19 +41,19 @@ impl GenerationData {
 
     /// Check if this is raw bytes
     #[must_use]
-    pub fn is_bytes(&self) -> bool {
+    pub const fn is_bytes(&self) -> bool {
         matches!(self, GenerationData::Bytes(_))
     }
 
     /// Check if this is a URL
     #[must_use]
-    pub fn is_url(&self) -> bool {
+    pub const fn is_url(&self) -> bool {
         matches!(self, GenerationData::Url(_))
     }
 
     /// Check if this is a local path
     #[must_use]
-    pub fn is_local_path(&self) -> bool {
+    pub const fn is_local_path(&self) -> bool {
         matches!(self, GenerationData::LocalPath(_))
     }
 
@@ -136,14 +136,14 @@ impl GenerationMetadata {
 
     /// Set the generation duration
     #[must_use]
-    pub fn with_duration(mut self, duration: Duration) -> Self {
+    pub const fn with_duration(mut self, duration: Duration) -> Self {
         self.duration = Some(duration);
         self
     }
 
     /// Set the seed
     #[must_use]
-    pub fn with_seed(mut self, seed: i64) -> Self {
+    pub const fn with_seed(mut self, seed: i64) -> Self {
         self.seed = Some(seed);
         self
     }
@@ -162,14 +162,14 @@ impl GenerationMetadata {
 
     /// Set the file size
     #[must_use]
-    pub fn with_size_bytes(mut self, size: u64) -> Self {
+    pub const fn with_size_bytes(mut self, size: u64) -> Self {
         self.size_bytes = Some(size);
         self
     }
 
     /// Set dimensions
     #[must_use]
-    pub fn with_dimensions(mut self, width: u32, height: u32) -> Self {
+    pub const fn with_dimensions(mut self, width: u32, height: u32) -> Self {
         self.width = Some(width);
         self.height = Some(height);
         self
@@ -177,7 +177,7 @@ impl GenerationMetadata {
 
     /// Set duration in seconds
     #[must_use]
-    pub fn with_duration_seconds(mut self, seconds: f32) -> Self {
+    pub const fn with_duration_seconds(mut self, seconds: f32) -> Self {
         self.duration_seconds = Some(seconds);
         self
     }
@@ -251,7 +251,7 @@ impl GenerationOutput {
 
     /// Get the total number of outputs (primary + additional)
     #[must_use]
-    pub fn output_count(&self) -> usize {
+    pub const fn output_count(&self) -> usize {
         1 + self.additional_outputs.len()
     }
 

@@ -55,7 +55,7 @@ impl UnifiedTool {
 
     /// Builder method: set requires confirmation
     #[must_use]
-    pub fn with_requires_confirmation(mut self, requires: bool) -> Self {
+    pub const fn with_requires_confirmation(mut self, requires: bool) -> Self {
         self.requires_confirmation = requires;
         self
     }
@@ -77,7 +77,7 @@ impl UnifiedTool {
 
     /// Builder method: set active state
     #[must_use]
-    pub fn with_active(mut self, active: bool) -> Self {
+    pub const fn with_active(mut self, active: bool) -> Self {
         self.is_active = active;
         self
     }
@@ -113,21 +113,21 @@ impl UnifiedTool {
 
     /// Builder method: set builtin flag
     #[must_use]
-    pub fn with_builtin(mut self, is_builtin: bool) -> Self {
+    pub const fn with_builtin(mut self, is_builtin: bool) -> Self {
         self.is_builtin = is_builtin;
         self
     }
 
     /// Builder method: set sort order
     #[must_use]
-    pub fn with_sort_order(mut self, order: i32) -> Self {
+    pub const fn with_sort_order(mut self, order: i32) -> Self {
         self.sort_order = order;
         self
     }
 
     /// Builder method: set has_subtools flag
     #[must_use]
-    pub fn with_has_subtools(mut self, has: bool) -> Self {
+    pub const fn with_has_subtools(mut self, has: bool) -> Self {
         self.has_subtools = has;
         self
     }
@@ -169,7 +169,7 @@ impl UnifiedTool {
 
     /// Builder method: set routing strip prefix
     #[must_use]
-    pub fn with_routing_strip_prefix(mut self, strip: bool) -> Self {
+    pub const fn with_routing_strip_prefix(mut self, strip: bool) -> Self {
         self.routing_strip_prefix = strip;
         self
     }
@@ -193,7 +193,7 @@ impl UnifiedTool {
 
     /// Builder method: mark as renamed due to conflict
     #[must_use]
-    pub fn with_was_renamed(mut self, renamed: bool) -> Self {
+    pub const fn with_was_renamed(mut self, renamed: bool) -> Self {
         self.was_renamed = renamed;
         self
     }
@@ -204,7 +204,7 @@ impl UnifiedTool {
 
     /// Builder method: set dispatch mode
     #[must_use]
-    pub fn with_dispatch_mode(mut self, mode: DispatchMode) -> Self {
+    pub const fn with_dispatch_mode(mut self, mode: DispatchMode) -> Self {
         self.dispatch_mode = mode;
         self
     }

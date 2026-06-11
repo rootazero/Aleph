@@ -25,7 +25,7 @@ pub struct CommandAnalysis {
 impl CommandAnalysis {
     /// Create a successful analysis with segments
     #[must_use]
-    pub fn success(segments: Vec<CommandSegment>, chains: Vec<Vec<CommandSegment>>) -> Self {
+    pub const fn success(segments: Vec<CommandSegment>, chains: Vec<Vec<CommandSegment>>) -> Self {
         Self {
             ok: true,
             reason: None,

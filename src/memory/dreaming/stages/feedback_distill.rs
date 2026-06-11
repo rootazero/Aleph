@@ -366,7 +366,7 @@ pub fn parse_distill_response(text: &str) -> Vec<DistillAction> {
         .unwrap_or_default()
 }
 
-fn clamp_action(mut a: DistillAction) -> DistillAction {
+const fn clamp_action(mut a: DistillAction) -> DistillAction {
     use DistillAction::*;
     match &mut a {
         New { confidence, .. } | Supersede { confidence, .. } => {

@@ -104,7 +104,7 @@ impl PluginId {
 
     /// Check whether the plugin ID is empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 }
@@ -150,7 +150,7 @@ impl SkillSource {
     ///
     /// Bundled=1 < Global=2 < Plugin=3 < Workspace=4
     #[must_use]
-    pub fn priority(&self) -> u8 {
+    pub const fn priority(&self) -> u8 {
         match self {
             Self::Bundled => 1,
             Self::Global => 2,
@@ -301,7 +301,7 @@ impl ValueObject for InstallKind {}
 
 impl InstallKind {
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Brew => "brew",
             Self::Apt => "apt",
@@ -365,7 +365,7 @@ pub struct DispatchSpec {
 impl ValueObject for DispatchSpec {}
 
 /// Serde helper: returns `true`.
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -417,7 +417,7 @@ impl SkillContent {
 
     /// Check if the content is empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
@@ -523,7 +523,7 @@ impl SkillManifest {
 
     /// Optional owning plugin.
     #[must_use]
-    pub fn plugin(&self) -> Option<&PluginId> {
+    pub const fn plugin(&self) -> Option<&PluginId> {
         self.plugin.as_ref()
     }
 
@@ -535,13 +535,13 @@ impl SkillManifest {
 
     /// The prompt content.
     #[must_use]
-    pub fn content(&self) -> &SkillContent {
+    pub const fn content(&self) -> &SkillContent {
         &self.content
     }
 
     /// How the content is injected.
     #[must_use]
-    pub fn scope(&self) -> &PromptScope {
+    pub const fn scope(&self) -> &PromptScope {
         &self.scope
     }
 
@@ -553,7 +553,7 @@ impl SkillManifest {
 
     /// Eligibility conditions.
     #[must_use]
-    pub fn eligibility(&self) -> &EligibilitySpec {
+    pub const fn eligibility(&self) -> &EligibilitySpec {
         &self.eligibility
     }
 
@@ -565,13 +565,13 @@ impl SkillManifest {
 
     /// Invocation policy.
     #[must_use]
-    pub fn invocation(&self) -> &InvocationPolicy {
+    pub const fn invocation(&self) -> &InvocationPolicy {
         &self.invocation
     }
 
     /// Where the skill came from.
     #[must_use]
-    pub fn source(&self) -> &SkillSource {
+    pub const fn source(&self) -> &SkillSource {
         &self.source
     }
 
@@ -618,7 +618,7 @@ impl SkillManifest {
 
     /// Whether a user can invoke this skill directly.
     #[must_use]
-    pub fn is_user_invocable(&self) -> bool {
+    pub const fn is_user_invocable(&self) -> bool {
         self.invocation.user_invocable
     }
 
@@ -630,7 +630,7 @@ impl SkillManifest {
     }
 
     /// Set the prompt scope.
-    pub fn set_scope(&mut self, scope: PromptScope) {
+    pub const fn set_scope(&mut self, scope: PromptScope) {
         self.scope = scope;
     }
 

@@ -42,7 +42,7 @@ impl Default for WhatsAppChunker {
 
 impl WhatsAppChunker {
     #[must_use]
-    pub fn new(mode: ChunkMode, max_size: usize) -> Self {
+    pub const fn new(mode: ChunkMode, max_size: usize) -> Self {
         Self { mode, max_size }
     }
 }

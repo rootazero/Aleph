@@ -45,22 +45,22 @@ pub struct MediaPolicy {
     pub temp_ttl_secs: u64,
 }
 
-fn default_max_image_bytes() -> u64 {
+const fn default_max_image_bytes() -> u64 {
     20 * 1024 * 1024
 }
-fn default_max_audio_bytes() -> u64 {
+const fn default_max_audio_bytes() -> u64 {
     100 * 1024 * 1024
 }
-fn default_max_video_duration() -> u64 {
+const fn default_max_video_duration() -> u64 {
     1800
 }
-fn default_max_video_bytes() -> u64 {
+const fn default_max_video_bytes() -> u64 {
     500 * 1024 * 1024
 }
-fn default_max_document_bytes() -> u64 {
+const fn default_max_document_bytes() -> u64 {
     50 * 1024 * 1024
 }
-fn default_max_document_pages() -> u32 {
+const fn default_max_document_pages() -> u32 {
     200
 }
 fn default_temp_dir() -> PathBuf {
@@ -69,7 +69,7 @@ fn default_temp_dir() -> PathBuf {
         .join("aleph")
         .join("media_temp")
 }
-fn default_temp_ttl_secs() -> u64 {
+const fn default_temp_ttl_secs() -> u64 {
     3600
 }
 
@@ -91,7 +91,7 @@ impl Default for MediaPolicy {
 impl MediaPolicy {
     /// Temp file TTL as Duration.
     #[must_use]
-    pub fn temp_ttl(&self) -> Duration {
+    pub const fn temp_ttl(&self) -> Duration {
         Duration::from_secs(self.temp_ttl_secs)
     }
 

@@ -77,7 +77,7 @@ impl ChainContext {
 
     /// Returns true if this is a root-level context (depth == 0).
     #[must_use]
-    pub fn is_root(&self) -> bool {
+    pub const fn is_root(&self) -> bool {
         self.depth == 0
     }
 }

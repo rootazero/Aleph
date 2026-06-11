@@ -23,7 +23,7 @@ pub struct ChromeMcpBackend {
 }
 
 impl ChromeMcpBackend {
-    pub fn new(
+    pub const fn new(
         driver: Arc<ChromeMcpDriver>,
         profile_name: String,
         ssrf_guard: Arc<BrowserSsrfGuard>,

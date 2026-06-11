@@ -28,7 +28,7 @@ pub enum AgentEvent {
 impl AgentEvent {
     /// Get the tier of this event
     #[must_use]
-    pub fn tier(&self) -> EventTier {
+    pub const fn tier(&self) -> EventTier {
         match self {
             Self::Critical(_) => EventTier::Critical,
             Self::Important(_) => EventTier::Important,
@@ -108,7 +108,7 @@ pub enum CriticalEvent {
 impl CriticalEvent {
     /// Get timestamp of this event
     #[must_use]
-    pub fn timestamp(&self) -> u64 {
+    pub const fn timestamp(&self) -> u64 {
         match self {
             Self::BugRootCauseFound { timestamp, .. } => *timestamp,
             Self::TaskCancelled { timestamp, .. } => *timestamp,
@@ -214,7 +214,7 @@ pub enum ImportantEvent {
 impl ImportantEvent {
     /// Get timestamp of this event
     #[must_use]
-    pub fn timestamp(&self) -> u64 {
+    pub const fn timestamp(&self) -> u64 {
         match self {
             Self::Hotspot { timestamp, .. } => *timestamp,
             Self::ConfirmedInsight { timestamp, .. } => *timestamp,
@@ -282,7 +282,7 @@ pub enum InfoEvent {
 impl InfoEvent {
     /// Get timestamp of this event
     #[must_use]
-    pub fn timestamp(&self) -> u64 {
+    pub const fn timestamp(&self) -> u64 {
         match self {
             Self::ToolExecuted { timestamp, .. } => *timestamp,
             Self::FileAccessed { timestamp, .. } => *timestamp,

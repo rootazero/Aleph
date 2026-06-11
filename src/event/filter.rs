@@ -85,7 +85,7 @@ impl EventFilter {
     /// let filter = EventFilter::new(vec![EventType::ToolCallCompleted]);
     /// ```
     #[must_use]
-    pub fn new(event_types: Vec<EventType>) -> Self {
+    pub const fn new(event_types: Vec<EventType>) -> Self {
         Self {
             session_ids: None,
             agent_ids: None,
@@ -195,13 +195,13 @@ impl EventFilter {
 
     /// Check if this filter has any session restrictions.
     #[must_use]
-    pub fn has_session_filter(&self) -> bool {
+    pub const fn has_session_filter(&self) -> bool {
         self.session_ids.is_some()
     }
 
     /// Check if this filter has any agent restrictions.
     #[must_use]
-    pub fn has_agent_filter(&self) -> bool {
+    pub const fn has_agent_filter(&self) -> bool {
         self.agent_ids.is_some()
     }
 

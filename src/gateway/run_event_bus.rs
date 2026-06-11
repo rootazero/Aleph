@@ -210,7 +210,7 @@ impl RunEvent {
 
     /// Check if this is a terminal event (run ended)
     #[must_use]
-    pub fn is_terminal(&self) -> bool {
+    pub const fn is_terminal(&self) -> bool {
         matches!(
             self,
             RunEvent::RunCompleted { .. }
@@ -249,7 +249,7 @@ pub enum RunEndResult {
 impl RunEndResult {
     /// Check if the result is successful
     #[must_use]
-    pub fn is_success(&self) -> bool {
+    pub const fn is_success(&self) -> bool {
         matches!(self, RunEndResult::Completed { .. })
     }
 

@@ -61,7 +61,7 @@ impl OAuthTokens {
 
     /// Check if the token can be refreshed
     #[must_use]
-    pub fn can_refresh(&self) -> bool {
+    pub const fn can_refresh(&self) -> bool {
         self.refresh_token.is_some()
     }
 }

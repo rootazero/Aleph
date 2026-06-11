@@ -221,7 +221,7 @@ impl MemoryEvent {
     /// Matches the `#[serde(tag = "type")]` discriminant so callers can
     /// filter events by type without deserializing the full payload.
     #[must_use]
-    pub fn event_type_tag(&self) -> &'static str {
+    pub const fn event_type_tag(&self) -> &'static str {
         match self {
             MemoryEvent::NoteCreated { .. } => "NoteCreated",
             MemoryEvent::NoteContentUpdated { .. } => "NoteContentUpdated",
@@ -240,7 +240,7 @@ impl MemoryEvent {
     /// Only `NoteAccessed` is Pulse (buffered).
     /// All other variants are Skeleton.
     #[must_use]
-    pub fn is_skeleton(&self) -> bool {
+    pub const fn is_skeleton(&self) -> bool {
         !matches!(self, MemoryEvent::NoteAccessed { .. })
     }
 }

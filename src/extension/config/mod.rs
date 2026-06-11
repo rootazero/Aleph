@@ -177,7 +177,7 @@ impl ConfigManager {
 
     /// Get the merged configuration
     #[must_use]
-    pub fn get_config(&self) -> &AlephConfig {
+    pub const fn get_config(&self) -> &AlephConfig {
         &self.config
     }
 
@@ -201,7 +201,7 @@ impl ConfigManager {
 
     /// Get MCP servers
     #[must_use]
-    pub fn get_mcp_servers(&self) -> Option<&HashMap<String, McpConfig>> {
+    pub const fn get_mcp_servers(&self) -> Option<&HashMap<String, McpConfig>> {
         self.config.mcp.as_ref()
     }
 }

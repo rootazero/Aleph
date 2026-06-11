@@ -33,7 +33,7 @@ pub struct SkillStatusTool {
 
 impl SkillStatusTool {
     #[must_use]
-    pub fn new(system: SkillSystem) -> Self {
+    pub const fn new(system: SkillSystem) -> Self {
         Self { system }
     }
 }

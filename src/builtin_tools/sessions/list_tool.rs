@@ -39,7 +39,7 @@ pub struct SessionsListArgs {
     pub message_limit: Option<u32>,
 }
 
-fn default_limit() -> Option<u32> {
+const fn default_limit() -> Option<u32> {
     Some(50)
 }
 

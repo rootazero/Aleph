@@ -30,7 +30,7 @@ impl Config {
 
     /// Check if using new unified tools configuration
     #[must_use]
-    pub fn is_using_unified_tools(&self) -> bool {
+    pub const fn is_using_unified_tools(&self) -> bool {
         self.unified_tools.is_some()
     }
 
@@ -269,7 +269,7 @@ impl Config {
     /// # Returns
     /// * `usize` - Number of routing rules configured
     #[must_use]
-    pub fn rule_count(&self) -> usize {
+    pub const fn rule_count(&self) -> usize {
         self.rules.len()
     }
 }

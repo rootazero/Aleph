@@ -69,16 +69,16 @@ const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 /// Hard cap on tracked pairs as a defensive backstop.
 const MAX_TRACKED_PAIRS: usize = 10_000;
 
-fn default_enabled() -> bool {
+const fn default_enabled() -> bool {
     true
 }
-fn default_max_events_per_window() -> u32 {
+const fn default_max_events_per_window() -> u32 {
     DEFAULT_MAX_EVENTS_PER_WINDOW
 }
-fn default_window_seconds() -> u64 {
+const fn default_window_seconds() -> u64 {
     DEFAULT_WINDOW_SECONDS
 }
-fn default_cooldown_seconds() -> u64 {
+const fn default_cooldown_seconds() -> u64 {
     DEFAULT_COOLDOWN_SECONDS
 }
 
@@ -110,7 +110,7 @@ impl PairLoopGuardConfig {
     fn window(&self) -> Duration {
         Duration::from_secs(self.window_seconds.max(1))
     }
-    fn cooldown(&self) -> Duration {
+    const fn cooldown(&self) -> Duration {
         Duration::from_secs(self.cooldown_seconds)
     }
 }
@@ -133,7 +133,7 @@ pub struct PairLoopGuardResult {
 }
 
 impl PairLoopGuardResult {
-    fn allowed() -> Self {
+    const fn allowed() -> Self {
         Self {
             suppressed: false,
             reason: None,
@@ -165,7 +165,7 @@ struct PairState {
 }
 
 impl PairState {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             events: VecDeque::new(),
             cooldown_until: None,

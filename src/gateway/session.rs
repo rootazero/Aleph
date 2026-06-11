@@ -27,7 +27,7 @@ pub enum SessionError {
 }
 
 impl HttpSessionManager {
-    pub fn new(store: Arc<SecurityStore>, expiry_hours: u64) -> Self {
+    pub const fn new(store: Arc<SecurityStore>, expiry_hours: u64) -> Self {
         Self {
             store,
             expiry_hours,
@@ -35,7 +35,7 @@ impl HttpSessionManager {
     }
 
     #[must_use]
-    pub fn expiry_hours(&self) -> u64 {
+    pub const fn expiry_hours(&self) -> u64 {
         self.expiry_hours
     }
 

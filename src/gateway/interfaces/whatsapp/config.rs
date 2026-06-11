@@ -36,12 +36,12 @@ pub struct WhatsAppConfig {
     pub history: HistoryBufferConfig,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
 impl WhatsAppConfig {
-    pub fn validate(&self) -> Result<(), String> {
+    pub const fn validate(&self) -> Result<(), String> {
         Ok(())
     }
 
@@ -90,7 +90,7 @@ pub struct DeliveryConfig {
     pub send_read_receipts: bool,
 }
 
-fn default_text_chunk_limit() -> usize {
+const fn default_text_chunk_limit() -> usize {
     4000
 }
 

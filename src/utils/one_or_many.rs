@@ -16,13 +16,13 @@ pub enum OneOrMany<T> {
 
 impl<T> OneOrMany<T> {
     /// Create from a single value
-    pub fn one(value: T) -> Self {
+    pub const fn one(value: T) -> Self {
         Self::One(value)
     }
 
     /// Create from multiple values
     #[must_use]
-    pub fn many(values: Vec<T>) -> Self {
+    pub const fn many(values: Vec<T>) -> Self {
         Self::Many(values)
     }
 
@@ -35,7 +35,7 @@ impl<T> OneOrMany<T> {
     }
 
     /// Get the number of elements
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         match self {
             Self::One(_) => 1,
             Self::Many(vs) => vs.len(),
@@ -43,7 +43,7 @@ impl<T> OneOrMany<T> {
     }
 
     /// Check if empty
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         matches!(self, Self::Many(vs) if vs.is_empty())
     }
 

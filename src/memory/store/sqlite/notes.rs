@@ -63,7 +63,7 @@ pub(crate) fn body_text_sha256(body: &str) -> String {
 /// Stable string encoding of `ProvenanceOrigin` for the `notes_provenance.origin`
 /// column. Mirrors the literals parsed by `extract_provenance_markers` so a
 /// round-trip read+write is identity.
-fn provenance_origin_to_str(origin: &ProvenanceOrigin) -> &'static str {
+const fn provenance_origin_to_str(origin: &ProvenanceOrigin) -> &'static str {
     match origin {
         ProvenanceOrigin::RawSource => "raw_source",
         ProvenanceOrigin::PriorNote => "prior_note",

@@ -79,7 +79,7 @@ impl GuestSessionManager {
 
     /// Get a reference to the activity logger
     #[must_use]
-    pub fn activity_logger(&self) -> &Arc<GuestActivityLogger> {
+    pub const fn activity_logger(&self) -> &Arc<GuestActivityLogger> {
         &self.activity_logger
     }
 

@@ -164,7 +164,7 @@ pub struct AuthorInfo {
 impl AuthorInfo {
     /// Check if this author info has any content
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.name.is_none() && self.email.is_none() && self.url.is_none()
     }
 }
@@ -403,13 +403,13 @@ impl PluginManifest {
 
     /// Check if this manifest has configuration schema
     #[must_use]
-    pub fn has_config(&self) -> bool {
+    pub const fn has_config(&self) -> bool {
         self.config_schema.is_some()
     }
 
     /// Check if this manifest requires any permissions
     #[must_use]
-    pub fn requires_permissions(&self) -> bool {
+    pub const fn requires_permissions(&self) -> bool {
         !self.permissions.is_empty()
     }
 }

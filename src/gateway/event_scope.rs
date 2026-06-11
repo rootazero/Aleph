@@ -17,7 +17,7 @@ pub struct EventScopeGuard {
 impl EventScopeGuard {
     /// Create a guard with custom rules.
     #[must_use]
-    pub fn new(rules: Vec<(String, Vec<String>)>) -> Self {
+    pub const fn new(rules: Vec<(String, Vec<String>)>) -> Self {
         Self { rules }
     }
 

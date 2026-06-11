@@ -53,7 +53,7 @@ pub struct McpPersistentConfig {
     pub servers: HashMap<String, McpManagerConfig>,
 }
 
-fn default_version() -> u32 {
+const fn default_version() -> u32 {
     1
 }
 

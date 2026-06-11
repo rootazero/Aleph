@@ -69,7 +69,7 @@ impl A2AClient {
     }
 
     #[must_use]
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
@@ -305,13 +305,13 @@ impl A2AClient {
 
     /// Get the configured timeout
     #[must_use]
-    pub fn timeout(&self) -> Duration {
+    pub const fn timeout(&self) -> Duration {
         self.timeout
     }
 
     /// Check if auth token is configured
     #[must_use]
-    pub fn has_auth(&self) -> bool {
+    pub const fn has_auth(&self) -> bool {
         self.auth_token.is_some()
     }
 

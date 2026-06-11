@@ -14,7 +14,7 @@ use super::policy::SsrfPolicy;
 /// 169.254.0.0/16, 172.16.0.0/12, 192.0.2.0/24 (TEST-NET-1), 192.168.0.0/16,
 /// 198.18.0.0/15 (benchmark), 198.51.100.0/24 (TEST-NET-2), 203.0.113.0/24 (TEST-NET-3),
 /// 224.0.0.0/4 (multicast), 240.0.0.0/4 (reserved + broadcast).
-pub(crate) fn is_blocked_ipv4(ip: Ipv4Addr) -> bool {
+pub(crate) const fn is_blocked_ipv4(ip: Ipv4Addr) -> bool {
     let octets = ip.octets();
 
     // 0.0.0.0/8 — "this" network

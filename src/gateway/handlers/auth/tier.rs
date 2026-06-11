@@ -24,7 +24,7 @@ pub enum Tier {
 
 impl Tier {
     /// Parse the `level` pairing param. Unknown / missing → `Chat` (safe default).
-    pub fn from_level(level: Option<&str>) -> Self {
+    pub const fn from_level(level: Option<&str>) -> Self {
         match level {
             Some(s) if s.eq_ignore_ascii_case("config") => Tier::Config,
             _ => Tier::Chat,
@@ -76,7 +76,7 @@ pub fn tier_for_permissions(permissions: &[String]) -> &'static str {
 /// the tier is determined solely by the attach boundary, so every kind maps the
 /// same way. Keeping it in the signature makes the rule's shape explicit and
 /// gives later phases one place to specialise.
-pub fn default_tier(channel_kind: crate::gateway::surface::SurfaceKind, is_loopback: bool) -> Tier {
+pub const fn default_tier(channel_kind: crate::gateway::surface::SurfaceKind, is_loopback: bool) -> Tier {
     let _ = channel_kind; // carried for identity; not yet a tier input (see doc).
     if is_loopback {
         // Same-machine attach: operator. Byte-equivalent to the legacy

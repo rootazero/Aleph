@@ -54,7 +54,7 @@ pub fn sanitize_for_prompt(value: &str, level: SanitizeLevel) -> String {
 /// Includes:
 /// - Unicode Cf (format) characters: zero-width spaces, joiners, direction marks, etc.
 /// - U+2028 (Line Separator) and U+2029 (Paragraph Separator)
-fn is_format_char(c: char) -> bool {
+const fn is_format_char(c: char) -> bool {
     // U+2028 and U+2029 are line/paragraph separators (category Zl/Zp)
     if c == '\u{2028}' || c == '\u{2029}' {
         return true;

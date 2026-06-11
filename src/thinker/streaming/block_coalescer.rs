@@ -62,21 +62,21 @@ impl CoalescingConfig {
 
     /// Builder: set min chars
     #[must_use]
-    pub fn with_min_chars(mut self, chars: usize) -> Self {
+    pub const fn with_min_chars(mut self, chars: usize) -> Self {
         self.min_chars = chars;
         self
     }
 
     /// Builder: set max chars
     #[must_use]
-    pub fn with_max_chars(mut self, chars: usize) -> Self {
+    pub const fn with_max_chars(mut self, chars: usize) -> Self {
         self.max_chars = chars;
         self
     }
 
     /// Builder: set idle timeout
     #[must_use]
-    pub fn with_idle_ms(mut self, ms: u64) -> Self {
+    pub const fn with_idle_ms(mut self, ms: u64) -> Self {
         self.idle_ms = ms;
         self
     }
@@ -110,7 +110,7 @@ impl Default for BlockCoalescer {
 impl BlockCoalescer {
     /// Create a new coalescer with configuration
     #[must_use]
-    pub fn new(config: CoalescingConfig) -> Self {
+    pub const fn new(config: CoalescingConfig) -> Self {
         Self {
             config,
             buffer: String::new(),
@@ -168,19 +168,19 @@ impl BlockCoalescer {
 
     /// Check if buffer meets minimum size for emission
     #[must_use]
-    pub fn is_ready(&self) -> bool {
+    pub const fn is_ready(&self) -> bool {
         self.buffer.len() >= self.config.min_chars
     }
 
     /// Get current buffer length
     #[must_use]
-    pub fn buffer_len(&self) -> usize {
+    pub const fn buffer_len(&self) -> usize {
         self.buffer.len()
     }
 
     /// Check if buffer is empty
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
 

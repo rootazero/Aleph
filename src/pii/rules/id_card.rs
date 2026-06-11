@@ -33,7 +33,7 @@ const WEIGHTS: &[u32] = &[7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
 pub struct IdCardRule;
 
 impl IdCardRule {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 

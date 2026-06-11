@@ -113,7 +113,7 @@ impl CronStore {
     }
 
     /// Mark the store as dirty (needs persistence).
-    pub fn mark_dirty(&mut self) {
+    pub const fn mark_dirty(&mut self) {
         self.dirty = true;
     }
 
@@ -125,7 +125,7 @@ impl CronStore {
     }
 
     /// Get a mutable reference to the jobs vec. Auto-marks dirty.
-    pub fn jobs_mut(&mut self) -> &mut Vec<CronJob> {
+    pub const fn jobs_mut(&mut self) -> &mut Vec<CronJob> {
         self.dirty = true;
         &mut self.jobs
     }
@@ -155,7 +155,7 @@ impl CronStore {
     }
 
     /// Number of jobs in the store.
-    pub fn job_count(&self) -> usize {
+    pub const fn job_count(&self) -> usize {
         self.jobs.len()
     }
 

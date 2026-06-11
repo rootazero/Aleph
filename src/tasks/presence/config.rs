@@ -17,11 +17,11 @@ pub struct PresenceConfig {
     pub interval_secs: u64,
 }
 
-fn default_enabled() -> bool {
+const fn default_enabled() -> bool {
     true
 }
 
-fn default_interval_secs() -> u64 {
+const fn default_interval_secs() -> u64 {
     30
 }
 

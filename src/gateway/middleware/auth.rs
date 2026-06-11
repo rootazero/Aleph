@@ -17,7 +17,7 @@ pub struct AuthLayer;
 
 impl AuthLayer {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -42,7 +42,7 @@ pub struct AuthService<S> {
 }
 
 impl<S> AuthService<S> {
-    pub fn new(inner: S) -> Self {
+    pub const fn new(inner: S) -> Self {
         Self { inner }
     }
 }

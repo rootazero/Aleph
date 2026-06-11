@@ -33,7 +33,7 @@ impl SkillSystemEvent {
         }
     }
     #[must_use]
-    pub fn all_reloaded(count: usize, skill_ids: Vec<String>) -> Self {
+    pub const fn all_reloaded(count: usize, skill_ids: Vec<String>) -> Self {
         Self::AllReloaded { count, skill_ids }
     }
     #[must_use]
@@ -44,7 +44,7 @@ impl SkillSystemEvent {
         }
     }
     #[must_use]
-    pub fn is_bulk_reload(&self) -> bool {
+    pub const fn is_bulk_reload(&self) -> bool {
         matches!(self, Self::AllReloaded { .. })
     }
 }

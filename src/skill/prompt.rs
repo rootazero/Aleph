@@ -58,7 +58,7 @@ impl Default for SkillPromptBudget {
 impl SkillPromptBudget {
     /// A budget that imposes no limits (renders every skill).
     #[must_use]
-    pub fn unlimited() -> Self {
+    pub const fn unlimited() -> Self {
         Self {
             max_skills: 0,
             max_chars: 0,

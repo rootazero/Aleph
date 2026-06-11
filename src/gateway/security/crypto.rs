@@ -17,7 +17,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// OS-backed CSPRNG. Panics only if the operating system entropy source fails,
 /// matching the previous `OsRng` behavior.
-fn os_rng() -> UnwrapErr<SysRng> {
+const fn os_rng() -> UnwrapErr<SysRng> {
     UnwrapErr(SysRng)
 }
 

@@ -95,7 +95,7 @@ pub struct GenerationProviderConfig {
     pub voices_url: Option<String>,
 }
 
-fn default_enabled() -> bool {
+const fn default_enabled() -> bool {
     true
 }
 

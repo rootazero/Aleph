@@ -72,19 +72,19 @@ where
     Ok(value)
 }
 
-fn default_temperature() -> f32 {
+const fn default_temperature() -> f32 {
     0.7
 }
 
-fn default_max_tokens() -> u32 {
+const fn default_max_tokens() -> u32 {
     4096
 }
 
-fn default_max_turns() -> usize {
+const fn default_max_turns() -> usize {
     50 // Allows complex multi-step tasks like file organization
 }
 
-fn default_timeout_seconds() -> u64 {
+const fn default_timeout_seconds() -> u64 {
     300 // Default 5 minutes - agent loops may need longer for complex tasks
 }
 

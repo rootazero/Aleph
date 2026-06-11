@@ -71,27 +71,27 @@ pub struct DispatcherConfigToml {
     pub agent: AgentConfigToml,
 }
 
-pub fn default_dispatcher_enabled() -> bool {
+pub const fn default_dispatcher_enabled() -> bool {
     true
 }
 
-pub fn default_dispatcher_l3_enabled() -> bool {
+pub const fn default_dispatcher_l3_enabled() -> bool {
     true
 }
 
-pub fn default_dispatcher_l3_timeout() -> u64 {
+pub const fn default_dispatcher_l3_timeout() -> u64 {
     5000 // 5 seconds
 }
 
-pub fn default_dispatcher_confirmation_threshold() -> f32 {
+pub const fn default_dispatcher_confirmation_threshold() -> f32 {
     0.7 // Require confirmation if confidence < 70%
 }
 
-pub fn default_dispatcher_confirmation_timeout() -> u64 {
+pub const fn default_dispatcher_confirmation_timeout() -> u64 {
     30000 // 30 seconds
 }
 
-pub fn default_dispatcher_confirmation_enabled() -> bool {
+pub const fn default_dispatcher_confirmation_enabled() -> bool {
     true
 }
 
@@ -206,31 +206,31 @@ pub struct AgentConfigToml {
     pub heuristics_threshold: u32,
 }
 
-pub fn default_agent_enabled() -> bool {
+pub const fn default_agent_enabled() -> bool {
     true
 }
 
-pub fn default_agent_max_steps() -> u32 {
+pub const fn default_agent_max_steps() -> u32 {
     10
 }
 
-pub fn default_agent_step_timeout() -> u64 {
+pub const fn default_agent_step_timeout() -> u64 {
     30000 // 30 seconds per step
 }
 
-pub fn default_agent_enable_rollback() -> bool {
+pub const fn default_agent_enable_rollback() -> bool {
     true
 }
 
-pub fn default_agent_plan_confirmation_required() -> bool {
+pub const fn default_agent_plan_confirmation_required() -> bool {
     true
 }
 
-pub fn default_agent_allow_irreversible() -> bool {
+pub const fn default_agent_allow_irreversible() -> bool {
     false
 }
 
-pub fn default_agent_heuristics_threshold() -> u32 {
+pub const fn default_agent_heuristics_threshold() -> u32 {
     2 // At least 2 action signals to trigger planning
 }
 

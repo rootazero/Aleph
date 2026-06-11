@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-fn default_timeout() -> u64 {
+const fn default_timeout() -> u64 {
     5000
 }
 
@@ -38,7 +38,7 @@ pub struct BrowserWaitForTool {
 }
 
 impl BrowserWaitForTool {
-    pub fn new(manager: Arc<ProfileManager>) -> Self {
+    pub const fn new(manager: Arc<ProfileManager>) -> Self {
         Self { manager }
     }
 }

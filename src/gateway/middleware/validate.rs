@@ -13,7 +13,7 @@ pub struct ValidateLayer;
 
 impl ValidateLayer {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -38,7 +38,7 @@ pub struct ValidateService<S> {
 }
 
 impl<S> ValidateService<S> {
-    pub fn new(inner: S) -> Self {
+    pub const fn new(inner: S) -> Self {
         Self { inner }
     }
 }

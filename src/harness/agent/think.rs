@@ -173,7 +173,7 @@ pub(crate) enum GraceReason {
 }
 
 impl GraceReason {
-    fn nudge(self) -> &'static str {
+    const fn nudge(self) -> &'static str {
         match self {
             Self::Budget => GRACE_NUDGE_BUDGET,
             Self::Diminishing => GRACE_NUDGE_DIMINISHING,

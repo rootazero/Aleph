@@ -60,19 +60,19 @@ pub struct ResolvedPlugins {
 impl ResolvedPlugins {
     /// Check if there are any active plugins
     #[must_use]
-    pub fn has_plugins(&self) -> bool {
+    pub const fn has_plugins(&self) -> bool {
         !self.active.is_empty()
     }
 
     /// Get total number of discovered plugins (active + overridden)
     #[must_use]
-    pub fn total_count(&self) -> usize {
+    pub const fn total_count(&self) -> usize {
         self.active.len() + self.overridden.len()
     }
 
     /// Get number of conflicts resolved
     #[must_use]
-    pub fn conflict_count(&self) -> usize {
+    pub const fn conflict_count(&self) -> usize {
         self.overridden.len()
     }
 }

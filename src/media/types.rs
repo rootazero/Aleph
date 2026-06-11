@@ -22,7 +22,7 @@ pub enum MediaImageFormat {
 
 impl MediaImageFormat {
     #[must_use]
-    pub fn mime_type(&self) -> &'static str {
+    pub const fn mime_type(&self) -> &'static str {
         match self {
             Self::Png => "image/png",
             Self::Jpeg => "image/jpeg",
@@ -34,7 +34,7 @@ impl MediaImageFormat {
     }
 
     #[must_use]
-    pub fn extension(&self) -> &'static str {
+    pub const fn extension(&self) -> &'static str {
         match self {
             Self::Png => "png",
             Self::Jpeg => "jpeg",
@@ -62,7 +62,7 @@ pub enum AudioFormat {
 
 impl AudioFormat {
     #[must_use]
-    pub fn mime_type(&self) -> &'static str {
+    pub const fn mime_type(&self) -> &'static str {
         match self {
             Self::Mp3 => "audio/mpeg",
             Self::Wav => "audio/wav",
@@ -73,7 +73,7 @@ impl AudioFormat {
     }
 
     #[must_use]
-    pub fn extension(&self) -> &'static str {
+    pub const fn extension(&self) -> &'static str {
         match self {
             Self::Mp3 => "mp3",
             Self::Wav => "wav",
@@ -98,7 +98,7 @@ pub enum VideoFormat {
 
 impl VideoFormat {
     #[must_use]
-    pub fn mime_type(&self) -> &'static str {
+    pub const fn mime_type(&self) -> &'static str {
         match self {
             Self::Mp4 => "video/mp4",
             Self::WebM => "video/webm",
@@ -107,7 +107,7 @@ impl VideoFormat {
     }
 
     #[must_use]
-    pub fn extension(&self) -> &'static str {
+    pub const fn extension(&self) -> &'static str {
         match self {
             Self::Mp4 => "mp4",
             Self::WebM => "webm",
@@ -133,7 +133,7 @@ pub enum DocFormat {
 
 impl DocFormat {
     #[must_use]
-    pub fn mime_type(&self) -> &'static str {
+    pub const fn mime_type(&self) -> &'static str {
         match self {
             Self::Pdf => "application/pdf",
             Self::Docx => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -145,7 +145,7 @@ impl DocFormat {
     }
 
     #[must_use]
-    pub fn extension(&self) -> &'static str {
+    pub const fn extension(&self) -> &'static str {
         match self {
             Self::Pdf => "pdf",
             Self::Docx => "docx",
@@ -188,7 +188,7 @@ pub enum MediaType {
 impl MediaType {
     /// Human-readable category name.
     #[must_use]
-    pub fn category(&self) -> &'static str {
+    pub const fn category(&self) -> &'static str {
         match self {
             Self::Image { .. } => "image",
             Self::Audio { .. } => "audio",

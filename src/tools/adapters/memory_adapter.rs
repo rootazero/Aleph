@@ -44,7 +44,7 @@ pub struct MemorySearchTool<M: MemoryBackend> {
 }
 
 impl<M: MemoryBackend> MemorySearchTool<M> {
-    pub fn new(backend: Arc<M>) -> Self {
+    pub const fn new(backend: Arc<M>) -> Self {
         Self { backend }
     }
 }
@@ -128,7 +128,7 @@ pub struct MemoryStoreTool<M: MemoryBackend> {
 }
 
 impl<M: MemoryBackend> MemoryStoreTool<M> {
-    pub fn new(backend: Arc<M>) -> Self {
+    pub const fn new(backend: Arc<M>) -> Self {
         Self { backend }
     }
 }

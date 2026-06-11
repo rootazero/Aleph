@@ -66,7 +66,7 @@ pub struct TimeWindow {
 
 impl TimeWindow {
     #[must_use]
-    pub fn contains(&self, minute_of_day: u16) -> bool {
+    pub const fn contains(&self, minute_of_day: u16) -> bool {
         minute_of_day >= self.start_minute && minute_of_day < self.end_minute
     }
 

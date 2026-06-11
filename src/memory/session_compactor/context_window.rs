@@ -35,7 +35,7 @@ pub fn estimate_total_tokens(messages: &[UnifiedMessage], ratio: f64) -> usize {
 /// Returns the index where `fresh_tail` begins. Messages in `[0..idx]` are
 /// candidates for compression; messages in `[idx..]` are kept verbatim.
 #[must_use]
-pub fn partition_fresh_tail(messages: &[UnifiedMessage], fresh_tail_count: usize) -> usize {
+pub const fn partition_fresh_tail(messages: &[UnifiedMessage], fresh_tail_count: usize) -> usize {
     if messages.len() <= fresh_tail_count {
         0
     } else {
@@ -45,7 +45,7 @@ pub fn partition_fresh_tail(messages: &[UnifiedMessage], fresh_tail_count: usize
 
 /// Same as [`partition_fresh_tail`] but for `(role, content)` string pairs.
 #[must_use]
-pub fn partition_fresh_tail_pairs(messages: &[(String, String)], fresh_tail_count: usize) -> usize {
+pub const fn partition_fresh_tail_pairs(messages: &[(String, String)], fresh_tail_count: usize) -> usize {
     if messages.len() <= fresh_tail_count {
         0
     } else {

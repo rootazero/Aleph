@@ -109,7 +109,7 @@ impl ExecApprovalRecord {
 
     /// Check if resolved
     #[must_use]
-    pub fn is_resolved(&self) -> bool {
+    pub const fn is_resolved(&self) -> bool {
         self.decision.is_some()
     }
 }

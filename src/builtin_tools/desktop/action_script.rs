@@ -351,7 +351,7 @@ fn build_action(name: &str, kw: &Kwargs<'_>) -> Result<DesktopBatchAction, Scrip
     Ok(action)
 }
 
-fn blank_batch_action() -> DesktopBatchAction {
+const fn blank_batch_action() -> DesktopBatchAction {
     DesktopBatchAction {
         action: String::new(),
         region: None,

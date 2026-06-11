@@ -26,7 +26,7 @@ pub enum LeakDecision {
 
 impl LeakDecision {
     #[must_use]
-    pub fn is_blocked(&self) -> bool {
+    pub const fn is_blocked(&self) -> bool {
         matches!(self, Self::Block { .. })
     }
 }

@@ -48,7 +48,7 @@ pub struct TurnId(pub uuid::Uuid);
 
 impl TurnId {
     #[must_use]
-    pub fn new(id: uuid::Uuid) -> Self {
+    pub const fn new(id: uuid::Uuid) -> Self {
         Self(id)
     }
 
@@ -112,7 +112,7 @@ impl TurnResultBudget {
     }
 
     #[must_use]
-    pub fn max_turn_tokens(&self) -> usize {
+    pub const fn max_turn_tokens(&self) -> usize {
         self.max_turn_tokens
     }
 

@@ -168,7 +168,7 @@ impl SharedTokenManager {
     }
 
     /// Get the HMAC secret.
-    pub fn secret(&self) -> &[u8; 32] {
+    pub const fn secret(&self) -> &[u8; 32] {
         &self.secret
     }
 

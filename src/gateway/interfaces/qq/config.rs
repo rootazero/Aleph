@@ -39,6 +39,6 @@ pub enum QQGroupPolicy {
     Open,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }

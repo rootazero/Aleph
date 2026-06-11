@@ -109,7 +109,7 @@ impl FileOpKind {
     /// True when this op kind invalidates earlier reads / writes / edits on
     /// the same path. Both `Write` and `Edit` are state-mutating from the
     /// LLM's perspective.
-    fn is_mutating(self) -> bool {
+    const fn is_mutating(self) -> bool {
         matches!(self, FileOpKind::Write | FileOpKind::Edit)
     }
 }
@@ -126,7 +126,7 @@ impl FileOpSupersedeStage {
     /// Construct with the full configuration surface explicitly set.
     /// Use [`FileOpSupersedeStage::default`] for production defaults.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         read_tools: Vec<String>,
         write_tools: Vec<String>,
         edit_tools: Vec<String>,

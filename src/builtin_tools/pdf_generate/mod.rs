@@ -64,7 +64,7 @@ Examples:\n\
 
     /// Create a new PDF generation tool
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             tool_context_handle: None,
         }

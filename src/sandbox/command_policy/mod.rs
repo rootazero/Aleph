@@ -75,7 +75,7 @@ pub struct PolicyEvaluation {
 }
 
 impl PolicyEvaluation {
-    fn is_clean(&self) -> bool {
+    const fn is_clean(&self) -> bool {
         self.blocked.is_empty() && self.warned.is_empty()
     }
 }
@@ -135,7 +135,7 @@ impl CommandPolicy {
 
     /// Number of compiled rules — primarily for diagnostics / tests.
     #[must_use]
-    pub fn rule_count(&self) -> usize {
+    pub const fn rule_count(&self) -> usize {
         self.names.len()
     }
 
@@ -232,7 +232,7 @@ pub struct CommandPolicyHook {
 
 impl CommandPolicyHook {
     #[must_use]
-    pub fn new(policy: CommandPolicy) -> Self {
+    pub const fn new(policy: CommandPolicy) -> Self {
         Self { policy }
     }
 }

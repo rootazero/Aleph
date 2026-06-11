@@ -219,7 +219,7 @@ impl SecretVault {
 
     /// Get all entries (for re-encryption during token reset).
     #[must_use]
-    pub fn entries(&self) -> &HashMap<String, EncryptedEntry> {
+    pub const fn entries(&self) -> &HashMap<String, EncryptedEntry> {
         &self.data.entries
     }
 

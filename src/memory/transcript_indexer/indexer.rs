@@ -210,7 +210,7 @@ impl TranscriptIndexer {
 
     /// Estimate token count for text
     #[must_use]
-    pub fn estimate_tokens(&self, text: &str) -> usize {
+    pub const fn estimate_tokens(&self, text: &str) -> usize {
         text.len().div_ceil(4) // 4 chars per token, round up
     }
 

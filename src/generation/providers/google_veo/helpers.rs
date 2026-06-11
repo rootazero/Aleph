@@ -24,7 +24,7 @@ pub fn is_valid_veo3_duration(duration: u32) -> bool {
 
 /// Check if a duration is valid for Veo 2
 #[must_use]
-pub fn is_valid_veo2_duration(duration: u32) -> bool {
+pub const fn is_valid_veo2_duration(duration: u32) -> bool {
     duration >= VEO2_DURATION_RANGE.0 && duration <= VEO2_DURATION_RANGE.1
 }
 

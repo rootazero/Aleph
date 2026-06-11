@@ -63,15 +63,15 @@ pub struct SearchOptions {
     pub include_full_content: bool,
 }
 
-fn default_safe_search() -> bool {
+const fn default_safe_search() -> bool {
     true
 }
 
-fn default_max_results() -> usize {
+const fn default_max_results() -> usize {
     5
 }
 
-fn default_timeout() -> u64 {
+const fn default_timeout() -> u64 {
     10
 }
 
@@ -131,7 +131,7 @@ impl SearchOptions {
 
     /// Brave `safesearch` (`off`/`moderate`).
     #[must_use]
-    pub fn brave_safesearch(&self) -> &'static str {
+    pub const fn brave_safesearch(&self) -> &'static str {
         if self.safe_search {
             "moderate"
         } else {
@@ -152,7 +152,7 @@ impl SearchOptions {
 
     /// Bing `safeSearch` (`Off`/`Moderate`).
     #[must_use]
-    pub fn bing_safesearch(&self) -> &'static str {
+    pub const fn bing_safesearch(&self) -> &'static str {
         if self.safe_search {
             "Moderate"
         } else {
@@ -174,7 +174,7 @@ impl SearchOptions {
 
     /// Google CSE `safe` (`active`/`off`).
     #[must_use]
-    pub fn google_safe(&self) -> &'static str {
+    pub const fn google_safe(&self) -> &'static str {
         if self.safe_search {
             "active"
         } else {
@@ -206,7 +206,7 @@ impl SearchOptions {
     /// We expose only Off vs Moderate today; bumping to Strict requires
     /// a new SearchOptions field.
     #[must_use]
-    pub fn searxng_safesearch(&self) -> u8 {
+    pub const fn searxng_safesearch(&self) -> u8 {
         if self.safe_search {
             1
         } else {
@@ -229,7 +229,7 @@ impl SearchOptions {
 
     /// DuckDuckGo `kp` (`1`=moderate, `-2`=off; strict is `-1`).
     #[must_use]
-    pub fn ddg_kp(&self) -> &'static str {
+    pub const fn ddg_kp(&self) -> &'static str {
         if self.safe_search {
             "1"
         } else {
@@ -265,7 +265,7 @@ pub struct QuotaInfo {
 
 impl QuotaInfo {
     #[must_use]
-    pub fn unlimited() -> Self {
+    pub const fn unlimited() -> Self {
         Self {
             remaining: None,
             limit: None,

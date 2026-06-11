@@ -138,7 +138,7 @@ impl SkillStatusEntry {
     }
 
     #[must_use]
-    pub fn matches_filter(&self, filter: SkillStatusFilter) -> bool {
+    pub const fn matches_filter(&self, filter: SkillStatusFilter) -> bool {
         match filter {
             SkillStatusFilter::All => true,
             SkillStatusFilter::Ready => self.eligible && !self.disabled,

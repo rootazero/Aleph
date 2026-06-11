@@ -16,12 +16,12 @@ impl VoiceState {
     /// Returns true when voice mode is explicitly enabled.
     /// Provider resolution happens at TTS generation time (auto-detect fallback).
     #[must_use]
-    pub fn is_active(&self) -> bool {
+    pub const fn is_active(&self) -> bool {
         self.enabled
     }
 
     /// Record a successful TTS synthesis — resets the failure counter.
-    pub fn record_success(&mut self) {
+    pub const fn record_success(&mut self) {
         self.consecutive_failures = 0;
     }
 
@@ -29,7 +29,7 @@ impl VoiceState {
     ///
     /// Returns `true` if the channel has been auto-disabled (3rd consecutive
     /// failure), `false` otherwise.
-    pub fn record_failure(&mut self) -> bool {
+    pub const fn record_failure(&mut self) -> bool {
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
         if self.consecutive_failures >= 3 {
             self.enabled = false;

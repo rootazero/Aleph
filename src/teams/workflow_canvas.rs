@@ -141,7 +141,7 @@ fn render_task_body(task: &CoordTask) -> String {
     format!("**{}**{desc}{status_line}{owner_line}", task.subject)
 }
 
-fn status_color(s: CoordTaskStatus) -> Option<&'static str> {
+const fn status_color(s: CoordTaskStatus) -> Option<&'static str> {
     match s {
         CoordTaskStatus::Pending => Some("3"),
         CoordTaskStatus::Blocked => Some("6"),

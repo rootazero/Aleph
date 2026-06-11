@@ -129,7 +129,7 @@ impl SignalError {
 
     /// Check if error is retryable
     #[must_use]
-    pub fn is_retryable(&self) -> bool {
+    pub const fn is_retryable(&self) -> bool {
         matches!(
             self,
             Self::RateLimited { .. }
@@ -141,7 +141,7 @@ impl SignalError {
 
     /// Get suggested retry delay for retryable errors
     #[must_use]
-    pub fn retry_delay(&self, default: Duration) -> Duration {
+    pub const fn retry_delay(&self, default: Duration) -> Duration {
         match self {
             Self::RateLimited { retry_after_secs } => Duration::from_secs(*retry_after_secs),
             _ => default,

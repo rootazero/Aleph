@@ -144,7 +144,7 @@ impl EventBus {
     ///     .with_session_id("session-1")
     ///     .with_global_bus(GlobalBus::global());
     /// ```
-    pub fn with_global_bus(mut self, global_bus: &'static GlobalBus) -> Self {
+    pub const fn with_global_bus(mut self, global_bus: &'static GlobalBus) -> Self {
         self.global_bus = Some(global_bus);
         self
     }
@@ -163,7 +163,7 @@ impl EventBus {
 
     /// Check if this EventBus is connected to a GlobalBus.
     #[must_use]
-    pub fn is_connected_to_global(&self) -> bool {
+    pub const fn is_connected_to_global(&self) -> bool {
         self.global_bus.is_some()
     }
 

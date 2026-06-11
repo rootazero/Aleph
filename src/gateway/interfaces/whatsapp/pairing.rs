@@ -91,7 +91,7 @@ pub enum PairingState {
 impl PairingState {
     /// Map this fine-grained state to the gateway's coarse `ChannelStatus`.
     #[must_use]
-    pub fn to_channel_status(&self) -> ChannelStatus {
+    pub const fn to_channel_status(&self) -> ChannelStatus {
         match self {
             PairingState::Idle => ChannelStatus::Disconnected,
             PairingState::Initializing
@@ -107,13 +107,13 @@ impl PairingState {
 
     /// Whether the pairing has completed successfully and the channel is usable.
     #[must_use]
-    pub fn is_connected(&self) -> bool {
+    pub const fn is_connected(&self) -> bool {
         matches!(self, PairingState::Connected { .. })
     }
 
     /// Human-readable description of the current state.
     #[must_use]
-    pub fn description(&self) -> &str {
+    pub const fn description(&self) -> &str {
         match self {
             PairingState::Idle => "Bridge not started",
             PairingState::Initializing => "Bridge process starting",
@@ -129,7 +129,7 @@ impl PairingState {
 }
 
 /// Returns a short tag for the state variant (for transition error messages).
-pub(crate) fn state_tag(state: &PairingState) -> &'static str {
+pub(crate) const fn state_tag(state: &PairingState) -> &'static str {
     match state {
         PairingState::Idle => "Idle",
         PairingState::Initializing => "Initializing",

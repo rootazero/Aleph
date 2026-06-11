@@ -79,7 +79,7 @@ impl AgentInstanceConfig {
 
     /// Return the agent's timeout override, if set.
     #[must_use]
-    pub fn timeout_secs(&self) -> Option<u64> {
+    pub const fn timeout_secs(&self) -> Option<u64> {
         self.timeout_secs
     }
 
@@ -234,7 +234,7 @@ impl AgentInstance {
 
     /// Get the agent configuration
     #[must_use]
-    pub fn config(&self) -> &AgentInstanceConfig {
+    pub const fn config(&self) -> &AgentInstanceConfig {
         &self.config
     }
 

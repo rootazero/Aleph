@@ -44,15 +44,15 @@ impl Default for IntentDetectionPolicy {
     }
 }
 
-fn default_confidence_threshold() -> f64 {
+const fn default_confidence_threshold() -> f64 {
     0.7
 }
 
-fn default_timeout_ms() -> u64 {
+const fn default_timeout_ms() -> u64 {
     3000
 }
 
-fn default_min_input_length() -> u64 {
+const fn default_min_input_length() -> u64 {
     3
 }
 
@@ -73,7 +73,7 @@ impl IntentDetectionPolicy {
     }
 
     /// Get timeout as std::time::Duration
-    pub fn timeout_duration(&self) -> std::time::Duration {
+    pub const fn timeout_duration(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.timeout_ms)
     }
 }

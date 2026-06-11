@@ -132,7 +132,7 @@ impl ToolResultStore {
     /// `~/.aleph/`.
     #[doc(hidden)]
     #[must_use]
-    pub fn with_dir_for_tests(base_dir: PathBuf) -> Self {
+    pub const fn with_dir_for_tests(base_dir: PathBuf) -> Self {
         Self {
             base_dir,
             index: OnceLock::new(),

@@ -69,7 +69,7 @@ pub struct VoiceModeSetTool {
 
 impl VoiceModeSetTool {
     /// Create a new VoiceModeSetTool backed by the given registry.
-    pub fn new(channel_registry: Arc<ChannelRegistry>) -> Self {
+    pub const fn new(channel_registry: Arc<ChannelRegistry>) -> Self {
         Self { channel_registry }
     }
 

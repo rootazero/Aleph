@@ -40,7 +40,7 @@ pub struct DreamValidationReport {
 impl DreamValidationReport {
     /// Overall OK if L1 and L2 both passed. L3/L4 failures are warnings.
     #[must_use]
-    pub fn overall_ok(&self) -> bool {
+    pub const fn overall_ok(&self) -> bool {
         self.l1_format.passed && self.l2_consistency.passed
     }
 }

@@ -19,7 +19,7 @@ pub enum InitPhase {
 
 impl InitPhase {
     #[must_use]
-    pub fn name(&self) -> &'static str {
+    pub const fn name(&self) -> &'static str {
         match self {
             Self::Directories => "directories",
             Self::Config => "config",
@@ -30,7 +30,7 @@ impl InitPhase {
     }
 
     #[must_use]
-    pub fn display_name(&self) -> &'static str {
+    pub const fn display_name(&self) -> &'static str {
         match self {
             Self::Directories => "Creating directories",
             Self::Config => "Generating configuration",

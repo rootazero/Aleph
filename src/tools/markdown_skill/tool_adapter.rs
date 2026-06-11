@@ -22,7 +22,7 @@ pub struct MarkdownCliTool {
 impl MarkdownCliTool {
     /// Create a new Markdown CLI tool
     #[must_use]
-    pub fn new(spec: AlephSkillSpec) -> Self {
+    pub const fn new(spec: AlephSkillSpec) -> Self {
         Self { spec }
     }
 
@@ -147,7 +147,7 @@ impl MarkdownCliTool {
 
     /// Check if tool requires confirmation
     #[must_use]
-    pub fn requires_confirmation(&self) -> bool {
+    pub const fn requires_confirmation(&self) -> bool {
         if let Some(aleph_meta) = &self.spec.metadata.aleph {
             matches!(
                 aleph_meta.security.confirmation,
