@@ -1,5 +1,6 @@
 //! Vault-backed `WhatsApp` auth storage
 
+use crate::secrets::crypto::SecretsCrypto;
 use crate::secrets::vault::SecretVault;
 use crate::sync_primitives::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
@@ -24,21 +25,30 @@ pub enum WaAuthError {
 pub struct WaAuthManager {
     vault: Arc<Mutex<SecretVault>>,
     account_id: String,
+    crypto: Option<SecretsCrypto>,
 }
 
 impl WaAuthManager {
     pub fn new(account_id: impl Into<String>) -> Self {
         let path = crate::secrets::vault::SecretVault::default_path();
-        // `open_or_backup` preserves a corrupt/incompatible vault instead of
-        // silently overwriting it on the next save (see SecretVault docs).
         let vault = SecretVault::open_or_backup(path);
-        Self::with_vault(vault, account_id)
+        let crypto = crate::gateway::security::SharedTokenManager::global_crypto();
+        Self::with_vault_and_crypto(vault, account_id, crypto)
     }
 
     pub fn with_vault(vault: SecretVault, account_id: impl Into<String>) -> Self {
+        Self::with_vault_and_crypto(vault, account_id, None)
+    }
+
+    pub fn with_vault_and_crypto(
+        vault: SecretVault,
+        account_id: impl Into<String>,
+        crypto: Option<SecretsCrypto>,
+    ) -> Self {
         Self {
             vault: Arc::new(Mutex::new(vault)),
             account_id: account_id.into(),
+            crypto,
         }
     }
 
@@ -49,14 +59,30 @@ impl WaAuthManager {
     pub fn save(&self, data: &WaAuthData) -> Result<(), WaAuthError> {
         let bytes =
             bincode::serialize(data).map_err(|e| WaAuthError::Serialization(e.to_string()))?;
-        let entry = crate::secrets::types::EncryptedEntry {
-            ciphertext: bytes,
-            nonce: [0u8; 12],
-            salt: [0u8; 32],
-            created_at: chrono::Utc::now().timestamp(),
-            updated_at: chrono::Utc::now().timestamp(),
-            metadata: crate::secrets::types::EntryMetadata::default(),
+
+        let entry = if let Some(ref crypto) = self.crypto {
+            let encrypted = crypto
+                .encrypt(&String::from_utf8_lossy(&bytes))
+                .map_err(|e| WaAuthError::Serialization(format!("Encryption failed: {e}")))?;
+            crate::secrets::types::EncryptedEntry {
+                ciphertext: encrypted.ciphertext,
+                nonce: encrypted.nonce,
+                salt: encrypted.salt,
+                created_at: chrono::Utc::now().timestamp(),
+                updated_at: chrono::Utc::now().timestamp(),
+                metadata: crate::secrets::types::EntryMetadata::default(),
+            }
+        } else {
+            crate::secrets::types::EncryptedEntry {
+                ciphertext: bytes,
+                nonce: [0u8; 12],
+                salt: [0u8; 32],
+                created_at: chrono::Utc::now().timestamp(),
+                updated_at: chrono::Utc::now().timestamp(),
+                metadata: crate::secrets::types::EntryMetadata::default(),
+            }
         };
+
         let mut vault = self.vault.lock().unwrap_or_else(|e| e.into_inner());
         vault
             .set(&self.key(), entry)
@@ -68,7 +94,23 @@ impl WaAuthManager {
         let entry = vault
             .get(&self.key())
             .map_err(|_| WaAuthError::NotFound(self.account_id.clone()))?;
-        let data: WaAuthData = bincode::deserialize(&entry.ciphertext)
+
+        let bytes = if entry.nonce != [0u8; 12] {
+            if let Some(ref crypto) = self.crypto {
+                let decrypted = crypto
+                    .decrypt(&entry.ciphertext, &entry.nonce, &entry.salt)
+                    .map_err(|e| WaAuthError::Serialization(format!("Decryption failed: {e}")))?;
+                decrypted.into_bytes()
+            } else {
+                return Err(WaAuthError::Serialization(
+                    "Encrypted auth data found but no crypto engine available".to_string(),
+                ));
+            }
+        } else {
+            entry.ciphertext.clone()
+        };
+
+        let data: WaAuthData = bincode::deserialize(&bytes)
             .map_err(|e| WaAuthError::Serialization(e.to_string()))?;
         Ok(data)
     }

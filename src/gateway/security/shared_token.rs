@@ -12,7 +12,10 @@ use crate::secrets::crypto::SecretsCrypto;
 use crate::secrets::types::{DecryptedSecret, EncryptedEntry, EntryMetadata, SecretError};
 use crate::secrets::vault::SecretVault;
 use crate::sync_primitives::{Arc, Mutex, RwLock};
+use std::sync::OnceLock;
 use uuid::Uuid;
+
+static GLOBAL_SHARED_TOKEN_MANAGER: OnceLock<Arc<SharedTokenManager>> = OnceLock::new();
 
 /// Manages a single shared token for UI/API authentication.
 ///
@@ -159,6 +162,20 @@ impl SharedTokenManager {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    pub fn set_global(manager: Arc<SharedTokenManager>) {
+        let _ = GLOBAL_SHARED_TOKEN_MANAGER.set(manager);
+    }
+
+    pub fn global() -> Option<Arc<SharedTokenManager>> {
+        GLOBAL_SHARED_TOKEN_MANAGER.get().cloned()
+    }
+
+    pub fn global_crypto() -> Option<SecretsCrypto> {
+        GLOBAL_SHARED_TOKEN_MANAGER
+            .get()
+            .and_then(|mgr| mgr.crypto().ok())
     }
 
     /// Check if the store already has a shared token hash (regardless of whether

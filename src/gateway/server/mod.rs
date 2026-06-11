@@ -561,6 +561,7 @@ impl GatewayServer {
     /// auto-inject the locally-stored shared token into the first
     /// `connect` request.
     pub fn set_shared_token_manager(&mut self, manager: Arc<SharedTokenManager>) {
+        SharedTokenManager::set_global(manager.clone());
         self.shared_token_mgr = Some(manager);
     }
 
