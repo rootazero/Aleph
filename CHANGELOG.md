@@ -11,90 +11,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **自主目标循环硬化（Loop Engineering 第 2/3 轮）** — the autonomous goal loop
-  gained an objective stop-hook gate so the model's self-reported completion is
-  checked against deterministic guardrails before a goal closes; per-goal gate
-  commands (AND-combined with the global gate); a per-goal wall-clock deadline
-  (`timeout_minutes`) that auto-retires exhausted pursuits; accumulated
-  "lessons" that are rebacked into continuation prompts and promoted into
-  long-term notes via a global-only Dream consolidate stage; secret redaction
-  on unattended-run trace streams; and fail-closed behavior on confirm-gated
-  tools during unattended autonomous runs.
-- **实时记忆（关键词链接 + 编织）** — real-time memory: deterministic
+- **Autonomous goal-loop hardening (Loop Engineering rounds 2 & 3)** — the
+  autonomous goal loop gained an objective stop-hook gate so the model's
+  self-reported completion is checked against deterministic guardrails before a
+  goal closes; per-goal gate commands (AND-combined with the global gate); a
+  per-goal wall-clock deadline (`timeout_minutes`) that auto-retires exhausted
+  pursuits; accumulated "lessons" that are rebacked into continuation prompts and
+  promoted into long-term notes via a global-only Dream consolidate stage; secret
+  redaction on unattended-run trace streams; and fail-closed behavior on
+  confirm-gated tools during unattended autonomous runs.
+- **Real-time memory (keyword linking + weaving)** — deterministic
   keyword-overlap note pairing with LLM keyword extraction, a keyword-first link
   contract (FTS fallback when embedding is empty), a NoteWeave Dream stage that
   relinks orphan notes by keyword overlap, a mandatory ingest link contract with
   a repair prompt, async session-end flush (compress + link) gated on a bounded
   per-agent readiness registry, and note `keywords` frontmatter.
-- **多代理：子代理完成回告 + 会话死锁生命周期** — background subagent
-  completions now announce back to the parent session, with a session-deadlock
-  lifecycle (sweep + conclude) so stalled multi-agent sessions are reclaimed.
-- **Teams 编排接线** — team lifecycle events on the event bus, a
+- **Multi-agent: subagent completion announce + session deadlock lifecycle** —
+  background subagent completions now announce back to the parent session, with a
+  session-deadlock lifecycle (sweep + conclude) so stalled multi-agent sessions
+  are reclaimed.
+- **Teams orchestration wiring** — team lifecycle events on the event bus, a
   process-lifetime background-agent tracker, subagent guardrail inheritance, and
   an end-to-end `lead_review_required` verification gate on workflow review
   steps.
-- **Aleph 集群节点可见性** — `node_invoke_many` concurrent tag fan-out tool and
-  `node_list`, node tags on the connect frame for fan-out selection, `last_seen`
-  wiring, and an offline-fleet view that merges unreachable nodes.
-- **CLI 流式保真** — `aleph watch` live activity board, model-fallback notice,
-  colored history with markdown rendering, live response-body streaming, and
-  provider-retry (`run_retrying`) visibility in CLI/TUI/Panel.
-- **Panel 玻璃语言全面铺开** — chat message-flow glass refresh, unified
+- **Aleph cluster node visibility** — `node_invoke_many` concurrent tag fan-out
+  tool and `node_list`, node tags on the connect frame for fan-out selection,
+  `last_seen` wiring, and an offline-fleet view that merges unreachable nodes.
+- **CLI streaming fidelity** — `aleph watch` live activity board, model-fallback
+  notice, colored history with markdown rendering, live response-body streaming,
+  and provider-retry (`run_retrying`) visibility in CLI/TUI/Panel.
+- **Panel glass language rollout** — chat message-flow glass refresh, unified
   `nav-tile` frosted sidebar material across all menus, glass round-2 for
   transient surfaces (modals/menus/drawers) with a 28%-smaller WASM bundle, and
   full-width assistant reply bubbles.
-- **工具权限策略端到端** — tool permission policy wired end-to-end with a
-  per-channel permission layer and a three-tier (global → agent → channel) merge.
-- **MCP 协议保真 + OAuth** — wire-format fidelity fixes, Streamable HTTP session
-  support (`Mcp-Session-Id`), OAuth bearer-token chain wiring with an `mcp_login`
-  tool, and external MCP tools surfaced into the live LLM tool registry.
-- **Provider 能力面** — a `list_models` tool surfacing capability + cost
-  metadata, a model-metadata/pricing catalog refresh, live route/failover
+- **Tool permission policy end-to-end** — tool permission policy wired
+  end-to-end with a per-channel permission layer and a three-tier
+  (global → agent → channel) merge.
+- **MCP protocol fidelity + OAuth** — wire-format fidelity fixes, Streamable
+  HTTP session support (`Mcp-Session-Id`), OAuth bearer-token chain wiring with
+  an `mcp_login` tool, and external MCP tools surfaced into the live LLM tool
+  registry.
+- **Provider capability surface** — a `list_models` tool surfacing capability +
+  cost metadata, a model-metadata/pricing catalog refresh, live route/failover
   `route_status` observability, native ollama `/api/chat` migration
   (history + tools + vision), gemini parallel `functionResponse` merge with
   cache-billing fix, and OpenAI stale encrypted-reasoning strip-and-retry.
-- **语音作为上下文层** — the previously dead voice-mode context layer is wired
-  into prompt generation, with a Whisper hallucination filter on transcription
-  and markdown/URL sanitization + length clamp on TTS.
-- **Hook + 插件服务生命周期** — `[prompt.extra_files]` config wiring and
+- **Voice as a context layer** — the previously dead voice-mode context layer is
+  wired into prompt generation, with a Whisper hallucination filter on
+  transcription and markdown/URL sanitization + length clamp on TTS.
+- **Hook + plugin service lifecycle** — `[prompt.extra_files]` config wiring and
   `HookAction::Agent` delivery; plugin manifest `[[services]]` wired end-to-end
   with a full service lifecycle (autostart / disable / uninstall / shutdown /
   reload).
-- **消息排队 / steering** — a non-lossy FIFO busy queue with a `queue`
+- **Message queueing / steering** — a non-lossy FIFO busy queue with a `queue`
   busy-input mode, a `/stop` channel command, steering teardown-race rescue, and
   a replayed interruption marker.
-- **历史压缩缓存 + 进程拓扑瘦身** — a compaction fingerprint cache that kills
-  per-turn redundant LLM summarization and wires daily insights into memory
-  gather; plus a single process-wide `AlephBridge` (3 → 1) with lazy spawn,
-  cutting idle desktop subprocesses.
+- **Compaction cache + process-topology slimming** — a compaction fingerprint
+  cache that kills per-turn redundant LLM summarization and wires daily insights
+  into memory gather; plus a single process-wide `AlephBridge` (3 → 1) with lazy
+  spawn, cutting idle desktop subprocesses.
 
 ### Fixed
 
-- **WhatsApp 凭据加密** — WhatsApp auth data is now encrypted at rest in the
-  vault instead of stored in plaintext.
-- **Sandbox 加固** — fail-closed writable-symlink TOCTOU guard for the macOS
-  seatbelt, and a head + tail command-policy scan that closes padded-tail
+- **WhatsApp credential encryption** — WhatsApp auth data is now encrypted at
+  rest in the vault instead of stored in plaintext.
+- **Sandbox hardening** — fail-closed writable-symlink TOCTOU guard for the
+  macOS seatbelt, and a head + tail command-policy scan that closes padded-tail
   evasion.
-- **安全杂项** — SOCKS5 `nmethods` allocation cap, PowerShell injection escaping
-  in desktop mail ops, stronger filename validation and file permissions,
-  constant-time A2A auth-token comparison, and A2A broadcast-channel leak fixes.
-- **记忆 incoming-link 全路径匹配** — NoteDecay incoming-link protection and
-  NoteWeave orphan detection now match the full `to_note` path, preventing
-  false-orphan archival.
-- **Harness 退出保真** — exit-point `terminate_reason` fidelity (including a
+- **Security miscellany** — SOCKS5 `nmethods` allocation cap, PowerShell
+  injection escaping in desktop mail ops, stronger filename validation and file
+  permissions, constant-time A2A auth-token comparison, and A2A
+  broadcast-channel leak fixes.
+- **Memory incoming-link full-path matching** — NoteDecay incoming-link
+  protection and NoteWeave orphan detection now match the full `to_note` path,
+  preventing false-orphan archival.
+- **Harness exit fidelity** — exit-point `terminate_reason` fidelity (including a
   `DiminishingReturns` variant) and parallel tool-batch partitioning into
   resource-disjoint groups.
-- **panic 硬化** — UTF-8 byte-slice panic in device-timestamp formatting,
-  saturating token totals to avoid overflow panic, and poison-safe mutex
-  handling in webchat event dispatch and the ACP streaming callback.
+- **Panic hardening** — UTF-8 byte-slice panic in device-timestamp formatting,
+  saturating token totals to avoid overflow panic, and poison-safe mutex handling
+  in webchat event dispatch and the ACP streaming callback.
 - **macOS shell** — `perm_monitor` now spawns on the Tauri runtime (not a bare
   tokio runtime), and the daemon auto-restarts on permission grant.
-- **工具调用挽救** — malformed tool-call argument salvage, wider coercion,
+- **Tool-call salvage** — malformed tool-call argument salvage, wider coercion,
   did-you-mean `NotFound` hints, and bounded error bodies.
-- **Workflow 运行生命周期** — run identity, status/cancel surface, sticky
+- **Workflow run lifecycle** — run identity, status/cancel surface, sticky
   cancellation guard, and deterministic latest-run tie-break on same-second runs.
-- **初始化回滚保护** — `init_unified` now protects pre-existing data during an
-  initialization rollback instead of clobbering it.
+- **Initialization rollback protection** — `init_unified` now protects
+  pre-existing data during an initialization rollback instead of clobbering it.
 
 ## [26.6.9]
 
