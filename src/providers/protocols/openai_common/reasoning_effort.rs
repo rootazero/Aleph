@@ -140,7 +140,7 @@ pub fn clamp_effort(model: &str, requested: &str) -> Option<String> {
         .filter(|s| **s != "none")
         .filter_map(|s| effort_ordinal(s).map(|o| (s, o)))
         // Tie-break toward the lower effort by ordering on (distance, ordinal).
-        .min_by_key(|(_, o)| ((*o as i16 - want as i16).unsigned_abs(), *o))
+        .min_by_key(|(_, o)| ((i16::from(*o) - i16::from(want)).unsigned_abs(), *o))
         .map(|(s, _)| s.to_string())
 }
 

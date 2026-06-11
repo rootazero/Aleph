@@ -414,7 +414,7 @@ impl EventHandler for Handler {
                     .clone()
                     .unwrap_or_else(|| "application/octet-stream".to_string()),
                 filename: Some(a.filename.clone()),
-                size: Some(a.size as u64),
+                size: Some(u64::from(a.size)),
                 url: Some(a.url.clone()),
                 path: None,
                 data: None,

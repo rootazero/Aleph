@@ -50,7 +50,7 @@ impl StateDatabase {
                 event.seq,
                 event.event_type,
                 event.payload_json,
-                event.is_structural as i32,
+                i32::from(event.is_structural),
                 event.timestamp,
             ],
         )
@@ -99,7 +99,7 @@ impl StateDatabase {
                     event.seq,
                     event.event_type,
                     event.payload_json,
-                    event.is_structural as i32,
+                    i32::from(event.is_structural),
                     event.timestamp,
                 ])
                 .map_err(|e| AlephError::config(format!("Failed to insert event: {e}")))?;

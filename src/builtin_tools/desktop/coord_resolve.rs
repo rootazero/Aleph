@@ -103,8 +103,8 @@ pub async fn resolve_viewport(
             .or_else(|| displays.first())?,
     };
     let s = pick.scale_factor.max(1.0);
-    let w = (pick.width as f64 * s).round() as u32;
-    let h = (pick.height as f64 * s).round() as u32;
+    let w = (f64::from(pick.width) * s).round() as u32;
+    let h = (f64::from(pick.height) * s).round() as u32;
     Some((w, h))
 }
 

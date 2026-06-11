@@ -72,7 +72,7 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
     match err {
         // Rate limit is a top-level RequestError variant (not inside ApiError)
         teloxide::RequestError::RetryAfter(seconds) => {
-            ErrorClass::RateLimited(seconds.seconds() as u64)
+            ErrorClass::RateLimited(u64::from(seconds.seconds()))
         }
         teloxide::RequestError::Api(api_err) => {
             use teloxide::ApiError;
@@ -436,7 +436,7 @@ pub(crate) async fn send_message(
                                 }
                                 return Err(ChannelError::SendFailed(e.to_string()));
                             }
-                            let backoff_ms = 500 * attempts as u64;
+                            let backoff_ms = 500 * u64::from(attempts);
                             tracing::warn!(
                                 "Telegram pre-connect error, retrying in {}ms (attempt {}/{}): {}",
                                 backoff_ms,
@@ -458,7 +458,7 @@ pub(crate) async fn send_message(
                                 }
                                 return Err(ChannelError::SendFailed(e.to_string()));
                             }
-                            let backoff_ms = 1000 * attempts as u64;
+                            let backoff_ms = 1000 * u64::from(attempts);
                             tracing::warn!(
                                 "Telegram post-connect error, retrying in {}ms (attempt {}/{}): {}",
                                 backoff_ms,
@@ -786,7 +786,7 @@ impl TelegramDelivery {
             req = req.link_preview_options(opts);
         }
         match req.await {
-            Ok(msg) => Ok(msg.id.0 as i64),
+            Ok(msg) => Ok(i64::from(msg.id.0)),
             Err(e) => {
                 let cls = classify_error(&e);
                 self.cooldown

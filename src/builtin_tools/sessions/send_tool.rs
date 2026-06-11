@@ -335,7 +335,7 @@ impl SessionsSendTool {
             input: args.message.clone(),
             session_key: gateway_session_key,
             timeout_secs: if args.timeout_seconds > 0 {
-                Some(args.timeout_seconds as u64)
+                Some(u64::from(args.timeout_seconds))
             } else {
                 Some(300) // Default 5 min for fire-and-forget
             },
@@ -390,7 +390,7 @@ impl SessionsSendTool {
             "sessions_send: wait mode"
         );
 
-        let timeout_duration = std::time::Duration::from_secs(args.timeout_seconds as u64);
+        let timeout_duration = std::time::Duration::from_secs(u64::from(args.timeout_seconds));
 
         // Execute with timeout
         let execution_result = tokio::time::timeout(
@@ -420,7 +420,7 @@ impl SessionsSendTool {
                                 run_id: format!("{run_id}-continue"),
                                 input: "继续".to_string(),
                                 session_key: session_key_to_gateway(&target_session_key),
-                                timeout_secs: Some(args.timeout_seconds as u64),
+                                timeout_secs: Some(u64::from(args.timeout_seconds)),
                                 metadata: sub_metadata.clone(),
                                 attachments: Vec::new(),
                                 pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),

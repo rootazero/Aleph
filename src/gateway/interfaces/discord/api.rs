@@ -163,7 +163,7 @@ pub async fn list_channels(http: &Http, guild_id: u64) -> Result<Vec<ChannelSumm
             channel_id: ch.id.get(),
             name: ch.name.clone(),
             channel_type: u8::from(ch.kind),
-            position: ch.position as i64,
+            position: i64::from(ch.position),
         })
         .collect();
 

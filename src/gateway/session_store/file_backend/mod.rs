@@ -371,7 +371,7 @@ impl SessionStore for FileSessionStore {
                 }
             }
             if let Some(threshold) = filter.active_minutes {
-                let cutoff = chrono::Utc::now().timestamp() - (threshold as i64 * 60);
+                let cutoff = chrono::Utc::now().timestamp() - (i64::from(threshold) * 60);
                 if meta.last_active_at < cutoff {
                     continue;
                 }

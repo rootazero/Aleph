@@ -1108,7 +1108,7 @@ impl AiProvider for FailoverProvider {
                                     g.record_latency(started.elapsed());
                                     if let Some(u) = &resp.usage {
                                         g.record_tokens(
-                                            u.input_tokens as u64 + u.output_tokens as u64,
+                                            u64::from(u.input_tokens) + u64::from(u.output_tokens),
                                         );
                                     }
                                 }

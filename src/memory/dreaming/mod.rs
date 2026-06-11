@@ -623,7 +623,7 @@ impl DreamDaemon {
         // run forever AND hold the `is_running` latch via `RunGuard`, blocking
         // every subsequent scheduled cycle.
         let result = match tokio::time::timeout(
-            Duration::from_secs(self.config.max_duration_seconds as u64),
+            Duration::from_secs(u64::from(self.config.max_duration_seconds)),
             self.run_dream(run_start, run_date, true),
         )
         .await
@@ -692,7 +692,7 @@ impl DreamDaemon {
         }
 
         let idle = idle_seconds();
-        if idle < self.config.idle_threshold_seconds as i64 {
+        if idle < i64::from(self.config.idle_threshold_seconds) {
             info!(
                 reason = "idle_below_threshold",
                 idle_seconds = idle,
@@ -756,7 +756,7 @@ impl DreamDaemon {
 
         let run_future = self.run_dream(run_start, run_date.clone(), false);
         let run_result = tokio::time::timeout(
-            Duration::from_secs(self.config.max_duration_seconds as u64),
+            Duration::from_secs(u64::from(self.config.max_duration_seconds)),
             run_future,
         )
         .await;
@@ -896,7 +896,7 @@ impl DreamDaemon {
                 let activity_checker: Arc<dyn Fn() -> bool + Send + Sync> = if force {
                     Arc::new(|| false)
                 } else {
-                    let threshold = self.config.idle_threshold_seconds as i64;
+                    let threshold = i64::from(self.config.idle_threshold_seconds);
                     Arc::new(move || idle_seconds() < threshold)
                 };
                 let ctx = DreamContext {

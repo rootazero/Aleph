@@ -142,7 +142,7 @@ pub async fn handle_get(request: JsonRpcRequest, db: Arc<StateDatabase>) -> Json
     let entries: Vec<AgentTraceReplayEntry> = traces
         .iter()
         .map(|t| AgentTraceReplayEntry {
-            step: t.step_index as u64,
+            step: u64::from(t.step_index),
             event: t.event.clone(),
         })
         .collect();

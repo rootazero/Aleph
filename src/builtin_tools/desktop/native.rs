@@ -168,10 +168,10 @@ impl super::DesktopTool {
                                 ),
                             }));
                         }
-                        if r.x > u32::MAX as f64
-                            || r.y > u32::MAX as f64
-                            || r.width > u32::MAX as f64
-                            || r.height > u32::MAX as f64
+                        if r.x > f64::from(u32::MAX)
+                            || r.y > f64::from(u32::MAX)
+                            || r.width > f64::from(u32::MAX)
+                            || r.height > f64::from(u32::MAX)
                         {
                             return Ok(Some(DesktopOutput {
                                 success: false,
@@ -520,7 +520,7 @@ impl super::DesktopTool {
             },
             "focus_window" => {
                 let window_id = match args.window_id {
-                    Some(id) => id as u64,
+                    Some(id) => u64::from(id),
                     None => {
                         return Ok(Some(DesktopOutput {
                             success: false,
@@ -547,7 +547,7 @@ impl super::DesktopTool {
             }
             "move_window" => {
                 let window_id = match args.window_id {
-                    Some(id) => id as u64,
+                    Some(id) => u64::from(id),
                     None => {
                         return Ok(Some(invalid_args(
                             "move_window requires 'window_id' (get it from window_list)",
@@ -575,7 +575,7 @@ impl super::DesktopTool {
             }
             "resize_window" => {
                 let window_id = match args.window_id {
-                    Some(id) => id as u64,
+                    Some(id) => u64::from(id),
                     None => {
                         return Ok(Some(invalid_args(
                             "resize_window requires 'window_id' (get it from window_list)",

@@ -475,7 +475,7 @@ impl CompressionService {
         tokio::spawn(async move {
             // `tokio::time::interval` panics on a zero period; clamp a
             // misconfigured 0 from user config to 1s instead of killing the task.
-            let mut interval = interval(Duration::from_secs((interval_secs.max(1)) as u64));
+            let mut interval = interval(Duration::from_secs(u64::from((interval_secs.max(1)))));
 
             tracing::info!(
                 interval_seconds = interval_secs,
@@ -524,7 +524,7 @@ impl CompressionService {
         runtime.spawn(async move {
             // `tokio::time::interval` panics on a zero period; clamp a
             // misconfigured 0 from user config to 1s instead of killing the task.
-            let mut hourly_interval = interval(Duration::from_secs((interval_secs.max(1)) as u64));
+            let mut hourly_interval = interval(Duration::from_secs(u64::from((interval_secs.max(1)))));
 
             tracing::info!(
                 interval_seconds = interval_secs,

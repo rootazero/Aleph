@@ -154,7 +154,7 @@ impl RequestStateData {
     pub fn new(_request_id: Uuid) -> Self {
         let now = current_timestamp_ms();
         Self {
-            state: AtomicU64::new(RequestState::Pending.as_u8() as u64),
+            state: AtomicU64::new(u64::from(RequestState::Pending.as_u8())),
             stage_entered_at: AtomicU64::new(now),
             created_at: AtomicU64::new(now),
             total_duration: AtomicU64::new(0),
@@ -194,7 +194,7 @@ impl RequestStateData {
         }
 
         let now = current_timestamp_ms();
-        self.state.store(new_state.as_u8() as u64, Ordering::SeqCst);
+        self.state.store(u64::from(new_state.as_u8()), Ordering::SeqCst);
         self.stage_entered_at.store(now, Ordering::SeqCst);
 
         // If entering a terminal state, record total duration

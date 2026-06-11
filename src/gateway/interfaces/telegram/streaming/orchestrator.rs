@@ -35,7 +35,7 @@ impl StreamOrchestrator {
             .expect("Invalid conversation_id in TelegramDelivery");
         let tracker = Arc::new(Mutex::new(LaneDeliveryTracker::new(
             chat_id.0,
-            thread_id.map(|t| t as i64),
+            thread_id.map(|t| i64::from(t)),
         )));
         let status_controller =
             StatusReactionController::new(delivery.clone(), config.status_reactions.clone());

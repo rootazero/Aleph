@@ -224,7 +224,7 @@ impl SqliteMemoryBackend {
             .lock()
             .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
 
-        let cutoff = Utc::now().timestamp() - (retention_days as i64 * 86400);
+        let cutoff = Utc::now().timestamp() - (i64::from(retention_days) * 86400);
 
         let deleted = conn
             .execute(

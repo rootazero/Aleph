@@ -70,7 +70,7 @@ impl MemoryContextProvider {
         let target_tokens = (self.config.max_output_chars as u64)
             .saturating_mul(2)
             .saturating_div(3)
-            .min(u32::MAX as u64) as u32;
+            .min(u64::from(u32::MAX)) as u32;
         // Coordinate with the per-turn context budget: memory is injected into
         // the system prompt (counted as overhead by the pressure sensor and NOT
         // reducible by message compaction), so an oversized injection forces the

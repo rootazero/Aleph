@@ -378,7 +378,7 @@ impl AgentEnvStore {
         }
 
         let threshold =
-            Utc::now().timestamp() - (self.config.archive_after_days as i64 * 24 * 60 * 60);
+            Utc::now().timestamp() - (i64::from(self.config.archive_after_days) * 24 * 60 * 60);
 
         let conn = self
             .conn

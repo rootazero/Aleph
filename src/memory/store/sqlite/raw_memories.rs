@@ -78,7 +78,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
                 raw.path,
                 raw.layer,
                 raw.attachment_text,
-                raw.is_processed as i64,
+                i64::from(raw.is_processed),
                 raw.created_at,
             ],
         )
@@ -105,7 +105,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
                 raw.path,
                 raw.layer,
                 raw.attachment_text,
-                raw.is_processed as i64,
+                i64::from(raw.is_processed),
                 raw.created_at,
             ],
         )

@@ -119,7 +119,7 @@ impl SubmitPolling for MidjourneyProvider {
             attempts += 1;
             if attempts > MAX_POLL_ATTEMPTS {
                 return Err(GenerationError::timeout(Duration::from_secs(
-                    (MAX_POLL_ATTEMPTS as u64).saturating_mul(POLL_INTERVAL_SECS),
+                    u64::from(MAX_POLL_ATTEMPTS).saturating_mul(POLL_INTERVAL_SECS),
                 )));
             }
 

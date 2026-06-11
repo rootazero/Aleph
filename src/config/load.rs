@@ -259,7 +259,7 @@ impl Config {
             config.ssrf.allow_private_network = v;
         }
         if let Some(v) = ssrf.get("max_redirects").and_then(|v| v.as_integer()) {
-            if let Ok(n) = u8::try_from(v.clamp(0, u8::MAX as i64)) {
+            if let Ok(n) = u8::try_from(v.clamp(0, i64::from(u8::MAX))) {
                 config.ssrf.max_redirects = n;
             }
         }

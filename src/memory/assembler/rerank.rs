@@ -125,7 +125,7 @@ pub(crate) fn parse_response(
         return Err(AssemblerError::RerankEmpty);
     }
 
-    let sum: u64 = sanitized.iter().map(|(_, _, b)| *b as u64).sum();
+    let sum: u64 = sanitized.iter().map(|(_, _, b)| u64::from(*b)).sum();
     let cap = ((total_budget as f32) * 0.7) as u64;
     if sum > cap {
         let scale = cap as f32 / sum as f32;

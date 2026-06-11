@@ -231,8 +231,8 @@ impl GoogleImagenProvider {
                 return DEFAULT_ASPECT_RATIO.to_string();
             }
             // Use integer cross-multiplication to avoid f32 precision loss
-            let w = w as u64;
-            let h = h as u64;
+            let w = u64::from(w);
+            let h = u64::from(h);
             return if w == h {
                 "1:1".to_string()
             } else if w * 4 == h * 3 {

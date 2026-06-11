@@ -289,7 +289,7 @@ impl DeliveryStore {
             "UPDATE outbound_deliveries
              SET attempts = ?1, next_attempt_at = ?2, last_error = ?3
              WHERE id = ?4",
-            params![attempts as i64, next_attempt_at, last_error, id],
+            params![i64::from(attempts), next_attempt_at, last_error, id],
         )?;
         Ok(())
     }

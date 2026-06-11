@@ -290,7 +290,7 @@ impl NoteStore for SqliteMemoryBackend {
                     origin_str,
                     source_kind,
                     p.source_id,
-                    p.inferred as i64,
+                    i64::from(p.inferred),
                     now_ts,
                 ],
             )
@@ -1007,7 +1007,7 @@ impl NoteStore for SqliteMemoryBackend {
                     origin_str,
                     source_kind,
                     p.source_id,
-                    p.inferred as i64,
+                    i64::from(p.inferred),
                     now_ts,
                 ],
             )
@@ -1213,7 +1213,7 @@ impl NoteStore for SqliteMemoryBackend {
             .iter()
             .map(|(note_path, score)| super::recall_signals::RecallHit {
                 note_path: note_path.clone(),
-                score: *score as f64,
+                score: f64::from(*score),
             })
             .collect();
         self.record_signals(query, channel, &recall_hits, None, namespace)

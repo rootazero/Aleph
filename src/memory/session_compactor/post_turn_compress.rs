@@ -238,7 +238,7 @@ impl SessionCompactor {
             if d1_created > 0 {
                 self.metrics
                     .d1_condensations
-                    .fetch_add(d1_created as u64, Ordering::Relaxed);
+                    .fetch_add(u64::from(d1_created), Ordering::Relaxed);
             }
         }
 
@@ -254,7 +254,7 @@ impl SessionCompactor {
                 if d2_created > 0 {
                     self.metrics
                         .d2_condensations
-                        .fetch_add(d2_created as u64, Ordering::Relaxed);
+                        .fetch_add(u64::from(d2_created), Ordering::Relaxed);
                 }
             }
         }

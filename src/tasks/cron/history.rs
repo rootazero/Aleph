@@ -233,7 +233,7 @@ pub fn cleanup_old_cron_runs(
     retention_days: u32,
     now_ms: i64,
 ) -> Result<u64, String> {
-    let cutoff_ms = now_ms - (retention_days as i64) * 86_400_000;
+    let cutoff_ms = now_ms - i64::from(retention_days) * 86_400_000;
     let deleted = conn
         .execute(
             "DELETE FROM cron_job_runs WHERE created_at < ?1",

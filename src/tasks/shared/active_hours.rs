@@ -137,14 +137,14 @@ impl ActiveHoursSchedule {
 
         // Start from today; if no remaining window today, advance one day at a time.
         for day_offset in 0..7 {
-            let date = (now.date_naive() + chrono::Duration::days(day_offset as i64))
+            let date = (now.date_naive() + chrono::Duration::days(i64::from(day_offset)))
                 .and_hms_opt(0, 0, 0)?;
             let weekday_idx = date.weekday().num_days_from_monday() as usize;
             for win in &self.windows[weekday_idx] {
                 // Build the window's wall-clock start in the schedule's tz.
                 let start_time = NaiveTime::from_hms_opt(
-                    (win.start_minute / 60) as u32,
-                    (win.start_minute % 60) as u32,
+                    u32::from(win.start_minute / 60),
+                    u32::from(win.start_minute % 60),
                     0,
                 )?;
                 let start_naive = date.date().and_time(start_time);
@@ -165,8 +165,8 @@ impl ActiveHoursSchedule {
                 // the next open moment so callers don't get stuck.
                 if start_ms <= now_ms {
                     let end_time = NaiveTime::from_hms_opt(
-                        (win.end_minute / 60) as u32,
-                        (win.end_minute % 60) as u32,
+                        u32::from(win.end_minute / 60),
+                        u32::from(win.end_minute % 60),
                         0,
                     )?;
                     let end_naive = date.date().and_time(end_time);

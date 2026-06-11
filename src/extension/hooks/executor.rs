@@ -627,7 +627,7 @@ impl HookExecutor {
                     } else {
                         Some(format!("HTTP {}", status.as_u16()))
                     },
-                    exit_code: Some(status.as_u16() as i32),
+                    exit_code: Some(i32::from(status.as_u16())),
                 })
             }
             Err(e) => Ok(ActionResult {

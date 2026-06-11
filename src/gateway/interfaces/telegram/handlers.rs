@@ -99,7 +99,7 @@ pub(crate) async fn convert_message(
         ConversationId::new(msg.chat.id.0.to_string())
     };
 
-    let thread_id = msg.thread_id.map(|t| t.0 .0 as i64);
+    let thread_id = msg.thread_id.map(|t| i64::from(t.0 .0));
 
     // Extract platform-specific metadata
     let mut metadata: Vec<MessageMeta> = Vec::new();
@@ -193,7 +193,7 @@ pub(crate) async fn extract_attachments(
                         largest.file.id.0.clone(),
                         "image/jpeg".to_string(),
                         None,
-                        largest.file.size as u64,
+                        u64::from(largest.file.size),
                     )
                 }),
                 MediaKind::Document(doc) => Some((
@@ -202,7 +202,7 @@ pub(crate) async fn extract_attachments(
                         .mime_type
                         .as_ref().map_or_else(|| "application/octet-stream".to_string(), |m| m.to_string()),
                     doc.document.file_name.clone(),
-                    doc.document.file.size as u64,
+                    u64::from(doc.document.file.size),
                 )),
                 MediaKind::Audio(audio) => Some((
                     audio.audio.file.id.0.clone(),
@@ -211,7 +211,7 @@ pub(crate) async fn extract_attachments(
                         .mime_type
                         .as_ref().map_or_else(|| "audio/mpeg".to_string(), |m| m.to_string()),
                     audio.audio.file_name.clone(),
-                    audio.audio.file.size as u64,
+                    u64::from(audio.audio.file.size),
                 )),
                 MediaKind::Video(video) => Some((
                     video.video.file.id.0.clone(),
@@ -220,7 +220,7 @@ pub(crate) async fn extract_attachments(
                         .mime_type
                         .as_ref().map_or_else(|| "video/mp4".to_string(), |m| m.to_string()),
                     video.video.file_name.clone(),
-                    video.video.file.size as u64,
+                    u64::from(video.video.file.size),
                 )),
                 MediaKind::Voice(voice) => Some((
                     voice.voice.file.id.0.clone(),
@@ -229,7 +229,7 @@ pub(crate) async fn extract_attachments(
                         .mime_type
                         .as_ref().map_or_else(|| "audio/ogg".to_string(), |m| m.to_string()),
                     None,
-                    voice.voice.file.size as u64,
+                    u64::from(voice.voice.file.size),
                 )),
                 MediaKind::Sticker(s) => {
                     let mime = if s.sticker.flags.is_animated {
@@ -243,7 +243,7 @@ pub(crate) async fn extract_attachments(
                         s.sticker.file.id.0.clone(),
                         mime,
                         None,
-                        s.sticker.file.size as u64,
+                        u64::from(s.sticker.file.size),
                     ))
                 }
                 _ => None,

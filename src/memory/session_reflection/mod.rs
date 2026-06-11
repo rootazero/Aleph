@@ -169,7 +169,7 @@ impl SessionReflector {
         if self.config.cooldown_minutes == 0 {
             return false;
         }
-        let window = self.config.cooldown_minutes as i64 * 60;
+        let window = i64::from(self.config.cooldown_minutes) * 60;
         let now = chrono::Utc::now().timestamp();
         let guard = self.last_reflect.lock().unwrap_or_else(|e| e.into_inner());
         matches!(guard.get(agent_id), Some(&last) if now - last < window)

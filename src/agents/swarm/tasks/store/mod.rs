@@ -831,7 +831,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         let next_steps_json = serde_json::to_string(&input.next_steps)
             .map_err(|e| db_err(format!("next_steps serialize failed: {e}")))?;
         let now = now_epoch();
-        let confidence_i: Option<i64> = input.confidence.map(|v| v.min(100) as i64);
+        let confidence_i: Option<i64> = input.confidence.map(|v| i64::from(v.min(100)));
         let conn = self.conn.lock().await;
         conn.execute(
             r#"

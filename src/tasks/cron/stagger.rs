@@ -18,7 +18,7 @@ pub fn compute_stagger_offset(job_id: &str, stagger_ms: i64) -> i64 {
 
     let hash = Sha256::digest(job_id.as_bytes());
     let head = u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]);
-    (head as i64) % stagger_ms
+    i64::from(head) % stagger_ms
 }
 
 /// Compute the next staggered execution time for a job.

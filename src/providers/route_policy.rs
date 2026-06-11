@@ -140,13 +140,13 @@ impl RateLimits {
         };
         let rpm_permille = rpm
             .filter(|&l| l > 0)
-            .map_or(0, |l| rpm_used as u64 * 1000 / l as u64);
+            .map_or(0, |l| u64::from(rpm_used) * 1000 / u64::from(l));
         let tpm_permille = tpm
             .filter(|&l| l > 0)
-            .map_or(0, |l| tpm_used * 1000 / l as u64);
+            .map_or(0, |l| tpm_used * 1000 / u64::from(l));
         let permille = rpm_permille.max(tpm_permille);
         let over = permille >= 1000;
-        (permille.min(u16::MAX as u64) as u16, over)
+        (permille.min(u64::from(u16::MAX)) as u16, over)
     }
 }
 
@@ -389,7 +389,7 @@ where
         // Lowest rate-window utilisation first — spread load toward whoever has
         // the most remaining headroom. `0‰` (no limit / idle) sorts first.
         LoadBalanceStrategy::UsageBased => {
-            sort_by_metric(group, metric_of, name_of, |m| m.utilization_permille as u64)
+            sort_by_metric(group, metric_of, name_of, |m| u64::from(m.utilization_permille))
         }
     }
 }

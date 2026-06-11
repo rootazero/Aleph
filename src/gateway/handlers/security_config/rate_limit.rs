@@ -170,7 +170,7 @@ pub(super) fn write_sandbox_rate_limit_to_toml(
                 let mut w = toml::Table::new();
                 w.insert(
                     "max_requests".to_string(),
-                    toml::Value::Integer(window.max_requests as i64),
+                    toml::Value::Integer(i64::from(window.max_requests)),
                 );
                 w.insert(
                     "window_secs".to_string(),
@@ -178,7 +178,7 @@ pub(super) fn write_sandbox_rate_limit_to_toml(
                 );
                 w.insert(
                     "burst_allow".to_string(),
-                    toml::Value::Integer(window.burst_allow as i64),
+                    toml::Value::Integer(i64::from(window.burst_allow)),
                 );
                 rl_table.insert(key.to_string(), toml::Value::Table(w));
             }

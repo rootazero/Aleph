@@ -293,7 +293,7 @@ impl OpenAiCompatProvider {
         }
 
         Err(GenerationError::timeout(Duration::from_secs(
-            MAX_POLL_ATTEMPTS as u64 * POLL_INTERVAL_SECS,
+            u64::from(MAX_POLL_ATTEMPTS) * POLL_INTERVAL_SECS,
         )))
     }
 }

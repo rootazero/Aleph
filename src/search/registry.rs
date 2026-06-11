@@ -357,7 +357,7 @@ impl SearchRegistry {
         let start = Instant::now();
         let result = match provider.search("test", &test_options).await {
             Ok(_) => {
-                let latency = start.elapsed().as_millis().min(u32::MAX as u128) as u32;
+                let latency = start.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
                 ProviderTestResult {
                     success: true,
                     latency_ms: latency,

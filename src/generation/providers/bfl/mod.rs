@@ -193,7 +193,7 @@ impl BflProvider {
         }
 
         Err(GenerationError::timeout(Duration::from_secs(
-            (MAX_POLL_ATTEMPTS as u64).saturating_mul(POLL_INTERVAL_SECS),
+            u64::from(MAX_POLL_ATTEMPTS).saturating_mul(POLL_INTERVAL_SECS),
         )))
     }
 
@@ -353,7 +353,7 @@ impl GenerationProvider for BflProvider {
             if let Some(d) = result.duration {
                 metadata
                     .extra
-                    .insert("render_seconds".into(), serde_json::Value::from(d as f64));
+                    .insert("render_seconds".into(), serde_json::Value::from(f64::from(d)));
             }
             metadata.extra.insert(
                 "task_id".into(),

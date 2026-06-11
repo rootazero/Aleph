@@ -96,7 +96,7 @@ impl CompressionScheduler {
             return CompressionTrigger::TurnThreshold(turns);
         }
 
-        let idle_threshold = Duration::from_secs(config.idle_timeout_seconds as u64);
+        let idle_threshold = Duration::from_secs(u64::from(config.idle_timeout_seconds));
         drop(config);
 
         // Check idle timeout

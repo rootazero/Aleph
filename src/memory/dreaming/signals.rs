@@ -80,7 +80,7 @@ impl SignalSnapshot {
         });
 
         let growth_rate = if m.total_notes > 0 {
-            (m.notes_added_24h as f64 / m.total_notes as f64).clamp(0.0, 1.0)
+            (f64::from(m.notes_added_24h) / f64::from(m.total_notes)).clamp(0.0, 1.0)
         } else {
             0.0
         };
@@ -99,7 +99,7 @@ impl SignalSnapshot {
             source: "recall_signals".into(),
         });
         let never_recalled_ratio = if m.total_notes > 0 {
-            (m.never_recalled_count as f64 / m.total_notes as f64).clamp(0.0, 1.0)
+            (f64::from(m.never_recalled_count) / f64::from(m.total_notes)).clamp(0.0, 1.0)
         } else {
             0.0
         };
@@ -112,7 +112,7 @@ impl SignalSnapshot {
 
         // Skill usage signals
         let skill_recall_rate = if m.skill_notes_total > 0 {
-            (m.skill_notes_recalled as f64 / m.skill_notes_total as f64).clamp(0.0, 1.0)
+            (f64::from(m.skill_notes_recalled) / f64::from(m.skill_notes_total)).clamp(0.0, 1.0)
         } else {
             0.0
         };
@@ -125,7 +125,7 @@ impl SignalSnapshot {
 
         // Quality signals
         let correction_rate = if m.session_count > 0 {
-            (m.correction_count as f64 / m.session_count as f64).clamp(0.0, 1.0)
+            (f64::from(m.correction_count) / f64::from(m.session_count)).clamp(0.0, 1.0)
         } else {
             0.0
         };

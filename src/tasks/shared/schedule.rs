@@ -79,10 +79,10 @@ pub fn compute_next_every(
     // checked for `<= 0`, not an upper bound) can't overflow i64 — a panic in
     // debug or a wrapped past-timestamp in release that `advance_next_run`
     // would then spin on. Out-of-range results collapse to `None`.
-    let elapsed = (now_ms - anchor_ms) as i128;
-    let every = every_ms as i128;
+    let elapsed = i128::from(now_ms - anchor_ms);
+    let every = i128::from(every_ms);
     let periods = (elapsed + every - 1) / every; // ceil division
-    let next = anchor_ms as i128 + periods * every;
+    let next = i128::from(anchor_ms) + periods * every;
     i64::try_from(next).ok()
 }
 

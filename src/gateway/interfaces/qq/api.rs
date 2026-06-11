@@ -169,7 +169,7 @@ impl QQApiClient {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
 
-        let code = status.as_u16() as u32;
+        let code = u32::from(status.as_u16());
         if code == 429 || code == 304023 || code == 304024 {
             return Err(QQError::RateLimited {
                 retry_after_secs: 5,

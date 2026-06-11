@@ -54,7 +54,7 @@ impl SqliteMemoryBackend {
                 row.session_id,
                 row.query_hash,
                 row.strategy,
-                row.used_fallback as i64,
+                i64::from(row.used_fallback),
                 row.fallback_reason,
                 row.candidates_count,
                 row.selected_item_ids,

@@ -162,7 +162,7 @@ pub(super) fn read_ssrf_config_from_toml(
             allow_private = v;
         }
         if let Some(v) = ssrf.get("max_redirects").and_then(|v| v.as_integer()) {
-            max_redirects = v.clamp(0, u8::MAX as i64) as u8;
+            max_redirects = v.clamp(0, i64::from(u8::MAX)) as u8;
         }
         if let Some(a) = ssrf.get("allowed_hosts").and_then(|v| v.as_array()) {
             allowed = a
@@ -421,7 +421,7 @@ pub(super) fn write_ssrf_config_to_toml(
         );
         ssrf_table.insert(
             "max_redirects".to_string(),
-            toml::Value::Integer(config.ssrf_max_redirects as i64),
+            toml::Value::Integer(i64::from(config.ssrf_max_redirects)),
         );
         ssrf_table.insert(
             "allowed_hosts".to_string(),

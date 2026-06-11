@@ -724,7 +724,7 @@ fn apply_rates(b: &TokenBreakdown, r: &Rates) -> (f64, CostStatus) {
     let mut missing = false;
     let mut bill = |tokens: u32, rate: Option<f64>| match rate {
         Some(per_mtok) if tokens > 0 => {
-            usd += (tokens as f64 / 1_000_000.0) * per_mtok;
+            usd += (f64::from(tokens) / 1_000_000.0) * per_mtok;
         }
         None if tokens > 0 => missing = true,
         _ => {}

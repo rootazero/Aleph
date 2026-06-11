@@ -108,7 +108,7 @@ const WHITE: Rgba<u8> = Rgba([255, 255, 255, 255]);
 
 /// Paint a filled rectangle, clamped to the image bounds.
 fn fill_rect(img: &mut RgbaImage, x: i64, y: i64, w: i64, h: i64, color: Rgba<u8>) {
-    let (iw, ih) = (img.width() as i64, img.height() as i64);
+    let (iw, ih) = (i64::from(img.width()), i64::from(img.height()));
     let x0 = x.max(0);
     let y0 = y.max(0);
     let x1 = (x + w).min(iw);
@@ -163,7 +163,7 @@ fn draw_label(img: &mut RgbaImage, x: i64, y: i64, n: usize, gs: i64, bg: Rgba<u
 /// Choose a glyph scale proportional to image height so marks stay legible on
 /// both small windows and large Retina captures.
 fn glyph_scale(height: u32) -> i64 {
-    ((height / 350) as i64).clamp(2, 6)
+    i64::from(height / 350).clamp(2, 6)
 }
 
 /// Paint numbered Set-of-Marks onto a PNG capture. Pure: decodes `png_bytes`,
@@ -175,8 +175,8 @@ fn annotate(png_bytes: &[u8], marks: &[Mark], scale: f64) -> std::result::Result
         .to_rgba8();
     let gs = glyph_scale(img.height());
     let thickness = gs.max(2);
-    let iw = img.width() as i64;
-    let ih = img.height() as i64;
+    let iw = i64::from(img.width());
+    let ih = i64::from(img.height());
 
     for mark in marks {
         let color = PALETTE[mark.index % PALETTE.len()];

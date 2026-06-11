@@ -204,7 +204,7 @@ impl MutationGate {
             return None;
         }
 
-        let rate = total_recalled as f64 / total_produced as f64;
+        let rate = f64::from(total_recalled) / f64::from(total_produced);
         if rate < DISTILL_MIN_RECALL_RATE {
             Some(format!(
                 "wasted distillation: {total_recalled}/{total_produced} recalled ({:.0}% < {:.0}%)",

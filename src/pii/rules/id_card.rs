@@ -95,7 +95,7 @@ impl IdCardRule {
                 if !b.is_ascii_digit() {
                     return 0;
                 }
-                (b - b'0') as u32 * w
+                u32::from(b - b'0') * w
             })
             .sum();
         let expected = CHECK_CODES[(sum % 11) as usize];

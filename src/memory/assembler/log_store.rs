@@ -43,7 +43,7 @@ impl AssemblyLogWriter {
             fallback_reason: env.meta.fallback_reason.clone(),
             candidates_count: env.meta.candidates_considered as i64,
             selected_item_ids: selected_json,
-            total_tokens: total_tokens as i64,
+            total_tokens: i64::from(total_tokens),
             rerank_latency_ms: env.meta.llm_rerank_latency_ms.map(|v| v as i64),
             total_latency_ms: env.meta.total_latency_ms as i64,
             created_at: env.generated_at,

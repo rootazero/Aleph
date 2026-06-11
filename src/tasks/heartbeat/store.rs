@@ -99,7 +99,7 @@ impl HeartbeatStore {
                 .map_err(|e| format!("failed to serialize task '{}': {e}", task.id))?;
             tx.execute(
                 "INSERT INTO heartbeat_tasks (id, name, agent_id, enabled, data) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![task.id, task.name, task.agent_id, task.enabled as i32, json],
+                params![task.id, task.name, task.agent_id, i32::from(task.enabled), json],
             )
             .map_err(|e| format!("failed to insert task '{}': {e}", task.id))?;
         }

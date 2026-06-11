@@ -90,7 +90,7 @@ pub async fn poll_prediction(
         attempts += 1;
         if attempts > MAX_POLL_ATTEMPTS {
             return Err(GenerationError::timeout(Duration::from_millis(
-                POLL_INTERVAL_MS.saturating_mul(MAX_POLL_ATTEMPTS as u64),
+                POLL_INTERVAL_MS.saturating_mul(u64::from(MAX_POLL_ATTEMPTS)),
             )));
         }
 

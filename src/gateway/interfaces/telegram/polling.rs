@@ -127,7 +127,7 @@ pub(crate) async fn run_polling_loop(
             );
             // Persist the offset from the diagnostic fetch if we got updates
             if let (Some(tracker), Some(last)) = (&offset_tracker, updates.last()) {
-                tracker.advance(last.id.0 as i64, "boot");
+                tracker.advance(i64::from(last.id.0), "boot");
             }
         }
         Err(e) => tracing::error!(

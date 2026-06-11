@@ -113,7 +113,7 @@ impl SessionStore for SessionManager {
             .map_err(map_err)?;
         let mut sessions = sessions;
         if let Some(threshold) = filter.active_minutes {
-            let cutoff = chrono::Utc::now().timestamp() - (threshold as i64 * 60);
+            let cutoff = chrono::Utc::now().timestamp() - (i64::from(threshold) * 60);
             sessions.retain(|s| s.last_active_at >= cutoff);
         }
         if let Some(limit) = filter.limit {
