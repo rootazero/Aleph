@@ -155,7 +155,6 @@ impl SignalError {
 
 impl From<SignalError> for crate::gateway::channel::ChannelError {
     fn from(err: SignalError) -> Self {
-        use crate::gateway::channel::ChannelError;
         match err {
             SignalError::HttpRequest(e) => Self::ReceiveFailed(e.to_string()),
             SignalError::ApiError { status, message } => {

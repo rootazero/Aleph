@@ -259,7 +259,7 @@ impl Default for SecuritySpec {
 
 impl From<&AlephSkillSpec> for crate::domain::skill::SkillManifest {
     fn from(spec: &AlephSkillSpec) -> Self {
-        use crate::domain::skill::{SkillContent, SkillId, SkillManifest, SkillSource};
+        use crate::domain::skill::{SkillContent, SkillId, SkillSource};
         Self::new(
             SkillId::new(&spec.name),
             spec.name.clone(),
