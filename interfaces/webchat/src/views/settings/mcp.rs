@@ -37,6 +37,7 @@ fn load_servers(
 }
 
 #[component]
+#[must_use]
 pub fn McpView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

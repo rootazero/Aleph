@@ -40,6 +40,7 @@ use graph_canvas::{GraphCanvas, GraphState};
 use crate::api::agents::AgentsApi;
 
 #[component]
+#[must_use]
 pub fn CanvasView() -> impl IntoView {
     view! { <RadialCanvasView /> }
 }

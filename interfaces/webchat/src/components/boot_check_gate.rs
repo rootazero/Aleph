@@ -26,6 +26,7 @@ use leptos::task::spawn_local;
 /// No children pass-through (that pattern is a React idiom; Leptos parents
 /// own their subtree directly).
 #[component]
+#[must_use]
 pub fn BootCheckGate() -> impl IntoView {
     let state = use_context::<DashboardState>().expect("DashboardState not provided");
     let i18n = use_i18n();

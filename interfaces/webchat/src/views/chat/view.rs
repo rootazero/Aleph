@@ -19,6 +19,7 @@ use wasm_bindgen::prelude::*;
 
 /// Top-level Chat view component.
 #[component]
+#[must_use]
 pub fn ChatView() -> impl IntoView {
     let i18n = use_i18n();
     let dashboard = expect_context::<DashboardState>();

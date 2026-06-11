@@ -20,6 +20,7 @@ pub struct Spring2D {
 
 impl Spring2D {
     /// Create a spring at `initial_pos` moving with `initial_vel`, pulled toward `target`.
+    #[must_use]
     pub fn new(initial_pos: Vec2, initial_vel: Vec2, target: Vec2) -> Self {
         Self {
             pos: initial_pos,
@@ -53,29 +54,35 @@ impl Spring2D {
     }
 
     /// True when both position is near target and velocity is near zero.
+    #[must_use]
     pub fn settled(&self) -> bool {
         let displacement = self.pos - self.target;
         displacement.length() < SPRING_SETTLE_POS_EPS && self.vel.length() < SPRING_SETTLE_VEL_EPS
     }
 
+    #[must_use]
     pub fn position(&self) -> Vec2 {
         self.pos
     }
+    #[must_use]
     pub fn velocity(&self) -> Vec2 {
         self.vel
     }
+    #[must_use]
     pub fn target(&self) -> Vec2 {
         self.target
     }
 }
 
 /// Standard smoothstep ease-in-out: 3t² - 2t³.
+#[must_use]
 pub fn ease_in_out(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     3.0 * t * t - 2.0 * t * t * t
 }
 
 /// Linear interpolation between two Vec3s.
+#[must_use]
 pub fn lerp_vec3(a: Vec3, b: Vec3, t: f32) -> Vec3 {
     Vec3::new(
         a.x + (b.x - a.x) * t,
@@ -92,6 +99,7 @@ pub struct TweenResult {
 }
 
 /// Outward drift used for nodes leaving / entering the view.
+#[must_use]
 pub fn drift_outward(direction: Vec3, magnitude: f32) -> Vec3 {
     let len = (direction.x * direction.x + direction.y * direction.y)
         .sqrt()
@@ -104,6 +112,7 @@ pub fn drift_outward(direction: Vec3, magnitude: f32) -> Vec3 {
 }
 
 /// Interpolate a single node id between old and new neighborhoods at parameter t.
+#[must_use]
 pub fn lerp_node(node_id: &str, from: &Neighborhood, to: &Neighborhood, t: f32) -> TweenResult {
     let eased = ease_in_out(t);
     let from_pos = from.target_positions.get(node_id).copied();

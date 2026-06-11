@@ -88,6 +88,7 @@ pub struct GenerationProviderEntry {
 impl GenerationProviderEntry {
     /// Get the effective generation type, preferring the server-provided field
     /// and falling back to capabilities[0] for backward compatibility.
+    #[must_use]
     pub fn effective_generation_type(&self) -> Option<GenerationType> {
         if let Some(ref gt) = self.generation_type {
             match gt.as_str() {

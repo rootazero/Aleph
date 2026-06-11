@@ -146,6 +146,7 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 #[component]
+#[must_use]
 pub fn Home() -> impl IntoView {
     // Get dashboard state from context
     let state = expect_context::<DashboardState>();

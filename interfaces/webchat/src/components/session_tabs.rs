@@ -25,6 +25,7 @@ use crate::state::sessions::SessionMap;
 use crate::views::chat::state::ChatState;
 
 #[component]
+#[must_use]
 pub fn SessionTabs() -> impl IntoView {
     let sessions = expect_context::<SessionMap>();
     let chat = expect_context::<ChatState>();

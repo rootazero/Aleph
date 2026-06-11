@@ -126,6 +126,7 @@ fn find_backend<'a>(
 // ============================================================================
 
 #[component]
+#[must_use]
 pub fn SearchView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

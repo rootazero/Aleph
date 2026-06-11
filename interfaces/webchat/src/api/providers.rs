@@ -116,6 +116,7 @@ pub enum CatalogView {
 }
 
 impl CatalogView {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Configured => "configured",
@@ -137,6 +138,7 @@ pub enum ModelOverride {
 }
 
 impl ModelOverride {
+    #[must_use]
     pub fn model(&self) -> &str {
         match self {
             Self::Qualified { model, .. } => model,
@@ -144,6 +146,7 @@ impl ModelOverride {
         }
     }
 
+    #[must_use]
     pub fn provider(&self) -> Option<&str> {
         match self {
             Self::Qualified { provider, .. } => Some(provider),

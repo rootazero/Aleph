@@ -53,6 +53,7 @@ impl Default for SessionMap {
 }
 
 impl SessionMap {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             snapshots: RwSignal::new(HashMap::new()),

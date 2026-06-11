@@ -6,6 +6,7 @@ use std::collections::HashMap;
 ///
 /// `relation` is set to "_default" since the underlying graph edges no longer
 /// carry a relation field.
+#[must_use]
 pub fn group_by_category_into_clusters(
     nodes: Vec<CanvasNode>,
     active_id: &str,
@@ -51,6 +52,7 @@ pub fn group_by_category_into_clusters(
 }
 
 /// Compute ClusterNode display radius: 24 + 6 * log2(N), capped at 60.
+#[must_use]
 pub fn cluster_radius(n: usize) -> f32 {
     let r = 24.0 + 6.0 * (n.max(2) as f32).log2();
     r.min(60.0)

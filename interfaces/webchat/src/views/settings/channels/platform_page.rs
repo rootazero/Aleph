@@ -36,6 +36,7 @@ struct InstanceInfo {
 /// button), and the right panel shows the configuration for the selected
 /// instance.
 #[component]
+#[must_use]
 pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

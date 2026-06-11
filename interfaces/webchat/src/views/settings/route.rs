@@ -28,6 +28,7 @@ const LB_KEYS: &[&str] = &[
 ];
 
 #[component]
+#[must_use]
 pub fn RouteView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

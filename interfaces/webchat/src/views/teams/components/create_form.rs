@@ -12,6 +12,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 #[component]
+#[must_use]
 pub fn KanbanCreateForm(
     open: RwSignal<bool>,
     #[prop(into)] on_created: Callback<()>,

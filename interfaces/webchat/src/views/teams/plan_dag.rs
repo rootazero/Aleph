@@ -28,6 +28,7 @@ const LAYER_GAP: f32 = 64.0;
 const PAD: f32 = 32.0;
 
 #[component]
+#[must_use]
 pub fn PlanDagView() -> impl IntoView {
     let dash = expect_context::<DashboardState>();
     let state = expect_context::<TeamsTabState>();

@@ -24,6 +24,7 @@ pub enum ToolKind {
 
 impl ToolKind {
     /// 由工具名（大小写不敏感）映射到大类。未知名 → `Default`。
+    #[must_use]
     pub fn from_name(name: &str) -> ToolKind {
         let n = name.to_lowercase();
         match n.as_str() {
@@ -54,6 +55,7 @@ impl ToolKind {
     }
 
     /// 卡片默认是否展开内容：文件改动类默认展开，其余默认折叠。
+    #[must_use]
     pub fn default_open(self) -> bool {
         matches!(
             self,
@@ -73,6 +75,7 @@ pub struct DiffLine {
 }
 
 /// 从 `{"Success":{"output":..}}` 取出 output。
+#[must_use]
 pub fn success_output(result: &Value) -> Option<&Value> {
     result.get("Success").and_then(|s| s.get("output"))
 }
@@ -87,6 +90,7 @@ pub fn error_message(result: &Value) -> Option<String> {
 }
 
 /// 行级 diff（带相等的上下文行），返回 (行, 新增数, 删除数)。
+#[must_use]
 pub fn diff_lines(old: &str, new: &str) -> (Vec<DiffLine>, usize, usize) {
     let diff = TextDiff::from_lines(old, new);
     let mut lines = Vec::new();
@@ -110,6 +114,7 @@ pub fn diff_lines(old: &str, new: &str) -> (Vec<DiffLine>, usize, usize) {
 }
 
 /// 取前 `max_lines` 行；返回 (展示文本, 被隐藏行数)。隐藏数为 0 表示未截断。
+#[must_use]
 pub fn split_preview(text: &str, max_lines: usize) -> (String, usize) {
     let lines: Vec<&str> = text.lines().collect();
     if lines.len() <= max_lines {
@@ -121,6 +126,7 @@ pub fn split_preview(text: &str, max_lines: usize) -> (String, usize) {
 
 /// 按工具大类汇总计数，用于「无叙述」时合成占位标题。
 /// 顺序固定（首次出现的大类先出），便于稳定渲染与测试。
+#[must_use]
 pub fn summarize_tools(tools: &[(String, String)]) -> Vec<(ToolKind, usize)> {
     let mut order: Vec<ToolKind> = Vec::new();
     let mut counts: std::collections::HashMap<ToolKind, usize> = std::collections::HashMap::new();
@@ -135,6 +141,7 @@ pub fn summarize_tools(tools: &[(String, String)]) -> Vec<(ToolKind, usize)> {
 }
 
 /// 文件类工具的路径，用于头部 `📄 path`。非文件工具返回 None。
+#[must_use]
 pub fn file_path_of(payload: &Option<ToolPayload>) -> Option<String> {
     let args = payload.as_ref()?.args.as_ref()?;
     for key in ["path", "file_path", "filename"] {
@@ -161,6 +168,7 @@ fn kind_icon(kind: ToolKind) -> &'static str {
 /// 行内图标 —— 先按工具名给几个常见工具更贴切的字形（web_fetch 🌐 /
 /// skill 📖 / memory 🧠），否则回落到大类图标。图标即代表动作，让聊天里
 /// 一行 `🌐 https://…` 自解释，无需再写工具名。
+#[must_use]
 pub fn tool_icon(tool_name: &str, kind: ToolKind) -> &'static str {
     let n = tool_name.to_lowercase();
     if n.contains("web_fetch") || n.contains("fetch") || n.contains("browse") || n.contains("http")
@@ -203,6 +211,7 @@ const HEADLINE_KEYS: &[&str] = &[
 /// 文件路径 / URL……）压成一行。没有可描述的参数时返回 `None`，由调用方
 /// 改用大类动词标签（搜索 / 读取 / 执行……）。这取代了老旧的
 /// 「工具名 + COMPLETED + 耗时」式标题。
+#[must_use]
 pub fn tool_headline(kind: ToolKind, payload: &Option<ToolPayload>) -> Option<String> {
     match kind {
         ToolKind::FileEdit | ToolKind::FileWrite | ToolKind::FileRead | ToolKind::ApplyPatch => {
@@ -233,6 +242,7 @@ pub fn tool_headline(kind: ToolKind, payload: &Option<ToolPayload>) -> Option<St
 /// 工具名与「COMPLETED · 耗时」。左侧聊天与右侧工作区面板都渲染它。展开状态为
 /// 每卡本地信号：文件改动类默认展开，其余默认折叠。
 #[component]
+#[must_use]
 pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl IntoView {
     let workspace = use_context::<WorkspaceState>();
     let chat = expect_context::<ChatState>();

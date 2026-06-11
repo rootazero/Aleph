@@ -39,6 +39,7 @@ use leptos::task::spawn_local;
 /// - `title`       — header text (e.g. "使用现有文件夹" / "新建空白项目 — 选择父目录").
 /// - `confirm_label` — bottom-right button label (e.g. "选择此目录").
 #[component]
+#[must_use]
 pub fn DirectoryBrowser(
     open: RwSignal<bool>,
     on_pick: Callback<String>,

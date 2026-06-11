@@ -135,6 +135,7 @@ fn load_installed_slugs(state: DashboardState, installed_slugs: RwSignal<Vec<Str
 }
 
 #[component]
+#[must_use]
 pub fn ClawHubView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

@@ -15,6 +15,7 @@ use leptos::prelude::*;
 /// - `has_api_key` drives placeholder + status line.
 /// - `hint` is an optional vendor placeholder shown when no key is set.
 #[component]
+#[must_use]
 pub fn ProviderKeyField(
     /// Editable value (callers guarantee it starts empty).
     value: RwSignal<String>,

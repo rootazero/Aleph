@@ -19,6 +19,7 @@ use leptos_router::components::A;
 /// (`get_connection_target`), in a plain browser from the page origin (the
 /// origin that served the Panel *is* the core).
 #[component]
+#[must_use]
 pub fn ConnectionStatus() -> impl IntoView {
     let state = use_context::<DashboardState>().expect("DashboardState not provided");
     let i18n = use_i18n();

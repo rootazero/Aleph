@@ -108,6 +108,7 @@ pub enum RerankProviderType {
 }
 
 impl RerankProviderType {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Self::Jina => "jina",
@@ -118,6 +119,7 @@ impl RerankProviderType {
         }
     }
 
+    #[must_use]
     pub fn from_str_val(s: &str) -> Self {
         match s {
             "siliconflow" => Self::SiliconFlow,

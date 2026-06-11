@@ -23,6 +23,7 @@ pub struct MemoryState {
 }
 
 impl MemoryState {
+    #[must_use]
     pub fn new() -> Self {
         // Read persisted collapsed state from localStorage (default: false).
         let initial_collapsed = web_sys::window()

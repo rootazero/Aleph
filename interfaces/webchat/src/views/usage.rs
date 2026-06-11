@@ -32,6 +32,7 @@ fn format_thousands(n: u64) -> String {
 }
 
 #[component]
+#[must_use]
 pub fn UsageView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

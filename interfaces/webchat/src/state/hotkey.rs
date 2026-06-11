@@ -21,6 +21,7 @@ pub struct HotkeyState {
 }
 
 impl HotkeyState {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             palette_open: RwSignal::new(false),

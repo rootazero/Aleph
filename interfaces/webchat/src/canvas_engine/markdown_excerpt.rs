@@ -12,6 +12,7 @@ const MAX_LEN: usize = 180;
 
 /// Render `src` (raw Markdown) into a 180-char whitelisted HTML string.
 /// Truncates with an ellipsis if the source is longer.
+#[must_use]
 pub fn render_excerpt(src: &str) -> String {
     let parser = Parser::new(src);
     let mut out = String::with_capacity(src.len().min(MAX_LEN * 2));

@@ -97,6 +97,7 @@ fn format_timestamp_ms(ts_ms: i64) -> String {
 /// Unified Tasks view with Cron and Heartbeat tabs.
 /// Accessible at /dashboard/tasks (and /dashboard/cron for backward compat).
 #[component]
+#[must_use]
 pub fn TasksView() -> impl IntoView {
     let (active_tab, set_active_tab) = signal("cron".to_string());
     let i18n = use_i18n();

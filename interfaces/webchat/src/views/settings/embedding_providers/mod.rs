@@ -24,6 +24,7 @@ use add_panel::AddProviderPanel;
 use detail_panel::ProviderDetailPanel;
 
 #[component]
+#[must_use]
 pub fn EmbeddingProvidersView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

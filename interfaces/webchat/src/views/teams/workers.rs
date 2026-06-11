@@ -15,6 +15,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 #[component]
+#[must_use]
 pub fn WorkersView() -> impl IntoView {
     let i18n = use_i18n();
     let dash = expect_context::<DashboardState>();

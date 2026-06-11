@@ -31,6 +31,7 @@ pub enum PanelMode {
 
 impl PanelMode {
     /// Determine the panel mode from a URL path.
+    #[must_use]
     pub fn from_path(path: &str) -> Self {
         if path.starts_with("/memory") {
             Self::Memory
@@ -49,6 +50,7 @@ impl PanelMode {
 }
 
 #[component]
+#[must_use]
 pub fn ModeSidebar() -> impl IntoView {
     let location = use_location();
     let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));

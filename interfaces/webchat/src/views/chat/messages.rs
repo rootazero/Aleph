@@ -16,6 +16,7 @@ use leptos::prelude::*;
 /// Welcome hero — shown in the message area while a conversation is empty.
 /// A breathing ℵ orb above a shimmering greeting, with a staggered reveal.
 #[component]
+#[must_use]
 pub(super) fn ChatHero() -> impl IntoView {
     let i18n = use_i18n();
     let chat = expect_context::<ChatState>();
@@ -93,6 +94,7 @@ pub(super) fn ChatHero() -> impl IntoView {
 /// read history, new content lands silently and a "↓ New messages" pill
 /// appears so they can opt in.
 #[component]
+#[must_use]
 pub(super) fn MessageList() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();

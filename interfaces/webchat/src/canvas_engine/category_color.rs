@@ -4,6 +4,7 @@ use crate::canvas_engine::fnv1a::fnv1a_32;
 
 /// Returns a CSS color string. Well-known categories → curated variable;
 /// anything else → deterministic `hsl(hue, 55%, 65%)`.
+#[must_use]
 pub fn category_color(category: &str) -> String {
     match category {
         "feedback" => "var(--cat-feedback)".to_string(),

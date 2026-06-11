@@ -53,6 +53,7 @@ pub enum ChatSendErrorCode {
 impl ChatSendErrorCode {
     /// CSS modifier class for the inline banner. Lives here so the UI
     /// layer can theme severity by code without a giant match table.
+    #[must_use]
     pub const fn severity_class(self) -> &'static str {
         match self {
             // Soft warning — yellow accent
@@ -322,6 +323,7 @@ impl Default for ChatState {
 }
 
 impl ChatState {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             messages: RwSignal::new(Vec::new()),
@@ -366,6 +368,7 @@ impl ChatState {
     }
 
     /// Pop the head of the queue, if any. Returns the prompt to replay.
+    #[must_use]
     pub fn dequeue_prompt_front(&self) -> Option<QueuedPrompt> {
         let mut popped = None;
         self.prompt_queue.update(|q| {
@@ -398,6 +401,7 @@ impl ChatState {
     }
 
     /// Pop a run from the speak set; returns `true` if it was registered.
+    #[must_use]
     pub fn take_speak_run(&self, run_id: &str) -> bool {
         let mut found = false;
         self.voice_run_ids.update(|ids| {
@@ -410,6 +414,7 @@ impl ChatState {
     }
 
     /// Final accumulated text of the assistant message for `run_id`, if present.
+    #[must_use]
     pub fn assistant_text_for_run(&self, run_id: &str) -> String {
         let target_id = format!("assistant-{run_id}");
         self.messages.with(|msgs| {
@@ -566,6 +571,7 @@ impl ChatState {
 
     /// Resolved model id for `run_id`, read from the assistant bubble's
     /// `model_info`. Used by the context gauge to pick a window size.
+    #[must_use]
     pub fn model_for_run(&self, run_id: &str) -> Option<String> {
         let target_id = format!("assistant-{run_id}");
         self.messages.with(|msgs| {
@@ -696,6 +702,7 @@ impl ChatState {
 
     /// Return the content of the most recent user message, if any. Used by
     /// the retry path to repopulate the composer.
+    #[must_use]
     pub fn last_user_text(&self) -> Option<String> {
         self.messages.with(|msgs| {
             msgs.iter()
@@ -739,6 +746,7 @@ impl ChatState {
     /// `is_dragging_files` and `retry_pulse` are intentionally excluded —
     /// the former is ephemeral DOM-hover state, the latter a one-shot
     /// pulse that shouldn't replay on restore.
+    #[must_use]
     pub fn capture_snapshot(&self) -> SessionSnapshot {
         SessionSnapshot {
             messages: self.messages.get_untracked(),

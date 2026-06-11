@@ -58,6 +58,7 @@ pub(super) fn validate_regex(pattern: &str) -> Result<(), String> {
 }
 
 #[component]
+#[must_use]
 pub fn SecurityView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

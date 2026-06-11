@@ -173,6 +173,7 @@ pub const OAUTH_PRESETS: &[ProviderPreset] = &[ProviderPreset {
     auth_type: "oauth",
 }];
 
+#[must_use]
 pub fn find_preset(name: &str) -> Option<&'static ProviderPreset> {
     PRESETS
         .iter()

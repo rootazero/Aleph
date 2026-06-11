@@ -9,6 +9,7 @@ use crate::i18n::*;
 /// Displays a channel's icon, name, description, and connection status.
 /// Links to the channel's configuration page at `/settings/channels/{id}`.
 #[component]
+#[must_use]
 pub fn ChannelCard(
     id: &'static str,
     name: &'static str,

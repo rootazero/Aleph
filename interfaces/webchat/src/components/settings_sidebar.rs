@@ -50,6 +50,7 @@ pub enum SettingsTab {
 }
 
 impl SettingsTab {
+    #[must_use]
     pub fn path(&self) -> &'static str {
         match self {
             Self::General => "/settings/general",
@@ -82,6 +83,7 @@ impl SettingsTab {
         }
     }
 
+    #[must_use]
     pub fn i18n_label(&self, i18n: I18nContext<Locale>) -> String {
         match self {
             Self::General => t_string!(i18n, settings.tabs.general).to_string(),
@@ -114,6 +116,7 @@ impl SettingsTab {
         }
     }
 
+    #[must_use]
     pub fn icon_svg(&self) -> &'static str {
         match self {
             Self::General => {
@@ -200,6 +203,7 @@ pub struct SettingsGroup {
 }
 
 impl SettingsGroup {
+    #[must_use]
     pub fn i18n_label(&self, i18n: I18nContext<Locale>) -> String {
         match self.label {
             "Basic" => t_string!(i18n, settings.groups.basic).to_string(),

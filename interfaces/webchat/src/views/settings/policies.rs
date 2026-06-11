@@ -12,6 +12,7 @@ const ASK: &str = "ask";
 const DENY: &str = "deny";
 
 #[component]
+#[must_use]
 pub fn PoliciesView() -> impl IntoView {
     let i18n = use_i18n();
     let content_filter = RwSignal::new(false);

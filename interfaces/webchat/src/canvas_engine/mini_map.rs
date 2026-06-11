@@ -23,6 +23,7 @@ pub struct GlobalMiniMap {
 }
 
 impl GlobalMiniMap {
+    #[must_use]
     pub fn empty(size_px: f32) -> Self {
         Self {
             size_px,
@@ -32,6 +33,7 @@ impl GlobalMiniMap {
     }
 
     /// Build a deterministic minimap from full-graph DTOs and edges.
+    #[must_use]
     pub fn build(dtos: &[NoteNodeDto], edges: &[NoteLinkDto], size_px: f32) -> Self {
         let component_of = compute_components(dtos, edges);
         let center = (size_px / 2.0) as f64;
@@ -63,6 +65,7 @@ impl GlobalMiniMap {
 
     /// Return the id of the closest node within `hit_radius` of `(mx, my)`,
     /// or `None` if no node is close enough.
+    #[must_use]
     pub fn pick_at(&self, mx: f32, my: f32, hit_radius: f32) -> Option<&str> {
         let mx = mx as f64;
         let my = my as f64;

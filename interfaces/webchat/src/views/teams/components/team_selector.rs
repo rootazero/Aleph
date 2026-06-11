@@ -5,6 +5,7 @@ use crate::views::teams::TeamsTabState;
 use leptos::prelude::*;
 
 #[component]
+#[must_use]
 pub fn TeamSelector() -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<TeamsTabState>();

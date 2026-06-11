@@ -39,6 +39,7 @@ pub(super) fn canonical_oauth_name(name: &str) -> &'static str {
 }
 
 #[component]
+#[must_use]
 pub fn ProvidersView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

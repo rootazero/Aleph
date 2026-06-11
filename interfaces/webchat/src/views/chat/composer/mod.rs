@@ -34,6 +34,7 @@ use shared_ui_logic::state::should_auto_drain_on_settle;
 /// Textarea + side buttons + palette popup + injection-guard banner.
 /// Mounted by [`super::view::ChatView`] at the viewport bottom.
 #[component]
+#[must_use]
 pub(super) fn InputArea() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();

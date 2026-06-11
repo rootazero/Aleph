@@ -52,6 +52,7 @@ pub(crate) fn generate_qr_svg(url: &str) -> String {
 }
 
 #[component]
+#[must_use]
 pub fn PairQr() -> impl IntoView {
     let i18n = use_i18n();
     let url = format!("{}/pair", discover_self_host());

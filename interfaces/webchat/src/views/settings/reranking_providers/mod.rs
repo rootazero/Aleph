@@ -68,6 +68,7 @@ pub(super) const RERANK_PRESETS: &[RerankPreset] = &[
 ];
 
 #[component]
+#[must_use]
 pub fn RerankingProvidersView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

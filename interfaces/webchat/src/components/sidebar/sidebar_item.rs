@@ -9,6 +9,7 @@ use leptos_router::components::A;
 use leptos_router::hooks::use_location;
 
 #[component]
+#[must_use]
 pub fn SidebarItem(
     href: &'static str,
     label: Signal<String>,

@@ -32,6 +32,7 @@ fn preset_icon_color(id: &str) -> &'static str {
 
 /// ACP Harnesses settings page — manages external CLI tools
 #[component]
+#[must_use]
 pub fn AcpHarnessesView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

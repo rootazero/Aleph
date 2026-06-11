@@ -155,6 +155,7 @@ async fn hydrate_session_history(
 }
 
 #[component]
+#[must_use]
 pub fn ChatSidebar() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();

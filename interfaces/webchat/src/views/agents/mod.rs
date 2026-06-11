@@ -66,6 +66,7 @@ const ALL_TABS: [AgentTab; 5] = [
 ];
 
 #[component]
+#[must_use]
 pub fn AgentsView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let location = use_location();

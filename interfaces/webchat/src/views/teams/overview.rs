@@ -17,6 +17,7 @@ use wasm_bindgen::JsCast;
 // ============================================================================
 
 #[component]
+#[must_use]
 pub fn OverviewView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

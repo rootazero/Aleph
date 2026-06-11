@@ -18,6 +18,7 @@ fn effective_models(e: &CatalogEntry) -> Vec<String> {
 }
 
 #[component]
+#[must_use]
 pub fn OverviewTab(agent_id: String) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

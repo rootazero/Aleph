@@ -36,6 +36,7 @@ impl Default for UserPrefs {
 pub const CANVAS_RADIAL_NAVIGATION_KEY: &str = "aleph.canvas_radial_navigation";
 
 /// Read the canvas radial navigation flag from localStorage, falling back to default.
+#[must_use]
 pub fn load_canvas_radial_navigation() -> bool {
     #[cfg(target_arch = "wasm32")]
     {

@@ -26,6 +26,7 @@ struct TimelineRow {
 }
 
 #[component]
+#[must_use]
 pub fn ReplayView() -> impl IntoView {
     let dash = expect_context::<DashboardState>();
     let state = expect_context::<TeamsTabState>();

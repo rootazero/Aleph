@@ -7,6 +7,7 @@ use crate::i18n::*;
 use leptos::prelude::*;
 
 #[component]
+#[must_use]
 pub fn DashboardSidebar() -> impl IntoView {
     let i18n = use_i18n();
 

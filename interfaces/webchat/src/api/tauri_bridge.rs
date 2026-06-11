@@ -12,6 +12,7 @@ extern "C" {
 }
 
 /// 是否运行在桌面 Tauri shell 内。
+#[must_use]
 pub fn is_shell() -> bool {
     let Some(win) = web_sys::window() else {
         return false;
@@ -50,6 +51,7 @@ pub async fn set_connection_target(raw: &str) -> Result<(), String> {
 /// `ConnectionTarget::parse` 的显示形态(补 http scheme + 默认端口 18790)。
 /// 权威解析由 shell 的 `set_connection_target` 完成;此处只为预览,
 /// IPv6 等边角由权威解析兜底。
+#[must_use]
 pub fn normalize_endpoint_preview(raw: &str) -> String {
     let t = raw.trim();
     if t.is_empty() || t.eq_ignore_ascii_case("local") {

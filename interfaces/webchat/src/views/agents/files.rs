@@ -17,6 +17,7 @@ const IDENTITY_FILES: &[&str] = &[
 ];
 
 #[component]
+#[must_use]
 pub fn FilesTab(agent_id: String) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

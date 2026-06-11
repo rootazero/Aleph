@@ -127,6 +127,7 @@ fn load_skills(
 // ---------------------------------------------------------------------------
 
 #[component]
+#[must_use]
 pub fn SkillsView() -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<DashboardState>();

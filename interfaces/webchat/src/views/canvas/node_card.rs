@@ -15,6 +15,7 @@ pub enum CardMode {
 /// focused / selected center node stays Mini — its rich detail is rendered
 /// in the sidebar `NodeDetailPanel`, so the canvas stays readable
 /// (no large card occluding 1-hop neighbors and edges).
+#[must_use]
 pub fn pick_mode(hop: u8, is_hovered: bool, _is_selected: bool, zoom: f32) -> CardMode {
     if zoom < 0.5 {
         return CardMode::Dot;
@@ -38,6 +39,7 @@ pub fn pick_mode(hop: u8, is_hovered: bool, _is_selected: bool, zoom: f32) -> Ca
 ///
 /// All modes are positioned via `transform: translate3d(x,y,0)` using `screen_xy`.
 #[component]
+#[must_use]
 pub fn NodeCard(
     /// Node id (used as click target).
     #[prop(into)]

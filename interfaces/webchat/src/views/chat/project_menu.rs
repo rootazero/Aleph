@@ -32,6 +32,7 @@ enum BrowserPurpose {
 /// Top-level composer accessory. Renders the active-project chip or the
 /// trigger pill that opens the picker dropdown.
 #[component]
+#[must_use]
 pub fn ProjectMenu() -> impl IntoView {
     let i18n = use_i18n();
     let dashboard = expect_context::<DashboardState>();

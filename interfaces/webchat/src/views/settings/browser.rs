@@ -52,6 +52,7 @@ macro_rules! section_save {
 // ============================================================================
 
 #[component]
+#[must_use]
 pub fn BrowserView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

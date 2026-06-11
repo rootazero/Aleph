@@ -8,6 +8,7 @@ use crate::state::layout::{LayoutMode, WorkspaceState};
 use leptos::prelude::*;
 
 #[component]
+#[must_use]
 pub fn LayoutToggle() -> impl IntoView {
     let i18n = use_i18n();
 

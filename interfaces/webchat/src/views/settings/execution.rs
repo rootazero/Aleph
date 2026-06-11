@@ -53,6 +53,7 @@ fn format_duration(secs: u64) -> String {
 }
 
 #[component]
+#[must_use]
 pub fn ExecutionView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

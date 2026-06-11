@@ -49,6 +49,7 @@ impl Default for ExportOptions {
 /// `Document`. The mapping is lossy on the way out (Aleph carries `category`,
 /// `tags`, `link_count` which JSON Canvas has no slot for) but lossless on the
 /// fields the spec models.
+#[must_use]
 pub fn graph_to_canvas(
     neighbors: &GraphNeighborsResponse,
     positions: &HashMap<String, Vec2>,
@@ -163,6 +164,7 @@ pub struct ImportResult {
 
 /// Convert a JSON Canvas document into an Aleph-shaped note list + edge list
 /// + positions map.
+#[must_use]
 pub fn canvas_to_graph(doc: &Document) -> ImportResult {
     let mut notes = Vec::with_capacity(doc.nodes.len());
     let mut positions = HashMap::with_capacity(doc.nodes.len());

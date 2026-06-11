@@ -32,6 +32,7 @@ pub struct Viewport {
 }
 
 impl Viewport {
+    #[must_use]
     pub fn new(width: f64, height: f64) -> Self {
         Self {
             offset: Vec2::new(width / 2.0, height / 2.0),
@@ -41,6 +42,7 @@ impl Viewport {
         }
     }
 
+    #[must_use]
     pub fn world_to_screen(&self, world: Vec2) -> Vec2 {
         Vec2 {
             x: world.x * self.scale + self.offset.x,
@@ -48,6 +50,7 @@ impl Viewport {
         }
     }
 
+    #[must_use]
     pub fn screen_to_world(&self, screen: Vec2) -> Vec2 {
         Vec2 {
             x: (screen.x - self.offset.x) / self.scale,
@@ -73,6 +76,7 @@ impl Viewport {
         self.offset.y = self.height / 2.0 - world_point.y * self.scale;
     }
 
+    #[must_use]
     pub fn hit_test(&self, screen_point: Vec2, nodes: &[CanvasNode]) -> Option<usize> {
         let world = self.screen_to_world(screen_point);
         // Screen-space padding → world units (scale is clamped ≥ 0.1 by zoom_at,
@@ -95,6 +99,7 @@ impl Viewport {
     /// letting the user move onto the card to read it. Below the Dot zoom
     /// threshold (`scale < 0.5`) the node renders as a dot with no enlarged
     /// card, so retention degrades to the same forgiving circle as entry.
+    #[must_use]
     pub fn hover_retains(&self, screen_point: Vec2, node_world: Vec2, node_radius: f64) -> bool {
         let center = self.world_to_screen(node_world);
         if self.scale < 0.5 {
@@ -106,6 +111,7 @@ impl Viewport {
         (-RETAIN_HALF_W..=RETAIN_HALF_W).contains(&dx) && (-RETAIN_UP..=RETAIN_DOWN).contains(&dy)
     }
 
+    #[must_use]
     pub fn is_visible(&self, world_point: Vec2, margin: f64) -> bool {
         let screen = self.world_to_screen(world_point);
         screen.x >= -margin
@@ -147,11 +153,13 @@ impl Viewport {
 }
 
 /// Per-Z layer parallax offset. Z=0 → factor 1.0, Z=200 → factor 0.85.
+#[must_use]
 pub fn parallax_factor(z: f32) -> f32 {
     1.0 - 0.15 * (z / 200.0).clamp(0.0, 1.0)
 }
 
 /// Compute additional position offset for a node when the viewport is dragged.
+#[must_use]
 pub fn parallax_offset(z: f32, drag_dx: f32, drag_dy: f32) -> (f32, f32) {
     let f = parallax_factor(z);
     (drag_dx * f, drag_dy * f)

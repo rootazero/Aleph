@@ -12,6 +12,7 @@ use leptos::task::spawn_local;
 const BROWSER_RUNTIMES: &[&str] = &["fnm", "node", "playwright-cli"];
 
 #[component]
+#[must_use]
 pub fn RuntimeSummaryBanner() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();

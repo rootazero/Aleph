@@ -10,6 +10,7 @@ pub struct NavController {
 }
 
 impl NavController {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             state: NavState::Idle,
@@ -118,6 +119,7 @@ impl NavController {
     /// True while a `retarget` tween is animating between two neighborhoods.
     /// Used by the canvas view to gate user input that would conflict with the
     /// tween (e.g. starting a node-drag while the focus is mid-flight).
+    #[must_use]
     pub fn is_animating(&self) -> bool {
         matches!(self.state, NavState::Animating { .. })
     }

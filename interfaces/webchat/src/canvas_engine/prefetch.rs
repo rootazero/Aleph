@@ -19,6 +19,7 @@ pub struct PrefetchCache<T> {
 }
 
 impl<T> PrefetchCache<T> {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             entries: VecDeque::new(),
@@ -35,6 +36,7 @@ impl<T> PrefetchCache<T> {
         }
     }
 
+    #[must_use]
     pub fn get(&self, id: &str, now_ms: f64) -> Option<&T> {
         self.entries.iter().rev().find_map(|(k, v, fetched)| {
             if k == id && now_ms - fetched <= self.ttl_ms {
@@ -45,14 +47,17 @@ impl<T> PrefetchCache<T> {
         })
     }
 
+    #[must_use]
     pub fn has(&self, id: &str, now_ms: f64) -> bool {
         self.get(id, now_ms).is_some()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -92,6 +97,7 @@ impl Default for HoverDebouncer {
 }
 
 impl HoverDebouncer {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             current_id: None,
@@ -141,6 +147,7 @@ pub struct InFlightSet {
 }
 
 impl InFlightSet {
+    #[must_use]
     pub fn new(cap: usize) -> Self {
         Self {
             ids: HashSet::new(),
@@ -148,14 +155,17 @@ impl InFlightSet {
         }
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.ids.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[must_use]
     pub fn contains(&self, id: &str) -> bool {
         self.ids.contains(id)
     }

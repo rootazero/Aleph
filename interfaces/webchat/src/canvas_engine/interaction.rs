@@ -22,6 +22,7 @@ pub struct InteractionState {
 }
 
 impl InteractionState {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             is_panning: false,
@@ -35,11 +36,13 @@ impl InteractionState {
     }
 
     /// Returns true if the mouse-up position is close enough to mouse-down to be a click.
+    #[must_use]
     pub fn is_click(&self, up_pos: Vec2) -> bool {
         up_pos.distance_to(&self.mouse_down_screen) < 5.0
     }
 
     /// Returns true if the current time is within the double-click threshold of the last click.
+    #[must_use]
     pub fn is_double_click(&self, now: f64) -> bool {
         now - self.last_click_time < 300.0
     }
@@ -91,6 +94,7 @@ impl Default for CanvasInteractionState {
 }
 
 impl CanvasInteractionState {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             debounce: HoverDebouncer::new(),
@@ -114,6 +118,7 @@ impl CanvasInteractionState {
         }
     }
 
+    #[must_use]
     pub fn on_keydown(&self, key: &str, alt: bool, _shift: bool) -> CanvasIntent {
         match (key, alt) {
             ("Tab", _) => CanvasIntent::HoverFocus(Direction::Next),
