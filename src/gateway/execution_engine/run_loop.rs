@@ -718,6 +718,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let mut allowed_names: std::collections::BTreeSet<String> =
                 allowed_tools.iter().map(|t| t.name.clone()).collect();
 
+            let unattended =
+                request.metadata.get("unattended").map(String::as_str) == Some("true");
+
             // External MCP tools: snapshot the bridge-maintained registry
             // (boot installs it via `set_mcp_tool_registry`) and join each
             // entry into this request's LoopToolRegistry. This is the
@@ -813,6 +816,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     hook_executor.clone(),
                     hook_session_id.clone(),
                     tool_permissions.clone(),
+                    unattended,
                 );
 
             // Trace sink — built before SubagentTool so it can be inherited by
@@ -961,6 +965,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 hook_executor.clone(),
                 hook_session_id.clone(),
                 tool_permissions.clone(),
+                unattended,
             );
 
             // Build FlowRequest. A resumed run carries no fresh input — the

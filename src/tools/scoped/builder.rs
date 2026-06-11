@@ -46,6 +46,7 @@ impl ScopedToolService {
             last_health_generation: std::sync::atomic::AtomicU64::new(0),
             definition_rewriters: Vec::new(),
             tool_permissions: None,
+            unattended: false,
         }
     }
 
@@ -60,6 +61,14 @@ impl ScopedToolService {
         permissions: crate::config::types::policies::ToolPermissionsConfig,
     ) -> Self {
         self.tool_permissions = Some(permissions);
+        self
+    }
+
+    /// Mark this service as serving an unattended (autonomous continuation)
+    /// run. Confirm-gated tools then fail closed. See [`Self::unattended`].
+    #[must_use]
+    pub fn with_unattended(mut self, unattended: bool) -> Self {
+        self.unattended = unattended;
         self
     }
 

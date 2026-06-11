@@ -59,7 +59,23 @@ pub struct Goal {
     /// `#[serde(default)]` → 旧持久化读为 `Unchecked`。
     #[serde(default)]
     pub gate_outcome: GateOutcome,
+    /// Optional per-goal objective gate: a shell command evaluated like a
+    /// `config.toml [[stop_hooks]]` entry (exit 0 = passed, exit 2 = vetoed,
+    /// stdout = reason). Supplements the global gate (logical AND) — see
+    /// the continuation hook. `#[serde(default)]` → old payloads read `None`.
+    #[serde(default)]
+    pub gate_command: Option<String>,
+    /// Accumulated lessons (the article's "state file"): gate-failure reasons
+    /// and model-authored insights, fed back into the continuation prompt so
+    /// the loop does not repeat mistakes. Ring-capped at `MAX_LESSONS` (newest
+    /// kept). `#[serde(default)]` → old payloads read empty.
+    #[serde(default)]
+    pub lessons: Vec<String>,
 }
+
+/// Ring cap on accumulated lessons kept per goal (newest retained). Bounds the
+/// state file so an unbounded loop cannot grow the goal row without limit.
+pub const MAX_LESSONS: usize = 5;
 
 impl Goal {
     #[must_use]
@@ -81,6 +97,8 @@ impl Goal {
             note: None,
             continuations_used: 0,
             gate_outcome: GateOutcome::Unchecked,
+            gate_command: None,
+            lessons: Vec::new(),
         }
     }
 
@@ -112,6 +130,28 @@ impl Goal {
     #[must_use]
     pub const fn with_gate_outcome(mut self, outcome: GateOutcome, now_ms: u64) -> Self {
         self.gate_outcome = outcome;
+        self.updated_at_ms = now_ms;
+        self
+    }
+
+    /// Configuration, not a lifecycle transition — deliberately does not bump
+    /// `updated_at_ms` (mirrors `with_budget`/`with_pursuit`).
+    #[must_use]
+    pub fn with_gate_command(mut self, gate_command: Option<String>) -> Self {
+        self.gate_command = gate_command;
+        self
+    }
+
+    /// Append a lesson to the state file, keeping at most `MAX_LESSONS` (newest).
+    /// Appending a lesson is progress, so it bumps `updated_at_ms` (like
+    /// `with_note`). Returns a new `Goal` (§不可变性).
+    #[must_use]
+    pub fn with_lesson_appended(mut self, lesson: String, now_ms: u64) -> Self {
+        self.lessons.push(lesson);
+        if self.lessons.len() > MAX_LESSONS {
+            let drop = self.lessons.len() - MAX_LESSONS;
+            self.lessons.drain(0..drop);
+        }
         self.updated_at_ms = now_ms;
         self
     }
@@ -257,5 +297,44 @@ mod tests {
             "note":null,"continuations_used":0}"#;
         let g: Goal = serde_json::from_str(json).expect("deserialize old payload");
         assert_eq!(g.gate_outcome, GateOutcome::Unchecked);
+    }
+
+    #[test]
+    fn new_goal_has_no_gate_command_and_no_lessons() {
+        let g = sample();
+        assert_eq!(g.gate_command, None);
+        assert!(g.lessons.is_empty());
+    }
+
+    #[test]
+    fn with_gate_command_sets_without_bumping_updated_at() {
+        let g = sample();
+        let after = g.clone().with_gate_command(Some("cargo test".into()));
+        assert_eq!(after.gate_command.as_deref(), Some("cargo test"));
+        assert_eq!(after.updated_at_ms, g.updated_at_ms, "config, no bump");
+        assert_eq!(g.gate_command, None, "original unchanged");
+    }
+
+    #[test]
+    fn with_lesson_appended_keeps_last_five_and_bumps_updated_at() {
+        let mut g = sample();
+        for i in 0..7 {
+            g = g.with_lesson_appended(format!("lesson {i}"), 1_000 + i as u64);
+        }
+        assert_eq!(g.lessons.len(), MAX_LESSONS);
+        assert_eq!(g.lessons.first().unwrap(), "lesson 2", "oldest dropped");
+        assert_eq!(g.lessons.last().unwrap(), "lesson 6", "newest kept");
+        assert_eq!(g.updated_at_ms, 1_006);
+    }
+
+    #[test]
+    fn old_payload_without_new_fields_deserializes_defaults() {
+        let json = r#"{"id":"goal-1","session_id":"s","objective":"o",
+            "status":"active","token_budget":null,"tokens_at_start":0,
+            "pursuit":{"mode":"passive"},"created_at_ms":1,"updated_at_ms":1,
+            "note":null,"continuations_used":0,"gate_outcome":"unchecked"}"#;
+        let g: Goal = serde_json::from_str(json).expect("deserialize old payload");
+        assert_eq!(g.gate_command, None);
+        assert!(g.lessons.is_empty());
     }
 }
