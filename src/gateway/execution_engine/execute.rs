@@ -863,7 +863,14 @@ fn spawn_continuation_run(
         input: prompt,
         session_key: session_key.clone(),
         timeout_secs: None,
-        metadata: std::collections::HashMap::new(),
+        metadata: {
+            // Unattended security-tax: this autonomous run has no human on the
+            // channel to approve anything. The per-run ScopedToolService reads
+            // this marker and fails closed on confirm-gated tools.
+            let mut m = std::collections::HashMap::new();
+            m.insert("unattended".to_string(), "true".to_string());
+            m
+        },
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override: None,

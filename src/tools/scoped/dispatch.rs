@@ -363,6 +363,29 @@ impl ScopedToolService {
         name: &str,
         reason: &str,
     ) -> Result<(), ConfirmDenial> {
+        // Unattended security-tax: an autonomous continuation run has no human
+        // on the channel to approve anything. Fail closed — auto-deny any
+        // confirm-gated tool (`requires_confirmation` ∪ `Ask`-tier permission ∪
+        // operator-override `confirm_tools`, all of which funnel here) with an
+        // audit line, rather than awaiting an approval that can never arrive.
+        // Interactive turns leave `unattended = false` and are unaffected.
+        if self.unattended {
+            tracing::warn!(
+                tool = %name,
+                "unattended run: auto-denied confirm-gated tool (no human to approve)"
+            );
+            return Err(ConfirmDenial {
+                outcome: ApprovalOutcome::Denied,
+                hint: Some(
+                    "This run is unattended (autonomous continuation) — \
+                     interactive approval is unavailable, so confirm-gated tools \
+                     are auto-denied. Use a non-interactive approach, or call \
+                     goal(action='update', status='blocked') to hand back to the \
+                     user.",
+                ),
+            });
+        }
+
         let mem_key = self.session_memory_key();
 
         // Session memory short-circuit: a prior session grant satisfies the

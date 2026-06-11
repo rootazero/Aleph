@@ -106,6 +106,11 @@ pub struct ScopedToolService {
     /// `confirm_tools`. `None` = no policy configured (allow-all default,
     /// byte-identical to pre-wiring behavior).
     pub(super) tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
+    /// True when this service serves an UNATTENDED run (an autonomous goal
+    /// continuation — no human on the channel). Confirm-gated tools fail closed
+    /// (auto-denied) instead of awaiting an approval that can never arrive.
+    /// Defaults `false`; interactive turns are unaffected.
+    pub(super) unattended: bool,
 }
 
 // =============================================================================
