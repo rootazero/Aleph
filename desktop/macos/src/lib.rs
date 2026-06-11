@@ -13,7 +13,7 @@ mod system;
 pub use sleep_inhibitor::MacosPower;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use aleph_desktop::media_types::{
@@ -52,38 +52,36 @@ pub struct MacOSPlatform {
     bridge: Arc<SwiftBridge>,
 }
 
+/// Process-wide shared Swift bridge client.
+///
+/// Every `MacOSPlatform` constructed in this process shares one `SwiftBridge`,
+/// so the daemon spawns at most a single `AlephBridge` child regardless of how
+/// many subsystems (presence reporter, builtin tool registry, voice handler …)
+/// build a platform handle. The client is lazy: the child process is not
+/// spawned until the first real `desktop.*` call.
+static SHARED_BRIDGE: OnceLock<Arc<SwiftBridge>> = OnceLock::new();
+
+fn shared_bridge() -> Arc<SwiftBridge> {
+    SHARED_BRIDGE
+        .get_or_init(|| Arc::new(SwiftBridge::new(resolve_helper_path())))
+        .clone()
+}
+
 impl MacOSPlatform {
     /// Create a new `MacOSPlatform` instance.
     ///
-    /// Constructs the long-lived [`SwiftBridge`] RPC client and schedules a
-    /// background handshake against the Swift helper. The helper is spawned
-    /// lazily on first use, so startup never blocks on IPC. Handshake results
-    /// are logged at `info` on success and `warn` on failure — aleph-server
-    /// continues to start even when the helper binary is missing.
+    /// Returns a handle backed by the process-wide [`SwiftBridge`] singleton.
+    /// Multiple platform handles in the same process share one bridge client,
+    /// so the daemon spawns at most a single `AlephBridge` child. The helper
+    /// is started lazily on the first real `desktop.*` call — construction
+    /// never forks a child process.
     #[must_use]
     pub fn new() -> Self {
-        let helper_path = resolve_helper_path();
-        let bridge = Arc::new(SwiftBridge::new(helper_path));
-
-        // Warm the bridge in the background if we are inside a Tokio runtime.
-        // Falls through silently (no warm-up) in sync test/CLI contexts; the
-        // first real call will still spawn the helper on demand.
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let bridge_warm = Arc::clone(&bridge);
-            handle.spawn(async move {
-                match bridge_warm.handshake(env!("CARGO_PKG_VERSION")).await {
-                    Ok(hs) => tracing::info!(
-                        protocol = hs.protocol_version,
-                        methods = ?hs.supported_methods,
-                        "SwiftBridge handshake complete"
-                    ),
-                    Err(err) => tracing::warn!(
-                        error = %err,
-                        "SwiftBridge handshake failed; desktop bridge operations will use disabled mode"
-                    ),
-                }
-            });
-        }
+        // Shared, process-wide bridge. No construction-time warm-up: the helper
+        // is spawned lazily by `ensure_running` on the first real desktop call,
+        // so subsystems that never touch the bridge (e.g. the presence reporter,
+        // which only uses `system()`) do not fork an `AlephBridge` child.
+        let bridge = shared_bridge();
 
         Self {
             screen: MacOSScreen::new(Arc::clone(&bridge)),
@@ -428,5 +426,27 @@ mod tests {
         // Arc is shared with the platform; strong_count should be at least 2
         // (one reference owned by `platform.bridge`, one by `bridge`).
         assert!(Arc::strong_count(&bridge) >= 2);
+    }
+
+    #[test]
+    fn platforms_share_one_bridge() {
+        let a = MacOSPlatform::new();
+        let b = MacOSPlatform::new();
+        assert!(
+            Arc::ptr_eq(&a.bridge(), &b.bridge()),
+            "all platforms must share the process-wide singleton bridge"
+        );
+    }
+
+    #[tokio::test]
+    async fn construction_does_not_spawn_bridge() {
+        // No warm-up handshake at construction: the helper stays unspawned
+        // until the first real desktop call. Guards against re-introducing an
+        // eager warm-up that would fork a child process at construction.
+        let platform = MacOSPlatform::new();
+        assert!(
+            !platform.bridge().is_running(),
+            "constructing a platform must not spawn the bridge"
+        );
     }
 }
