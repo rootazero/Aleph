@@ -657,8 +657,8 @@ where
                                         };
                                         let cont_agent_id =
                                             request.session_key.agent_id().to_string();
-                                        let cont_registry = cont_deps.0.clone();
-                                        let cont_adapter = cont_deps.1.clone();
+                                        let cont_registry = cont_deps.registry.clone();
+                                        let cont_adapter = cont_deps.adapter.clone();
                                         let cont_session = session_key_str.clone();
                                         tokio::spawn(async move {
                                             let resolved_agent =

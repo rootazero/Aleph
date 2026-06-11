@@ -1384,7 +1384,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Wire goal-pursuit autonomous-continuation deps (opt-in, only fires
         // for sessions whose goal has PursuitMode::Active). Idempotent: a
         // second set is ignored by the OnceLock. Registry clone is cheap (Arc).
-        let _ = continuation_cell.set((agent_registry.clone(), engine_arc.clone()));
+        let _ = continuation_cell.set(alephcore::gateway::execution_engine::ContinuationDeps {
+            registry: agent_registry.clone(),
+            adapter: engine_arc.clone(),
+            gate: None,
+        });
 
         // Create run_manager with real execution dependencies.
         // Inject the live config so Panel runs honor the global output_mode
