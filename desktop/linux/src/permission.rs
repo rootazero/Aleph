@@ -236,7 +236,7 @@ const fn build_info(permission: PermissionKind, status: PermissionStatus) -> Per
 // ---------------------------------------------------------------------------
 
 /// `true` if at least one `/dev/video*` capture device exists.
-const fn camera_present() -> bool {
+fn camera_present() -> bool {
     #[cfg(target_os = "linux")]
     {
         std::fs::read_dir("/dev")
@@ -253,7 +253,7 @@ const fn camera_present() -> bool {
 }
 
 /// `true` if the ALSA `/dev/snd` device tree exists.
-const fn microphone_present() -> bool {
+fn microphone_present() -> bool {
     #[cfg(target_os = "linux")]
     {
         std::path::Path::new("/dev/snd").exists()
