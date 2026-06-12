@@ -640,7 +640,7 @@ mod tests {
             starts.len(),
             1,
             "selector line {selector:?} must appear exactly once in the \
-             material-primitives section of tailwind.css"
+             given section of tailwind.css"
         );
         let mut depth: i64 = 1;
         let mut body = Vec::new();
