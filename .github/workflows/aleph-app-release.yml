@@ -114,6 +114,27 @@ jobs:
           fi
           cd desktop/shell && cargo tauri build --verbose --config "$config"
 
+      # The macOS dmg and Linux AppImage bundlers wipe their output
+      # subdirectory before regenerating, so the second (lite) `tauri build`
+      # below would delete the full app's Aleph_*.dmg / Aleph_*.AppImage this
+      # step just produced (deb/rpm/msi/nsis survive — they only add a file).
+      # Move the full app's bundles aside now, while they are the only outputs
+      # present, so the lite build cannot clobber them. The full upload below
+      # reads from this preserved tree.
+      - name: Preserve full app bundle outputs (pre-lite)
+        shell: bash
+        run: |
+          shopt -s nullglob
+          src="target/release/bundle"
+          dst="full-bundle"
+          for sub in dmg deb appimage rpm msi nsis macos; do
+            for f in "$src/$sub/"*; do
+              mkdir -p "$dst/$sub"
+              mv "$f" "$dst/$sub/"
+              echo "  preserved $f"
+            done
+          done
+
       # Panel-only ("lite") variant: same matrix, distinct identifier +
       # productName ("Aleph Panel"). `-- --no-default-features` is forwarded to
       # cargo (there is no top-level tauri flag for it), dropping the
@@ -158,16 +179,16 @@ jobs:
           name: ${{ matrix.asset }}
           if-no-files-found: warn
           path: |
-            target/release/bundle/dmg/*.dmg
-            target/release/bundle/deb/*.deb
-            target/release/bundle/appimage/*.AppImage
-            target/release/bundle/rpm/*.rpm
-            target/release/bundle/msi/*.msi
-            target/release/bundle/nsis/*.exe
-            target/release/bundle/macos/*.app.tar.gz
-            target/release/bundle/macos/*.app.tar.gz.sig
-            target/release/bundle/appimage/*.AppImage.sig
-            target/release/bundle/nsis/*.exe.sig
+            full-bundle/dmg/*.dmg
+            full-bundle/deb/*.deb
+            full-bundle/appimage/*.AppImage
+            full-bundle/rpm/*.rpm
+            full-bundle/msi/*.msi
+            full-bundle/nsis/*.exe
+            full-bundle/macos/*.app.tar.gz
+            full-bundle/macos/*.app.tar.gz.sig
+            full-bundle/appimage/*.AppImage.sig
+            full-bundle/nsis/*.exe.sig
 
       - uses: actions/upload-artifact@v7
         with:
