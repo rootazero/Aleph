@@ -1,26 +1,10 @@
-全部 55 个 arena 相关测试通过。
-
----
-
-# Module: arena
-
-## Summary
-- Files reviewed: 8 (mod.rs, aggregate.rs, handle.rs, manager.rs, types.rs, events.rs, storage.rs, integration_tests.rs)
-- Issues found: 2
-- Issues fixed: 2
-
-## Fixes
-1. **aggregate.rs:182** `completed_steps += delta` 整数溢出 → 改用 `saturating_add(delta)`
-2. **manager.rs:96-118** `active_arenas_for` 返回非确定性顺序（HashMap 迭代） → 对 `ArenaId` 派生 `Ord`，返回前 `sort()`
-
-## Notes
-
-这个模块代码质量很高，几乎没有典型的常见缺陷：
-
-- **Lock 安全**: 所有 `read()`/`write()` 均已使用 `.unwrap_or_else(|e| e.into_inner())` 模式
-- **SQL 注入**: `storage.rs` 使用 `params![]` 参数化查询，安全
-- **UTF-8 安全**: 无字符串字节切片操作
-- **状态机**: Created → Active → Settling → Archived 转换完整，每个步骤都校验前置状态
-- **测试覆盖**: 55 个测试覆盖了所有主要路径（单元 + 集成 + 上层调用方）
-- **架构合规**: 遵循 P1 低耦合（通过 Handle 隔离权限）、P2 高内聚（类型/聚合/存储分层清晰）、P7 防御性设计
- in manager.rs was also auto-sorted by a linter hook, which further improves determinism
+ISSUE|src/arena/types.rs:417|medium|Production unwrap() in has_pipeline_cycle violates no-unwrap policy|in_degree.get_mut(neighbor).unwrap() panics if graph invariant is broken
+ISSUE|src/arena/manager.rs:172|medium|settle_with_facts bypasses coordinator permission check|forces Active->Settling->Archived transition without validating can_merge/coordinator permission
+ISSUE|src/arena/aggregate.rs:537|medium|ArenaProgress.total_steps is never updated|exposed in snapshots/query_arena but only default 0 is ever assigned
+ISSUE|src/arena/handle.rs:69|medium|Silent lock-poison recovery may operate on inconsistent state|arena.write().unwrap_or_else(|e| e.into_inner()) recovers from poison without validation; pattern repeated at lines 86,102,111,125,132,139,151,183
+ISSUE|src/arena/manager.rs:74|medium|Silent lock-poison recovery may operate on inconsistent state|shared.read().unwrap_or_else(|e| e.into_inner()) recovers from poison without validation; pattern repeated at lines 101,125,169
+ISSUE|src/arena/types.rs:89|low|AgentId is a plain String alias, not a type-safe newtype|pub type AgentId = String allows accidental substitution with arbitrary strings
+ISSUE|src/arena/manager.rs:136|low|Internal enum Debug format exposed in JSON API|format!("{:?}", slot.status) leaks Rust variant names to clients
+ISSUE|src/arena/manager.rs:148|low|Internal enum Debug format exposed in JSON API|format!("{:?}", arena.status()) leaks Rust variant names to clients
+ISSUE|src/arena/manager.rs:198|low|SettleReport.events_cleared is hardcoded to 0|field always reports 0 regardless of actual events processed
+ISSUE|src/arena/handle.rs:166|low|Hardcoded artifact limit in snapshot_for_context|.take(5) caps context artifacts with no configuration or documented rationale

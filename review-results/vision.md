@@ -1,25 +1,7 @@
-
-
-All 36 vision-related tests pass. Here's the report:
-
----
-
-# Module: vision
-
-## Summary
-- Files reviewed: 7
-- Issues found: 1
-- Issues fixed: 1
-
-## Fixes
-1. **[platform_ocr.rs:51] Misleading `Option` wrapper in `resolve_base64` return type** → Changed from `Result<Option<String>, VisionError>` to `Result<String, VisionError>`. The function never returned `Ok(None)`, making the `Option` misleading. Wrapped in `Some` at the call site where `DesktopRequest::Ocr` expects `Option<String>`. Updated corresponding test assertion.
-
-## Notes
-This module is well-written and follows project conventions closely:
-- **No security issues**: No UTF-8 byte slicing, no lock poisoning, no `unwrap`/`expect` on user-facing paths, no SQL injection vectors, no `static mut`
-- **Good architecture**: Follows R1 (brain-limb separation) — `PlatformOcrProvider` delegates to Desktop Bridge rather than calling macOS Vision framework directly
-- **Clean trait design**: `VisionProvider` trait is minimal and well-defined (P5 least knowledge)
-- **Solid test coverage**: Pipeline fallback, capability filtering, serialization round-trips, OCR response parsing edge cases all tested
-- **Both providers are stubs**: `ClaudeVisionProvider` returns errors for all operations (pending API wiring); `PlatformOcrProvider` depends on Desktop Bridge runtime. This is expected for the current project stage
-
-The pre-existing compilation error in `agent_init.rs:177` (`?` operator type mismatch) is unrelated to vision — it's from other uncommitted changes in the working tree.
+ISSUE|src/vision/providers/platform_ocr.rs:37|high|Core directly constructs aleph_desktop::NativeScreen, violating CLAUDE.md R1 brain-limb separation; platform capabilities must be injected, not instantiated inside core|screen: Arc::new(aleph_desktop::NativeScreen::new()) in core/src/vision/providers/
+ISSUE|src/vision/providers/platform_ocr.rs:53|medium|resolve_png_bytes decodes arbitrary base64 without verifying decoded bytes are valid PNG before passing to screen.ocr, which expects PNG bytes|ImageInput::Base64 branch returns raw decoded bytes with no format validation
+ISSUE|src/vision/providers/platform_ocr.rs:80|medium|resolve_png_bytes reads FilePath as raw bytes without validating it is a PNG file, despite function name and downstream API expecting PNG bytes|std::fs::read(path) with no image format check
+ISSUE|src/vision/providers/claude.rs:103|low|Base64 size ceiling underestimates decoded length by up to 2 bytes due to integer truncation and base64 padding, allowing payloads slightly larger than MAX_IMAGE_FILE_SIZE|(data.len() / 4) * 3 truncates before accounting for padding
+ISSUE|src/vision/providers/claude.rs:141|low|Unknown file extensions silently fallback to image/png MIME type, misrepresenting content to the Anthropic API|_ => "image/png" fallback in extension-to-MIME mapping
+ISSUE|src/vision/providers/claude.rs:157|low|User-supplied URL included verbatim in error message risks sensitive URL leakage through logs and upstream callers|format!("... does not support URL images: {url}")
+ISSUE|src/vision/providers/platform_ocr.rs:89|low|User-supplied URL included verbatim in error message risks sensitive URL leakage through logs and upstream callers|format!("... does not support URL images directly: {url}")

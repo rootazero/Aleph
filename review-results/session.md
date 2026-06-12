@@ -1,0 +1,14 @@
+ISSUE|src/session/events.rs:3|medium|Session event types depend on gateway::session_manager, inverting the core/control-plane layering|use crate::gateway::session_manager::SessionIdentityMeta;
+ISSUE|src/session/events.rs:273|low|now_ms returns 0 when the system clock goes backwards, producing out-of-order timestamps|SystemTime::now().duration_since(UNIX_EPOCH).map_or_else(|e| { ... 0 }, |d| d.as_millis() as i64)
+ISSUE|src/session/state.rs:9|medium|SessionState depends on gateway::session_manager, inverting the core/control-plane layering|use crate::gateway::session_manager::SessionIdentityMeta;
+ISSUE|src/session/state.rs:57|medium|TurnStarted overwrites current_turn without checking for an in-progress turn, dropping pending tool calls from malformed streams|self.current_turn = Some(TurnState { id: *turn_id, pending_tool_calls: HashMap::new() });
+ISSUE|src/session/state.rs:67|medium|TurnEnded clears current_turn regardless of event.turn_id, potentially ending the wrong turn|self.current_turn = None;
+ISSUE|src/session/state.rs:88|medium|Tool-call state mutations apply to current_turn without verifying event.turn_id matches current_turn.id, mis-attributing calls|SessionEvent::ToolCallRequested { call_id, name, .. } => { ... turn.pending_tool_calls.insert(...) }
+ISSUE|src/session/state.rs:99|low|ToolCallApproved updates approval without verifying the event belongs to the current turn|if let Some(pc) = turn.pending_tool_calls.get_mut(call_id) { pc.approved = Some(by.clone()); }
+ISSUE|src/session/actor.rs:79|medium|Actor replay failures are silently swallowed and surfaced as ActorShutdown, hiding storage errors and causing respawn loops|if let Err(e) = self.replay().await { tracing::error!(...); return; }
+ISSUE|src/session/in_process.rs:82|low|Spawned actor JoinHandle is dropped, so panics/replay errors are never observed by the service|tokio::spawn(actor.run());
+ISSUE|src/session/store.rs:202|low|SqliteEventStore::new silently ignores FTS5 migration failure, degrading search without notice|let _ = migrate_add_session_events_fts(&conn);
+ISSUE|src/session/store.rs:252|low|FTS index insert failures are silently ignored, causing search_events to miss content-bearing events|if let Err(e) = conn.execute("INSERT INTO session_events_fts ...") { tracing::debug!(...) }
+ISSUE|src/session/store.rs:282|medium|load_events_range silently resets a u64 'from' greater than i64::MAX to 0 instead of returning an error|let from_val = i64::try_from(from.unwrap_or(0)).unwrap_or(0);
+ISSUE|src/session/store.rs:283|low|load_events_range silently clamps a u64 'to' greater than i64::MAX to i64::MAX|let to_val = to.and_then(|v| i64::try_from(v).ok()).unwrap_or(i64::MAX);
+ISSUE|src/session/store.rs:578|low|Global OnceLock store introduces a process-wide mutable singleton; prefer dependency injection|static GLOBAL_EVENT_STORE: OnceLock<Arc<dyn SessionEventStore>> = OnceLock::new();

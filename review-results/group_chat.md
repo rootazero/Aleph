@@ -1,27 +1,13 @@
-All tests pass. Here's the review report:
-
----
-
-# Module: group_chat
-
-## Summary
-- Files reviewed: 8 (mod.rs, channel.rs, coordinator.rs, executor.rs, protocol.rs, orchestrator.rs, session.rs, persona.rs) + 1 related (config/types/group_chat.rs)
-- Issues found: 4
-- Issues fixed: 4
-
-## Fixes
-
-1. **coordinator.rs:170** `truncate_str` byte/char semantic confusion → Removed misleading `s.len() <= max_len` early-return that compared byte length against a character limit. The `char_indices().nth()` path handles both cases correctly.
-
-2. **coordinator.rs:131** System prompt duplication → `build_persona_prompt` embedded `persona.system_prompt` in the user message text, while `executor.rs:218` also passed it via `.with_system()`. Removed from the prompt text — system prompt is now only sent through the proper system parameter, saving LLM tokens.
-
-3. **persona.rs:76** Non-deterministic `list_presets()` order → HashMap iteration is unordered. Added `sort_by(|a, b| a.id.cmp(&b.id))` for deterministic output. Updated test to no longer need manual sorting.
-
-4. **config/types/group_chat.rs:130** UTF-8 safety bug → `PersonaConfig::validate()` used `.len()` (bytes) for prompt length check, meaning a 667-character Chinese prompt would hit the 2000 "character" limit. Changed to `.chars().count()` to match `Persona::validate()` which already does this correctly.
-
-## Notes
-
-- **Code quality is high overall** — proper error types, trait-based abstraction, thorough test coverage (66 tests), correct use of `char_indices()` in coordinator, `?` operator for error propagation, no lock poisoning risk (uses `tokio::sync::Mutex`).
-- **No security vulnerabilities found** — no SQL formatting, no `static mut`, no `&s[..n]` byte slicing, no `lock().unwrap()`.
-- **Pre-existing compilation error** in `bin/aleph-server/commands/start/builder/agent_init.rs:177` (unrelated `?` operator issue) — not in scope.
-- **Architecture compliance**: Clean separation of concerns (protocol types, coordinator logic, executor, orchestrator, session state). Follows P1 (low coupling), P2 (high cohesion), P6 (simplicity).
+ISSUE|orchestrator.rs:116|low|Lock poisoning silently recovered when locking sessions map; corrupted state may be used|self.sessions.lock().unwrap_or_else(|e| e.into_inner()) ignores poison errors in create_session
+ISSUE|orchestrator.rs:153|low|Lock poisoning silently recovered when looking up sessions; corrupted state may be used|self.sessions.lock().unwrap_or_else(|e| e.into_inner()) ignores poison errors in get_session
+ISSUE|orchestrator.rs:167|low|Lock poisoning silently recovered when removing sessions; corrupted state may be used|self.sessions.lock().unwrap_or_else(|e| e.into_inner()) ignores poison errors in end_session
+ISSUE|orchestrator.rs:239|low|Lock poisoning silently recovered when listing sessions; corrupted state may be used|self.sessions.lock().unwrap_or_else(|e| e.into_inner()) ignores poison errors in all_sessions
+ISSUE|orchestrator.rs:170|low|Session may remain Active if try_lock fails during end_session|if let Ok(mut session) = handle.try_lock() silently skips ending when lock is contended
+ISSUE|channel.rs:72|medium|Command parser accepts /groupchatstart (missing space) as a valid start command|after.starts_with("start ") matches without requiring space after /groupchat
+ISSUE|channel.rs:75|medium|Command parser accepts /groupchatend (missing space) as a valid end command|after == "end" || after.starts_with("end ") matches without requiring space after /groupchat
+ISSUE|channel.rs:114|low|--role flag without a value is silently ignored instead of failing|if i < tokens.len() allows missing role spec to be skipped
+ISSUE|channel.rs:162|low|Inline role IDs can collide for names differing only by spaces vs hyphens|"Dr Smith" and "Dr-Smith" both map to id "dr_smith"
+ISSUE|coordinator.rs:46|medium|Unescaped persona fields injected into coordinator prompt enable prompt injection|format!("- id=\"{}\" name=\"{}\" prompt=\"{}\"", p.id, p.name, truncated) interpolates user-controlled persona data
+ISSUE|session.rs:96|medium|Conversation history interpolates unescaped speaker names and content into later prompts|format!("[{}]: {}\n\n", turn.speaker.name(), turn.content) embeds arbitrary turn content
+ISSUE|persona.rs:75|low|reload silently overwrites duplicate persona IDs without warning|from_configs logs duplicate warnings but reload does not
+ISSUE|protocol.rs:217|low|FromStr error type is bare String instead of a typed error|type Err = String lacks a structured error variant

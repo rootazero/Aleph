@@ -1,21 +1,4 @@
-Lib compiles cleanly. Here's the review:
-
-# Module: clawhub
-
-## Summary
-- Files reviewed: 3 (mod.rs, client.rs, types.rs)
-- Issues found: 1
-- Issues fixed: 1
-
-## Fixes
-1. **[client.rs:210] Slug path separator in temp filename** — `slug` format is `owner/skill` (contains `/`). Using it directly in `format!("clawhub-{}-{}.zip", slug, ...)` creates a path like `/tmp/clawhub-owner/skill-uuid.zip`, where the parent directory `clawhub-owner` doesn't exist, causing `fs::write` to fail. Fixed by sanitizing: `slug.replace('/', "-")`.
-
-## Notes
-This module is well-written. No issues found in the other checklist categories:
-
-- **UTF-8 safety**: No byte slicing. The `body.chars().take(200)` in `check_status` is correct.
-- **Lock safety**: No Mutex/RwLock usage.
-- **unwrap safety**: Only `Client::builder().build().unwrap_or_default()` which is safe. All other error paths use `?` or `map_err`.
-- **Architecture**: Clean separation between raw API types and internal unified types (`From` impls). Read-only client with no auth — appropriate for public API. Follows P1 (low coupling), P2 (high cohesion), P6 (simplicity).
-- **Code quality**: Functions are concise, no dead code, no DRY violations. `encode_slug_path` properly handles URL encoding with per-segment percent-encoding.
-- **Edge cases**: `unix_ms_to_rfc3339` handles invalid timestamps via `unwrap_or_default()`. `is_newer_version` has documented fallback for non-semver strings. Browse has fallback to search when endpoint returns empty.
+ISSUE|client.rs:267|medium|download temp filename only replaces '/' in the slug, leaving '\' and '..' path components that can redirect the write outside the temp directory|let safe_slug = slug.replace('/', "-"); temp_dir().join(format!("clawhub-{}-{}.zip", safe_slug, ...)) embeds the raw slug into a filesystem path
+ISSUE|client.rs:327|medium|error response body in check_status is read into memory without any size cap, allowing a malicious server to exhaust memory|resp.bytes().await reads the full body; no MAX_DOWNLOAD_BYTES limit
+ISSUE|client.rs:106|low|success JSON responses are parsed into memory without a size cap, risking OOM from a huge registry response|resp.json() in get_json consumes the entire response body
+ISSUE|client.rs:254|low|download buffers the entire response in memory before writing to disk despite using a byte stream|all chunks are accumulated into Vec<u003cu8> and only then written via tokio::fs::write
