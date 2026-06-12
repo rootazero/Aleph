@@ -8,26 +8,36 @@
 use crate::output::{self, icon, theme};
 use aleph_client::CliResult;
 
-/// Derive the Panel's HTTP base URL from the gateway WebSocket URL.
+/// Derive the Panel's HTTP base URL from the gateway endpoint.
 ///
-/// `ws://127.0.0.1:18790/ws` → `http://127.0.0.1:18790/`
-/// `wss://host:443/ws`       → `https://host:443/`
+/// Every input shape — ws/wss/http/https scheme (or bare host:port), with or
+/// without the `/ws` JSON-RPC path, with or without a trailing slash —
+/// converges to the Panel root: `<scheme>://<host[:port]>/`.
 ///
-/// Falls back to returning the input unchanged if it has no recognized WS
-/// scheme (the caller may already have passed an HTTP URL).
+/// `ws://127.0.0.1:18790/ws`   → `http://127.0.0.1:18790/`
+/// `wss://host:443/ws/`        → `https://host:443/`
+/// `http://127.0.0.1:18790/ws` → `http://127.0.0.1:18790/`
 fn panel_url(server_url: &str) -> String {
     let (scheme, rest) = if let Some(rest) = server_url.strip_prefix("wss://") {
         ("https://", rest)
     } else if let Some(rest) = server_url.strip_prefix("ws://") {
         ("http://", rest)
-    } else if server_url.starts_with("http://") || server_url.starts_with("https://") {
-        return server_url.trim_end_matches("/ws").to_string();
+    } else if let Some(rest) = server_url.strip_prefix("https://") {
+        ("https://", rest)
+    } else if let Some(rest) = server_url.strip_prefix("http://") {
+        ("http://", rest)
     } else {
         // Unknown scheme: assume plain host:port, default to http.
         ("http://", server_url)
     };
-    // Drop the `/ws` JSON-RPC path; the Panel is served at the root.
-    let host = rest.trim_end_matches("/ws").trim_end_matches('/');
+    // Normalize to the root. Trim order matters: strip any trailing '/'
+    // FIRST (so a `…/ws/` endpoint still loses its `/ws` path), then the
+    // `/ws` JSON-RPC path, then any slash that exposed — and re-append
+    // exactly one.
+    let host = rest
+        .trim_end_matches('/')
+        .trim_end_matches("/ws")
+        .trim_end_matches('/');
     format!("{scheme}{host}/")
 }
 
@@ -107,9 +117,34 @@ mod tests {
 
     #[test]
     fn http_url_is_normalized_to_root() {
+        // Same trailing-slash shape as the ws branches — callers can rely on
+        // `<scheme>://<host[:port]>/` regardless of the configured scheme.
         assert_eq!(
             panel_url("http://127.0.0.1:18790/ws"),
-            "http://127.0.0.1:18790"
+            "http://127.0.0.1:18790/"
+        );
+        assert_eq!(panel_url("https://example.com/ws"), "https://example.com/");
+    }
+
+    #[test]
+    fn trailing_slash_after_ws_path_is_stripped() {
+        // `…/ws/` must not leave a `/ws` residue (trim order boundary).
+        assert_eq!(
+            panel_url("ws://127.0.0.1:18790/ws/"),
+            "http://127.0.0.1:18790/"
+        );
+        assert_eq!(
+            panel_url("http://127.0.0.1:18790/ws/"),
+            "http://127.0.0.1:18790/"
+        );
+    }
+
+    #[test]
+    fn trailing_slash_without_ws_path_normalizes() {
+        assert_eq!(panel_url("ws://127.0.0.1:18790/"), "http://127.0.0.1:18790/");
+        assert_eq!(
+            panel_url("https://example.com:8443/"),
+            "https://example.com:8443/"
         );
     }
 

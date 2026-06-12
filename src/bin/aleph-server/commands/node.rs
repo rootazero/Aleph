@@ -47,6 +47,13 @@ fn identity_path(name: &str) -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".aleph").join("node").join(format!("{name}.json")))
 }
 
+/// Migration note: old pre-LAN-trust `NodeCredential` files (which carry an
+/// extra `bearer` field) deserialize here successfully too — `NodeIdentity`
+/// has no `deny_unknown_fields`, so serde silently drops the dead `bearer`
+/// and the upgraded node KEEPS its enrolled `node_id` instead of
+/// re-enrolling. That is deliberate: the center's bookkeeping (touch_device,
+/// environments.list, deregister) stays keyed to the same UUID across the
+/// upgrade. Do not "fix" this into a forced re-enroll.
 fn read_identity(path: &Path) -> Option<NodeIdentity> {
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
@@ -381,6 +388,23 @@ mod tests {
         write_identity(&path, &id).unwrap();
         let loaded = read_identity(&path).expect("reads back");
         assert_eq!(loaded, id);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn legacy_node_credential_file_parses_and_keeps_node_id() {
+        // Pre-LAN-trust `NodeCredential` files carry an extra `bearer` field.
+        // serde must drop it and keep the enrolled node_id so an upgraded
+        // node does NOT re-enroll (see the `read_identity` migration note).
+        let path = std::env::temp_dir().join("aleph-node-legacy-cred-migration-test.json");
+        std::fs::write(
+            &path,
+            r#"{"node_id":"n-legacy","bearer":"tok:sig","center":"ws://c"}"#,
+        )
+        .unwrap();
+        let loaded = read_identity(&path).expect("legacy credential file still parses");
+        assert_eq!(loaded.node_id, "n-legacy");
+        assert_eq!(loaded.center, "ws://c");
         std::fs::remove_file(&path).ok();
     }
 
