@@ -105,9 +105,10 @@ pub struct GatewayServerConfig {
     pub max_connections_per_ip: usize,
     /// Protocol version
     pub protocol_version: u32,
-    /// Extra browser origins allowed on the `/ws` upgrade (moved from
-    /// `[gateway.auth] allowed_origins`; same semantics — additional to the
-    /// built-in same-origin / loopback / `tauri:` rules).
+    /// Extra browser origins allowed on the `/ws` upgrade — additional to the
+    /// built-in same-origin / loopback / `tauri:` rules. Lives under
+    /// `[gateway]`; the legacy `[gateway.auth]` table that once held it is
+    /// ignored on load (see `from_toml` legacy-config test).
     #[serde(default)]
     pub allowed_origins: Vec<String>,
     /// Trust every Origin on the `/ws` upgrade. Escape hatch for reverse

@@ -12,10 +12,6 @@ pub struct CliConfig {
     #[serde(default = "default_server")]
     pub server: String,
 
-    /// Device ID for this client
-    #[serde(default = "default_device_id")]
-    pub device_id: String,
-
     /// Device name
     #[serde(default = "default_device_name")]
     pub device_name: String,
@@ -51,10 +47,6 @@ fn default_server() -> String {
     crate::DEFAULT_GATEWAY_URL.to_string()
 }
 
-fn default_device_id() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
-
 fn default_device_name() -> String {
     "aleph-cli".to_string()
 }
@@ -63,7 +55,6 @@ impl Default for CliConfig {
     fn default() -> Self {
         Self {
             server: default_server(),
-            device_id: default_device_id(),
             device_name: default_device_name(),
             default_session: None,
             manifest: ManifestConfig::default(),

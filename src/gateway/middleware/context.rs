@@ -97,7 +97,7 @@ mod tests {
     fn test_context_clone_is_independent() {
         let ctx1 = GatewayRequestContext::new("test_client");
         let ctx2 = ctx1.clone();
-        // Mutating clone doesn't affect original (user_id is immutable per request)
+        // Cloning yields an independent copy that shares the same request-scoped values.
         assert_eq!(ctx1.request_id, ctx2.request_id);
         assert_eq!(ctx1.client_id, ctx2.client_id);
     }

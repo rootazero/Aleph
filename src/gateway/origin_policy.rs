@@ -4,17 +4,20 @@
 //! cross-origin `fetch`/XHR, and a web page **cannot forge** this header. A
 //! malicious site the user happens to visit can nonetheless *reach*
 //! `ws://127.0.0.1:18790/ws` (loopback is not firewalled from the browser),
-//! so without an origin check it could open an authenticated control channel
-//! to the local daemon — the classic DNS-rebinding / cross-origin-WebSocket
-//! confused-deputy. This type centralises the allow/deny decision so the WS
-//! upgrade handler and the static-asset CORS layer share one implementation.
+//! so without an origin check it could open a control channel to the local
+//! daemon — the classic DNS-rebinding / cross-origin-WebSocket confused-deputy.
+//! Under LAN-trust this origin gate is the *only* validation on the browser
+//! surface (there is no authentication step), which is exactly why it must
+//! stay: it is the guardrail against the public internet, not against LAN
+//! neighbours. This type centralises the allow/deny decision so the WS upgrade
+//! handler and the static-asset CORS layer share one implementation.
 //!
 //! Decision (`is_allowed`):
 //!   * **No `Origin` header** → allow. Native clients (CLI, bots, bridges,
 //!     `tokio-tungstenite`) send none; only browsers do. Absence therefore
-//!     means a same-host non-browser caller, which loopback/auth already gate.
+//!     means a same-host non-browser caller (shell webview, curl, CLI).
 //!   * **Exact allow-list match** → allow. Operator-configured extra origins
-//!     (`[gateway.auth] allowed_origins`) for split panel/API deployments.
+//!     (`[gateway] allowed_origins`) for split panel/API deployments.
 //!   * **`tauri:` scheme** → allow. The desktop shell's own webview origin,
 //!     unspoofable by a remote page.
 //!   * **Loopback host** (`127.0.0.0/8`, `::1`, `localhost`, `*.localhost`) →
