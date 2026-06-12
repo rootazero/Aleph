@@ -62,6 +62,14 @@ impl SessionMap {
         }
     }
 
+    /// Whether the session tab strip renders (>= 2 open tabs). Single source
+    /// for the strip's render guard AND the message column's top clearance —
+    /// the two must move together.
+    #[must_use]
+    pub fn tab_strip_visible(&self) -> bool {
+        self.tab_order.with(|o| o.len() >= 2)
+    }
+
     /// Open or focus a tab for `agent_id`. Idempotent — re-activating the
     /// already-active tab is a no-op.
     ///

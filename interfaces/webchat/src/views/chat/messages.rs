@@ -169,7 +169,8 @@ pub(super) fn MessageList() -> impl IntoView {
                     fallback=move || view! {
                         <div class=move || format!(
                             "max-w-3xl mx-auto px-4 {} pb-[calc(var(--composer-clearance,150px)+1rem)] space-y-3",
-                            if sessions.tab_order.with(|o| o.len() >= 2) { "pt-14" } else { "pt-6" }
+                            // pt-14 = band height (~33px: 2*py-1 + 24px pill + 1px border) + headroom
+                            if sessions.tab_strip_visible() { "pt-14" } else { "pt-6" }
                         )>
                             // Inline send-error banner (G2) — shown when the last
                             // outbound send failed; colour-coded by error code.
