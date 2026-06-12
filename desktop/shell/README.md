@@ -54,13 +54,14 @@ On first launch — and after every app update — the shell forces any stale
 daemon offline (and removes the pre-app bash-installer autostart service) so
 the `aleph-server` bundled in this app always wins.
 
-## Notifications & authentication
+## Notifications
 
-The notification bridge connects to `ws://127.0.0.1:18790/ws`. If the
-Gateway requires authentication, set `ALEPH_GATEWAY_TOKEN` so the shell can
-authenticate; otherwise notifications degrade silently and the rest of the
-shell is unaffected. Wiring proactive heartbeat events to a dedicated
-EventBus topic is a planned follow-up.
+The notification bridge connects to the configured Gateway origin's `/ws`
+endpoint (`ws://127.0.0.1:18790/ws` for the default Local target) with a
+bare, credential-free handshake (LAN-trust). If the connection fails,
+notifications degrade silently and the rest of the shell is unaffected.
+Wiring proactive heartbeat events to a dedicated EventBus topic is a
+planned follow-up.
 
 ## Build & run
 
@@ -79,5 +80,4 @@ produced on its own CI runner (see `.github/workflows/aleph-server-release.yml`)
 | Variable | Effect |
 |---|---|
 | `ALEPH_SHELL_LOG` | log filter, e.g. `debug` (default `info`) |
-| `ALEPH_GATEWAY_TOKEN` | token used by the notification bridge to authenticate |
 | `ALEPH_SHELL_HOTKEY` | override the global summon shortcut (default `CmdOrCtrl+Shift+A`) |

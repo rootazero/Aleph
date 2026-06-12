@@ -10,6 +10,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, Wry};
 
 const ID_SHOW: &str = "menu_show";
+const ID_OPEN_BROWSER: &str = "menu_open_browser";
 const ID_CONNECT_REMOTE: &str = "menu_connect_remote";
 const ID_CONNECT_LOCAL: &str = "menu_connect_local";
 const ID_CHECK_UPDATE: &str = "menu_check_update";
@@ -38,6 +39,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::about(app, Some("About Aleph"), None)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, ID_SHOW, "Show Aleph", true, None::<&str>)?,
+            &MenuItem::with_id(app, ID_OPEN_BROWSER, "Open in Browser", true, None::<&str>)?,
             &MenuItem::with_id(
                 app,
                 ID_CONNECT_REMOTE,
@@ -151,6 +153,14 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 pub fn on_event(app: &AppHandle, id: &str) {
     match id {
         ID_SHOW => crate::focus_window(app),
+        // Open the Panel in the system browser at the configured Gateway
+        // origin. Nonce-free under LAN-trust: same-LAN browsers are trusted,
+        // so there is no bootstrap handshake or credential handoff. Common to
+        // both shell variants; the CLI sibling of this affordance is
+        // `aleph open` (spec §4.1).
+        ID_OPEN_BROWSER => {
+            crate::external_link::open_url(&browser_origin(&crate::connection::load_target()));
+        }
         ID_CONNECT_REMOTE => {
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(url) = tauri::Url::parse("tauri://localhost/connect.html") {
@@ -199,4 +209,33 @@ fn open_devtools(app: &AppHandle) {
         return;
     };
     window.open_devtools();
+}
+
+/// The origin the "Open in Browser" item hands to the system browser: the
+/// loopback Gateway for Local, the configured origin for Remote. Pure so it
+/// is unit-testable without a window or menu.
+fn browser_origin(target: &crate::connection::ConnectionTarget) -> String {
+    match target {
+        crate::connection::ConnectionTarget::Local => crate::PANEL_URL.to_string(),
+        crate::connection::ConnectionTarget::Remote(url) => url.as_str().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browser_origin_local_is_the_loopback_panel() {
+        assert_eq!(
+            browser_origin(&crate::connection::ConnectionTarget::Local),
+            "http://127.0.0.1:18790"
+        );
+    }
+
+    #[test]
+    fn browser_origin_remote_is_the_configured_origin() {
+        let target = crate::connection::ConnectionTarget::parse("10.0.0.5").unwrap();
+        assert_eq!(browser_origin(&target), "http://10.0.0.5:18790/");
+    }
 }
