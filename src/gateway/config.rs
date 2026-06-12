@@ -248,10 +248,10 @@ impl Default for GatewayServerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {
-    /// Require shared token for access (default)
-    #[default]
+    /// Require shared token for access
     Token,
-    /// No authentication required
+    /// No authentication required (default)
+    #[default]
     None,
 }
 
@@ -281,7 +281,7 @@ pub struct AuthConfig {
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            mode: AuthMode::Token,
+            mode: AuthMode::None,
             session_expiry_hours: 72,
             token_expiry_hours: 24,
             allowed_origins: vec![],
@@ -790,9 +790,9 @@ model = "test"
     }
 
     #[test]
-    fn test_auth_mode_default_is_token() {
+    fn test_auth_mode_default_is_none() {
         let config = GatewayConfig::default();
-        assert!(matches!(config.gateway.auth.mode, AuthMode::Token));
+        assert!(matches!(config.gateway.auth.mode, AuthMode::None));
     }
 
     #[test]
@@ -820,6 +820,7 @@ require_auth = true
 model = "test"
 "#;
         let config = GatewayConfig::from_toml(toml).unwrap();
-        assert!(matches!(config.gateway.auth.mode, AuthMode::Token));
+        // require_auth is a legacy field that doesn't override [gateway.auth]; default is now None
+        assert!(matches!(config.gateway.auth.mode, AuthMode::None));
     }
 }

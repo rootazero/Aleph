@@ -36,14 +36,14 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
-    async fn returns_token_mode_by_default() {
+    async fn returns_none_mode_by_default() {
         let cfg = Arc::new(GatewayServerConfig::default());
         let req = JsonRpcRequest::with_id("gateway.credentials", None, json!(1));
         let resp = handle_gateway_credentials(req, cfg).await;
         assert!(resp.is_success());
         let value = resp.result.expect("result present");
-        assert_eq!(value["auth_mode"], "token");
-        assert_eq!(value["auth_required"], true);
+        assert_eq!(value["auth_mode"], "none");
+        assert_eq!(value["auth_required"], false);
         assert_eq!(value["bind_address"], "127.0.0.1:18790");
     }
 

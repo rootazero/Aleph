@@ -866,7 +866,7 @@ mod tests {
     fn test_gateway_config_default() {
         let config = GatewayConfig::default();
         assert_eq!(config.max_connections, 1000);
-        assert_eq!(config.auth_mode, AuthMode::Token);
+        assert_eq!(config.auth_mode, AuthMode::None);
     }
 
     #[tokio::test]

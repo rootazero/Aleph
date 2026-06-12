@@ -106,11 +106,11 @@ mod tests {
     }
 
     #[test]
-    fn defaults_have_token_auth_no_env_overrides() {
+    fn defaults_have_none_auth_no_env_overrides() {
         let cfg = GatewayServerConfig::default();
         let plan = build_credential_plan(&cfg, no_env);
-        assert_eq!(plan.auth_mode, "token");
-        assert!(plan.auth_required);
+        assert_eq!(plan.auth_mode, "none");
+        assert!(!plan.auth_required);
         assert!(!plan.has_env_token);
         assert!(!plan.has_env_session_secret);
         assert!(!plan.require_challenge);
@@ -177,7 +177,7 @@ mod tests {
         let plan = build_credential_plan(&cfg, no_env);
         let json = serde_json::to_string(&plan).expect("serializes");
         // Spot-check a stable key — full schema is asserted by serde derive.
-        assert!(json.contains("\"auth_mode\":\"token\""));
+        assert!(json.contains("\"auth_mode\":\"none\""));
         assert!(json.contains("\"bind_address\":\"127.0.0.1:18790\""));
     }
 }
