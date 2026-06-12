@@ -247,8 +247,10 @@ git add -A && git commit -m "gateway: remove auth/pairing/devices method handler
 
 **Files:**
 - Modify: `src/gateway/server/mod.rs:362-367,433,486,542-549,676-680`（删 `auth_routes` 字段、`set_auth_routes`、挂载块）
-- Delete: `src/gateway/auth_middleware.rs`（486 行）、`src/gateway/bootstrap.rs`（160 行）、`src/gateway/challenge.rs`（334 行）、`src/gateway/pair_loop_guard.rs`
-- Modify: `src/gateway/mod.rs`（删 4 个 mod 声明）
+- Delete: `src/gateway/auth_middleware.rs`（486 行）、`src/gateway/bootstrap.rs`（160 行）、`src/gateway/challenge.rs`（334 行）
+- Modify: `src/gateway/mod.rs`（删 3 个 mod 声明）
+
+> **T4 审查修正（2026-06-12）**：原文此处还删 `src/gateway/pair_loop_guard.rs`——**计划错误，不删**。它是 channel 适配器的 bot↔bot 回复风暴防护（出生提交 `0a8e40389` 即 channel 功能，按 `MessageMeta::BotAuthored` 门控），被 `inbound_router/mod.rs` 和 `channel_policy.rs`（spec §4.2 明确保留）消费，与 `/pair` 页面、设备配对、HTTP auth 零关系。与 T3 的 pairing.rs/pairing_store.rs 同属"channel vs device 混淆"。`gateway/mod.rs` 的 `mod pair_loop_guard` 声明保留。
 - Modify: builder 中 `set_auth_routes(...)` 调用点（`grep -rn "set_auth_routes\|auth_routes(" src/bin/ src/gateway/`）
 
 - [ ] **Step 1: 删字段与挂载**
