@@ -212,13 +212,8 @@ pub(in crate::commands::start) fn initialize_auth(
     });
 
     if !daemon {
-        println!("Auth methods:");
-        println!("  - connect         : Authenticate connection");
-        println!("  - pairing.approve : Approve device pairing");
-        println!("  - pairing.reject  : Reject device pairing");
-        println!("  - pairing.list    : List pending pairings");
-        println!("  - devices.list    : List approved devices");
-        println!("  - devices.revoke  : Revoke device access");
+        println!("Session methods:");
+        println!("  - connect : Session handshake (LAN-trust: no device auth)");
         println!();
     }
 

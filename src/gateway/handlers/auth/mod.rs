@@ -80,18 +80,16 @@ pub struct AuthContext {
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
 }
 
-impl AuthContext {
-    #[must_use]
-    pub fn public_bind_for_loopback(&self) -> String {
-        format!("127.0.0.1:{}", self.bind_port)
-    }
-}
-
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::gateway::security::store::DeviceUpsertData;
+
+    #[test]
+    fn tier_for_permissions_maps_wildcard_to_config() {
+        assert_eq!(tier::tier_for_permissions(&["*".into()]), "config");
+        assert_eq!(tier::tier_for_permissions(&["chat".into()]), "chat");
+    }
 
     pub(crate) fn create_test_context() -> Arc<AuthContext> {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
