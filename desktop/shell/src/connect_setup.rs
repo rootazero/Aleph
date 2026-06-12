@@ -9,11 +9,12 @@
 //!   * pick one of the `aleph-server` instances this module discovers on the
 //!     LAN via mDNS.
 //!
-//! All three Tauri commands here are lite-only (mirrored by the
-//! `#![cfg(...)]` below) and are registered in `main.rs`'s lite
-//! `generate_handler!` arm. The discovery browse is a blocking 3-second
-//! operation, so the command wrapper always hops onto a blocking thread —
-//! never the Tauri event loop.
+//! Both Tauri commands here (`discover_servers` / `connect_to`) are lite-only
+//! (mirrored by the `#![cfg(...)]` below) and are registered in `main.rs`'s
+//! lite `generate_handler!` arm; the variant flag the page keys off
+//! (`connection::is_lite_shell`) is registered by both variants. The
+//! discovery browse is a blocking 3-second operation, so the command wrapper
+//! always hops onto a blocking thread — never the Tauri event loop.
 
 #![cfg(not(feature = "embedded-core"))]
 
@@ -121,7 +122,11 @@ pub async fn target_reachable(target: &connection::ConnectionTarget) -> bool {
 /// not-reachable fallback — never a white screen (spec §8). Both `connect.html`
 /// and `index.html` are served from the bundled `splash/` frontendDist, so the
 /// `tauri://localhost/connect.html` URL resolves in both variants.
-pub fn show_connect_page(handle: &tauri::AppHandle) {
+///
+/// Named with the `lite_` prefix to stay distinct from the full-app-only
+/// `main.rs::show_connection_page` (same page, different plumbing: that one
+/// also forwards a message to the page's `__alephError` hook).
+pub fn show_lite_connect_page(handle: &tauri::AppHandle) {
     use tauri::Manager;
     let Some(window) = handle.get_webview_window("main") else {
         tracing::error!("main window missing — cannot show the connection page");

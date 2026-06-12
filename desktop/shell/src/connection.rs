@@ -189,9 +189,30 @@ pub fn clear_connection_target(app: tauri::AppHandle) -> Result<(), String> {
     set_connection_target(app, "local".to_string())
 }
 
+/// Whether this build is the panel-only (lite) shell variant. Registered in
+/// *both* variants (the full app answers `false`) so the connect page can
+/// determine its mode deterministically at load — which connect command to
+/// call and whether to show the mDNS discovery section — instead of inferring
+/// the variant from whether a discovery scan happened to succeed.
+#[tauri::command]
+pub fn is_lite_shell() -> bool {
+    cfg!(not(feature = "embedded-core"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lite_flag_matches_build_variant() {
+        // Each matrix asserts its own constant: the full app must answer
+        // `false`, the panel-only shell `true` — the connect page keys its
+        // command choice and discovery UI off this.
+        #[cfg(feature = "embedded-core")]
+        assert!(!is_lite_shell());
+        #[cfg(not(feature = "embedded-core"))]
+        assert!(is_lite_shell());
+    }
 
     #[test]
     fn empty_and_local_parse_to_local() {

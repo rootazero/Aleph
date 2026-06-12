@@ -113,23 +113,26 @@ fn main() {
     // catalogue); the shell stays pure I/O: window, tray, updater, hotkey,
     // connection target.
     //
-    // The panel-only variant additionally exposes the first-run setup surface
+    // Both variants register `is_lite_shell` so the connect page can resolve
+    // which variant hosts it deterministically (full answers `false`). The
+    // panel-only variant additionally exposes the first-run setup surface
     // (`discover_servers` for LAN mDNS discovery, `connect_to` for a
-    // probe-guarded target switch). Those commands are compiled out of the
-    // full app, so its handler list stays the three config toggles. The two
-    // arms are mutually exclusive `generate_handler!` invocations — only one
-    // is ever registered.
+    // probe-guarded target switch); those are compiled out of the full app.
+    // The two arms are mutually exclusive `generate_handler!` invocations —
+    // only one is ever registered.
     #[cfg(feature = "embedded-core")]
     let builder = builder.invoke_handler(tauri::generate_handler![
         connection::get_connection_target,
         connection::set_connection_target,
         connection::clear_connection_target,
+        connection::is_lite_shell,
     ]);
     #[cfg(not(feature = "embedded-core"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         connection::get_connection_target,
         connection::set_connection_target,
         connection::clear_connection_target,
+        connection::is_lite_shell,
         connect_setup::discover_servers,
         connect_setup::connect_to,
     ]);
@@ -392,7 +395,7 @@ async fn bring_target_online(handle: &tauri::AppHandle) -> bool {
     // anywhere — there is no sensible default Gateway for a panel-only shell.
     if !connection::marker_exists() {
         tracing::info!("no connection target configured — opening first-run connect page");
-        connect_setup::show_connect_page(handle);
+        connect_setup::show_lite_connect_page(handle);
         return true;
     }
 
@@ -411,7 +414,7 @@ async fn bring_target_online(handle: &tauri::AppHandle) -> bool {
         // Configured but down: land on the operable connection page rather than
         // the webview's native error page (spec §8 — no white screen).
         tracing::warn!("configured Gateway unreachable at startup — opening connect page");
-        connect_setup::show_connect_page(handle);
+        connect_setup::show_lite_connect_page(handle);
     }
     true
 }
@@ -456,10 +459,20 @@ pub(crate) fn focus_window(handle: &tauri::AppHandle) {
 /// after the new target has been persisted. In the full app the resident
 /// `supervise_daemon` loop picks up the persisted switch on its next tick and
 /// re-arms in the matching mode.
+///
+/// Panel-only shell: every re-route is probe-gated — the webview navigates
+/// only when the target's Gateway answers, otherwise it lands on the connect
+/// page. This is the structural guard behind `connect_to`'s own pre-probe:
+/// paths that reach `set_connection_target` directly (the full-app-shaped
+/// `connect.html` fallback, "Back to Local", tray/menu) cannot strand the
+/// user on a dead origin either (spec §8 — no white screen).
 pub(crate) fn reroute_for_target(app: &tauri::AppHandle, target: connection::ConnectionTarget) {
     match &target {
         connection::ConnectionTarget::Remote(url) => {
             external_link::set_remote_host(Some(url.clone()));
+            // Full app: navigate directly — the resident supervisor surfaces
+            // an unreachable remote on its next tick.
+            #[cfg(feature = "embedded-core")]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.navigate(url.clone());
             }
@@ -477,14 +490,23 @@ pub(crate) fn reroute_for_target(app: &tauri::AppHandle, target: connection::Con
                     reveal_panel(&handle);
                 });
             }
-            // Panel-only shell: no local daemon to launch — just navigate to
-            // the loopback Gateway and bring the window forward.
-            #[cfg(not(feature = "embedded-core"))]
-            {
-                navigate_to_target(app, &target);
-                focus_window(app);
-            }
         }
+    }
+    // Panel-only shell: no daemon to manage in either arm — probe the target
+    // and navigate only when it answers. The probe is async, so hop onto the
+    // async runtime (the sync connection commands stay non-blocking).
+    #[cfg(not(feature = "embedded-core"))]
+    {
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if connect_setup::target_reachable(&target).await {
+                navigate_to_target(&handle, &target);
+                focus_window(&handle);
+            } else {
+                tracing::warn!("re-route target unreachable — opening connect page");
+                connect_setup::show_lite_connect_page(&handle);
+            }
+        });
     }
 }
 
