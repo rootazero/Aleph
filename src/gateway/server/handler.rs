@@ -20,7 +20,6 @@ use tokio::sync::{broadcast, RwLock};
 use tokio::time::{interval_at, Instant as TokioInstant, MissedTickBehavior};
 use tracing::{debug, error, info, warn};
 
-use crate::gateway::config::AuthMode;
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 use crate::gateway::event_scope::EventScopeGuard;
 use crate::gateway::handlers::events::{
@@ -33,9 +32,7 @@ use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR,
     PARSE_ERROR, RATE_LIMITED,
 };
-use crate::gateway::rate_limiter::{
-    scope_for_method, RateLimitError, RateLimitKey, RateLimitScope, RateLimiter,
-};
+use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
 use crate::gateway::state_version::StateVersionTracker;
 
 use super::per_client_buffer::PerClientBuffer;
@@ -49,7 +46,6 @@ struct ConnectionContext {
     connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
     subscription_manager: Arc<SubscriptionManager>,
     guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
-    auth_mode: AuthMode,
     presence: Arc<PresenceTracker>,
     state_versions: Arc<StateVersionTracker>,
     rate_limiter: Arc<RateLimiter>,
@@ -78,16 +74,6 @@ struct ConnectionContext {
     /// MUST carry an `idempotency_key` or it is rejected before lane
     /// dispatch with [`IDEMPOTENCY_KEY_REQUIRED`].
     require_idempotency_key: bool,
-    /// Locally-stored shared token to auto-inject into the first `connect`
-    /// when the peer is loopback AND presented a valid `aleph_session`
-    /// cookie at WS handshake. `Some` ⇒ the panel WebSocket inherits the
-    /// same trust as the cookie that loaded the panel HTML, so the user
-    /// is not prompted to approve a pairing code on a fresh app start.
-    /// `None` ⇒ existing flow (Case 0/1/2/3 in `connect.rs`) runs
-    /// untouched — non-loopback peers, dev wiring, and clients that
-    /// already carry their own token / `shared_token` / `invitation_token`
-    /// land here.
-    bootstrap_shared_token: Option<String>,
     /// Device-token manager. Used by the cluster node disconnect path to stamp
     /// `last_seen_at`. `None` in auth-disabled / legacy wiring.
     token_manager: Option<Arc<TokenManager>>,
@@ -107,164 +93,6 @@ struct ConnectionContext {
     /// Shared exec-approval manager for node-initiated approvals (cluster ③).
     /// `None` ⇒ `node.approval.request` is refused.
     exec_approval_manager: Option<Arc<crate::exec::manager::ExecApprovalManager>>,
-}
-
-/// Extract the `aleph_session` cookie value from a request's `Cookie` header.
-///
-/// Returns `None` when the header is missing, malformed, or does not
-/// contain an `aleph_session=…` pair. Mirrors the helper in
-/// [`crate::gateway::auth_middleware`] — duplicated here to avoid
-/// re-exporting a private item across modules.
-fn extract_session_cookie(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies
-                .split(';')
-                .filter_map(|c| {
-                    let (name, value) = c.trim().split_once('=')?;
-                    if name == "aleph_session" {
-                        Some(value.to_string())
-                    } else {
-                        None
-                    }
-                })
-                .next()
-        })
-}
-
-/// Bridge an `aleph_session` cookie into a WS-level shared-token bootstrap.
-///
-/// Returns `Some(shared_token)` only when ALL hold:
-///   1. peer is on a loopback interface,
-///   2. shared state has both `session_mgr` and `shared_token_mgr` plumbed
-///      (production wiring; dev/auth-none/legacy wiring leaves them `None`),
-///   3. the `aleph_session` cookie is present and validates against the
-///      session store.
-///
-/// Anything short of all three yields `None`, and the connection falls
-/// through to the existing token / `shared_token` / pairing flow. Refusing
-/// non-loopback peers is what keeps a LAN attacker who somehow obtains a
-/// session cookie from short-circuiting auth — `/auth/bootstrap` is
-/// already loopback-gated upstream, but defence-in-depth costs nothing.
-/// Record a failed `connect` against the per-source-IP `Auth` rate-limit
-/// bucket and report whether the source is now locked out.
-///
-/// Loopback peers are exempt (same trust class as the local desktop shell,
-/// consistent with the rest of the dispatch path). Returns the retry/lockout
-/// hint in milliseconds when the source has exhausted its auth-failure budget,
-/// otherwise `None`. This is the cross-connection backstop to the
-/// per-connection `auth_attempts` counter (openclaw #87148).
-fn record_auth_failure_lockout(
-    rate_limiter: &RateLimiter,
-    peer_ip: std::net::IpAddr,
-) -> Option<u64> {
-    if peer_ip.is_loopback() {
-        return None;
-    }
-    let key = RateLimitKey::new(&peer_ip.to_string(), RateLimitScope::Auth);
-    match rate_limiter.check_and_record(&key) {
-        Ok(()) => None,
-        Err(RateLimitError::Exceeded { retry_after_ms, .. }) => Some(retry_after_ms),
-        Err(RateLimitError::LockedOut {
-            lockout_remaining_ms,
-            ..
-        }) => Some(lockout_remaining_ms),
-    }
-}
-
-fn resolve_bootstrap_shared_token(
-    state: &Arc<GatewaySharedState>,
-    peer_addr: &SocketAddr,
-    headers: &HeaderMap,
-) -> Option<String> {
-    if !peer_addr.ip().is_loopback() {
-        return None;
-    }
-    let session_mgr = state.session_mgr.as_ref()?;
-    let shared_token_mgr = state.shared_token_mgr.as_ref()?;
-    let session_id = extract_session_cookie(headers)?;
-    match session_mgr.validate_session(&session_id) {
-        Ok(true) => {}
-        Ok(false) => return None,
-        Err(e) => {
-            warn!(
-                error = %e,
-                "ws upgrade: session_mgr.validate_session failed; falling back to pairing"
-            );
-            return None;
-        }
-    }
-    // Prefer the in-memory cache populated at boot; fall through to a DB
-    // read if this process has not loaded the token yet (e.g. in tests
-    // that construct a fresh manager). Both paths are O(1) on the hot
-    // upgrade path, so the cost is negligible.
-    shared_token_mgr
-        .get_current_token()
-        .or_else(|| shared_token_mgr.try_load_token_from_db())
-}
-
-/// Rewrite the first `connect` JSON-RPC frame to carry the locally-known
-/// shared token, so a cookie-bootstrapped Panel rides Case 0 in
-/// `connect.rs` instead of falling into the device-pairing branch.
-///
-/// Returns the original `text` unchanged when ANY of these hold:
-///   * no bootstrap token is available (Cookie absent / invalid / non-loopback),
-///   * the method is not exactly `connect` (e.g. `connect.challenge`
-///     never carries credentials),
-///   * the client already supplied an explicit `token`, `shared_token`,
-///     or `invitation_token` (we never overwrite client intent),
-///   * the JSON cannot be re-parsed as an object with an object `params`
-///     (defensive — the upstream `serde_json::from_str` already succeeded
-///     into a typed `JsonRpcRequest`, but a `params: null` payload is
-///     legal in JSON-RPC and there is nowhere to insert the field).
-///
-/// The injection is purely additive (one extra string field), so the
-/// re-serialised frame remains a valid JSON-RPC 2.0 request.
-fn maybe_inject_bootstrap_shared_token(
-    text: &str,
-    req: &JsonRpcRequest,
-    bootstrap_shared_token: Option<&str>,
-) -> String {
-    let Some(token) = bootstrap_shared_token else {
-        return text.to_string();
-    };
-    if req.method != "connect" {
-        return text.to_string();
-    }
-    // Sniff the parsed params for any already-set credential field. We
-    // intentionally read the typed `req.params` rather than the raw JSON
-    // — `JsonRpcRequest::params` is `Option<Value>` so this stays a
-    // single allocation-free pointer-deref.
-    if let Some(params) = req.params.as_ref().and_then(|v| v.as_object()) {
-        if params.contains_key("token")
-            || params.contains_key("shared_token")
-            || params.contains_key("invitation_token")
-        {
-            return text.to_string();
-        }
-    }
-
-    // Re-serialise the frame with `params.shared_token` injected.
-    let Ok(mut envelope) = serde_json::from_str::<serde_json::Value>(text) else {
-        return text.to_string();
-    };
-    // Insert into `params` (creating it if `params` is null / missing).
-    let params_slot = envelope
-        .as_object_mut()
-        .map(|m| m.entry("params").or_insert_with(|| serde_json::json!({})));
-    let Some(params) = params_slot else {
-        return text.to_string();
-    };
-    let Some(params_obj) = params.as_object_mut() else {
-        return text.to_string();
-    };
-    params_obj.insert(
-        "shared_token".to_string(),
-        serde_json::Value::String(token.to_string()),
-    );
-    serde_json::to_string(&envelope).unwrap_or_else(|_| text.to_string())
 }
 
 /// axum handler: upgrade HTTP connection to WebSocket at `/ws`
@@ -350,15 +178,6 @@ pub(super) async fn ws_upgrade_handler(
         ChannelClass::Bot
     };
 
-    let bootstrap_shared_token = resolve_bootstrap_shared_token(&state, &peer_addr, &headers);
-    if bootstrap_shared_token.is_some() {
-        debug!(
-            "ws upgrade: loopback peer {} presented a valid aleph_session cookie; \
-             shared token will be auto-injected into the first connect",
-            peer_addr
-        );
-    }
-
     ws.on_upgrade(move |socket| async move {
         let ctx = ConnectionContext {
             // Shared chain built once at server construction (cloning shares the
@@ -368,7 +187,6 @@ pub(super) async fn ws_upgrade_handler(
             connections: state.connections.clone(),
             subscription_manager: state.subscription_manager.clone(),
             guest_session_manager: state.guest_session_manager.clone(),
-            auth_mode: state.auth_mode.clone(),
             presence: state.presence.clone(),
             state_versions: state.state_versions.clone(),
             rate_limiter: state.rate_limiter.clone(),
@@ -379,7 +197,6 @@ pub(super) async fn ws_upgrade_handler(
             ping_interval_secs: state.ping_interval_secs,
             idle_timeout_secs: state.idle_timeout_secs,
             require_idempotency_key: state.require_idempotency_key,
-            bootstrap_shared_token,
             token_manager: state.token_manager.clone(),
             client_ip,
             reverse_rpc: state.reverse_rpc.clone(),
@@ -1346,36 +1163,6 @@ pub(super) async fn process_request(text: &str, middleware_chain: &MiddlewareCha
     serde_json::to_string(&value).unwrap_or_default()
 }
 
-/// Pairing-wizard bootstrap bypass for the WS auth gate.
-///
-/// Returns `true` when an unauthenticated request should be allowed to reach
-/// the handler pipeline because it is part of the same-machine pairing
-/// handshake. The bypass is intentionally narrow:
-///   * peer must be loopback (rejects all LAN/WAN callers)
-///   * method must be a `wizard.*` RPC (the only surface that can mint a token
-///     without prior auth, and only after `PairingFlow::confirm_pairing` runs)
-fn allow_unauth_loopback_wizard(peer: &SocketAddr, method: &str) -> bool {
-    peer.ip().is_loopback() && method.starts_with("wizard.")
-}
-
-/// Cold-browser pairing bypass for the WS auth gate.
-///
-/// Returns `true` for the anonymous pairing methods (`pairing.start_browser`,
-/// `pairing.start_node`, `pairing.poll`) used by the `/pair` HTML page and a
-/// tokenless `aleph-server node`. Unlike the wizard bypass, this one is NOT
-/// loopback-gated — a remote LAN browser (mobile, other laptop) hitting
-/// `/pair`, or a remote node dialing in to enroll, is the primary use case.
-/// The security boundary is the operator's 1-click approve from the already-
-/// authenticated Panel; rate limiting is the existing
-/// `PairingManager::MAX_PENDING_REQUESTS = 10` cap on pending pairing
-/// requests in the DB.
-fn allow_unauth_browser_pairing(method: &str) -> bool {
-    matches!(
-        method,
-        "pairing.start_browser" | "pairing.start_node" | "pairing.poll"
-    )
-}
-
 /// LAN-trust cluster-node detection at `connect` time.
 ///
 /// Token roles are gone, so a cluster node announces itself by request shape:
@@ -1400,10 +1187,6 @@ fn node_connect_identity(params: Option<&serde_json::Value>, conn_id: &str) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn sa(ip: &str) -> SocketAddr {
-        format!("{ip}:0").parse().unwrap()
-    }
 
     // ── LAN-trust node-shape detection + cluster registration ────────────
 
@@ -1490,229 +1273,6 @@ mod tests {
         assert!(registry.deregister("conn-1"));
         assert!(registry.node_identity_by_conn("conn-1").is_none());
         assert!(registry.list_environments().is_empty());
-    }
-
-    #[test]
-    fn auth_failure_lockout_trips_after_budget_and_exempts_loopback() {
-        use crate::gateway::rate_limiter::{RateLimitConfig, WindowConfig};
-
-        let cfg = RateLimitConfig {
-            auth: WindowConfig {
-                max_requests: 2,
-                window_secs: 60,
-                lockout_secs: Some(300),
-            },
-            ..RateLimitConfig::default()
-        };
-        let rl = RateLimiter::new(cfg);
-        let ip = sa("203.0.113.7").ip(); // non-loopback (TEST-NET-3)
-
-        // Within budget: first two failures pass.
-        assert!(record_auth_failure_lockout(&rl, ip).is_none());
-        assert!(record_auth_failure_lockout(&rl, ip).is_none());
-        // Budget exhausted: subsequent failures are locked out.
-        assert!(record_auth_failure_lockout(&rl, ip).is_some());
-
-        // Loopback is always exempt regardless of prior failures.
-        let lo = sa("127.0.0.1").ip();
-        for _ in 0..5 {
-            assert!(record_auth_failure_lockout(&rl, lo).is_none());
-        }
-    }
-
-    #[test]
-    fn auth_failure_lockout_is_per_source_ip() {
-        use crate::gateway::rate_limiter::{RateLimitConfig, WindowConfig};
-
-        let cfg = RateLimitConfig {
-            auth: WindowConfig {
-                max_requests: 1,
-                window_secs: 60,
-                lockout_secs: Some(300),
-            },
-            ..RateLimitConfig::default()
-        };
-        let rl = RateLimiter::new(cfg);
-        let a = sa("198.51.100.1").ip();
-        let b = sa("198.51.100.2").ip();
-
-        assert!(record_auth_failure_lockout(&rl, a).is_none()); // a: 1 ok
-        assert!(record_auth_failure_lockout(&rl, a).is_some()); // a: locked
-                                                                // A different source IP has its own independent budget.
-        assert!(record_auth_failure_lockout(&rl, b).is_none()); // b: 1 ok
-    }
-
-    #[test]
-    fn bypass_allows_wizard_on_ipv4_loopback() {
-        assert!(allow_unauth_loopback_wizard(
-            &sa("127.0.0.1"),
-            "wizard.start"
-        ));
-        assert!(allow_unauth_loopback_wizard(
-            &sa("127.0.0.1"),
-            "wizard.answer"
-        ));
-        assert!(allow_unauth_loopback_wizard(
-            &sa("127.0.0.1"),
-            "wizard.cancel"
-        ));
-    }
-
-    #[test]
-    fn bypass_allows_wizard_on_ipv6_loopback() {
-        assert!(allow_unauth_loopback_wizard(&sa("[::1]"), "wizard.next"));
-    }
-
-    #[test]
-    fn bypass_rejects_wizard_on_lan_address() {
-        assert!(!allow_unauth_loopback_wizard(
-            &sa("192.168.1.5"),
-            "wizard.start"
-        ));
-        assert!(!allow_unauth_loopback_wizard(
-            &sa("10.0.0.7"),
-            "wizard.start"
-        ));
-    }
-
-    #[test]
-    fn bypass_rejects_non_wizard_methods_on_loopback() {
-        assert!(!allow_unauth_loopback_wizard(
-            &sa("127.0.0.1"),
-            "memory.search"
-        ));
-        assert!(!allow_unauth_loopback_wizard(&sa("127.0.0.1"), "connect"));
-        assert!(!allow_unauth_loopback_wizard(
-            &sa("127.0.0.1"),
-            "agents.list"
-        ));
-    }
-
-    #[test]
-    fn bypass_requires_dot_separator_in_method() {
-        // "wizardx.foo" must not match — guards against accidental prefix
-        // collisions if a future method were named "wizardry" etc.
-        assert!(!allow_unauth_loopback_wizard(
-            &sa("127.0.0.1"),
-            "wizardx.foo"
-        ));
-    }
-
-    #[test]
-    fn browser_pairing_bypass_admits_anonymous_pairing_methods() {
-        assert!(allow_unauth_browser_pairing("pairing.start_browser"));
-        assert!(allow_unauth_browser_pairing("pairing.start_node"));
-        assert!(allow_unauth_browser_pairing("pairing.poll"));
-        // Everything else — including the existing authenticated pairing
-        // methods — stays gated.
-        assert!(!allow_unauth_browser_pairing("pairing.approve"));
-        assert!(!allow_unauth_browser_pairing("pairing.reject"));
-        assert!(!allow_unauth_browser_pairing("pairing.list"));
-        assert!(!allow_unauth_browser_pairing("memory.search"));
-        assert!(!allow_unauth_browser_pairing(""));
-    }
-
-    fn headers_with_cookie(raw: &str) -> HeaderMap {
-        let mut h = HeaderMap::new();
-        h.insert(header::COOKIE, raw.parse().unwrap());
-        h
-    }
-
-    #[test]
-    fn extract_session_cookie_picks_aleph_session_value() {
-        let h = headers_with_cookie("foo=bar; aleph_session=abc-123; baz=qux");
-        assert_eq!(extract_session_cookie(&h), Some("abc-123".to_string()));
-    }
-
-    #[test]
-    fn extract_session_cookie_handles_no_aleph_session() {
-        let h = headers_with_cookie("foo=bar; other=val");
-        assert_eq!(extract_session_cookie(&h), None);
-    }
-
-    #[test]
-    fn extract_session_cookie_is_none_when_header_missing() {
-        let h = HeaderMap::new();
-        assert_eq!(extract_session_cookie(&h), None);
-    }
-
-    fn parse_req(text: &str) -> JsonRpcRequest {
-        serde_json::from_str(text).expect("text must be a valid JsonRpcRequest")
-    }
-
-    #[test]
-    fn inject_skips_when_no_bootstrap_token() {
-        let text =
-            r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"device_name":"Web Panel"}}"#;
-        let req = parse_req(text);
-        let out = maybe_inject_bootstrap_shared_token(text, &req, None);
-        assert_eq!(out, text);
-    }
-
-    #[test]
-    fn inject_skips_non_connect_methods() {
-        // `connect.challenge` is in the connect family but never carries
-        // credentials. We must not inject into it.
-        let text =
-            r#"{"jsonrpc":"2.0","id":1,"method":"connect.challenge","params":{"device_id":"d"}}"#;
-        let req = parse_req(text);
-        let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
-        assert_eq!(out, text);
-    }
-
-    #[test]
-    fn inject_skips_when_client_already_carries_token() {
-        let text = r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"token":"existing:sig","device_name":"Web Panel"}}"#;
-        let req = parse_req(text);
-        let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
-        assert_eq!(out, text);
-    }
-
-    #[test]
-    fn inject_skips_when_client_already_carries_shared_token() {
-        let text = r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"shared_token":"client-supplied","device_name":"Web Panel"}}"#;
-        let req = parse_req(text);
-        let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
-        assert_eq!(out, text);
-    }
-
-    #[test]
-    fn inject_skips_when_client_already_carries_invitation_token() {
-        let text = r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"invitation_token":"guest-tok","device_name":"Web Panel"}}"#;
-        let req = parse_req(text);
-        let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
-        assert_eq!(out, text);
-    }
-
-    #[test]
-    fn inject_adds_shared_token_to_anonymous_connect() {
-        let text =
-            r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"device_name":"Web Panel"}}"#;
-        let req = parse_req(text);
-        let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
-        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(
-            v["params"]["shared_token"].as_str(),
-            Some("tok-XYZ"),
-            "shared_token must be injected verbatim"
-        );
-        assert_eq!(
-            v["params"]["device_name"].as_str(),
-            Some("Web Panel"),
-            "existing params fields must be preserved"
-        );
-        assert_eq!(v["method"].as_str(), Some("connect"));
-        assert_eq!(v["id"].as_i64(), Some(1));
-    }
-
-    #[test]
-    fn inject_creates_params_when_missing() {
-        // A `connect` with no params at all should still be upgraded.
-        let text = r#"{"jsonrpc":"2.0","id":1,"method":"connect"}"#;
-        let req = parse_req(text);
-        let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
-        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(v["params"]["shared_token"].as_str(), Some("tok-XYZ"));
     }
 
     #[test]
