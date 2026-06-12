@@ -662,6 +662,18 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
+    // Local voice sidecar supervisor — installed only when enabled; the
+    // sidecar itself is spawned lazily on first voice demand.
+    if let Some(ref cfg_arc) = app_config {
+        let cfg = cfg_arc.read().await;
+        if cfg.local_voice().enabled {
+            alephcore::gateway::voice::sidecar::init_global(cfg.local_voice().clone());
+            if !daemon {
+                println!("  Local voice: sidecar supervisor armed (lazy spawn)");
+            }
+        }
+    }
+
     // Wire STT config from dedicated transcription provider.
     // api_key is #[serde(skip)] and injected from vault at runtime, so
     // resolution (config-inline or vault `gen:<name>`) is shared with the
