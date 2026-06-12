@@ -12,7 +12,7 @@ use crate::config::Config;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
-use crate::gateway::voice::inbound::{resolve_stt_config, transcribe_bytes};
+use crate::gateway::voice::inbound::{resolve_stt_source, transcribe_bytes, SttUnavailable};
 use crate::sync_primitives::Arc;
 
 /// `OpenAI` Whisper rejects payloads larger than 25 MB; reject early so we never
@@ -70,16 +70,33 @@ pub async fn handle_transcribe(
         .unwrap_or_else(|| "audio/webm".to_string());
     let filename = filename_for_mime(&mime);
 
-    let stt = {
+    let stt_source = {
         let cfg = config.read().await;
-        resolve_stt_config(&cfg.generation, &vault)
+        resolve_stt_source(&cfg.generation, &vault)
     };
-    let Some(stt) = stt else {
+    let Some(stt_source) = stt_source else {
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
             "No transcription provider configured. Add one in Settings → Generation Providers.",
         );
+    };
+    let stt = match stt_source.materialize().await {
+        Ok(cfg) => cfg,
+        Err(SttUnavailable::Downloading { percent }) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Local voice model is still downloading ({percent}%). Try again shortly or use text."),
+            );
+        }
+        Err(SttUnavailable::Error(e)) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Local transcription unavailable: {e}"),
+            );
+        }
     };
 
     match transcribe_bytes(bytes, &filename, &mime, params.language.as_deref(), &stt).await {

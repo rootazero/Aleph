@@ -112,8 +112,8 @@ pub struct InboundMessageRouter {
     pub(super) session_store: Option<Arc<dyn super::session_store::SessionStore>>,
     /// App config for reading `output_mode` at runtime
     pub(super) app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
-    /// STT config for voice transcription
-    pub(super) stt_config: Option<super::voice::inbound::SttConfig>,
+    /// Late-bound STT source for voice transcription
+    pub(super) stt_source: Option<super::voice::inbound::SttSource>,
     /// Generation provider registry for TTS
     pub(super) generation_registry: Option<Arc<crate::generation::GenerationProviderRegistry>>,
     /// Generation config for TTS
@@ -169,7 +169,7 @@ impl InboundMessageRouter {
             command_parser: None,
             session_store: None,
             app_config: None,
-            stt_config: None,
+            stt_source: None,
             generation_registry: None,
             generation_config: None,
             coalescer: None,
@@ -275,9 +275,9 @@ impl InboundMessageRouter {
         self
     }
 
-    /// Set STT config for voice transcription
-    pub fn with_stt_config(mut self, config: super::voice::inbound::SttConfig) -> Self {
-        self.stt_config = Some(config);
+    /// Set the late-bound STT source for voice transcription
+    pub fn with_stt_source(mut self, source: super::voice::inbound::SttSource) -> Self {
+        self.stt_source = Some(source);
         self
     }
 
@@ -583,8 +583,10 @@ impl InboundMessageRouter {
         )
         .await;
 
-        // Voice STT: transcribe audio attachments before further processing
-        let has_stt = self.stt_config.is_some();
+        // Voice STT: transcribe audio attachments before further processing.
+        // The source is late-bound: a local sidecar resolves (port, token) per
+        // message, so materialization only happens when audio is present.
+        let has_stt = self.stt_source.is_some();
         let has_audio = super::voice::inbound::has_audio_attachment(&ctx.message);
         tracing::debug!(
             has_stt = has_stt,
@@ -592,14 +594,32 @@ impl InboundMessageRouter {
             attachments = ctx.message.attachments.len(),
             "Voice STT check"
         );
-        if let Some(ref stt_config) = self.stt_config {
+        if let Some(ref stt_source) = self.stt_source {
             if has_audio {
-                let result =
-                    super::voice::inbound::process_inbound_voice(ctx.message.clone(), stt_config)
+                match stt_source.materialize().await {
+                    Ok(stt_config) => {
+                        let result = super::voice::inbound::process_inbound_voice(
+                            ctx.message.clone(),
+                            &stt_config,
+                        )
                         .await;
-                ctx.message = result.message;
-                if result.transcribed {
-                    ctx.voice_reply_hint = true;
+                        ctx.message = result.message;
+                        if result.transcribed {
+                            ctx.voice_reply_hint = true;
+                        }
+                    }
+                    Err(super::voice::inbound::SttUnavailable::Downloading { percent }) => {
+                        // Voice model still downloading: don't transcribe and
+                        // don't fail — keep the attachments and surface an
+                        // in-conversation hint instead.
+                        if ctx.message.text.is_empty() {
+                            ctx.message.text =
+                                format!("[语音模型下载中 {percent}%，请稍候重试或改用文字]");
+                        }
+                    }
+                    Err(super::voice::inbound::SttUnavailable::Error(e)) => {
+                        tracing::warn!(error = %e, "local STT unavailable, no fallback");
+                    }
                 }
             }
         }

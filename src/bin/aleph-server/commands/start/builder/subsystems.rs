@@ -674,18 +674,19 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
-    // Wire STT config from dedicated transcription provider.
+    // Wire the late-bound STT source from the dedicated transcription provider.
     // api_key is #[serde(skip)] and injected from vault at runtime, so
     // resolution (config-inline or vault `gen:<name>`) is shared with the
-    // `voice.transcribe` panel RPC via `resolve_stt_config`.
+    // `voice.transcribe` panel RPC via `resolve_stt_source`. A local sidecar
+    // source materializes its (port, token) per message, not at boot.
     if let Some(ref cfg_arc) = app_config {
         let cfg = cfg_arc.read().await;
         if let Some(stt) =
-            alephcore::gateway::voice::inbound::resolve_stt_config(&cfg.generation, &vault)
+            alephcore::gateway::voice::inbound::resolve_stt_source(&cfg.generation, &vault)
         {
-            inbound_router = inbound_router.with_stt_config(stt);
+            inbound_router = inbound_router.with_stt_source(stt);
             if !daemon {
-                println!("  Inbound router: voice STT transcription enabled (from transcription provider)");
+                println!("  Inbound router: voice STT enabled (local-aware source)");
             }
         }
     }

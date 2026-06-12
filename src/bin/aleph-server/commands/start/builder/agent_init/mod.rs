@@ -1134,15 +1134,29 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     });
 
                 if let Some((key, pcfg)) = tcfg {
-                    let whisper = WhisperTranscription::new(
-                        key,
-                        pcfg.base_url.clone(),
-                        pcfg.models.first().cloned(),
-                    );
-                    if !daemon {
-                        println!("  MediaProcessor: Whisper transcription enabled (from transcription provider)");
+                    if pcfg.provider_type == alephcore::LOCAL_PROVIDER_TYPE {
+                        // The local sidecar resolves its endpoint at call time;
+                        // the placeholder key from the selection walk is unused
+                        // here (`key` is consumed by the Whisper branch below).
+                        if !daemon {
+                            println!(
+                                "  MediaProcessor: local voice transcription enabled (sidecar)"
+                            );
+                        }
+                        Some(Box::new(
+                            alephcore::gateway::voice::local_provider::LocalTranscription,
+                        ) as Box<dyn TranscriptionService>)
+                    } else {
+                        let whisper = WhisperTranscription::new(
+                            key,
+                            pcfg.base_url.clone(),
+                            pcfg.models.first().cloned(),
+                        );
+                        if !daemon {
+                            println!("  MediaProcessor: Whisper transcription enabled (from transcription provider)");
+                        }
+                        Some(Box::new(whisper) as Box<dyn TranscriptionService>)
                     }
-                    Some(Box::new(whisper))
                 } else {
                     None
                 }

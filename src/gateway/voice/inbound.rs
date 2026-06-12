@@ -29,18 +29,95 @@ pub struct SttConfig {
     pub model: String,
 }
 
-/// Resolve the active STT config from the generation config + vault.
+/// STT unavailability, typed so callers can react without string-matching.
+#[derive(Debug)]
+pub enum SttUnavailable {
+    /// Local sidecar still downloading models.
+    Downloading { percent: u8 },
+    Error(String),
+}
+
+/// Late-bound STT source. Local resolves (port, token) per message because the
+/// sidecar port changes per spawn; Static is the existing cloud behavior.
+#[derive(Clone)]
+pub enum SttSource {
+    Static(SttConfig),
+    /// Local sidecar, with an optional pre-resolved cloud fallback (spec §4.6:
+    /// local failure / model download falls back to cloud automatically; a
+    /// cloud default never falls back to local).
+    Local { fallback: Option<Box<SttConfig>> },
+}
+
+impl SttSource {
+    /// Materialize a concrete `SttConfig`, consulting the sidecar when local.
+    pub async fn materialize(&self) -> Result<SttConfig, SttUnavailable> {
+        match self {
+            Self::Static(cfg) => Ok(cfg.clone()),
+            Self::Local { fallback } => match Self::local_config().await {
+                Ok(cfg) => Ok(cfg),
+                Err(unavailable) => match fallback {
+                    Some(cloud) => {
+                        warn!(
+                            reason = ?unavailable,
+                            "local STT unavailable — falling back to cloud provider"
+                        );
+                        Ok((**cloud).clone())
+                    }
+                    None => Err(unavailable),
+                },
+            },
+        }
+    }
+
+    async fn local_config() -> Result<SttConfig, SttUnavailable> {
+        let sup = super::sidecar::global()
+            .ok_or_else(|| SttUnavailable::Error("local voice not initialized".into()))?;
+        let ep = sup
+            .ensure_endpoint()
+            .await
+            .map_err(|e| SttUnavailable::Error(format!("{e:#}")))?;
+        Ok(SttConfig {
+            api_key: ep.token,
+            base_url: ep.base_url,
+            model: sup.config().stt_model.clone(),
+        })
+    }
+}
+
+/// Resolve the active STT source from generation config + vault.
 ///
-/// Picks the `default_transcription_provider` when set and enabled, otherwise
-/// the first enabled transcription provider with a resolvable API key (config
-/// inline or vault `gen:<name>`). Returns `None` when no usable provider exists.
+/// Local (`provider_type == "local"`) wins per the normalized defaults; a cloud
+/// candidate (if any) rides along as the fallback. Pure cloud setups produce
+/// `Static` exactly as before. Returns `None` when no usable provider exists.
 ///
 /// Shared by the boot path (inbound router wiring) and the `voice.transcribe`
 /// panel RPC so both resolve the provider identically.
-pub fn resolve_stt_config(
+pub fn resolve_stt_source(
     gen_cfg: &crate::config::types::generation::GenerationConfig,
     vault: &crate::gateway::security::SharedTokenManager,
-) -> Option<SttConfig> {
+) -> Option<SttSource> {
+    let chosen = choose_transcription_provider(gen_cfg, vault, false)?;
+    if chosen.1.provider_type == crate::config::types::voice_local::LOCAL_PROVIDER_TYPE {
+        let fallback = choose_transcription_provider(gen_cfg, vault, true)
+            .map(|(key, pcfg)| Box::new(static_stt_config(key, pcfg)));
+        Some(SttSource::Local { fallback })
+    } else {
+        let (key, pcfg) = chosen;
+        Some(SttSource::Static(static_stt_config(key, pcfg)))
+    }
+}
+
+/// Selection walk shared by primary + fallback resolution.
+/// `skip_local = true` excludes `provider_type == "local"` entries.
+///
+/// Picks the `default_transcription_provider` when set and enabled, otherwise
+/// the first enabled transcription provider with a resolvable API key (config
+/// inline or vault `gen:<name>`).
+fn choose_transcription_provider<'a>(
+    gen_cfg: &'a crate::config::types::generation::GenerationConfig,
+    vault: &crate::gateway::security::SharedTokenManager,
+    skip_local: bool,
+) -> Option<(String, &'a crate::GenerationProviderConfig)> {
     let resolve_key = |name: &str, pcfg: &crate::GenerationProviderConfig| -> Option<String> {
         if let Some(ref key) = pcfg.api_key {
             if !key.is_empty() {
@@ -55,15 +132,20 @@ pub fn resolve_stt_config(
         }
         None
     };
+    let eligible = |pcfg: &crate::GenerationProviderConfig| {
+        pcfg.enabled
+            && !(skip_local
+                && pcfg.provider_type == crate::config::types::voice_local::LOCAL_PROVIDER_TYPE)
+    };
 
-    let (key, pcfg) = gen_cfg
+    gen_cfg
         .default_transcription_provider
         .as_ref()
         .and_then(|default_name| {
             gen_cfg
                 .transcription_providers
                 .get_key_value(default_name)
-                .filter(|(_, pcfg)| pcfg.enabled)
+                .filter(|(_, pcfg)| eligible(pcfg))
                 .and_then(|(name, pcfg)| resolve_key(name, pcfg).map(|key| (key, pcfg)))
         })
         .or_else(|| {
@@ -71,14 +153,17 @@ pub fn resolve_stt_config(
                 .transcription_providers
                 .iter()
                 .find_map(|(name, pcfg)| {
-                    if pcfg.enabled {
+                    if eligible(pcfg) {
                         resolve_key(name, pcfg).map(|key| (key, pcfg))
                     } else {
                         None
                     }
                 })
-        })?;
+        })
+}
 
+/// The original static `SttConfig` construction (url normalize + model pick).
+fn static_stt_config(key: String, pcfg: &crate::GenerationProviderConfig) -> SttConfig {
     let base = pcfg.base_url.as_deref().unwrap_or("https://api.openai.com");
     let resolved = crate::generation::providers::url_normalize::resolve_base_url(base);
     let stt_endpoint = resolved.primary_endpoint(crate::generation::GenerationType::Transcription);
@@ -91,11 +176,11 @@ pub fn resolve_stt_config(
         .cloned()
         .unwrap_or_else(|| "whisper-1".to_string());
 
-    Some(SttConfig {
+    SttConfig {
         api_key: key,
         base_url: stt_base,
         model: stt_model,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -356,5 +441,49 @@ mod tests {
     fn has_audio_attachment_empty() {
         let msg = make_message(vec![]);
         assert!(!has_audio_attachment(&msg));
+    }
+
+    fn make_vault() -> (tempfile::TempDir, crate::gateway::security::SharedTokenManager) {
+        use crate::gateway::security::{SecurityStore, SharedTokenManager};
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = std::sync::Arc::new(SecurityStore::in_memory().unwrap());
+        let vault = SharedTokenManager::new(store, dir.path().join("test.vault"));
+        (dir, vault)
+    }
+
+    #[test]
+    fn resolve_prefers_local_with_cloud_fallback() {
+        use crate::config::types::generation::GenerationConfig;
+        let (_dir, vault) = make_vault();
+        let mut gen = GenerationConfig::default();
+        // local (normalized shape) + one cloud provider with inline key
+        let mut local = crate::GenerationProviderConfig::new("local");
+        local.api_key = Some("local-sidecar".into());
+        gen.transcription_providers.insert("local".into(), local);
+        let mut cloud = crate::GenerationProviderConfig::new("openai_whisper");
+        cloud.api_key = Some("sk-cloud".into());
+        gen.transcription_providers
+            .insert("openai_whisper".into(), cloud);
+        gen.default_transcription_provider = Some("local".into());
+
+        match resolve_stt_source(&gen, &vault) {
+            Some(SttSource::Local { fallback: Some(f) }) => assert_eq!(f.api_key, "sk-cloud"),
+            other => panic!("expected Local with fallback, got {:?}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn resolve_pure_cloud_stays_static() {
+        use crate::config::types::generation::GenerationConfig;
+        let (_dir, vault) = make_vault();
+        let mut gen = GenerationConfig::default();
+        let mut cloud = crate::GenerationProviderConfig::new("openai_whisper");
+        cloud.api_key = Some("sk-cloud".into());
+        gen.transcription_providers
+            .insert("openai_whisper".into(), cloud);
+        match resolve_stt_source(&gen, &vault) {
+            Some(SttSource::Static(cfg)) => assert_eq!(cfg.api_key, "sk-cloud"),
+            _ => panic!("expected Static"),
+        }
     }
 }
