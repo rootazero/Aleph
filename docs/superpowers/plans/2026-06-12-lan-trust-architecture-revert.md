@@ -549,6 +549,10 @@ embedded-core = []
 
 `deeplink.rs`：删 pairing 分支（`grep -n "pair" desktop/shell/src/deeplink.rs` 定位）；若删后文件无实义则整删并清 mod。
 
+> **修正注（T9 执行时核实，2026-06-12）**：`deeplink.rs` 实际**没有 pairing 分支**——它是通用 raw-URL 转发器（`aleph://…` → focus 窗口 + `aleph:deep-link` DOM CustomEvent 交 Panel 路由），壳从不解释深链内容。spec §5.4 所指"配对深链（deeplink 中 pairing 部分）"是 Panel 侧概念，已随 T1-T8 删除。本文件零改动，保留原样。
+>
+> **修正注 2（"Open in Browser" 菜单项处置）**：menu.rs 的 `ID_OPEN_BROWSER` 原实现 100% nonce 耦合（spawn `aleph-server bootstrap-url` 子进程→`/auth/bootstrap?nonce=…`→系统浏览器），机制必删；但其用户面功能（在系统浏览器打开 Panel）按 spec §4.1 对 CLI 胞兄 `aleph open` 的对称处置（去 nonce 保留）应予保留——恢复为裸打开当前 `ConnectionTarget` origin（Local→`http://127.0.0.1:18790`，Remote→所配 URL），复用 `external_link::open_url`，两变体共有不门控。
+
 - [ ] **Step 3: 双矩阵编译**
 
 ```bash
