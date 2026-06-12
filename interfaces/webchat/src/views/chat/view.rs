@@ -142,10 +142,15 @@ pub fn ChatView() -> impl IntoView {
                 // On web / Win / Linux native chrome owns window drag.
                 // Session tab strip — renders only when ≥2 agents are open.
                 <SessionTabs />
-                // Message list (scrollable) — or the welcome hero when empty
-                <MessageList />
-                // Input area (pinned to bottom)
-                <InputArea />
+                // Overlap container: the scroll area extends to the bottom,
+                // the composer FLOATS on top of it (real backdrop blur —
+                // messages frost as they flow behind it).
+                <div class="relative flex-1 min-h-0">
+                    // Message list (scrollable) — or the welcome hero when empty
+                    <MessageList />
+                    // Input area (floating glass bar pinned over the flow)
+                    <InputArea />
+                </div>
             </div>
             // Workspace pane — renders only when LayoutMode::Split.
             <WorkspacePanel />

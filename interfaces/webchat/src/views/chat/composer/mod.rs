@@ -30,6 +30,8 @@ use shared_ui_logic::safety::{
     check_prompt_injection, prompt_guard_message, PromptInjectionVerdict,
 };
 use shared_ui_logic::state::should_auto_drain_on_settle;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 
 /// Textarea + side buttons + palette popup + injection-guard banner.
 /// Mounted by [`super::view::ChatView`] at the viewport bottom.
@@ -59,6 +61,34 @@ pub(super) fn InputArea() -> impl IntoView {
     let current_namespace: RwSignal<Option<String>> = RwSignal::new(None);
 
     let file_input_ref = NodeRef::<leptos::html::Input>::new();
+    let stack_ref = NodeRef::<leptos::html::Div>::new();
+
+    // Composer height → `--composer-clearance` on <html>, so the scroll
+    // content + jump pill always clear the floating bar (queue bar /
+    // attachments / multiline growth included). Mirrors the ResizeObserver
+    // pattern in views/canvas/graph_canvas.rs; the chat view is kept alive
+    // by MainContent, so the leaked closure is one-per-app, not per-visit.
+    Effect::new(move |_| {
+        let Some(el) = stack_ref.get() else { return };
+        let cb: Closure<dyn FnMut(js_sys::Array)> = Closure::new(move |entries: js_sys::Array| {
+            if let Ok(entry) = entries.get(0).dyn_into::<web_sys::ResizeObserverEntry>() {
+                let h = entry.content_rect().height();
+                if let Some(root) = web_sys::window()
+                    .and_then(|w| w.document())
+                    .and_then(|d| d.document_element())
+                    .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+                {
+                    let _ = root
+                        .style()
+                        .set_property("--composer-clearance", &format!("{}px", h + 40.0));
+                }
+            }
+        });
+        if let Ok(observer) = web_sys::ResizeObserver::new(cb.as_ref().unchecked_ref()) {
+            observer.observe(&el);
+        }
+        cb.forget();
+    });
 
     // i18n labels threaded into the pure palette builder so palette.rs
     // stays free of i18n macros (and unit-testable).
@@ -477,8 +507,8 @@ pub(super) fn InputArea() -> impl IntoView {
         Callback::new(move |entry: PaletteEntry| select_for_callback(entry));
 
     view! {
-        <div class="px-4 pb-5 pt-2">
-            <div class="max-w-3xl mx-auto">
+        <div class="absolute inset-x-0 bottom-0 z-10 px-4 pb-4 pt-2 pointer-events-none">
+            <div class="max-w-3xl mx-auto pointer-events-auto" node_ref=stack_ref>
                 <AttachmentPreviewBar attachments=attachments />
 
                 <QueuedPromptBar queue=chat.prompt_queue />

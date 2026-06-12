@@ -9,7 +9,7 @@ use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState};
 use super::timeline::{self, TimelineRow};
 use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
 use crate::components::tool_card::ToolCard;
-use crate::i18n::{t_string, t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
 use leptos::prelude::*;
 
@@ -160,12 +160,12 @@ pub(super) fn MessageList() -> impl IntoView {
     };
 
     view! {
-        <div class="relative flex-1 min-h-0">
+        <div class="relative h-full">
             <div node_ref=scroll_ref class="absolute inset-0 overflow-y-auto" on:scroll=on_scroll>
                 <Show
                     when=move || chat.messages.get().is_empty()
                     fallback=move || view! {
-                        <div class="max-w-3xl mx-auto px-4 py-6 space-y-3">
+                        <div class="max-w-3xl mx-auto px-4 pt-6 pb-[calc(var(--composer-clearance,150px)+1rem)] space-y-3">
                             // Inline send-error banner (G2) — shown when the last
                             // outbound send failed; colour-coded by error code.
                             <SendErrorBanner />
@@ -221,7 +221,7 @@ pub(super) fn MessageList() -> impl IntoView {
             // content has landed since they last looked at the bottom.
             <Show when=move || unseen_below.get() && !stuck_to_bottom.get()>
                 <button
-                    class="absolute left-1/2 -translate-x-1/2 bottom-3 z-10
+                    class="absolute left-1/2 -translate-x-1/2 bottom-[calc(var(--composer-clearance,150px)+0.5rem)] z-10
                            px-3 py-1.5 rounded-full text-xs font-medium
                            bg-primary text-white shadow-md hover:bg-primary-hover
                            transition-all flex items-center gap-1"
