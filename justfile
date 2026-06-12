@@ -107,6 +107,31 @@ shell-build: build
     cd {{shell_dir}} && CI=true cargo tauri build --config "{\"version\":\"$version\"}"
     echo "✓ Installers: {{release_dir}}/bundle/"
 
+# Build the panel-only desktop shell (no embedded aleph-server daemon).
+#
+# A distinct bundle identifier + productName ("Aleph Panel") so it installs
+# alongside the full app. `--no-default-features` (forwarded to cargo after
+# `--`) drops the embedded-core code path; `tauri.lite.conf.json` clears
+# externalBin so no daemon is bundled. The splash frontend is self-contained
+# HTML, so this needs no WASM/Swift build.
+shell-build-lite:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="$(tr -d '[:space:]' < VERSION)"
+    cd {{shell_dir}} && CI=true cargo tauri build \
+        --config tauri.lite.conf.json --config "{\"version\":\"$version\"}" \
+        -- --no-default-features
+    echo "✓ Lite installers: {{release_dir}}/bundle/"
+
+# Run the panel-only shell in dev mode (no embedded daemon).
+shell-dev-lite:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="$(tr -d '[:space:]' < VERSION)"
+    cd {{shell_dir}} && cargo tauri dev \
+        --config tauri.lite.conf.json --config "{\"version\":\"$version\"}" \
+        -- --no-default-features
+
 # ─── Single Stage ───
 
 # Build WASM Panel UI only
