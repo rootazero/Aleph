@@ -308,6 +308,20 @@ Not a subagent task. Swift WKWebView harness (same WebKit engine as Aleph.app's 
 
 **Verdict rule (§6.2):** drop the fade (keep the float) iff mask ON raises p95 frame time by >4ms or pushes dropped-frame share (>25ms frames) above 10% while mask OFF holds ~60fps at the same workload. Otherwise the fade stays. If dropped: remove `.chat-scroll-fade` rules + class, reduced-transparency lines, and re-run wasm/dist — as a follow-up task on this branch.
 
+**RESULTS (measured 2026-06-12, real WKWebView via Swift harness, 1440×900@2x, 147-message fixture; artifacts in `target/wk-measure/`):**
+
+| # | Point | Result |
+|---|-------|--------|
+| 1 | Async-scroll fast path | liquid mask ON avg 16.67ms / OFF 16.66ms (Δ≈0.01ms); p95 17ms both; luxe + aurora identical; 0% dropped, 60.0fps everywhere → **fade STAYS** |
+| 2 | Streaming re-blur | luxe 59.9fps vs liquid 59.8fps, p95 21ms, 0 dropped — blur-tier delta invisible |
+| 3 | Hover during streaming | 59.9fps, max frame 24ms, 0 dropped — no shimmer-class hitching |
+| 4 | Band dissolve ×6 | clean in all snapshots — no full-alpha gap, no mask×backdrop-filter sibling artifact |
+| 5 | Reduced-transparency | computed: composer/tabs backdrop `none`, scroller mask `none`, band opaque `oklch(0.15 0.02 310)`; visual collapse confirmed |
+| 6 | Overlay scrollbar | thumb does not flash on programmatic scroll in WebKit — not capturable; arithmetic (fade top 26px) matches macOS thumb end-fade convention; non-blocking, eyeball on real use |
+| 7 | <2 tabs top rows | first row at 92-100% mask alpha imperceptible in luxe·light AND liquid·dark — as the arithmetic said |
+
+Live-panel pass: bootstrap-URL auth + real panel composition rendered correctly in WKWebView (`real_panel.png`); current session had zero scrollable depth, so fixture numbers govern. **§6.2 verdict: keep the fade.** Follow-up CSS task: none.
+
 ### Task 5 (controller-run): artifacts + final review + merge + deploy
 
 1. Rebuild dist on the branch (worktree caveat: run wasm-bindgen with absolute paths if `just wasm` misroutes): wasm build → `wasm-bindgen` → `npm run build:css`; commit `dist/aleph_panel.js`, `dist/aleph_panel_bg.wasm` (tracked artifacts must ship with the branch).
