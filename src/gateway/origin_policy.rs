@@ -5,8 +5,12 @@
 //! malicious site the user happens to visit can nonetheless *reach*
 //! `ws://127.0.0.1:18790/ws` (loopback is not firewalled from the browser),
 //! so without an origin check it could open a control channel to the local
-//! daemon — the classic DNS-rebinding / cross-origin-WebSocket confused-deputy.
-//! Under LAN-trust this origin gate is the *only* validation on the browser
+//! daemon — the cross-origin-WebSocket confused-deputy. The classic
+//! DNS-rebinding variant (a domain rebound to the gateway's own address so
+//! `Origin == Host`) is defended by the Host gate on the same-origin branch:
+//! same-origin is only auto-allowed when the `Host` is an IP literal or
+//! loopback, never a domain name. Under LAN-trust this origin gate is the *only*
+//! validation on the browser
 //! surface (there is no authentication step), which is exactly why it must
 //! stay: it is the guardrail against the public internet, not against LAN
 //! neighbours. This type centralises the allow/deny decision so the WS upgrade
@@ -22,10 +26,13 @@
 //!     unspoofable by a remote page.
 //!   * **Loopback host** (`127.0.0.0/8`, `::1`, `localhost`, `*.localhost`) →
 //!     allow. Same-machine UI.
-//!   * **Same-origin** (the `Origin` authority equals the request `Host`) →
-//!     allow. Keeps remote deployments served from their own domain working
-//!     without configuration — this is the documented "additional to
-//!     same-origin" contract of `allowed_origins`.
+//!   * **Same-origin with an IP-literal / loopback `Host`** (the `Origin`
+//!     authority equals the request `Host`, *and* that `Host` is an IP literal
+//!     or loopback) → allow. Keeps LAN deployments reached by IP
+//!     (`http://10.10.10.6:18790`) working without configuration; an IP literal
+//!     cannot be DNS-rebound. Same-origin with a *domain* `Host` is **not**
+//!     auto-allowed — such a deployment must add its origin to `allowed_origins`
+//!     (this is what closes the DNS-rebinding hole).
 //!   * Anything else → deny.
 
 use axum::http::Uri;
@@ -126,12 +133,20 @@ impl OriginPolicy {
         // Same-origin: the Origin's authority (host[:port]) equals the request
         // Host header. This blocks the cross-origin confused-deputy — a page at
         // evil.com carries `Origin: …evil.com`, which never matches the
-        // gateway's own Host. (Classic DNS-rebinding — evil.com rebound to the
-        // gateway's own address so Origin == Host — is NOT caught here; that
-        // needs a Host allow-list, which is not currently enforced.)
+        // gateway's own Host.
+        //
+        // Classic DNS-rebinding (evil.com rebound to the gateway's address so
+        // Origin == Host == evil.com) is now defended: we only auto-allow
+        // same-origin when the request `Host` is an IP literal or loopback. A
+        // rebinding attack must use a *domain* name (the A record is what gets
+        // rebound), so a domain Host falls through to deny. Legitimate access is
+        // always loopback, an IP literal (LAN `host = "0.0.0.0"` deployments
+        // reach the gateway by IP, which cannot be rebound), or an
+        // operator-configured domain that is matched earlier by `allowed_origins`.
         if let Some(host) = host {
+            let host = host.trim();
             if let Some(authority) = uri.authority() {
-                if authority.as_str().eq_ignore_ascii_case(host.trim()) {
+                if authority.as_str().eq_ignore_ascii_case(host) && host_is_ip_or_loopback(host) {
                     return true;
                 }
             }
@@ -139,6 +154,29 @@ impl OriginPolicy {
 
         false
     }
+}
+
+/// Whether the request `Host` header (a `host[:port]` authority) names an IP
+/// literal or a loopback host — the only Hosts for which same-origin is
+/// auto-allowed. Domain names are excluded because they are what a DNS-rebinding
+/// attack rebinds; domain deployments must instead allow-list their origin.
+fn host_is_ip_or_loopback(host_header: &str) -> bool {
+    // Parse as an authority to strip the port and unbracket IPv6 robustly
+    // (`[::1]:18790` → host `::1`, `1.2.3.4:18790` → host `1.2.3.4`).
+    let Ok(authority) = host_header.parse::<axum::http::uri::Authority>() else {
+        return false;
+    };
+    let host = authority.host();
+    if is_loopback_host(host) {
+        return true;
+    }
+    // `Authority::host()` keeps IPv6 brackets (`[2001:db8::1]`); strip them
+    // before parsing as an IP literal.
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(host);
+    bare.parse::<std::net::IpAddr>().is_ok()
 }
 
 /// Whether `host` (a bare host, possibly bracketed IPv6) resolves to loopback.
@@ -187,14 +225,45 @@ mod tests {
     }
 
     #[test]
-    fn same_origin_allowed_without_config() {
+    fn same_origin_domain_host_rejected_without_config() {
         let p = OriginPolicy::loopback_only();
-        // Remote deployment served from its own domain: Origin authority
-        // equals the request Host → allowed, no config needed.
-        assert!(p.is_allowed(Some("https://aleph.example.com"), Some("aleph.example.com")));
-        assert!(p.is_allowed(
+        // Domain Host: same-origin is no longer auto-allowed (DNS-rebinding
+        // hardening). A bare domain deployment must allow-list its own origin.
+        assert!(!p.is_allowed(Some("https://aleph.example.com"), Some("aleph.example.com")));
+        assert!(!p.is_allowed(
             Some("https://aleph.example.com:8443"),
             Some("aleph.example.com:8443")
+        ));
+        // Once the operator adds the origin to `allowed_origins`, it passes.
+        let configured = OriginPolicy::new(vec!["https://aleph.example.com".to_string()]);
+        assert!(configured.is_allowed(Some("https://aleph.example.com"), Some("aleph.example.com")));
+    }
+
+    #[test]
+    fn dns_rebinding_same_origin_domain_host_rejected() {
+        let p = OriginPolicy::loopback_only();
+        // Classic DNS-rebinding: evil.com rebound to the gateway address, so the
+        // page carries Origin == Host == evil.com:18790. The domain Host gate
+        // rejects it because the Host is a name, not an IP literal / loopback.
+        assert!(!p.is_allowed(Some("https://evil.com:18790"), Some("evil.com:18790")));
+    }
+
+    #[test]
+    fn same_origin_lan_ip_host_allowed() {
+        let p = OriginPolicy::loopback_only();
+        // LAN browser served from the gateway's IP literal. The IP cannot be
+        // DNS-rebound, so same-origin auto-allow is safe — this is the key
+        // `host = "0.0.0.0"` LAN path.
+        assert!(p.is_allowed(Some("http://10.10.10.6:18790"), Some("10.10.10.6:18790")));
+    }
+
+    #[test]
+    fn same_origin_ipv6_host_allowed() {
+        let p = OriginPolicy::loopback_only();
+        // Same-origin over an IPv6 literal Host (bracketed, with port).
+        assert!(p.is_allowed(
+            Some("http://[2001:db8::1]:18790"),
+            Some("[2001:db8::1]:18790")
         ));
     }
 

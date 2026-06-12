@@ -830,8 +830,8 @@ Browsers attach an unforgeable `Origin` header to every WebSocket upgrade
 and cross-origin `fetch`. A malicious public web page the user happens to
 visit can still *reach* `ws://127.0.0.1:18790/ws` (loopback is not
 firewalled from the browser), so without an origin check it could open a
-control channel to the local daemon — the classic DNS-rebinding /
-cross-origin-WebSocket confused-deputy. The origin gate
+control channel to the local daemon — the cross-origin-WebSocket
+confused-deputy (and its DNS-rebinding variant). The origin gate
 (`src/gateway/origin_policy.rs`) is therefore retained as the **only**
 validation on the browser surface. It guards against the public internet,
 **not** against LAN neighbours.
@@ -844,7 +844,7 @@ validation on the browser surface. It guards against the public internet,
 | **loopback** (`127.0.0.0/8`, `::1`, `localhost`, `*.localhost`) | allow | Same-machine UI. |
 | **`tauri:` scheme** | allow | The desktop shell's own webview origin, unspoofable by a remote page. |
 | **exact allow-list match** (`[gateway] allowed_origins`) | allow | Operator-configured extra origins for split panel/API deployments. |
-| **same-origin** (Origin authority == request `Host`) | allow | Remote deployments served from their own domain work without config; blocks the cross-origin confused-deputy (a page at `evil.com` carries `Origin: …evil.com`, never matching the gateway's own Host). |
+| **same-origin** (Origin authority == request `Host`) | allow **only if the `Host` is an IP literal or loopback** | LAN deployments reached by IP (`http://10.10.10.6:18790`) work without config; an IP literal cannot be DNS-rebound. A **domain** `Host` is *not* auto-allowed — the deployment must add its origin to `allowed_origins` (see DNS-rebinding note below). |
 | anything else (public web domain) | **deny** | |
 
 Note the gate does **not** auto-allow arbitrary private-LAN IPs by range —
@@ -852,14 +852,19 @@ a cross-origin browser request from another LAN host is only accepted when
 it is same-origin with the gateway's `Host`, in the allow-list, or
 loopback/`tauri:`. Native LAN clients carry no `Origin` and pass freely.
 
-> **Limitation — classic DNS-rebinding.** The same-origin rule defeats the
-> cross-origin confused-deputy, but not classic DNS-rebinding: if an attacker
-> rebinds `evil.com` to the gateway's own address, the victim's page then
-> carries `Origin == Host == evil.com` and passes. Fully closing this needs a
-> **Host allow-list** (rejecting `Host` headers whose name isn't a known
-> gateway name), which Aleph does not currently enforce. Under the default
-> loopback bind this requires a targeted local attack; it is most relevant in
-> LAN mode (`host = "0.0.0.0"`).
+> **DNS-rebinding — defended.** A classic DNS-rebinding attack rebinds a
+> domain (`evil.com`) to the gateway's own address so the victim's page
+> carries `Origin == Host == evil.com` and would slip past a naive
+> same-origin check. Aleph closes this by gating the same-origin branch on
+> the `Host`: same-origin is auto-allowed **only when the `Host` is an IP
+> literal or loopback** (`127.0.0.0/8`, `::1`, `localhost`, `*.localhost`, or
+> a bare IPv4/IPv6 address). A rebinding attack must use a domain name (the A
+> record is what gets rebound), and a domain `Host` no longer passes
+> same-origin — it falls through to deny. The trade-off: a zero-config
+> **domain** deployment (serving the panel from `aleph.example.com` with no
+> `allowed_origins`) is now rejected and must add its origin to
+> `[gateway] allowed_origins`. LAN deployments reached by IP and loopback
+> access are unaffected.
 
 **Escape hatch — `allow_any_origin`.** Set `[gateway] allow_any_origin =
 true` to trust every Origin unconditionally
