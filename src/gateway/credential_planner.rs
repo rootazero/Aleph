@@ -1,10 +1,9 @@
 //! Gateway credential surface planner — read-only diagnostic.
 //!
 //! Ported (and trimmed) from openclaw `src/gateway/credential-planner.ts`.
-//! The upstream version drives runtime auth wiring; Aleph's auth wiring is
-//! already done by [`super::auth_middleware`]. This module's *only* job is
-//! to expose **what the gateway sees** so ops can diagnose "why is the
-//! token I just exported not taking effect" without diffing TOML by hand.
+//! This module's *only* job is to expose **what the gateway sees** so ops
+//! can diagnose "why is the token I just exported not taking effect"
+//! without diffing TOML by hand.
 //!
 //! Pure function. No I/O beyond the env-reader closure the caller passes
 //! in (so tests can isolate). No mutation. No enforcement.

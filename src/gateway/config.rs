@@ -179,10 +179,8 @@ pub struct GatewayServerConfig {
     pub bootstrap: BootstrapConfig,
 }
 
-/// Bootstrap-nonce knobs for the loopback cookie-handoff endpoint.
-///
-/// See [`crate::gateway::bootstrap::BootstrapNonceManager`] for the
-/// runtime that consumes these values.
+/// Bootstrap-nonce knobs (retained for config-file compatibility; the HTTP
+/// bootstrap-consume endpoint was removed in the LAN-trust revert).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BootstrapConfig {

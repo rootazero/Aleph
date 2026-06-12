@@ -418,7 +418,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         full_config.gateway.require_challenge,
         full_config.gateway.allow_guest,
         full_config.gateway.enable_pairing,
-        &full_config.gateway.bootstrap,
         full_config.gateway.auth.session_expiry_hours,
         args.daemon,
         server.node_registry.clone(),
@@ -431,28 +430,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &event_bus,
     );
     server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
-
-    // Mount HTTP auth routes (/auth/logout, /auth/bootstrap, /pair,
-    // /rpc) at the router root so the
-    // loopback bootstrap-consume and browser-pairing endpoints are
-    // reachable from a real browser. Same BootstrapNonceManager,
-    // HttpSessionManager, and PairingManager Arcs as the JSON-RPC handlers
-    // (`gateway.bootstrap.issue`, `pairing.start_browser`,
-    // `pairing.poll`), so issuer + consumer see one source of truth.
-    // The legacy `/login` + `/auth/login` token-paste form was removed in
-    // Phase 4 of the auth UX overhaul.
-    {
-        use alephcore::gateway::auth_middleware::{auth_routes, AuthState};
-        let auth_state = std::sync::Arc::new(AuthState {
-            shared_token_mgr: auth_bundle.auth_ctx.shared_token_mgr.clone(),
-            session_mgr: auth_bundle.session_mgr.clone(),
-            auth_mode: full_config.gateway.auth.mode.clone(),
-            bootstrap_mgr: auth_bundle.bootstrap_mgr.clone(),
-            pairing_mgr: auth_bundle.pairing_manager.clone(),
-            auth_ctx: Some(auth_bundle.auth_ctx.clone()),
-        });
-        server.set_auth_routes(auth_routes(auth_state));
-    }
 
     // Plumb the same HttpSessionManager + SharedTokenManager into the WS
     // upgrade path. When a loopback peer (e.g. the Tauri Panel running on

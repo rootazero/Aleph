@@ -1,9 +1,9 @@
 //! Authentication types — shared context and data structures.
 //!
 //! Handler implementations for auth/pairing/devices have been removed as part
-//! of the LAN-trust architecture revert (Task 3). This module holds only the
-//! types still referenced by surviving handlers (cluster, secrets, connect)
-//! and T4-doomed files (auth_middleware). Will be further reduced in T5.
+//! of the LAN-trust architecture revert (Tasks 3-4). This module holds only the
+//! types still referenced by surviving handlers (cluster, secrets, connect).
+//! Will be further reduced in T5.
 
 use crate::sync_primitives::Arc;
 use serde::Serialize;
@@ -51,7 +51,7 @@ impl TransportPolicy {
 
 /// Authentication context for handlers.
 ///
-/// Shared by cluster.*/secrets.* handlers and T4-doomed auth_middleware.
+/// Shared by cluster.*/secrets.* handlers.
 /// Will be deleted in T5 when security/device stores are removed.
 pub struct AuthContext {
     pub token_manager: Arc<TokenManager>,
@@ -71,9 +71,7 @@ pub struct AuthContext {
     pub started_at_unix: i64,
     pub presence: Arc<PresenceTracker>,
     pub max_connections: u32,
-    pub challenge_manager: Arc<crate::gateway::challenge::ChallengeManager>,
     pub require_challenge: bool,
-    pub bootstrap_mgr: Arc<crate::gateway::bootstrap::BootstrapNonceManager>,
     pub session_mgr: Arc<crate::gateway::session::HttpSessionManager>,
     pub bind_port: u16,
     pub connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
@@ -136,9 +134,7 @@ pub(crate) mod tests {
             started_at_unix: 1_700_000_000,
             presence: Arc::new(PresenceTracker::new()),
             max_connections: 1000,
-            challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
             require_challenge: false,
-            bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
             session_mgr,
             bind_port: 18790,
             connections: Arc::new(RwLock::new(HashMap::new())),

@@ -27,7 +27,6 @@ pub mod link;
 pub mod transport;
 
 pub mod admin_api;
-pub mod auth_middleware;
 pub mod credential_planner;
 pub mod event_bus;
 pub mod event_emitter;
@@ -89,9 +88,7 @@ pub mod reply_emitter;
 pub mod routing_config;
 
 pub mod agent_env;
-pub mod bootstrap;
 pub mod caller_identity;
-pub mod challenge;
 pub mod context;
 pub mod event_scope;
 pub mod execution_adapter;

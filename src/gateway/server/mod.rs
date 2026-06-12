@@ -307,12 +307,6 @@ pub struct GatewayServer {
     /// 404 from the server side — the CLI is expected to take the local
     /// lock instead.
     admin_router: Option<Router>,
-    /// HTTP auth routes (`/auth/logout`, `/auth/bootstrap`, `/pair`,
-    /// `/rpc`). Mounted at the router
-    /// root when set so the loopback bootstrap-consume endpoint and the
-    /// browser-pairing flow are reachable from the browser. The legacy
-    /// `/login` + `/auth/login` token-paste form was removed in Phase 4.
-    auth_routes: Option<Router>,
     /// HTTP session manager. When set together with `shared_token_mgr`,
     /// `ws_upgrade_handler` validates the `aleph_session` cookie on
     /// loopback peers and auto-injects the shared token into the first
@@ -378,7 +372,6 @@ impl GatewayServer {
             orchestrator: None,
             openai_api_token: None,
             admin_router: None,
-            auth_routes: None,
             session_mgr: None,
             shared_token_mgr: None,
             token_manager: None,
@@ -431,7 +424,6 @@ impl GatewayServer {
             orchestrator: None,
             openai_api_token: None,
             admin_router: None,
-            auth_routes: None,
             session_mgr: None,
             shared_token_mgr: None,
             token_manager: None,
@@ -484,17 +476,6 @@ impl GatewayServer {
     /// Idempotent — replaces any previously set admin router.
     pub fn set_admin_router(&mut self, router: Router) {
         self.admin_router = Some(router);
-    }
-
-    /// Mount HTTP auth routes (`/auth/logout`, `/auth/bootstrap`,
-    /// `/pair`, `/rpc`) at the router
-    /// root in `build_router`. Built by
-    /// [`crate::gateway::auth_middleware::auth_routes`]. The Phase 4
-    /// deletion of `/login` + `/auth/login` means these routes now
-    /// strictly override only the bootstrap + pairing surfaces.
-    /// Idempotent — replaces any previously set auth routes.
-    pub fn set_auth_routes(&mut self, router: Router) {
-        self.auth_routes = Some(router);
     }
 
     /// Install the `HttpSessionManager` whose cookies the `/ws` upgrade
@@ -619,14 +600,6 @@ impl GatewayServer {
         // Spec C: mount admin IPC router under /v1/admin if configured.
         if let Some(admin) = self.admin_router.clone() {
             router = router.nest("/v1/admin", admin);
-        }
-
-        // Mount auth routes at the root (`/auth/*`, `/pair`, `/rpc`) so
-        // the loopback bootstrap-consume endpoint and the browser-pairing
-        // flow are reachable. The Phase 4 deletion of `/login` means
-        // unauthenticated browsers are redirected to `/pair` instead.
-        if let Some(auth) = self.auth_routes.clone() {
-            router = router.merge(auth);
         }
 
         router.layer(SecurityHeadersLayer::new())

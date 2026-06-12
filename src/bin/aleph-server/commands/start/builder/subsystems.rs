@@ -42,13 +42,6 @@ pub(in crate::commands::start) struct AuthBundle {
     pub mdns_broadcaster: Option<alephcore::gateway::MdnsBroadcaster>,
     pub invitation_manager: Arc<alephcore::gateway::security::InvitationManager>,
     pub guest_session_manager: Arc<alephcore::gateway::security::GuestSessionManager>,
-    /// Shared with the loopback `/auth/bootstrap` HTTP route so the
-    /// issuer (RPC handler inside `auth_ctx`) and the consumer (HTTP
-    /// route) see the same nonce map.
-    pub bootstrap_mgr: Arc<alephcore::gateway::bootstrap::BootstrapNonceManager>,
-    /// Shared with the loopback `/auth/bootstrap` HTTP route so the
-    /// same-machine bootstrap-consume flow (inside `auth_ctx`) and the cookie
-    /// issuer (HTTP route) operate on the same session store.
     pub session_mgr: Arc<alephcore::gateway::session::HttpSessionManager>,
 }
 
@@ -69,7 +62,6 @@ pub(in crate::commands::start) fn initialize_auth(
     require_challenge: bool,
     allow_guest: bool,
     enable_pairing: bool,
-    bootstrap_cfg: &alephcore::gateway::config::BootstrapConfig,
     session_expiry_hours: u64,
     daemon: bool,
     node_registry: Arc<alephcore::cluster::NodeRegistry>,
@@ -172,11 +164,6 @@ pub(in crate::commands::start) fn initialize_auth(
         }
     }
 
-    let bootstrap_mgr = Arc::new(alephcore::gateway::bootstrap::BootstrapNonceManager::new(
-        std::time::Duration::from_secs(bootstrap_cfg.nonce_ttl_secs),
-        std::time::Duration::from_secs(bootstrap_cfg.used_retention_secs),
-    ));
-
     let session_mgr = Arc::new(alephcore::gateway::session::HttpSessionManager::new(
         security_store_out.clone(),
         session_expiry_hours,
@@ -201,11 +188,7 @@ pub(in crate::commands::start) fn initialize_auth(
         presence,
         connections,
         max_connections,
-        challenge_manager: Arc::new(
-            alephcore::gateway::challenge::ChallengeManager::with_server_id(instance_id),
-        ),
         require_challenge,
-        bootstrap_mgr: bootstrap_mgr.clone(),
         session_mgr: session_mgr.clone(),
         bind_port: port,
         node_registry,
@@ -226,7 +209,6 @@ pub(in crate::commands::start) fn initialize_auth(
         mdns_broadcaster,
         invitation_manager,
         guest_session_manager,
-        bootstrap_mgr,
         session_mgr,
     }
 }
