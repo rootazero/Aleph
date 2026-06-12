@@ -31,7 +31,7 @@ use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::presence::{PresenceEntry, PresenceTracker};
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR,
-    PARSE_ERROR, PERMISSION_DENIED, RATE_LIMITED,
+    PARSE_ERROR, RATE_LIMITED,
 };
 use crate::gateway::rate_limiter::{
     scope_for_method, RateLimitError, RateLimitKey, RateLimitScope, RateLimiter,
@@ -39,7 +39,7 @@ use crate::gateway::rate_limiter::{
 use crate::gateway::state_version::StateVersionTracker;
 
 use super::per_client_buffer::PerClientBuffer;
-use super::{ConnectionState, GatewaySharedState, MAX_AUTH_ATTEMPTS};
+use super::{ConnectionState, GatewaySharedState};
 use crate::gateway::security::TokenManager;
 
 /// Shared context for handling a WebSocket connection.
@@ -88,10 +88,8 @@ struct ConnectionContext {
     /// already carry their own token / `shared_token` / `invitation_token`
     /// land here.
     bootstrap_shared_token: Option<String>,
-    /// Device-token manager for the per-dispatch revocation re-check. `None`
-    /// disables the check (auth-disabled / legacy wiring). Only consulted for
-    /// connections that authenticated via a device token (i.e. whose
-    /// `ConnectionState.device_token_hash` is `Some`).
+    /// Device-token manager. Used by the cluster node disconnect path to stamp
+    /// `last_seen_at`. `None` in auth-disabled / legacy wiring.
     token_manager: Option<Arc<TokenManager>>,
     /// Resolved real client IP. Equals the socket peer IP unless the peer is a
     /// configured trusted proxy, in which case it is taken from
@@ -469,9 +467,6 @@ async fn handle_connection(
     let rpc_out_tx_replies = rpc_out_tx.clone();
     let rpc_channel = crate::cluster::ReverseRpcChannel::new(rpc_out_tx);
     let rpc_pending = rpc_channel.pending();
-    // Clone kept in scope so a successful `role:node` connect can register this
-    // same channel into the NodeRegistry (cluster Phase 0b).
-    let rpc_channel_for_node = rpc_channel.clone();
     {
         let mut reg = ctx.reverse_rpc.write().await;
         reg.insert(conn_id.clone(), rpc_channel);
@@ -543,76 +538,65 @@ async fn handle_connection(
                         // authenticated connection (anti-spoof), never params.
                         if let Ok(node_req) = serde_json::from_str::<JsonRpcRequest>(&text) {
                             if node_req.method == "node.approval.request" {
-                                // Only an authenticated connection may reach the
-                                // node-approval path. Unauthenticated frames fall
-                                // through to normal dispatch so the standard
-                                // AUTH_REQUIRED response + auth-failure accounting
-                                // fire (and the method is not revealed as a
-                                // recognized special case).
-                                let is_authenticated = {
-                                    let conns = ctx.connections.read().await;
-                                    conns.get(&conn_id).is_some_and(|s| s.authenticated)
-                                };
-                                if is_authenticated {
-                                    match (
-                                        ctx.node_registry.node_identity_by_conn(&conn_id),
-                                        ctx.exec_approval_manager.clone(),
-                                    ) {
-                                        (Some((node_id, node_name)), Some(manager)) => {
-                                            let event_bus = ctx.event_bus.clone();
-                                            let out = rpc_out_tx_replies.clone();
-                                            let req_id = node_req.id.clone();
-                                            let params = node_req
-                                                .params
-                                                .clone()
-                                                .unwrap_or(serde_json::Value::Null);
-                                            let tool = params
-                                                .get("tool")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or_default()
-                                                .to_string();
-                                            let reason = params
-                                                .get("reason")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or_default()
-                                                .to_string();
-                                            tokio::spawn(async move {
-                                                let outcome = crate::approval::run_node_approval(
-                                                    &manager,
-                                                    &event_bus,
-                                                    &node_id,
-                                                    &node_name,
-                                                    &tool,
-                                                    &reason,
-                                                )
-                                                .await;
-                                                let resp = JsonRpcResponse::success(
-                                                    req_id,
-                                                    serde_json::json!({ "outcome": outcome }),
-                                                );
-                                                if let Ok(s) = serde_json::to_string(&resp) {
-                                                    let _ = out.send(s).await;
-                                                }
-                                            });
-                                        }
-                                        _ => {
-                                            // Not a registered node conn, or no
-                                            // manager wired: refuse.
-                                            let resp = JsonRpcResponse::error(
-                                                node_req.id.clone(),
-                                                -32000,
-                                                "node.approval.request not permitted".to_string(),
+                                // LAN-trust: every connection is an implicit
+                                // operator, so the node-approval path is always
+                                // reachable. Node identity is taken from the
+                                // connection (anti-spoof), never params.
+                                match (
+                                    ctx.node_registry.node_identity_by_conn(&conn_id),
+                                    ctx.exec_approval_manager.clone(),
+                                ) {
+                                    (Some((node_id, node_name)), Some(manager)) => {
+                                        let event_bus = ctx.event_bus.clone();
+                                        let out = rpc_out_tx_replies.clone();
+                                        let req_id = node_req.id.clone();
+                                        let params = node_req
+                                            .params
+                                            .clone()
+                                            .unwrap_or(serde_json::Value::Null);
+                                        let tool = params
+                                            .get("tool")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default()
+                                            .to_string();
+                                        let reason = params
+                                            .get("reason")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default()
+                                            .to_string();
+                                        tokio::spawn(async move {
+                                            let outcome = crate::approval::run_node_approval(
+                                                &manager,
+                                                &event_bus,
+                                                &node_id,
+                                                &node_name,
+                                                &tool,
+                                                &reason,
+                                            )
+                                            .await;
+                                            let resp = JsonRpcResponse::success(
+                                                req_id,
+                                                serde_json::json!({ "outcome": outcome }),
                                             );
                                             if let Ok(s) = serde_json::to_string(&resp) {
-                                                let _ = rpc_out_tx_replies.send(s).await;
+                                                let _ = out.send(s).await;
                                             }
+                                        });
+                                    }
+                                    _ => {
+                                        // Not a registered node conn, or no
+                                        // manager wired: refuse.
+                                        let resp = JsonRpcResponse::error(
+                                            node_req.id.clone(),
+                                            -32000,
+                                            "node.approval.request not permitted".to_string(),
+                                        );
+                                        if let Ok(s) = serde_json::to_string(&resp) {
+                                            let _ = rpc_out_tx_replies.send(s).await;
                                         }
                                     }
-                                    continue;
                                 }
-                                // else: not authenticated — fall through (no
-                                // continue) to the normal auth-gated dispatch
-                                // below.
+                                continue;
                             }
                         }
 
@@ -621,351 +605,33 @@ async fn handle_connection(
 
                         let response = match request {
                             Ok(ref req) => {
-                                // Check authentication requirement
-                                let (is_first, is_authenticated, device_token_hash) = {
+                                // Session-init invariant: the first frame on a
+                                // connection must be `connect`. LAN-trust drops
+                                // all token machinery, but the handshake still
+                                // bootstraps per-connection session state (presence,
+                                // surface kind, guest session id).
+                                let is_first = {
                                     let conns = ctx.connections.read().await;
-                                    let state = conns.get(&conn_id);
-                                    (
-                                        state.is_none_or(|s| s.first_message),
-                                        state.is_some_and(|s| s.authenticated),
-                                        state.and_then(|s| s.device_token_hash.clone()),
-                                    )
+                                    conns.get(&conn_id).is_none_or(|s| s.first_message)
                                 };
-
-                                // Per-dispatch device-token revocation re-check.
-                                // A connection that authenticated with a device
-                                // token (Case 1) carries its token hash; if that
-                                // token has since been revoked (token rotation or
-                                // device removal), close the connection instead of
-                                // serving further requests. Connections that
-                                // authenticated by any other means carry no hash
-                                // and are exempt, so the local panel
-                                // (shared-token/loopback) is never affected.
-                                // (openclaw #70707)
-                                if is_authenticated {
-                                    if let (Some(tm), Some(hash)) =
-                                        (ctx.token_manager.as_ref(), device_token_hash.as_ref())
-                                    {
-                                        if tm.is_token_hash_revoked(hash) {
-                                            warn!(
-                                                "Connection {} device token revoked, disconnecting",
-                                                conn_id
-                                            );
-                                            let response_str = serde_json::to_string(
-                                                &JsonRpcResponse::error(
-                                                    req.id.clone(),
-                                                    AUTH_REQUIRED,
-                                                    "Device token revoked; please re-authenticate",
-                                                ),
-                                            )
-                                            .unwrap_or_default();
-                                            let _ = write
-                                                .send(WsMessage::Text(response_str.into()))
-                                                .await;
-                                            break;
-                                        }
-                                    }
+                                if is_first && req.method != "connect" {
+                                    warn!(
+                                        "Connection {} rejected: first request must be 'connect' (got '{}')",
+                                        conn_id, req.method
+                                    );
+                                    let response = JsonRpcResponse::error(
+                                        req.id.clone(),
+                                        AUTH_REQUIRED,
+                                        "First request must be 'connect'",
+                                    );
+                                    let response_str = serde_json::to_string(&response).unwrap_or_default();
+                                    let _ = write.send(WsMessage::Text(response_str.into())).await;
+                                    break;
                                 }
 
-                                // Pairing wizard bootstrap exception:
-                                // a same-machine panel that just got a
-                                // `pairing_required` error has no token yet,
-                                // but needs to drive `wizard.*` to obtain one.
-                                // Allow it ONLY on loopback so LAN clients
-                                // can't bypass auth. wizard.* never mutates
-                                // is_authenticated/first_message; panel will
-                                // reconnect() after wizard.answer issues a
-                                // token, going through the normal `connect`
-                                // path with the real credentials.
-                                let allow_unauth_wizard =
-                                    allow_unauth_loopback_wizard(&peer_addr, &req.method)
-                                        || allow_unauth_browser_pairing(&req.method);
-
-                                // Auth gating logic
-                                if ctx.auth_mode.is_auth_required()
-                                    && !is_authenticated
-                                    && !allow_unauth_wizard
                                 {
-                                    // Allow `connect.challenge` pre-auth too — clients need
-                                    // to fetch a nonce before they can sign a `connect`.
-                                    let is_connect_family =
-                                        req.method == "connect" || req.method == "connect.challenge";
-
-                                    // First message must be "connect" (or "connect.challenge")
-                                    if is_first && !is_connect_family {
-                                        warn!(
-                                            "Connection {} rejected: first request must be 'connect' (got '{}')",
-                                            conn_id, req.method
-                                        );
-                                        let response = JsonRpcResponse::error(
-                                            req.id.clone(),
-                                            AUTH_REQUIRED,
-                                            "Authentication required: first request must be 'connect'",
-                                        );
-                                        let response_str = serde_json::to_string(&response).unwrap_or_default();
-                                        let _ = write.send(WsMessage::Text(response_str.into())).await;
-                                        // Close connection after auth failure
-                                        break;
-                                    }
-
-                                    // Non-connect requests require authentication
-                                    if !is_first && !is_connect_family {
-                                        warn!(
-                                            "Connection {} rejected: not authenticated (method: '{}')",
-                                            conn_id, req.method
-                                        );
-                                        serde_json::to_string(&JsonRpcResponse::error(
-                                            req.id.clone(),
-                                            AUTH_REQUIRED,
-                                            "Authentication required",
-                                        ))
-                                        .unwrap_or_default()
-                                    } else {
-                                        // Cookie-bootstrap injection: a loopback peer that
-                                        // presented a valid `aleph_session` cookie at WS
-                                        // handshake (validated in `ws_upgrade_handler`)
-                                        // should not be asked to pair again — the cookie
-                                        // and the shared token are the same trust class.
-                                        // We rewrite the first `connect` to carry
-                                        // `shared_token=<local>` so it rides Case 0 in
-                                        // `connect.rs` and skips the device-pairing
-                                        // branch. We never overwrite an explicit
-                                        // `token` / `shared_token` / `invitation_token`
-                                        // — the client may legitimately want a different
-                                        // identity than the local desktop session.
-                                        let text_for_dispatch = maybe_inject_bootstrap_shared_token(
-                                            &text,
-                                            req,
-                                            ctx.bootstrap_shared_token.as_deref(),
-                                        );
-
-                                        // Handle connect request
-                                        let response = process_request(&text_for_dispatch, &ctx.middleware_chain).await;
-
-                                        // If connect succeeded, mark as authenticated
-                                        if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
-                                            debug!("Parsed connect response: success={}, method={}", resp.is_success(), req.method);
-                                            if resp.is_success() && req.method == "connect" {
-                                                debug!("Connect succeeded, extracting device_id and permissions");
-                                                // Extract device_id and permissions from result
-                                                let device_id = resp.result
-                                                    .as_ref()
-                                                    .and_then(|r| r.get("device_id"))
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("unknown")
-                                                    .to_string();
-                                                let permissions = resp.result
-                                                    .as_ref()
-                                                    .and_then(|r| r.get("permissions"))
-                                                    .and_then(|v| v.as_array())
-                                                    .map(|arr| {
-                                                        arr.iter()
-                                                            .filter_map(|v| v.as_str().map(String::from))
-                                                            .collect()
-                                                    })
-                                                    .unwrap_or_default();
-
-                                                // Extract guest_session_id if this is a guest token
-                                                let guest_session_id = resp.result
-                                                    .as_ref()
-                                                    .and_then(|r| r.get("token"))
-                                                    .and_then(|v| v.as_str())
-                                                    .and_then(|token| {
-                                                        debug!("Extracting guest_session_id from token: {}", token);
-                                                        // Guest tokens have format: guest:{session_id}:{token}
-                                                        if token.starts_with("guest:") {
-                                                            let session_id = token.split(':').nth(1).map(String::from);
-                                                            debug!("Extracted guest_session_id: {:?}", session_id);
-                                                            session_id
-                                                        } else {
-                                                            debug!("Token does not start with 'guest:'");
-                                                            None
-                                                        }
-                                                    });
-
-                                                // Role drives the method-level authorization gate. Guest sessions are
-                                                // always "guest"; device connects carry the role from the connect
-                                                // response, derived from the device's permissions (chat tier → "guest",
-                                                // config tier → "operator"). The fallback is "guest" (the safe,
-                                                // least-privilege default): every connect success path sets `role`
-                                                // explicitly, so this only guards a future path that forgets to.
-                                                let role = if guest_session_id.is_some() {
-                                                    Some("guest".to_string())
-                                                } else {
-                                                    Some(
-                                                        resp.result
-                                                            .as_ref()
-                                                            .and_then(|r| r.get("role"))
-                                                            .and_then(|v| v.as_str())
-                                                            .unwrap_or("guest")
-                                                            .to_string(),
-                                                    )
-                                                };
-
-                                                let is_node = role.as_deref() == Some("node");
-                                                let mut conns = ctx.connections.write().await;
-                                                if let Some(state) = conns.get_mut(&conn_id) {
-                                                    state.authenticate(device_id.clone(), permissions, role);
-                                                    // Record the surface identity: client-declared kind, else
-                                                    // inferred from loopback (same-machine attach ⇒ desktop-class).
-                                                    let declared = req
-                                                        .params
-                                                        .as_ref()
-                                                        .and_then(|p| p.get("channel_kind"))
-                                                        .and_then(|v| v.as_str());
-                                                    let kind = match crate::gateway::surface::SurfaceKind::from_opt_str(declared) {
-                                                        crate::gateway::surface::SurfaceKind::Unknown if ctx.client_ip.is_loopback() => {
-                                                            crate::gateway::surface::SurfaceKind::Desktop
-                                                        }
-                                                        other => other,
-                                                    };
-                                                    state.channel_kind = Some(kind);
-                                                    state.guest_session_id = guest_session_id.clone();
-                                                    state.first_message = false;
-                                                    // Capture the device-token hash ONLY when this
-                                                    // connect authenticated via an existing device
-                                                    // token (Case 1: `params.token` present). Every
-                                                    // other path (shared-token bootstrap, guest,
-                                                    // approved-device issuance) leaves it None and is
-                                                    // exempt from the dispatch-time revocation re-check.
-                                                    // Guest connections never carry a revocable device
-                                                    // token, so skip them explicitly.
-                                                    state.device_token_hash = if guest_session_id.is_some()
-                                                    {
-                                                        None
-                                                    } else {
-                                                        ctx.token_manager.as_ref().and_then(|tm| {
-                                                            req.params
-                                                                .as_ref()
-                                                                .and_then(|p| p.get("token"))
-                                                                .and_then(|t| t.as_str())
-                                                                .and_then(|tok| tok.split_once(':'))
-                                                                .map(|(token, _sig)| tm.token_hash(token))
-                                                        })
-                                                    };
-                                                    if let Some(ref session_id) = guest_session_id {
-                                                        info!("Connection {} authenticated as guest (session: {})", conn_id, session_id);
-                                                    } else {
-                                                        info!("Connection {} authenticated (device: {})", conn_id, device_id);
-                                                    }
-
-                                                    // Track presence after successful auth
-                                                    let presence_entry = PresenceEntry {
-                                                        conn_id: conn_id.clone(),
-                                                        device_id: state.device_id.clone(),
-                                                        device_name: state.metadata.get("client_name").cloned().unwrap_or_else(|| "Unknown".to_string()),
-                                                        platform: state.metadata.get("platform").cloned().unwrap_or_else(|| "unknown".to_string()),
-                                                        role: crate::gateway::presence::ConnectionRole::User,
-                                                        connected_at: chrono::Utc::now(),
-                                                        last_heartbeat: chrono::Utc::now(),
-                                                    };
-                                                    ctx.presence.upsert(conn_id.clone(), presence_entry);
-                                                    ctx.state_versions.bump_presence();
-                                                    let _ = ctx.event_bus.publish_json(&TopicEvent::new("presence.joined", serde_json::json!({"conn_id": &conn_id})).with_state_version(ctx.state_versions.snapshot()));
-                                                }
-                                                drop(conns);
-                                                // Cluster Phase 0b: register a node-role connection so it
-                                                // surfaces in environments.list (and becomes node_invoke-reachable
-                                                // in 0c). Pure glue; no-op for non-node roles. On success emit a
-                                                // `node.connected` lifecycle event (sibling of presence.joined) so
-                                                // operators/Panel get a live fleet feed without polling.
-                                                if is_node
-                                                    && crate::cluster::maybe_register_node(
-                                                        &ctx.node_registry,
-                                                        Some("node"),
-                                                        &device_id,
-                                                        &conn_id,
-                                                        req.params.as_ref(),
-                                                        &rpc_channel_for_node,
-                                                    )
-                                                {
-                                                    let name = req
-                                                        .params
-                                                        .as_ref()
-                                                        .and_then(|p| p.get("device_name"))
-                                                        .and_then(|v| v.as_str())
-                                                        .unwrap_or("unknown");
-                                                    let _ = ctx.event_bus.publish_json(&TopicEvent::new(
-                                                        "node.connected",
-                                                        serde_json::json!({"node_id": &device_id, "name": name, "conn_id": &conn_id}),
-                                                    ));
-                                                    // Stamp the node device's last_seen_at so that once it
-                                                    // goes offline, environments.list can show an honest
-                                                    // "last seen" (the column was never written after enroll).
-                                                    if let Some(tm) = ctx.token_manager.as_ref() {
-                                                        if let Err(e) = tm.touch_device(&device_id) {
-                                                            debug!("failed to stamp node last_seen on connect for {}: {}", device_id, e);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        // Mark first_message = false even if connect failed
-                                        // Track failed auth attempts and disconnect if limit reached
-                                        let auth_failed = {
-                                            let mut conns = ctx.connections.write().await;
-                                            if let Some(state) = conns.get_mut(&conn_id) {
-                                                state.first_message = false;
-                                                if !state.authenticated {
-                                                    state.auth_attempts += 1;
-                                                    if state.auth_attempts >= MAX_AUTH_ATTEMPTS {
-                                                        warn!(
-                                                            "Connection {} exceeded max auth attempts ({}), disconnecting",
-                                                            conn_id, MAX_AUTH_ATTEMPTS
-                                                        );
-                                                        let response_str = serde_json::to_string(&JsonRpcResponse::error(
-                                                            req.id.clone(),
-                                                            AUTH_REQUIRED,
-                                                            "Too many failed authentication attempts",
-                                                        )).unwrap_or_default();
-                                                        drop(conns);
-                                                        let _ = write.send(WsMessage::Text(response_str.into())).await;
-                                                        break;
-                                                    }
-                                                    true
-                                                } else {
-                                                    false
-                                                }
-                                            } else {
-                                                false
-                                            }
-                                        };
-
-                                        // Per-source-IP auth-failure rate limit (loopback exempt).
-                                        // The per-connection `auth_attempts` counter above resets
-                                        // every time a remote peer reconnects (fresh ConnectionState),
-                                        // so on its own it does not bound a reconnect-driven
-                                        // brute-force of device tokens. Record failures against the
-                                        // `Auth` scope keyed by source IP so a flood of failed
-                                        // `connect`s from one remote address is locked out across
-                                        // connections. (openclaw #87148)
-                                        if auth_failed {
-                                            if let Some(retry_after_ms) =
-                                                record_auth_failure_lockout(&ctx.rate_limiter, ctx.client_ip)
-                                            {
-                                                warn!(
-                                                    "Connection {} auth-failure rate limited by source IP, disconnecting",
-                                                    conn_id
-                                                );
-                                                let response_str = serde_json::to_string(
-                                                    &JsonRpcResponse::error_with_data(
-                                                        req.id.clone(),
-                                                        RATE_LIMITED,
-                                                        "Too many failed authentication attempts",
-                                                        serde_json::json!({ "retry_after_ms": retry_after_ms }),
-                                                    ),
-                                                )
-                                                .unwrap_or_default();
-                                                let _ = write.send(WsMessage::Text(response_str.into())).await;
-                                                break;
-                                            }
-                                        }
-
-                                        response
-                                    }
-                                } else {
-                                    // No auth required OR already authenticated
+                                    // Dispatch path. LAN-trust treats every
+                                    // connection as an implicit operator.
 
                                     // --- Rate limit check ---
                                     // Loopback exemption is based on network origin
@@ -1012,58 +678,11 @@ async fn handle_connection(
                                     }
                                     } // end loopback exemption
 
-                                    // --- Method-level authorization gate ---
-                                    // Authentication is binary at the transport
-                                    // layer, but a conservative set of
-                                    // administrative / secret-bearing
-                                    // control-plane methods additionally require
-                                    // operator role. Guest (and future node-role)
-                                    // connections are rejected from those so an
-                                    // invitation-scoped session cannot reach
-                                    // `config.apply`, `daemon.shutdown`,
-                                    // `secret.*`, etc. Only enforced when auth is
-                                    // required — a no-auth local daemon stays
-                                    // fully open (existing contract).
-                                    if ctx.auth_mode.is_auth_required()
-                                        && crate::gateway::method_authz::required_privilege(&req.method)
-                                            == crate::gateway::method_authz::MethodPrivilege::Operator
-                                    {
-                                        let is_operator = {
-                                            let conns = ctx.connections.read().await;
-                                            conns.get(&conn_id).is_some_and(|s| s.is_operator())
-                                        };
-                                        if !is_operator {
-                                            warn!(
-                                                "Connection {} (non-operator) denied operator-only method '{}'",
-                                                conn_id, req.method
-                                            );
-                                            let resp_str = serde_json::to_string(&JsonRpcResponse::error(
-                                                req.id.clone(),
-                                                PERMISSION_DENIED,
-                                                "Operator privileges required for this method",
-                                            ))
-                                            .unwrap_or_default();
-                                            if let Err(e) = write.send(WsMessage::Text(resp_str.into())).await {
-                                                error!("Failed to send authz-denied response to {}: {}", conn_id, e);
-                                                break;
-                                            }
-                                            continue;
-                                        }
-                                    }
-
                                     // Originating-connection role for the
-                                    // config-tier tool gate. ONLY in auth mode:
-                                    // a no-auth local daemon leaves this None so
-                                    // every run is trusted (zero regression —
-                                    // B1's role fallback can be "guest" even
-                                    // locally, which must NOT gate config here).
-                                    let caller_role: Option<String> =
-                                        if ctx.auth_mode.is_auth_required() {
-                                            let conns = ctx.connections.read().await;
-                                            conns.get(&conn_id).and_then(|s| s.role.clone())
-                                        } else {
-                                            None
-                                        };
+                                    // config-tier tool gate. LAN-trust: every
+                                    // connection is an implicit operator, so the
+                                    // config-tier gate always passes.
+                                    let caller_role: Option<String> = Some("operator".to_string());
 
                                     // Handle events.* methods specially (they need conn_id)
                                     if req.method == "events.subscribe" {
@@ -1210,7 +829,10 @@ async fn handle_connection(
                                         };
                                         // --- End idempotency + lane block ---
 
-                                        // Extract guest_session_id from connect response
+                                        // Establish session state from a successful connect
+                                        // handshake. LAN-trust: no auth, but the handshake
+                                        // still records surface kind, clears first_message,
+                                        // and tracks presence.
                                         if req.method == "connect" {
                                             if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
                                                 if resp.is_success() {
@@ -1231,11 +853,29 @@ async fn handle_connection(
                                                             }
                                                         });
 
-                                                    if let Some(session_id) = guest_session_id {
+                                                    {
                                                         let mut conns = ctx.connections.write().await;
                                                         if let Some(state) = conns.get_mut(&conn_id) {
-                                                            state.guest_session_id = Some(session_id.clone());
-                                                            info!("Connection {} authenticated as guest (session: {})", conn_id, session_id);
+                                                            // Record the surface identity: client-declared
+                                                            // kind, else inferred from loopback (same-machine
+                                                            // attach ⇒ desktop-class).
+                                                            let declared = req
+                                                                .params
+                                                                .as_ref()
+                                                                .and_then(|p| p.get("channel_kind"))
+                                                                .and_then(|v| v.as_str());
+                                                            let kind = match crate::gateway::surface::SurfaceKind::from_opt_str(declared) {
+                                                                crate::gateway::surface::SurfaceKind::Unknown if ctx.client_ip.is_loopback() => {
+                                                                    crate::gateway::surface::SurfaceKind::Desktop
+                                                                }
+                                                                other => other,
+                                                            };
+                                                            state.channel_kind = Some(kind);
+                                                            state.first_message = false;
+                                                            if let Some(ref session_id) = guest_session_id {
+                                                                state.guest_session_id = Some(session_id.clone());
+                                                                info!("Connection {} authenticated as guest (session: {})", conn_id, session_id);
+                                                            }
                                                         }
                                                     }
 

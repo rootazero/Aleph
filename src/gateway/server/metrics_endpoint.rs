@@ -70,8 +70,9 @@ pub async fn handle_metrics(State(state): State<Arc<GatewaySharedState>>) -> imp
     let (connections_active, connections_authenticated) = {
         let conns = state.connections.read().await;
         let active = conns.len() as u64;
-        let authed = conns.values().filter(|c| c.authenticated).count() as u64;
-        (active, authed)
+        // LAN-trust: every connection is an implicit operator, so all active
+        // connections count as authenticated.
+        (active, active)
     };
 
     // Request-lifecycle counts come from the global registry the middleware

@@ -55,6 +55,7 @@ pub mod clawhub;
 pub mod cluster;
 pub mod commands;
 pub mod config;
+pub mod connect;
 pub mod cron;
 pub mod daemon_control;
 pub mod debug;
@@ -324,7 +325,8 @@ impl HandlerRegistry {
         registry.register("services.list", services::handle_list);
         registry.register("services.status", services::handle_status);
 
-        // Embedded PTY terminal handlers (operator-only via method_authz).
+        // Embedded PTY terminal handlers (open to all connections under the
+        // LAN-trust model — every connection is the implicit operator).
         // Stateless: they reach the process-global `pty::manager()` accessor;
         // the event bus is attached once in `GatewayServer::build_router`, so
         // no boot-time wiring is required here.

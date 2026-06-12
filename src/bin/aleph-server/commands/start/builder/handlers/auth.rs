@@ -6,12 +6,17 @@ pub(in crate::commands::start) fn register_auth_handlers(
     server: &mut GatewayServer,
     auth_ctx: &Arc<auth_handlers::AuthContext>,
 ) {
-    register_handler!(server, "connect", auth_handlers::handle_connect, auth_ctx);
+    // LAN-trust connect: minimal no-auth handshake. Reuses the AuthContext's
+    // state-version tracker and transport policy as the handshake baseline.
+    let connect_ctx = Arc::new(alephcore::gateway::handlers::connect::ConnectContext {
+        state_versions: Arc::clone(&auth_ctx.state_versions),
+        transport_policy: auth_ctx.transport_policy.clone(),
+    });
     register_handler!(
         server,
-        "connect.challenge",
-        auth_handlers::handle_connect_challenge,
-        auth_ctx
+        "connect",
+        alephcore::gateway::handlers::connect::handle_connect,
+        connect_ctx
     );
     register_handler!(
         server,

@@ -5,17 +5,21 @@
 //! rides [`TurnContext`](crate::tools::turn_context::TurnContext) to the
 //! tool-dispatch config-tier gate.
 //!
-//! Scoped only around `process_request` in the authenticated dispatch path
+//! Scoped only around `process_request` in the dispatch path
 //! (`server::handler`). Never crosses the run's spawn boundary (`start_run` reads
-//! it while still in-task). Unset for non-gateway callers (cron, internal) and,
-//! by design, for the local no-auth daemon — the gate treats absent role as
-//! trusted.
+//! it while still in-task). Unset for non-gateway callers (cron, internal).
+//!
+//! LAN-trust: the gateway no longer authenticates, so every connection is an
+//! implicit operator — the dispatch loop always scopes `Some("operator")`. The
+//! task-local is retained so the config-tier tool gate keeps a single source of
+//! truth for the caller role.
 
 use tokio::task_local;
 
 task_local! {
-    /// Originating connection role: `Some("operator")` / `Some("guest")`, or
-    /// `None` when auth is not required (local daemon) or outside any dispatch.
+    /// Originating connection role. Under LAN-trust this is always
+    /// `Some("operator")` inside a dispatch, or `None` for non-gateway callers
+    /// (cron, internal) — the gate treats absent role as trusted.
     pub static CALLER_ROLE: Option<String>;
 }
 

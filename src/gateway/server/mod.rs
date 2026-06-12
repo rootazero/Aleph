@@ -36,43 +36,20 @@ use crate::security::headers::SecurityHeadersLayer;
 use notify::RecommendedWatcher;
 use notify_debouncer_full::{Debouncer, FileIdMap};
 
-/// Maximum number of failed authentication attempts before disconnecting
-const MAX_AUTH_ATTEMPTS: u8 = 5;
-
 /// State for an individual WebSocket connection
 pub struct ConnectionState {
-    /// Whether the connection has been authenticated
-    pub authenticated: bool,
     /// Whether this is the first message (for handshake enforcement)
     pub first_message: bool,
-    /// Number of failed authentication attempts
-    pub auth_attempts: u8,
     /// Event topics this connection is subscribed to
     pub subscriptions: Vec<String>,
     /// Connection metadata
     pub metadata: HashMap<String, String>,
     /// Device ID (set after successful connect)
     pub device_id: Option<String>,
-    /// Role this connection authenticated as: `"operator"` for device tokens,
-    /// `"guest"` for invitation-scoped guest sessions. `None` before connect or
-    /// in auth-disabled mode. Consulted by the method-level authorization gate
-    /// (`method_authz`) so non-operator connections cannot reach operator-only
-    /// control-plane RPCs. See [`ConnectionState::is_operator`].
-    pub role: Option<String>,
     /// Permissions (set after successful connect)
     pub permissions: Vec<String>,
     /// Guest session ID (set for guest connections)
     pub guest_session_id: Option<String>,
-    /// HMAC hash of the device token this connection authenticated with.
-    ///
-    /// Set ONLY when auth succeeded via an existing device token
-    /// (`connect` Case 1). `None` for every other auth path — shared-token
-    /// loopback bootstrap, guest invitations, approved-device token issuance,
-    /// and auth-disabled mode — so those connections are never subject to the
-    /// per-dispatch revocation re-check (and the local panel is never
-    /// disconnected by it). When `Some`, the dispatch loop re-checks revocation
-    /// on each request and closes the connection if the token was revoked.
-    pub device_token_hash: Option<String>,
     /// Resolved real client IP (socket peer IP, or the `X-Forwarded-For`
     /// client when the peer is a trusted proxy). The per-IP connection cap
     /// counts established connections by this value so it isolates real
@@ -91,44 +68,15 @@ impl ConnectionState {
     /// (the resolved real client IP — see [`ConnectionState::client_ip`]).
     pub(crate) fn new(client_ip: std::net::IpAddr) -> Self {
         Self {
-            authenticated: false,
             first_message: true,
-            auth_attempts: 0,
             subscriptions: vec![],
             metadata: HashMap::new(),
             device_id: None,
-            role: None,
             permissions: vec![],
             guest_session_id: None,
-            device_token_hash: None,
             client_ip,
             channel_kind: None,
         }
-    }
-
-    /// Mark connection as authenticated.
-    ///
-    /// `role` is `"operator"` for device-token connections and `"guest"` for
-    /// invitation-scoped guest sessions; it drives the method-level
-    /// authorization gate. `None` leaves the connection non-operator.
-    pub fn authenticate(
-        &mut self,
-        device_id: String,
-        permissions: Vec<String>,
-        role: Option<String>,
-    ) {
-        self.authenticated = true;
-        self.device_id = Some(device_id);
-        self.permissions = permissions;
-        self.role = role;
-    }
-
-    /// Whether this connection authenticated as an operator (full control-plane
-    /// access). Guest / node connections return `false` and are barred from
-    /// operator-only RPC methods by the dispatch-time authorization gate.
-    #[must_use]
-    pub fn is_operator(&self) -> bool {
-        self.role.as_deref() == Some("operator")
     }
 }
 

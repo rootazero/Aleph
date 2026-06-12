@@ -131,15 +131,13 @@ pub async fn handle_devices_set_level(
         }
     }
 
-    // Refresh any LIVE connection(s) for this device in place. The method-authz
-    // gate and Phase-2 caller_role both read the live ConnectionState per
-    // request, so a downgrade bites on the next request without reconnect.
-    let new_role = super::tier::role_for_permissions(&permissions).to_string();
+    // Refresh any LIVE connection(s) for this device in place so a permission
+    // change bites on the next request without reconnect. (LAN-trust: the role
+    // is no longer tracked per connection — every connection is operator.)
     {
         let mut conns = ctx.connections.write().await;
         for state in conns.values_mut() {
             if state.device_id.as_deref() == Some(params.device_id.as_str()) {
-                state.role = Some(new_role.clone());
                 state.permissions = permissions.clone();
             }
         }
@@ -193,11 +191,8 @@ mod tests {
         ctx.device_store.approve_device(&dev).unwrap();
 
         let mut cs = ConnectionState::new("127.0.0.1".parse().unwrap());
-        cs.authenticate(
-            "dev-up".to_string(),
-            vec!["chat".to_string(), "read".to_string()],
-            Some("guest".to_string()),
-        );
+        cs.device_id = Some("dev-up".to_string());
+        cs.permissions = vec!["chat".to_string(), "read".to_string()];
         ctx.connections.write().await.insert("c-up".to_string(), cs);
 
         let req = JsonRpcRequest::with_id(
@@ -213,7 +208,6 @@ mod tests {
 
         let conns = ctx.connections.read().await;
         let live = conns.get("c-up").unwrap();
-        assert_eq!(live.role.as_deref(), Some("operator"));
         assert_eq!(live.permissions, vec!["*".to_string()]);
     }
 
@@ -227,11 +221,8 @@ mod tests {
         ctx.device_store.approve_device(&dev).unwrap();
 
         let mut cs = ConnectionState::new("127.0.0.1".parse().unwrap());
-        cs.authenticate(
-            "dev-dn".to_string(),
-            vec!["*".to_string()],
-            Some("operator".to_string()),
-        );
+        cs.device_id = Some("dev-dn".to_string());
+        cs.permissions = vec!["*".to_string()];
         ctx.connections.write().await.insert("c-dn".to_string(), cs);
 
         let req = JsonRpcRequest::with_id(
@@ -250,7 +241,6 @@ mod tests {
 
         let conns = ctx.connections.read().await;
         let live = conns.get("c-dn").unwrap();
-        assert_eq!(live.role.as_deref(), Some("guest"));
         assert_eq!(
             live.permissions,
             vec!["chat".to_string(), "read".to_string()]
@@ -300,11 +290,8 @@ mod tests {
         ctx.device_store.approve_device(&target).unwrap();
 
         let mut other = ConnectionState::new("127.0.0.1".parse().unwrap());
-        other.authenticate(
-            "dev-other".to_string(),
-            vec!["*".to_string()],
-            Some("operator".to_string()),
-        );
+        other.device_id = Some("dev-other".to_string());
+        other.permissions = vec!["*".to_string()];
         ctx.connections
             .write()
             .await
@@ -320,7 +307,6 @@ mod tests {
 
         let conns = ctx.connections.read().await;
         let other = conns.get("c-other").unwrap();
-        assert_eq!(other.role.as_deref(), Some("operator"));
         assert_eq!(other.permissions, vec!["*".to_string()]);
     }
 }
