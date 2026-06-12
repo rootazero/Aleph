@@ -11,6 +11,12 @@
 )]
 
 mod connection;
+// First-run connection setup (address entry + mDNS discovery) is panel-only:
+// the full app brings its bundled daemon up and never needs a connect-first
+// step. The panel-only shell hosts no daemon, so on first launch it has no
+// Gateway to point at and must ask (spec §8).
+#[cfg(not(feature = "embedded-core"))]
+mod connect_setup;
 // Daemon lifecycle + the TCC permission monitor are full-app-only: the
 // panel-only (`--no-default-features`) shell hosts no local `aleph-server`,
 // so there is nothing to launch, supervise, or watch permissions for.
@@ -97,22 +103,40 @@ fn main() {
         // summon hotkey — all pure OS integration.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        // The only `invoke_handler` the shell exposes: connection-config
-        // commands (local vs remote Gateway target). These are I/O config
-        // toggles, not business or UI logic — the R2/R4 boundary holds
-        // (spec §5.2 explicit exception). Every *panel-facing* operation
-        // still goes through the gateway's JSON-RPC (`fs.*` for directory
-        // browsing, `projects.*` for the catalogue); the shell stays pure
-        // I/O: window, tray, updater, hotkey, connection target.
-        .invoke_handler(tauri::generate_handler![
-            connection::get_connection_target,
-            connection::set_connection_target,
-            connection::clear_connection_target,
-        ])
-        // Shared update state: the background checker, the tray, and the
-        // macOS menu all read it.
-        .manage(update::Updater::default());
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build());
+
+    // The only `invoke_handler` the shell exposes: connection-config commands
+    // (local vs remote Gateway target). These are I/O config toggles, not
+    // business or UI logic — the R2/R4 boundary holds (spec §5.2 explicit
+    // exception). Every *panel-facing* operation still goes through the
+    // gateway's JSON-RPC (`fs.*` for directory browsing, `projects.*` for the
+    // catalogue); the shell stays pure I/O: window, tray, updater, hotkey,
+    // connection target.
+    //
+    // The panel-only variant additionally exposes the first-run setup surface
+    // (`discover_servers` for LAN mDNS discovery, `connect_to` for a
+    // probe-guarded target switch). Those commands are compiled out of the
+    // full app, so its handler list stays the three config toggles. The two
+    // arms are mutually exclusive `generate_handler!` invocations — only one
+    // is ever registered.
+    #[cfg(feature = "embedded-core")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        connection::get_connection_target,
+        connection::set_connection_target,
+        connection::clear_connection_target,
+    ]);
+    #[cfg(not(feature = "embedded-core"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        connection::get_connection_target,
+        connection::set_connection_target,
+        connection::clear_connection_target,
+        connect_setup::discover_servers,
+        connect_setup::connect_to,
+    ]);
+
+    // Shared update state: the background checker, the tray, and the macOS
+    // menu all read it.
+    let builder = builder.manage(update::Updater::default());
 
     // macOS shows an app menu in the system menu bar regardless of window
     // chrome; give it shell-aware items. Windows and Linux stay chromeless.
@@ -348,13 +372,30 @@ async fn bring_target_online(handle: &tauri::AppHandle) -> bool {
 
 /// Bring the configured target online and reveal the Panel (panel-only shell).
 ///
-/// There is no local daemon to launch or supervise: just point the webview at
-/// the configured origin (Local resolves to the loopback Gateway). If it is not
-/// running the webview shows its native connection-error page (Task 10 adds the
-/// first-run connect/discovery flow). Returns `true` unconditionally — the
-/// panel-only variant runs no health supervisor that would consume the value.
+/// There is no local daemon to launch or supervise — the shell only points the
+/// webview at a Gateway someone else runs. The first-run / unreachable cases
+/// must never leave the user on a blank "can't connect" page (spec §8):
+///
+///   * No target ever chosen (first run) → open the bundled connection page so
+///     the user can type an address or pick a `aleph-server` discovered on the
+///     LAN via mDNS.
+///   * A target is chosen but unreachable → open the same connection page
+///     (with the failed address prefilled) so they can retry, change it, or
+///     rescan — not a dead origin.
+///   * Reachable → navigate to it.
+///
+/// Returns `true` unconditionally — the panel-only variant runs no health
+/// supervisor that would consume the value.
 #[cfg(not(feature = "embedded-core"))]
 async fn bring_target_online(handle: &tauri::AppHandle) -> bool {
+    // First run: no target has ever been chosen. Ask before navigating
+    // anywhere — there is no sensible default Gateway for a panel-only shell.
+    if !connection::marker_exists() {
+        tracing::info!("no connection target configured — opening first-run connect page");
+        connect_setup::show_connect_page(handle);
+        return true;
+    }
+
     let target = connection::load_target();
     match &target {
         connection::ConnectionTarget::Local => external_link::set_remote_host(None),
@@ -362,8 +403,16 @@ async fn bring_target_online(handle: &tauri::AppHandle) -> bool {
             external_link::set_remote_host(Some(url.clone()));
         }
     }
-    navigate_to_target(handle, &target);
-    focus_window(handle);
+
+    if connect_setup::target_reachable(&target).await {
+        navigate_to_target(handle, &target);
+        focus_window(handle);
+    } else {
+        // Configured but down: land on the operable connection page rather than
+        // the webview's native error page (spec §8 — no white screen).
+        tracing::warn!("configured Gateway unreachable at startup — opening connect page");
+        connect_setup::show_connect_page(handle);
+    }
     true
 }
 

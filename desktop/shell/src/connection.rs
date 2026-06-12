@@ -119,6 +119,18 @@ fn has_explicit_port_in_input(raw: &str) -> bool {
     }
 }
 
+/// Whether a target has ever been chosen (the marker file exists). Unlike
+/// [`load_target`], which collapses "no marker" and "marker says local" into
+/// `Local`, this distinguishes first run (no marker) from a deliberate Local
+/// choice — the panel-only shell needs that to decide whether to open its
+/// first-run connection page. Consumed only by the panel-only variant's
+/// first-run flow; the full app supervises a local daemon and never shows a
+/// first-run page, so this is gated out of it.
+#[cfg(not(feature = "embedded-core"))]
+pub fn marker_exists() -> bool {
+    target_marker().is_some_and(|m| m.exists())
+}
+
 /// Load the persisted target; missing/unreadable/unparsable → Local
 /// (fail-safe: a corrupt marker must never strand the user on a broken
 /// remote — it falls back to the always-available local daemon).

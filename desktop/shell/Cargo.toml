@@ -37,6 +37,9 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 dirs = { workspace = true }
 url = "2"
+# LAN discovery for the panel-only variant's first-run connect page. Used only
+# under `--no-default-features`; the full app compiles it but never browses.
+mdns-sd = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 window-vibrancy = "0.5"
