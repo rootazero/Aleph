@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.6.13]
+
+### Changed
+
+- **LAN-trust architecture (shell-core separation reverted)** — Aleph returns
+  to a single integrated architecture where the trust boundary is the network
+  boundary. The server binds `127.0.0.1` by default; setting
+  `[gateway] host = "0.0.0.0"` opts the whole LAN in, granting any LAN device
+  full control of the agent (including PTY/shell). Device pairing, token auth,
+  the bootstrap/challenge handshake, guest invitations, and the per-method
+  authorization gate are all removed — roughly 17k lines of auth and
+  shell-separation code deleted. See `docs/reference/SECURITY.md` for the model.
+- **Three-artifact distribution** — a single release now ships three
+  deliverables across macOS / Windows / Linux: the full desktop App (with
+  `aleph-server` bundled for zero-config single-machine use), the Aleph Panel
+  lite shell (no daemon — connects to any `aleph-server` on the LAN), and the
+  standalone `aleph-server` binary (installed via `curl | bash` for server /
+  NAS deployment).
+- **DNS-rebinding hardening on the WS origin guard** — with auth removed, the
+  WebSocket Origin check is the sole protocol guardrail. Same-origin requests
+  are now auto-allowed only when the `Host` is an IP literal or loopback
+  (rebinding requires a domain, which IP/loopback cannot be); domain
+  deployments must list their origin in `[gateway] allowed_origins`, or set
+  `[gateway] allow_any_origin = true` to opt out.
+- **CLI and node enrollment reworked for LAN-trust** — the `aleph auth`,
+  `devices`, and `guests` subcommands are removed, the desktop "Open in
+  Browser" action is de-nonced, clients use the no-token connect-first
+  handshake, and `aleph-server` nodes enroll through `cluster.enroll` instead
+  of token pairing.
+
+### Added
+
+- **Three-material glass theme system** — appearance gains an orthogonal
+  material axis (Luxe / Liquid / Aurora) layered over brightness and accent
+  colour, with a 3-up material row in the theme popover and Appearance
+  settings, a SwatchButton primitive, and `aria-pressed` state on every
+  appearance toggle.
+- **Floating composer chrome** — the chat composer floats over the message
+  flow with clearance tracking, overlay session tabs, and a top scroll fade.
+- **Panel-only first-run connect setup** — the lite shell ships a deterministic
+  connect flow with mDNS server discovery and a probe-gated reroute, reusing
+  the splash/connect page with progressive enhancement.
+- **Material persistence + reduced-transparency fallback** — the chosen
+  material is persisted across sessions and every material primitive honors the
+  reduced-transparency accessibility setting.
+
+### Fixed
+
+- **Crash safety: char-boundary-safe slicing** — security structural-marker
+  detection and extension consent-approval now slice on character boundaries,
+  avoiding panics on multi-byte UTF-8 input.
+- **Error propagation over panics** — the builtin tool registry propagates
+  goal-store errors instead of panicking, and the clipboard tool propagates
+  base64 parse errors instead of `expect`.
+
 ## [26.6.11]
 
 ### Added
