@@ -157,10 +157,11 @@
 | `just dev` | Dev server (rebuilds WASM first) |
 | `just build` | Release build (WASM + server) |
 | `just shell-dev` | Run the desktop App in dev mode |
-| `just shell-build` | Build desktop App installers (.dmg/.msi/.deb，内置 aleph-server) |
+| `just shell-build` | Build 完整桌面 App installers (.dmg/.msi/.deb，内置 aleph-server) |
+| `just shell-build-lite` | Build Aleph Panel 纯壳 App installers (无 server，连局域网内 server) |
 | `just test-all` | All tests (core + desktop + proptest) |
 | `just clippy` | Lint |
-| `just verify-build` | CI 验证三平台 App 能否正常构建（build-only，不打 tag、不发布） |
+| `just verify-build` | CI 验证三产物（完整 App / Panel 纯壳 App / 独立 server）三平台能否正常构建（build-only，不打 tag、不发布） |
 | `just release YY.M.D` | **发版**: 更新 VERSION + 提交推送 + 触发 GitHub workflow（需先写 changelog） |
 
 ### Rust 工具链
@@ -195,11 +196,11 @@
 **由 AI (Claude) 驱动的两步流程：**
 
 1. **AI 写版本日志** — 读取**上一个 release 版本到 HEAD 之间**的 git log（通过 `git log <上次release commit>..HEAD`），总结 10-20 条有价值的内容，分为 Added（新增功能）和 Fixed（修复）两个分类，写入 CHANGELOG.md
-2. **运行 `just release YY.M.D`** — 自动完成：版本号更新 + 提交推送 + 触发三平台桌面 App 构建（App 内置 `aleph-server`）
+2. **运行 `just release YY.M.D`** — 自动完成：版本号更新 + 提交推送 + 触发**三产物 × 三平台**构建并发布（完整桌面 App 内置 `aleph-server` / Aleph Panel 纯壳 App / 独立 `aleph-server` 二进制 + `install.sh`，同一 GitHub Release）
 
 `just release` 会校验 CHANGELOG.md 中是否有对应版本的条目，没有则拒绝发布。GitHub Release 页面自动从 CHANGELOG.md 提取版本日志。
 
-> **可选预检**：发布前可先跑 `just verify-build`，以 build-only 模式在 CI 上构建三平台 App（只构建 + 传 artifacts，不打 tag、不发布），确认三平台都能正常构建后再 `just release`。同一 workflow（`aleph-app-release.yml`）的 `publish` 输入：`off`=纯验证，`on`=`just release` 走的发布模式。
+> **可选预检**：发布前可先跑 `just verify-build`，以 build-only 模式在 CI 上构建**三产物 × 三平台**（完整 App / Panel 纯壳 App / 独立 server，只构建 + 传 artifacts，不打 tag、不发布），确认都能正常构建后再 `just release`。同一 workflow（`aleph-app-release.yml`）的 `publish` 输入：`off`=纯验证，`on`=`just release` 走的发布模式。
 
 ### Feature Flags
 

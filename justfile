@@ -307,9 +307,11 @@ deps:
 
 # ─── Release ───
 
-# Verify the three-platform desktop App builds on CI without publishing.
-# Triggers aleph-app-release.yml in build-only mode (publish=off): builds the
-# macOS / Windows / Linux apps + uploads artifacts; no tag, no GitHub Release.
+# Verify the full release matrix builds on CI without publishing.
+# Triggers aleph-app-release.yml in build-only mode (publish=off): builds all
+# three deliverables across macOS / Windows / Linux — the full desktop App
+# (aleph-server bundled), the Aleph Panel lite shell (no daemon), and the
+# standalone aleph-server binary — and uploads artifacts; no tag, no Release.
 # Runs against the current origin/main — push local commits first if needed.
 verify-build:
     gh workflow run aleph-app-release.yml --field publish=false
@@ -318,9 +320,11 @@ verify-build:
     @echo "  Monitor: gh run list --workflow aleph-app-release.yml --limit 1"
 
 # Release a new version: bump VERSION, commit, push, trigger the app workflow.
-# Runs the workflow in publish mode — builds the three-platform desktop apps
-# and publishes a GitHub Release. CHANGELOG.md must be written by AI (Claude)
-# BEFORE running this command.
+# Runs the workflow in publish mode — builds and publishes all three
+# deliverables (full desktop App with aleph-server bundled, Aleph Panel lite
+# shell, standalone aleph-server binary + install.sh) across the three
+# platforms in a single GitHub Release. CHANGELOG.md must be written by AI
+# (Claude) BEFORE running this command.
 # Usage: just release 26.5.21
 release version:
     #!/usr/bin/env bash
