@@ -1,7 +1,7 @@
 //! 集成测试：反向 RPC 端到端（服务端 → 已连 WS 客户端）。
 //!
-//! 验证 Phase 0a 的传输原语：一个真实 `GatewayServer`（auth 关闭以隔离传输
-//! 逻辑）接受一个 WS 客户端连接后，能从 `server.reverse_rpc` 取出该连接的
+//! 验证 Phase 0a 的传输原语：一个真实 `GatewayServer`（LAN-trust 无鉴权）
+//! 接受一个 WS 客户端连接后，能从 `server.reverse_rpc` 取出该连接的
 //! `ReverseRpcChannel`，对客户端发起 `tool.call` 请求，并拿回客户端构造的响应。
 
 use std::collections::HashMap;
@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alephcore::cluster::ReverseRpcChannel;
-use alephcore::gateway::config::AuthMode;
 use alephcore::gateway::server::{GatewayConfig, GatewayServer};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
@@ -21,12 +20,9 @@ type ReverseRpcRegistry = Arc<RwLock<HashMap<String, ReverseRpcChannel>>>;
 
 #[tokio::test]
 async fn server_calls_method_on_connected_client_and_gets_response() {
-    // 1) 起服务端（AuthMode::None 隔离传输；不调用 server.run()，自行 bind
+    // 1) 起服务端（LAN-trust 无鉴权；不调用 server.run()，自行 bind
     //    随机端口并 axum::serve，以拿到实际监听地址）。
-    let config = GatewayConfig {
-        auth_mode: AuthMode::None,
-        ..Default::default()
-    };
+    let config = GatewayConfig::default();
     let dummy_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let server = GatewayServer::with_config(dummy_addr, config);
 

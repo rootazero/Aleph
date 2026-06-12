@@ -193,6 +193,7 @@ impl OrchestratorFixture {
             session_epoch_registrar: None,
             cheap_provider: None,
             default_prompt_mode: Default::default(),
+            prompt_extra_files: None,
             mcp_handle: None,
         });
 
