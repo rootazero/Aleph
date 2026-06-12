@@ -1,7 +1,8 @@
-//! 集群中心侧 RPC：`cluster.enroll`（operator 铸 node token）、
-//! `cluster.deregister`（operator 注销节点：驱逐在线会话 + 撤 token/设备）、
-//! `environments.list`（read，枚举在线节点）。形态为 gateway RPC 而非 builtin
-//! 工具——凭证操作的既有模式（同 devices.*/pairing.*）。
+//! 集群中心侧 RPC：`cluster.enroll`（登记 node 设备记录）、
+//! `cluster.deregister`（operator 注销节点：驱逐在线会话 + 抹除设备记录）、
+//! `environments.list`（read，枚举在线节点）。LAN-trust 模型下节点不再持有
+//! token——连接身份由 connect 参数形状（`commands` + `tags`）声明，enroll 只
+//! 负责在 `security_store` 留下设备记录供离线视图合并。
 
 use crate::sync_primitives::Arc;
 
@@ -12,7 +13,6 @@ use crate::cluster::ResolveError;
 use crate::gateway::handlers::auth::AuthContext;
 use crate::gateway::handlers::{parse_params, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
-use crate::gateway::security::device::DeviceRole;
 use crate::gateway::security::store::DeviceUpsertData;
 
 /// 没有任何匹配节点时的错误码（同 devices.* 的 -32004 not-found）。
@@ -23,7 +23,9 @@ struct EnrollParams {
     node_name: String,
 }
 
-/// operator-gated：铸一个 `DeviceRole::Node` 设备 + token，返回给操作员转交节点机。
+/// 登记一个 role=node 的设备记录，返回 `node_id` 给操作员转交节点机。
+/// LAN-trust：不再铸 token——节点凭 connect 参数形状（`commands`+`tags`）
+/// 声明身份（见 `cluster::maybe_register_node`），enroll 仅留存离线视图记录。
 pub async fn handle_cluster_enroll(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
@@ -43,7 +45,7 @@ pub async fn handle_cluster_enroll(
         device_type: None,
         public_key: &[0u8; 32],
         fingerprint: &fingerprint,
-        role: DeviceRole::Node.as_str(),
+        role: "node",
         scopes: &["node".to_string()],
     }) {
         return JsonRpcResponse::error(
@@ -53,27 +55,10 @@ pub async fn handle_cluster_enroll(
         );
     }
 
-    let signed =
-        match ctx
-            .token_manager
-            .issue_token(&device_id, DeviceRole::Node, vec!["node".to_string()])
-        {
-            Ok(t) => t,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INTERNAL_ERROR,
-                    format!("failed to issue node token: {e}"),
-                )
-            }
-        };
-
     JsonRpcResponse::success(
         request.id,
         serde_json::json!({
             "node_id": device_id,
-            "token": signed.token,
-            "signature": signed.signature,
         }),
     )
 }
@@ -100,16 +85,14 @@ fn resolve_enrolled_node(ctx: &AuthContext, q: &str) -> Option<String> {
     }
 }
 
-/// operator-gated：注销一个节点。三步硬下线，缺一不可——
+/// operator-gated：注销一个节点。两步下线——
 /// ① `forget` 即时驱逐在线会话（立刻从 `environments.list` 消失，且不再
 ///    被 `node_invoke`/`node_file` 寻址到）；
-/// ② `revoke_device_tokens` 撤销其 token，阻止重连；
-/// ③ `revoke_device` 抹除设备记录（enroll 写入 `security_store，此处对称撤除`）。
+/// ② `revoke_device` 抹除设备记录（enroll 写入 `security_store`，此处对称撤除）。
 ///
 /// 注意：本调用不强制 close 节点当前 WS socket——它会在下一次 ping/idle-watchdog
-/// 到期时由传输层断开。但驱逐 + 撤 token 已保证节点既无法再被下发命令、也无法
-/// 凭旧 token 重新登记。修复了"`devices.revoke` 撤 token 却把在线会话留在
-/// NodeRegistry"的旧缺口。
+/// 到期时由传输层断开。LAN-trust 下没有 token 可撤销；阻止重连属于网络边界
+/// （bind/origin）职责，T6 重做节点 enrollment 时再收紧。
 ///
 /// 寻址先走在线 `NodeRegistry` 多级匹配；不在线则回退 `security_store` 的已登记
 /// 节点设备（精确 id / 唯一精确 name）——environments.list 里可见的离线节点
@@ -148,11 +131,7 @@ pub async fn handle_cluster_deregister(
 
     // ① 即时驱逐在线会话。
     let evicted = ctx.node_registry.forget(&node_id);
-    // ② 撤 token，阻止重连（失败只记日志——驱逐已生效，不应让整体失败）。
-    if let Err(e) = ctx.token_manager.revoke_device_tokens(&node_id) {
-        warn!(node_id = %node_id, error = %e, "failed to revoke node tokens on deregister");
-    }
-    // ③ 抹除设备记录（enroll 的对称撤除）。
+    // ② 抹除设备记录（enroll 的对称撤除）。
     let device_removed = ctx
         .security_store
         .revoke_device(&node_id)
@@ -217,7 +196,7 @@ mod tests {
     use crate::gateway::protocol::JsonRpcRequest;
 
     #[tokio::test]
-    async fn enroll_mints_node_token_that_validates_as_node() {
+    async fn enroll_registers_node_device_without_token() {
         let ctx = create_test_context();
         let req = JsonRpcRequest::with_id(
             "cluster.enroll",
@@ -228,15 +207,14 @@ mod tests {
         assert!(resp.is_success(), "enroll should succeed: {:?}", resp.error);
         let result = resp.result.unwrap();
         let node_id = result["node_id"].as_str().unwrap().to_string();
-        let token = result["token"].as_str().unwrap().to_string();
-        let signature = result["signature"].as_str().unwrap().to_string();
-        assert!(!token.is_empty());
-        let v = ctx
-            .token_manager
-            .validate_token(&token, &signature)
-            .unwrap();
-        assert_eq!(v.device_id, node_id);
-        assert_eq!(v.role, crate::gateway::security::DeviceRole::Node);
+        // LAN-trust: no token material leaves enroll.
+        assert!(result.get("token").is_none());
+        assert!(result.get("signature").is_none());
+        // The device record lands in the store with role=node.
+        let devices = ctx.security_store.list_devices().unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].device_id, node_id);
+        assert_eq!(devices[0].role, "node");
     }
 
     #[tokio::test]

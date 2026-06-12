@@ -30,11 +30,17 @@ See the `channels` guide: `read_config_guide(topic="channels")`. Each channel
 is a `[channels.<name>]` section in `~/.aleph/config.toml`, with secrets in the
 vault (`channel:<instance_id>:<field>`). Channel changes need a restart.
 
-### Device pairing (mobile / browser)
-Remote ends authenticate via pairing, not a pasted token:
-- Run `aleph open`, or use the desktop App "Open in Browser", or
-- Visit `/pair` on the core → it shows a 6-digit code → approve from the
-  desktop App (NotificationCenter) or Devices → Add.
+### Reaching the core from a browser or another device
+There is no authentication step (LAN-trust): the trust boundary is the
+network boundary.
+- Same machine: open the desktop App "Open in Browser", or visit
+  `http://127.0.0.1:18790` directly.
+- Another device on your LAN: set `[gateway] host = "0.0.0.0"` in
+  `~/.aleph/config.toml` so the core listens on the network, then point a
+  browser or the Aleph Panel thin-shell app at the core's IP. **Every
+  device on that LAN gets full control** — only do this on a trusted
+  network. To reach the core over the internet, front it with your own
+  reverse proxy / VPN.
 
 ## Caveats
 

@@ -1,60 +1,61 @@
-//! `aleph open` — issue a bootstrap nonce and open the system browser.
+//! `aleph open` — open the Panel in the system browser.
 //!
-//! Mirrors the desktop app's "Open in Browser" menu. Requires the daemon
-//! to be running and the caller to be authenticated (the CLI client
-//! already carries the shared token on connect).
-
-use serde::{Deserialize, Serialize};
+//! LAN-trust model: the gateway serves the Panel at its HTTP root with no
+//! authentication, so there is no nonce to issue and no token to carry. This
+//! command simply derives the Panel's HTTP URL from the configured WebSocket
+//! endpoint and shells out to the platform browser launcher.
 
 use crate::output::{self, icon, theme};
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::CliResult;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct BootstrapIssueResult {
-    url: String,
-    expires_in_secs: u64,
-    #[serde(default)]
-    nonce: Option<String>,
+/// Derive the Panel's HTTP base URL from the gateway endpoint.
+///
+/// Every input shape — ws/wss/http/https scheme (or bare host:port), with or
+/// without the `/ws` JSON-RPC path, with or without a trailing slash —
+/// converges to the Panel root: `<scheme>://<host[:port]>/`.
+///
+/// `ws://127.0.0.1:18790/ws`   → `http://127.0.0.1:18790/`
+/// `wss://host:443/ws/`        → `https://host:443/`
+/// `http://127.0.0.1:18790/ws` → `http://127.0.0.1:18790/`
+fn panel_url(server_url: &str) -> String {
+    let (scheme, rest) = if let Some(rest) = server_url.strip_prefix("wss://") {
+        ("https://", rest)
+    } else if let Some(rest) = server_url.strip_prefix("ws://") {
+        ("http://", rest)
+    } else if let Some(rest) = server_url.strip_prefix("https://") {
+        ("https://", rest)
+    } else if let Some(rest) = server_url.strip_prefix("http://") {
+        ("http://", rest)
+    } else {
+        // Unknown scheme: assume plain host:port, default to http.
+        ("http://", server_url)
+    };
+    // Normalize to the root. Trim order matters: strip any trailing '/'
+    // FIRST (so a `…/ws/` endpoint still loses its `/ws` path), then the
+    // `/ws` JSON-RPC path, then any slash that exposed — and re-append
+    // exactly one.
+    let host = rest
+        .trim_end_matches('/')
+        .trim_end_matches("/ws")
+        .trim_end_matches('/');
+    format!("{scheme}{host}/")
 }
 
-/// Issue a one-shot bootstrap nonce via JSON-RPC and open the resulting
-/// URL in the system browser. With `--json` only prints the URL +
-/// expiry; otherwise also shells out to the platform `open` command.
+/// Open the Panel URL in the system browser. With `--json` only prints the URL.
 pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
-    let issued: BootstrapIssueResult = {
-        let _spin = (!json).then(|| output::Spinner::start("Requesting bootstrap nonce"));
-        let result = async {
-            let (client, _events) = AlephClient::connect(server_url).await?;
-            let issued: BootstrapIssueResult =
-                client.call("gateway.bootstrap.issue", None::<()>).await?;
-            client.close().await?;
-            Ok::<BootstrapIssueResult, aleph_client::CliError>(issued)
-        }
-        .await;
-        if let Some(s) = _spin {
-            s.stop().await;
-        }
-        result?
-    };
+    let url = panel_url(server_url);
 
     if json {
-        output::print_json(&serde_json::json!({
-            "url": issued.url,
-            "expires_in_secs": issued.expires_in_secs,
-        }));
+        output::print_json(&serde_json::json!({ "url": url }));
         return Ok(());
     }
 
     println!(
-        "{} Opening {} {}",
+        "{} Opening {}",
         theme::paint(theme::Style::Info, icon::arrow()),
-        theme::paint(theme::Style::Bold, &issued.url),
-        theme::paint(
-            theme::Style::Muted,
-            &format!("(valid for {}s)", issued.expires_in_secs)
-        )
+        theme::paint(theme::Style::Bold, &url)
     );
-    if let Err(e) = open_url(&issued.url) {
+    if let Err(e) = open_url(&url) {
         // Don't fail hard — print the URL so the user can copy/paste.
         eprintln!(
             "{} Could not launch system browser: {e}",
@@ -63,7 +64,7 @@ pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
         eprintln!(
             "{} Open this URL manually: {}",
             theme::paint(theme::Style::Info, icon::info()),
-            issued.url
+            url
         );
     }
     Ok(())
@@ -102,27 +103,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bootstrap_result_roundtrip() {
-        let json = serde_json::json!({
-            "nonce": "abc",
-            "url": "http://127.0.0.1:18790/auth/bootstrap?nonce=abc",
-            "expires_in_secs": 60u64,
-        });
-        let parsed: BootstrapIssueResult = serde_json::from_value(json).unwrap();
-        assert_eq!(parsed.expires_in_secs, 60);
-        assert!(parsed.url.contains("/auth/bootstrap?nonce="));
-        assert_eq!(parsed.nonce.as_deref(), Some("abc"));
+    fn ws_url_becomes_http_panel_root() {
+        assert_eq!(
+            panel_url("ws://127.0.0.1:18790/ws"),
+            "http://127.0.0.1:18790/"
+        );
     }
 
     #[test]
-    fn bootstrap_result_omits_optional_nonce() {
-        // Server may evolve to drop the nonce from the payload (URL already
-        // carries it); the client tolerates that.
-        let json = serde_json::json!({
-            "url": "http://127.0.0.1:18790/auth/bootstrap?nonce=xyz",
-            "expires_in_secs": 60u64,
-        });
-        let parsed: BootstrapIssueResult = serde_json::from_value(json).unwrap();
-        assert!(parsed.nonce.is_none());
+    fn wss_url_becomes_https_panel_root() {
+        assert_eq!(panel_url("wss://example.com:443/ws"), "https://example.com:443/");
+    }
+
+    #[test]
+    fn http_url_is_normalized_to_root() {
+        // Same trailing-slash shape as the ws branches — callers can rely on
+        // `<scheme>://<host[:port]>/` regardless of the configured scheme.
+        assert_eq!(
+            panel_url("http://127.0.0.1:18790/ws"),
+            "http://127.0.0.1:18790/"
+        );
+        assert_eq!(panel_url("https://example.com/ws"), "https://example.com/");
+    }
+
+    #[test]
+    fn trailing_slash_after_ws_path_is_stripped() {
+        // `…/ws/` must not leave a `/ws` residue (trim order boundary).
+        assert_eq!(
+            panel_url("ws://127.0.0.1:18790/ws/"),
+            "http://127.0.0.1:18790/"
+        );
+        assert_eq!(
+            panel_url("http://127.0.0.1:18790/ws/"),
+            "http://127.0.0.1:18790/"
+        );
+    }
+
+    #[test]
+    fn trailing_slash_without_ws_path_normalizes() {
+        assert_eq!(panel_url("ws://127.0.0.1:18790/"), "http://127.0.0.1:18790/");
+        assert_eq!(
+            panel_url("https://example.com:8443/"),
+            "https://example.com:8443/"
+        );
+    }
+
+    #[test]
+    fn bare_host_port_defaults_to_http() {
+        assert_eq!(panel_url("127.0.0.1:18790"), "http://127.0.0.1:18790/");
     }
 }

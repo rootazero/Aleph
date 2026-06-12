@@ -2,20 +2,6 @@ use super::{current_timestamp_ms, SecurityStore};
 use rusqlite::{params, Result as SqliteResult};
 
 impl SecurityStore {
-    /// Approve a channel sender
-    pub fn approve_sender(&self, channel: &str, sender_id: &str) -> SqliteResult<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            "INSERT INTO approved_senders (channel, sender_id, approved_at)
-             VALUES (?1, ?2, ?3)
-             ON CONFLICT(channel, sender_id) DO UPDATE SET
-               approved_at = excluded.approved_at,
-               revoked_at = NULL",
-            params![channel, sender_id, current_timestamp_ms()],
-        )?;
-        Ok(())
-    }
-
     /// Check if sender is approved
     pub fn is_sender_approved(&self, channel: &str, sender_id: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());

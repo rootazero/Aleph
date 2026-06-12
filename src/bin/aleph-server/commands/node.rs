@@ -1,7 +1,13 @@
 //! `aleph-server node` —— 集群节点（执行臂）拨出运行时。
 //!
-//! 拨向中心 WS、用 node-token 认证、声明命令、入站循环服务 `tool.call`，
-//! 在本机 sandbox 跑 bash。断线指数退避重连。无 DB / 无 harness / 无 LLM。
+//! 拨向中心 WS、声明命令、入站循环服务 `tool.call`，在本机 sandbox 跑 bash。
+//! 断线指数退避重连。无 DB / 无 harness / 无 LLM。
+//!
+//! LAN-trust 模型：节点不再持有 token。首启时调 `cluster.enroll` 在中心登记
+//! 一条设备记录，拿回 `node_id`（UUID）并落盘；之后每次 `connect` 用该
+//! `node_id` 作 `device_id` 声明身份（连同 `commands` + `tags` 形状）。中心
+//! 据此把节点稳定地键入同一 UUID（修正 touch_device / environments.list /
+//! deregister 的记账漂移）。无 token、无配对码、无 AUTH_FAILED。
 
 use alephcore::sync_primitives::RwLock;
 use std::path::{Path, PathBuf};
@@ -26,91 +32,59 @@ use tokio_tungstenite::tungstenite::Message;
 
 const BACKOFF_INITIAL_MS: u64 = 2_000;
 const BACKOFF_MAX_MS: u64 = 60_000;
-const POLL_INTERVAL_MS: u64 = 2_000;
-const AUTH_FAILED_CODE: i64 = -32001;
 
-/// Persisted node credential. `bearer` is the combined "{token}:{signature}"
-/// string the center's `pairing.poll` hands out — sent verbatim as the
-/// `connect` `token` param.
+/// Persisted node identity. LAN-trust: the only credential is the enrolled
+/// `node_id` (a center-minted UUID); it is sent verbatim as the `connect`
+/// `device_id` so the center keys this node's bookkeeping under one stable id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct NodeCredential {
+struct NodeIdentity {
     node_id: String,
-    bearer: String,
     center: String,
 }
 
 /// `~/.aleph/node/<name>.json`. `None` only if the home dir is unresolvable.
-fn credential_path(name: &str) -> Option<PathBuf> {
+fn identity_path(name: &str) -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".aleph").join("node").join(format!("{name}.json")))
 }
 
-fn read_credential(path: &Path) -> Option<NodeCredential> {
+/// Migration note: old pre-LAN-trust `NodeCredential` files (which carry an
+/// extra `bearer` field) deserialize here successfully too — `NodeIdentity`
+/// has no `deny_unknown_fields`, so serde silently drops the dead `bearer`
+/// and the upgraded node KEEPS its enrolled `node_id` instead of
+/// re-enrolling. That is deliberate: the center's bookkeeping (touch_device,
+/// environments.list, deregister) stays keyed to the same UUID across the
+/// upgrade. Do not "fix" this into a forced re-enroll.
+fn read_identity(path: &Path) -> Option<NodeIdentity> {
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
-fn write_credential(path: &Path, cred: &NodeCredential) -> std::io::Result<()> {
+fn write_identity(path: &Path, id: &NodeIdentity) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_vec_pretty(cred).map_err(std::io::Error::other)?;
+    let json = serde_json::to_vec_pretty(id).map_err(std::io::Error::other)?;
     std::fs::write(path, json)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
         if let Err(e) = std::fs::set_permissions(path, perms) {
-            tracing::warn!("failed to restrict node credential permissions: {e}");
+            tracing::warn!("failed to restrict node identity permissions: {e}");
         }
     }
     Ok(())
 }
 
-/// Outcome of parsing a `pairing.poll` reply. Pure.
-#[derive(Debug)]
-enum PairingOutcome {
-    Pending,
-    Approved { bearer: String, node_id: String },
-    Rejected,
-    Expired,
-}
-
-fn parse_pairing_outcome(resp: &Value) -> PairingOutcome {
-    match resp.pointer("/result/status").and_then(|s| s.as_str()) {
-        Some("approved") => PairingOutcome::Approved {
-            bearer: resp
-                .pointer("/result/token")
-                .and_then(|t| t.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            node_id: resp
-                .pointer("/result/device_id")
-                .and_then(|d| d.as_str())
-                .unwrap_or_default()
-                .to_string(),
-        },
-        Some("rejected") => PairingOutcome::Rejected,
-        Some("expired") => PairingOutcome::Expired,
-        _ => PairingOutcome::Pending,
-    }
-}
-
-/// Result of one `run_session` attempt.
-enum SessionOutcome {
-    /// Connected and the inbound loop ended (clean reconnect).
-    Ended,
-    /// Center rejected `connect` with `AUTH_FAILED` — credential is stale.
-    AuthFailed,
-}
-
-/// True when a `connect` reply is an `AUTH_FAILED` (-32001) error. Pure.
-fn connect_rejected_auth(connect_resp: &Value) -> bool {
-    connect_resp.pointer("/error/code").and_then(serde_json::Value::as_i64) == Some(AUTH_FAILED_CODE)
+/// Parse a `cluster.enroll` reply into the minted `node_id`. Pure.
+fn parse_enroll_node_id(resp: &Value) -> Option<String> {
+    resp.pointer("/result/node_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
 }
 
 pub async fn handle_node(
     center: String,
-    token: Option<String>,
     name: String,
     tags: Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -118,26 +92,26 @@ pub async fn handle_node(
     let table = Arc::new(table);
     let declared = table.descriptors();
     let url = format!("{}/ws", center.trim_end_matches('/'));
-    let cred_path = credential_path(&name);
+    let id_path = identity_path(&name);
 
-    // Resolve the bearer: persisted credential > --token > interactive pairing.
-    let mut bearer = match cred_path.as_deref().and_then(read_credential) {
-        Some(cred) => {
-            tracing::info!("node '{name}' using persisted credential");
-            cred.bearer
+    // Resolve the node identity: persisted enrollment > enroll now.
+    let node_id = match id_path.as_deref().and_then(read_identity) {
+        Some(id) => {
+            tracing::info!("node '{name}' using persisted identity {}", id.node_id);
+            id.node_id
         }
-        None => if let Some(t) = token { t } else {
-            let cred = run_pairing(&url, &center, &name, &declared).await?;
-            persist_credential(cred_path.as_deref(), &cred);
-            cred.bearer
-        },
+        None => {
+            let id = enroll_node(&url, &center, &name).await?;
+            persist_identity(id_path.as_deref(), &id);
+            id.node_id
+        }
     };
 
     let mut backoff = BACKOFF_INITIAL_MS;
     loop {
         match run_session(
             &url,
-            &bearer,
+            &node_id,
             &name,
             &declared,
             &tags,
@@ -146,20 +120,9 @@ pub async fn handle_node(
         )
         .await
         {
-            Ok(SessionOutcome::Ended) => {
+            Ok(()) => {
                 tracing::warn!("node session ended cleanly; reconnecting");
                 backoff = BACKOFF_INITIAL_MS;
-            }
-            Ok(SessionOutcome::AuthFailed) => {
-                tracing::warn!("node credential rejected by center; clearing and re-pairing");
-                if let Some(p) = cred_path.as_deref() {
-                    let _ = std::fs::remove_file(p);
-                }
-                let cred = run_pairing(&url, &center, &name, &declared).await?;
-                persist_credential(cred_path.as_deref(), &cred);
-                bearer = cred.bearer;
-                backoff = BACKOFF_INITIAL_MS;
-                continue;
             }
             Err(e) => tracing::error!("node session error: {e}; retrying in {backoff}ms"),
         }
@@ -169,11 +132,11 @@ pub async fn handle_node(
 }
 
 /// Best-effort persist; a write failure warns but does not abort the node
-/// (it will re-pair on next restart).
-fn persist_credential(path: Option<&Path>, cred: &NodeCredential) {
+/// (it will re-enroll on next restart).
+fn persist_identity(path: Option<&Path>, id: &NodeIdentity) {
     if let Some(p) = path {
-        if let Err(e) = write_credential(p, cred) {
-            tracing::warn!("failed to persist node credential: {e}");
+        if let Err(e) = write_identity(p, id) {
+            tracing::warn!("failed to persist node identity: {e}");
         }
     }
 }
@@ -209,100 +172,71 @@ fn build_command_table(name: &str) -> (CommandTable, ApprovalSlot) {
     (table, slot)
 }
 
-/// Interactive pairing: anonymous WS → `pairing.start_node` → print the code →
-/// poll `pairing.poll` every 2s until the operator approves from the Panel.
-/// Returns the minted node credential. No retry/backoff here — the caller's
-/// reconnect loop owns that; pairing is linear and readable.
-async fn run_pairing(
+/// Register this node with the center via `cluster.enroll` and return the
+/// minted identity. LAN-trust: no token is minted — enroll only records a
+/// device entry and hands back the `node_id` (UUID) used for connect keying.
+/// No retry/backoff here — the caller's reconnect loop owns that.
+async fn enroll_node(
     url: &str,
     center: &str,
     name: &str,
-    declared: &[CommandDescriptor],
-) -> Result<NodeCredential, Box<dyn std::error::Error>> {
+) -> Result<NodeIdentity, Box<dyn std::error::Error>> {
     let (mut ws, _resp) = tokio_tungstenite::connect_async(url).await?;
 
-    let start = json!({
-        "jsonrpc": "2.0", "id": 1, "method": "pairing.start_node",
-        "params": { "node_name": name, "commands": declared }
+    let enroll = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "cluster.enroll",
+        "params": { "node_name": name }
     });
-    ws.send(Message::Text(start.to_string().into())).await?;
-    let start_reply = ws
+    ws.send(Message::Text(enroll.to_string().into())).await?;
+    let reply = ws
         .next()
         .await
-        .ok_or("center closed before start_node reply")??;
-    let Message::Text(start_text) = start_reply else {
-        return Err("unexpected non-text start_node reply".into());
+        .ok_or("center closed before enroll reply")??;
+    let Message::Text(text) = reply else {
+        return Err("unexpected non-text enroll reply".into());
     };
-    let start_val: Value = serde_json::from_str(start_text.as_str())?;
-    let code = start_val
-        .pointer("/result/code")
-        .and_then(|c| c.as_str())
-        .ok_or("center did not return a pairing code")?
-        .to_string();
-
-    println!("\n  Aleph 节点配对码: {code}");
-    println!("  请在中心 Panel 通知卡批准此节点\n");
-
-    let mut poll_id = 2;
-    loop {
-        let poll = json!({
-            "jsonrpc": "2.0", "id": poll_id, "method": "pairing.poll",
-            "params": { "code": code }
-        });
-        ws.send(Message::Text(poll.to_string().into())).await?;
-        let poll_reply = ws.next().await.ok_or("center closed during poll")??;
-        if let Message::Text(poll_text) = poll_reply {
-            let poll_val: Value = serde_json::from_str(poll_text.as_str())?;
-            match parse_pairing_outcome(&poll_val) {
-                PairingOutcome::Approved { bearer, node_id } => {
-                    tracing::info!("node '{name}' pairing approved");
-                    return Ok(NodeCredential {
-                        node_id,
-                        bearer,
-                        center: center.to_string(),
-                    });
-                }
-                PairingOutcome::Rejected => return Err("pairing rejected by operator".into()),
-                PairingOutcome::Expired => return Err("pairing code expired".into()),
-                PairingOutcome::Pending => {}
-            }
-        }
-        poll_id += 1;
-        tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
-    }
+    let val: Value = serde_json::from_str(text.as_str())?;
+    let node_id = parse_enroll_node_id(&val)
+        .ok_or_else(|| format!("center did not return a node_id: {val}"))?;
+    tracing::info!("node '{name}' enrolled as {node_id}");
+    Ok(NodeIdentity {
+        node_id,
+        center: center.to_string(),
+    })
 }
 
 async fn run_session(
     url: &str,
-    token: &str,
+    node_id: &str,
     name: &str,
     declared: &[CommandDescriptor],
     tags: &[String],
     table: &Arc<CommandTable>,
     approval_slot: &ApprovalSlot,
-) -> Result<SessionOutcome, Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error>> {
     let (ws, _resp) = tokio_tungstenite::connect_async(url).await?;
     let (mut write, mut read) = ws.split();
 
+    // LAN-trust connect: `device_id` is the enrolled UUID so the center keys
+    // this node's records stably; `commands` + `tags` are the node-detection
+    // signal (no other client sends them). No token.
     let connect = json!({
         "jsonrpc": "2.0", "id": 1, "method": "connect",
-        "params": { "token": token, "device_name": name, "commands": declared, "tags": tags }
+        "params": {
+            "device_id": node_id,
+            "device_name": name,
+            "commands": declared,
+            "tags": tags
+        }
     });
     write
         .send(Message::Text(connect.to_string().into()))
         .await?;
-    let reply = read
+    // Drain the connect reply (LAN-trust always succeeds; no auth to check).
+    let _reply = read
         .next()
         .await
         .ok_or("center closed before connect reply")??;
-    if let Message::Text(text) = &reply {
-        if let Ok(v) = serde_json::from_str::<Value>(text.as_str()) {
-            if connect_rejected_auth(&v) {
-                tracing::warn!("node '{name}' rejected by center (auth failed)");
-                return Ok(SessionOutcome::AuthFailed);
-            }
-        }
-    }
     tracing::info!("node '{name}' connected to center");
 
     // Bidirectional channel for this connection: outbound mpsc drained by a
@@ -359,7 +293,7 @@ async fn run_session(
     *approval_slot.write().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     writer.abort();
     loop_result?;
-    Ok(SessionOutcome::Ended)
+    Ok(())
 }
 
 /// 解析一帧；若是 `tool.call` 请求则 dispatch 并返回应答帧 JSON；否则 None。
@@ -445,51 +379,41 @@ mod tests {
     }
 
     #[test]
-    fn node_credential_round_trips_through_disk() {
-        let cred = NodeCredential {
+    fn node_identity_round_trips_through_disk() {
+        let id = NodeIdentity {
             node_id: "n-1".into(),
-            bearer: "tok:sig".into(),
             center: "ws://c".into(),
         };
-        let path = std::env::temp_dir().join("aleph-node-cred-roundtrip-test.json");
-        write_credential(&path, &cred).unwrap();
-        let loaded = read_credential(&path).expect("reads back");
-        assert_eq!(loaded, cred);
+        let path = std::env::temp_dir().join("aleph-node-identity-roundtrip-test.json");
+        write_identity(&path, &id).unwrap();
+        let loaded = read_identity(&path).expect("reads back");
+        assert_eq!(loaded, id);
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn parse_pairing_outcome_reads_each_status() {
-        let approved = json!({"result":{"status":"approved","token":"t:s","device_id":"d"}});
-        match parse_pairing_outcome(&approved) {
-            PairingOutcome::Approved { bearer, node_id } => {
-                assert_eq!(bearer, "t:s");
-                assert_eq!(node_id, "d");
-            }
-            other => panic!("expected Approved, got {other:?}"),
-        }
-        assert!(matches!(
-            parse_pairing_outcome(&json!({"result":{"status":"rejected"}})),
-            PairingOutcome::Rejected
-        ));
-        assert!(matches!(
-            parse_pairing_outcome(&json!({"result":{"status":"expired"}})),
-            PairingOutcome::Expired
-        ));
-        assert!(matches!(
-            parse_pairing_outcome(&json!({"result":{"status":"pending"}})),
-            PairingOutcome::Pending
-        ));
+    fn legacy_node_credential_file_parses_and_keeps_node_id() {
+        // Pre-LAN-trust `NodeCredential` files carry an extra `bearer` field.
+        // serde must drop it and keep the enrolled node_id so an upgraded
+        // node does NOT re-enroll (see the `read_identity` migration note).
+        let path = std::env::temp_dir().join("aleph-node-legacy-cred-migration-test.json");
+        std::fs::write(
+            &path,
+            r#"{"node_id":"n-legacy","bearer":"tok:sig","center":"ws://c"}"#,
+        )
+        .unwrap();
+        let loaded = read_identity(&path).expect("legacy credential file still parses");
+        assert_eq!(loaded.node_id, "n-legacy");
+        assert_eq!(loaded.center, "ws://c");
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn connect_rejected_auth_detects_auth_failed() {
-        assert!(connect_rejected_auth(
-            &json!({"error":{"code":-32001,"message":"x"}})
-        ));
-        assert!(!connect_rejected_auth(&json!({"result":{"ok":true}})));
-        assert!(!connect_rejected_auth(
-            &json!({"error":{"code":-32000,"message":"transient"}})
-        ));
+    fn parse_enroll_node_id_reads_minted_id() {
+        let ok = json!({"result": {"node_id": "uuid-123"}});
+        assert_eq!(parse_enroll_node_id(&ok).as_deref(), Some("uuid-123"));
+        // Missing / malformed replies yield None (caller errors out).
+        assert!(parse_enroll_node_id(&json!({"result": {}})).is_none());
+        assert!(parse_enroll_node_id(&json!({"error": {"code": -32000}})).is_none());
     }
 }

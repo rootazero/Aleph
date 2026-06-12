@@ -13,9 +13,8 @@ use crate::views::cron::CronView;
 use crate::views::home::Home;
 use crate::views::logs::Logs;
 use crate::views::memory::Memory;
-use crate::views::pairing_modal::PairingModal;
 use crate::views::runtimes::RuntimesView;
-use crate::views::settings::{Settings, GeneralView, AppearanceView, BehaviorView, SearchView, ProvidersView, EmbeddingProvidersView, RerankingProvidersView, GenerationProvidersView, RouteView, MemoryView, BrowserView, NetworkView, RoutingRulesView, McpView, PluginsView, SkillsView, ClawHubView, AcpHarnessesView, SecurityView, AuthView, PoliciesView, ExecutionView, ChannelsOverview, ChannelPlatformPage};
+use crate::views::settings::{Settings, GeneralView, AppearanceView, BehaviorView, SearchView, ProvidersView, EmbeddingProvidersView, RerankingProvidersView, GenerationProvidersView, RouteView, MemoryView, BrowserView, NetworkView, RoutingRulesView, McpView, PluginsView, SkillsView, ClawHubView, AcpHarnessesView, SecurityView, PoliciesView, ExecutionView, ChannelsOverview, ChannelPlatformPage};
 use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
 use crate::views::usage::UsageView;
@@ -101,11 +100,6 @@ fn AppContent() -> impl IntoView {
                     if let Err(e) = state.setup_alert_subscriptions().await {
                         web_sys::console::error_1(
                             &format!("Failed to setup alert subscriptions: {e}").into(),
-                        );
-                    }
-                    if let Err(e) = state.setup_pairing_subscriptions().await {
-                        web_sys::console::error_1(
-                            &format!("Failed to setup pairing subscriptions: {e}").into(),
                         );
                     }
                     if let Err(e) = state.setup_approval_subscriptions().await {
@@ -232,12 +226,9 @@ fn AppContent() -> impl IntoView {
             </Router>
 
             // First-boot gate — blocks the shell with a "Connecting…" or
-            // "Cannot reach core" overlay until the first auth succeeds.
+            // "Cannot reach core" overlay until the first connection succeeds.
             // Outside <Router> because it never navigates.
             <BootCheckGate />
-
-            // Pairing modal overlays everything when pairing_required is triggered
-            <PairingModal />
         </div>
     }
 }
@@ -420,7 +411,6 @@ fn SettingsRouter() -> impl IntoView {
 
             // Security
             "/settings/security" => view! { <ConfigGate><SecurityView /></ConfigGate> }.into_any(),
-            "/settings/auth" => view! { <ConfigGate><AuthView /></ConfigGate> }.into_any(),
             "/settings/policies" => view! { <ConfigGate><PoliciesView /></ConfigGate> }.into_any(),
             "/settings/execution" => {
                 view! { <ConfigGate><ExecutionView /></ConfigGate> }.into_any()

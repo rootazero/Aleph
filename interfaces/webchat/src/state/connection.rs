@@ -25,7 +25,7 @@ pub enum ConnectionPhase {
     /// Lost a previously-good connection and is retrying. `attempt` is 1-based
     /// for display (the underlying counter is 0-based).
     Reconnecting { attempt: u32, max: u32 },
-    /// Authenticated and healthy.
+    /// Connected and healthy.
     Connected,
     /// Reconnect ran out of attempts; user action required.
     Failed { reason: String },
@@ -76,9 +76,7 @@ impl ConnectionPhase {
         Self::Initial
     }
 
-    /// True when the app shell should be hidden behind the boot gate. The
-    /// `pairing_required` path is excluded by the gate component itself so
-    /// `PairingModal` can take over.
+    /// True when the app shell should be hidden behind the boot gate.
     #[must_use]
     pub const fn is_pre_ready(&self) -> bool {
         matches!(self, Self::Initial | Self::Connecting)

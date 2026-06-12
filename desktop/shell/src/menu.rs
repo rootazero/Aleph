@@ -125,7 +125,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     )?;
 
     // Help — external resources. Opens via the system browser (no in-app
-    // navigation away from the Panel), reusing daemon::open_url_in_browser.
+    // navigation away from the Panel), reusing external_link::open_url.
     let help_menu = Submenu::with_items(
         app,
         "Help",
@@ -153,10 +153,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 pub fn on_event(app: &AppHandle, id: &str) {
     match id {
         ID_SHOW => crate::focus_window(app),
+        // Open the Panel in the system browser at the configured Gateway
+        // origin. Nonce-free under LAN-trust: same-LAN browsers are trusted,
+        // so there is no bootstrap handshake or credential handoff. Common to
+        // both shell variants; the CLI sibling of this affordance is
+        // `aleph open` (spec §4.1).
         ID_OPEN_BROWSER => {
-            tauri::async_runtime::spawn(async {
-                crate::daemon::open_in_system_browser().await;
-            });
+            crate::external_link::open_url(&browser_origin(&crate::connection::load_target()));
         }
         ID_CONNECT_REMOTE => {
             if let Some(window) = app.get_webview_window("main") {
@@ -172,21 +175,23 @@ pub fn on_event(app: &AppHandle, id: &str) {
         ID_CHECK_UPDATE => crate::update::check_now(app),
         ID_QUIT => app.exit(0),
         ID_QUIT_STOP => {
+            // Full app only: stop the bundled daemon before quitting. The
+            // panel-only shell owns no local daemon, so it just exits.
+            #[cfg(feature = "embedded-core")]
             crate::daemon::stop_daemon();
             app.exit(0);
         }
         ID_RELOAD_PANEL => reload_panel(app),
         #[cfg(debug_assertions)]
         ID_OPEN_DEVTOOLS => open_devtools(app),
-        ID_VISIT_REPO => crate::daemon::open_url_in_browser(REPO_URL),
-        ID_REPORT_ISSUE => crate::daemon::open_url_in_browser(ISSUES_URL),
+        ID_VISIT_REPO => crate::external_link::open_url(REPO_URL),
+        ID_REPORT_ISSUE => crate::external_link::open_url(ISSUES_URL),
         _ => {}
     }
 }
 
-/// Re-fetch the Panel in the current main window. The Panel keeps its
-/// `aleph_session` cookie across this reload — no fresh bootstrap nonce
-/// is needed.
+/// Re-fetch the Panel in the current main window (an in-window reload of the
+/// already-loaded origin).
 fn reload_panel(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -204,4 +209,33 @@ fn open_devtools(app: &AppHandle) {
         return;
     };
     window.open_devtools();
+}
+
+/// The origin the "Open in Browser" item hands to the system browser: the
+/// loopback Gateway for Local, the configured origin for Remote. Pure so it
+/// is unit-testable without a window or menu.
+fn browser_origin(target: &crate::connection::ConnectionTarget) -> String {
+    match target {
+        crate::connection::ConnectionTarget::Local => crate::PANEL_URL.to_string(),
+        crate::connection::ConnectionTarget::Remote(url) => url.as_str().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browser_origin_local_is_the_loopback_panel() {
+        assert_eq!(
+            browser_origin(&crate::connection::ConnectionTarget::Local),
+            "http://127.0.0.1:18790"
+        );
+    }
+
+    #[test]
+    fn browser_origin_remote_is_the_configured_origin() {
+        let target = crate::connection::ConnectionTarget::parse("10.0.0.5").unwrap();
+        assert_eq!(browser_origin(&target), "http://10.0.0.5:18790/");
+    }
 }

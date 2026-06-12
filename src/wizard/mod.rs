@@ -10,7 +10,6 @@ pub mod prompter;
 pub mod session;
 pub mod types;
 
-pub use flows::pairing::PairingFlow;
 pub use flows::{
     onboarding::{OnboardingData, ProviderSetupFlow, QuickSetupFlow},
     OnboardingFlow,

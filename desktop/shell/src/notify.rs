@@ -5,9 +5,9 @@
 //! last mile of R5 ("AI comes to you"). Pure I/O: it forwards events, it
 //! never interprets or acts on them.
 //!
-//! Best-effort by design. If the Gateway requires authentication and no
-//! token is available, the bridge logs a hint and the rest of the shell is
-//! entirely unaffected.
+//! Best-effort by design. If the Gateway closes the connection or rejects the
+//! handshake, the bridge logs a hint and the rest of the shell is entirely
+//! unaffected.
 //!
 //! R5 ("不打扰用户 / 不抢焦点") is enforced here: a notification only fires
 //! when the Panel window is **not** focused. If the user is already looking
@@ -69,7 +69,7 @@ async fn session(
         .map_err(|e| format!("connect failed: {e}"))?;
 
     // The Gateway rejects any first frame that is not `connect`.
-    ws.send(Message::Text(connect_request(target)))
+    ws.send(Message::Text(connect_request()))
         .await
         .map_err(|e| format!("connect send failed: {e}"))?;
     ws.send(Message::Text(subscribe_request()))
@@ -111,36 +111,25 @@ fn ws_url(target: &crate::connection::ConnectionTarget) -> String {
     }
 }
 
-/// Build the `connect` handshake request, including a token if one is
-/// supplied via `ALEPH_GATEWAY_TOKEN` — but only for the Local target.
-///
-/// Security: only the LOCAL daemon may receive the auto-provisioned local
-/// shared token. A remote Gateway must never see it (it would hand a remote
-/// server full local operator control). Remote auth rides the /pair cookie
-/// flow in the webview; the notify WS gracefully degrades without creds.
-fn connect_request(target: &crate::connection::ConnectionTarget) -> String {
-    let mut params = json!({
-        "device_name": "Aleph Desktop",
-        "device_type": "desktop",
-        "device_id": "aleph-desktop-shell",
-        // Declare the surface identity so the gateway routes `surface.notify`
-        // (audience ["desktop"]) here even when the daemon is REMOTE — a remote
-        // client_ip is not loopback, so the Phase 0 fallback would otherwise
-        // label this connection Unknown and it would receive nothing.
-        "channel_kind": "desktop",
-    });
-    if target.is_local() {
-        if let Ok(token) = std::env::var("ALEPH_GATEWAY_TOKEN") {
-            if !token.is_empty() {
-                params["shared_token"] = json!(token);
-            }
-        }
-    }
+/// Build the `connect` handshake request. The LAN-trust Gateway accepts an
+/// unauthenticated `connect` (no device tokens); the bridge connects bare and
+/// only declares its surface identity so the gateway can route `surface.notify`
+/// (audience `["desktop"]`) and `surface.approval` to this desktop surface.
+fn connect_request() -> String {
     json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "connect",
-        "params": params,
+        "params": {
+            "device_name": "Aleph Desktop",
+            "device_type": "desktop",
+            "device_id": "aleph-desktop-shell",
+            // Declare the surface identity so the gateway routes `surface.notify`
+            // (audience ["desktop"]) here even when the Gateway is REMOTE — a
+            // remote client_ip is not loopback, so the fallback would otherwise
+            // label this connection Unknown and it would receive nothing.
+            "channel_kind": "desktop",
+        },
     })
     .to_string()
 }
@@ -156,22 +145,22 @@ fn subscribe_request() -> String {
     .to_string()
 }
 
-/// Route one parsed JSON-RPC frame: surface auth failures, forward events.
+/// Route one parsed JSON-RPC frame: surface connect failures, forward events.
 fn handle_message(app: &AppHandle, msg: &Value) {
-    // An error on the `connect` request (id 1) almost always means the
-    // Gateway requires authentication — log one helpful line.
+    // An error on the `connect` request (id 1) means the Gateway refused the
+    // handshake — log one helpful line; OS notifications stay disabled.
     if let Some(error) = msg.get("error") {
         if msg.get("id").and_then(Value::as_i64) == Some(1) {
             tracing::warn!(
-                "Gateway rejected the desktop shell connection ({}). \
-                 Set ALEPH_GATEWAY_TOKEN to enable OS notifications.",
+                "Gateway rejected the desktop shell connection ({}); \
+                 OS notifications are disabled.",
                 // A closure, not the `Value::as_str` path: inside the
                 // `tracing::warn!` expansion the bare `Value` name resolves
                 // to `tracing::Value` (a trait), not `serde_json::Value`.
                 error
                     .get("message")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("authentication error")
+                    .unwrap_or("connection error")
             );
         }
         return;
@@ -293,40 +282,20 @@ mod tests {
 
     #[test]
     fn connect_request_is_well_formed() {
-        let v: Value = serde_json::from_str(&connect_request(
-            &crate::connection::ConnectionTarget::Local,
-        ))
-        .unwrap();
+        let v: Value = serde_json::from_str(&connect_request()).unwrap();
         assert_eq!(v["method"], "connect");
         assert_eq!(v["params"]["device_type"], "desktop");
         assert_eq!(v["params"]["channel_kind"], "desktop");
     }
 
-    /// Both token cases are in one test to avoid races on the shared env var
-    /// when the test suite runs in parallel.
     #[test]
-    fn connect_request_token_gating_by_target() {
-        std::env::set_var("ALEPH_GATEWAY_TOKEN", "tok-local");
-
-        // Local target: token MUST be present.
-        let v: Value = serde_json::from_str(&connect_request(
-            &crate::connection::ConnectionTarget::Local,
-        ))
-        .unwrap();
-        assert_eq!(
-            v["params"]["shared_token"], "tok-local",
-            "Local connect must include the shared_token"
-        );
-
-        // Remote target: token MUST be absent.
-        let remote = crate::connection::ConnectionTarget::parse("10.0.0.5").unwrap();
-        let v: Value = serde_json::from_str(&connect_request(&remote)).unwrap();
+    fn connect_request_carries_no_credentials() {
+        // LAN-trust: the handshake is bare — no device token of any kind.
+        let v: Value = serde_json::from_str(&connect_request()).unwrap();
         assert!(
             v["params"].get("shared_token").is_none(),
-            "remote connect must NOT leak the local token"
+            "connect must not carry a shared_token under LAN-trust"
         );
-
-        std::env::remove_var("ALEPH_GATEWAY_TOKEN");
     }
 
     #[test]

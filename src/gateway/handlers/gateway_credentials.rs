@@ -1,4 +1,5 @@
-//! `gateway.credentials` — read-only diagnostic snapshot of the auth surface.
+//! `gateway.credentials` — read-only diagnostic snapshot of the gateway
+//! connection surface (bind address, origin policy, mutation hardening).
 //!
 //! Wraps [`build_credential_plan`] for the JSON-RPC layer. Lives on the
 //! Query lane (registered alongside `gateway.metrics.lanes` in
@@ -12,13 +13,12 @@ use super::super::credential_planner::build_credential_plan;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 
 /// Handle `gateway.credentials`. Returns the structured [`CredentialPlan`]
-/// derived from the live `GatewayServerConfig` plus the running process'
-/// environment.
+/// derived from the live `GatewayServerConfig`.
 pub async fn handle_gateway_credentials(
     request: JsonRpcRequest,
     cfg: Arc<GatewayServerConfig>,
 ) -> JsonRpcResponse {
-    let plan = build_credential_plan(&cfg, |name| std::env::var(name).ok());
+    let plan = build_credential_plan(&cfg);
     match serde_json::to_value(&plan) {
         Ok(value) => JsonRpcResponse::success(request.id, value),
         Err(err) => JsonRpcResponse::error(
@@ -32,35 +32,31 @@ pub async fn handle_gateway_credentials(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::config::{AuthConfig, AuthMode, GatewayServerConfig};
+    use crate::gateway::config::GatewayServerConfig;
     use serde_json::json;
 
     #[tokio::test]
-    async fn returns_token_mode_by_default() {
+    async fn returns_default_surface_snapshot() {
         let cfg = Arc::new(GatewayServerConfig::default());
         let req = JsonRpcRequest::with_id("gateway.credentials", None, json!(1));
         let resp = handle_gateway_credentials(req, cfg).await;
         assert!(resp.is_success());
         let value = resp.result.expect("result present");
-        assert_eq!(value["auth_mode"], "token");
-        assert_eq!(value["auth_required"], true);
+        assert_eq!(value["allow_any_origin"], false);
+        assert_eq!(value["allowed_origins_count"], 0);
         assert_eq!(value["bind_address"], "127.0.0.1:18790");
     }
 
     #[tokio::test]
-    async fn reflects_auth_none() {
+    async fn reflects_origin_escape_hatch() {
         let cfg = GatewayServerConfig {
-            auth: AuthConfig {
-                mode: AuthMode::None,
-                ..AuthConfig::default()
-            },
+            allow_any_origin: true,
             ..GatewayServerConfig::default()
         };
         let cfg = Arc::new(cfg);
         let req = JsonRpcRequest::with_id("gateway.credentials", None, json!(1));
         let resp = handle_gateway_credentials(req, cfg).await;
         let value = resp.result.expect("result present");
-        assert_eq!(value["auth_mode"], "none");
-        assert_eq!(value["auth_required"], false);
+        assert_eq!(value["allow_any_origin"], true);
     }
 }

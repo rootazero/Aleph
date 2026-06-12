@@ -1,5 +1,5 @@
 //! `BootCheckGate` — pre-app-shell overlay that blocks rendering of the main
-//! UI until the panel has authenticated to the Gateway at least once.
+//! UI until the panel has connected to the Gateway at least once.
 //!
 //! Aleph's desktop App is a single-core single-window Tauri build, so this
 //! gate intentionally omits openhuman's Local/Cloud mode picker (R3 — no
@@ -9,8 +9,6 @@
 //!   * A "Cannot reach core" trouble screen with a Retry button when the
 //!     probe fails — the existing `connect()` path on app.rs only logs to the
 //!     console, leaving the user with no recovery affordance.
-//!   * Auto-passthrough when `pairing_required` is set, so `PairingModal` can
-//!     own that flow (single source of UI truth).
 //!
 //! Once `has_connected_once` latches true, the gate disengages permanently
 //! for this session — runtime drops are handled by [`ServiceBlockingGate`].
@@ -31,23 +29,18 @@ pub fn BootCheckGate() -> impl IntoView {
     let state = use_context::<DashboardState>().expect("DashboardState not provided");
     let i18n = use_i18n();
 
-    // The gate disengages permanently once we've ever authenticated. After
+    // The gate disengages permanently once we've ever connected. After
     // that, ServiceBlockingGate owns runtime recovery.
     let has_connected_once = state.has_connected_once;
-    let pairing_required = state.pairing_required;
 
-    // Derived: should the overlay be visible at all? We hide on three signals:
+    // Derived: should the overlay be visible at all? We hide on two signals:
     //   * Connected at least once (handed off to ServiceBlockingGate)
-    //   * Pairing is in progress (PairingModal owns the UI)
     //   * Currently connected (caught up to ready state)
     let show_gate = Memo::new(move |_| {
         if has_connected_once.get() {
             return false;
         }
-        if pairing_required.get().is_some() {
-            return false;
-        }
-        // Still booting and never authenticated — gate the shell.
+        // Still booting and never connected — gate the shell.
         !state.is_connected.get()
     });
 
@@ -139,8 +132,7 @@ mod tests {
     // The component itself wires Leptos signals to DOM; we test the gating
     // logic through ConnectionPhase (see state/connection.rs tests). The
     // visibility predicate is intentionally trivial:
-    //   show_gate ⇔ !has_connected_once && pairing_required.is_none()
-    //              && !is_connected
+    //   show_gate ⇔ !has_connected_once && !is_connected
     // Documenting that here so future changes invalidate this comment
     // before they invalidate behavior.
 

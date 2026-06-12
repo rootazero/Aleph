@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Aleph Panel",
+  "identifier": "ai.aleph.panel",
+  "bundle": {
+    "externalBin": []
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/rootazero/Aleph/releases/latest/download/latest-panel.json"
+      ]
+    }
+  }
+}

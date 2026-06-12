@@ -247,8 +247,10 @@ git add -A && git commit -m "gateway: remove auth/pairing/devices method handler
 
 **Files:**
 - Modify: `src/gateway/server/mod.rs:362-367,433,486,542-549,676-680`（删 `auth_routes` 字段、`set_auth_routes`、挂载块）
-- Delete: `src/gateway/auth_middleware.rs`（486 行）、`src/gateway/bootstrap.rs`（160 行）、`src/gateway/challenge.rs`（334 行）、`src/gateway/pair_loop_guard.rs`
-- Modify: `src/gateway/mod.rs`（删 4 个 mod 声明）
+- Delete: `src/gateway/auth_middleware.rs`（486 行）、`src/gateway/bootstrap.rs`（160 行）、`src/gateway/challenge.rs`（334 行）
+- Modify: `src/gateway/mod.rs`（删 3 个 mod 声明）
+
+> **T4 审查修正（2026-06-12）**：原文此处还删 `src/gateway/pair_loop_guard.rs`——**计划错误，不删**。它是 channel 适配器的 bot↔bot 回复风暴防护（出生提交 `0a8e40389` 即 channel 功能，按 `MessageMeta::BotAuthored` 门控），被 `inbound_router/mod.rs` 和 `channel_policy.rs`（spec §4.2 明确保留）消费，与 `/pair` 页面、设备配对、HTTP auth 零关系。与 T3 的 pairing.rs/pairing_store.rs 同属"channel vs device 混淆"。`gateway/mod.rs` 的 `mod pair_loop_guard` 声明保留。
 - Modify: builder 中 `set_auth_routes(...)` 调用点（`grep -rn "set_auth_routes\|auth_routes(" src/bin/ src/gateway/`）
 
 - [ ] **Step 1: 删字段与挂载**
@@ -354,8 +356,12 @@ OriginPolicy 装配点（`grep -rn "OriginPolicy::new\|origin_policy" src/bin/ s
 
 ```bash
 cd src/gateway/security && ls | grep -v -e "^crypto.rs$" -e "^mod.rs$" | xargs git rm -r && cd -
-git rm src/gateway/device_store.rs src/gateway/pairing_store.rs src/gateway/trusted_proxy.rs
+git rm src/gateway/device_store.rs src/gateway/trusted_proxy.rs
 ```
+
+> **T3 审查修正（2026-06-12）**：原文此处还删 `src/gateway/pairing_store.rs`——那是**计划错误**。该文件是 **channel 发送者配对** store（`channel.pairing.*`，被 `inbound_router/{mod,permission,types}.rs`、`start/mod.rs`、`builder/subsystems.rs` 消费，属 spec §4.2 "session/channel/execution 全部不动"的保留范围），与设备认证配对（`security/store/pairing.rs`、`security/pairing.rs`，本步删除）是两套东西。**不要删 `pairing_store.rs` 和 `handlers/pairing.rs`**（后者 T3 已据此保留）。
+
+> **T5 执行修正（2026-06-12，方案 B 重定范围）**：implementer BLOCKED 升级证实 `security/shared_token.rs` 是**生产密钥保险库本体**（SecretVault 宿主 + vault 主密钥经 `store/` 持久化，合计 ~50+ 保留范围消费者），照原清单删除会毁掉 providers/OAuth/channel 的全部密钥存储。裁决：**保留 `shared_token.rs`、`store/`（整个）、`token_readonly.rs`（admin IPC bearer）、`crypto.rs`**；只删纯 auth 模块（上行 Step 4 命令需排除这四者）。级联删除：`gateway/session.rs`（HTTP cookie 会话，T4 后零消费者）、`handlers/guests.rs`、`wizard/flows/pairing.rs`、前拉 T6 的 4 个 server 侧 CLI 文件。`AuthContext` 收缩为 `{shared_token_mgr, security_store, node_registry}` 三字段；`initialize_auth`→`initialize_vault`。实际落地：commits `5b37242a4` + `6fdd7810f`（47 文件，净 −7,185 行）。Vault 抽离 = 未来独立任务。
 
 `security/mod.rs` 改写为仅 `pub mod crypto;`（保留文件头注释里 crypto 相关部分）。
 
@@ -543,6 +549,10 @@ embedded-core = []
 
 `deeplink.rs`：删 pairing 分支（`grep -n "pair" desktop/shell/src/deeplink.rs` 定位）；若删后文件无实义则整删并清 mod。
 
+> **修正注（T9 执行时核实，2026-06-12）**：`deeplink.rs` 实际**没有 pairing 分支**——它是通用 raw-URL 转发器（`aleph://…` → focus 窗口 + `aleph:deep-link` DOM CustomEvent 交 Panel 路由），壳从不解释深链内容。spec §5.4 所指"配对深链（deeplink 中 pairing 部分）"是 Panel 侧概念，已随 T1-T8 删除。本文件零改动，保留原样。
+>
+> **修正注 2（"Open in Browser" 菜单项处置）**：menu.rs 的 `ID_OPEN_BROWSER` 原实现 100% nonce 耦合（spawn `aleph-server bootstrap-url` 子进程→`/auth/bootstrap?nonce=…`→系统浏览器），机制必删；但其用户面功能（在系统浏览器打开 Panel）按 spec §4.1 对 CLI 胞兄 `aleph open` 的对称处置（去 nonce 保留）应予保留——恢复为裸打开当前 `ConnectionTarget` origin（Local→`http://127.0.0.1:18790`，Remote→所配 URL），复用 `external_link::open_url`，两变体共有不门控。
+
 - [ ] **Step 3: 双矩阵编译**
 
 ```bash
@@ -604,6 +614,8 @@ pub fn discover() -> Vec<String> {
 ```
 
 （窗口部分按 splash 现有模式实现：`grep -rn "splash" desktop/shell/src/main.rs` 找加载内联 HTML 的现成写法照抄。）
+
+> **修正注（T10 执行时裁决，2026-06-12）**：实际实现**未新建独立 WebviewWindow**，而是复用既有 `splash/connect.html`（先于本任务存在：地址输入+Connect 按钮+双变体打包+tray/menu "Connect Remote" 既有目标），lite 下渐进增强出 mDNS 发现区（`discover_servers` invoke 失败=full 变体→静默隐藏发现区，full 行为等价不变）。spec §5.3"原生小窗"的功能要求（手填 IP[:端口]+发现列表点选）全满足；单源 DRY 避免第二份连接 UI 漂移。失败重试选型：TCP-probe-before-navigate（Tauri 2.11.2 无导航失败事件，错误回调不可行）；`connection::marker_exists()` 区分首启与 marker=local。
 
 - [ ] **Step 2: main.rs 接线**
 
@@ -794,6 +806,22 @@ grep -rn "pairing\|show-token\|bootstrap-url\|/pair" docs/ CLAUDE.md README.md -
 git add -A && git commit -m "docs: LAN-trust distribution and security model"
 ```
 
+> ⚠️ 实现修正：`git add -A` 不安全（worktree 有未 gitignore 的 `interfaces/webchat/node_modules` 数千文件）。改为只 add 本任务改动的 `.md` 文件。
+
+### Amendment 6（controller，2026-06-12）— T13 scope 扩展 + 计划材料 3 处更正
+
+执行中发现两类与计划散文不符，据此扩展/修正（均以分支已提交的真实代码为准）：
+
+**A. SECURITY.md 残留子系统区扩入 scope。** `docs/reference/SECURITY.md` 的 `## Identity Context & Permission Enforcement` 整节（约行 22–284）连同 Overview（行 3 顶注、行 9–16 bullets）描述的是**本弧 Task 1–5 已删除的 role-based guest-invitation 权限子系统**——`policy_engine.rs` / `invitation_manager.rs` 已不存在（核实：`src/gateway/security/` 现仅 `crypto.rs / mod.rs / shared_token.rs / store/ / token_readonly.rs`），`aleph guests *` CLI 已删。计划原文仅命名"auth-ux 节"属 under-scoping。**T13 scope 扩展为同时清理此节**，与"使 SECURITY.md 符合 LAN-trust 现实"同质。清理须严格区分：
+- **删/改写**：Identity-based 权限流图、Invitation Manager、Policy Engine、GuestScope、`Role::Guest/Anonymous`、Guest Invitation Flow、`aleph guests` CLI、"Security Guarantees"中 guest/invitation 条目。
+- **保留**：`## Architecture`（行 286 起的 Exec Kernel：Command Parser / Risk Analyzer / Approval Manager / Allowlist / Output Masking / Audit）及其后 `## Exec Kernel` 全部——这是 `src/exec/` shell 安全子系统，**未删**。
+- **据实改写为保留机制**：工具级权限现由 **ScopedToolService 通道工具权限层**（spec §4.2 明确保留，三层 merge global→agent→channel）治理，非 role-based；`IdentityContext`/`Role` 若仍存于 `shared/protocol/src/auth.rs` 则坍缩为单一 owner 身份（connect 恒返 operator），按**存活类型**据实写，勿引用已删类型。
+
+**B. 计划材料 3 处更正（已据实落文档，记录在案）：**
+1. 材料 #5「`aleph open` 保留去 nonce」→ 实为**桌面 shell 菜单项 "Open in Browser"**（`desktop/shell/src/menu.rs`），无此 CLI 命令（`cli.rs` 的 `Command` enum 无 `Open` 变体）。
+2. 材料 #9「`method_authz` 已删」→ 文件仍在（`src/gateway/method_authz.rs`），但 RPC 级 gate 已 inert（caller 恒 operator 恒过），仍被 `ScopedToolService` 当 tool-dispatch 分类器消费。文档按**效果**写（无方法级门槛、含 PTY/shell），不声称"文件已删"。
+3. 材料 #3「Origin 放行…私网」→ 代码**不**按 RFC1918 网段 auto-allow 私网 IP，仅放行 无 Origin / loopback / `tauri:` / allow-list / 同源。SECURITY.md 规则表据实写明。
+
 ---
 
 ## 收尾验收（全计划完成后）
@@ -807,3 +835,17 @@ git add -A && git commit -m "docs: LAN-trust distribution and security model"
   4. 完整版零配置开箱（`just shell-build` 装 .app 验证）
 - [ ] 删除量核对：`git diff --stat <计划起点>..HEAD | tail -1` 预期净删 10k+ 行
 - [ ] CHANGELOG.md 写条目后按 CLAUDE.md 发版流程 `just release`（用户触发）
+
+---
+
+## Amendment 7（controller，2026-06-13）— Host 白名单 DNS-rebinding 硬化（最终审查后，用户选定）
+
+**背景**：全部 13 task 完成后的最终代码审查（final-rev-static）判 ✅ 可合入、零 CRITICAL/HIGH，但记一条 **MEDIUM (M1)**：删除认证后 `src/gateway/origin_policy.rs` 的 WS Origin 校验成为浏览器面**唯一**护栏，其 **same-origin 放行路径挡不住经典 DNS-rebinding**——攻击者在 `evil.com:18790` 托管恶意页，把 `evil.com` 重绑到网关地址后，请求带 `Origin == Host == evil.com:18790` 即同源放行，驱动 agent（含 PTY）。`is_allowed` 逻辑与回退前逐字节相同（既有 gap），但回退删了门后的 auth 兜底使其更暴露。
+
+**决策（用户经 AskUserQuestion 选定"加 Host 白名单硬化"）**：gate 住 same-origin 放行——**仅当请求 `Host` 的主机部分是 IP 字面量或 loopback 时**才 auto-allow same-origin；域名 Host 不再自动同源放行（须走 `[gateway] allowed_origins`）。依据：DNS-rebinding 必须用域名（重绑 A 记录），纯 IP/loopback 的 Host 无法被重绑。
+
+**不破坏的已发布场景**：loopback 浏览器、LAN-IP 浏览器（`10.x:18790` Host 是 IP 字面量→放行，LAN 模式关键路径）、IPv6、tauri shell、native 无 Origin、allow-list。**有意行为变更**：零配置**域名** same-origin 现被拒，域名部署须 allow-list 其 origin——这是堵 rebinding 的必要代价。
+
+**实现**：`is_allowed` same-origin 分支加 `&& host_is_ip_or_loopback(host)` 门 + helper（剥端口含 IPv6 括号、判 loopback/IP 字面量）+ TDD 测试（rebinding 域名 Host 被拒 / LAN-IP 同源放行 / IPv6 / 域名同源无配置被拒+加 allow-list 后放行）+ 三处文档措辞改为"已防御"（origin_policy.rs / SECURITY.md / CLAUDE.md，撤回 Amendment 阶段加的"当前未实现"限制说明）。验证 `cargo clippy -p alephcore -- -D warnings`（项目 gate，不含 --all-targets）+ `cargo test -p alephcore --lib origin_policy`。
+
+**合并**：硬化完成后，用户选定由 controller 合 `lan-trust-revert → 本地 main`（main 已并发前进 32 commits，先 merge main 入分支 ort 解 webchat 冲突→验证→`--no-ff`）。全程 NOT pushed，推送/发版由用户触发。

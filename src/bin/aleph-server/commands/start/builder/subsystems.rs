@@ -5,91 +5,49 @@
 //! Subsystem initializers extracted from `start/mod.rs`.
 //!
 //! Each function handles one cohesive initialization concern:
-//! - POE handlers
-//! - Authentication
+//! - Security store + secrets vault (and the secrets/cluster handler context)
 //! - App config loading (with secrets vault)
 //! - Channel registration
 //! - Inbound message routing
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use alephcore::gateway::server::ConnectionState;
 use alephcore::sync_primitives::{Arc, RwLock};
 
-use alephcore::gateway::device_store::DeviceStore;
 use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::interfaces::telegram::offset::OffsetTracker;
 use alephcore::gateway::interfaces::telegram::parse_telegram_channel_config;
 use alephcore::gateway::interfaces::TelegramChannel;
 #[cfg(target_os = "macos")]
 use alephcore::gateway::interfaces::{IMessageChannel, IMessageConfig};
-use alephcore::gateway::security::{PairingManager, TokenManager};
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{AgentRegistry, ChannelRegistry, InboundMessageRouter, RoutingConfig};
 
 use super::register_channel_handlers;
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
+// ── Security store + vault ──────────────────────────────────────────────────
 
-/// Return type for `initialize_auth`: all security objects needed by the caller.
-pub(in crate::commands::start) struct AuthBundle {
-    pub device_store: Arc<DeviceStore>,
+/// Return type for `initialize_vault`: the security store, the secrets
+/// vault (inside the handler context), and the mDNS broadcaster.
+pub(in crate::commands::start) struct VaultBundle {
     pub security_store: Arc<alephcore::gateway::security::SecurityStore>,
-    pub pairing_manager: Arc<alephcore::gateway::security::PairingManager>,
-    pub token_manager: Arc<alephcore::gateway::security::TokenManager>,
     pub auth_ctx: Arc<auth_handlers::AuthContext>,
     pub mdns_broadcaster: Option<alephcore::gateway::MdnsBroadcaster>,
-    pub invitation_manager: Arc<alephcore::gateway::security::InvitationManager>,
-    pub guest_session_manager: Arc<alephcore::gateway::security::GuestSessionManager>,
-    /// Shared with the loopback `/auth/bootstrap` HTTP route so the
-    /// issuer (RPC handler inside `auth_ctx`) and the consumer (HTTP
-    /// route) see the same nonce map.
-    pub bootstrap_mgr: Arc<alephcore::gateway::bootstrap::BootstrapNonceManager>,
-    /// Shared with the loopback `/auth/bootstrap` HTTP route so the
-    /// same-machine bootstrap-consume flow (inside `auth_ctx`) and the cookie
-    /// issuer (HTTP route) operate on the same session store.
-    pub session_mgr: Arc<alephcore::gateway::session::HttpSessionManager>,
 }
 
-/// Initialize authentication and security subsystems (construction only).
-/// Does NOT register handlers — the orchestrator layer is responsible for that.
-#[allow(clippy::too_many_arguments)]
-pub(in crate::commands::start) fn initialize_auth(
+/// Open the security store, bring up the encrypted secrets vault, and build
+/// the shared context for the `secrets.*` / `cluster.*` handlers
+/// (construction only — the orchestrator layer registers handlers).
+///
+/// The shared token is loaded (or provisioned on first start)
+/// unconditionally: it is the vault master key and the `/v1/admin` IPC
+/// bearer, both of which outlive the removed device-auth machinery.
+pub(in crate::commands::start) fn initialize_vault(
     port: u16,
-    event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
-    auth_mode: alephcore::gateway::config::AuthMode,
-    state_versions: Arc<alephcore::gateway::state_version::StateVersionTracker>,
-    transport_policy: alephcore::gateway::handlers::auth::TransportPolicy,
-    instance_id: String,
-    started_at_unix: i64,
-    presence: Arc<alephcore::gateway::presence::PresenceTracker>,
-    connections: Arc<tokio::sync::RwLock<HashMap<String, ConnectionState>>>,
-    max_connections: u32,
-    require_challenge: bool,
-    allow_guest: bool,
-    enable_pairing: bool,
-    bootstrap_cfg: &alephcore::gateway::config::BootstrapConfig,
-    session_expiry_hours: u64,
-    daemon: bool,
     node_registry: Arc<alephcore::cluster::NodeRegistry>,
-) -> AuthBundle {
+) -> VaultBundle {
     use alephcore::utils::paths;
     use tracing::{info, warn};
-
-    let device_store_path =
-        paths::get_devices_db_path().unwrap_or_else(|_| PathBuf::from("/tmp/aleph_devices.db"));
-
-    let device_store = Arc::new(
-        DeviceStore::open(&device_store_path)
-            .or_else(|e| {
-                eprintln!(
-                    "Warning: Failed to load device store from {device_store_path:?}: {e}. Using in-memory."
-                );
-                DeviceStore::in_memory()
-            })
-            .expect("Fatal: Failed to create in-memory device store fallback"),
-    );
 
     let security_store_path =
         paths::get_security_db_path().unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
@@ -103,16 +61,6 @@ pub(in crate::commands::start) fn initialize_auth(
             })
             .expect("Fatal: Failed to create in-memory security store fallback"),
     );
-
-    let token_manager = Arc::new(TokenManager::new(security_store.clone()));
-    let pairing_manager = Arc::new(PairingManager::new(security_store.clone()));
-
-    // Clone before moving into AuthContext so AuthBundle can expose them directly.
-    let security_store_out = security_store.clone();
-    let pairing_manager_out = pairing_manager.clone();
-    let token_manager_out = token_manager.clone();
-    let invitation_manager = Arc::new(alephcore::gateway::security::InvitationManager::new());
-    let guest_session_manager = Arc::new(alephcore::gateway::security::GuestSessionManager::new());
 
     let mdns_broadcaster = match alephcore::gateway::MdnsBroadcaster::new(port, "aleph") {
         Ok(broadcaster) => {
@@ -150,89 +98,34 @@ pub(in crate::commands::start) fn initialize_auth(
         }
     }
 
-    if auth_mode.is_auth_required() {
-        match shared_token_mgr.try_load_token_from_db() {
-            Some(_) => {
-                info!(
-                    "auth token ready (loaded from DB) — desktop app auto-injects; \
-                     CLI users: run `aleph-server bootstrap-token` to retrieve"
-                );
-            }
-            None => match shared_token_mgr.generate_token() {
-                Ok(_) => {
-                    info!(
-                        "auth token provisioned (first start) — desktop app \
-                         auto-injects; CLI users: run `aleph-server bootstrap-token`"
-                    );
-                }
-                Err(e) => {
-                    warn!("Failed to generate shared token: {}", e);
-                }
-            },
+    // Load (or first-start provision) the shared token. Device auth is gone,
+    // but the token is still the vault master key — without it in memory every
+    // `get_secret`/`store_secret` fails — and the `/v1/admin` IPC bearer the
+    // CLI reads via `read_current_token_readonly`.
+    match shared_token_mgr.try_load_token_from_db() {
+        Some(_) => {
+            info!("vault master token ready (loaded from DB)");
         }
+        None => match shared_token_mgr.generate_token() {
+            Ok(_) => {
+                info!("vault master token provisioned (first start)");
+            }
+            Err(e) => {
+                warn!("Failed to generate shared token: {}", e);
+            }
+        },
     }
 
-    let bootstrap_mgr = Arc::new(alephcore::gateway::bootstrap::BootstrapNonceManager::new(
-        std::time::Duration::from_secs(bootstrap_cfg.nonce_ttl_secs),
-        std::time::Duration::from_secs(bootstrap_cfg.used_retention_secs),
-    ));
-
-    let session_mgr = Arc::new(alephcore::gateway::session::HttpSessionManager::new(
-        security_store_out.clone(),
-        session_expiry_hours,
-    ));
-
     let auth_ctx = Arc::new(auth_handlers::AuthContext {
-        token_manager,
-        pairing_manager,
-        device_store: device_store.clone(),
-        security_store,
-        invitation_manager: invitation_manager.clone(),
-        guest_session_manager: guest_session_manager.clone(),
-        event_bus,
-        auth_mode,
-        allow_guest,
-        enable_pairing,
         shared_token_mgr,
-        state_versions,
-        transport_policy,
-        instance_id: instance_id.clone(),
-        started_at_unix,
-        presence,
-        connections,
-        max_connections,
-        challenge_manager: Arc::new(
-            alephcore::gateway::challenge::ChallengeManager::with_server_id(instance_id),
-        ),
-        require_challenge,
-        bootstrap_mgr: bootstrap_mgr.clone(),
-        session_mgr: session_mgr.clone(),
-        bind_port: port,
+        security_store: security_store.clone(),
         node_registry,
     });
 
-    if !daemon {
-        println!("Auth methods:");
-        println!("  - connect         : Authenticate connection");
-        println!("  - pairing.approve : Approve device pairing");
-        println!("  - pairing.reject  : Reject device pairing");
-        println!("  - pairing.list    : List pending pairings");
-        println!("  - devices.list    : List approved devices");
-        println!("  - devices.revoke  : Revoke device access");
-        println!();
-    }
-
-    AuthBundle {
-        device_store,
-        security_store: security_store_out,
-        pairing_manager: pairing_manager_out,
-        token_manager: token_manager_out,
+    VaultBundle {
+        security_store,
         auth_ctx,
         mdns_broadcaster,
-        invitation_manager,
-        guest_session_manager,
-        bootstrap_mgr,
-        session_mgr,
     }
 }
 

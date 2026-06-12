@@ -11,6 +11,16 @@
 )]
 
 mod connection;
+// First-run connection setup (address entry + mDNS discovery) is panel-only:
+// the full app brings its bundled daemon up and never needs a connect-first
+// step. The panel-only shell hosts no daemon, so on first launch it has no
+// Gateway to point at and must ask (spec §8).
+#[cfg(not(feature = "embedded-core"))]
+mod connect_setup;
+// Daemon lifecycle + the TCC permission monitor are full-app-only: the
+// panel-only (`--no-default-features`) shell hosts no local `aleph-server`,
+// so there is nothing to launch, supervise, or watch permissions for.
+#[cfg(feature = "embedded-core")]
 mod daemon;
 mod deeplink;
 mod external_link;
@@ -18,25 +28,26 @@ mod hotkey;
 #[cfg(target_os = "macos")]
 mod menu;
 mod notify;
+#[cfg(feature = "embedded-core")]
 mod perm_monitor;
 mod tray;
 mod update;
 mod webview_perms;
 
-use std::time::Duration;
-
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_window_state::{StateFlags, WindowExt};
 
-/// The local daemon's Panel origin. The webview navigates here once the
-/// daemon reports ready; until then it shows the bundled splash.
+/// The loopback Gateway origin. In the full app the bundled daemon serves it;
+/// in both variants the `Local` connection target resolves here.
 const PANEL_URL: &str = "http://127.0.0.1:18790";
 
-/// How often the daemon health supervisor probes `/ready`.
-const HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(5);
+/// How often the daemon health supervisor probes `/ready`. Full-app-only.
+#[cfg(feature = "embedded-core")]
+const HEALTH_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 /// Consecutive failed probes before the daemon is declared down. At the
 /// poll interval above this is ~15s of sustained silence — long enough to
-/// ride out a brief stall, short enough to recover quickly.
+/// ride out a brief stall, short enough to recover quickly. Full-app-only.
+#[cfg(feature = "embedded-core")]
 const FAILURES_TO_DECLARE_DOWN: u32 = 3;
 
 /// Injected into every document the webview loads (splash and Panel).
@@ -66,19 +77,6 @@ fn window_state_flags() -> StateFlags {
 }
 
 fn main() {
-    // Inject the auto-provisioned shared token before any subsystems boot.
-    // The notify.rs subsystem reads ALEPH_GATEWAY_TOKEN during connect_request
-    // — this must be set before Tauri/Tokio threads start. The token is read
-    // daemon-free from ~/.aleph/data/security.db via the bundled `aleph-server
-    // bootstrap-token` subcommand: no OS keychain, so no Keychain UI prompt on
-    // app updates. The guard ensures an explicit env override is never
-    // clobbered.
-    if std::env::var_os("ALEPH_GATEWAY_TOKEN").is_none() {
-        if let Some(token) = daemon::load_shared_token() {
-            std::env::set_var("ALEPH_GATEWAY_TOKEN", token);
-        }
-    }
-
     init_tracing();
 
     let builder = tauri::Builder::default()
@@ -105,22 +103,43 @@ fn main() {
         // summon hotkey — all pure OS integration.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        // The only `invoke_handler` the shell exposes: connection-config
-        // commands (local vs remote Gateway target). These are I/O config
-        // toggles, not business or UI logic — the R2/R4 boundary holds
-        // (spec §5.2 explicit exception). Every *panel-facing* operation
-        // still goes through the gateway's JSON-RPC (`fs.*` for directory
-        // browsing, `projects.*` for the catalogue); the shell stays pure
-        // I/O: window, tray, updater, hotkey, connection target.
-        .invoke_handler(tauri::generate_handler![
-            connection::get_connection_target,
-            connection::set_connection_target,
-            connection::clear_connection_target,
-        ])
-        // Shared update state: the background checker, the tray, and the
-        // macOS menu all read it.
-        .manage(update::Updater::default());
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build());
+
+    // The only `invoke_handler` the shell exposes: connection-config commands
+    // (local vs remote Gateway target). These are I/O config toggles, not
+    // business or UI logic — the R2/R4 boundary holds (spec §5.2 explicit
+    // exception). Every *panel-facing* operation still goes through the
+    // gateway's JSON-RPC (`fs.*` for directory browsing, `projects.*` for the
+    // catalogue); the shell stays pure I/O: window, tray, updater, hotkey,
+    // connection target.
+    //
+    // Both variants register `is_lite_shell` so the connect page can resolve
+    // which variant hosts it deterministically (full answers `false`). The
+    // panel-only variant additionally exposes the first-run setup surface
+    // (`discover_servers` for LAN mDNS discovery, `connect_to` for a
+    // probe-guarded target switch); those are compiled out of the full app.
+    // The two arms are mutually exclusive `generate_handler!` invocations —
+    // only one is ever registered.
+    #[cfg(feature = "embedded-core")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        connection::get_connection_target,
+        connection::set_connection_target,
+        connection::clear_connection_target,
+        connection::is_lite_shell,
+    ]);
+    #[cfg(not(feature = "embedded-core"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        connection::get_connection_target,
+        connection::set_connection_target,
+        connection::clear_connection_target,
+        connection::is_lite_shell,
+        connect_setup::discover_servers,
+        connect_setup::connect_to,
+    ]);
+
+    // Shared update state: the background checker, the tray, and the macOS
+    // menu all read it.
+    let builder = builder.manage(update::Updater::default());
 
     // macOS shows an app menu in the system menu bar regardless of window
     // chrome; give it shell-aware items. Windows and Linux stay chromeless.
@@ -153,6 +172,8 @@ fn main() {
             // (input_monitoring, screen_recording). When the user grants one
             // in System Settings and returns to the app, the daemon is
             // restarted automatically — no manual "restart aleph-server" step.
+            // Full-app only: the panel-only shell owns no local daemon to restart.
+            #[cfg(feature = "embedded-core")]
             perm_monitor::start_monitor(handle.clone());
 
             // Background worker: bring the daemon up, reveal the Panel, then
@@ -259,78 +280,30 @@ fn spawn_background(handle: tauri::AppHandle) {
                 }
             };
             rt.block_on(async move {
-                let version = handle.package_info().version.to_string();
-                let target = connection::load_target();
+                // Bring the chosen target online and reveal the Panel. The full
+                // app supervises the bundled daemon; the panel-only shell just
+                // navigates to the configured origin (no local daemon to manage).
+                let up = bring_target_online(&handle).await;
 
-                // Bring the chosen target online. Local owns + supervises the
-                // bundled daemon (today's behaviour, kept byte-for-byte);
-                // Remote never touches a local daemon — we only probe TCP
-                // reachability and navigate the webview at the remote origin.
-                let up = match &target {
-                    connection::ConnectionTarget::Local => {
-                        // Explicitly clear the remote allow-list (idempotent):
-                        // Local navigations only ever touch loopback.
-                        external_link::set_remote_host(None);
-                        // First launch / post-update: force any stale daemon
-                        // offline so the `aleph-server` bundled in this app
-                        // takes over.
-                        daemon::reconcile_for_version(&version).await;
-                        match daemon::ensure_ready().await {
-                            Ok(()) => {
-                                reveal_panel(&handle);
-                                true
-                            }
-                            Err(e) => {
-                                tracing::error!("daemon did not become ready: {e}");
-                                show_daemon_error(&handle, &e);
-                                false
-                            }
-                        }
-                    }
-                    connection::ConnectionTarget::Remote(url) => {
-                        // Allow the remote origin in the link guard so in-Panel
-                        // navigations stay in the webview instead of escaping
-                        // to the OS browser.
-                        external_link::set_remote_host(Some(url.clone()));
-                        let host = url.host_str().unwrap_or("").to_string();
-                        let port = url.port_or_known_default().unwrap_or(18790);
-                        let reachable = daemon::tcp_reachable(&host, port).await;
-                        if reachable {
-                            // Navigate the webview to the remote root; an
-                            // unauthenticated client is redirected to `/pair`.
-                            if let Some(window) = handle.get_webview_window("main") {
-                                let _ = window.navigate(url.clone());
-                            }
-                            focus_window(&handle);
-                        } else {
-                            // Spec §5.5: a remote that is unreachable at startup
-                            // must land on the bundled connection page (retry /
-                            // back-to-local), never on the dead remote origin —
-                            // otherwise the user stares at the webview's native
-                            // "can't connect" page until the supervisor's first
-                            // tick (one HEALTH_POLL_INTERVAL later) corrects it.
-                            tracing::warn!(
-                                "remote Gateway {host}:{port} not reachable at startup — showing connection page"
-                            );
-                            show_connection_page(
-                                &handle,
-                                "Remote Gateway unreachable. Retry or go back to local.",
-                            );
-                            focus_window(&handle);
-                        }
-                        reachable
-                    }
-                };
-
-                // Three resident background tasks for the lifetime of the
-                // shell: the OS-notification bridge, the daemon/Gateway health
-                // supervisor, and the auto-update checker. None returns;
-                // run them together.
+                // Resident background tasks for the lifetime of the shell. The
+                // OS-notification bridge and the auto-update checker are common
+                // to both variants; the daemon/Gateway health supervisor is
+                // full-app-only (the panel-only shell owns no daemon to keep
+                // alive). None returns; run them together.
+                #[cfg(feature = "embedded-core")]
                 tokio::join!(
                     notify::run_notification_bridge(handle.clone()),
                     supervise_daemon(handle.clone(), up),
                     update::run_update_checker(handle),
                 );
+                #[cfg(not(feature = "embedded-core"))]
+                {
+                    let _ = up;
+                    tokio::join!(
+                        notify::run_notification_bridge(handle.clone()),
+                        update::run_update_checker(handle),
+                    );
+                }
             });
         });
     if let Err(e) = spawned {
@@ -338,28 +311,134 @@ fn spawn_background(handle: tauri::AppHandle) {
     }
 }
 
-/// Point the main window's webview at the live Panel, without disturbing the
-/// window's visibility — used for the first reveal and for a silent reload
-/// after the daemon recovers.
+/// Bring the configured target online and reveal the Panel. Returns whether
+/// the target is believed up (the full-app supervisor's initial state).
 ///
-/// `bootstrap_url`: when present (Phase 2 default), the daemon-issued
-/// `/auth/bootstrap?nonce=…` URL — the daemon validates the nonce and
-/// sets the session cookie, the Panel never sees a token in the URL.
-/// Pass `None` for in-window reloads (the Panel already holds a session
-/// cookie) and for the rare cold path where nonce-issue fails — the
-/// gateway redirects unauthenticated browsers to `/pair`.
-fn navigate_to_panel(handle: &tauri::AppHandle, bootstrap_url: Option<&str>) {
+/// Full app: Local owns + supervises the bundled daemon (reconcile any stale
+/// daemon offline, launch the bundled one, wait for `/ready`, then reveal);
+/// Remote only probes TCP reachability and navigates the webview.
+#[cfg(feature = "embedded-core")]
+async fn bring_target_online(handle: &tauri::AppHandle) -> bool {
+    let version = handle.package_info().version.to_string();
+    let target = connection::load_target();
+    match &target {
+        connection::ConnectionTarget::Local => {
+            // Explicitly clear the remote allow-list (idempotent): Local
+            // navigations only ever touch loopback.
+            external_link::set_remote_host(None);
+            // First launch / post-update: force any stale daemon offline so the
+            // `aleph-server` bundled in this app takes over.
+            daemon::reconcile_for_version(&version).await;
+            match daemon::ensure_ready().await {
+                Ok(()) => {
+                    reveal_panel(handle);
+                    true
+                }
+                Err(e) => {
+                    tracing::error!("daemon did not become ready: {e}");
+                    show_daemon_error(handle, &e);
+                    false
+                }
+            }
+        }
+        connection::ConnectionTarget::Remote(url) => {
+            // Allow the remote origin in the link guard so in-Panel navigations
+            // stay in the webview instead of escaping to the OS browser.
+            external_link::set_remote_host(Some(url.clone()));
+            let host = url.host_str().unwrap_or("").to_string();
+            let port = url.port_or_known_default().unwrap_or(18790);
+            let reachable = daemon::tcp_reachable(&host, port).await;
+            if reachable {
+                if let Some(window) = handle.get_webview_window("main") {
+                    let _ = window.navigate(url.clone());
+                }
+                focus_window(handle);
+            } else {
+                // Spec §5.5: a remote that is unreachable at startup must land
+                // on the bundled connection page (retry / back-to-local), never
+                // on the dead remote origin — otherwise the user stares at the
+                // webview's native "can't connect" page until the supervisor's
+                // first tick (one HEALTH_POLL_INTERVAL later) corrects it.
+                tracing::warn!(
+                    "remote Gateway {host}:{port} not reachable at startup — showing connection page"
+                );
+                show_connection_page(
+                    handle,
+                    "Remote Gateway unreachable. Retry or go back to local.",
+                );
+                focus_window(handle);
+            }
+            reachable
+        }
+    }
+}
+
+/// Bring the configured target online and reveal the Panel (panel-only shell).
+///
+/// There is no local daemon to launch or supervise — the shell only points the
+/// webview at a Gateway someone else runs. The first-run / unreachable cases
+/// must never leave the user on a blank "can't connect" page (spec §8):
+///
+///   * No target ever chosen (first run) → open the bundled connection page so
+///     the user can type an address or pick a `aleph-server` discovered on the
+///     LAN via mDNS.
+///   * A target is chosen but unreachable → open the same connection page
+///     (with the failed address prefilled) so they can retry, change it, or
+///     rescan — not a dead origin.
+///   * Reachable → navigate to it.
+///
+/// Returns `true` unconditionally — the panel-only variant runs no health
+/// supervisor that would consume the value.
+#[cfg(not(feature = "embedded-core"))]
+async fn bring_target_online(handle: &tauri::AppHandle) -> bool {
+    // First run: no target has ever been chosen. Ask before navigating
+    // anywhere — there is no sensible default Gateway for a panel-only shell.
+    if !connection::marker_exists() {
+        tracing::info!("no connection target configured — opening first-run connect page");
+        connect_setup::show_lite_connect_page(handle);
+        return true;
+    }
+
+    let target = connection::load_target();
+    match &target {
+        connection::ConnectionTarget::Local => external_link::set_remote_host(None),
+        connection::ConnectionTarget::Remote(url) => {
+            external_link::set_remote_host(Some(url.clone()));
+        }
+    }
+
+    if connect_setup::target_reachable(&target).await {
+        navigate_to_target(handle, &target);
+        focus_window(handle);
+    } else {
+        // Configured but down: land on the operable connection page rather than
+        // the webview's native error page (spec §8 — no white screen).
+        tracing::warn!("configured Gateway unreachable at startup — opening connect page");
+        connect_setup::show_lite_connect_page(handle);
+    }
+    true
+}
+
+/// Point the main window's webview at the configured Gateway origin. Local
+/// resolves to the loopback default; Remote to the configured URL. Used for
+/// the first reveal and for a silent reload after the daemon recovers.
+fn navigate_to_target(handle: &tauri::AppHandle, target: &connection::ConnectionTarget) {
     let Some(window) = handle.get_webview_window("main") else {
         tracing::error!("main window missing — cannot reach the Panel");
         return;
     };
-    match daemon::build_panel_url(bootstrap_url) {
-        Ok(url) => {
-            if let Err(e) = window.navigate(url) {
-                tracing::error!("failed to navigate to the Panel: {e}");
+    let url = match target {
+        connection::ConnectionTarget::Local => match PANEL_URL.parse() {
+            Ok(url) => url,
+            Err(e) => {
+                tracing::error!("invalid Panel URL: {e}");
+                return;
             }
-        }
-        Err(e) => tracing::error!("invalid Panel URL: {e}"),
+        },
+        connection::ConnectionTarget::Remote(url) => url.clone(),
+    };
+    if let Err(e) = window.navigate(url) {
+        tracing::error!("failed to navigate to the Panel: {e}");
     }
 }
 
@@ -375,55 +454,78 @@ pub(crate) fn focus_window(handle: &tauri::AppHandle) {
 }
 
 /// Re-route the shell for a freshly-chosen target: update the link allow-list,
-/// then navigate + (re)start supervision. Called by the connection commands
-/// (`set_connection_target` / `clear_connection_target`) after the new target
-/// has been persisted. The resident `supervise_daemon` loop picks up the
-/// persisted switch on its next tick and re-arms in the matching mode.
+/// then navigate (and, in the full app, (re)start supervision). Called by the
+/// connection commands (`set_connection_target` / `clear_connection_target`)
+/// after the new target has been persisted. In the full app the resident
+/// `supervise_daemon` loop picks up the persisted switch on its next tick and
+/// re-arms in the matching mode.
+///
+/// Panel-only shell: every re-route is probe-gated — the webview navigates
+/// only when the target's Gateway answers, otherwise it lands on the connect
+/// page. This is the structural guard behind `connect_to`'s own pre-probe:
+/// paths that reach `set_connection_target` directly (the full-app-shaped
+/// `connect.html` fallback, "Back to Local", tray/menu) cannot strand the
+/// user on a dead origin either (spec §8 — no white screen).
 pub(crate) fn reroute_for_target(app: &tauri::AppHandle, target: connection::ConnectionTarget) {
     match &target {
         connection::ConnectionTarget::Remote(url) => {
             external_link::set_remote_host(Some(url.clone()));
+            // Full app: navigate directly — the resident supervisor surfaces
+            // an unreachable remote on its next tick.
+            #[cfg(feature = "embedded-core")]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.navigate(url.clone());
             }
         }
         connection::ConnectionTarget::Local => {
             external_link::set_remote_host(None);
-            // bring the local daemon up and reveal the Panel
-            let handle = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let version = handle.package_info().version.to_string();
-                daemon::reconcile_for_version(&version).await;
-                let _ = daemon::ensure_ready().await;
-                reveal_panel(&handle);
-            });
+            // Full app: bring the local daemon up, then reveal the Panel.
+            #[cfg(feature = "embedded-core")]
+            {
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let version = handle.package_info().version.to_string();
+                    daemon::reconcile_for_version(&version).await;
+                    let _ = daemon::ensure_ready().await;
+                    reveal_panel(&handle);
+                });
+            }
         }
+    }
+    // Panel-only shell: no daemon to manage in either arm — probe the target
+    // and navigate only when it answers. The probe is async, so hop onto the
+    // async runtime (the sync connection commands stay non-blocking).
+    #[cfg(not(feature = "embedded-core"))]
+    {
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if connect_setup::target_reachable(&target).await {
+                navigate_to_target(&handle, &target);
+                focus_window(&handle);
+            } else {
+                tracing::warn!("re-route target unreachable — opening connect page");
+                connect_setup::show_lite_connect_page(&handle);
+            }
+        });
     }
 }
 
 /// Reveal the Panel for the first time: navigate to it and bring the window
 /// forward. The window starts hidden, so this is what the user sees on a
-/// normal launch.
-///
-/// Ask the daemon for a one-shot bootstrap URL (Phase 2 default — no token
-/// in the URL bar; the daemon validates the nonce on loopback and sets the
-/// session cookie). If that fails (binary missing, RPC unreachable), fall
-/// through to the plain Panel URL — the gateway's session middleware will
-/// redirect unauthenticated browsers to `/pair` so the user can complete
-/// pairing manually. Phase 4 removed the legacy `?token=` URL fallback.
+/// normal launch. Full-app-only — the panel-only shell reveals via
+/// `bring_target_online` directly.
+#[cfg(feature = "embedded-core")]
 fn reveal_panel(handle: &tauri::AppHandle) {
     let handle = handle.clone();
     tauri::async_runtime::spawn(async move {
-        let bootstrap_url = tokio::task::spawn_blocking(daemon::load_bootstrap_url)
-            .await
-            .ok()
-            .flatten();
-        navigate_to_panel(&handle, bootstrap_url.as_deref());
+        navigate_to_target(&handle, &connection::load_target());
         focus_window(&handle);
     });
 }
 
-/// Surface a daemon-startup failure on the splash screen.
+/// Surface a daemon-startup failure on the splash screen. Full-app-only — the
+/// panel-only shell launches no daemon and has no startup failure to surface.
+#[cfg(feature = "embedded-core")]
 fn show_daemon_error(handle: &tauri::AppHandle, message: &str) {
     let Some(window) = handle.get_webview_window("main") else {
         return;
@@ -436,6 +538,7 @@ fn show_daemon_error(handle: &tauri::AppHandle, message: &str) {
 }
 
 /// Whether the daemon is currently believed to be serving the Panel.
+#[cfg(feature = "embedded-core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DaemonHealth {
     Up,
@@ -443,6 +546,7 @@ enum DaemonHealth {
 }
 
 /// What the supervisor must do after folding in one probe result.
+#[cfg(feature = "embedded-core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SupervisorAction {
     /// The daemon's state is unchanged — do nothing.
@@ -459,6 +563,7 @@ enum SupervisorAction {
 /// A small state machine that turns a stream of `/ready` probe results into
 /// daemon-lifecycle actions. Deliberately free of I/O so it can be
 /// unit-tested without a running daemon.
+#[cfg(feature = "embedded-core")]
 struct Supervisor {
     health: DaemonHealth,
     consecutive_failures: u32,
@@ -468,6 +573,7 @@ struct Supervisor {
     remote: bool,
 }
 
+#[cfg(feature = "embedded-core")]
 impl Supervisor {
     /// Start supervising. `daemon_up` is the outcome of the initial boot:
     /// a failed boot starts the supervisor in `Down` so it keeps retrying.
@@ -540,7 +646,8 @@ impl Supervisor {
 /// boot this is the only thing standing between a crashed daemon and a dead
 /// Panel: it relaunches the daemon when it disappears and reloads the Panel
 /// once it is back. Silent by design — it never shows or focuses the window
-/// (R5), it just keeps the plumbing connected.
+/// (R5), it just keeps the plumbing connected. Full-app-only.
+#[cfg(feature = "embedded-core")]
 async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
     // The supervisor adapts to a target switch made at runtime (via the
     // connection commands / tray / menu): each tick re-reads the persisted
@@ -585,10 +692,9 @@ async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
             SupervisorAction::ReloadPanel => {
                 tracing::info!("Gateway recovered — reloading the Panel");
                 match &target {
-                    // No bootstrap nonce on in-window reloads — the Panel has
-                    // already obtained an `aleph_session` cookie on the first
-                    // reveal.
-                    connection::ConnectionTarget::Local => navigate_to_panel(&handle, None),
+                    // In-window reload after the local daemon recovers — the
+                    // Panel already holds its session state from the first reveal.
+                    connection::ConnectionTarget::Local => navigate_to_target(&handle, &target),
                     // Remote recovery: re-point the webview at the remote root.
                     connection::ConnectionTarget::Remote(url) => {
                         if let Some(window) = handle.get_webview_window("main") {
@@ -612,7 +718,8 @@ async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
 /// to the bundled connection page and forwarding the message to its
 /// `window.__alephError` hook. Mirrors `show_daemon_error`, but targets the
 /// connect page (where the user can retry or fall back to Local) rather than
-/// the splash.
+/// the splash. Full-app-only — wired into the daemon supervisor's Remote leg.
+#[cfg(feature = "embedded-core")]
 fn show_connection_page(handle: &tauri::AppHandle, message: &str) {
     let Some(window) = handle.get_webview_window("main") else {
         return;
@@ -679,7 +786,9 @@ fn init_tracing() {
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }
 
-#[cfg(test)]
+// Every test here exercises the daemon-supervision state machine, which is
+// compiled only for the full app.
+#[cfg(all(test, feature = "embedded-core"))]
 mod tests {
     use super::*;
 

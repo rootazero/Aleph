@@ -154,8 +154,9 @@ The Gateway is Aleph's control plane, providing:
 
 | Domain | Methods |
 |--------|---------|
-| `auth.*` | `connect`, `pairing.approve`, `pairing.reject`, `devices.list` |
-| `interface.*` | `status`, `config`, `login` |
+| `connect` | LAN-trust handshake (no auth; always `operator`) |
+| `pairing.*` | `list`, `approve`, `reject` — **channel** sender approval (iMessage/Telegram unknown senders), not device auth |
+| `interface.*` | `status`, `config` |
 | `mcp.*` | `start`, `stop`, `list`, `call` |
 | `plugins.*` | `install`, `uninstall`, `list`, `enable`, `disable` |
 | `skills.*` | `list`, `install`, `activate` |
@@ -306,37 +307,22 @@ When session exceeds token threshold:
 
 ## Security
 
-**Location**: `src/gateway/security/`
+**LAN-trust model**: the gateway has no authentication step. The trust
+boundary is the network boundary — whoever can reach the socket is the
+owner. The default bind is `127.0.0.1` (loopback only); set
+`[gateway] host = "0.0.0.0"` to open the LAN, which grants every device on
+that network complete control over the agent. The only retained protocol
+guardrail is the WS Origin check (`src/gateway/origin_policy.rs`), which
+blocks public web pages from cross-origin-driving the local daemon. See
+[SECURITY.md#auth-ux](SECURITY.md#auth-ux) for the full model.
 
-### Authentication Flow
+### Connect handshake
 
-```
-Client Connect
-    │
-    ▼
-┌─────────────────────────────────┐
-│ require_auth: true?             │
-│   Yes → First frame must be     │
-│         "connect" method        │
-│   No  → Direct access allowed   │
-└─────────────────────────────────┘
-    │
-    ▼ (if auth required)
-┌─────────────────────────────────┐
-│ Validate token / device pairing │
-│   • Bearer token                │
-│   • Device fingerprint          │
-│   • Public key signature        │
-└─────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────┐
-│ Grant session token             │
-│ Set client role (operator/node) │
-└─────────────────────────────────┘
-```
-
-### Connect Request
+The first frame on a `/ws` connection must be `connect`. The handshake
+carries no authentication — it only delivers a state-version baseline and
+keepalive policy, and always reports `role: operator`
+(`src/gateway/handlers/connect.rs`). Legacy `token` / `device_name` params
+from pre-revert clients are accepted and ignored, never validated.
 
 ```json
 {
@@ -348,10 +334,6 @@ Client Connect
       "id": "macos-app",
       "version": "1.0.0",
       "platform": "macos"
-    },
-    "role": "operator",
-    "auth": {
-      "token": "bearer_token"
     }
   }
 }
@@ -407,8 +389,8 @@ Alongside WebSocket, Gateway serves:
 
 Abuse protection at WS upgrade: besides the global `max_connections` cap, a
 per-IP concurrent-connection cap (`gateway.max_connections_per_ip`, default 64,
-`0` disables, loopback exempt) bounds preauth slot-exhaustion — a remote peer
-opening many sockets that never authenticate.
+`0` disables, loopback exempt) bounds slot-exhaustion — a remote peer
+opening many idle sockets.
 
 ### Trusted reverse proxies
 
@@ -423,15 +405,15 @@ the whole security boundary). Implemented in `src/gateway/trusted_proxy.rs`.
 
 ### Method-level authorization
 
-Authentication is binary at the transport layer, but a conservative set of
-administrative / secret-bearing control-plane methods (`config.apply`,
-`daemon.shutdown`, `secret.*`, `devices.remove`, `plugins.install`, `cron.create`,
-`dreaming.run_now`, …) additionally require **operator** role. Guest
-(invitation-scoped) and future node-role connections are rejected from those with
-`PERMISSION_DENIED`, while everything they legitimately need (chat, agent runs,
-memory/session/graph reads) stays open. Only enforced when auth is required; a
-no-auth local daemon is unchanged. The classifier lives in
-`src/gateway/method_authz.rs`.
+Under LAN-trust the per-RPC operator-vs-guest authorization gate is **inert**:
+every connection is an implicit `operator`, so there is no method-level
+barrier on the gateway surface. A classifier survives at the *tool-dispatch*
+tier (`src/gateway/method_authz.rs`, consumed by `ScopedToolService`) marking
+the self-management tools that mutate Aleph's own config — but because the
+caller role is always `operator`, that gate always passes. Limiting *what an
+agent may do* (as opposed to *who may connect*) is the job of the per-channel
+tool-permission layer (`ScopedToolService`), which is orthogonal to connection
+trust and unchanged by the revert.
 
 ### Distributed-trace correlation
 

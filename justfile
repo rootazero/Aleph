@@ -107,6 +107,31 @@ shell-build: build
     cd {{shell_dir}} && CI=true cargo tauri build --config "{\"version\":\"$version\"}"
     echo "✓ Installers: {{release_dir}}/bundle/"
 
+# Build the panel-only desktop shell (no embedded aleph-server daemon).
+#
+# A distinct bundle identifier + productName ("Aleph Panel") so it installs
+# alongside the full app. `--no-default-features` (forwarded to cargo after
+# `--`) drops the embedded-core code path; `tauri.lite.conf.json` clears
+# externalBin so no daemon is bundled. The splash frontend is self-contained
+# HTML, so this needs no WASM/Swift build.
+shell-build-lite:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="$(tr -d '[:space:]' < VERSION)"
+    cd {{shell_dir}} && CI=true cargo tauri build \
+        --config tauri.lite.conf.json --config "{\"version\":\"$version\"}" \
+        -- --no-default-features
+    echo "✓ Lite installers: {{release_dir}}/bundle/"
+
+# Run the panel-only shell in dev mode (no embedded daemon).
+shell-dev-lite:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="$(tr -d '[:space:]' < VERSION)"
+    cd {{shell_dir}} && cargo tauri dev \
+        --config tauri.lite.conf.json --config "{\"version\":\"$version\"}" \
+        -- --no-default-features
+
 # ─── Single Stage ───
 
 # Build WASM Panel UI only
@@ -282,9 +307,11 @@ deps:
 
 # ─── Release ───
 
-# Verify the three-platform desktop App builds on CI without publishing.
-# Triggers aleph-app-release.yml in build-only mode (publish=off): builds the
-# macOS / Windows / Linux apps + uploads artifacts; no tag, no GitHub Release.
+# Verify the full release matrix builds on CI without publishing.
+# Triggers aleph-app-release.yml in build-only mode (publish=off): builds all
+# three deliverables across macOS / Windows / Linux — the full desktop App
+# (aleph-server bundled), the Aleph Panel lite shell (no daemon), and the
+# standalone aleph-server binary — and uploads artifacts; no tag, no Release.
 # Runs against the current origin/main — push local commits first if needed.
 verify-build:
     gh workflow run aleph-app-release.yml --field publish=false
@@ -293,9 +320,11 @@ verify-build:
     @echo "  Monitor: gh run list --workflow aleph-app-release.yml --limit 1"
 
 # Release a new version: bump VERSION, commit, push, trigger the app workflow.
-# Runs the workflow in publish mode — builds the three-platform desktop apps
-# and publishes a GitHub Release. CHANGELOG.md must be written by AI (Claude)
-# BEFORE running this command.
+# Runs the workflow in publish mode — builds and publishes all three
+# deliverables (full desktop App with aleph-server bundled, Aleph Panel lite
+# shell, standalone aleph-server binary + install.sh) across the three
+# platforms in a single GitHub Release. CHANGELOG.md must be written by AI
+# (Claude) BEFORE running this command.
 # Usage: just release 26.5.21
 release version:
     #!/usr/bin/env bash

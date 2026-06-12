@@ -1,5 +1,5 @@
 //! 集成测试：节点拨入中心 → 中心经反向 RPC 发 tool.call → 节点 dispatch 跑 bash
-//! → 中心拿回结果。AuthMode::None 隔离传输（auth 由 0b 覆盖）。
+//! → 中心拿回结果。LAN-trust 无鉴权传输。
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alephcore::cluster::{CommandTable, ReverseRpcChannel};
-use alephcore::gateway::config::AuthMode;
 use alephcore::gateway::server::{GatewayConfig, GatewayServer};
 use alephcore::routing::session_key::SessionKey;
 use alephcore::sandbox::{Sandbox, SandboxCommand, SandboxError, SandboxOutput};
@@ -36,10 +35,7 @@ impl Sandbox for CannedSandbox {
 
 #[tokio::test]
 async fn center_runs_bash_on_connected_node() {
-    let config = GatewayConfig {
-        auth_mode: AuthMode::None,
-        ..Default::default()
-    };
+    let config = GatewayConfig::default();
     let dummy: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let server = GatewayServer::with_config(dummy, config);
     let reverse_rpc: ReverseRpcRegistry = server.reverse_rpc.clone();

@@ -21,9 +21,6 @@
 //! | profiles | Auth profile management |
 //! | generation | Content generation |
 //! | group_chat | Multi-agent group chat orchestration |
-//! | pairing | Device pairing |
-//! | runs | Run wait/queue |
-//! | auth | Authentication |
 //! | agent | Agent execution |
 //! | session | Session management |
 //! | channel | Channel status |
@@ -37,7 +34,6 @@
 //! | workspace | Workspace isolation management |
 //! | daemon | Daemon status, shutdown, logs |
 //! | arena | Multi-agent arena lifecycle |
-//! | guests | Guest invitation management |
 //! | teams | Team management (list, get, disband, delete) |
 
 pub mod acp_config;
@@ -46,7 +42,6 @@ pub mod agent;
 pub mod agents;
 pub mod arena;
 pub mod auth;
-pub mod auth_tools;
 pub mod behavior_config;
 pub mod browser_config;
 pub mod channel;
@@ -55,6 +50,7 @@ pub mod clawhub;
 pub mod cluster;
 pub mod commands;
 pub mod config;
+pub mod connect;
 pub mod cron;
 pub mod daemon_control;
 pub mod debug;
@@ -76,7 +72,6 @@ pub mod generation_providers;
 pub mod graph;
 pub mod graph_types;
 pub mod group_chat;
-pub mod guests;
 pub mod health;
 pub mod heartbeat;
 pub mod hooks_admin;
@@ -123,7 +118,6 @@ pub mod wizard;
 pub mod workspace;
 
 pub use config::{handle_get_full_config, handle_patch_config};
-pub use guests::SharedInvitationManager;
 pub use identity::SharedIdentityResolver;
 
 use crate::gateway::security::SharedTokenManager;
@@ -324,7 +318,8 @@ impl HandlerRegistry {
         registry.register("services.list", services::handle_list);
         registry.register("services.status", services::handle_status);
 
-        // Embedded PTY terminal handlers (operator-only via method_authz).
+        // Embedded PTY terminal handlers (open to all connections under the
+        // LAN-trust model — every connection is the implicit operator).
         // Stateless: they reach the process-global `pty::manager()` accessor;
         // the event bus is attached once in `GatewayServer::build_router`, so
         // no boot-time wiring is required here.
@@ -464,29 +459,6 @@ impl HandlerRegistry {
                 INTERNAL_ERROR,
                 "identity.list requires IdentityResolver - wire SharedIdentityResolver first"
                     .to_string(),
-            )
-        });
-
-        // Guest handlers (placeholders - actual handlers wired with InvitationManager)
-        registry.register("guests.createInvitation", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "guests.createInvitation requires InvitationManager - wire SharedInvitationManager first".to_string(),
-            )
-        });
-        registry.register("guests.listPending", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "guests.listPending requires InvitationManager - wire SharedInvitationManager first".to_string(),
-            )
-        });
-        registry.register("guests.revokeInvitation", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "guests.revokeInvitation requires InvitationManager - wire SharedInvitationManager first".to_string(),
             )
         });
 

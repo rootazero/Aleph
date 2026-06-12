@@ -37,7 +37,6 @@ pub async fn handle_reload(
                             "host": new_config.gateway.host,
                             "port": new_config.gateway.port,
                             "max_connections": new_config.gateway.max_connections,
-                            "require_auth": new_config.gateway.require_auth,
                         },
                         "agents": new_config.agents.keys().collect::<Vec<_>>(),
                         "bindings_count": new_config.bindings.len(),
@@ -159,7 +158,6 @@ pub async fn handle_get(request: JsonRpcRequest, watcher: Arc<ConfigWatcher>) ->
             "host": config.gateway.host,
             "port": config.gateway.port,
             "max_connections": config.gateway.max_connections,
-            "require_auth": config.gateway.require_auth,
             "protocol_version": config.gateway.protocol_version,
         }),
         Some("agents") => {
@@ -218,7 +216,6 @@ pub async fn handle_get(request: JsonRpcRequest, watcher: Arc<ConfigWatcher>) ->
                     "host": config.gateway.host,
                     "port": config.gateway.port,
                     "max_connections": config.gateway.max_connections,
-                    "require_auth": config.gateway.require_auth,
                 },
                 "agents": config.agents.keys().collect::<Vec<_>>(),
                 "bindings_count": config.bindings.len(),

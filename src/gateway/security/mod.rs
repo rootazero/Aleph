@@ -1,55 +1,38 @@
 // core/src/gateway/security/mod.rs
 
-//! Security Module
+//! Security Module — secret vault + cluster device records.
 //!
-//! Provides authentication and authorization for Gateway connections.
-//!
-//! ## Architecture
+//! The device-auth layer (auth tokens, HTTP sessions, device pairing,
+//! brute-force tracking, guest sessions, invitations, policy engine,
+//! identity map, activity logs) was removed in the LAN-trust
+//! architecture revert (2026-06). What remains:
 //!
 //! ```text
-//! SecurityManager (unified entry point)
-//!   ├── TokenManager (HMAC-signed tokens)
-//!   ├── PairingManager (8-char Base32 codes)
-//!   └── DeviceRegistry (Ed25519 public keys)
-//!          │
-//!          ▼
-//!     SecurityStore (SQLite)
+//! SharedTokenManager (vault manager; token doubles as vault master key)
+//!   ├── SecretVault (encrypted secrets file)
+//!   └── SecurityStore (SQLite)
+//! crypto (HMAC / Ed25519 / pairing-code primitives — consumed by
+//!         secrets vault, Feishu webhook, WhatsApp vault store)
+//! token_readonly (read-only shared-token lookup for the admin IPC client)
 //! ```
+//!
+//! `SecurityStore` persists the vault master key / HMAC secret **plus**
+//! cluster-node device records — the `devices` CRUD is alive and
+//! load-bearing for cluster federation (`handlers/cluster.rs`, WS node
+//! enrollment) — as well as approved senders, channel DM policies, and
+//! the security audit log. See `store/mod.rs` for per-table status,
+//! including the legacy tables kept only for migration compatibility.
 
-pub mod activity_log;
-pub mod activity_logger;
-pub mod brute_force;
 pub mod crypto;
-pub mod device;
-pub mod guest_session_manager;
-pub mod identity_map;
-pub mod invitation_manager;
-pub mod pairing;
-pub mod policy_engine;
 pub mod shared_token;
 pub mod store;
-pub mod token;
 pub mod token_readonly;
 
 // Re-export commonly used types
-pub use activity_log::{
-    ActivityLogQuery, ActivityLogQueryResult, ActivityStatus, ActivityType, GuestActivityLog,
-};
-pub use activity_logger::GuestActivityLogger;
-pub use brute_force::BruteForceDetector;
 pub use crypto::{
     generate_keypair, generate_pairing_code, generate_secret, hmac_sign, hmac_verify, sign_message,
     verify_signature, CryptoError, DeviceFingerprint, PAIRING_CODE_CHARSET, PAIRING_CODE_LENGTH,
 };
-pub use device::{Device, DeviceRole, DeviceType};
-pub use guest_session_manager::{GuestSession, GuestSessionError, GuestSessionManager};
-pub use identity_map::{IdentityMap, PlatformIdentity, UserId};
-pub use invitation_manager::{InvitationError, InvitationManager};
-pub use pairing::{PairingError, PairingManager, PairingRequest, PollState};
-pub use policy_engine::{PermissionResult, PolicyEngine};
 pub use shared_token::{SharedTokenError, SharedTokenManager};
-pub use store::{
-    DeviceRow, DeviceUpsertData, PairingRequestData, PairingRequestRow, SecurityStore, TokenRow,
-};
-pub use token::{SignedToken, TokenError, TokenManager, TokenValidation};
+pub use store::{DeviceUpsertData, SecurityStore};
 pub use token_readonly::read_current_token_readonly;

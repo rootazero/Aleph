@@ -1,6 +1,6 @@
 use crate::api::ExecApprovalApi;
 use crate::components::sidebar::SystemAlert;
-use crate::state::notifications::{IncomingPairing, PendingApprovalView};
+use crate::state::notifications::PendingApprovalView;
 use futures::channel::{mpsc, oneshot};
 use futures::{FutureExt, StreamExt};
 use gloo_timers::future::TimeoutFuture;
@@ -12,57 +12,6 @@ use shared_ui_logic::connection::wasm::WasmConnector;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-
-#[cfg(target_arch = "wasm32")]
-fn get_local_storage(key: &str) -> Option<String> {
-    web_sys::window()?
-        .local_storage()
-        .ok()??
-        .get_item(key)
-        .ok()?
-}
-
-#[cfg(target_arch = "wasm32")]
-fn set_local_storage(key: &str, value: &str) {
-    if let Some(storage) = web_sys::window()
-        .and_then(|w| w.local_storage().ok())
-        .flatten()
-    {
-        let _ = storage.set_item(key, value);
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn remove_local_storage(key: &str) {
-    if let Some(storage) = web_sys::window()
-        .and_then(|w| w.local_storage().ok())
-        .flatten()
-    {
-        let _ = storage.remove_item(key);
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-const fn get_local_storage(_key: &str) -> Option<String> {
-    None
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-const fn set_local_storage(_key: &str, _value: &str) {}
-
-#[cfg(not(target_arch = "wasm32"))]
-const fn remove_local_storage(_key: &str) {}
-
-/// State carried by the `PairingModal` while the wizard handshake is in flight.
-#[derive(Debug, Clone, Default)]
-pub struct PairingPrompt {
-    /// wizard.start `session_id` (set after wizard.start returns)
-    pub session_id: Option<String>,
-    /// Pairing code extracted from the wizard confirm step message
-    pub pairing_code: Option<String>,
-    /// Non-fatal warning shown inside the modal
-    pub last_error: Option<String>,
-}
 
 // RPC request sent to the message loop
 struct RpcRequest {
@@ -96,7 +45,7 @@ pub struct DashboardState {
     pub gateway_url: RwSignal<String>,
     pub connection_error: RwSignal<Option<String>>,
     pub is_reconnecting: RwSignal<bool>,
-    /// Latched true on the first successful authenticate; never reset.
+    /// Latched true on the first successful connect handshake; never reset.
     /// Lets the boot gate disengage and the service gate engage — two
     /// surfaces that differ only in "have we ever been live?".
     pub has_connected_once: RwSignal<bool>,
@@ -117,14 +66,6 @@ pub struct DashboardState {
     /// Alert subscription ID for cleanup
     alert_subscription_id: StoredValue<Option<usize>>,
 
-    /// Pending browser-pairing requests rendered by the `NotificationCenter`
-    /// with inline Approve / Reject buttons. Sourced from `pairing.**`
-    /// gateway events (see `setup_pairing_subscriptions`).
-    pub incoming_pairings: RwSignal<Vec<IncomingPairing>>,
-
-    /// Pairing subscription ID for cleanup
-    pairing_subscription_id: StoredValue<Option<usize>>,
-
     /// Pending operator-approval requests rendered by the `NotificationCenter`
     /// with inline allow-once / allow-session / deny buttons. Sourced from the
     /// `exec.approvals.pending` RPC; `approval.**` events trigger a refetch
@@ -138,13 +79,9 @@ pub struct DashboardState {
     /// Initialized from localStorage; mutated by the Settings panel toggle.
     pub canvas_radial_navigation: RwSignal<bool>,
 
-    /// Set to Some(_) when auth.connect returns `pairing_required`.
-    /// Cleared automatically after a successful reconnect.
-    pub pairing_required: RwSignal<Option<PairingPrompt>>,
-
-    /// Connection role captured from the `connect` response: `Some("operator")`
-    /// (config tier) or `Some("guest")` (chat tier); `None` before the first
-    /// successful authenticate. Read by `is_operator()` to gate operator-only
+    /// Connection role captured from the `connect` response. Under the LAN-trust
+    /// model the gateway always reports `Some("operator")`; `None` before the
+    /// first successful connect. Read by `is_operator()` to gate operator-only
     /// settings surfaces (e.g. cluster management) client-side.
     pub role: RwSignal<Option<String>>,
 }
@@ -191,21 +128,18 @@ impl DashboardState {
             disconnect_tx: StoredValue::new(None),
             alerts: RwSignal::new(HashMap::new()),
             alert_subscription_id: StoredValue::new(None),
-            incoming_pairings: RwSignal::new(Vec::new()),
-            pairing_subscription_id: StoredValue::new(None),
             pending_approvals: RwSignal::new(Vec::new()),
             approval_subscription_id: StoredValue::new(None),
             canvas_radial_navigation: RwSignal::new(
                 crate::api::settings::load_canvas_radial_navigation(),
             ),
-            pairing_required: RwSignal::new(None),
             role: RwSignal::new(None),
         }
     }
 
-    /// Reactive predicate: did this connection authenticate as `operator`
-    /// (config tier)? Consults the `role` captured from the `connect` response.
-    /// Returns false before the first successful authenticate. Used by
+    /// Reactive predicate: did this connection report the `operator` role?
+    /// Consults the `role` captured from the `connect` response.
+    /// Returns false before the first successful connect. Used by
     /// operator-only settings surfaces to gate UI up front.
     #[must_use]
     pub fn is_operator(&self) -> bool {
@@ -335,105 +269,19 @@ impl DashboardState {
             .map_err(|_| "Response channel closed".to_string())?
     }
 
-    /// Authenticate with the gateway after WebSocket connection is established
-    async fn authenticate(&self) -> Result<(), String> {
-        // Auth is delivered via the `aleph_session` HttpOnly cookie set by
-        // `/auth/bootstrap` (loopback handoff from the desktop shell) or
-        // `/auth/bootstrap/from_pairing` (cold-browser pairing). The Phase 1
-        // `?token=` URL-param fallback was removed in Phase 4 — the cookie
-        // is now the only inbound auth surface for the Panel.
-
-        // Try stored device token first
-        if let Some(token) = get_local_storage("aleph_device_token") {
-            let result = self
-                .rpc_call(
-                    "connect",
-                    serde_json::json!({
-                        "token": token,
-                        "device_name": "Web Panel"
-                    }),
-                )
-                .await;
-
-            if let Ok(resp) = result {
-                // Update stored token if a new one was issued
-                if let Some(new_token) = resp.get("token").and_then(|t| t.as_str()) {
-                    set_local_storage("aleph_device_token", new_token);
-                }
-                self.capture_role(&resp);
-                return Ok(());
-            }
-            // Token invalid, clear it and try shared token
-            remove_local_storage("aleph_device_token");
-            web_sys::console::log_1(&"Device token invalid, trying shared token...".into());
-        }
-
-        // Try shared token from localStorage (set during login page)
-        if let Some(token) = get_local_storage("aleph_shared_token") {
-            let result = self
-                .rpc_call(
-                    "connect",
-                    serde_json::json!({
-                        "shared_token": token,
-                        "device_name": "Web Panel"
-                    }),
-                )
-                .await;
-
-            match result {
-                Ok(resp) => {
-                    // Store device token for future use
-                    if let Some(device_token) = resp.get("token").and_then(|t| t.as_str()) {
-                        set_local_storage("aleph_device_token", device_token);
-                    }
-                    self.capture_role(&resp);
-                    return Ok(());
-                }
-                Err(e) => {
-                    web_sys::console::error_1(&format!("Shared token auth failed: {e}").into());
-                    // Clear invalid shared token
-                    remove_local_storage("aleph_shared_token");
-                }
-            }
-        }
-
-        // No token available — try a plain connect (works when auth_mode is "none")
-        let result = self
-            .rpc_call(
-                "connect",
-                serde_json::json!({
-                    "device_name": "Web Panel"
-                }),
-            )
-            .await;
-
-        match result {
-            Ok(resp) => {
-                if let Some(token) = resp.get("token").and_then(|t| t.as_str()) {
-                    set_local_storage("aleph_device_token", token);
-                }
-                self.capture_role(&resp);
-                Ok(())
-            }
-            Err(e) if e == "pairing_required" => {
-                // Gateway requires device pairing — trigger the PairingModal.
-                self.pairing_required.set(Some(PairingPrompt::default()));
-                Err(e)
-            }
-            Err(_) => {
-                // Auth required but no token — redirect to login
-                Err("Authentication required".to_string())
-            }
-        }
-    }
-
-    /// Persist a device token and trigger reconnect after successful pairing.
+    /// Complete the session handshake after the WebSocket connection is
+    /// established.
     ///
-    /// Called by `PairingModal` once `wizard.next` returns `done` with a token.
-    pub fn set_pairing_token(&self, token: String) {
-        set_local_storage("aleph_device_token", &token);
-        // Clear the modal
-        self.pairing_required.set(None);
+    /// LAN-trust model: there is no authentication. The handshake is a single
+    /// `connect` frame; the gateway replies with the session baseline
+    /// (`role`/`state_version`/`keepalive`) and always reports `operator`.
+    /// We only read `role` so `is_operator()` can gate operator-only UI.
+    async fn handshake(&self) -> Result<(), String> {
+        let resp = self
+            .rpc_call("connect", serde_json::json!({}))
+            .await?;
+        self.capture_role(&resp);
+        Ok(())
     }
 
     /// Connect to the gateway
@@ -613,10 +461,9 @@ impl DashboardState {
                     }
                 });
 
-                // Authenticate before marking as connected
-                let auth_state = *self;
-                let auth_result = auth_state.authenticate().await;
-                match auth_result {
+                // Complete the session handshake before marking as connected.
+                let handshake_state = *self;
+                match handshake_state.handshake().await {
                     Ok(()) => {
                         self.is_connected.set(true);
                         self.connection_error.set(None);
@@ -636,21 +483,11 @@ impl DashboardState {
 
                         Ok(())
                     }
-                    Err(ref e) if e == "pairing_required" => {
-                        // Stay connected at WS level; PairingModal will drive the
-                        // wizard.* handshake and call reconnect() when done.
-                        Err(e.clone())
-                    }
                     Err(e) => {
-                        // Auth failed — redirect to the browser-pairing
-                        // page (the legacy `/login` token-paste form was
-                        // removed in Phase 4 of the auth UX overhaul).
-                        #[cfg(target_arch = "wasm32")]
-                        {
-                            if let Some(window) = web_sys::window() {
-                                let _ = window.location().set_href("/pair");
-                            }
-                        }
+                        // Handshake failed (transport-level) — surface the error
+                        // so the boot/service gate offers a Retry path.
+                        self.is_connected.set(false);
+                        self.connection_error.set(Some(e.clone()));
                         Err(e)
                     }
                 }
@@ -812,72 +649,6 @@ impl DashboardState {
         // Store subscription ID for cleanup
         self.alert_subscription_id.set_value(Some(subscription_id));
 
-        Ok(())
-    }
-
-    /// Subscribe to `pairing.**` events so the `NotificationCenter` can
-    /// render inline Approve / Reject cards for cold-browser pairings.
-    ///
-    /// Mirrors `setup_alert_subscriptions` — wildcard topic subscribe,
-    /// then a typed handler that mutates `incoming_pairings`.
-    pub async fn setup_pairing_subscriptions(&self) -> Result<(), String> {
-        self.subscribe_topic("pairing.**").await?;
-        web_sys::console::log_1(&"Subscribed to pairing.** events".into());
-
-        let state = *self;
-        let subscription_id = self.subscribe_events(move |event: GatewayEvent| {
-            let topic = event.topic.as_str();
-            // The new browser-pairing flow emits the device_name field on
-            // the `pairing.requested` event with the origin_label string
-            // (see handle_pairing_start_browser → PairingRequested frame).
-            // We don't have a 6-digit code in the event payload yet — pull
-            // it from the `code` field if the gateway later includes it,
-            // otherwise leave blank (the operator will pick from the
-            // pairing.list RPC).
-            match topic {
-                "pairing.requested" => {
-                    let code = event
-                        .data
-                        .get("code")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let origin_label = event
-                        .data
-                        .get("origin_label")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| event.data.get("device_name").and_then(|v| v.as_str()))
-                        .unwrap_or("Unknown browser")
-                        .to_string();
-                    state.incoming_pairings.update(|list| {
-                        // De-dupe by code so a re-subscribe doesn't pile up
-                        // stale rows.
-                        list.retain(|p| p.code != code);
-                        list.push(IncomingPairing {
-                            code,
-                            origin_label,
-                            created_at_ms: js_sys::Date::now() as i64,
-                        });
-                    });
-                }
-                "pairing.completed" | "pairing.rejected" => {
-                    let code = event
-                        .data
-                        .get("code")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| event.data.get("device_id").and_then(|v| v.as_str()))
-                        .unwrap_or("")
-                        .to_string();
-                    state.incoming_pairings.update(|list| {
-                        list.retain(|p| p.code != code);
-                    });
-                }
-                _ => {}
-            }
-        });
-
-        self.pairing_subscription_id
-            .set_value(Some(subscription_id));
         Ok(())
     }
 

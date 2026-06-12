@@ -1,13 +1,13 @@
 //! Security Configuration View
 //!
 //! Provides UI for managing security settings:
-//! - Gateway security settings (require auth, enable pairing, allow guest)
-//! - Paired devices management
-//! - Device revocation
+//! - Network-access scope (gateway bind address)
+//! - SSRF / outbound protection, shell security, PII rules, secret protection
+//! - Sandbox rate limits
 //! - Real-time updates via config events
 //!
 //! ## Layout
-//! - [`gateway`] — `GatewaySecuritySettings`, `NetworkAccessSection`, `PairedDevices`, `DeviceCard`
+//! - [`gateway`] — `NetworkAccessSection` (gateway bind scope)
 //! - [`outbound`] — `OutboundSecuritySection`
 //! - [`shell`] — `ShellSecuritySection`
 //! - [`pii_rules`] — custom PII rule editor + section wrapper
@@ -27,11 +27,11 @@ mod shell;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{DeviceInfo, SearchConfig, SearchConfigApi, SecurityConfig, SecurityConfigApi};
+use crate::api::{SearchConfig, SearchConfigApi, SecurityConfig, SecurityConfigApi};
 use crate::context::DashboardState;
 use crate::i18n::{t_string, t, use_i18n};
 
-use gateway::{GatewaySecuritySettings, NetworkAccessSection, PairedDevices};
+use gateway::NetworkAccessSection;
 use outbound::OutboundSecuritySection;
 use pii_rules::CustomPiiRulesSection;
 use pii_section::PIISection;
@@ -64,7 +64,6 @@ pub fn SecurityView() -> impl IntoView {
     let i18n = use_i18n();
 
     let config = RwSignal::new(Option::<SecurityConfig>::None);
-    let devices = RwSignal::new(Vec::<DeviceInfo>::new());
     let search_config = RwSignal::new(SearchConfig {
         enabled: false,
         default_provider: String::new(),
@@ -95,16 +94,6 @@ pub fn SecurityView() -> impl IntoView {
                     }
                     Err(e) => {
                         error.set(Some(format!("Failed to load security config: {e}")));
-                    }
-                }
-
-                // Load devices
-                match SecurityConfigApi::list_devices(&state).await {
-                    Ok(devs) => {
-                        devices.set(devs);
-                    }
-                    Err(e) => {
-                        error.set(Some(format!("Failed to load devices: {e}")));
                     }
                 }
 
@@ -185,7 +174,6 @@ pub fn SecurityView() -> impl IntoView {
                                     </div>
                                 })}
 
-                                <GatewaySecuritySettings config=config />
                                 <NetworkAccessSection config=config />
                                 <OutboundSecuritySection config=config />
                                 <ShellSecuritySection config=config />
@@ -193,7 +181,6 @@ pub fn SecurityView() -> impl IntoView {
                                 <SandboxRateLimitSection config=config />
                                 <CustomPiiRulesSection config=config />
                                 <PIISection config=search_config />
-                                <PairedDevices devices=devices state=state />
 
                                 <div class="pt-4 border-t border-border">
                                     <button

@@ -1,6 +1,5 @@
 pub mod acp_harnesses;
 pub mod appearance;
-pub mod auth;
 pub mod behavior;
 pub mod browser;
 pub mod browser_runtime_banner;
@@ -25,7 +24,6 @@ pub mod skills;
 
 pub use acp_harnesses::AcpHarnessesView;
 pub use appearance::AppearanceView;
-pub use auth::AuthView;
 pub use behavior::BehaviorView;
 pub use browser::BrowserView;
 pub use channels::ChannelPlatformPage;

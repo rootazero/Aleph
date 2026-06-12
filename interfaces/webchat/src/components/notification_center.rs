@@ -15,12 +15,11 @@ use crate::components::sidebar::AlertLevel;
 use crate::context::DashboardState;
 use crate::i18n::{t_string, t, use_i18n};
 use crate::state::notifications::{
-    unread_count, visible_alerts, IncomingPairing, NotificationsState, PendingApprovalView,
+    unread_count, visible_alerts, NotificationsState, PendingApprovalView,
 };
 use leptos::ev::keydown;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use serde_json::json;
 
 #[component]
 #[must_use]
@@ -29,7 +28,6 @@ pub fn NotificationCenter() -> impl IntoView {
     let notif = use_context::<NotificationsState>().expect("NotificationsState not provided");
 
     let alerts = dashboard.alerts;
-    let incoming_pairings = dashboard.incoming_pairings;
     let pending_approvals = dashboard.pending_approvals;
     let is_open = notif.is_open;
     let dismissed = notif.dismissed;
@@ -39,12 +37,12 @@ pub fn NotificationCenter() -> impl IntoView {
     let bell_visible = Memo::new(move |_| dashboard.has_connected_once.get());
 
     // Reactive badge count. Pure derivation — no side effects.
-    // Includes both system alerts and pending browser-pairing requests
-    // so the operator sees a single "things to look at" pulse.
+    // Includes both system alerts and pending operator approvals so the
+    // operator sees a single "things to look at" pulse.
     let badge_count = Memo::new(move |_| {
         let a = alerts.get();
         let d = dismissed.get();
-        unread_count(&a, &d) + incoming_pairings.get().len() + pending_approvals.get().len()
+        unread_count(&a, &d) + pending_approvals.get().len()
     });
 
     // Visible alerts list (sorted). Re-evaluates on either signal change.
@@ -135,74 +133,8 @@ pub fn NotificationCenter() -> impl IntoView {
                 </div>
 
                 <div class="max-h-[60vh] overflow-y-auto">
-                    // Pending browser pairings — render first so a fresh
+                    // Pending operator approvals — render first so a fresh
                     // approval prompt is impossible to miss.
-                    {move || {
-                        let pairings = incoming_pairings.get();
-                        if pairings.is_empty() {
-                            view! { <div></div> }.into_any()
-                        } else {
-                            view! {
-                                <ul class="divide-y divide-border">
-                                    {pairings.into_iter().map(|p: IncomingPairing| {
-                                        let code_for_approve = p.code.clone();
-                                        let code_for_reject = p.code.clone();
-                                        let code_display = p.code.clone();
-                                        let label = p.origin_label;
-                                        view! {
-                                            <li class="px-4 py-3">
-                                                <div class="text-sm font-medium text-text-primary">
-                                                    "Pair browser"
-                                                </div>
-                                                <div class="text-xs text-text-secondary mt-0.5">
-                                                    {label}
-                                                </div>
-                                                <div class="font-mono text-2xl my-2 text-center tracking-widest text-indigo-300">
-                                                    {code_display}
-                                                </div>
-                                                <div class="flex gap-2">
-                                                    <button
-                                                        type="button"
-                                                        class="flex-1 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors"
-                                                        on:click=move |_| {
-                                                            let c = code_for_approve.clone();
-                                                            spawn_local(async move {
-                                                                let _ = dashboard
-                                                                    .rpc_call(
-                                                                        "pairing.approve",
-                                                                        json!({"code": c}),
-                                                                    )
-                                                                    .await;
-                                                            });
-                                                        }
-                                                    >
-                                                        "Approve"
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        class="flex-1 py-1.5 rounded bg-surface-sunken hover:bg-surface-raised text-text-secondary text-xs transition-colors"
-                                                        on:click=move |_| {
-                                                            let c = code_for_reject.clone();
-                                                            spawn_local(async move {
-                                                                let _ = dashboard
-                                                                    .rpc_call(
-                                                                        "pairing.reject",
-                                                                        json!({"code": c}),
-                                                                    )
-                                                                    .await;
-                                                            });
-                                                        }
-                                                    >
-                                                        "Reject"
-                                                    </button>
-                                                </div>
-                                            </li>
-                                        }
-                                    }).collect::<Vec<_>>()}
-                                </ul>
-                            }.into_any()
-                        }
-                    }}
                     {move || {
                         let approvals = pending_approvals.get();
                         if approvals.is_empty() {
@@ -282,7 +214,7 @@ pub fn NotificationCenter() -> impl IntoView {
                     }}
                     {move || {
                         let items = list.get();
-                        if items.is_empty() && incoming_pairings.get().is_empty() && pending_approvals.get().is_empty() {
+                        if items.is_empty() && pending_approvals.get().is_empty() {
                             view! {
                                 <div class="px-4 py-6 text-center text-sm text-text-tertiary">
                                     {move || t_string!(use_i18n(), notifications.empty).to_string()}

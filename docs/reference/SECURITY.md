@@ -1,285 +1,67 @@
 # Security System
 
-> Shell execution safety, approval workflows, identity-based permission enforcement, and guest access control
+> Shell execution safety, approval workflows, and per-channel tool permissions
 
 ---
 
 ## Overview
 
 Aleph's security system provides:
-- **Identity Context**: Immutable identity snapshots for permission enforcement
-- **Guest Access Control**: Invitation-based temporary access with scoped permissions
-- **Tool Permission Enforcement**: Role-based access control for all tool executions
+- **Permission Model**: Under LAN-trust every caller collapses to a single owner identity (see below)
+- **Tool Permission Enforcement**: Per-channel tool permissions via `ScopedToolService` — governs *what an agent may do*, orthogonal to *who may connect*
 - **Exec Approval**: Human-in-the-loop for shell commands
 - **Command Analysis**: Static analysis of command risk
 - **Allowlist/Blocklist**: Fine-grained command control
 - **Output Masking**: Sensitive data protection
 
-**Location**: `src/gateway/security/`, `src/exec/`
+**Location**: `src/gateway/security/` (crypto + vault: `crypto.rs`, `shared_token.rs`, `store/`, `token_readonly.rs`), `src/tools/scoped/`, `src/exec/`
 
 ---
 
-## Identity Context & Permission Enforcement
+## Permission Model (LAN-trust)
 
-### Architecture
+Aleph has no authentication step — the trust boundary is the network
+boundary (see [Trust model: LAN-trust](#auth-ux)). Every caller therefore
+resolves to a single **owner** identity, and there is no role-based access
+gate on the connection surface.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                  Identity-Based Permission Flow                  │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │                  Session Creation                          │  │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐          │  │
-│  │  │ Invitation │→ │  Activate  │→ │  Identity  │          │  │
-│  │  │  Manager   │  │  Session   │  │  Context   │          │  │
-│  │  └────────────┘  └────────────┘  └────────────┘          │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                           │                                      │
-│                           ▼                                      │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │                  Execution Chain                           │  │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐          │  │
-│  │  │   Agent    │→ │  Executor  │→ │   Policy   │          │  │
-│  │  │   Loop     │  │  (Single/  │  │   Engine   │          │  │
-│  │  │            │  │   Routed)  │  │            │          │  │
-│  │  └────────────┘  └────────────┘  └────────────┘          │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                           │                                      │
-│                           ▼                                      │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │                  Permission Check                          │  │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐          │  │
-│  │  │   Owner    │  │   Guest    │  │ Anonymous  │          │  │
-│  │  │  (Allow)   │  │  (Scope)   │  │  (Deny)    │          │  │
-│  │  └────────────┘  └────────────┘  └────────────┘          │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+### What was removed
 
-### IdentityContext
+The role-based guest / invitation permission *engine* was deleted in the
+LAN-trust revert:
 
-**Location**: `shared/protocol/src/auth.rs`
+- **`PolicyEngine`** (`src/gateway/security/policy_engine.rs`) — the
+  per-tool `Owner` / `Guest` / `Anonymous` permission checker. Gone.
+- **`InvitationManager`** (`src/gateway/security/invitation_manager.rs`)
+  and the `aleph guests invite / list / revoke` CLI — guest invitation
+  lifecycle. Gone.
 
-Immutable identity snapshot that flows through the execution chain:
+`src/gateway/security/` now holds only crypto + vault plumbing
+(`crypto.rs`, `shared_token.rs`, `store/`, `token_readonly.rs`).
 
-```rust
-pub struct IdentityContext {
-    /// Unique request identifier
-    pub request_id: String,
+### What survives (as inert types)
 
-    /// Session key for this request
-    pub session_key: String,
+The identity *types* still exist in the protocol crate
+(`shared/protocol/src/auth.rs`): `Role` (`Owner` / `Guest` / `Anonymous`),
+`GuestScope`, and `IdentityContext`. `SessionManager` still resolves a
+session's `IdentityContext` from stored metadata
+(`src/gateway/session_manager/ops/identity.rs`) — but with the invitation
+path gone, **every session falls back to `SessionIdentityMeta::owner`**;
+nothing creates `Guest` or `Anonymous` sessions any more. Those branches
+are unreachable legacy code, kept only as the audit-snapshot shape until a
+later cleanup folds them away.
 
-    /// Role of the requester
-    pub role: Role,
+### Where tool permissions actually live
 
-    /// Identity ID (\"owner\" or guest_id)
-    pub identity_id: String,
+Limiting *what an agent may do* (as opposed to *who may connect*) is the
+job of the per-channel tool-permission layer, **`ScopedToolService`**
+(`src/tools/scoped/`). It merges a `ToolPermissionsConfig` across three
+tiers — global → agent → channel, most-restrictive wins — and does not
+read `IdentityContext`. This is orthogonal to connection trust and is
+unchanged by the LAN-trust revert.
 
-    /// Guest permission scope (frozen at session creation)
-    pub scope: Option<GuestScope>,
-
-    /// Request creation timestamp (Unix seconds, UTC)
-    pub created_at: i64,
-
-    /// Source channel (\"cli\", \"gateway\", \"telegram\", etc.)
-    pub source_channel: String,
-}
-
-pub enum Role {
-    Owner,      // Full access to all tools
-    Guest,      // Limited access based on scope
-    Anonymous,  // No access (authentication required)
-}
-```
-
-### Guest Scope
-
-**Location**: `shared/protocol/src/auth.rs`
-
-Defines what a guest can access:
-
-```rust
-pub struct GuestScope {
-    /// Allowed tool names or categories
-    /// Examples: [\"translate\"], [\"shell\"], [\"*\"]
-    pub allowed_tools: Vec<String>,
-
-    /// Token expiration timestamp (Unix seconds, UTC)
-    pub expires_at: Option<i64>,
-
-    /// Human-readable name for UI display
-    pub display_name: Option<String>,
-}
-```
-
-### Permission Matching Rules
-
-1. **Exact Match**: `\"translate\"` matches tool `\"translate\"`
-2. **Category Match**: `\"shell\"` matches `\"shell:exec\"`, `\"shell:read\"`, etc.
-3. **Wildcard**: `\"*\"` matches any tool
-
-### PolicyEngine
-
-**Location**: `src/gateway/security/policy_engine.rs`
-
-Stateless permission checker:
-
-```rust
-impl PolicyEngine {
-    /// Check if identity has permission to execute a tool
-    pub fn check_tool_permission(
-        identity: &IdentityContext,
-        tool_name: &str,
-    ) -> PermissionResult {
-        match identity.role {
-            Role::Owner => PermissionResult::Allowed,
-
-            Role::Guest => {
-                // Check scope, expiration, and tool permission
-                Self::check_guest_scope(scope, tool_name, guest_id)
-            }
-
-            Role::Anonymous => PermissionResult::Denied {
-                reason: \"Authentication required\".to_string(),
-            },
-        }
-    }
-}
-
-pub enum PermissionResult {
-    Allowed,
-    Denied { reason: String },
-}
-```
-
-### Invitation Manager
-
-**Location**: `src/gateway/security/invitation_manager.rs`
-
-Manages guest invitation lifecycle:
-
-```rust
-impl InvitationManager {
-    /// Create a new guest invitation
-    pub fn create_invitation(
-        &self,
-        request: CreateInvitationRequest,
-    ) -> Result<Invitation, InvitationError> {
-        // Generate unique token and guest_id
-        // Store pending invitation
-        // Return invitation with URL
-    }
-
-    /// Activate an invitation (one-time use)
-    pub fn activate_invitation(
-        &self,
-        token: &str,
-    ) -> Result<GuestToken, InvitationError> {
-        // Validate token
-        // Check expiration
-        // Mark as activated
-        // Return guest token with scope
-    }
-}
-```
-
-### Session Identity Metadata
-
-**Location**: `src/gateway/session_manager.rs`
-
-Identity metadata stored in session database:
-
-```rust
-pub struct SessionIdentityMeta {
-    /// Role of the session owner
-    pub role: Role,
-
-    /// Identity ID (\"owner\" or guest_id)
-    pub identity_id: String,
-
-    /// Guest scope (frozen at session creation)
-    pub scope: Option<GuestScope>,
-
-    /// Source channel
-    pub source_channel: String,
-}
-```
-
-### Execution Flow
-
-1. **Session Creation**
-   - Owner: Default identity with full access
-   - Guest: Activate invitation → Store identity in session metadata
-
-2. **Request Processing**
-   - Gateway receives request with session_key
-   - SessionManager constructs IdentityContext from metadata
-   - IdentityContext passed to AgentLoop
-
-3. **Tool Execution**
-   - AgentLoop passes IdentityContext to Executor
-   - Executor checks permission via PolicyEngine
-   - If allowed: Execute tool
-   - If denied: Return ToolError with reason
-
-### Example: Guest Invitation Flow
-
-```rust
-// 1. Create invitation (Owner only)
-let scope = GuestScope {
-    allowed_tools: vec![\"translate\".to_string()],
-    expires_at: Some(now + 3600), // 1 hour
-    display_name: Some(\"Mom\".to_string()),
-};
-
-let invitation = manager.create_invitation(CreateInvitationRequest {
-    guest_name: \"Mom\".to_string(),
-    scope,
-})?;
-
-// invitation.token: \"abc123...\"
-// invitation.url: \"https://aleph.local/join?t=abc123...\"
-
-// 2. Guest activates invitation
-let guest_token = manager.activate_invitation(&invitation.token)?;
-
-// 3. Guest creates session with token
-// SessionManager stores identity metadata
-
-// 4. Guest executes tool
-let identity = session_manager.get_identity_context(&session_key, \"gateway\")?;
-// identity.role = Role::Guest
-// identity.scope = Some(GuestScope { allowed_tools: [\"translate\"], ... })
-
-let result = executor.execute(&action, &identity).await;
-// If action.tool_name = \"translate\" → Allowed
-// If action.tool_name = \"shell_exec\" → Denied
-```
-
-### CLI Commands
-
-```bash
-# Create guest invitation
-aleph guests invite --scope translate --ttl 30d --name \"Mom\"
-
-# List pending invitations
-aleph guests list
-
-# Revoke invitation
-aleph guests revoke <guest_id>
-```
-
-### Security Guarantees
-
-1. **Immutability**: IdentityContext is immutable once created
-2. **Frozen Permissions**: Guest scope is frozen at session creation
-3. **One-Time Use**: Invitations can only be activated once
-4. **Expiration**: Both invitations and guest tokens can expire
-5. **Stateless Checks**: PolicyEngine has no mutable state
-6. **Audit Trail**: All permission checks are logged
+Shell-command execution safety (risk analysis, approval, allowlist,
+output masking) is a separate subsystem — see **Exec Kernel** below.
 
 ---
 
@@ -1016,41 +798,102 @@ blocked_hosts = ["*.malware.com"]
 
 ---
 
-## Auth UX (post-2026-05 overhaul) {#auth-ux}
+## Trust model: LAN-trust {#auth-ux}
 
-Aleph never asks the user to find, copy, or paste an access token. The
-gateway token is auto-provisioned at first daemon start and stays
-invisible. Three trust-transfer mechanisms move authentication between
-surfaces:
+Aleph has **no authentication step**. The trust boundary *is* the network
+boundary: whoever can reach the gateway socket is the owner. Every
+`connect` handshake is accepted as `operator`
+(`src/gateway/handlers/connect.rs`) — legacy `token` / `device_name`
+params from old clients are accepted and ignored, never validated.
 
-1. **Same-process (Tauri desktop app)** — the shell reads the token from
-   `~/.aleph/data/security.db` (same-UID gate) via the
-   `aleph-server bootstrap-token` subcommand and issues a one-shot
-   bootstrap nonce; the Panel webview navigates to
-   `/auth/bootstrap?nonce=…` which sets the `aleph_session` HttpOnly
-   cookie.
+### Network boundary = trust boundary
 
-2. **Same-machine browser** — `aleph open` (CLI) and the desktop app's
-   "Open in Browser" menu item issue a nonce and launch the system
-   browser at the same URL. The endpoint refuses any non-loopback peer
-   (`is_loopback_peer` in `src/gateway/auth_middleware.rs`).
+- **Default — loopback only.** `aleph-server` binds `127.0.0.1`
+  (`GatewayServerConfig::default`), so only processes on the same machine
+  can connect. A single-machine desktop install needs zero configuration.
+- **LAN opt-in.** Set `[gateway] host = "0.0.0.0"` in
+  `~/.aleph/config.toml` to listen on every interface. **This grants every
+  device on your LAN complete control over the agent** — including the
+  PTY / shell-execution tools. There is no method-level gate to fall back
+  on: the old per-RPC operator-vs-guest authorization
+  (`method_authz`) is inert under LAN-trust because the caller role is
+  always `operator`. Only enable `0.0.0.0` on a network you trust
+  end-to-end (home LAN behind your router), never on an untrusted or
+  public segment.
+- **Beyond the LAN.** To reach Aleph across the internet, front it with
+  your own reverse proxy / VPN / SSH tunnel that terminates trust
+  *upstream* of the gateway. Aleph itself adds no transport auth.
 
-3. **Cold browser / remote / mobile** — `/pair` shows a 6-digit code; the
-   desktop app's NotificationCenter renders a row with `Approve` /
-   `Reject` buttons. A QR-code variant in the Devices view covers mobile.
+### The one remaining guardrail: WS Origin check
 
-The threat model is unchanged from before the overhaul: same-UID =
-trusted. We just stopped showing the token to the user, because seeing
-it was the friction, not the security.
+Browsers attach an unforgeable `Origin` header to every WebSocket upgrade
+and cross-origin `fetch`. A malicious public web page the user happens to
+visit can still *reach* `ws://127.0.0.1:18790/ws` (loopback is not
+firewalled from the browser), so without an origin check it could open a
+control channel to the local daemon — the cross-origin-WebSocket
+confused-deputy (and its DNS-rebinding variant). The origin gate
+(`src/gateway/origin_policy.rs`) is therefore retained as the **only**
+validation on the browser surface. It guards against the public internet,
+**not** against LAN neighbours.
 
-For debugging: `aleph auth debug show-token` still prints the token.
+`OriginPolicy::is_allowed` decides:
 
-**Phase 4 deletions** (2026-05): the legacy `/login` + `/auth/login`
-HTML token-paste form was removed; the Panel's `?token=` URL fallback
-was removed; the desktop shell no longer falls back to writing a token
-into the URL bar. The `aleph_session` cookie (issued by
-`/auth/bootstrap` or `/auth/bootstrap/from_pairing`) is the only
-inbound auth surface for the Panel.
+| Origin | Verdict | Why |
+|--------|---------|-----|
+| **absent / empty** | allow | Native clients (CLI, bots, bridges, `tokio-tungstenite`) send none; only browsers do. |
+| **loopback** (`127.0.0.0/8`, `::1`, `localhost`, `*.localhost`) | allow | Same-machine UI. |
+| **`tauri:` scheme** | allow | The desktop shell's own webview origin, unspoofable by a remote page. |
+| **exact allow-list match** (`[gateway] allowed_origins`) | allow | Operator-configured extra origins for split panel/API deployments. |
+| **same-origin** (Origin authority == request `Host`) | allow **only if the `Host` is an IP literal or loopback** | LAN deployments reached by IP (`http://10.10.10.6:18790`) work without config; an IP literal cannot be DNS-rebound. A **domain** `Host` is *not* auto-allowed — the deployment must add its origin to `allowed_origins` (see DNS-rebinding note below). |
+| anything else (public web domain) | **deny** | |
+
+Note the gate does **not** auto-allow arbitrary private-LAN IPs by range —
+a cross-origin browser request from another LAN host is only accepted when
+it is same-origin with the gateway's `Host`, in the allow-list, or
+loopback/`tauri:`. Native LAN clients carry no `Origin` and pass freely.
+
+> **DNS-rebinding — defended.** A classic DNS-rebinding attack rebinds a
+> domain (`evil.com`) to the gateway's own address so the victim's page
+> carries `Origin == Host == evil.com` and would slip past a naive
+> same-origin check. Aleph closes this by gating the same-origin branch on
+> the `Host`: same-origin is auto-allowed **only when the `Host` is an IP
+> literal or loopback** (`127.0.0.0/8`, `::1`, `localhost`, `*.localhost`, or
+> a bare IPv4/IPv6 address). A rebinding attack must use a domain name (the A
+> record is what gets rebound), and a domain `Host` no longer passes
+> same-origin — it falls through to deny. The trade-off: a zero-config
+> **domain** deployment (serving the panel from `aleph.example.com` with no
+> `allowed_origins`) is now rejected and must add its origin to
+> `[gateway] allowed_origins`. LAN deployments reached by IP and loopback
+> access are unaffected.
+
+**Escape hatch — `allow_any_origin`.** Set `[gateway] allow_any_origin =
+true` to trust every Origin unconditionally
+(`OriginPolicy::allow_any`). Intended only for deployments that front the
+gateway with their own reverse proxy / auth layer; it leaves the agent
+drivable by any web page the user's browser visits, so keep it `false`
+unless you know why.
+
+### Migration from the pre-revert auth model
+
+The device-authentication / pairing / token system (silent bootstrap,
+`/pair` 6-digit codes, `/login` form, `?token=` URLs, `aleph auth …` CLI)
+was removed in the LAN-trust revert. For operators upgrading:
+
+- **Old `[gateway.auth]` config is ignored, not rejected.** The config
+  root has no `deny_unknown_fields`, so dead keys (`require_auth`,
+  `enable_pairing`, `[gateway.auth]`, `[gateway.bootstrap]`, …) load
+  without error and are silently dropped
+  (`GatewayConfig::from_toml` legacy-config test). **One gotcha:** a
+  `allowed_origins` list that lived under the legacy `[gateway.auth]`
+  table is **not** migrated — move it up to the `[gateway]` root yourself.
+- **`aleph auth *` CLI subcommands are gone.** There is no
+  `aleph auth show-token` / `debug show-token` / `devices` / `pairing`
+  command any more. "Open in Browser" survives as a desktop-shell menu
+  item that hands the plain gateway URL (loopback, or the configured
+  remote) to the system browser — no nonce, no token.
+- **Orphaned `~/.aleph` token / device data is left in place.** The server
+  ignores any leftover device/token rows on startup and never deletes user
+  data; you may remove them by hand if you wish.
 
 ---
 
@@ -1063,9 +906,9 @@ inbound auth surface for the Panel.
 | Content Sanitizer | `src/security/content_sanitizer.rs` | Prompt injection defense |
 | Audit Logger | `src/security/audit.rs` | Security event logging |
 | Browser Guard | `src/browser/network_policy.rs` | Browser navigation SSRF |
-| Identity/Auth | `src/gateway/security/` | Session, pairing, permissions |
+| Crypto + Vault | `src/gateway/security/` | Secrets vault, shared-token crypto |
+| Tool Permissions | `src/tools/scoped/` | Per-channel tool permission merge |
 | Exec Kernel | `src/exec/` | Shell command safety |
-| Policy Engine | `src/gateway/security/policy_engine.rs` | Role-based access control |
 
 ---
 

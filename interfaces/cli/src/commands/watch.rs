@@ -28,7 +28,7 @@ pub async fn run(
     json: bool,
 ) -> CliResult<()> {
     let (client, mut events) = AlephClient::connect(server_url).await?;
-    client.authenticate(config).await?;
+    client.handshake(config).await?;
 
     if !json {
         // Banner on stderr: stdout stays pure feed data.

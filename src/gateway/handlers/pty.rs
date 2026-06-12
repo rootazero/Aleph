@@ -8,8 +8,8 @@
 //! `pty.output` / `pty.exit` topics (subscribe via `events.subscribe` with
 //! pattern `pty.*`).
 //!
-//! All `pty.*` methods are operator-only (see `gateway::method_authz`):
-//! spawning an interactive host shell is a privileged action.
+//! Under the LAN-trust model every connection is the implicit owner/operator,
+//! so the `pty.*` surface is open to all connections.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Deserialize;

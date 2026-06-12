@@ -9,41 +9,28 @@ use std::fmt;
 
 use uuid::Uuid;
 
-use crate::gateway::security::identity_map::UserId;
-
 /// Request-scoped context propagated through the middleware chain.
 ///
 /// Each inbound request gets a fresh context with a generated `request_id`
-/// for trace correlation. Auth middleware populates `user_id`; downstream
-/// middleware and the handler can read it.
+/// for trace correlation.
 #[derive(Debug, Clone)]
 pub struct GatewayRequestContext {
     /// Unique identifier for trace correlation across layers.
     pub request_id: Uuid,
-    /// Authenticated user identity, set by `AuthLayer` if token is valid.
-    pub user_id: Option<UserId>,
-    /// Client identifier (IP address, device fingerprint, or pairing identity).
+    /// Client identifier (IP address or connection identity).
     pub client_id: String,
     /// Trace flags for fine-grained observability control.
     pub trace_flags: TraceFlags,
 }
 
 impl GatewayRequestContext {
-    /// Create a new context with a fresh UUID and no authenticated identity.
+    /// Create a new context with a fresh UUID.
     pub fn new(client_id: impl Into<String>) -> Self {
         Self {
             request_id: Uuid::new_v4(),
-            user_id: None,
             client_id: client_id.into(),
             trace_flags: TraceFlags::default(),
         }
-    }
-
-    /// Set the authenticated user identity.
-    #[must_use]
-    pub fn with_user_id(mut self, user_id: UserId) -> Self {
-        self.user_id = Some(user_id);
-        self
     }
 
     /// Set trace flags.
@@ -89,9 +76,6 @@ impl TraceFlags {
 impl fmt::Display for GatewayRequestContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "req_id={}", self.request_id)?;
-        if let Some(ref uid) = self.user_id {
-            write!(f, " user={uid:?}")?;
-        }
         write!(f, " client={}", self.client_id)?;
         Ok(())
     }
@@ -106,21 +90,14 @@ mod tests {
         let ctx1 = GatewayRequestContext::new("test_client");
         let ctx2 = GatewayRequestContext::new("test_client");
         assert_ne!(ctx1.request_id, ctx2.request_id);
-        assert!(ctx1.user_id.is_none());
         assert_eq!(ctx1.client_id, "test_client");
-    }
-
-    #[test]
-    fn test_context_with_user_id() {
-        let ctx = GatewayRequestContext::new("test_client").with_user_id(UserId::Owner);
-        assert_eq!(ctx.user_id, Some(UserId::Owner));
     }
 
     #[test]
     fn test_context_clone_is_independent() {
         let ctx1 = GatewayRequestContext::new("test_client");
         let ctx2 = ctx1.clone();
-        // Mutating clone doesn't affect original (user_id is immutable per request)
+        // Cloning yields an independent copy that shares the same request-scoped values.
         assert_eq!(ctx1.request_id, ctx2.request_id);
         assert_eq!(ctx1.client_id, ctx2.client_id);
     }

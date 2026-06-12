@@ -3,7 +3,7 @@
 //! reconnect budget.
 //!
 //! Distinct from [`BootCheckGate`]:
-//!   * `BootCheckGate` engages BEFORE the first successful auth.
+//!   * `BootCheckGate` engages BEFORE the first successful connect.
 //!   * `ServiceBlockingGate` engages AFTER, when `reconnect()` gives up.
 //!
 //! Both render children behind the overlay (vs. instead of) so the user's

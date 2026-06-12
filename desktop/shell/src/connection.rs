@@ -27,10 +27,6 @@ pub enum ConnectionTarget {
 }
 
 impl ConnectionTarget {
-    pub const fn is_local(&self) -> bool {
-        matches!(self, Self::Local)
-    }
-
     /// Parse a persisted/user-entered target string. `"local"` (any case) or
     /// empty → Local. Otherwise normalise to a `Remote(Url)`:
     /// accept `host`, `host:port`, `http://host`, `https://host:port`;
@@ -123,6 +119,18 @@ fn has_explicit_port_in_input(raw: &str) -> bool {
     }
 }
 
+/// Whether a target has ever been chosen (the marker file exists). Unlike
+/// [`load_target`], which collapses "no marker" and "marker says local" into
+/// `Local`, this distinguishes first run (no marker) from a deliberate Local
+/// choice — the panel-only shell needs that to decide whether to open its
+/// first-run connection page. Consumed only by the panel-only variant's
+/// first-run flow; the full app supervises a local daemon and never shows a
+/// first-run page, so this is gated out of it.
+#[cfg(not(feature = "embedded-core"))]
+pub fn marker_exists() -> bool {
+    target_marker().is_some_and(|m| m.exists())
+}
+
 /// Load the persisted target; missing/unreadable/unparsable → Local
 /// (fail-safe: a corrupt marker must never strand the user on a broken
 /// remote — it falls back to the always-available local daemon).
@@ -181,9 +189,30 @@ pub fn clear_connection_target(app: tauri::AppHandle) -> Result<(), String> {
     set_connection_target(app, "local".to_string())
 }
 
+/// Whether this build is the panel-only (lite) shell variant. Registered in
+/// *both* variants (the full app answers `false`) so the connect page can
+/// determine its mode deterministically at load — which connect command to
+/// call and whether to show the mDNS discovery section — instead of inferring
+/// the variant from whether a discovery scan happened to succeed.
+#[tauri::command]
+pub fn is_lite_shell() -> bool {
+    cfg!(not(feature = "embedded-core"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lite_flag_matches_build_variant() {
+        // Each matrix asserts its own constant: the full app must answer
+        // `false`, the panel-only shell `true` — the connect page keys its
+        // command choice and discovery UI off this.
+        #[cfg(feature = "embedded-core")]
+        assert!(!is_lite_shell());
+        #[cfg(not(feature = "embedded-core"))]
+        assert!(is_lite_shell());
+    }
 
     #[test]
     fn empty_and_local_parse_to_local() {
@@ -229,12 +258,6 @@ mod tests {
     fn unsupported_scheme_rejected() {
         assert!(ConnectionTarget::parse("ftp://host").is_err());
         assert!(ConnectionTarget::parse("ws://host").is_err());
-    }
-
-    #[test]
-    fn is_local_flag() {
-        assert!(ConnectionTarget::Local.is_local());
-        assert!(!ConnectionTarget::parse("10.0.0.1").unwrap().is_local());
     }
 
     #[test]

@@ -27,7 +27,6 @@ pub mod link;
 pub mod transport;
 
 pub mod admin_api;
-pub mod auth_middleware;
 pub mod credential_planner;
 pub mod event_bus;
 pub mod event_emitter;
@@ -46,7 +45,6 @@ pub mod router;
 pub mod runtime_footer;
 pub mod security;
 pub mod server;
-pub mod session;
 pub mod shutdown_forensics;
 pub mod subagent_announce;
 pub mod surface;
@@ -74,7 +72,6 @@ pub mod channel_policy;
 pub mod channel_registry;
 pub mod coalescer;
 pub mod delivery_queue;
-pub mod device_store;
 pub mod hot_reload;
 pub mod http_server;
 pub mod inbound_context;
@@ -89,9 +86,7 @@ pub mod reply_emitter;
 pub mod routing_config;
 
 pub mod agent_env;
-pub mod bootstrap;
 pub mod caller_identity;
-pub mod challenge;
 pub mod context;
 pub mod event_scope;
 pub mod execution_adapter;
@@ -114,7 +109,6 @@ pub mod streaming;
 pub mod tailscale;
 pub mod tools_invalidation;
 pub mod trace_context;
-pub mod trusted_proxy;
 pub mod voice;
 pub mod webhook_receiver;
 pub mod webhooks;
@@ -145,14 +139,9 @@ pub use channel::{
     HealthStatus, InboundMessage, MessageId, OutboundMessage, SendResult, UserId,
 };
 pub use channel_registry::{ChannelHealthSummary, ChannelRegistry, ChannelStatusSummary};
-pub use device_store::{ApprovedDevice, DeviceStore};
 pub use event_bus::{topic_matches, TopicEvent, TopicFilter};
 pub use events::GatewayEventFrame;
 pub use execution_adapter::ExecutionAdapter;
-pub use handlers::auth::{
-    create_hello_notification, handle_connect, handle_devices_list, handle_devices_revoke,
-    handle_pairing_approve, handle_pairing_list, handle_pairing_reject, AuthContext,
-};
 pub use handlers::events::{
     handle_list as handle_events_list, handle_subscribe, handle_unsubscribe, SubscriptionManager,
 };
@@ -199,8 +188,6 @@ mod proptest_channel;
 #[cfg(test)]
 mod proptest_protocol;
 
-#[cfg(test)]
-mod auth_probe_tests;
 
 #[cfg(all(test, feature = "loom"))]
 mod loom_concurrency;

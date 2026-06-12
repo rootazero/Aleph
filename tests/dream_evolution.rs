@@ -42,8 +42,15 @@ async fn full_evolution_cycle_consolidate() {
         &DreamingConfig::default(),
         &MemoryDecayPolicy::default(),
     );
-    // Consolidate: lint, review, consolidate, feedback_distill, drift, index, decay, skill_lifecycle
-    assert_eq!(pipeline.stages.len(), 8);
+    // Consolidate: lint, review, consolidate, feedback_distill, drift, index,
+    // weave, decay, skill_lifecycle, goal_lessons_promote — mirrors the
+    // authoritative name-list test `pipeline_from_strategy_consolidate` in
+    // `src/memory/dreaming/mod.rs`.
+    assert_eq!(pipeline.stages.len(), 10);
+    assert_eq!(
+        pipeline.stages.last().map(|s| s.name()),
+        Some("goal_lessons_promote")
+    );
 
     // 5. Validation (empty notes → passes trivially)
     let l1 = run_l1_validation(&HashMap::new());

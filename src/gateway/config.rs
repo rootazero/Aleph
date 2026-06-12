@@ -99,33 +99,23 @@ pub struct GatewayServerConfig {
     /// Maximum concurrent connections
     pub max_connections: usize,
     /// Maximum concurrent connections from a single non-loopback remote IP.
-    /// Bounds preauth slot-exhaustion (a remote peer opening many sockets that
-    /// never authenticate). `0` disables the cap; loopback is always exempt.
-    /// Default 64. The struct-level `#[serde(default)]` keeps old TOML loading.
+    /// Bounds slot-exhaustion (a remote peer opening many idle sockets).
+    /// `0` disables the cap; loopback is always exempt. Default 64. The
+    /// struct-level `#[serde(default)]` keeps old TOML loading.
     pub max_connections_per_ip: usize,
-    /// Trusted reverse-proxy IPs / CIDRs (e.g. `["10.0.0.0/8", "::1"]`). When
-    /// the WebSocket socket peer matches one of these, the real client IP is
-    /// read from `X-Forwarded-For` and used for the per-IP connection cap,
-    /// rate limiting, and auth-failure lockout. Empty (default) ⇒ the socket
-    /// peer address is used verbatim and `X-Forwarded-For` is never trusted.
-    #[serde(default)]
-    pub trusted_proxies: Vec<String>,
-    /// Legacy field — kept for TOML backward compat
-    #[serde(default)]
-    pub require_auth: bool,
     /// Protocol version
     pub protocol_version: u32,
-    /// Authentication configuration
+    /// Extra browser origins allowed on the `/ws` upgrade — additional to the
+    /// built-in same-origin / loopback / `tauri:` rules. Lives under
+    /// `[gateway]`; the legacy `[gateway.auth]` table that once held it is
+    /// ignored on load (see `from_toml` legacy-config test).
     #[serde(default)]
-    pub auth: AuthConfig,
-    /// Whether device pairing (the 6-digit `/pair` flow) is accepted. When
-    /// `false`, pairing requests are rejected at `connect`. Default `true`.
-    #[serde(default = "default_true_flag")]
-    pub enable_pairing: bool,
-    /// Whether guest invitation tokens may activate a guest session. When
-    /// `false`, guest connects are rejected at `connect`. Default `true`.
-    #[serde(default = "default_true_flag")]
-    pub allow_guest: bool,
+    pub allowed_origins: Vec<String>,
+    /// Trust every Origin on the `/ws` upgrade. Escape hatch for reverse
+    /// proxy deployments. SECURITY: leaves the agent drivable by any web
+    /// page the user's browser visits — keep false unless you know why.
+    #[serde(default)]
+    pub allow_any_origin: bool,
     /// Lane concurrency & channel-class priority configuration. Missing
     /// keys fall back to [`LaneConfig::default`], so old TOML files
     /// without a `[gateway.lane]` block keep loading.
@@ -149,14 +139,6 @@ pub struct GatewayServerConfig {
     /// double-send bugs (e.g. retried mutations after a network blip).
     #[serde(default)]
     pub require_idempotency_key: bool,
-    /// When true, token-bearing `connect` calls MUST carry a signed
-    /// `challenge: {nonce, signature}` payload obtained from
-    /// `connect.challenge`. Guest invitations are exempt. Default
-    /// `false`. Recommended `true` for LAN / Tailnet bind modes where
-    /// the same token may be observed on the wire by a witness who can
-    /// later replay it.
-    #[serde(default)]
-    pub require_challenge: bool,
     /// Periodic `[MEMORY]` log cadence in seconds for the gateway process.
     /// `0` disables the monitor. Default 300s (5 min) — see
     /// [`crate::gateway::memory_monitor`] for the log format.
@@ -172,34 +154,6 @@ pub struct GatewayServerConfig {
     /// [`crate::gateway::channel_health_monitor`].
     #[serde(default)]
     pub channel_health: crate::gateway::channel_health_monitor::ChannelHealthConfig,
-    /// One-shot bootstrap-nonce knobs for the loopback cookie-handoff
-    /// endpoint (`GET /auth/bootstrap?nonce=…`). Used by the desktop
-    /// shell's "Open in Browser" menu item and `aleph open` CLI.
-    #[serde(default)]
-    pub bootstrap: BootstrapConfig,
-}
-
-/// Bootstrap-nonce knobs for the loopback cookie-handoff endpoint.
-///
-/// See [`crate::gateway::bootstrap::BootstrapNonceManager`] for the
-/// runtime that consumes these values.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct BootstrapConfig {
-    /// One-shot nonce TTL in seconds. Default 60.
-    pub nonce_ttl_secs: u64,
-    /// How long consumed nonces are remembered for replay protection.
-    /// Default 300 (5 minutes).
-    pub used_retention_secs: u64,
-}
-
-impl Default for BootstrapConfig {
-    fn default() -> Self {
-        Self {
-            nonce_ttl_secs: 60,
-            used_retention_secs: 300,
-        }
-    }
 }
 
 const fn default_memory_monitor_secs() -> u64 {
@@ -214,10 +168,6 @@ const fn default_idle_timeout_secs() -> u64 {
     90
 }
 
-const fn default_true_flag() -> bool {
-    true
-}
-
 impl Default for GatewayServerConfig {
     fn default() -> Self {
         Self {
@@ -225,75 +175,17 @@ impl Default for GatewayServerConfig {
             port: 18790,
             max_connections: 100,
             max_connections_per_ip: 64,
-            trusted_proxies: Vec::new(),
-            require_auth: false,
             protocol_version: 1,
-            auth: AuthConfig::default(),
-            enable_pairing: true,
-            allow_guest: true,
+            allowed_origins: Vec::new(),
+            allow_any_origin: false,
             lane: LaneConfig::default(),
             ping_interval_secs: default_ping_interval_secs(),
             idle_timeout_secs: default_idle_timeout_secs(),
             require_idempotency_key: false,
-            require_challenge: false,
             memory_monitor_secs: default_memory_monitor_secs(),
             runtime_footer: crate::gateway::runtime_footer::RuntimeFooterConfig::default(),
             channel_health: crate::gateway::channel_health_monitor::ChannelHealthConfig::default(),
-            bootstrap: BootstrapConfig::default(),
         }
-    }
-}
-
-/// Authentication mode
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum AuthMode {
-    /// Require shared token for access (default)
-    #[default]
-    Token,
-    /// No authentication required
-    None,
-}
-
-impl AuthMode {
-    /// Whether this mode requires authentication
-    #[must_use]
-    pub const fn is_auth_required(&self) -> bool {
-        matches!(self, Self::Token)
-    }
-}
-
-/// Authentication configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct AuthConfig {
-    /// Authentication mode
-    pub mode: AuthMode,
-    /// HTTP session cookie expiry (hours)
-    pub session_expiry_hours: u64,
-    /// Device token expiry (hours)
-    pub token_expiry_hours: u64,
-    /// Allowed WebSocket origins (additional to same-origin)
-    #[serde(default)]
-    pub allowed_origins: Vec<String>,
-}
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            mode: AuthMode::Token,
-            session_expiry_hours: 72,
-            token_expiry_hours: 24,
-            allowed_origins: vec![],
-        }
-    }
-}
-
-impl AuthConfig {
-    /// Whether authentication is required
-    #[must_use]
-    pub const fn is_auth_required(&self) -> bool {
-        matches!(self.mode, AuthMode::Token)
     }
 }
 
@@ -674,63 +566,23 @@ headless = true
     }
 
     #[test]
-    fn bootstrap_block_defaults() {
-        let defaults = GatewayServerConfig::default();
-        assert_eq!(defaults.bootstrap.nonce_ttl_secs, 60);
-        assert_eq!(defaults.bootstrap.used_retention_secs, 300);
-
-        // Older TOML files (missing the block) load with defaults.
-        let toml = r#"
-[gateway]
-port = 18790
-
-[agents.main]
-model = "test"
-"#;
-        let cfg = GatewayConfig::from_toml(toml).expect("parse");
-        assert_eq!(cfg.gateway.bootstrap.nonce_ttl_secs, 60);
-        assert_eq!(cfg.gateway.bootstrap.used_retention_secs, 300);
-    }
-
-    #[test]
-    fn bootstrap_block_overrides() {
-        let toml = r#"
-[gateway]
-port = 18790
-
-[gateway.bootstrap]
-nonce_ttl_secs = 30
-used_retention_secs = 600
-
-[agents.main]
-model = "test"
-"#;
-        let cfg = GatewayConfig::from_toml(toml).expect("parse");
-        assert_eq!(cfg.gateway.bootstrap.nonce_ttl_secs, 30);
-        assert_eq!(cfg.gateway.bootstrap.used_retention_secs, 600);
-    }
-
-    #[test]
-    fn test_require_idempotency_key_and_challenge_default_false_and_parse() {
-        // Defaults stay false for existing TOML files (additive knobs).
+    fn test_require_idempotency_key_default_false_and_parse() {
+        // Default stays false for existing TOML files (additive knob).
         let defaults = GatewayServerConfig::default();
         assert!(!defaults.require_idempotency_key);
-        assert!(!defaults.require_challenge);
 
-        // Both knobs round-trip through TOML when opted in.
+        // The knob round-trips through TOML when opted in.
         let toml = r#"
 [agents.main]
 model = "test"
 
 [gateway]
 require_idempotency_key = true
-require_challenge = true
 "#;
-        let parsed = GatewayConfig::from_toml(toml).expect("parse opt-in flags");
+        let parsed = GatewayConfig::from_toml(toml).expect("parse opt-in flag");
         assert!(parsed.gateway.require_idempotency_key);
-        assert!(parsed.gateway.require_challenge);
 
-        // Older TOML files (missing the keys) keep loading.
+        // Older TOML files (missing the key) keep loading.
         let legacy_toml = r#"
 [agents.main]
 model = "test"
@@ -740,7 +592,6 @@ host = "0.0.0.0"
 "#;
         let legacy = GatewayConfig::from_toml(legacy_toml).expect("legacy still loads");
         assert!(!legacy.gateway.require_idempotency_key);
-        assert!(!legacy.gateway.require_challenge);
     }
 
     #[test]
@@ -770,56 +621,61 @@ model = "test"
     }
 
     #[test]
-    fn test_parse_auth_config() {
+    fn legacy_auth_tables_are_silently_ignored() {
+        // Old user configs still carry `[gateway.auth]` tables and removed
+        // auth knobs. The LAN-trust revert must load them without error
+        // (the root struct has no `deny_unknown_fields`), simply ignoring
+        // the dead keys.
         let toml = r#"
 [gateway]
 port = 18790
+require_auth = true
+enable_pairing = false
+allow_guest = false
+require_challenge = true
+trusted_proxies = ["10.0.0.0/8"]
 
 [gateway.auth]
 mode = "token"
 session_expiry_hours = 48
 token_expiry_hours = 12
+allowed_origins = ["https://legacy.example.com"]
+
+[gateway.bootstrap]
+nonce_ttl_secs = 30
 
 [agents.main]
 model = "test"
 "#;
-        let config = GatewayConfig::from_toml(toml).unwrap();
-        assert!(matches!(config.gateway.auth.mode, AuthMode::Token));
-        assert_eq!(config.gateway.auth.session_expiry_hours, 48);
-        assert_eq!(config.gateway.auth.token_expiry_hours, 12);
+        let config = GatewayConfig::from_toml(toml).expect("legacy auth config still loads");
+        assert_eq!(config.gateway.port, 18790);
+        // The legacy nested allowed_origins is NOT migrated — operators move
+        // it to the gateway root themselves (documented in the release note).
+        assert!(config.gateway.allowed_origins.is_empty());
+        assert!(!config.gateway.allow_any_origin);
     }
 
     #[test]
-    fn test_auth_mode_default_is_token() {
-        let config = GatewayConfig::default();
-        assert!(matches!(config.gateway.auth.mode, AuthMode::Token));
-    }
-
-    #[test]
-    fn test_auth_mode_none() {
-        let toml = r#"
-[gateway.auth]
-mode = "none"
-
-[agents.main]
-model = "test"
-"#;
-        let config = GatewayConfig::from_toml(toml).unwrap();
-        assert!(matches!(config.gateway.auth.mode, AuthMode::None));
-        assert!(!config.gateway.auth.is_auth_required());
-    }
-
-    #[test]
-    fn test_legacy_require_auth_compat() {
+    fn origin_knobs_parse_from_gateway_root() {
         let toml = r#"
 [gateway]
 port = 18790
-require_auth = true
+allowed_origins = ["https://panel.example.com"]
+allow_any_origin = true
 
 [agents.main]
 model = "test"
 "#;
-        let config = GatewayConfig::from_toml(toml).unwrap();
-        assert!(matches!(config.gateway.auth.mode, AuthMode::Token));
+        let config = GatewayConfig::from_toml(toml).expect("parse origin knobs");
+        assert_eq!(
+            config.gateway.allowed_origins,
+            vec!["https://panel.example.com".to_string()]
+        );
+        assert!(config.gateway.allow_any_origin);
+
+        // Defaults: empty allow-list, escape hatch off.
+        let defaults = GatewayServerConfig::default();
+        assert!(defaults.allowed_origins.is_empty());
+        assert!(!defaults.allow_any_origin);
     }
 }

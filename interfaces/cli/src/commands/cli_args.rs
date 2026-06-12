@@ -6,8 +6,6 @@
 
 use clap::{Subcommand, ValueEnum};
 
-use crate::commands::guests::GuestsAction;
-
 /// Top-level subcommands for the `aleph` client CLI.
 ///
 /// Each variant maps to one handler module under `commands/`. Variants do not
@@ -72,16 +70,10 @@ pub enum Commands {
         action: SessionAction,
     },
 
-    /// Manage guest invitations and permissions
-    Guests {
-        #[command(subcommand)]
-        action: GuestsAction,
-    },
-
     /// Show server information
     Info,
 
-    /// Connect and authenticate with the server
+    /// Connect to the server (LAN-trust: no credentials)
     Connect {
         /// Device name for this client
         #[arg(short, long, default_value = "aleph-cli")]
@@ -229,24 +221,6 @@ pub enum Commands {
         shell: clap_complete::Shell,
     },
 
-    /// Inspect or moderate device pairing requests
-    Pairing {
-        #[command(subcommand)]
-        action: PairingAction,
-    },
-
-    /// Manage approved client devices
-    Devices {
-        #[command(subcommand)]
-        action: DevicesAction,
-    },
-
-    /// Shared-token and HTTP session administration
-    Auth {
-        #[command(subcommand)]
-        action: AuthAction,
-    },
-
     /// Manage named vault secrets (API keys, tokens, etc.)
     Secret {
         #[command(subcommand)]
@@ -271,9 +245,9 @@ pub enum Commands {
         action: ProxyAction,
     },
 
-    /// Open the Aleph Panel in the system browser, auto-authenticated via a
-    /// one-time bootstrap nonce. Same UX as the desktop app's "Open in Browser"
-    /// menu item — no token typing.
+    /// Open the Aleph Panel in the system browser. LAN-trust: the gateway
+    /// serves the Panel with no authentication, so this just derives the
+    /// Panel URL from the configured endpoint and launches the browser.
     Open,
 
     /// Watch live agent activity across all sessions as a timestamped feed
@@ -1046,92 +1020,6 @@ pub enum ChatControlAction {
         /// Keep system messages
         #[arg(long)]
         keep_system: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum PairingAction {
-    /// List pending pairing requests
-    List,
-    /// Approve a pending pairing by code
-    Approve {
-        /// Pairing code shown by the requesting device
-        code: String,
-    },
-    /// Reject a pending pairing by code
-    Reject {
-        /// Pairing code to invalidate
-        code: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum DevicesAction {
-    /// List approved devices
-    List,
-    /// Revoke a device (also revokes its tokens)
-    Revoke {
-        /// Device ID to revoke
-        device_id: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum AuthAction {
-    // DEPRECATED (Phase 4, 26.5.25): `ShowToken` + `ResetToken` are hidden
-    // legacy variants kept for one release cycle so muscle-memory scripts
-    // keep parsing. Drop both variants (and the matching arms in
-    // `interfaces/cli/src/main.rs`) once 26.6.x has shipped.
-    /// Display the current shared access token (legacy — prefer `aleph open`
-    /// or the desktop app; use `aleph auth debug show-token` for break-glass).
-    #[command(hide = true)]
-    ShowToken,
-    /// Regenerate the shared token, invalidating all sessions (legacy —
-    /// use `aleph auth debug reset-token`).
-    #[command(hide = true)]
-    ResetToken {
-        /// Skip the interactive confirmation prompt
-        #[arg(short, long)]
-        yes: bool,
-    },
-    /// Debug surfaces (token introspection, regeneration) for developers.
-    Debug {
-        #[command(subcommand)]
-        action: AuthDebugAction,
-    },
-    /// List active HTTP sessions
-    Sessions,
-    /// Revoke a specific HTTP session
-    RevokeSession {
-        /// Session ID to revoke
-        session_id: String,
-    },
-    /// Start the browser OAuth login flow for a provider (codex/chatgpt)
-    Login {
-        /// Provider key (e.g. `chatgpt`)
-        provider: String,
-    },
-    /// Clear stored OAuth token for a provider
-    Logout {
-        /// Provider key (e.g. `chatgpt`)
-        provider: String,
-    },
-    /// Check OAuth login status for a provider
-    OauthStatus {
-        /// Provider key (e.g. `chatgpt`)
-        provider: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum AuthDebugAction {
-    /// Show the access token (developer / break-glass use only).
-    ShowToken,
-    /// Reset (regenerate) the access token, invalidating all sessions.
-    ResetToken {
-        /// Skip the interactive confirmation prompt
-        #[arg(short, long)]
-        yes: bool,
     },
 }
 

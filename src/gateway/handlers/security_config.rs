@@ -3,13 +3,14 @@
 //! RPC handlers for managing security settings:
 //! - `security_config.get`: Get current security configuration
 //! - `security_config.update`: Update security configuration
-//! - `security_config.list_devices`: List all paired devices
-//! - `security_config.revoke_device`: Revoke a device's access
+//!
+//! Device list/revoke and the auth flags died with the LAN-trust revert;
+//! what remains is network-access scope (bind address), SSRF, shell
+//! security, custom PII rules, secret protection, and sandbox rate limits.
 //!
 //! All modifications are persisted and broadcast as events.
 
 use crate::config::patcher::ConfigPatcher;
-use crate::gateway::device_store::DeviceStore;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::sync_primitives::Arc;
@@ -128,12 +129,6 @@ pub struct CustomLeakPattern {
 /// Security configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
-    /// Require authentication for Gateway connections
-    pub require_auth: bool,
-    /// Enable device pairing
-    pub enable_pairing: bool,
-    /// Allow guest access
-    pub allow_guest: bool,
     /// Network access scope (localhost or lan)
     #[serde(default = "default_network_access")]
     pub network_access: NetworkAccess,
@@ -176,18 +171,6 @@ const fn default_max_redirects() -> u8 {
     5
 }
 
-/// Device information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeviceInfo {
-    pub device_id: String,
-    pub device_name: String,
-    pub device_type: String,
-    pub paired_at: String,
-    pub last_seen: Option<String>,
-    /// UI tier label derived from the device permissions: `"chat"` | `"config"`.
-    pub tier: String,
-}
-
 /// Handle `security_config.get` request
 pub async fn handle_get(
     request: JsonRpcRequest,
@@ -203,13 +186,8 @@ pub async fn handle_get(
     let custom_pii_rules = toml_io::read_custom_pii_rules_from_toml(&config_patcher);
     let secrets_protection = toml_io::read_secrets_protection_from_toml(&config_patcher);
     let sandbox_rate_limit = rate_limit::read_sandbox_rate_limit_from_toml(&config_patcher);
-    let (require_auth, enable_pairing, allow_guest) =
-        toml_io::read_gateway_auth_flags(&config_patcher);
 
     let security_config = SecurityConfig {
-        require_auth,
-        enable_pairing,
-        allow_guest,
         network_access: NetworkAccess::from_bind_address(&host),
         ssrf_enabled,
         ssrf_allow_private_network: ssrf_allow_private,
@@ -252,16 +230,10 @@ pub async fn handle_update(
 
     // Check current host to determine if restart is needed
     let current_host = toml_io::read_gateway_host_from_config(&config_patcher);
-    let (cur_require_auth, cur_enable_pairing, cur_allow_guest) =
-        toml_io::read_gateway_auth_flags(&config_patcher);
 
     let new_host = security_config.network_access.to_bind_address().to_string();
-    // All gateway-level knobs (host, auth mode, pairing/guest gates) are read
-    // into the auth subsystem at boot, so a change to any requires a restart.
+    // The bind address is read once at boot, so a change requires a restart.
     let host_changed = current_host != new_host;
-    let auth_flags_changed = cur_require_auth != security_config.require_auth
-        || cur_enable_pairing != security_config.enable_pairing
-        || cur_allow_guest != security_config.allow_guest;
 
     // SSRF / shell / secrets / sandbox-rate-limit are all captured by their
     // consumers at boot (WebFetch clones the SsrfPolicy at construction,
@@ -297,7 +269,6 @@ pub async fn handle_update(
     );
 
     let needs_restart = host_changed
-        || auth_flags_changed
         || ssrf_changed
         || shell_changed
         || secrets_changed
@@ -313,22 +284,6 @@ pub async fn handle_update(
                 request.id,
                 INTERNAL_ERROR,
                 format!("Failed to save config: {e}"),
-            );
-        }
-    }
-
-    // Persist the gateway auth flags (require_auth / enable_pairing / allow_guest).
-    if auth_flags_changed {
-        if let Err(e) = toml_io::write_gateway_auth_flags(
-            &config_path,
-            security_config.require_auth,
-            security_config.enable_pairing,
-            security_config.allow_guest,
-        ) {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to save gateway auth config: {e}"),
             );
         }
     }
@@ -405,73 +360,4 @@ pub async fn handle_update(
             "needs_restart": needs_restart,
         }),
     )
-}
-
-/// Handle `security_config.list_devices` request
-pub async fn handle_list_devices(
-    request: JsonRpcRequest,
-    device_store: Arc<DeviceStore>,
-) -> JsonRpcResponse {
-    let devices = device_store.list_devices();
-
-    let device_infos: Vec<DeviceInfo> = devices
-        .into_iter()
-        .map(|d| DeviceInfo {
-            tier: crate::gateway::handlers::auth::tier::tier_for_permissions(&d.permissions)
-                .to_string(),
-            device_id: d.device_id,
-            device_name: d.device_name,
-            device_type: d.device_type.unwrap_or_else(|| "unknown".to_string()),
-            paired_at: d.approved_at,
-            last_seen: d.last_seen_at,
-        })
-        .collect();
-
-    let result = serde_json::to_value(&device_infos).unwrap_or_else(|_| serde_json::json!([]));
-
-    JsonRpcResponse::success(request.id, result)
-}
-
-/// Handle `security_config.revoke_device` request
-pub async fn handle_revoke_device(
-    request: JsonRpcRequest,
-    device_store: Arc<DeviceStore>,
-    event_bus: Arc<GatewayEventBus>,
-) -> JsonRpcResponse {
-    // Parse params
-    let params = match request.params {
-        Some(p) => p,
-        None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params"),
-    };
-
-    let device_id: String =
-        match serde_json::from_value(params.get("device_id").cloned().unwrap_or(Value::Null)) {
-            Ok(id) => id,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid device_id: {e}"),
-                )
-            }
-        };
-
-    match device_store.revoke_device(&device_id) {
-        Ok(_) => {
-            // Broadcast event
-            let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
-                section: Some("security".to_string()),
-                value: serde_json::json!({ "action": "device_revoked", "device_id": device_id }),
-                timestamp: chrono::Utc::now().timestamp_millis(),
-            });
-            let _ = event_bus.publish_json(&event);
-
-            JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
-        }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to revoke device: {e}"),
-        ),
-    }
 }

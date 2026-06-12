@@ -27,12 +27,11 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use aleph_client::{CliConfig, CliResult};
 
 use commands::cli_args::{
-    AuthAction, AuthDebugAction, CallsAction, ChannelsAction, ChatControlAction, Commands,
-    ConfigAction, CronAction, DaemonAction, DevicesAction, GatewayAction, HeartbeatAction,
-    HooksAction, IdentityAction, LogsAction, MarketplaceAction, McpAction, MemoryAction,
-    ModelsAction, PairingAction, PluginAction, ProvidersAction, ProxyAction, SandboxAction,
-    SecretAction, ServicesAction, SessionAction, SkillsAction, ToolsAction, TraceAction,
-    VaultAction, WebhookAction, WorkspaceAction,
+    CallsAction, ChannelsAction, ChatControlAction, Commands, ConfigAction, CronAction,
+    DaemonAction, GatewayAction, HeartbeatAction, HooksAction, IdentityAction, LogsAction,
+    MarketplaceAction, McpAction, MemoryAction, ModelsAction, PluginAction, ProvidersAction,
+    ProxyAction, SandboxAction, SecretAction, ServicesAction, SessionAction, SkillsAction,
+    ToolsAction, TraceAction, VaultAction, WebhookAction, WorkspaceAction,
 };
 
 /// Aleph CLI - Personal AI Assistant Client
@@ -153,9 +152,6 @@ async fn dispatch(
             .await
         }
         Commands::Session { action } => dispatch_session(server_url, action, config, json).await,
-        Commands::Guests { action } => {
-            commands::guests::handle_guests(server_url, action, config, json).await
-        }
         Commands::Config { action } => dispatch_config(server_url, action, config, json).await,
         Commands::Cron { action } => dispatch_cron(server_url, action, config, json).await,
         Commands::Heartbeat { action } => dispatch_heartbeat(server_url, action, json).await,
@@ -183,9 +179,6 @@ async fn dispatch(
             commands::completion::run(shell);
             Ok(())
         }
-        Commands::Pairing { action } => dispatch_pairing(server_url, action, json).await,
-        Commands::Devices { action } => dispatch_devices(server_url, action, json).await,
-        Commands::Auth { action } => dispatch_auth(server_url, action, json).await,
         Commands::Secret { action } => dispatch_secret(server_url, action, json).await,
         Commands::Hooks { action } => dispatch_hooks(server_url, action, json).await,
         Commands::Webhook { action } => dispatch_webhook(action, json).await,
@@ -212,61 +205,6 @@ async fn dispatch_proxy(action: ProxyAction, json: bool) -> CliResult<()> {
         ProxyAction::Show => proxy_cmd::show(json).await,
         ProxyAction::Set => proxy_cmd::set(json).await,
         ProxyAction::Clear => proxy_cmd::clear(json).await,
-    }
-}
-
-async fn dispatch_pairing(server_url: &str, action: PairingAction, json: bool) -> CliResult<()> {
-    use commands::pairing_cmd;
-    match action {
-        PairingAction::List => pairing_cmd::list(server_url, json).await,
-        PairingAction::Approve { code } => pairing_cmd::approve(server_url, &code, json).await,
-        PairingAction::Reject { code } => pairing_cmd::reject(server_url, &code, json).await,
-    }
-}
-
-async fn dispatch_devices(server_url: &str, action: DevicesAction, json: bool) -> CliResult<()> {
-    use commands::devices_cmd;
-    match action {
-        DevicesAction::List => devices_cmd::list(server_url, json).await,
-        DevicesAction::Revoke { device_id } => {
-            devices_cmd::revoke(server_url, &device_id, json).await
-        }
-    }
-}
-
-async fn dispatch_auth(server_url: &str, action: AuthAction, json: bool) -> CliResult<()> {
-    use commands::auth_cmd;
-    match action {
-        AuthAction::ShowToken => {
-            eprintln!(
-                "warning: `aleph auth show-token` is deprecated; \
-                 use `aleph open` or the desktop app. \
-                 For break-glass debugging, use `aleph auth debug show-token`."
-            );
-            auth_cmd::show_token(server_url, json).await
-        }
-        AuthAction::ResetToken { yes } => {
-            eprintln!(
-                "warning: `aleph auth reset-token` is deprecated; \
-                 use `aleph auth debug reset-token`."
-            );
-            auth_cmd::reset_token(server_url, yes, json).await
-        }
-        AuthAction::Debug { action } => match action {
-            AuthDebugAction::ShowToken => auth_cmd::show_token(server_url, json).await,
-            AuthDebugAction::ResetToken { yes } => {
-                auth_cmd::reset_token(server_url, yes, json).await
-            }
-        },
-        AuthAction::Sessions => auth_cmd::sessions(server_url, json).await,
-        AuthAction::RevokeSession { session_id } => {
-            auth_cmd::revoke_session(server_url, &session_id, json).await
-        }
-        AuthAction::Login { provider } => auth_cmd::login(server_url, &provider, json).await,
-        AuthAction::Logout { provider } => auth_cmd::logout(server_url, &provider, json).await,
-        AuthAction::OauthStatus { provider } => {
-            auth_cmd::oauth_status(server_url, &provider, json).await
-        }
     }
 }
 
@@ -1049,53 +987,15 @@ mod tests {
         );
     }
 
-    // === Cycle A surfaces (pairing / devices / auth). ===
-
     #[test]
-    fn parse_pairing_list() {
-        assert!(Cli::try_parse_from(["aleph", "pairing", "list"]).is_ok());
-    }
-
-    #[test]
-    fn parse_pairing_approve_requires_code() {
-        assert!(Cli::try_parse_from(["aleph", "pairing", "approve"]).is_err());
-        assert!(Cli::try_parse_from(["aleph", "pairing", "approve", "ABC123"]).is_ok());
-    }
-
-    #[test]
-    fn parse_devices_revoke_requires_id() {
-        assert!(Cli::try_parse_from(["aleph", "devices", "revoke"]).is_err());
-        assert!(Cli::try_parse_from(["aleph", "devices", "revoke", "dev-1"]).is_ok());
-    }
-
-    #[test]
-    fn parse_auth_subcommands() {
-        assert!(Cli::try_parse_from(["aleph", "auth", "show-token"]).is_ok());
-        assert!(Cli::try_parse_from(["aleph", "auth", "sessions"]).is_ok());
-        assert!(Cli::try_parse_from(["aleph", "auth", "reset-token"]).is_ok());
-        assert!(Cli::try_parse_from(["aleph", "auth", "reset-token", "--yes"]).is_ok());
-        assert!(Cli::try_parse_from(["aleph", "auth", "revoke-session", "abc"]).is_ok());
-        // revoke-session requires an id
-        assert!(Cli::try_parse_from(["aleph", "auth", "revoke-session"]).is_err());
-    }
-
-    #[test]
-    fn parses_auth_debug_show_token() {
-        assert!(Cli::try_parse_from(["aleph", "auth", "debug", "show-token"]).is_ok());
-    }
-
-    #[test]
-    fn parses_auth_debug_reset_token() {
-        assert!(Cli::try_parse_from(["aleph", "auth", "debug", "reset-token"]).is_ok());
-        assert!(Cli::try_parse_from(["aleph", "auth", "debug", "reset-token", "--yes"]).is_ok());
-    }
-
-    #[test]
-    fn legacy_auth_show_token_still_parses_but_is_hidden() {
-        // Backward compat: existing scripts using `aleph auth show-token` must
-        // still work for one release cycle, but the variant is hidden from help.
-        assert!(Cli::try_parse_from(["aleph", "auth", "show-token"]).is_ok());
-        assert!(Cli::try_parse_from(["aleph", "auth", "reset-token"]).is_ok());
+    fn lan_trust_removed_auth_surfaces() {
+        // LAN-trust revert (T6): the gateway has no auth, so the client's
+        // auth/pairing/devices subcommands are gone. Confirm they no longer
+        // parse as top-level commands.
+        assert!(Cli::try_parse_from(["aleph", "pairing", "list"]).is_err());
+        assert!(Cli::try_parse_from(["aleph", "devices", "list"]).is_err());
+        assert!(Cli::try_parse_from(["aleph", "auth", "show-token"]).is_err());
+        assert!(Cli::try_parse_from(["aleph", "guests", "list"]).is_err());
     }
 
     #[test]
@@ -1158,17 +1058,6 @@ mod tests {
         // remove must supply --command or --index
         assert!(Cli::try_parse_from(["aleph", "hooks", "remove", "before_tool_call"]).is_ok());
         // parses; handler rejects
-    }
-
-    #[test]
-    fn parse_auth_oauth_subcommands() {
-        assert!(Cli::try_parse_from(["aleph", "auth", "login", "chatgpt"]).is_ok());
-        assert!(Cli::try_parse_from(["aleph", "auth", "logout", "chatgpt"]).is_ok());
-        assert!(Cli::try_parse_from(["aleph", "auth", "oauth-status", "chatgpt"]).is_ok());
-        // provider arg is required on all three
-        assert!(Cli::try_parse_from(["aleph", "auth", "login"]).is_err());
-        assert!(Cli::try_parse_from(["aleph", "auth", "logout"]).is_err());
-        assert!(Cli::try_parse_from(["aleph", "auth", "oauth-status"]).is_err());
     }
 
     #[test]

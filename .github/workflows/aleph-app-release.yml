@@ -4,13 +4,14 @@ name: Aleph Release
 # Version is read from the VERSION file in the repo root.
 #
 # The `publish` input selects the run mode:
-#   off (default) — build the three desktop apps and upload artifacts only
+#   off (default) — build all three deliverables and upload artifacts only
 #                   (CI verification: no tag, no GitHub Release).
 #   on            — also tag the commit and publish a GitHub Release.
 #
-# Aleph ships as a native desktop app per platform: the Tauri shell bundles
-# the `aleph-server` daemon (and, on macOS, the Swift bridge) inside the app.
-# There is no separate bash-script install path.
+# Aleph ships three deliverables from one tag: the full desktop app (the Tauri
+# shell bundles the `aleph-server` daemon — and, on macOS, the Swift bridge —
+# inside the app), the Aleph Panel lite shell (no bundled daemon), and the
+# standalone `aleph-server` binary with `scripts/install.sh` for curl | bash.
 on:
   workflow_dispatch:
     inputs:
@@ -113,6 +114,45 @@ jobs:
           fi
           cd desktop/shell && cargo tauri build --verbose --config "$config"
 
+      # Panel-only ("lite") variant: same matrix, distinct identifier +
+      # productName ("Aleph Panel"). `-- --no-default-features` is forwarded to
+      # cargo (there is no top-level tauri flag for it), dropping the
+      # embedded-core path; tauri.lite.conf.json clears externalBin (no daemon)
+      # and repoints the updater at its own channel (latest-panel.json).
+      # Updater artifacts are produced under the same signing gate as the full
+      # app so lite can self-update from latest-panel.json.
+      - name: Build panel-only shell (lite)
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          config="{\"version\":\"$version\"}"
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
+            config="{\"version\":\"$version\",\"bundle\":{\"createUpdaterArtifacts\":true}}"
+          fi
+          cd desktop/shell && cargo tauri build --verbose \
+            --config tauri.lite.conf.json --config "$config" -- --no-default-features
+
+      # Full and lite bundles land in the same target/release/bundle/** tree.
+      # Move the lite outputs (always prefixed "Aleph Panel") into a separate
+      # tree so the full upload glob below stays unambiguous and lite uploads
+      # / the latest-panel.json manifest never cross-match the full app.
+      - name: Separate lite bundle outputs
+        shell: bash
+        run: |
+          shopt -s nullglob
+          src="target/release/bundle"
+          dst="lite-bundle"
+          for sub in dmg deb appimage rpm msi nsis macos; do
+            for f in "$src/$sub/Aleph Panel"*; do
+              mkdir -p "$dst/$sub"
+              mv "$f" "$dst/$sub/"
+              echo "  moved $f"
+            done
+          done
+
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
@@ -128,6 +168,31 @@ jobs:
             target/release/bundle/macos/*.app.tar.gz.sig
             target/release/bundle/appimage/*.AppImage.sig
             target/release/bundle/nsis/*.exe.sig
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aleph-panel-${{ matrix.asset }}
+          if-no-files-found: warn
+          path: |
+            lite-bundle/dmg/*.dmg
+            lite-bundle/deb/*.deb
+            lite-bundle/appimage/*.AppImage
+            lite-bundle/rpm/*.rpm
+            lite-bundle/msi/*.msi
+            lite-bundle/nsis/*.exe
+            lite-bundle/macos/*.app.tar.gz
+            lite-bundle/macos/*.app.tar.gz.sig
+            lite-bundle/appimage/*.AppImage.sig
+            lite-bundle/nsis/*.exe.sig
+
+      # The standalone server binary the curl|bash installer downloads. Already
+      # staged as a Tauri externalBin input above — no extra build.
+      - name: Upload standalone server binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: server-${{ matrix.asset }}
+          if-no-files-found: error
+          path: desktop/shell/binaries/aleph-server-*
 
   release:
     name: Create Release
@@ -196,6 +261,48 @@ jobs:
           echo "--- latest.json ---"
           cat latest.json
 
+      # The panel-only ("lite") updater manifest, on its own channel so the lite
+      # app never pulls the full app's bundle. Built from the separated
+      # aleph-panel-* artifacts. Same skip-when-unsigned behaviour as latest.json.
+      # The lite bundle filenames contain a space ("Aleph Panel.app.tar.gz"), so
+      # globs are resolved into quoted variables (never passed as bare args).
+      - name: Generate panel updater manifest (latest-panel.json)
+        run: |
+          shopt -s nullglob
+          TAG="${{ steps.version.outputs.value }}"
+          VERSION="${TAG#v}"
+          BASE="https://github.com/${{ github.repository }}/releases/download/$TAG"
+          platforms='{}'
+          add() {
+            local key="$1" bundle="$2" sig="$3"
+            if [ -n "$bundle" ] && [ -f "$bundle" ] && [ -n "$sig" ] && [ -f "$sig" ]; then
+              platforms=$(jq --arg k "$key" --arg s "$(cat "$sig")" \
+                --arg u "$BASE/$(basename "$bundle")" \
+                '.[$k]={signature:$s,url:$u}' <<<"$platforms")
+              echo "  + $key -> $(basename "$bundle")"
+            else
+              echo "  - $key skipped (no updater artifact)"
+            fi
+          }
+          mac=(artifacts/aleph-panel-aleph-macos/macos/*.app.tar.gz)
+          mac_sig=(artifacts/aleph-panel-aleph-macos/macos/*.app.tar.gz.sig)
+          lin=(artifacts/aleph-panel-aleph-linux/appimage/*.AppImage)
+          lin_sig=(artifacts/aleph-panel-aleph-linux/appimage/*.AppImage.sig)
+          win=(artifacts/aleph-panel-aleph-windows/nsis/*-setup.exe)
+          win_sig=(artifacts/aleph-panel-aleph-windows/nsis/*-setup.exe.sig)
+          add darwin-aarch64  "${mac[0]-}"  "${mac_sig[0]-}"
+          add linux-x86_64    "${lin[0]-}"  "${lin_sig[0]-}"
+          add windows-x86_64  "${win[0]-}"  "${win_sig[0]-}"
+          if [ "$platforms" = '{}' ]; then
+            echo "No panel updater artifacts — skipping latest-panel.json (auto-update not configured)."
+            exit 0
+          fi
+          jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson p "$platforms" \
+            '{version:$v,pub_date:$d,platforms:$p}' > latest-panel.json
+          echo "--- latest-panel.json ---"
+          cat latest-panel.json
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -211,4 +318,7 @@ jobs:
             artifacts/**/*.exe
             artifacts/**/*.app.tar.gz
             artifacts/**/*.sig
+            artifacts/server-*/aleph-server-*
+            scripts/install.sh
             latest.json
+            latest-panel.json

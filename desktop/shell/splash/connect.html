@@ -17,6 +17,18 @@
   .primary { background:#4f46e5; color:#fff; }
   .ghost { background:#23232b; color:#cfcfd6; }
   .err { color:#ff6b6b; font-size:12px; margin-top:10px; min-height:14px; }
+  /* mDNS discovery — only shown in the panel-only shell (see script). */
+  .discover { margin-top:18px; display:none; }
+  .discover.on { display:block; }
+  .discover-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  .discover-head span { color:#9a9aa2; font-size:12px; }
+  .rescan { flex:0 0 auto; padding:4px 10px; font-size:12px; background:#23232b; color:#cfcfd6; }
+  .found { list-style:none; margin:0; padding:0; }
+  .found li { margin-top:6px; }
+  .found button { width:100%; text-align:left; background:#1d1d24; color:#e8e8ea;
+                  border:1px solid #2a2a32; font-size:13px; }
+  .found button:hover { background:#23232b; }
+  .muted { color:#6a6a72; font-size:12px; margin-top:6px; }
 </style>
 </head>
 <body>
@@ -29,28 +41,117 @@
       <button class="ghost" id="local">Back to Local</button>
     </div>
     <div class="err" id="err"></div>
+
+    <div class="discover" id="discover">
+      <div class="discover-head">
+        <span>Found on your network</span>
+        <button class="rescan" id="rescan">Rescan</button>
+      </div>
+      <ul class="found" id="found"></ul>
+      <div class="muted" id="discover-status"></div>
+    </div>
   </div>
   <script>
     const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
     const err = (m) => { document.getElementById('err').textContent = m || ''; };
-    document.getElementById('connect').addEventListener('click', async () => {
+
+    // Which shell variant hosts this page. `is_lite_shell` is registered by
+    // BOTH variants (the full app answers false), so the mode is resolved
+    // deterministically at load — never inferred from whether a discovery
+    // scan happened to succeed. It gates the mDNS section AND which connect
+    // command submit() uses: the panel-only `connect_to` probes reachability
+    // before persisting; the full app's `set_connection_target` hands an
+    // unreachable target to its daemon supervisor instead. If the call itself
+    // fails we stay in full-app behaviour — safe either way, because the lite
+    // shell's re-route path is itself probe-gated.
+    let liteMode = false;
+    const modeReady = invoke('is_lite_shell')
+      .then(v => { liteMode = !!v; })
+      .catch(() => {});
+
+    async function submit(raw) {
       err('');
-      const raw = document.getElementById('addr').value.trim();
       if (!raw) { err('Enter an address'); return; }
-      try { await invoke('set_connection_target', { raw }); }
-      catch (e) { err(String(e)); }
+      await modeReady;
+      try {
+        // `connect_to` validates + probes reachability before persisting, so a
+        // bad address stays on this page instead of navigating to a dead origin.
+        await invoke(liteMode ? 'connect_to' : 'set_connection_target', { raw });
+      } catch (e) {
+        err(String(e));
+      }
+    }
+
+    document.getElementById('connect').addEventListener('click', () => {
+      submit(document.getElementById('addr').value.trim());
     });
     document.getElementById('local').addEventListener('click', async () => {
       err('');
       try { await invoke('clear_connection_target'); }
       catch (e) { err(String(e)); }
     });
+
     // prefill with the current target
     invoke('get_connection_target').then(t => {
       if (t && t !== 'local') document.getElementById('addr').value = t;
     }).catch(() => {});
+
     // shell calls this to surface routing errors (mirrors window.__alephError)
     window.__alephError = (m) => err(m);
+
+    // --- mDNS discovery (panel-only shell) ---------------------------------
+    const discoverEl = document.getElementById('discover');
+    const foundEl = document.getElementById('found');
+    const statusEl = document.getElementById('discover-status');
+    const rescanBtn = document.getElementById('rescan');
+
+    function renderFound(list) {
+      foundEl.innerHTML = '';
+      if (!list || list.length === 0) {
+        statusEl.textContent = 'No servers found — rescan or enter an address above.';
+        return;
+      }
+      statusEl.textContent = '';
+      for (const url of list) {
+        const li = document.createElement('li');
+        const b = document.createElement('button');
+        b.textContent = url;
+        b.addEventListener('click', () => {
+          document.getElementById('addr').value = url;
+          submit(url);
+        });
+        li.appendChild(b);
+        foundEl.appendChild(li);
+      }
+    }
+
+    async function scan() {
+      statusEl.textContent = 'Scanning…';
+      rescanBtn.disabled = true;
+      try {
+        renderFound(await invoke('discover_servers'));
+      } catch (e) {
+        // Discovery itself failed (mDNS unavailable, IPC error). Say so and
+        // keep the section visible — silently hiding it would be
+        // indistinguishable from "nothing on the network". Manual entry above
+        // still works.
+        foundEl.innerHTML = '';
+        statusEl.textContent = 'Discovery failed — rescan or enter an address above.';
+      } finally {
+        rescanBtn.disabled = false;
+      }
+    }
+
+    rescanBtn.addEventListener('click', scan);
+
+    // The section exists only in the panel-only shell; the full app never
+    // registers `discover_servers`, so it neither shows the section nor scans.
+    modeReady.then(() => {
+      if (liteMode) {
+        discoverEl.classList.add('on');
+        scan();
+      }
+    });
   </script>
 </body>
 </html>

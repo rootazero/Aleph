@@ -13,57 +13,13 @@ use super::harness::get_server;
 async fn concurrent_providers_list() {
     let server = get_server().await;
 
-    // Fire 10 concurrent providers.list requests
+    // Fire 10 concurrent providers.list requests. `rpc_call` opens a fresh
+    // WS connection per call (including the LAN-trust `connect` handshake),
+    // so each task exercises its own concurrent connection.
     let mut handles = Vec::new();
     for _ in 0..10 {
-        let ws_url = server.ws_url.clone();
-        let handle = tokio::spawn(async move {
-            // Each task creates its own WS connection
-            use futures_util::{SinkExt, StreamExt};
-            use std::time::Duration;
-            use tokio::time::timeout;
-            use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
-
-            let request = json!({
-                "jsonrpc": "2.0",
-                "method": "providers.list",
-                "params": {},
-                "id": 1
-            });
-
-            let (ws_stream, _) = timeout(Duration::from_secs(10), connect_async(&ws_url))
-                .await
-                .expect("connect timeout")
-                .expect("connect failed");
-
-            let (mut write, mut read) = ws_stream.split();
-
-            write
-                .send(WsMessage::Text(
-                    serde_json::to_string(&request).unwrap().into(),
-                ))
-                .await
-                .expect("send failed");
-
-            let response = timeout(Duration::from_secs(10), async {
-                while let Some(msg) = read.next().await {
-                    if let Ok(WsMessage::Text(text)) = msg {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
-                            if val.get("id").is_some() {
-                                return val;
-                            }
-                        }
-                    }
-                }
-                panic!("No response received");
-            })
-            .await
-            .expect("response timeout");
-
-            let _ = write.send(WsMessage::Close(None)).await;
-
-            response
-        });
+        let handle =
+            tokio::spawn(async move { server.rpc_call("providers.list", json!({})).await });
         handles.push(handle);
     }
 

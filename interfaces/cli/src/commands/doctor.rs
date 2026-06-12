@@ -266,7 +266,7 @@ async fn launch_llm_repair(server_url: &str, brief: &str, config: &CliConfig) ->
     eprintln!("Launching AI-assisted repair…");
 
     let (client, mut events) = AlephClient::connect(server_url).await?;
-    client.authenticate(config).await?;
+    client.handshake(config).await?;
 
     let session_key = config
         .default_session

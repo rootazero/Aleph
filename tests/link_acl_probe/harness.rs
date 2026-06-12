@@ -206,6 +206,7 @@ impl LinkAclHarness {
                 permission_level: Default::default(),
                 busy_input_mode: Default::default(),
                 default_workspace: None,
+                tool_permissions: None,
             },
         );
     }

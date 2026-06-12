@@ -157,10 +157,11 @@
 | `just dev` | Dev server (rebuilds WASM first) |
 | `just build` | Release build (WASM + server) |
 | `just shell-dev` | Run the desktop App in dev mode |
-| `just shell-build` | Build desktop App installers (.dmg/.msi/.deb，内置 aleph-server) |
+| `just shell-build` | Build 完整桌面 App installers (.dmg/.msi/.deb，内置 aleph-server) |
+| `just shell-build-lite` | Build Aleph Panel 纯壳 App installers (无 server，连局域网内 server) |
 | `just test-all` | All tests (core + desktop + proptest) |
 | `just clippy` | Lint |
-| `just verify-build` | CI 验证三平台 App 能否正常构建（build-only，不打 tag、不发布） |
+| `just verify-build` | CI 验证三产物（完整 App / Panel 纯壳 App / 独立 server）三平台能否正常构建（build-only，不打 tag、不发布） |
 | `just release YY.M.D` | **发版**: 更新 VERSION + 提交推送 + 触发 GitHub workflow（需先写 changelog） |
 
 ### Rust 工具链
@@ -168,7 +169,9 @@
 - **MSRV = 1.95**（由 `sysinfo 0.39` 决定），在 `Cargo.toml` 的 `[workspace.package]` 与 `[package]` 两处 `rust-version` 声明。
 - 仓库根的 `rust-toolchain.toml` 钉住具体 stable（当前 `1.96.0`），本地与 CI 自动使用同一工具链——无需 `rustup default` 或 `cargo +<ver>`。抬高 MSRV 时同步更新这两处。
 
-> **分发形态**: Aleph 以三平台原生桌面 App 发布（macOS `.dmg` / Windows `.msi` / Linux `.deb`）。App 通过 Tauri `externalBin` 内置 `aleph-server` 守护进程，首次启动自动拉起并接管旧 daemon；不再提供 bash / PowerShell 脚本安装。
+> **分发形态**: Aleph 发布三类产物（同一 tag 一并出）：**完整桌面 App**（macOS `.dmg` / Windows `.msi` / Linux `.deb`，通过 Tauri `externalBin` 内置 `aleph-server`，单机零配置，首次启动自动拉起并接管旧 daemon）、**Aleph Panel 纯壳 App**（`embedded-core` feature 关闭，不带 server，连接局域网内任一 `aleph-server`）、**独立 `aleph-server` 二进制**（`scripts/install.sh` 经 `curl | bash` 安装，用于服务器 / NAS 部署）。
+>
+> **信任模型 = 网络边界**：server 默认只绑 `127.0.0.1`（只信本机）；在 `~/.aleph/config.toml` 写一行 `[gateway] host = "0.0.0.0"` 即显式开放整个局域网——**局域网内任何设备由此获得对 agent 的完全控制权**（含 PTY/shell 执行，无方法级门槛）。唯一保留的协议护栏是 WS Origin 校验（`src/gateway/origin_policy.rs`，挡公网恶意网页**跨源**驱动 agent；经典 DNS-rebinding 已防御——same-origin 仅在 `Host` 为 IP 字面量/loopback 时放行，域名 `Host` 不再自动同源放行，域名部署须把 origin 加进 `[gateway] allowed_origins`，详见 SECURITY.md。`[gateway] allow_any_origin = true` 可关）。详见 [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)。
 
 > **⚠️ Panel ↔ Daemon 资源嵌入链**: Panel UI（`interfaces/webchat/dist/*`）通过 `rust_embed`（`src/gateway/control_plane/assets.rs`）在 **`aleph-server` 编译时** 静态嵌入到二进制；运行中的 daemon **不会** 从磁盘读取 dist/*。改完 panel 源码后看不到效果，几乎都是漏了重编 binary 这一步。完整刷新链：
 >
@@ -193,11 +196,11 @@
 **由 AI (Claude) 驱动的两步流程：**
 
 1. **AI 写版本日志** — 读取**上一个 release 版本到 HEAD 之间**的 git log（通过 `git log <上次release commit>..HEAD`），总结 10-20 条有价值的内容，分为 Added（新增功能）和 Fixed（修复）两个分类，写入 CHANGELOG.md
-2. **运行 `just release YY.M.D`** — 自动完成：版本号更新 + 提交推送 + 触发三平台桌面 App 构建（App 内置 `aleph-server`）
+2. **运行 `just release YY.M.D`** — 自动完成：版本号更新 + 提交推送 + 触发**三产物 × 三平台**构建并发布（完整桌面 App 内置 `aleph-server` / Aleph Panel 纯壳 App / 独立 `aleph-server` 二进制 + `install.sh`，同一 GitHub Release）
 
 `just release` 会校验 CHANGELOG.md 中是否有对应版本的条目，没有则拒绝发布。GitHub Release 页面自动从 CHANGELOG.md 提取版本日志。
 
-> **可选预检**：发布前可先跑 `just verify-build`，以 build-only 模式在 CI 上构建三平台 App（只构建 + 传 artifacts，不打 tag、不发布），确认三平台都能正常构建后再 `just release`。同一 workflow（`aleph-app-release.yml`）的 `publish` 输入：`off`=纯验证，`on`=`just release` 走的发布模式。
+> **可选预检**：发布前可先跑 `just verify-build`，以 build-only 模式在 CI 上构建**三产物 × 三平台**（完整 App / Panel 纯壳 App / 独立 server，只构建 + 传 artifacts，不打 tag、不发布），确认都能正常构建后再 `just release`。同一 workflow（`aleph-app-release.yml`）的 `publish` 输入：`off`=纯验证，`on`=`just release` 走的发布模式。
 
 ### Feature Flags
 
@@ -228,7 +231,7 @@ Singleton 强制由 OS 级 `flock` 保证（Spec C, 2026-05-02 起改为结构�
 - `aleph-server start` 在 `main()` 进入任何 DB/vault 操作之前先获取
   `~/.aleph/data/aleph.lock`。第二个 `start` 会立即以 exit 64 退出，
   并在 stderr 打印持锁进程的 PID。
-- 所有 CLI 写子命令（`secret`、`devices`、`pairing` 等）通过
+- 所有 CLI 写子命令（`secret`、`hooks`、`plugins` 等）通过
   `with_policy` 分发：服务在跑时，写操作通过 `/v1/admin/*` IPC 转发；
   服务不在时，CLI 自己拿锁本地写入。两条路径都不会与服务竞争。
 - OS 在进程退出（正常、panic、SIGKILL）时自动释放 `flock`。`kill -9 <pid>`
@@ -241,26 +244,12 @@ Singleton 强制由 OS 级 `flock` 保证（Spec C, 2026-05-02 起改为结构�
 `rm ~/.aleph/data/aleph.lock`（理论上不会出现，因为 flock 是 OS 管理的；
 该诊断仅作防御性提示）。
 
-### Auth UX
+### Trust model
 
-Auth tokens are auto-provisioned at first daemon start; users never see them.
-
-- **Desktop app**: silent bootstrap via Tauri shell handoff
-  (`aleph-server bootstrap-url` → `/auth/bootstrap?nonce=…` → session cookie).
-- **Same-machine browser**: `aleph open` or the desktop app's
-  "Open in Browser" menu item issues a nonce and launches the system
-  browser; same loopback gate as the shell handoff.
-- **Remote / mobile**: `/pair` shows a 6-digit code; approve from the
-  desktop app's NotificationCenter (or scan the QR in Devices → Add
-  browser/mobile).
-- **Debug only**: `aleph auth debug show-token` prints the token for
-  break-glass scenarios. The legacy `aleph auth show-token` still
-  parses but emits a deprecation warning.
-
-The legacy `/login` token-paste form and the Panel's `?token=` URL
-fallback were removed in Phase 4 of the auth UX overhaul (2026-05).
-See [docs/reference/SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)
-for the full trust-transfer model.
+LAN-trust：没有认证步骤，信任边界就是网络边界。默认只绑 `127.0.0.1`，
+`[gateway] host = "0.0.0.0"` 显式开放局域网；WS Origin 校验是唯一保留的
+协议护栏。完整模型见
+[docs/reference/SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)。
 
 ---
 

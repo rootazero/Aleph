@@ -95,6 +95,16 @@ pub fn is_internal(url: &Url) -> bool {
     }
 }
 
+/// Open `url` in the OS default browser/handler. Public entry point for the
+/// app menu's external links (repository, issue tracker) — same injection-safe
+/// launcher as the `_blank`-link guard, so menu code need not reach into the
+/// (full-app-only) daemon module for a common capability (spec §5.1).
+// Reached only through the macOS app menu today; dead in other builds.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn open_url(url: &str) {
+    open_external(url);
+}
+
 /// Open `url` in the OS default handler (browser / mail client), detached.
 /// Best-effort: a failure just means the link does nothing, which is no
 /// worse than the pre-guard behaviour. No shell is invoked, so the URL is

@@ -11,9 +11,9 @@
 //! - [`session`]: a single PTY (`portable-pty` master/child) + reader thread.
 //! - [`manager`]: the process-global bounded session registry + event-bus sink.
 //!
-//! Handlers live in `gateway::handlers::pty` (`pty.spawn/input/resize/close/list`)
-//! and are gated operator-only by `gateway::method_authz` — spawning a host
-//! shell is a privileged control-plane action.
+//! Handlers live in `gateway::handlers::pty` (`pty.spawn/input/resize/close/list`).
+//! Under the LAN-trust model every connection is the implicit owner/operator,
+//! so the PTY surface is open to all connections.
 
 pub mod manager;
 pub mod session;
