@@ -1115,22 +1115,6 @@
       "locked_title": "配置已锁定",
       "locked_notice": "此页面需要 Config 权限。请联系 operator 在「设置 → 安全」中授予,或重新配对时选择 Config。"
     },
-    "auth": {
-      "shared_token": "共享令牌",
-      "token_hint": "使用此令牌向网关认证客户端",
-      "copy_token": "复制",
-      "copied": "已复制！",
-      "regenerate": "重新生成",
-      "session_count": "活跃会话数",
-      "revoke_session": "撤销",
-      "revoke_all": "撤销所有会话",
-      "auth_mode": "认证模式",
-      "token_auth": "令牌认证",
-      "device_pairing": "设备配对",
-      "current_token": "当前令牌",
-      "hide_token": "隐藏令牌",
-      "show_token": "显示令牌"
-    },
     "channels": {
       "title": "频道",
       "description": "配置消息频道",

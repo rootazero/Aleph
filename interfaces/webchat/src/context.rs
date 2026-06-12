@@ -45,7 +45,7 @@ pub struct DashboardState {
     pub gateway_url: RwSignal<String>,
     pub connection_error: RwSignal<Option<String>>,
     pub is_reconnecting: RwSignal<bool>,
-    /// Latched true on the first successful authenticate; never reset.
+    /// Latched true on the first successful connect handshake; never reset.
     /// Lets the boot gate disengage and the service gate engage — two
     /// surfaces that differ only in "have we ever been live?".
     pub has_connected_once: RwSignal<bool>,
@@ -137,9 +137,9 @@ impl DashboardState {
         }
     }
 
-    /// Reactive predicate: did this connection authenticate as `operator`
-    /// (config tier)? Consults the `role` captured from the `connect` response.
-    /// Returns false before the first successful authenticate. Used by
+    /// Reactive predicate: did this connection report the `operator` role?
+    /// Consults the `role` captured from the `connect` response.
+    /// Returns false before the first successful connect. Used by
     /// operator-only settings surfaces to gate UI up front.
     #[must_use]
     pub fn is_operator(&self) -> bool {

@@ -1115,22 +1115,6 @@
       "locked_title": "Configuration locked",
       "locked_notice": "This page requires Config-tier permission. Ask an operator to grant it in Settings → Security, or re-pair selecting Config."
     },
-    "auth": {
-      "shared_token": "Shared Token",
-      "token_hint": "Use this token to authenticate clients with the Gateway",
-      "copy_token": "Copy",
-      "copied": "Copied!",
-      "regenerate": "Regenerate",
-      "session_count": "Active session count",
-      "revoke_session": "Revoke",
-      "revoke_all": "Revoke All Sessions",
-      "auth_mode": "Auth Mode",
-      "token_auth": "Token Authentication",
-      "device_pairing": "Device Pairing",
-      "current_token": "Current Token",
-      "hide_token": "Hide token",
-      "show_token": "Show token"
-    },
     "channels": {
       "title": "Channels",
       "description": "Configure messaging channels",
