@@ -1,12 +1,13 @@
 //! Single source of truth for panel appearance preferences.
 //!
-//! Four orthogonal, client-side axes — all persisted to `localStorage` and
+//! Five orthogonal, client-side axes — all persisted to `localStorage` and
 //! replayed on boot by [`init_appearance`]:
 //!
-//!   • mode      — System / Light / Dark / Glass → `<html>` class list
+//!   • mode      — System / Light / Dark           → `<html>` class list
 //!   • accent    — colour palette                  → `data-accent` attribute
 //!   • font scale— accessibility text size         → `--control-ui-text-scale`
 //!   • roundness — corner radius density           → `--control-ui-radius-scale`
+//!   • material  — glass material family           → `data-material` attribute
 //!
 //! Each enum carries pure (web_sys-free) conversion logic so it unit-tests on
 //! the host; the `read_*` / `apply_*` helpers touch the DOM. Both the topbar
@@ -22,6 +23,7 @@ const KEY_MODE: &str = "aleph-theme";
 const KEY_ACCENT: &str = "aleph-accent";
 const KEY_FONT_SCALE: &str = "aleph-font-scale";
 const KEY_ROUNDNESS: &str = "aleph-roundness";
+const KEY_MATERIAL: &str = "aleph-material";
 
 // ---------------------------------------------------------------------------
 // Theme mode
@@ -33,12 +35,10 @@ pub enum ThemeMode {
     System,
     Light,
     Dark,
-    /// Dark-based, intensified-glass showcase theme (refined ex-Vibrant).
-    Glass,
 }
 
 impl ThemeMode {
-    pub const ALL: [Self; 4] = [Self::System, Self::Light, Self::Dark, Self::Glass];
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -46,7 +46,6 @@ impl ThemeMode {
             Self::System => "跟随系统",
             Self::Light => "明亮",
             Self::Dark => "暗黑",
-            Self::Glass => "玻璃",
         }
     }
 
@@ -57,20 +56,17 @@ impl ThemeMode {
             Self::System => None,
             Self::Light => Some("light"),
             Self::Dark => Some("dark"),
-            Self::Glass => Some("glass"),
         }
     }
 
     fn from_storage(raw: Option<&str>) -> Self {
         match raw {
             Some("light") => Self::Light,
-            Some("dark") => Self::Dark,
-            Some("glass") => Self::Glass,
-            // Legacy migration: the retired Vibrant mode persisted as
-            // "translucent". Glass is the re-introduced strong-glass successor
-            // to Vibrant, so a stored "translucent" must load as Glass
-            // (faithful restore of original intent).
-            Some("translucent") => Self::Glass,
+            // Legacy values: the retired Glass theme ("glass") and its
+            // Vibrant-era predecessor ("translucent") were dark-based —
+            // both load as Dark. `legacy_glass_migration` (run once on
+            // boot) rewrites storage to dark + liquid material.
+            Some("dark" | "glass" | "translucent") => Self::Dark,
             _ => Self::System,
         }
     }
@@ -141,6 +137,78 @@ impl Accent {
             Some("sunset") => Self::Sunset,
             Some("rose") => Self::Rose,
             _ => Self::Mauve,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Material (glass material family)
+// ---------------------------------------------------------------------------
+
+/// Glass material family. `Luxe` is the base look (clears `data-material`);
+/// `Liquid` / `Aurora` re-skin every glass surface via the `--mat-*` primitive
+/// blocks keyed off `<html data-material="…">`. Orthogonal to mode + accent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Material {
+    Luxe,
+    Liquid,
+    Aurora,
+}
+
+impl Material {
+    pub const ALL: [Self; 3] = [Self::Luxe, Self::Liquid, Self::Aurora];
+
+    /// Stable id used for both the `data-material` attribute and persistence.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Luxe => "luxe",
+            Self::Liquid => "liquid",
+            Self::Aurora => "aurora",
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Luxe => "奢华磨砂",
+            Self::Liquid => "液态玻璃",
+            Self::Aurora => "极光浓雾",
+        }
+    }
+
+    /// Preview swatch background (CSS) for picker chips.
+    #[must_use]
+    pub const fn preview(self) -> &'static str {
+        match self {
+            Self::Luxe => "linear-gradient(145deg, oklch(0.95 0.010 300), oklch(0.84 0.030 310))",
+            Self::Liquid => {
+                "linear-gradient(145deg, oklch(0.82 0.100 310 / 0.9), oklch(0.66 0.130 250 / 0.75))"
+            }
+            Self::Aurora => {
+                "linear-gradient(135deg, oklch(0.75 0.140 350 / 0.85), oklch(0.68 0.120 280 / 0.85), oklch(0.78 0.100 200 / 0.85))"
+            }
+        }
+    }
+
+    /// `localStorage` value, or `None` for `Luxe` (which clears the key).
+    #[must_use]
+    pub const fn storage_value(self) -> Option<&'static str> {
+        match self {
+            Self::Luxe => None,
+            Self::Liquid => Some("liquid"),
+            Self::Aurora => Some("aurora"),
+        }
+    }
+
+    fn from_storage(raw: Option<&str>) -> Self {
+        match raw {
+            // "luxe" is never persisted (storage_value → None), but a stray
+            // stored value must still resolve to the default explicitly.
+            Some("luxe") => Self::Luxe,
+            Some("liquid") => Self::Liquid,
+            Some("aurora") => Self::Aurora,
+            _ => Self::Luxe,
         }
     }
 }
@@ -339,6 +407,11 @@ pub fn read_roundness() -> Roundness {
     Roundness::from_storage(read_key(KEY_ROUNDNESS).as_deref())
 }
 
+#[must_use]
+pub fn read_material() -> Material {
+    Material::from_storage(read_key(KEY_MATERIAL).as_deref())
+}
+
 // ---------------------------------------------------------------------------
 // Applies (mutate the DOM + persist)
 // ---------------------------------------------------------------------------
@@ -353,9 +426,6 @@ pub fn apply_mode(mode: ThemeMode) {
             }
             ThemeMode::Dark => {
                 let _ = classes.add_1("dark");
-            }
-            ThemeMode::Glass => {
-                let _ = classes.add_1("glass");
             }
             ThemeMode::System => {}
         }
@@ -394,9 +464,36 @@ pub fn apply_roundness(roundness: Roundness) {
     persist(KEY_ROUNDNESS, roundness.storage_value());
 }
 
+pub fn apply_material(material: Material) {
+    if let Some(html) = root() {
+        if material == Material::Luxe {
+            let _ = html.remove_attribute("data-material");
+        } else {
+            let _ = html.set_attribute("data-material", material.id());
+        }
+    }
+    // Luxe is the base material → clear the key.
+    persist(KEY_MATERIAL, material.storage_value());
+}
+
+/// Decide the legacy-Glass storage rewrite: a stored "glass"/"translucent"
+/// mode becomes dark + liquid material. Pure (host-testable); returns the
+/// `(aleph-theme, aleph-material)` values to write, or `None` when no
+/// migration applies.
+fn legacy_glass_migration(raw_mode: Option<&str>) -> Option<(&'static str, &'static str)> {
+    matches!(raw_mode, Some("glass" | "translucent")).then_some(("dark", "liquid"))
+}
+
 /// Replay every persisted appearance axis onto the DOM. Called once on boot
 /// (before the app mounts) so the first paint already reflects user choices.
 pub fn init_appearance() {
+    // One-shot legacy migration: Glass-theme users land on dark + liquid.
+    if let Some((mode_v, material_v)) = legacy_glass_migration(read_key(KEY_MODE).as_deref()) {
+        persist(KEY_MODE, Some(mode_v));
+        // Safe to overwrite material unconditionally: the key didn't exist
+        // before the Material axis was introduced.
+        persist(KEY_MATERIAL, Some(material_v));
+    }
     // Mode + accent: only touch the DOM for non-default values so System /
     // Mauve keep relying on the CSS `@media` / base-palette fallbacks.
     let mode = read_mode();
@@ -414,6 +511,10 @@ pub fn init_appearance() {
     let roundness = read_roundness();
     if roundness != Roundness::Default {
         apply_roundness(roundness);
+    }
+    let material = read_material();
+    if material != Material::Luxe {
+        apply_material(material);
     }
 }
 
@@ -470,22 +571,136 @@ mod tests {
         assert!(FontScale::Largest.storage_value().is_some());
         assert!(Roundness::Sharp.storage_value().is_some());
         assert!(ThemeMode::Dark.storage_value().is_some());
+        assert!(Material::Liquid.storage_value().is_some());
+        assert!(Material::Aurora.storage_value().is_some());
     }
 
     #[test]
-    fn legacy_translucent_migrates_to_glass() {
-        // The retired Vibrant mode persisted as "translucent". Glass is the
-        // re-introduced strong-glass successor to Vibrant, so a stored
-        // "translucent" must load as Glass (faithful restore of original intent).
+    fn legacy_glass_values_load_as_dark() {
+        // The retired Glass theme (and its Vibrant-era "translucent"
+        // predecessor) must keep PARSING — they map to Dark; the material
+        // half of the migration is decided by `legacy_glass_migration`.
+        assert_eq!(ThemeMode::from_storage(Some("glass")), ThemeMode::Dark);
         assert_eq!(
             ThemeMode::from_storage(Some("translucent")),
-            ThemeMode::Glass
+            ThemeMode::Dark
         );
     }
 
     #[test]
-    fn glass_storage_round_trips() {
-        assert_eq!(ThemeMode::Glass.storage_value(), Some("glass"));
-        assert_eq!(ThemeMode::from_storage(Some("glass")), ThemeMode::Glass);
+    fn legacy_glass_migration_targets_liquid_dark() {
+        assert_eq!(
+            legacy_glass_migration(Some("glass")),
+            Some(("dark", "liquid"))
+        );
+        assert_eq!(
+            legacy_glass_migration(Some("translucent")),
+            Some(("dark", "liquid"))
+        );
+        assert_eq!(legacy_glass_migration(Some("dark")), None);
+        assert_eq!(legacy_glass_migration(None), None);
+    }
+
+    #[test]
+    fn material_id_round_trips() {
+        for m in Material::ALL {
+            assert_eq!(Material::from_storage(Some(m.id())), m);
+        }
+        // Unknown / luxe both fall back to the default material.
+        assert_eq!(Material::from_storage(None), Material::Luxe);
+        assert_eq!(Material::from_storage(Some("nope")), Material::Luxe);
+    }
+
+    #[test]
+    fn material_default_clears_key() {
+        assert_eq!(Material::Luxe.storage_value(), None);
+        assert_eq!(Material::Liquid.storage_value(), Some("liquid"));
+        assert_eq!(Material::Aurora.storage_value(), Some("aurora"));
+    }
+
+    /// Body lines of the CSS rule whose selector line, after trimming,
+    /// equals `selector` exactly. Exact-line matching keeps `.dark {` from
+    /// matching `html[data-material="liquid"].dark {` or the kill block's
+    /// `.dark, .dark[data-material] {`. Lines come back trimmed (the system
+    /// mirrors sit one nesting level deeper than the `.dark` blocks they
+    /// copy) with empties dropped; brace depth is tracked so a nested rule
+    /// added later won't truncate the body. Callers pass the
+    /// material-primitives SECTION of the stylesheet, not the whole file —
+    /// the color-token layer above the banner reuses the same `.dark {` /
+    /// `:root:not(.light) {` selector lines, so the exactly-once assertion
+    /// only holds within that slice.
+    fn css_block_body<'a>(css: &'a str, selector: &str) -> Vec<&'a str> {
+        let lines: Vec<&str> = css.lines().collect();
+        let starts: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.trim() == selector)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            starts.len(),
+            1,
+            "selector line {selector:?} must appear exactly once in the \
+             material-primitives section of tailwind.css"
+        );
+        let mut depth: i64 = 1;
+        let mut body = Vec::new();
+        for line in &lines[starts[0] + 1..] {
+            let opens = line.matches('{').count() as i64;
+            let closes = line.matches('}').count() as i64;
+            if depth + opens - closes <= 0 {
+                return body;
+            }
+            depth += opens - closes;
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                body.push(trimmed);
+            }
+        }
+        panic!("unclosed block for selector {selector:?} in tailwind.css");
+    }
+
+    #[test]
+    fn mirror_blocks_are_verbatim_copies() {
+        // The stylesheet keeps a hand-synced `@media (prefers-color-scheme:
+        // dark)` mirror of every `.dark` primitive block (the media query
+        // can't reference the class-based selector). Drift would be silent
+        // and only visible to System-mode users — enforce the copy-verbatim
+        // discipline here. Comment lines participate on purpose: mirrors
+        // are verbatim copies, comments included.
+        let css = include_str!("../styles/tailwind.css");
+        let (_, material_section) = css
+            .split_once("Material primitives")
+            .expect("material primitives banner present in tailwind.css");
+        let pairs = [
+            (".dark {", ":root:not(.light) {"),
+            (
+                r#"html[data-material="liquid"].dark {"#,
+                r#":root:not(.light)[data-material="liquid"] {"#,
+            ),
+            (
+                r#"html[data-material="aurora"].dark {"#,
+                r#":root:not(.light)[data-material="aurora"] {"#,
+            ),
+        ];
+        for (dark, mirror) in pairs {
+            let dark_body = css_block_body(material_section, dark);
+            let mirror_body = css_block_body(material_section, mirror);
+            for (i, (d, m)) in dark_body.iter().zip(mirror_body.iter()).enumerate() {
+                assert_eq!(
+                    d,
+                    m,
+                    "system-mode mirror {mirror:?} drifted from {dark:?} at body \
+                     line {} — copy the `.dark` block verbatim",
+                    i + 1
+                );
+            }
+            assert_eq!(
+                dark_body.len(),
+                mirror_body.len(),
+                "system-mode mirror {mirror:?} and {dark:?} have different line \
+                 counts — copy the `.dark` block verbatim"
+            );
+        }
     }
 }

@@ -140,12 +140,19 @@ pub fn ChatView() -> impl IntoView {
                 // toggle on the traffic-light row and reserves the
                 // macOS overlay-titlebar space uniformly across tabs.
                 // On web / Win / Linux native chrome owns window drag.
-                // Session tab strip — renders only when ≥2 agents are open.
-                <SessionTabs />
-                // Message list (scrollable) — or the welcome hero when empty
-                <MessageList />
-                // Input area (pinned to bottom)
-                <InputArea />
+                // Overlap container: the scroll area extends to the full height,
+                // the session tab strip FLOATS over the top (frosted chrome band),
+                // and the composer FLOATS over the bottom (real backdrop blur —
+                // messages frost as they flow behind both surfaces).
+                <div class="relative flex-1 min-h-0">
+                    // Message list (scrollable) — or the welcome hero when empty
+                    <MessageList />
+                    // Session tab strip overlay — frosted band pinned to the top,
+                    // renders only when ≥2 agents are open.
+                    <div class="absolute inset-x-0 top-0 z-10"><SessionTabs /></div>
+                    // Input area (floating glass bar pinned over the flow)
+                    <InputArea />
+                </div>
             </div>
             // Workspace pane — renders only when LayoutMode::Split.
             <WorkspacePanel />

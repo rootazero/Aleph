@@ -7,8 +7,9 @@
 //! is pure I/O: render the choices, apply on click, no business logic.
 
 use crate::appearance::{
-    apply_accent, apply_font_scale, apply_mode, apply_roundness, read_accent, read_font_scale,
-    read_mode, read_roundness, Accent, FontScale, Roundness, ThemeMode,
+    apply_accent, apply_font_scale, apply_material, apply_mode, apply_roundness, read_accent,
+    read_font_scale, read_material, read_mode, read_roundness, Accent, FontScale, Material,
+    Roundness, ThemeMode,
 };
 use leptos::prelude::*;
 
@@ -17,16 +18,19 @@ use leptos::prelude::*;
 pub fn AppearanceView() -> impl IntoView {
     let mode = RwSignal::new(read_mode());
     let accent = RwSignal::new(read_accent());
+    let material = RwSignal::new(read_material());
     let font_scale = RwSignal::new(read_font_scale());
     let roundness = RwSignal::new(read_roundness());
 
     let reset = move |_| {
         apply_mode(ThemeMode::System);
         apply_accent(Accent::Mauve);
+        apply_material(Material::Luxe);
         apply_font_scale(FontScale::Default);
         apply_roundness(Roundness::Default);
         mode.set(ThemeMode::System);
         accent.set(Accent::Mauve);
+        material.set(Material::Luxe);
         font_scale.set(FontScale::Default);
         roundness.set(Roundness::Default);
     };
@@ -42,7 +46,7 @@ pub fn AppearanceView() -> impl IntoView {
 
             <div class="space-y-6">
                 // --- Theme mode -------------------------------------------------
-                <SettingCard title="主题模式" desc="界面明暗与玻璃质感。「跟随系统」交由操作系统决定。">
+                <SettingCard title="主题模式" desc="界面明暗。「跟随系统」交由操作系统决定。">
                     <div class="flex flex-wrap gap-2">
                         {ThemeMode::ALL.into_iter().map(|m| {
                             let active = move || mode.get() == m;
@@ -52,6 +56,35 @@ pub fn AppearanceView() -> impl IntoView {
                                     active=Signal::derive(active)
                                     on_pick=move || { apply_mode(m); mode.set(m); }
                                 />
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </SettingCard>
+
+                // --- Material --------------------------------------------------
+                <SettingCard title="材质" desc="界面的玻璃材质风格：奢华磨砂克制内敛，液态玻璃通透鲜活，极光浓雾色彩弥漫。">
+                    <div class="flex flex-wrap gap-4">
+                        {Material::ALL.into_iter().map(|m| {
+                            let active = move || material.get() == m;
+                            view! {
+                                <button
+                                    on:click=move |_| { apply_material(m); material.set(m); }
+                                    title=m.label()
+                                    class="flex flex-col items-center gap-1.5 group"
+                                >
+                                    <span
+                                        class=move || {
+                                            let base = "w-14 h-9 rounded-lg transition-transform group-hover:scale-105";
+                                            if active() {
+                                                format!("{base} ring-2 ring-offset-2 ring-offset-surface-raised ring-text-primary")
+                                            } else {
+                                                format!("{base} ring-1 ring-border")
+                                            }
+                                        }
+                                        style=format!("background: {}", m.preview())
+                                    />
+                                    <span class="text-xs text-text-secondary">{m.label()}</span>
+                                </button>
                             }
                         }).collect::<Vec<_>>()}
                     </div>

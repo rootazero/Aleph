@@ -157,13 +157,9 @@
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left:   env(safe-area-inset-left, 0px);
 
-  /* Tiered blur strengths. Transient popovers (`--glass-blur`) may be lush;
-     the always-on sidebar (`--glass-blur-chrome`) stays disciplined; small
-     in-content frosts and the full-viewport scrim are deliberately light.
-     `html.glass` intensifies the transient + chrome tiers only. */
-  --glass-blur: 20px;
-  --glass-saturate: 1.6;
-  --glass-blur-chrome: 16px;
+  /* Tiered blur strengths. The subtle in-content frost and full-viewport
+     scrim stay global here; the lush/chrome tiers are per-material (see
+     primitive blocks). */
   --glass-blur-subtle: 8px;
   --scrim-blur: 2px;
 }
@@ -230,9 +226,8 @@ h1, h2, h3, h4, h5, h6 {
    Dark Mode Overrides
    ============================================================ */
 
-.dark, html.glass {
+.dark {
   --color-surface:          oklch(0.15 0.020 310);
-  --color-surface-raised:   oklch(0.20 0.018 310);
   --color-surface-sunken:   oklch(0.12 0.015 310);
   --color-surface-overlay:  oklch(0.18 0.020 310);
 
@@ -269,9 +264,8 @@ h1, h2, h3, h4, h5, h6 {
 
 /* System preference fallback */
 @media (prefers-color-scheme: dark) {
-  :root:not(.light):not(.glass) {
+  :root:not(.light) {
     --color-surface:          oklch(0.15 0.020 310);
-    --color-surface-raised:   oklch(0.20 0.018 310);
     --color-surface-sunken:   oklch(0.12 0.015 310);
     --color-surface-overlay:  oklch(0.18 0.020 310);
 
@@ -354,7 +348,7 @@ html[data-accent="rose"] {
 }
 
 /* --- Dark values (explicit `.dark` class) --- */
-html.dark[data-accent="ocean"], html.glass[data-accent="ocean"] {
+html.dark[data-accent="ocean"] {
   --color-primary:          oklch(0.68 0.130 250);
   --color-primary-hover:    oklch(0.73 0.120 250);
   --color-primary-subtle:   oklch(0.22 0.050 250);
@@ -363,7 +357,7 @@ html.dark[data-accent="ocean"], html.glass[data-accent="ocean"] {
   --color-ring:             oklch(0.68 0.130 250 / 0.35);
   --color-chart-1:          oklch(0.68 0.130 250);
 }
-html.dark[data-accent="forest"], html.glass[data-accent="forest"] {
+html.dark[data-accent="forest"] {
   --color-primary:          oklch(0.66 0.120 150);
   --color-primary-hover:    oklch(0.71 0.110 150);
   --color-primary-subtle:   oklch(0.22 0.045 150);
@@ -372,7 +366,7 @@ html.dark[data-accent="forest"], html.glass[data-accent="forest"] {
   --color-ring:             oklch(0.66 0.120 150 / 0.35);
   --color-chart-1:          oklch(0.66 0.120 150);
 }
-html.dark[data-accent="sunset"], html.glass[data-accent="sunset"] {
+html.dark[data-accent="sunset"] {
   --color-primary:          oklch(0.74 0.135 65);
   --color-primary-hover:    oklch(0.79 0.125 65);
   --color-primary-subtle:   oklch(0.24 0.050 65);
@@ -381,7 +375,7 @@ html.dark[data-accent="sunset"], html.glass[data-accent="sunset"] {
   --color-ring:             oklch(0.74 0.135 65 / 0.35);
   --color-chart-1:          oklch(0.74 0.135 65);
 }
-html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
+html.dark[data-accent="rose"] {
   --color-primary:          oklch(0.70 0.150 15);
   --color-primary-hover:    oklch(0.75 0.140 15);
   --color-primary-subtle:   oklch(0.23 0.055 15);
@@ -393,7 +387,7 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
 
 /* --- System dark (no class, OS preference) --- */
 @media (prefers-color-scheme: dark) {
-  :root:not(.light):not(.glass)[data-accent="ocean"] {
+  :root:not(.light)[data-accent="ocean"] {
     --color-primary:        oklch(0.68 0.130 250);
     --color-primary-hover:  oklch(0.73 0.120 250);
     --color-primary-subtle: oklch(0.22 0.050 250);
@@ -402,7 +396,7 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
     --color-ring:           oklch(0.68 0.130 250 / 0.35);
     --color-chart-1:        oklch(0.68 0.130 250);
   }
-  :root:not(.light):not(.glass)[data-accent="forest"] {
+  :root:not(.light)[data-accent="forest"] {
     --color-primary:        oklch(0.66 0.120 150);
     --color-primary-hover:  oklch(0.71 0.110 150);
     --color-primary-subtle: oklch(0.22 0.045 150);
@@ -411,7 +405,7 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
     --color-ring:           oklch(0.66 0.120 150 / 0.35);
     --color-chart-1:        oklch(0.66 0.120 150);
   }
-  :root:not(.light):not(.glass)[data-accent="sunset"] {
+  :root:not(.light)[data-accent="sunset"] {
     --color-primary:        oklch(0.74 0.135 65);
     --color-primary-hover:  oklch(0.79 0.125 65);
     --color-primary-subtle: oklch(0.24 0.050 65);
@@ -420,7 +414,7 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
     --color-ring:           oklch(0.74 0.135 65 / 0.35);
     --color-chart-1:        oklch(0.74 0.135 65);
   }
-  :root:not(.light):not(.glass)[data-accent="rose"] {
+  :root:not(.light)[data-accent="rose"] {
     --color-primary:        oklch(0.70 0.150 15);
     --color-primary-hover:  oklch(0.75 0.140 15);
     --color-primary-subtle: oklch(0.23 0.055 15);
@@ -452,7 +446,8 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
   }
 }
 /* Gradient specular edge — bright at the top, fading down. Painted once,
-   composited; ~0 per-frame cost. */
+   composited; ~0 per-frame cost. Light/dark variance flows through the
+   mat-pop-spec-* primitives. */
 .glass::before {
   content: "";
   position: absolute;
@@ -460,7 +455,7 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
   border-radius: inherit;
   padding: 1px;
   background: linear-gradient(180deg,
-    oklch(1 0 0 / 0.40), oklch(1 0 0 / 0.04) 42%, oklch(1 0 0 / 0));
+    var(--mat-pop-spec-hi), var(--mat-pop-spec-mid) 45%, var(--mat-pop-spec-lo));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
           mask-composite: exclude;
@@ -473,24 +468,11 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
-  opacity: 0.4;
+  opacity: var(--mat-pop-grain);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
 }
 /* The popover's own children must sit above the ::before/::after overlays. */
 .glass > * { position: relative; z-index: 1; }
-
-/* Glass theme: intensify the specular edge + grain on chrome glass. */
-html.glass .glass::before {
-  background: linear-gradient(180deg,
-    oklch(1 0 0 / 0.62), oklch(1 0 0 / 0.10) 50%, oklch(1 0 0 / 0.02));
-}
-html.glass .glass::after { opacity: 0.5; }
-
-:root:not(.dark):not(.glass) .glass::before {
-  background: linear-gradient(180deg,
-    oklch(1 0 0 / 0.9), oklch(1 0 0 / 0.2) 45%, oklch(0.4 0.02 295 / 0.06));
-}
-:root:not(.dark):not(.glass) .glass::after { opacity: 0.25; }
 
 /* ============================================================
    Shared blur helpers — drive the full-viewport modal scrim and the
@@ -515,61 +497,371 @@ html.glass .glass::after { opacity: 0.5; }
    layered instead: translucent fill + 160° sheen + bright top edge +
    soft shadow. Real backdrop-filter stays reserved for transient
    surfaces (.glass on modals/menus).
-   Token states: light default → .dark / html.glass overrides → a
-   media-query branch for System mode (no class on <html>), mirroring
-   the reduced-transparency block below.
+   Token states: per-material primitive blocks (light default → .dark override
+   → a media-query branch for System mode), with ALL surface tokens derived
+   once via color-mix below.
+   ============================================================ */
+
+/* ============================================================
+   Material primitives — one flat block per material × brightness.
+   Every glass surface token below derives from these via color-mix,
+   so a new material = one new block, zero new derivations.
+   This block: LUXE (default material). Liquid/Aurora live further
+   down, after the accent palettes — search `data-material=`.
+   Selector convention: brightness → class on <html> (`.dark` / `:root`),
+   material → data-attribute on <html> (`html[data-material="liquid"]`).
    ============================================================ */
 :root {
-  --msg-glass-bg: oklch(1 0 0 / 0.65);
-  --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.35), transparent 42%);
-  --msg-glass-border: oklch(0.40 0.02 295 / 0.14);
-  --msg-glass-border-top: oklch(0.40 0.02 295 / 0.20);
-  --msg-glass-shadow: 0 4px 16px oklch(0.35 0.02 295 / 0.10);
-  --glass-inset-bg: oklch(0.45 0.02 295 / 0.06);
-  --glass-inset-border: oklch(0.40 0.02 295 / 0.12);
-  --glass-inset-border-top: oklch(0.40 0.02 295 / 0.16);
-  --code-header-bg: oklch(0.45 0.02 295 / 0.08);
-  --code-pre-bg: oklch(0.45 0.02 295 / 0.05);
+  /* surface inks + fill strengths */
+  --mat-ink-raise: oklch(1 0 0);
+  --mat-ink-sink: oklch(0.45 0.02 295);
+  --mat-fill-bubble: 65%;
+  --mat-fill-inset: 6%;
+  /* edges & light */
+  --mat-bubble-sheen: oklch(1 0 0 / 0.35);
+  --mat-edge: oklch(0.40 0.02 295 / 0.14);
+  --mat-edge-top: oklch(0.40 0.02 295 / 0.20);
+  --mat-edge-sunken: oklch(0.40 0.02 295 / 0.12);
+  --mat-edge-sunken-top: oklch(0.40 0.02 295 / 0.16);
+  /* depth */
+  --mat-shadow: oklch(0.35 0.02 295 / 0.10);
+  /* leaf colours (no useful derivation — keep exact) */
+  --mat-code-header: oklch(0.45 0.02 295 / 0.08);
+  --mat-code-pre: oklch(0.45 0.02 295 / 0.05);
+  /* user bubble accent recipe */
+  --mat-user-fill: 68%;
+  --mat-user-glow: 25%;
+  /* blur tiers (vary by MATERIAL only, not brightness) */
+  --glass-blur: 20px;
+  --glass-saturate: 1.6;
+  --glass-blur-chrome: 16px;
+  /* canvas field — opaque ground for non-macOS; semi-opaque aurora base
+     (on macOS the always-on vibrancy faintly shows through it). */
+  --mat-solid-ground: oklch(0.988 0.004 295);
+  --mat-canvas-base: oklch(0.972 0.005 295 / 0.86);
+  --mat-glow-a: 20%;
+  --mat-glow-b: 13%;
+  --mat-glow-top: 7%;
+  /* Cool counter-hue — a second light source so the wash reads as a mesh. */
+  --mat-glow-counter: color-mix(in oklch, oklch(0.62 0.13 250) 10%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.72);
+  /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
+  --mat-raised: oklch(1.00 0 0 / 0.55);
+  /* canvas grain CSS opacity over a FULL-strength noise SVG — effective alpha
+     equals this token. Legacy hardcoded grain was 0.025/0.05; luxe deepens it
+     slightly. */
+  --mat-grain: 0.035;
+  --mat-fill-chrome: 78%;
+  --mat-chrome-topline: oklch(1 0 0 / 0);
+  /* popover (.glass) specular edge + grain */
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.9);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.2);
+  --mat-pop-spec-lo: oklch(0.4 0.02 295 / 0.06);
+  --mat-pop-grain: 0.25;
 }
 .dark {
-  --msg-glass-bg: oklch(0.24 0.02 310 / 0.75);
-  --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.05), transparent 42%);
-  --msg-glass-border: oklch(1 0 0 / 0.10);
-  --msg-glass-border-top: oklch(1 0 0 / 0.22);
-  --msg-glass-shadow: 0 4px 16px oklch(0 0 0 / 0.25);
-  --glass-inset-bg: oklch(0.19 0.02 310 / 0.7);
-  --glass-inset-border: oklch(1 0 0 / 0.07);
-  --glass-inset-border-top: oklch(1 0 0 / 0.13);
-  --code-header-bg: oklch(0.19 0.02 310 / 0.9);
-  --code-pre-bg: oklch(0.15 0.02 310 / 0.85);
+  --mat-ink-raise: oklch(0.24 0.02 310);
+  --mat-ink-sink: oklch(0.19 0.02 310);
+  --mat-fill-bubble: 75%;
+  --mat-fill-inset: 70%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.05);
+  --mat-edge: oklch(1 0 0 / 0.10);
+  --mat-edge-top: oklch(1 0 0 / 0.22);
+  --mat-edge-sunken: oklch(1 0 0 / 0.07);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.13);
+  --mat-shadow: oklch(0 0 0 / 0.25);
+  --mat-code-header: oklch(0.19 0.02 310 / 0.9);
+  --mat-code-pre: oklch(0.15 0.02 310 / 0.85);
+  /* brightness-invariant for Luxe (materials DO vary these per brightness);
+     listed anyway — every primitive block stays a complete set. */
+  --mat-user-fill: 68%;
+  --mat-user-glow: 25%;
+  --mat-solid-ground: oklch(0.155 0.022 300);
+  --mat-canvas-base: oklch(0.175 0.022 300 / 0.84);
+  --mat-glow-a: 24%;
+  --mat-glow-b: 15%;
+  --mat-glow-top: 8%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.05);
+  --mat-raised: oklch(0.26 0.018 300 / 0.45);
+  --mat-grain: 0.06;
+  --mat-fill-chrome: 78%;
+  --mat-chrome-topline: oklch(1 0 0 / 0);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.40);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.04);
+  --mat-pop-spec-lo: oklch(1 0 0 / 0);
+  --mat-pop-grain: 0.4;
 }
-/* Glass theme: dark-adjacent values with a brighter specular top edge. */
-html.glass {
-  --msg-glass-bg: oklch(0.24 0.02 310 / 0.65);
-  --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.07), transparent 42%);
-  --msg-glass-border: oklch(1 0 0 / 0.12);
-  --msg-glass-border-top: oklch(1 0 0 / 0.35);
-  --msg-glass-shadow: 0 4px 16px oklch(0 0 0 / 0.30);
-  --glass-inset-bg: oklch(0.19 0.02 310 / 0.6);
-  --glass-inset-border: oklch(1 0 0 / 0.09);
-  --glass-inset-border-top: oklch(1 0 0 / 0.18);
-  --code-header-bg: oklch(0.17 0.02 310 / 0.85);
-  --code-pre-bg: oklch(0.14 0.02 310 / 0.8);
-}
-/* System mode (no explicit class) + OS dark — same values as .dark. */
+/* System mode (no explicit class) + OS dark — exact mirror of `.dark`.
+   Edit `.dark` first, then copy every property here. Never tune this block
+   independently; it exists only because the media query can't reference
+   the class-based selector.
+   (enforced by mirror_blocks_are_verbatim_copies in src/appearance.rs) */
 @media (prefers-color-scheme: dark) {
-  :root:not(.light):not(.glass) {
-    --msg-glass-bg: oklch(0.24 0.02 310 / 0.75);
-    --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.05), transparent 42%);
-    --msg-glass-border: oklch(1 0 0 / 0.10);
-    --msg-glass-border-top: oklch(1 0 0 / 0.22);
-    --msg-glass-shadow: 0 4px 16px oklch(0 0 0 / 0.25);
-    --glass-inset-bg: oklch(0.19 0.02 310 / 0.7);
-    --glass-inset-border: oklch(1 0 0 / 0.07);
-    --glass-inset-border-top: oklch(1 0 0 / 0.13);
-    --code-header-bg: oklch(0.19 0.02 310 / 0.9);
-    --code-pre-bg: oklch(0.15 0.02 310 / 0.85);
+  :root:not(.light) {
+    --mat-ink-raise: oklch(0.24 0.02 310);
+    --mat-ink-sink: oklch(0.19 0.02 310);
+    --mat-fill-bubble: 75%;
+    --mat-fill-inset: 70%;
+    --mat-bubble-sheen: oklch(1 0 0 / 0.05);
+    --mat-edge: oklch(1 0 0 / 0.10);
+    --mat-edge-top: oklch(1 0 0 / 0.22);
+    --mat-edge-sunken: oklch(1 0 0 / 0.07);
+    --mat-edge-sunken-top: oklch(1 0 0 / 0.13);
+    --mat-shadow: oklch(0 0 0 / 0.25);
+    --mat-code-header: oklch(0.19 0.02 310 / 0.9);
+    --mat-code-pre: oklch(0.15 0.02 310 / 0.85);
+    /* brightness-invariant for Luxe (materials DO vary these per brightness);
+       listed anyway — every primitive block stays a complete set. */
+    --mat-user-fill: 68%;
+    --mat-user-glow: 25%;
+    --mat-solid-ground: oklch(0.155 0.022 300);
+    --mat-canvas-base: oklch(0.175 0.022 300 / 0.84);
+    --mat-glow-a: 24%;
+    --mat-glow-b: 15%;
+    --mat-glow-top: 8%;
+    --mat-glow-counter: color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
+    --mat-sheen: oklch(1 0 0 / 0.05);
+    --mat-raised: oklch(0.26 0.018 300 / 0.45);
+    --mat-grain: 0.06;
+    --mat-fill-chrome: 78%;
+    --mat-chrome-topline: oklch(1 0 0 / 0);
+    --mat-pop-spec-hi: oklch(1 0 0 / 0.40);
+    --mat-pop-spec-mid: oklch(1 0 0 / 0.04);
+    --mat-pop-spec-lo: oklch(1 0 0 / 0);
+    --mat-pop-grain: 0.4;
   }
+}
+
+/* ============================================================
+   Material: LIQUID GLASS — translucent lens surfaces, bright
+   specular edges, vivid accent-derived light field.
+   ============================================================ */
+html[data-material="liquid"] {
+  --mat-ink-raise: oklch(1 0 0);
+  --mat-ink-sink: oklch(0.42 0.04 300);
+  --mat-fill-bubble: 46%;
+  --mat-fill-inset: 8%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.55);
+  --mat-edge: oklch(1 0 0 / 0.55);
+  --mat-edge-top: oklch(1 0 0 / 0.92);
+  --mat-edge-sunken: oklch(0.40 0.03 300 / 0.14);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.55);
+  --mat-shadow: oklch(0.35 0.05 300 / 0.16);
+  --mat-code-header: oklch(0.45 0.03 300 / 0.10);
+  --mat-code-pre: oklch(0.45 0.03 300 / 0.06);
+  --mat-user-fill: 60%;
+  --mat-user-glow: 40%;
+  --mat-solid-ground: oklch(0.965 0.010 300);
+  --mat-canvas-base: oklch(0.955 0.012 300 / 0.82);
+  --mat-glow-a: 38%;
+  --mat-glow-b: 26%;
+  --mat-glow-top: 16%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.70 0.14 250) 26%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.85);
+  --mat-raised: oklch(1 0 0 / 0.42);
+  --mat-grain: 0.05;
+  --mat-fill-chrome: 58%;
+  --mat-chrome-topline: oklch(1 0 0 / 0.35);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.95);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.25);
+  --mat-pop-spec-lo: oklch(0.4 0.03 300 / 0.06);
+  --mat-pop-grain: 0.3;
+  --glass-blur: 34px;
+  --glass-saturate: 2.0;
+  --glass-blur-chrome: 24px;
+}
+html[data-material="liquid"].dark {
+  /* visionOS-style lens: WHITE ink at low fill over a vivid dark field. */
+  --mat-ink-raise: oklch(1 0 0);
+  --mat-ink-sink: oklch(1 0 0);
+  --mat-fill-bubble: 8%;
+  --mat-fill-inset: 5%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.10);
+  --mat-edge: oklch(1 0 0 / 0.13);
+  --mat-edge-top: oklch(1 0 0 / 0.32);
+  --mat-edge-sunken: oklch(1 0 0 / 0.08);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.16);
+  --mat-shadow: oklch(0 0 0 / 0.35);
+  --mat-code-header: oklch(0.16 0.03 305 / 0.85);
+  --mat-code-pre: oklch(0.13 0.03 305 / 0.8);
+  --mat-user-fill: 48%;
+  --mat-user-glow: 45%;
+  --mat-solid-ground: oklch(0.140 0.030 300);
+  --mat-canvas-base: oklch(0.150 0.030 300 / 0.78);
+  --mat-glow-a: 44%;
+  --mat-glow-b: 30%;
+  --mat-glow-top: 14%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.66 0.14 250) 26%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.08);
+  --mat-raised: oklch(0.25 0.020 300 / 0.38);
+  --mat-grain: 0.09;
+  --mat-fill-chrome: 55%;
+  --mat-chrome-topline: oklch(1 0 0 / 0.06);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.62);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.10);
+  --mat-pop-spec-lo: oklch(1 0 0 / 0.02);
+  --mat-pop-grain: 0.5;
+}
+
+/* ============================================================
+   Material: AURORA FROST — the canvas IS the show; surfaces are
+   thick milky frost the colour bleeds through.
+   ============================================================ */
+html[data-material="aurora"] {
+  --mat-ink-raise: oklch(1 0 0);
+  --mat-ink-sink: oklch(0.42 0.03 330);
+  --mat-fill-bubble: 58%;
+  --mat-fill-inset: 7%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.60);
+  --mat-edge: oklch(1 0 0 / 0.70);
+  --mat-edge-top: oklch(1 0 0 / 0.95);
+  --mat-edge-sunken: oklch(0.40 0.03 330 / 0.13);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.60);
+  --mat-shadow: oklch(0.45 0.06 330 / 0.13);
+  --mat-code-header: oklch(0.45 0.03 330 / 0.09);
+  --mat-code-pre: oklch(0.45 0.03 330 / 0.05);
+  --mat-user-fill: 62%;
+  --mat-user-glow: 32%;
+  --mat-solid-ground: oklch(0.965 0.015 330);
+  --mat-canvas-base: oklch(0.960 0.018 330 / 0.80);
+  --mat-glow-a: 48%;
+  --mat-glow-b: 36%;
+  --mat-glow-top: 26%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.72 0.12 200) 34%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.90);
+  --mat-raised: oklch(1 0 0 / 0.60);
+  --mat-grain: 0.02;
+  --mat-fill-chrome: 72%;
+  --mat-chrome-topline: oklch(1 0 0 / 0.25);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.95);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.30);
+  --mat-pop-spec-lo: oklch(0.4 0.03 330 / 0.05);
+  --mat-pop-grain: 0.18;
+  --glass-blur: 26px;
+  --glass-saturate: 1.5;
+  --glass-blur-chrome: 20px;
+}
+html[data-material="aurora"].dark {
+  --mat-ink-raise: oklch(0.22 0.05 315);
+  --mat-ink-sink: oklch(0.17 0.04 312);
+  --mat-fill-bubble: 50%;
+  --mat-fill-inset: 60%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.09);
+  --mat-edge: oklch(1 0 0 / 0.11);
+  --mat-edge-top: oklch(1 0 0 / 0.27);
+  --mat-edge-sunken: oklch(1 0 0 / 0.07);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.14);
+  --mat-shadow: oklch(0 0 0 / 0.38);
+  --mat-code-header: oklch(0.15 0.04 312 / 0.9);
+  --mat-code-pre: oklch(0.12 0.04 312 / 0.85);
+  --mat-user-fill: 55%;
+  --mat-user-glow: 38%;
+  --mat-solid-ground: oklch(0.160 0.040 310);
+  --mat-canvas-base: oklch(0.170 0.045 310 / 0.76);
+  --mat-glow-a: 40%;
+  --mat-glow-b: 32%;
+  --mat-glow-top: 18%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.62 0.13 230) 30%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.06);
+  --mat-raised: oklch(0.24 0.030 310 / 0.50);
+  --mat-grain: 0.035;
+  --mat-fill-chrome: 64%;
+  --mat-chrome-topline: oklch(1 0 0 / 0.05);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.50);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.08);
+  --mat-pop-spec-lo: oklch(1 0 0 / 0.01);
+  --mat-pop-grain: 0.35;
+}
+
+/* System mode + OS dark — mirrors of the material `.dark` blocks above.
+   Edit the `.dark` blocks first, then copy every line here verbatim. Never
+   tune these independently; they exist only because the media query can't
+   reference the class-based selector.
+   (enforced by mirror_blocks_are_verbatim_copies in src/appearance.rs) */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light)[data-material="liquid"] {
+    /* visionOS-style lens: WHITE ink at low fill over a vivid dark field. */
+    --mat-ink-raise: oklch(1 0 0);
+    --mat-ink-sink: oklch(1 0 0);
+    --mat-fill-bubble: 8%;
+    --mat-fill-inset: 5%;
+    --mat-bubble-sheen: oklch(1 0 0 / 0.10);
+    --mat-edge: oklch(1 0 0 / 0.13);
+    --mat-edge-top: oklch(1 0 0 / 0.32);
+    --mat-edge-sunken: oklch(1 0 0 / 0.08);
+    --mat-edge-sunken-top: oklch(1 0 0 / 0.16);
+    --mat-shadow: oklch(0 0 0 / 0.35);
+    --mat-code-header: oklch(0.16 0.03 305 / 0.85);
+    --mat-code-pre: oklch(0.13 0.03 305 / 0.8);
+    --mat-user-fill: 48%;
+    --mat-user-glow: 45%;
+    --mat-solid-ground: oklch(0.140 0.030 300);
+    --mat-canvas-base: oklch(0.150 0.030 300 / 0.78);
+    --mat-glow-a: 44%;
+    --mat-glow-b: 30%;
+    --mat-glow-top: 14%;
+    --mat-glow-counter: color-mix(in oklch, oklch(0.66 0.14 250) 26%, transparent);
+    --mat-sheen: oklch(1 0 0 / 0.08);
+    --mat-raised: oklch(0.25 0.020 300 / 0.38);
+    --mat-grain: 0.09;
+    --mat-fill-chrome: 55%;
+    --mat-chrome-topline: oklch(1 0 0 / 0.06);
+    --mat-pop-spec-hi: oklch(1 0 0 / 0.62);
+    --mat-pop-spec-mid: oklch(1 0 0 / 0.10);
+    --mat-pop-spec-lo: oklch(1 0 0 / 0.02);
+    --mat-pop-grain: 0.5;
+  }
+  :root:not(.light)[data-material="aurora"] {
+    --mat-ink-raise: oklch(0.22 0.05 315);
+    --mat-ink-sink: oklch(0.17 0.04 312);
+    --mat-fill-bubble: 50%;
+    --mat-fill-inset: 60%;
+    --mat-bubble-sheen: oklch(1 0 0 / 0.09);
+    --mat-edge: oklch(1 0 0 / 0.11);
+    --mat-edge-top: oklch(1 0 0 / 0.27);
+    --mat-edge-sunken: oklch(1 0 0 / 0.07);
+    --mat-edge-sunken-top: oklch(1 0 0 / 0.14);
+    --mat-shadow: oklch(0 0 0 / 0.38);
+    --mat-code-header: oklch(0.15 0.04 312 / 0.9);
+    --mat-code-pre: oklch(0.12 0.04 312 / 0.85);
+    --mat-user-fill: 55%;
+    --mat-user-glow: 38%;
+    --mat-solid-ground: oklch(0.160 0.040 310);
+    --mat-canvas-base: oklch(0.170 0.045 310 / 0.76);
+    --mat-glow-a: 40%;
+    --mat-glow-b: 32%;
+    --mat-glow-top: 18%;
+    --mat-glow-counter: color-mix(in oklch, oklch(0.62 0.13 230) 30%, transparent);
+    --mat-sheen: oklch(1 0 0 / 0.06);
+    --mat-raised: oklch(0.24 0.030 310 / 0.50);
+    --mat-grain: 0.035;
+    --mat-fill-chrome: 64%;
+    --mat-chrome-topline: oklch(1 0 0 / 0.05);
+    --mat-pop-spec-hi: oklch(1 0 0 / 0.50);
+    --mat-pop-spec-mid: oklch(1 0 0 / 0.08);
+    --mat-pop-spec-lo: oklch(1 0 0 / 0.01);
+    --mat-pop-grain: 0.35;
+  }
+}
+
+/* ── Derived surface tokens — defined ONCE; all themes/materials flow
+      through the primitives above. All theme classes live on <html>, so
+      single-element cascade resolution makes the var() substitution pick
+      up each material/brightness block automatically.
+      (atmosphere tokens have their own derivation block further down —
+      search "Atmosphere tokens — derived") ── */
+:root {
+  --msg-glass-bg: color-mix(in oklch, var(--mat-ink-raise) var(--mat-fill-bubble), transparent);
+  --msg-glass-sheen: linear-gradient(160deg, var(--mat-bubble-sheen), transparent 42%);
+  --msg-glass-border: var(--mat-edge);
+  --msg-glass-border-top: var(--mat-edge-top);
+  --msg-glass-shadow: 0 4px 16px var(--mat-shadow);
+  --glass-inset-bg: color-mix(in oklch, var(--mat-ink-sink) var(--mat-fill-inset), transparent);
+  --glass-inset-border: var(--mat-edge-sunken);
+  --glass-inset-border-top: var(--mat-edge-sunken-top);
+  --code-header-bg: var(--mat-code-header);
+  --code-pre-bg: var(--mat-code-pre);
 }
 
 @layer components {
@@ -590,10 +882,10 @@ html.glass {
   .msg-glass-user {
     color: var(--color-text-inverse);
     background-image: linear-gradient(160deg, oklch(1 0 0 / 0.10), transparent 45%);
-    background-color: color-mix(in oklch, var(--color-primary) 68%, transparent);
+    background-color: color-mix(in oklch, var(--color-primary) var(--mat-user-fill), transparent);
     border: 1px solid color-mix(in oklch, var(--color-primary) 45%, transparent);
     border-top-color: color-mix(in oklch, white 28%, var(--color-primary));
-    box-shadow: 0 4px 14px color-mix(in oklch, var(--color-primary) 25%, transparent);
+    box-shadow: 0 4px 14px color-mix(in oklch, var(--color-primary) var(--mat-user-glow), transparent);
   }
   /* Errored final answer — danger-tinted glass (same recipe, danger hue). */
   .msg-glass-danger {
@@ -649,25 +941,29 @@ html.glass {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
   }
-  .glass::before, .glass::after, .aleph-sidebar::before { display: none !important; }
+  .glass::before, .glass::after, .aleph-sidebar::before,
+  .aleph-shell::after { display: none !important; }
   .aleph-scrim, .aleph-blur-subtle {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
   }
   .aleph-sidebar { background-color: var(--color-sidebar) !important; }
-  :root {
+  /* Kill the primitives at the source: every material collapses to solid.
+     !important here beats any non-!important material or theme block
+     regardless of specificity or position. `:root[data-material]` also
+     covers the data-material attribute blocks so they can't re-supply
+     values via the normal cascade. */
+  :root, :root[data-material] {
     --aleph-canvas-base: var(--aleph-solid-ground) !important;
-    --color-surface-raised: oklch(1.00 0 0) !important;
+    --mat-raised: oklch(1.00 0 0) !important;
+    --mat-grain: 0 !important;
     --scrim-blur: 0px !important;
+    --glass-blur: 0px !important;
     --glass-blur-subtle: 0px !important;
     --glass-blur-chrome: 0px !important;
+    --glass-saturate: 1 !important;
   }
-  .dark { --color-surface-raised: oklch(0.20 0.018 310) !important; }
-  html.glass {
-    --glass-blur: 0px;
-    --aleph-canvas-base: var(--aleph-solid-ground) !important;
-    --color-surface-raised: oklch(0.25 0.020 300) !important;
-  }
+  .dark, .dark[data-material] { --mat-raised: oklch(0.20 0.018 310) !important; }
   /* Message-flow faux glass → opaque solids. */
   .msg-glass {
     background-color: var(--color-surface-raised) !important;
@@ -684,14 +980,21 @@ html.glass {
     background-image: none !important;
   }
   .glass-inset { background-color: var(--color-surface-sunken) !important; }
-  /* Sidebar nav tile → opaque solid; drop the faux-glass highlight. */
   .nav-tile-active {
     background-color: var(--color-sidebar-active) !important;
     box-shadow: none !important;
   }
+  .aleph-composer, .aleph-session-tabs {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .aleph-session-tabs { background-color: var(--color-surface) !important; }
+  .chat-scroll-fade { mask-image: none !important; -webkit-mask-image: none !important; }
 }
 @media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
-  :root:not(.light):not(.glass) { --color-surface-raised: oklch(0.20 0.018 310) !important; }
+  :root:not(.light), :root:not(.light)[data-material] {
+    --mat-raised: oklch(0.20 0.018 310) !important;
+  }
 }
 
 /* Soft entrance for popovers / menus. */
@@ -908,75 +1211,22 @@ html.theme-switching::view-transition-new(root) {
 /* ════════════════════════════════════════════════════════════
    Aleph Atmosphere
    Codex's two-column structure married to a Gemini-style
-   light-field: a slow, accent-aware gradient drifts behind every
+   light-field: a static accent-aware light-field sits behind every
    surface while glossy materials float on top.
    ════════════════════════════════════════════════════════════ */
 
-/* --- Atmosphere tokens — light (the default look) --- */
+/* --- Atmosphere tokens — derived once from the material primitives
+       (message-surface tokens derive in their own block above — search
+       "Derived surface tokens") --- */
 :root {
-  /* Opaque ground for non-macOS (browser): the semi-opaque aurora composites
-     over this so there's never see-through-to-nothing. */
-  --aleph-solid-ground: oklch(0.988 0.004 295);
-  /* Semi-opaque controlled aurora base. On macOS the always-on vibrancy faintly
-     shows through it (保留通透感); the alpha keeps it wallpaper-independent. */
-  --aleph-canvas-base: oklch(0.972 0.005 295 / 0.86);
-  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 20%, transparent);
-  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 13%, transparent);
-  --aleph-glow-top: color-mix(in oklch, var(--color-primary)  7%, transparent);
-  /* Cool counter-hue — a second light source in a different hue turns the
-     flat single-colour wash into a subtle mesh-gradient field. */
-  --aleph-glow-c:   color-mix(in oklch, oklch(0.62 0.13 250) 10%, transparent);
-  --aleph-sheen:    oklch(1 0 0 / 0.72);
-  /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
-  --color-surface-raised: oklch(1.00 0 0 / 0.55);
-}
-
-/* --- Atmosphere tokens — dark --- */
-.dark {
-  --aleph-solid-ground: oklch(0.155 0.022 300);
-  --aleph-canvas-base:  oklch(0.175 0.022 300 / 0.84);
-  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 24%, transparent);
-  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 15%, transparent);
-  --aleph-glow-top: color-mix(in oklch, var(--color-primary)  8%, transparent);
-  --aleph-glow-c:   color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
-  --aleph-sheen:    oklch(1 0 0 / 0.05);
-  /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
-  --color-surface-raised: oklch(0.26 0.018 300 / 0.45);
-}
-/* --- Atmosphere tokens — Glass (dark-based, intensified, controlled) ---
-   Strong-glass showcase theme. Reuses the dramatic dark mood (stronger glow
-   than the calmed Dark), with a slightly lower canvas alpha so the controlled
-   aurora reads deeper — but NEVER transparent: the macOS vibrancy only faintly
-   shows behind this controlled colour, raw wallpaper is never exposed. */
-html.glass {
-  --aleph-solid-ground: oklch(0.150 0.024 300);
-  --aleph-canvas-base:  oklch(0.165 0.024 300 / 0.80);
-  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 34%, transparent);
-  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 22%, transparent);
-  --aleph-glow-top: color-mix(in oklch, var(--color-primary) 12%, transparent);
-  --aleph-glow-c:   color-mix(in oklch, oklch(0.66 0.14 250) 18%, transparent);
-  --aleph-sheen:    oklch(1 0 0 / 0.07);
-  /* Cards: a touch more transparent than Dark so they read glassier on aurora. */
-  --color-surface-raised: oklch(0.25 0.020 300 / 0.40);
-  /* Intensified glass material — pushed past the restrained default.
-     Transient popovers go lush (34px); the always-on sidebar tier
-     (--glass-blur-chrome) stays at 24px to cap idle GPU cost. */
-  --glass-blur: 34px;
-  --glass-saturate: 2.0;
-  --glass-blur-chrome: 24px;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not(.light):not(.glass) {
-    --aleph-solid-ground: oklch(0.155 0.022 300);
-    --aleph-canvas-base:  oklch(0.175 0.022 300 / 0.84);
-    --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 24%, transparent);
-    --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 15%, transparent);
-    --aleph-glow-top: color-mix(in oklch, var(--color-primary)  8%, transparent);
-    --aleph-glow-c:   color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
-    --aleph-sheen:    oklch(1 0 0 / 0.05);
-    /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
-    --color-surface-raised: oklch(0.26 0.018 300 / 0.45);
-  }
+  --aleph-solid-ground: var(--mat-solid-ground);
+  --aleph-canvas-base: var(--mat-canvas-base);
+  --aleph-glow-a: color-mix(in oklch, var(--color-primary) var(--mat-glow-a), transparent);
+  --aleph-glow-b: color-mix(in oklch, var(--color-primary) var(--mat-glow-b), transparent);
+  --aleph-glow-top: color-mix(in oklch, var(--color-primary) var(--mat-glow-top), transparent);
+  --aleph-glow-c: var(--mat-glow-counter);
+  --aleph-sheen: var(--mat-sheen);
+  --color-surface-raised: var(--mat-raised);
 }
 
 /* macOS: let the always-on vibrancy show behind our semi-opaque aurora in every
@@ -1009,6 +1259,22 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
    * imperceptible. Static gradient is the same look without the cost.
    */
 }
+/* Static fine grain over the canvas — painted once, zero per-frame cost.
+   Two jobs: (1) gives the chrome backdrop-blur visible structure to frost
+   (the grain gets iced flat under sidebar/composer — the frosted-vs-clear
+   differential finally shows), (2) dithers gradient banding on the aurora.
+   SVG is the seamless 180×180 canvas tile at FULL strength — NOT the popover
+   tile used by .glass::after, which has 0.035 baked into its rect — so the
+   effective alpha equals --mat-grain alone. */
+.aleph-shell::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: var(--mat-grain);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
 
 /* --- Glossy sidebar — a soft, accent-tinted column (Codex) --- */
 .aleph-sidebar {
@@ -1020,7 +1286,7 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
      and paint in the shell's root stacking context, or clicks in the main
      area won't close them. */
   position: relative;
-  background-color: color-mix(in oklch, var(--color-sidebar) 78%, transparent);
+  background-color: color-mix(in oklch, var(--color-sidebar) var(--mat-fill-chrome), transparent);
   background-image: linear-gradient(
     180deg,
     color-mix(in oklch, var(--color-primary) 9%, var(--color-sidebar)) 0%,
@@ -1028,7 +1294,8 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
     color-mix(in oklch, var(--color-primary) 8%, var(--color-sidebar)) 100%
   );
   box-shadow: inset -1px 0 0 var(--color-border-subtle),
-              inset  1px 0 0 var(--aleph-sheen);
+              inset  1px 0 0 var(--aleph-sheen),
+              inset  0 1px 0 var(--mat-chrome-topline);
 }
 /* The frosted blur lives on a z-index:-1 layer behind the sidebar content,
    so the .aleph-sidebar element itself stays free of backdrop-filter (and
@@ -1041,12 +1308,6 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
   pointer-events: none;
   backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
   -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
-}
-/* Glass theme: deepen the sidebar's frosted layer to match the stronger chrome. */
-html.glass .aleph-sidebar {
-  box-shadow: inset -1px 0 0 var(--color-border-subtle),
-              inset  1px 0 0 var(--aleph-sheen),
-              inset  0 1px 0 oklch(1 0 0 / 0.06);
 }
 
 /* Brand row — hugs the top of the sidebar by default. On macOS the row
@@ -1101,6 +1362,8 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
   border: 1px solid var(--color-border);
   border-radius: var(--radius-2xl);
   box-shadow: var(--shadow-md), inset 0 1px 0 var(--aleph-sheen);
+  backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
   transition: box-shadow var(--duration-normal) var(--ease-spring),
               border-color var(--duration-normal) var(--ease-spring),
               transform var(--duration-normal) var(--ease-spring);
@@ -1124,6 +1387,23 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 .aleph-composer textarea:focus-visible {
   outline: none;
   box-shadow: none;
+}
+
+/* --- Session tab strip — frosted chrome band over the message flow --- */
+.aleph-session-tabs {
+  background-color: color-mix(in oklch, var(--color-surface) 55%, transparent);
+  backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+  border-bottom: 1px solid var(--color-border-subtle);
+  box-shadow: inset 0 1px 0 var(--mat-chrome-topline);
+}
+
+/* Top fade — content dissolves under the chrome band instead of clipping.
+   Static mask on the scroll container; verify scroll perf in WKWebView
+   (spec §6.2: if it costs, drop the fade, keep the float). */
+.chat-scroll-fade {
+  mask-image: linear-gradient(180deg, transparent 0, #000 26px);
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 26px);
 }
 
 /* --- Empty-state hero --- */
@@ -1637,26 +1917,8 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
 }
 *::-webkit-scrollbar-corner   { background: transparent; }
 
-/* ════════════════════════════════════════════════════════════
-   Grain — a fixed, ultra-faint fractal-noise overlay behind the
-   shell. Pure flat vector surfaces read as sterile; a whisper of
-   grain breaks the digital flatness and gives the light-field a
-   filmic, physical quality. It paints once and never animates, so
-   (like the static light-field above) it carries zero idle cost.
-   Sits on top of `::before` (the gradient) but below all content.
-   ════════════════════════════════════════════════════════════ */
-.aleph-shell::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  opacity: 0.025;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-.dark .aleph-shell::after,
-html.glass .aleph-shell::after,
-:root:not(.light):not(.glass) .aleph-shell::after { opacity: 0.05; }
+/* (Grain rule merged into .aleph-shell::after near .aleph-shell::before above;
+   opacity is now driven by --mat-grain from the material primitive block.) */
 
 /* ════════════════════════════════════════════════════════════
    Chat message entrance — a one-shot rise+fade as each bubble

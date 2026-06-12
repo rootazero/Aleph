@@ -1,14 +1,18 @@
 //
-// Theme picker — a topbar popover that controls two of the appearance axes:
-//   • Mode   : System / Light / Dark / Glass (Glass = dark-based intensified glass)
-//   • Accent : Mauve / Ocean / Forest / Sunset / Rose
+// Theme picker — a topbar popover that controls three of the appearance axes:
+//   • Mode     : System / Light / Dark
+//   • Material : Luxe / Liquid / Aurora
+//   • Accent   : Mauve / Ocean / Forest / Sunset / Rose
 //
 // The read/apply/persist logic + enums live in `crate::appearance` (the single
 // source of appearance truth, shared with the Appearance settings page and the
 // boot replay in `lib.rs`). This component only owns the popover UI and the
 // circular View-Transition reveal animation.
 //
-use crate::appearance::{apply_accent, apply_mode, read_accent, read_mode, Accent, ThemeMode};
+use crate::appearance::{
+    apply_accent, apply_material, apply_mode, read_accent, read_material, read_mode, Accent,
+    Material, ThemeMode,
+};
 use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
@@ -89,6 +93,7 @@ fn animated_apply(client_x: f64, client_y: f64, apply: impl FnOnce() + 'static) 
 pub fn ThemeToggle() -> impl IntoView {
     let mode = RwSignal::new(read_mode());
     let accent = RwSignal::new(read_accent());
+    let material = RwSignal::new(read_material());
     let open = RwSignal::new(false);
 
     let current_swatch = move || accent.get().swatch().to_string();
@@ -149,6 +154,42 @@ pub fn ThemeToggle() -> impl IntoView {
                                             }
                                             class=move || {
                                                 let base = "px-2 py-1.5 rounded-lg text-xs font-medium transition-colors";
+                                                if is_active() {
+                                                    format!("{base} bg-primary text-white")
+                                                } else {
+                                                    format!("{base} text-text-secondary hover:bg-surface-sunken")
+                                                }
+                                            }
+                                        >
+                                            {m.label()}
+                                        </button>
+                                    }
+                                })
+                                .collect::<Vec<_>>()}
+                        </div>
+                    </div>
+
+                    // Material
+                    <div>
+                        <p class="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+                            "材质"
+                        </p>
+                        <div class="grid grid-cols-3 gap-1">
+                            {Material::ALL
+                                .into_iter()
+                                .map(|m| {
+                                    let is_active = move || material.get() == m;
+                                    view! {
+                                        <button
+                                            on:click=move |ev: web_sys::MouseEvent| {
+                                                let x = ev.client_x() as f64;
+                                                let y = ev.client_y() as f64;
+                                                animated_apply(x, y, move || apply_material(m));
+                                                material.set(m);
+                                            }
+                                            class=move || {
+                                                // px-1 (not px-2 like the Mode row): 4-CJK labels need the extra 8px in a third-width column
+                                                let base = "px-1 py-1.5 rounded-lg text-xs font-medium transition-colors";
                                                 if is_active() {
                                                     format!("{base} bg-primary text-white")
                                                 } else {
