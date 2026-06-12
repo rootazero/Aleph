@@ -205,7 +205,7 @@ mod render {
 
             // Node points
             for p in &self.points {
-                let is_focus = focus_id.map_or(false, |f| f == p.id);
+                let is_focus = focus_id.is_some_and(|f| f == p.id);
                 let is_neighbor = focus_neighbor_ids.iter().any(|n| n == &p.id);
                 let radius = if is_focus {
                     4.0

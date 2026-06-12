@@ -1,7 +1,8 @@
 //! Top-of-chat tab strip — one tab per opened `agent_id`.
 //!
-//! Sits above `MessageList` inside `ChatView` so it scrolls with neither
-//! the sidebar nor the workspace pane. Tabs are populated by
+//! Floats over the top of `MessageList` inside `ChatView` (absolute
+//! frosted overlay band) — it scrolls with neither the sidebar nor the
+//! workspace pane. Tabs are populated by
 //! [`SessionMap::activate`]; first activation happens implicitly when
 //! the chat sidebar's dropdown picks a default agent. We only render the
 //! strip when ≥2 tabs are open — a single open agent is already named in
@@ -33,9 +34,9 @@ pub fn SessionTabs() -> impl IntoView {
     install_tab_hotkeys(sessions, chat);
 
     view! {
-        <Show when=move || sessions.tab_order.with(|o| o.len() >= 2)>
+        <Show when=move || sessions.tab_strip_visible()>
             <div class="aleph-session-tabs flex items-center gap-1 px-2 py-1
-                        bg-surface-base/30 text-xs overflow-x-auto flex-shrink-0">
+                        text-xs overflow-x-auto">
                 <For
                     each=move || sessions.tab_order.get()
                     key=|aid| aid.clone()

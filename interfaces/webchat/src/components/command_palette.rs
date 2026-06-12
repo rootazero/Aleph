@@ -4,12 +4,14 @@
 //! built on cmdk + Radix Dialog) but rewritten as a self-contained Leptos
 //! component with zero new dependencies. Lives entirely on the panel side
 //! and routes through `leptos_router::use_navigate` for navigation actions
-//! and direct DOM mutation for theme actions (matching `theme_toggle.rs`).
+//! and `crate::appearance::apply_mode` for theme actions (the canonical
+//! helper `theme_toggle.rs` shares).
 //!
 //! Open/close is driven by `crate::state::hotkey::HotkeyState` so the same
 //! signal can be flipped from anywhere (currently only the ⌘K listener and
 //! the inner Esc handler).
 
+use crate::appearance::{apply_mode, ThemeMode};
 use crate::i18n::{t_string, use_i18n};
 use crate::state::hotkey::HotkeyState;
 use leptos::ev::keydown;
@@ -51,48 +53,6 @@ struct Action {
     keywords: &'static [&'static str],
     group: Group,
     run: Box<dyn FnMut()>,
-}
-
-/// Apply a theme mode. Mirrors the helper in `theme_toggle.rs` but kept
-/// inline so the palette has zero coupling to that component's internals.
-fn apply_theme(mode: &'static str) {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let Some(document) = window.document() else {
-        return;
-    };
-    let Some(html) = document.document_element() else {
-        return;
-    };
-    let cls = html.class_list();
-    let _ = cls.remove_4("dark", "light", "glass", "translucent");
-    let storage = window.local_storage().ok().flatten();
-    match mode {
-        "light" => {
-            let _ = cls.add_1("light");
-            if let Some(s) = &storage {
-                let _ = s.set_item("aleph-theme", "light");
-            }
-        }
-        "dark" => {
-            let _ = cls.add_1("dark");
-            if let Some(s) = &storage {
-                let _ = s.set_item("aleph-theme", "dark");
-            }
-        }
-        "glass" => {
-            let _ = cls.add_1("glass");
-            if let Some(s) = &storage {
-                let _ = s.set_item("aleph-theme", "glass");
-            }
-        }
-        _ => {
-            if let Some(s) = &storage {
-                let _ = s.remove_item("aleph-theme");
-            }
-        }
-    }
 }
 
 /// Reload the panel page.
@@ -165,28 +125,21 @@ fn build_actions() -> Vec<Action> {
             label: "Theme: Light".to_string(),
             keywords: &["theme", "light", "明亮"],
             group: Group::Theme,
-            run: Box::new(|| apply_theme("light")),
+            run: Box::new(|| apply_mode(ThemeMode::Light)),
         },
         Action {
             id: "theme.dark",
             label: "Theme: Dark".to_string(),
             keywords: &["theme", "dark", "暗黑"],
             group: Group::Theme,
-            run: Box::new(|| apply_theme("dark")),
-        },
-        Action {
-            id: "theme.glass",
-            label: "Theme: Glass".to_string(),
-            keywords: &["theme", "glass", "玻璃", "vibrant", "translucent"],
-            group: Group::Theme,
-            run: Box::new(|| apply_theme("glass")),
+            run: Box::new(|| apply_mode(ThemeMode::Dark)),
         },
         Action {
             id: "theme.system",
             label: "Theme: System".to_string(),
             keywords: &["theme", "system", "auto", "跟随系统"],
             group: Group::Theme,
-            run: Box::new(|| apply_theme("system")),
+            run: Box::new(|| apply_mode(ThemeMode::System)),
         },
         Action {
             id: "diag.reload",

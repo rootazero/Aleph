@@ -9,8 +9,9 @@ use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState};
 use super::timeline::{self, TimelineRow};
 use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
 use crate::components::tool_card::ToolCard;
-use crate::i18n::{t_string, t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
+use crate::state::sessions::SessionMap;
 use leptos::prelude::*;
 
 /// Welcome hero — shown in the message area while a conversation is empty.
@@ -35,7 +36,7 @@ pub(super) fn ChatHero() -> impl IntoView {
         ("🧠", "回忆上下文", "我们上次聊到哪了？帮我回顾一下"),
     ];
     view! {
-        <div class="h-full flex flex-col items-center justify-center px-6 pb-10 text-center select-none">
+        <div class="h-full flex flex-col items-center justify-center px-6 pb-[var(--composer-clearance,150px)] text-center select-none">
             <div class="aleph-rise mb-7" style="animation-delay: 0s">
                 <div class="aleph-hero-orb w-16 h-16 rounded-2xl flex items-center justify-center">
                     // Brand mark — Hebrew aleph, same glyph the app icon uses.
@@ -98,6 +99,7 @@ pub(super) fn ChatHero() -> impl IntoView {
 pub(super) fn MessageList() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
+    let sessions = expect_context::<SessionMap>();
     let scroll_ref = NodeRef::<leptos::html::Div>::new();
 
     // Memoized timeline: the flat message vector folded into day-separated
@@ -160,12 +162,16 @@ pub(super) fn MessageList() -> impl IntoView {
     };
 
     view! {
-        <div class="relative flex-1 min-h-0">
-            <div node_ref=scroll_ref class="absolute inset-0 overflow-y-auto" on:scroll=on_scroll>
+        <div class="relative h-full">
+            <div node_ref=scroll_ref class="absolute inset-0 overflow-y-auto chat-scroll-fade" on:scroll=on_scroll>
                 <Show
                     when=move || chat.messages.get().is_empty()
                     fallback=move || view! {
-                        <div class="max-w-3xl mx-auto px-4 py-6 space-y-3">
+                        <div class=move || format!(
+                            "max-w-3xl mx-auto px-4 {} pb-[calc(var(--composer-clearance,150px)+1rem)] space-y-3",
+                            // pt-14 = band height (~33px: 2*py-1 + 24px pill + 1px border) + headroom
+                            if sessions.tab_strip_visible() { "pt-14" } else { "pt-6" }
+                        )>
                             // Inline send-error banner (G2) — shown when the last
                             // outbound send failed; colour-coded by error code.
                             <SendErrorBanner />
@@ -221,7 +227,7 @@ pub(super) fn MessageList() -> impl IntoView {
             // content has landed since they last looked at the bottom.
             <Show when=move || unseen_below.get() && !stuck_to_bottom.get()>
                 <button
-                    class="absolute left-1/2 -translate-x-1/2 bottom-3 z-10
+                    class="absolute left-1/2 -translate-x-1/2 bottom-[calc(var(--composer-clearance,150px)+0.5rem)] z-10
                            px-3 py-1.5 rounded-full text-xs font-medium
                            bg-primary text-white shadow-md hover:bg-primary-hover
                            transition-all flex items-center gap-1"

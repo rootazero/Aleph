@@ -1,14 +1,19 @@
 //
-// Theme picker — a topbar popover that controls two of the appearance axes:
-//   • Mode   : System / Light / Dark / Glass (Glass = dark-based intensified glass)
-//   • Accent : Mauve / Ocean / Forest / Sunset / Rose
+// Theme picker — a topbar popover that controls three of the appearance axes:
+//   • Mode     : System / Light / Dark
+//   • Material : Luxe / Liquid / Aurora
+//   • Accent   : Mauve / Ocean / Forest / Sunset / Rose
 //
 // The read/apply/persist logic + enums live in `crate::appearance` (the single
 // source of appearance truth, shared with the Appearance settings page and the
 // boot replay in `lib.rs`). This component only owns the popover UI and the
 // circular View-Transition reveal animation.
 //
-use crate::appearance::{apply_accent, apply_mode, read_accent, read_mode, Accent, ThemeMode};
+use crate::appearance::{
+    apply_accent, apply_material, apply_mode, read_accent, read_material, read_mode, Accent,
+    Material, ThemeMode,
+};
+use crate::components::ui::SwatchButton;
 use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
@@ -89,6 +94,7 @@ fn animated_apply(client_x: f64, client_y: f64, apply: impl FnOnce() + 'static) 
 pub fn ThemeToggle() -> impl IntoView {
     let mode = RwSignal::new(read_mode());
     let accent = RwSignal::new(read_accent());
+    let material = RwSignal::new(read_material());
     let open = RwSignal::new(false);
 
     let current_swatch = move || accent.get().swatch().to_string();
@@ -134,7 +140,7 @@ pub fn ThemeToggle() -> impl IntoView {
                         <p class="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
                             "外观"
                         </p>
-                        <div class="grid grid-cols-2 gap-1">
+                        <div class="grid grid-cols-3 gap-1">
                             {ThemeMode::ALL
                                 .into_iter()
                                 .map(|m| {
@@ -147,8 +153,46 @@ pub fn ThemeToggle() -> impl IntoView {
                                                 animated_apply(x, y, move || apply_mode(m));
                                                 mode.set(m);
                                             }
+                                            aria-pressed=move || is_active().to_string()
                                             class=move || {
-                                                let base = "px-2 py-1.5 rounded-lg text-xs font-medium transition-colors";
+                                                let base = "px-1 py-1.5 rounded-lg text-xs font-medium transition-colors";
+                                                if is_active() {
+                                                    format!("{base} bg-primary text-white")
+                                                } else {
+                                                    format!("{base} text-text-secondary hover:bg-surface-sunken")
+                                                }
+                                            }
+                                        >
+                                            {m.label()}
+                                        </button>
+                                    }
+                                })
+                                .collect::<Vec<_>>()}
+                        </div>
+                    </div>
+
+                    // Material
+                    <div>
+                        <p class="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+                            "材质"
+                        </p>
+                        <div class="grid grid-cols-3 gap-1">
+                            {Material::ALL
+                                .into_iter()
+                                .map(|m| {
+                                    let is_active = move || material.get() == m;
+                                    view! {
+                                        <button
+                                            on:click=move |ev: web_sys::MouseEvent| {
+                                                let x = ev.client_x() as f64;
+                                                let y = ev.client_y() as f64;
+                                                animated_apply(x, y, move || apply_material(m));
+                                                material.set(m);
+                                            }
+                                            aria-pressed=move || is_active().to_string()
+                                            class=move || {
+                                                // px-1: 4-CJK labels need the extra 8px in a third-width column (same as the Mode row)
+                                                let base = "px-1 py-1.5 rounded-lg text-xs font-medium transition-colors";
                                                 if is_active() {
                                                     format!("{base} bg-primary text-white")
                                                 } else {
@@ -173,28 +217,19 @@ pub fn ThemeToggle() -> impl IntoView {
                             {Accent::ALL.into_iter().map(|a| {
                                 let is_active = move || accent.get() == a;
                                 view! {
-                                    <button
-                                        on:click=move |ev: web_sys::MouseEvent| {
+                                    <SwatchButton
+                                        background=a.swatch()
+                                        face="w-6 h-6 rounded-full transition-transform group-hover:scale-110"
+                                        ring_offset="ring-offset-surface-overlay"
+                                        title=a.label()
+                                        active=Signal::derive(is_active)
+                                        on_pick=move |ev: web_sys::MouseEvent| {
                                             let x = ev.client_x() as f64;
                                             let y = ev.client_y() as f64;
                                             animated_apply(x, y, move || apply_accent(a));
                                             accent.set(a);
                                         }
-                                        title=a.label()
-                                        class="flex flex-col items-center gap-1 group"
-                                    >
-                                        <span
-                                            class=move || {
-                                                let base = "w-6 h-6 rounded-full transition-transform group-hover:scale-110";
-                                                if is_active() {
-                                                    format!("{base} ring-2 ring-offset-2 ring-offset-surface-overlay ring-text-primary")
-                                                } else {
-                                                    format!("{base} ring-1 ring-border")
-                                                }
-                                            }
-                                            style=format!("background: {}", a.swatch())
-                                        />
-                                    </button>
+                                    />
                                 }
                             }).collect::<Vec<_>>()}
                         </div>
