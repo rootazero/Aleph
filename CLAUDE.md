@@ -171,7 +171,7 @@
 
 > **分发形态**: Aleph 发布三类产物（同一 tag 一并出）：**完整桌面 App**（macOS `.dmg` / Windows `.msi` / Linux `.deb`，通过 Tauri `externalBin` 内置 `aleph-server`，单机零配置，首次启动自动拉起并接管旧 daemon）、**Aleph Panel 纯壳 App**（`embedded-core` feature 关闭，不带 server，连接局域网内任一 `aleph-server`）、**独立 `aleph-server` 二进制**（`scripts/install.sh` 经 `curl | bash` 安装，用于服务器 / NAS 部署）。
 >
-> **信任模型 = 网络边界**：server 默认只绑 `127.0.0.1`（只信本机）；在 `~/.aleph/config.toml` 写一行 `[gateway] host = "0.0.0.0"` 即显式开放整个局域网——**局域网内任何设备由此获得对 agent 的完全控制权**（含 PTY/shell 执行，无方法级门槛）。唯一保留的协议护栏是 WS Origin 校验（`src/gateway/origin_policy.rs`，挡公网恶意网页跨源驱动 agent 及 DNS rebinding，`[gateway] allow_any_origin = true` 可关）。详见 [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)。
+> **信任模型 = 网络边界**：server 默认只绑 `127.0.0.1`（只信本机）；在 `~/.aleph/config.toml` 写一行 `[gateway] host = "0.0.0.0"` 即显式开放整个局域网——**局域网内任何设备由此获得对 agent 的完全控制权**（含 PTY/shell 执行，无方法级门槛）。唯一保留的协议护栏是 WS Origin 校验（`src/gateway/origin_policy.rs`，挡公网恶意网页**跨源**驱动 agent；注：经典 DNS-rebinding 需 Host 白名单才能根治，当前未实现——loopback 默认下风险有限、LAN 模式更需留意，详见 SECURITY.md。`[gateway] allow_any_origin = true` 可关）。详见 [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)。
 
 > **⚠️ Panel ↔ Daemon 资源嵌入链**: Panel UI（`interfaces/webchat/dist/*`）通过 `rust_embed`（`src/gateway/control_plane/assets.rs`）在 **`aleph-server` 编译时** 静态嵌入到二进制；运行中的 daemon **不会** 从磁盘读取 dist/*。改完 panel 源码后看不到效果，几乎都是漏了重编 binary 这一步。完整刷新链：
 >

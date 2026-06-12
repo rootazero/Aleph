@@ -4,13 +4,14 @@ name: Aleph Release
 # Version is read from the VERSION file in the repo root.
 #
 # The `publish` input selects the run mode:
-#   off (default) — build the three desktop apps and upload artifacts only
+#   off (default) — build all three deliverables and upload artifacts only
 #                   (CI verification: no tag, no GitHub Release).
 #   on            — also tag the commit and publish a GitHub Release.
 #
-# Aleph ships as a native desktop app per platform: the Tauri shell bundles
-# the `aleph-server` daemon (and, on macOS, the Swift bridge) inside the app.
-# There is no separate bash-script install path.
+# Aleph ships three deliverables from one tag: the full desktop app (the Tauri
+# shell bundles the `aleph-server` daemon — and, on macOS, the Swift bridge —
+# inside the app), the Aleph Panel lite shell (no bundled daemon), and the
+# standalone `aleph-server` binary with `scripts/install.sh` for curl | bash.
 on:
   workflow_dispatch:
     inputs:

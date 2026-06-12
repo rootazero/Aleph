@@ -844,13 +844,22 @@ validation on the browser surface. It guards against the public internet,
 | **loopback** (`127.0.0.0/8`, `::1`, `localhost`, `*.localhost`) | allow | Same-machine UI. |
 | **`tauri:` scheme** | allow | The desktop shell's own webview origin, unspoofable by a remote page. |
 | **exact allow-list match** (`[gateway] allowed_origins`) | allow | Operator-configured extra origins for split panel/API deployments. |
-| **same-origin** (Origin authority == request `Host`) | allow | Remote deployments served from their own domain work without config; the DNS-rebinding defence (a page at `evil.com` carries `Origin: …evil.com`, never matching the gateway's own Host). |
+| **same-origin** (Origin authority == request `Host`) | allow | Remote deployments served from their own domain work without config; blocks the cross-origin confused-deputy (a page at `evil.com` carries `Origin: …evil.com`, never matching the gateway's own Host). |
 | anything else (public web domain) | **deny** | |
 
 Note the gate does **not** auto-allow arbitrary private-LAN IPs by range —
 a cross-origin browser request from another LAN host is only accepted when
 it is same-origin with the gateway's `Host`, in the allow-list, or
 loopback/`tauri:`. Native LAN clients carry no `Origin` and pass freely.
+
+> **Limitation — classic DNS-rebinding.** The same-origin rule defeats the
+> cross-origin confused-deputy, but not classic DNS-rebinding: if an attacker
+> rebinds `evil.com` to the gateway's own address, the victim's page then
+> carries `Origin == Host == evil.com` and passes. Fully closing this needs a
+> **Host allow-list** (rejecting `Host` headers whose name isn't a known
+> gateway name), which Aleph does not currently enforce. Under the default
+> loopback bind this requires a targeted local attack; it is most relevant in
+> LAN mode (`host = "0.0.0.0"`).
 
 **Escape hatch — `allow_any_origin`.** Set `[gateway] allow_any_origin =
 true` to trust every Origin unconditionally

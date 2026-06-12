@@ -124,9 +124,11 @@ impl OriginPolicy {
         }
 
         // Same-origin: the Origin's authority (host[:port]) equals the request
-        // Host header. This is the DNS-rebinding defence — a page at
-        // evil.com hitting a victim gateway carries `Origin: …evil.com` which
-        // never matches the gateway's own Host.
+        // Host header. This blocks the cross-origin confused-deputy — a page at
+        // evil.com carries `Origin: …evil.com`, which never matches the
+        // gateway's own Host. (Classic DNS-rebinding — evil.com rebound to the
+        // gateway's own address so Origin == Host — is NOT caught here; that
+        // needs a Host allow-list, which is not currently enforced.)
         if let Some(host) = host {
             if let Some(authority) = uri.authority() {
                 if authority.as_str().eq_ignore_ascii_case(host.trim()) {
