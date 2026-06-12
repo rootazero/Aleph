@@ -202,6 +202,8 @@
 
 > **可选预检**：发布前可先跑 `just verify-build`，以 build-only 模式在 CI 上构建**三产物 × 三平台**（完整 App / Panel 纯壳 App / 独立 server，只构建 + 传 artifacts，不打 tag、不发布），确认都能正常构建后再 `just release`。同一 workflow（`aleph-app-release.yml`）的 `publish` 输入：`off`=纯验证，`on`=`just release` 走的发布模式。
 
+> **监控 CI（每次发版复用）**：用 `python3 scripts/poll_release_run.py`（不带参数自动选最新 run）做 **fail-fast 轮询**——job 级检查，任一平台 job 失败/取消立即退出并打印是哪个平台，而不是像 `gh run watch --exit-status` 那样整轮（~33 分钟）才返回、漏报单平台早败。脚本内部循环、守 gh 空响应/超时（开发网络有过 DNS/代理瞬断），budget（默认 540s）用尽后打印 `RESULT=STILL_RUNNING`，直接再跑一次即可。最后一行 `RESULT=COMPLETED conclusion=success` 全绿 / `RESULT=FAILED` 附失败 job 名。**平台门控陷阱**：CI 失败常是 `#[cfg(target_os)]` 分支里的 `const fn` 调运行时函数——本地 macOS 不编译该分支故看不见，失败后一次性 grep `desktop/{linux,windows,shell,shared}` 全部 const fn 亲读每个 body。
+
 ### Feature Flags
 
 所有生产功能始终编译，无需 feature flags。仅保留测试用 features：`loom` (并发测试)、`test-helpers` (集成测试工具)。
