@@ -838,7 +838,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Some(note_memory_dir.clone()),
         Some(sandbox.clone()),
     )
-    .await;
+    .await?;
 
     if let Some(ref arena_mgr) = agent_result.arena_manager {
         register_arena_handlers(&mut server, arena_mgr);

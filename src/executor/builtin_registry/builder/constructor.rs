@@ -4,6 +4,7 @@
 //! Contains the `with_config()` constructor that wires up all tool instances
 //! and registers their metadata.
 
+use crate::error::AlephError;
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
@@ -38,7 +39,7 @@ impl BuiltinToolRegistry {
     /// - File operations are sandboxed by `PathPermissionChecker`
     /// - Tool policy is enforced layered (Guardrails + Sandbox + `ApprovalGate`).
     ///   See docs/reference/SANDBOX.md.
-    pub async fn with_config(config: BuiltinToolConfig) -> Self {
+    pub async fn with_config(config: BuiltinToolConfig) -> crate::error::Result<Self> {
         let search_tool = if let Some(ref registry) = config.search_registry {
             SearchTool::with_registry(Arc::clone(registry))
         } else {
@@ -244,10 +245,10 @@ impl BuiltinToolRegistry {
         let goal_store = Arc::new(
             crate::goal::GoalStore::open(
                 &crate::utils::paths::get_data_dir()
-                    .expect("open goal store: data dir unavailable")
+                    .map_err(|e| AlephError::other(format!("goal store data dir: {e}")))?
                     .join("goals.db"),
             )
-            .expect("open goal store"),
+            .map_err(|e| AlephError::other(format!("goal store open: {e}")))?,
         );
         crate::goal::init_global(goal_store.clone());
         let goal_tool = crate::builtin_tools::GoalTool::new(goal_store);
@@ -328,14 +329,14 @@ impl BuiltinToolRegistry {
             );
             let ws_handle = search_tool.default_workspace_handle();
             let sk_handle = search_tool.default_session_key_handle();
-            let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                dirs::home_dir().map_or_else(|| {
-                        std::env::temp_dir()
-                            .join("aleph")
-                            .join("memory")
-                            .join("note")
-                    }, |p| p.join(".aleph").join("memory").join("note"))
-            });
+        let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+            dirs::home_dir().map_or_else(|| {
+                    std::env::temp_dir()
+                        .join("aleph")
+                        .join("memory")
+                        .join("note")
+                }, |p| p.join(".aleph").join("memory").join("note"))
+        });
             let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string());
             let explore_tool = MemoryExploreTool::new(db.clone(), Arc::clone(embedder));
             info!("Created memory_search, memory_browse, and memory_explore tools");
@@ -354,7 +355,7 @@ impl BuiltinToolRegistry {
                             .join("memory")
                             .join("note")
                     }, |p| p.join(".aleph").join("memory").join("note"))
-            });
+        });
             let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string());
             info!("Created memory_browse tool (no embedder for memory_search)");
             (None, Some(browse_tool), None, None, None)
@@ -1673,7 +1674,7 @@ impl BuiltinToolRegistry {
             .clone()
             .or_else(|| Some(crate::builtin_tools::agent_manage::new_tool_policy_handle()));
 
-        Self {
+        Ok(Self {
             search_tool,
             web_fetch_tool,
             file_ops_tool,
@@ -1890,6 +1891,6 @@ impl BuiltinToolRegistry {
             media_pipeline: config.media_pipeline.clone(),
             recall_context_db: config.memory_db.clone(),
             tools,
-        }
+        })
     }
 }

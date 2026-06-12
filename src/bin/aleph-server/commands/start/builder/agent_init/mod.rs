@@ -137,7 +137,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     note_memory_dir: Option<std::path::PathBuf>,
     // Phase 3 Task 8: sandbox for exec-class tools.
     sandbox: Option<Arc<dyn alephcore::sandbox::Sandbox>>,
-) -> AgentHandlersResult {
+) -> alephcore::Result<AgentHandlersResult> {
     // Assigned in both the real-execution branch and the simulated branch
     // below; deferred init keeps the dead initial value out (and lets the
     // compiler prove both modes set it before the `.expect(...)` read).
@@ -543,7 +543,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 .map(std::sync::Arc::new),
             ..Default::default()
         };
-        let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;
+        let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await?;
 
         use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
         use alephcore::tool_metadata::{ToolSource, UnifiedTool};
@@ -2158,7 +2158,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         println!("  Gateway readiness: signaled (ready=true)");
     }
 
-    AgentHandlersResult {
+    Ok(AgentHandlersResult {
         _run_manager: run_manager
             .expect("run_manager must be set in both real and simulated modes"),
         execution_adapter: exec_adapter,
@@ -2189,5 +2189,5 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         memory_context_provider: mcp_for_orchestrator,
         memory_backend: Some(memory_db.clone()),
         arena_manager: Some(arena_manager),
-    }
+    })
 }

@@ -371,7 +371,7 @@ pub struct BuiltinToolRegistry {
 
 impl BuiltinToolRegistry {
     /// Create a new registry with default configuration
-    pub async fn new() -> Self {
+    pub async fn new() -> crate::error::Result<Self> {
         Self::with_config(BuiltinToolConfig::default()).await
     }
 

@@ -38,7 +38,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_registry_creation() {
-        let registry = BuiltinToolRegistry::new().await;
+        let registry = BuiltinToolRegistry::new().await.unwrap();
 
         // Verify all tools are registered
         assert!(registry.get_tool("search").is_some());
@@ -54,7 +54,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_metadata() {
-        let registry = BuiltinToolRegistry::new().await;
+        let registry = BuiltinToolRegistry::new().await.unwrap();
 
         let search = registry.get_tool("search").unwrap();
         assert_eq!(search.name, "search");
@@ -64,7 +64,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unknown_tool_returns_error() {
-        let registry = BuiltinToolRegistry::new().await;
+        let registry = BuiltinToolRegistry::new().await.unwrap();
 
         let result = registry
             .execute_tool("nonexistent", serde_json::json!({}))
@@ -78,7 +78,7 @@ mod tests {
     #[tokio::test]
     async fn test_meta_tools_not_registered_without_tool_catalog() {
         // Without tool catalog, meta tools should not be registered
-        let registry = BuiltinToolRegistry::new().await;
+        let registry = BuiltinToolRegistry::new().await.unwrap();
 
         assert!(registry.get_tool("list_tools").is_none());
         assert!(registry.get_tool("search_tools").is_none());
@@ -93,7 +93,7 @@ mod tests {
             tool_catalog: Some(tool_catalog),
             ..Default::default()
         };
-        let registry = BuiltinToolRegistry::with_config(config).await;
+        let registry = BuiltinToolRegistry::with_config(config).await.unwrap();
 
         assert!(registry.get_tool("list_tools").is_some());
         assert!(registry.get_tool("search_tools").is_some());
@@ -265,9 +265,7 @@ mod tests {
         async fn test_sessions_tools_always_registered_metadata() {
             // Sessions tool metadata is always registered (so LLM sees them),
             // but execution fails without GatewayContext injection.
-            let registry = BuiltinToolRegistry::new().await;
-
-            // Metadata present
+            let registry = BuiltinToolRegistry::new().await.unwrap();
             assert!(registry.get_tool("session_list").is_some());
             assert!(registry.get_tool("session_send").is_some());
 
@@ -286,7 +284,7 @@ mod tests {
                 gateway_context: Some(gateway_context),
                 ..Default::default()
             };
-            let registry = BuiltinToolRegistry::with_config(config).await;
+            let registry = BuiltinToolRegistry::with_config(config).await.unwrap();
 
             assert!(registry.get_tool("session_list").is_some());
             assert!(registry.get_tool("session_send").is_some());
@@ -304,7 +302,7 @@ mod tests {
         #[tokio::test]
         async fn test_sessions_list_execution_without_context() {
             // Without gateway_context, session.list should fail with error
-            let registry = BuiltinToolRegistry::new().await;
+            let registry = BuiltinToolRegistry::new().await.unwrap();
 
             let result = registry
                 .execute_tool("session_list", serde_json::json!({}))
@@ -326,7 +324,7 @@ mod tests {
                 gateway_context: Some(gateway_context),
                 ..Default::default()
             };
-            let registry = BuiltinToolRegistry::with_config(config).await;
+            let registry = BuiltinToolRegistry::with_config(config).await.unwrap();
 
             let result = registry
                 .execute_tool("session_list", serde_json::json!({}))

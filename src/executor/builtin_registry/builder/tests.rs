@@ -25,6 +25,7 @@ mod spec3_tool_gating_tests {
             ..Default::default()
         })
         .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -131,6 +132,7 @@ mod agent_info_wiring_tests {
             ..Default::default()
         })
         .await
+        .unwrap()
     }
 
     #[tokio::test]
