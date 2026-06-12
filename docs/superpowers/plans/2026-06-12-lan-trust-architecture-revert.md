@@ -354,8 +354,10 @@ OriginPolicy 装配点（`grep -rn "OriginPolicy::new\|origin_policy" src/bin/ s
 
 ```bash
 cd src/gateway/security && ls | grep -v -e "^crypto.rs$" -e "^mod.rs$" | xargs git rm -r && cd -
-git rm src/gateway/device_store.rs src/gateway/pairing_store.rs src/gateway/trusted_proxy.rs
+git rm src/gateway/device_store.rs src/gateway/trusted_proxy.rs
 ```
+
+> **T3 审查修正（2026-06-12）**：原文此处还删 `src/gateway/pairing_store.rs`——那是**计划错误**。该文件是 **channel 发送者配对** store（`channel.pairing.*`，被 `inbound_router/{mod,permission,types}.rs`、`start/mod.rs`、`builder/subsystems.rs` 消费，属 spec §4.2 "session/channel/execution 全部不动"的保留范围），与设备认证配对（`security/store/pairing.rs`、`security/pairing.rs`，本步删除）是两套东西。**不要删 `pairing_store.rs` 和 `handlers/pairing.rs`**（后者 T3 已据此保留）。
 
 `security/mod.rs` 改写为仅 `pub mod crypto;`（保留文件头注释里 crypto 相关部分）。
 

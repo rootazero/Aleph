@@ -56,7 +56,8 @@
 - `src/gateway/handlers/auth/` 整目录：connect 的 challenge/token/pairing 分支、bootstrap、devices、tier。`connect` 作为协议方法保留但简化为"无凭据，直接返回 hello/会话信息"（精简后的 handler 移出 auth/ 目录，落点由实现计划定，倾向并入 hello_snapshot 一侧）
 - `src/gateway/security/` **除 `crypto.rs` 外**全删：token、pairing、device、brute_force、guest_session_manager、invitation_manager、policy_engine、identity_map、activity_log、activity_logger、shared_token、token_readonly
   - ⚠️ `crypto.rs` 被 `src/secrets/vault.rs`、飞书 webhook、WhatsApp vault_store 使用，必须保留
-- `src/gateway/` 根：`auth_middleware.rs`（486）、`bootstrap.rs`（160）、`challenge.rs`（334）、`device_store.rs`（334）、`pairing_store.rs`（472）、`method_authz.rs`（361）、`pair_loop_guard.rs`、`trusted_proxy.rs`（178）、`auth_probe_tests.rs`（1043）
+- `src/gateway/` 根：`auth_middleware.rs`（486）、`bootstrap.rs`（160）、`challenge.rs`（334）、`device_store.rs`（334）、`method_authz.rs`（361）、`pair_loop_guard.rs`、`trusted_proxy.rs`（178）、`auth_probe_tests.rs`（1043）
+  - ~~`pairing_store.rs`（472）~~ **T3 审查修正（2026-06-12）：不删**。该文件是 channel 发送者配对 store（`channel.pairing.*`，inbound router 消费，属 §4.2 保留范围），与设备认证配对（`security/` 内，删）是两套东西；原列入系混淆。`src/gateway/handlers/pairing.rs` 同理保留
 - `caller_identity` 简化：所有请求隐式为 owner（仅 3 个文件涉及）
 - CLI：`aleph auth *`、`aleph-server bootstrap-url`、配对/设备子命令全删；`aleph open` 保留但去掉 nonce（纯粹开浏览器到 server URL）
 - Panel 路由：`/pair` 页面、`/auth/bootstrap`、`?token=` 处理全部消失
