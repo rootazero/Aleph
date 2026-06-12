@@ -28,6 +28,10 @@ required-features = ["sherpa"]
 name = "mem_spike"
 required-features = ["sherpa"]
 
+[[example]]
+name = "melo_spike"
+required-features = ["sherpa"]
+
 [dependencies]
 sherpa-rs = { version = "0.6", optional = true }
 tokio = { workspace = true }

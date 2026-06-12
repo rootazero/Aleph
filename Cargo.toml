@@ -18,6 +18,8 @@ members = [
     "interfaces/cli",
     "interfaces/tui",
     "interfaces/webchat",
+
+    "aleph-voice",
 ]
 
 [workspace.package]
