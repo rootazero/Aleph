@@ -36,13 +36,20 @@ pub struct OriginPolicy {
     /// against the raw `Origin` header. Empty ⇒ only same-origin / loopback /
     /// `tauri:` are accepted.
     allowed: Vec<String>,
+    /// Escape hatch: when true, every Origin passes unconditionally.
+    /// Opt-in only via [`OriginPolicy::allow_any`]; all other constructors
+    /// leave it false.
+    allow_any: bool,
 }
 
 impl OriginPolicy {
     /// Build from the configured extra-origin allow-list.
     #[must_use]
     pub const fn new(allowed: Vec<String>) -> Self {
-        Self { allowed }
+        Self {
+            allowed,
+            allow_any: false,
+        }
     }
 
     /// Policy with no extra origins — same-origin, loopback and `tauri:` only.
@@ -50,6 +57,17 @@ impl OriginPolicy {
     pub const fn loopback_only() -> Self {
         Self {
             allowed: Vec::new(),
+            allow_any: false,
+        }
+    }
+
+    /// Escape hatch: trust every Origin. For users who front the gateway
+    /// with their own reverse proxy / auth layer.
+    #[must_use]
+    pub const fn allow_any() -> Self {
+        Self {
+            allowed: Vec::new(),
+            allow_any: true,
         }
     }
 
@@ -61,6 +79,9 @@ impl OriginPolicy {
     /// allow-list pass.
     #[must_use]
     pub fn is_allowed(&self, origin: Option<&str>, host: Option<&str>) -> bool {
+        if self.allow_any {
+            return true;
+        }
         let Some(origin) = origin else {
             // Non-browser client: no Origin header. Browsers always send one.
             return true;
@@ -196,5 +217,25 @@ mod tests {
         let p = OriginPolicy::loopback_only();
         assert!(!p.is_allowed(Some("not a uri"), Some("127.0.0.1")));
         assert!(!p.is_allowed(Some("ftp://127.0.0.1"), None));
+    }
+
+    #[test]
+    fn allow_any_origin_bypasses_all_checks() {
+        let policy = OriginPolicy::allow_any();
+        // A hostile public-web Origin with a mismatched Host passes when the
+        // escape hatch is on (reverse-proxy deployments terminate trust
+        // upstream of the gateway).
+        assert!(policy.is_allowed(Some("https://evil.example.com"), Some("10.0.0.6:18790")));
+        // Even malformed origins pass — the hatch short-circuits everything.
+        assert!(policy.is_allowed(Some("not a uri"), None));
+    }
+
+    #[test]
+    fn default_constructors_do_not_allow_any() {
+        // Regression guard: the escape hatch must be opt-in only.
+        assert!(!OriginPolicy::loopback_only()
+            .is_allowed(Some("https://evil.example.com"), Some("10.0.0.6:18790")));
+        assert!(!OriginPolicy::new(vec![])
+            .is_allowed(Some("https://evil.example.com"), Some("10.0.0.6:18790")));
     }
 }
