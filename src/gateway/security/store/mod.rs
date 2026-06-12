@@ -6,6 +6,13 @@
 //! master key (shared-token chain), cluster-node device records, channel
 //! policies, and the security audit log. Device-auth tokens, HTTP sessions,
 //! and device pairing requests were removed with the authentication layer.
+//!
+//! Legacy tables: the migration chain below still creates `sessions`,
+//! `tokens`, and `pairing_requests` (SCHEMA_V2/V3) and v9/v10 still rebuild
+//! `pairing_requests` for the 'browser'/'node' CHECK variants, but no code
+//! on HEAD reads or writes these three tables anymore. The migrations are
+//! kept solely so existing databases upgrade cleanly — do not wire new
+//! features to these tables.
 
 use crate::sync_primitives::Mutex;
 use rusqlite::{Connection, Result as SqliteResult};
