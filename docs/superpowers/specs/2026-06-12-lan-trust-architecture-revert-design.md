@@ -71,6 +71,8 @@
   2. 放行 Origin host 为 localhost（含 `127.0.0.0/8`、`::1`、`localhost` 字面量）或私网 IP 字面量（`10.x` / `192.168.x` / `172.16-31.x`）的请求
   3. 其余拒绝（公网域名 Origin 全部命中此条——攻击页 Origin 是域名不是私网 IP 字面量）
   4. `[gateway] allow_any_origin = true` 逃生口（默认 false）
+
+  > **实现注（计划阶段核实）**：现有 `origin_policy.rs` 的"无 Origin / loopback / `tauri:` / 同源 / 显式 allowlist"规则已等价覆盖上述 1-3 条的安全目标（合法 LAN 浏览器访问天然同源，公网域名 Origin 与 Host 不符被拒，DNS rebinding 同理）——无需新增私网 IP 字面量判断，唯一改动是新增第 4 条逃生口。
 - 工具权限层（ScopedToolService、channel_policy）、admin_api（CLI IPC）、rate_limiter、mdns_broadcaster（纯壳自动发现要用）、tailscale.rs、session/channel/execution 全部不动
 
 ### 4.3 Panel 侧（interfaces/webchat）
