@@ -361,6 +361,8 @@ git rm src/gateway/device_store.rs src/gateway/trusted_proxy.rs
 
 > **T3 审查修正（2026-06-12）**：原文此处还删 `src/gateway/pairing_store.rs`——那是**计划错误**。该文件是 **channel 发送者配对** store（`channel.pairing.*`，被 `inbound_router/{mod,permission,types}.rs`、`start/mod.rs`、`builder/subsystems.rs` 消费，属 spec §4.2 "session/channel/execution 全部不动"的保留范围），与设备认证配对（`security/store/pairing.rs`、`security/pairing.rs`，本步删除）是两套东西。**不要删 `pairing_store.rs` 和 `handlers/pairing.rs`**（后者 T3 已据此保留）。
 
+> **T5 执行修正（2026-06-12，方案 B 重定范围）**：implementer BLOCKED 升级证实 `security/shared_token.rs` 是**生产密钥保险库本体**（SecretVault 宿主 + vault 主密钥经 `store/` 持久化，合计 ~50+ 保留范围消费者），照原清单删除会毁掉 providers/OAuth/channel 的全部密钥存储。裁决：**保留 `shared_token.rs`、`store/`（整个）、`token_readonly.rs`（admin IPC bearer）、`crypto.rs`**；只删纯 auth 模块（上行 Step 4 命令需排除这四者）。级联删除：`gateway/session.rs`（HTTP cookie 会话，T4 后零消费者）、`handlers/guests.rs`、`wizard/flows/pairing.rs`、前拉 T6 的 4 个 server 侧 CLI 文件。`AuthContext` 收缩为 `{shared_token_mgr, security_store, node_registry}` 三字段；`initialize_auth`→`initialize_vault`。实际落地：commits `5b37242a4` + `6fdd7810f`（47 文件，净 −7,185 行）。Vault 抽离 = 未来独立任务。
+
 `security/mod.rs` 改写为仅 `pub mod crypto;`（保留文件头注释里 crypto 相关部分）。
 
 - [ ] **Step 5: 编译收敛**

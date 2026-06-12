@@ -54,8 +54,9 @@
 ### 4.1 删除清单（约 13,000 行，含 ~1k 行 auth 测试）
 
 - `src/gateway/handlers/auth/` 整目录：connect 的 challenge/token/pairing 分支、bootstrap、devices、tier。`connect` 作为协议方法保留但简化为"无凭据，直接返回 hello/会话信息"（精简后的 handler 移出 auth/ 目录，落点由实现计划定，倾向并入 hello_snapshot 一侧）
-- `src/gateway/security/` **除 `crypto.rs` 外**全删：token、pairing、device、brute_force、guest_session_manager、invitation_manager、policy_engine、identity_map、activity_log、activity_logger、shared_token、token_readonly
+- `src/gateway/security/` 删**纯 auth 模块**：token、pairing、device、brute_force、guest_session_manager、invitation_manager、policy_engine、identity_map、activity_log、activity_logger
   - ⚠️ `crypto.rs` 被 `src/secrets/vault.rs`、飞书 webhook、WhatsApp vault_store 使用，必须保留
+  - **T5 审查修正（2026-06-12，方案 B）**：~~shared_token、token_readonly~~ **不删**。`shared_token.rs` 是生产密钥保险库本体（SecretVault 宿主，54 个消费者：providers/OAuth/channel 密钥/vault_store 工具/语音），`store/` 是保险库主密钥持久层 + cluster 设备记录（32 个消费者），`token_readonly.rs` 是 admin IPC bearer 查找（§4.2 "admin_api 不动"）——三者属 vault 链非设备认证，原列入系把"token=认证凭据"与"token=vault 主密钥"混淆。**Vault 抽离到 `src/secrets/` 是刻意推迟的未来工作，不属本次回退**。级联：`gateway/session.rs`（HTTP cookie 会话，T4 后零消费者）、`handlers/guests.rs`、`wizard/flows/pairing.rs` 一并删除
 - `src/gateway/` 根：`auth_middleware.rs`（486）、`bootstrap.rs`（160）、`challenge.rs`（334）、`device_store.rs`（334）、`method_authz.rs`（361）、`trusted_proxy.rs`（178）、`auth_probe_tests.rs`（1043）
   - ~~`pairing_store.rs`（472）~~ **T3 审查修正（2026-06-12）：不删**。该文件是 channel 发送者配对 store（`channel.pairing.*`，inbound router 消费，属 §4.2 保留范围），与设备认证配对（`security/` 内，删）是两套东西；原列入系混淆。`src/gateway/handlers/pairing.rs` 同理保留
   - ~~`pair_loop_guard.rs`~~ **T4 审查修正（2026-06-12）：不删**。channel 适配器 bot↔bot 回复风暴防护（出生提交 `0a8e40389`），被 inbound_router + channel_policy（§4.2 保留）消费，与 HTTP/设备 auth 零关系；同属 channel vs device 混淆
