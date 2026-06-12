@@ -287,6 +287,22 @@ impl VoiceSidecarSupervisor {
             .await?;
         Ok(parse_model_state(&v["tts"]["model_state"]))
     }
+
+    /// STT model state via /voice/status (downloading guard for inbound path).
+    pub async fn stt_model_state(&self) -> anyhow::Result<RemoteModelState> {
+        let ep = self.ensure_endpoint().await?;
+        let client = reqwest::Client::new();
+        let v: serde_json::Value = client
+            .get(format!("{}/voice/status", ep.base_url))
+            .bearer_auth(&ep.token)
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(parse_model_state(&v["stt"]["model_state"]))
+    }
 }
 
 /// Parse the sidecar's tagged ModelState JSON into our subset.

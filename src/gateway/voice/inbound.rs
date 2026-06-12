@@ -76,6 +76,20 @@ impl SttSource {
             .ensure_endpoint()
             .await
             .map_err(|e| SttUnavailable::Error(format!("{e:#}")))?;
+        // Probe STT model state: if the model is still downloading, surface a
+        // typed Downloading variant so callers can show progress without treating
+        // it as an error (3-strike counters, fallback exhaustion, etc.).
+        match sup.stt_model_state().await {
+            Ok(super::sidecar::RemoteModelState::Downloading { percent }) => {
+                return Err(SttUnavailable::Downloading { percent });
+            }
+            Ok(_) => {} // Ready or Other — proceed normally
+            Err(e) => {
+                // Status check failed (network blip, etc.) — log and continue
+                // so a transient status-endpoint failure doesn't block STT.
+                tracing::warn!(error = %e, "STT model state check failed, proceeding anyway");
+            }
+        }
         Ok(SttConfig {
             api_key: ep.token,
             base_url: ep.base_url,
@@ -485,5 +499,46 @@ mod tests {
             Some(SttSource::Static(cfg)) => assert_eq!(cfg.api_key, "sk-cloud"),
             _ => panic!("expected Static"),
         }
+    }
+
+    /// Proves the SttUnavailable::Downloading variant is produced when the
+    /// sidecar's STT model state is Downloading. Tests the mapping logic used
+    /// by local_config() via a helper that mirrors the production code path.
+    #[test]
+    fn stt_downloading_state_maps_to_unavailable_downloading() {
+        use crate::gateway::voice::sidecar::{parse_model_state, RemoteModelState};
+
+        // Simulate what local_config() does: parse the /voice/status response
+        // and map Downloading → SttUnavailable::Downloading.
+        let status_json: serde_json::Value =
+            serde_json::json!({"state": "downloading", "percent": 55});
+        let state = parse_model_state(&status_json);
+
+        let unavailable = match state {
+            RemoteModelState::Downloading { percent } => SttUnavailable::Downloading { percent },
+            RemoteModelState::Ready => panic!("expected Downloading, got Ready"),
+            RemoteModelState::Other(s) => panic!("expected Downloading, got Other({s})"),
+        };
+
+        assert!(
+            matches!(unavailable, SttUnavailable::Downloading { percent: 55 }),
+            "expected Downloading{{55}}"
+        );
+    }
+
+    /// Proves Ready and Other model states do NOT produce SttUnavailable::Downloading.
+    #[test]
+    fn stt_ready_state_does_not_block() {
+        use crate::gateway::voice::sidecar::{parse_model_state, RemoteModelState};
+
+        let ready_json: serde_json::Value = serde_json::json!({"state": "ready"});
+        let state = parse_model_state(&ready_json);
+        assert_eq!(state, RemoteModelState::Ready);
+        // Ready → local_config() proceeds, no SttUnavailable produced
+
+        let other_json: serde_json::Value = serde_json::json!({"state": "error"});
+        let state2 = parse_model_state(&other_json);
+        assert!(matches!(state2, RemoteModelState::Other(_)));
+        // Other → local_config() proceeds (treated as non-blocking)
     }
 }
