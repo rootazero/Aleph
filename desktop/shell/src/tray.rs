@@ -82,6 +82,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             }
             "quit" => app.exit(0),
             "quit_stop" => {
+                // Full app only: stop the bundled daemon before quitting. The
+                // panel-only shell owns no local daemon, so it just exits.
+                #[cfg(feature = "embedded-core")]
                 crate::daemon::stop_daemon();
                 app.exit(0);
             }

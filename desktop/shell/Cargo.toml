@@ -11,6 +11,12 @@ rust-version.workspace = true
 name = "aleph-desktop-shell"
 path = "src/main.rs"
 
+[features]
+default = ["embedded-core"]
+# Bundles + supervises the local aleph-server daemon (full app variant).
+# Build the panel-only shell with --no-default-features.
+embedded-core = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

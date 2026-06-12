@@ -10,7 +10,6 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, Wry};
 
 const ID_SHOW: &str = "menu_show";
-const ID_OPEN_BROWSER: &str = "menu_open_browser";
 const ID_CONNECT_REMOTE: &str = "menu_connect_remote";
 const ID_CONNECT_LOCAL: &str = "menu_connect_local";
 const ID_CHECK_UPDATE: &str = "menu_check_update";
@@ -39,7 +38,6 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::about(app, Some("About Aleph"), None)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, ID_SHOW, "Show Aleph", true, None::<&str>)?,
-            &MenuItem::with_id(app, ID_OPEN_BROWSER, "Open in Browser", true, None::<&str>)?,
             &MenuItem::with_id(
                 app,
                 ID_CONNECT_REMOTE,
@@ -125,7 +123,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     )?;
 
     // Help — external resources. Opens via the system browser (no in-app
-    // navigation away from the Panel), reusing daemon::open_url_in_browser.
+    // navigation away from the Panel), reusing external_link::open_url.
     let help_menu = Submenu::with_items(
         app,
         "Help",
@@ -153,11 +151,6 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 pub fn on_event(app: &AppHandle, id: &str) {
     match id {
         ID_SHOW => crate::focus_window(app),
-        ID_OPEN_BROWSER => {
-            tauri::async_runtime::spawn(async {
-                crate::daemon::open_in_system_browser().await;
-            });
-        }
         ID_CONNECT_REMOTE => {
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(url) = tauri::Url::parse("tauri://localhost/connect.html") {
@@ -172,21 +165,23 @@ pub fn on_event(app: &AppHandle, id: &str) {
         ID_CHECK_UPDATE => crate::update::check_now(app),
         ID_QUIT => app.exit(0),
         ID_QUIT_STOP => {
+            // Full app only: stop the bundled daemon before quitting. The
+            // panel-only shell owns no local daemon, so it just exits.
+            #[cfg(feature = "embedded-core")]
             crate::daemon::stop_daemon();
             app.exit(0);
         }
         ID_RELOAD_PANEL => reload_panel(app),
         #[cfg(debug_assertions)]
         ID_OPEN_DEVTOOLS => open_devtools(app),
-        ID_VISIT_REPO => crate::daemon::open_url_in_browser(REPO_URL),
-        ID_REPORT_ISSUE => crate::daemon::open_url_in_browser(ISSUES_URL),
+        ID_VISIT_REPO => crate::external_link::open_url(REPO_URL),
+        ID_REPORT_ISSUE => crate::external_link::open_url(ISSUES_URL),
         _ => {}
     }
 }
 
-/// Re-fetch the Panel in the current main window. The Panel keeps its
-/// `aleph_session` cookie across this reload — no fresh bootstrap nonce
-/// is needed.
+/// Re-fetch the Panel in the current main window (an in-window reload of the
+/// already-loaded origin).
 fn reload_panel(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;

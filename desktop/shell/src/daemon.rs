@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use url::Url;
 
 const DAEMON_HOST: &str = "127.0.0.1";
 const DAEMON_PORT: u16 = 18790;
@@ -328,126 +327,6 @@ const fn daemon_bin_name() -> &'static str {
     }
 }
 
-/// Construct the URL to navigate the embedded Panel webview to.
-///
-/// `bootstrap_url` (if `Some`) is a full server-issued
-/// `/auth/bootstrap?nonce=…` URL — when present we navigate there
-/// directly so the daemon sets the session cookie, and the Panel never
-/// sees a token in any URL parameter. When `None` we navigate to the
-/// plain Panel URL; an unauthenticated browser is redirected to
-/// `/pair` by the gateway's session middleware.
-///
-/// Phase 4 removed the Phase 1 `legacy_token` parameter; the
-/// `?token=` URL fallback no longer exists.
-pub fn build_panel_url(bootstrap_url: Option<&str>) -> Result<Url, url::ParseError> {
-    if let Some(u) = bootstrap_url {
-        return Url::parse(u);
-    }
-    super::PANEL_URL.parse()
-}
-
-/// Issue a one-time bootstrap nonce via the bundled `aleph-server
-/// bootstrap-url` subcommand and open the resulting loopback URL in
-/// the system browser. Best-effort — failures are logged; user-visible
-/// feedback is a no-op.
-///
-/// Wired to the macOS "Open in Browser" menu item. The same UX is
-/// available on every platform via the `aleph open` CLI subcommand.
-// Only the macOS tray menu wires this today; other platforms reach the same
-// flow via the CLI, so the symbol is dead in those builds.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub async fn open_in_system_browser() {
-    let url = match tokio::task::spawn_blocking(load_bootstrap_url).await {
-        Ok(Some(u)) => u,
-        Ok(None) => {
-            tracing::warn!("cannot open browser: bootstrap-url returned nothing");
-            return;
-        }
-        Err(e) => {
-            tracing::warn!("cannot open browser: bootstrap-url join failed: {e}");
-            return;
-        }
-    };
-    open_url_in_browser(&url);
-}
-
-/// Run `aleph-server bootstrap-url` and parse the single-line URL from
-/// stdout. Returns `None` on any failure so the caller can degrade
-/// gracefully — the user can always run `aleph open` from a terminal,
-/// or open `/pair` in the browser and approve from the desktop app.
-pub fn load_bootstrap_url() -> Option<String> {
-    let bin = resolve_daemon_binary()?;
-    let output = std::process::Command::new(&bin)
-        .arg("bootstrap-url")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        tracing::warn!(
-            status = ?output.status.code(),
-            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
-            "bootstrap-url returned non-zero"
-        );
-        return None;
-    }
-    let raw = String::from_utf8(output.stdout).ok()?;
-    let url = raw.trim();
-    if url.is_empty() {
-        None
-    } else {
-        Some(url.to_string())
-    }
-}
-
-/// Read the auto-provisioned shared token via the bundled `aleph-server
-/// bootstrap-token` subcommand. The token lives in `~/.aleph/data/security.db`
-/// (mode 0600) and is read directly from the DB — no running daemon and no OS
-/// keychain are involved, so this never triggers a Keychain UI prompt. Returns
-/// `None` on first run (before the daemon has provisioned a token).
-pub fn load_shared_token() -> Option<String> {
-    let bin = resolve_daemon_binary()?;
-    let output = std::process::Command::new(&bin)
-        .arg("bootstrap-token")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        tracing::warn!(
-            status = ?output.status.code(),
-            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
-            "bootstrap-token returned non-zero"
-        );
-        return None;
-    }
-    let raw = String::from_utf8(output.stdout).ok()?;
-    let token = raw.trim();
-    if token.is_empty() {
-        None
-    } else {
-        Some(token.to_string())
-    }
-}
-
-/// Cross-platform "open this URL in the default browser" — used by
-/// the menu handler and as the fallback path in `reveal_panel`.
-// Reachable only through the macOS tray menu today; dead in other builds.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub fn open_url_in_browser(url: &str) {
-    let result = if cfg!(target_os = "macos") {
-        std::process::Command::new("open").arg(url).status()
-    } else if cfg!(target_os = "linux") {
-        std::process::Command::new("xdg-open").arg(url).status()
-    } else if cfg!(target_os = "windows") {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .status()
-    } else {
-        tracing::warn!("no system browser launcher for this platform");
-        return;
-    };
-    if let Err(e) = result {
-        tracing::warn!("failed to open browser at {url}: {e}");
-    }
-}
-
 /// Resolve the `aleph-server` binary: the copy bundled next to the shell
 /// executable (Tauri `externalBin`, also where `cargo run` leaves it),
 /// falling back to anything on `PATH`.
@@ -518,32 +397,6 @@ fn spawn_detached(bin: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn build_panel_url_without_bootstrap_is_plain_panel_url() {
-        let url = build_panel_url(None).expect("build url");
-        assert_eq!(url.scheme(), "http");
-        assert_eq!(url.host_str(), Some("127.0.0.1"));
-        assert_eq!(url.port(), Some(18790));
-        assert!(
-            url.query().is_none(),
-            "expected no query, got {:?}",
-            url.query()
-        );
-    }
-
-    #[test]
-    fn build_panel_url_uses_bootstrap_url_when_provided() {
-        let url = build_panel_url(Some("http://127.0.0.1:18790/auth/bootstrap?nonce=abc"))
-            .expect("build url");
-        assert_eq!(url.path(), "/auth/bootstrap");
-        let query = url.query().expect("expected query");
-        assert!(query.contains("nonce=abc"), "got query {query}");
-        assert!(
-            !query.contains("token="),
-            "Phase 4 removed the ?token= URL fallback; got query {query}"
-        );
-    }
 
     #[test]
     fn classify_ready_status_recognises_the_daemon() {

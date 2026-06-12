@@ -27,10 +27,6 @@ pub enum ConnectionTarget {
 }
 
 impl ConnectionTarget {
-    pub const fn is_local(&self) -> bool {
-        matches!(self, Self::Local)
-    }
-
     /// Parse a persisted/user-entered target string. `"local"` (any case) or
     /// empty → Local. Otherwise normalise to a `Remote(Url)`:
     /// accept `host`, `host:port`, `http://host`, `https://host:port`;
@@ -229,12 +225,6 @@ mod tests {
     fn unsupported_scheme_rejected() {
         assert!(ConnectionTarget::parse("ftp://host").is_err());
         assert!(ConnectionTarget::parse("ws://host").is_err());
-    }
-
-    #[test]
-    fn is_local_flag() {
-        assert!(ConnectionTarget::Local.is_local());
-        assert!(!ConnectionTarget::parse("10.0.0.1").unwrap().is_local());
     }
 
     #[test]
