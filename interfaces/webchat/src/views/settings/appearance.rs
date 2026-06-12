@@ -186,6 +186,7 @@ fn ChoiceButton(
     view! {
         <button
             on:click=move |_| on_pick()
+            aria-pressed=move || active.get().to_string()
             class=move || {
                 let base = "px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border";
                 if active.get() {

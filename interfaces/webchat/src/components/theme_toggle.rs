@@ -153,6 +153,7 @@ pub fn ThemeToggle() -> impl IntoView {
                                                 animated_apply(x, y, move || apply_mode(m));
                                                 mode.set(m);
                                             }
+                                            aria-pressed=move || is_active().to_string()
                                             class=move || {
                                                 let base = "px-1 py-1.5 rounded-lg text-xs font-medium transition-colors";
                                                 if is_active() {
@@ -188,6 +189,7 @@ pub fn ThemeToggle() -> impl IntoView {
                                                 animated_apply(x, y, move || apply_material(m));
                                                 material.set(m);
                                             }
+                                            aria-pressed=move || is_active().to_string()
                                             class=move || {
                                                 // px-1: 4-CJK labels need the extra 8px in a third-width column (same as the Mode row)
                                                 let base = "px-1 py-1.5 rounded-lg text-xs font-medium transition-colors";
