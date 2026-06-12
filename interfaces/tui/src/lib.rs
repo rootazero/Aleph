@@ -27,8 +27,8 @@ pub async fn run(
     // Connect to gateway
     let (client, events) = AlephClient::connect(server_url).await?;
 
-    // Authenticate
-    client.authenticate(config).await?;
+    // Handshake (LAN-trust: no credentials)
+    client.handshake(config).await?;
 
     // Determine session key
     let session_key = session

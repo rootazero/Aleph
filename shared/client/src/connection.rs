@@ -41,8 +41,6 @@ pub struct AlephClient {
     _event_tx: mpsc::Sender<StreamEvent>,
     /// Whether client is connected
     connected: Arc<std::sync::atomic::AtomicBool>,
-    /// Authentication token
-    auth_token: Arc<RwLock<Option<String>>>,
 }
 
 impl AlephClient {
@@ -67,7 +65,6 @@ impl AlephClient {
             id_counter: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             _event_tx: event_tx.clone(),
             connected: connected.clone(),
-            auth_token: Arc::new(RwLock::new(None)),
         };
 
         // Spawn read task with write access for responding to Server requests
@@ -321,33 +318,32 @@ impl AlephClient {
         }
     }
 
-    /// Connect and authenticate with the server
-    pub async fn authenticate(&self, config: &CliConfig) -> CliResult<String> {
+    /// Perform the `connect` handshake with the server.
+    ///
+    /// LAN-trust model: the gateway has no authentication. `connect` carries
+    /// no credentials — it only declares a surface identity (`device_name`)
+    /// and receives the session baseline back: `{ role, state_version,
+    /// keepalive }`. No token is minted, stored, or replayed. Returns the
+    /// server-assigned role (always `"operator"` under LAN-trust) so callers
+    /// can surface it.
+    pub async fn handshake(&self, config: &CliConfig) -> CliResult<String> {
         #[derive(Serialize)]
         struct ConnectParams {
-            device_id: String,
             device_name: String,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            token: Option<String>,
         }
 
         #[derive(serde::Deserialize)]
         struct ConnectResult {
-            token: String,
+            #[serde(default)]
+            role: String,
         }
 
         let params = ConnectParams {
-            device_id: config.device_id.clone(),
             device_name: config.device_name.clone(),
-            token: config.auth_token.clone(),
         };
 
         let result: ConnectResult = self.call("connect", Some(params)).await?;
-
-        // Store token
-        *self.auth_token.write().await = Some(result.token.clone());
-
-        Ok(result.token)
+        Ok(result.role)
     }
 
     /// Close the connection

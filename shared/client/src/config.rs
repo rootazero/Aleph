@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::error::{CliError, CliResult};
 
 /// CLI configuration
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CliConfig {
     /// Default server URL
     #[serde(default = "default_server")]
@@ -20,30 +20,12 @@ pub struct CliConfig {
     #[serde(default = "default_device_name")]
     pub device_name: String,
 
-    /// Authentication token (if authenticated)
-    pub auth_token: Option<String>,
-
     /// Default session key
     pub default_session: Option<String>,
 
     /// Client manifest settings
     #[serde(default)]
     pub manifest: ManifestConfig,
-}
-
-// Manual Debug impl so a stray `{:?}` (e.g. in a tracing line) never prints the
-// auth token in cleartext.
-impl std::fmt::Debug for CliConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CliConfig")
-            .field("server", &self.server)
-            .field("device_id", &self.device_id)
-            .field("device_name", &self.device_name)
-            .field("auth_token", &self.auth_token.as_ref().map(|_| "***"))
-            .field("default_session", &self.default_session)
-            .field("manifest", &self.manifest)
-            .finish()
-    }
 }
 
 /// Client manifest configuration
@@ -83,7 +65,6 @@ impl Default for CliConfig {
             server: default_server(),
             device_id: default_device_id(),
             device_name: default_device_name(),
-            auth_token: None,
             default_session: None,
             manifest: ManifestConfig::default(),
         }
@@ -132,8 +113,8 @@ impl CliConfig {
         std::fs::write(&config_path, content)
             .map_err(|e| CliError::Config(format!("Failed to write config: {e}")))?;
 
-        // The config may hold an auth token — restrict to owner read/write so it
-        // isn't world-readable (default file mode is 0644).
+        // Restrict to owner read/write so the config isn't world-readable
+        // (default file mode is 0644).
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -141,11 +122,5 @@ impl CliConfig {
         }
 
         Ok(())
-    }
-
-    /// Update auth token and save
-    pub fn set_auth_token(&mut self, token: String, path: Option<&str>) -> CliResult<()> {
-        self.auth_token = Some(token);
-        self.save(path)
     }
 }
