@@ -467,6 +467,9 @@ async fn handle_connection(
     let rpc_out_tx_replies = rpc_out_tx.clone();
     let rpc_channel = crate::cluster::ReverseRpcChannel::new(rpc_out_tx);
     let rpc_pending = rpc_channel.pending();
+    // Clone kept in scope so a node-shaped connect (params carrying
+    // `commands`/`tags`) can register this same channel into the NodeRegistry.
+    let rpc_channel_for_node = rpc_channel.clone();
     {
         let mut reg = ctx.reverse_rpc.write().await;
         reg.insert(conn_id.clone(), rpc_channel);
@@ -880,21 +883,65 @@ async fn handle_connection(
                                                     }
 
                                                     // Track presence for no-auth connect
-                                                    let conns = ctx.connections.read().await;
-                                                    if let Some(state) = conns.get(&conn_id) {
-                                                        let presence_entry = PresenceEntry {
-                                                            conn_id: conn_id.clone(),
-                                                            device_id: state.device_id.clone(),
-                                                            device_name: state.metadata.get("client_name").cloned().unwrap_or_else(|| "Unknown".to_string()),
-                                                            platform: state.metadata.get("platform").cloned().unwrap_or_else(|| "unknown".to_string()),
-                                                            role: crate::gateway::presence::ConnectionRole::User,
-                                                            connected_at: chrono::Utc::now(),
-                                                            last_heartbeat: chrono::Utc::now(),
-                                                        };
-                                                        drop(conns);
-                                                        ctx.presence.upsert(conn_id.clone(), presence_entry);
-                                                        ctx.state_versions.bump_presence();
-                                                        let _ = ctx.event_bus.publish_json(&TopicEvent::new("presence.joined", serde_json::json!({"conn_id": &conn_id})).with_state_version(ctx.state_versions.snapshot()));
+                                                    {
+                                                        let conns = ctx.connections.read().await;
+                                                        if let Some(state) = conns.get(&conn_id) {
+                                                            let presence_entry = PresenceEntry {
+                                                                conn_id: conn_id.clone(),
+                                                                device_id: state.device_id.clone(),
+                                                                device_name: state.metadata.get("client_name").cloned().unwrap_or_else(|| "Unknown".to_string()),
+                                                                platform: state.metadata.get("platform").cloned().unwrap_or_else(|| "unknown".to_string()),
+                                                                role: crate::gateway::presence::ConnectionRole::User,
+                                                                connected_at: chrono::Utc::now(),
+                                                                last_heartbeat: chrono::Utc::now(),
+                                                            };
+                                                            drop(conns);
+                                                            ctx.presence.upsert(conn_id.clone(), presence_entry);
+                                                            ctx.state_versions.bump_presence();
+                                                            let _ = ctx.event_bus.publish_json(&TopicEvent::new("presence.joined", serde_json::json!({"conn_id": &conn_id})).with_state_version(ctx.state_versions.snapshot()));
+                                                        }
+                                                    }
+
+                                                    // Cluster Phase 0b: token roles are gone, so a
+                                                    // node announces itself by request shape — the
+                                                    // node client always sends `commands` + `tags`
+                                                    // in its connect params, which no other client
+                                                    // does. Register it so it surfaces in
+                                                    // environments.list and becomes reachable via
+                                                    // node_invoke/node_file, emit the
+                                                    // `node.connected` lifecycle event (sibling of
+                                                    // presence.joined), and stamp last_seen for the
+                                                    // offline view.
+                                                    if let Some(node_id) =
+                                                        node_connect_identity(req.params.as_ref(), &conn_id)
+                                                    {
+                                                        if crate::cluster::maybe_register_node(
+                                                            &ctx.node_registry,
+                                                            Some("node"),
+                                                            &node_id,
+                                                            &conn_id,
+                                                            req.params.as_ref(),
+                                                            &rpc_channel_for_node,
+                                                        ) {
+                                                            let name = req
+                                                                .params
+                                                                .as_ref()
+                                                                .and_then(|p| p.get("device_name"))
+                                                                .and_then(|v| v.as_str())
+                                                                .unwrap_or("unknown");
+                                                            let _ = ctx.event_bus.publish_json(&TopicEvent::new(
+                                                                "node.connected",
+                                                                serde_json::json!({"node_id": &node_id, "name": name, "conn_id": &conn_id}),
+                                                            ));
+                                                            // Stamp the node device's last_seen_at so that
+                                                            // once it goes offline, environments.list can
+                                                            // show an honest "last seen".
+                                                            if let Some(tm) = ctx.token_manager.as_ref() {
+                                                                if let Err(e) = tm.touch_device(&node_id) {
+                                                                    debug!("failed to stamp node last_seen on connect for {}: {}", node_id, e);
+                                                                }
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1329,12 +1376,120 @@ fn allow_unauth_browser_pairing(method: &str) -> bool {
     )
 }
 
+/// LAN-trust cluster-node detection at `connect` time.
+///
+/// Token roles are gone, so a cluster node announces itself by request shape:
+/// the node client (`aleph-server node`) always sends `commands` + `tags` in
+/// its connect params, which no other client does. When the shape matches,
+/// returns the id to register the node under — the explicit `device_id` param
+/// when present, else `device_name`, else the connection id (always
+/// available). Returns `None` for every non-node connect.
+fn node_connect_identity(params: Option<&serde_json::Value>, conn_id: &str) -> Option<String> {
+    let p = params?;
+    if p.get("commands").is_none() && p.get("tags").is_none() {
+        return None;
+    }
+    Some(
+        p.get("device_id")
+            .and_then(|v| v.as_str())
+            .or_else(|| p.get("device_name").and_then(|v| v.as_str()))
+            .map_or_else(|| conn_id.to_string(), String::from),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn sa(ip: &str) -> SocketAddr {
         format!("{ip}:0").parse().unwrap()
+    }
+
+    // ── LAN-trust node-shape detection + cluster registration ────────────
+
+    #[test]
+    fn node_connect_identity_detects_commands_or_tags_shape() {
+        // The node client always sends both `commands` and `tags`.
+        let full = serde_json::json!({
+            "token": "stale:sig",
+            "device_name": "build-box",
+            "commands": [],
+            "tags": ["linux"]
+        });
+        assert_eq!(
+            node_connect_identity(Some(&full), "conn-1").as_deref(),
+            Some("build-box")
+        );
+        // Either key alone is enough.
+        let tags_only = serde_json::json!({"device_name": "t", "tags": []});
+        assert!(node_connect_identity(Some(&tags_only), "c").is_some());
+        let commands_only = serde_json::json!({"device_name": "c2", "commands": []});
+        assert!(node_connect_identity(Some(&commands_only), "c").is_some());
+        // Explicit device_id wins over device_name.
+        let with_id = serde_json::json!({
+            "device_id": "node-7", "device_name": "x", "commands": [], "tags": []
+        });
+        assert_eq!(
+            node_connect_identity(Some(&with_id), "c").as_deref(),
+            Some("node-7")
+        );
+        // Neither id nor name → conn_id fallback.
+        let anon = serde_json::json!({"commands": []});
+        assert_eq!(
+            node_connect_identity(Some(&anon), "conn-9").as_deref(),
+            Some("conn-9")
+        );
+    }
+
+    #[test]
+    fn ordinary_connect_params_are_not_node_shaped() {
+        // Panel / CLI connects (no commands/tags) must not register as nodes.
+        let panel = serde_json::json!({
+            "device_name": "Web Panel",
+            "channel_kind": "browser",
+            "token": "legacy:sig"
+        });
+        assert!(node_connect_identity(Some(&panel), "c").is_none());
+        let bare = serde_json::json!({});
+        assert!(node_connect_identity(Some(&bare), "c").is_none());
+        assert!(node_connect_identity(None, "c").is_none());
+    }
+
+    #[test]
+    fn node_shape_connect_registers_and_disconnect_deregisters() {
+        let registry = crate::cluster::NodeRegistry::new();
+        let (tx, _rx) = tokio::sync::mpsc::channel::<String>(8);
+        let channel = crate::cluster::ReverseRpcChannel::new(tx);
+        let params = serde_json::json!({
+            "token": "stale:sig",
+            "device_name": "build-box",
+            "commands": [{"name": "bash", "schema": {}}],
+            "tags": ["linux"]
+        });
+        // Same decision + registration sequence the dispatch loop runs on a
+        // successful connect.
+        let node_id = node_connect_identity(Some(&params), "conn-1").expect("node shape");
+        assert!(crate::cluster::maybe_register_node(
+            &registry,
+            Some("node"),
+            &node_id,
+            "conn-1",
+            Some(&params),
+            &channel,
+        ));
+        // Online + resolvable, as environments.list / node_invoke require.
+        assert_eq!(
+            registry.node_identity_by_conn("conn-1"),
+            Some(("build-box".to_string(), "build-box".to_string()))
+        );
+        let envs = registry.list_environments();
+        assert_eq!(envs.len(), 1);
+        assert_eq!(envs[0].id, "build-box");
+        assert_eq!(envs[0].commands[0].name, "bash");
+        // The existing disconnect path deregisters by conn_id.
+        assert!(registry.deregister("conn-1"));
+        assert!(registry.node_identity_by_conn("conn-1").is_none());
+        assert!(registry.list_environments().is_empty());
     }
 
     #[test]
