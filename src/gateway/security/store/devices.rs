@@ -24,23 +24,6 @@ impl SecurityStore {
         Ok(())
     }
 
-    /// Get device by ID
-    pub fn get_device(&self, device_id: &str) -> SqliteResult<Option<DeviceRow>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT device_id, device_name, device_type, public_key, fingerprint, role, scopes,
-                    created_at, approved_at, last_seen_at, revoked_at
-             FROM devices WHERE device_id = ?1",
-        )?;
-
-        let result = stmt.query_row(params![device_id], DeviceRow::from_row);
-        match result {
-            Ok(device) => Ok(Some(device)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-
     /// Get device by fingerprint
     pub fn get_device_by_fingerprint(&self, fingerprint: &str) -> SqliteResult<Option<DeviceRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());

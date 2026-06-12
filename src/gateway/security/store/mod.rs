@@ -2,7 +2,10 @@
 
 //! Unified `SQLite` storage for security data.
 //!
-//! Manages devices, tokens, pairing requests, and approved senders.
+//! Under LAN-trust this store is the persistence layer for the secret vault
+//! master key (shared-token chain), cluster-node device records, channel
+//! policies, and the security audit log. Device-auth tokens, HTTP sessions,
+//! and device pairing requests were removed with the authentication layer.
 
 use crate::sync_primitives::Mutex;
 use rusqlite::{Connection, Result as SqliteResult};
@@ -10,9 +13,7 @@ use std::path::Path;
 use tracing::{debug, info};
 
 mod devices;
-mod pairing;
 mod senders;
-mod sessions;
 mod tokens;
 mod types;
 
