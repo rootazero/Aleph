@@ -42,7 +42,6 @@ pub enum SettingsTab {
     Policies,
     RoutingRules,
     Security,
-    Auth,
     Execution,
 
     // Network
@@ -77,7 +76,6 @@ impl SettingsTab {
             Self::Policies => "/settings/policies",
             Self::RoutingRules => "/settings/routing",
             Self::Security => "/settings/security",
-            Self::Auth => "/settings/auth",
             Self::Execution => "/settings/execution",
             Self::Network => "/settings/network",
         }
@@ -110,7 +108,6 @@ impl SettingsTab {
             Self::Policies => t_string!(i18n, settings.tabs.policies).to_string(),
             Self::RoutingRules => t_string!(i18n, settings.tabs.routing_rules).to_string(),
             Self::Security => t_string!(i18n, settings.tabs.security).to_string(),
-            Self::Auth => t_string!(i18n, settings.tabs.auth).to_string(),
             Self::Execution => "Execution".to_string(),
             Self::Network => "服务与集群".to_string(),
         }
@@ -187,7 +184,6 @@ impl SettingsTab {
             Self::Security => {
                 r#"<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>"#
             }
-            Self::Auth => r#"<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>"#,
             Self::Execution => r#"<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>"#,
             Self::Network => {
                 r#"<circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 6h6a3 3 0 0 1 3 3v0M7 18h6a3 3 0 0 0 3-3v0"/>"#
@@ -259,7 +255,6 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
             SettingsTab::Browser,
             SettingsTab::Policies,
             SettingsTab::Security,
-            SettingsTab::Auth,
             SettingsTab::Execution,
         ],
     },
