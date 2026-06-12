@@ -181,11 +181,6 @@ pub enum Command {
         /// Center WebSocket base URL, e.g. <ws://127.0.0.1:18790>
         #[arg(long, value_name = "URL")]
         center: String,
-        /// Node auth token (minted via center `cluster.enroll`). Optional:
-        /// omit to interactively pair on first start. A persisted credential
-        /// from a prior pairing takes precedence over this flag.
-        #[arg(long, value_name = "TOKEN", env = "ALEPH_NODE_TOKEN")]
-        token: Option<String>,
         /// Human-readable node name shown in `environments.list`.
         #[arg(long, value_name = "NAME", default_value = "aleph-node")]
         name: String,
@@ -697,21 +692,13 @@ mod tests {
             "node",
             "--center",
             "ws://127.0.0.1:18790",
-            "--token",
-            "node-tok",
             "--name",
             "edge-1",
         ])
         .unwrap();
         match args.command {
-            Some(Command::Node {
-                center,
-                token,
-                name,
-                ..
-            }) => {
+            Some(Command::Node { center, name, .. }) => {
                 assert_eq!(center, "ws://127.0.0.1:18790");
-                assert_eq!(token.as_deref(), Some("node-tok"));
                 assert_eq!(name, "edge-1");
             }
             _ => panic!("Expected Node command"),
@@ -725,8 +712,6 @@ mod tests {
             "node",
             "--center",
             "ws://127.0.0.1:18790",
-            "--token",
-            "node-tok",
         ])
         .unwrap();
         match args.command {

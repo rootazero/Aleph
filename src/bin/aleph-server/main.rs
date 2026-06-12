@@ -232,11 +232,10 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Command::Node {
             center,
-            token,
             name,
             tags,
         }) => {
-            return commands::node::handle_node(center, token, name, tags).await;
+            return commands::node::handle_node(center, name, tags).await;
         }
         Some(Command::SandboxDebug {
             network,
