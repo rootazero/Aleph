@@ -806,6 +806,22 @@ grep -rn "pairing\|show-token\|bootstrap-url\|/pair" docs/ CLAUDE.md README.md -
 git add -A && git commit -m "docs: LAN-trust distribution and security model"
 ```
 
+> ⚠️ 实现修正：`git add -A` 不安全（worktree 有未 gitignore 的 `interfaces/webchat/node_modules` 数千文件）。改为只 add 本任务改动的 `.md` 文件。
+
+### Amendment 6（controller，2026-06-12）— T13 scope 扩展 + 计划材料 3 处更正
+
+执行中发现两类与计划散文不符，据此扩展/修正（均以分支已提交的真实代码为准）：
+
+**A. SECURITY.md 残留子系统区扩入 scope。** `docs/reference/SECURITY.md` 的 `## Identity Context & Permission Enforcement` 整节（约行 22–284）连同 Overview（行 3 顶注、行 9–16 bullets）描述的是**本弧 Task 1–5 已删除的 role-based guest-invitation 权限子系统**——`policy_engine.rs` / `invitation_manager.rs` 已不存在（核实：`src/gateway/security/` 现仅 `crypto.rs / mod.rs / shared_token.rs / store/ / token_readonly.rs`），`aleph guests *` CLI 已删。计划原文仅命名"auth-ux 节"属 under-scoping。**T13 scope 扩展为同时清理此节**，与"使 SECURITY.md 符合 LAN-trust 现实"同质。清理须严格区分：
+- **删/改写**：Identity-based 权限流图、Invitation Manager、Policy Engine、GuestScope、`Role::Guest/Anonymous`、Guest Invitation Flow、`aleph guests` CLI、"Security Guarantees"中 guest/invitation 条目。
+- **保留**：`## Architecture`（行 286 起的 Exec Kernel：Command Parser / Risk Analyzer / Approval Manager / Allowlist / Output Masking / Audit）及其后 `## Exec Kernel` 全部——这是 `src/exec/` shell 安全子系统，**未删**。
+- **据实改写为保留机制**：工具级权限现由 **ScopedToolService 通道工具权限层**（spec §4.2 明确保留，三层 merge global→agent→channel）治理，非 role-based；`IdentityContext`/`Role` 若仍存于 `shared/protocol/src/auth.rs` 则坍缩为单一 owner 身份（connect 恒返 operator），按**存活类型**据实写，勿引用已删类型。
+
+**B. 计划材料 3 处更正（已据实落文档，记录在案）：**
+1. 材料 #5「`aleph open` 保留去 nonce」→ 实为**桌面 shell 菜单项 "Open in Browser"**（`desktop/shell/src/menu.rs`），无此 CLI 命令（`cli.rs` 的 `Command` enum 无 `Open` 变体）。
+2. 材料 #9「`method_authz` 已删」→ 文件仍在（`src/gateway/method_authz.rs`），但 RPC 级 gate 已 inert（caller 恒 operator 恒过），仍被 `ScopedToolService` 当 tool-dispatch 分类器消费。文档按**效果**写（无方法级门槛、含 PTY/shell），不声称"文件已删"。
+3. 材料 #3「Origin 放行…私网」→ 代码**不**按 RFC1918 网段 auto-allow 私网 IP，仅放行 无 Origin / loopback / `tauri:` / allow-list / 同源。SECURITY.md 规则表据实写明。
+
 ---
 
 ## 收尾验收（全计划完成后）
