@@ -35,7 +35,7 @@ pub fn SessionTabs() -> impl IntoView {
     view! {
         <Show when=move || sessions.tab_order.with(|o| o.len() >= 2)>
             <div class="aleph-session-tabs flex items-center gap-1 px-2 py-1
-                        bg-surface-base/30 text-xs overflow-x-auto flex-shrink-0">
+                        text-xs overflow-x-auto flex-shrink-0">
                 <For
                     each=move || sessions.tab_order.get()
                     key=|aid| aid.clone()

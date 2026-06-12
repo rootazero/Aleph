@@ -11,6 +11,7 @@ use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
 use crate::components::tool_card::ToolCard;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
+use crate::state::sessions::SessionMap;
 use leptos::prelude::*;
 
 /// Welcome hero — shown in the message area while a conversation is empty.
@@ -98,6 +99,7 @@ pub(super) fn ChatHero() -> impl IntoView {
 pub(super) fn MessageList() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
+    let sessions = expect_context::<SessionMap>();
     let scroll_ref = NodeRef::<leptos::html::Div>::new();
 
     // Memoized timeline: the flat message vector folded into day-separated
@@ -161,11 +163,14 @@ pub(super) fn MessageList() -> impl IntoView {
 
     view! {
         <div class="relative h-full">
-            <div node_ref=scroll_ref class="absolute inset-0 overflow-y-auto" on:scroll=on_scroll>
+            <div node_ref=scroll_ref class="absolute inset-0 overflow-y-auto chat-scroll-fade" on:scroll=on_scroll>
                 <Show
                     when=move || chat.messages.get().is_empty()
                     fallback=move || view! {
-                        <div class="max-w-3xl mx-auto px-4 pt-6 pb-[calc(var(--composer-clearance,150px)+1rem)] space-y-3">
+                        <div class=move || format!(
+                            "max-w-3xl mx-auto px-4 {} pb-[calc(var(--composer-clearance,150px)+1rem)] space-y-3",
+                            if sessions.tab_order.with(|o| o.len() >= 2) { "pt-14" } else { "pt-6" }
+                        )>
                             // Inline send-error banner (G2) — shown when the last
                             // outbound send failed; colour-coded by error code.
                             <SendErrorBanner />

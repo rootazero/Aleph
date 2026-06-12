@@ -984,6 +984,12 @@ html[data-material="aurora"].dark {
     background-color: var(--color-sidebar-active) !important;
     box-shadow: none !important;
   }
+  .aleph-composer, .aleph-session-tabs {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .aleph-session-tabs { background-color: var(--color-surface) !important; }
+  .chat-scroll-fade { mask-image: none !important; -webkit-mask-image: none !important; }
 }
 @media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
   :root:not(.light), :root:not(.light)[data-material] {
@@ -1356,6 +1362,8 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
   border: 1px solid var(--color-border);
   border-radius: var(--radius-2xl);
   box-shadow: var(--shadow-md), inset 0 1px 0 var(--aleph-sheen);
+  backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
   transition: box-shadow var(--duration-normal) var(--ease-spring),
               border-color var(--duration-normal) var(--ease-spring),
               transform var(--duration-normal) var(--ease-spring);
@@ -1379,6 +1387,23 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 .aleph-composer textarea:focus-visible {
   outline: none;
   box-shadow: none;
+}
+
+/* --- Session tab strip — frosted chrome band over the message flow --- */
+.aleph-session-tabs {
+  background-color: color-mix(in oklch, var(--color-surface) 55%, transparent);
+  backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+  border-bottom: 1px solid var(--color-border-subtle);
+  box-shadow: inset 0 1px 0 var(--mat-chrome-topline);
+}
+
+/* Top fade — content dissolves under the chrome band instead of clipping.
+   Static mask on the scroll container; verify scroll perf in WKWebView
+   (spec §6.2: if it costs, drop the fade, keep the float). */
+.chat-scroll-fade {
+  mask-image: linear-gradient(180deg, transparent 0, #000 26px);
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 26px);
 }
 
 /* --- Empty-state hero --- */
