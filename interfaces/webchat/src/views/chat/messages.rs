@@ -35,7 +35,7 @@ pub(super) fn ChatHero() -> impl IntoView {
         ("🧠", "回忆上下文", "我们上次聊到哪了？帮我回顾一下"),
     ];
     view! {
-        <div class="h-full flex flex-col items-center justify-center px-6 pb-10 text-center select-none">
+        <div class="h-full flex flex-col items-center justify-center px-6 pb-[var(--composer-clearance,150px)] text-center select-none">
             <div class="aleph-rise mb-7" style="animation-delay: 0s">
                 <div class="aleph-hero-orb w-16 h-16 rounded-2xl flex items-center justify-center">
                     // Brand mark — Hebrew aleph, same glyph the app icon uses.
