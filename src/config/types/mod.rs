@@ -49,6 +49,7 @@ pub mod stop_hooks;
 pub mod subagent;
 pub mod task_routing;
 pub mod tools;
+pub mod voice_local;
 
 // Re-export all types for backward compatibility
 // Users can still use `use crate::config::XXX` instead of `use crate::config::types::XXX`
@@ -83,3 +84,4 @@ pub use stop_hooks::*;
 pub use subagent::*;
 pub use task_routing::*;
 pub use tools::*;
+pub use voice_local::*;

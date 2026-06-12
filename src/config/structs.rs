@@ -2,7 +2,7 @@
 //!
 //! This module defines the core configuration structures for Aleph.
 
-use crate::config::types::{GeneralConfig, MemoryConfig, ProviderConfig, RoutingRuleConfig, BehaviorConfig, SearchConfigInternal, SkillsConfig, ToolsConfig, McpConfig, UnifiedToolsConfig, ToolServiceConfig, SmartFlowConfig, SmartMatchingConfig, DispatcherConfigToml, CoworkConfigToml, PoliciesConfig, GenerationConfig, OrchestratorConfig, SubAgentConfig, TaskRoutingConfig, GroupChatConfig, PersonaConfig, EvolutionConfig, MediaConfig, PrivacyConfig, ShellSecurityConfig, ProfileConfig, SecretProviderConfig, SecretMapping, SecretsConfig, PromptSectionConfig, AcpConfig, ExecutionConfig, AgentsConfig, StopHookConfig, GuardrailsToml, StabilityToml, FallbackProviderToml, ContextBudgetToml, ProviderConfigEntry, SearchConfig};
+use crate::config::types::{GeneralConfig, MemoryConfig, ProviderConfig, RoutingRuleConfig, BehaviorConfig, SearchConfigInternal, SkillsConfig, ToolsConfig, McpConfig, UnifiedToolsConfig, ToolServiceConfig, SmartFlowConfig, SmartMatchingConfig, DispatcherConfigToml, CoworkConfigToml, PoliciesConfig, GenerationConfig, OrchestratorConfig, SubAgentConfig, TaskRoutingConfig, GroupChatConfig, PersonaConfig, EvolutionConfig, MediaConfig, PrivacyConfig, ShellSecurityConfig, ProfileConfig, SecretProviderConfig, SecretMapping, SecretsConfig, PromptSectionConfig, AcpConfig, ExecutionConfig, AgentsConfig, StopHookConfig, GuardrailsToml, StabilityToml, FallbackProviderToml, ContextBudgetToml, ProviderConfigEntry, SearchConfig, VoiceSection, VoiceLocalConfig};
 use crate::tasks::cron::CronConfig;
 use crate::tasks::heartbeat::config::HeartbeatConfig;
 use crate::tasks::shared::reaper::ReaperConfig;
@@ -106,6 +106,9 @@ pub struct Config {
     /// Generation providers configuration (image, speech, audio, video)
     #[serde(default)]
     pub generation: GenerationConfig,
+    /// Local voice sidecar ([voice.local]) — aleph-voice STT/TTS.
+    #[serde(default, rename = "voice")]
+    pub voice_local: VoiceSection,
     /// Orchestrator configuration (Three-Layer Control architecture)
     #[serde(default)]
     pub orchestrator: OrchestratorConfig,
@@ -395,6 +398,7 @@ impl Default for Config {
             agent: CoworkConfigToml::default(),
             policies: PoliciesConfig::default(),
             generation: GenerationConfig::default(),
+            voice_local: VoiceSection::default(),
             orchestrator: OrchestratorConfig::default(),
             subagent: SubAgentConfig::default(),
             task_routing: TaskRoutingConfig::default(),
@@ -445,6 +449,12 @@ impl Config {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Convenience accessor for the local voice sidecar config.
+    #[must_use]
+    pub fn local_voice(&self) -> &VoiceLocalConfig {
+        &self.voice_local.local
     }
 }
 
