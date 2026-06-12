@@ -466,6 +466,17 @@ impl BuiltinToolRegistry {
         );
         info!("Registered voice_mode_set tool in BuiltinToolRegistry");
 
+        // Local voice sidecar tool — status/warmup for on-device STT/TTS (R8)
+        reg(
+            tools,
+            "local_voice",
+            "Inspect or warm up the local voice (STT/TTS) sidecar: status shows model download \
+             progress and engine state; warmup pre-loads models for instant voice. Use when the \
+             user asks about local voice readiness or wants to prepare voice mode.",
+            schema::<crate::builtin_tools::voice_tools::LocalVoiceArgs>("local_voice"),
+        );
+        info!("Registered local_voice tool in BuiltinToolRegistry");
+
         // Wiki orientation tools (Spec 5 Task 12).
         // `note_schema` is always registered when a memory dir is available (LLM can always
         // read/write SCHEMA.md). `note_orient` is only exposed in Tools / Hybrid mode so the

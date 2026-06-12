@@ -1516,6 +1516,12 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
+            // Local voice sidecar tool — status/warmup (R8)
+            "local_voice" => Box::pin(async move {
+                let tool = crate::builtin_tools::voice_tools::LocalVoiceTool::new();
+                tool.call_json(arguments).await
+            }),
+
             // ClawHub tool
             "clawhub" => Box::pin(async move {
                 let tool = self.clawhub_tool.as_ref().ok_or_else(|| {

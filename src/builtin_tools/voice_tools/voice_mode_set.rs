@@ -108,6 +108,18 @@ impl VoiceModeSetTool {
             })
             .await;
 
+        // Spec §4.5: enabling voice fires an async warmup so models are loaded
+        // by the time the user speaks. Fire-and-forget; failures only log.
+        if enabled {
+            if let Some(sup) = crate::gateway::voice::sidecar::global() {
+                tokio::spawn(async move {
+                    if let Err(e) = sup.warmup().await {
+                        tracing::warn!(error = %e, "voice warmup on enable failed");
+                    }
+                });
+            }
+        }
+
         let action = if enabled { "enabled" } else { "disabled" };
         let message = format!("Voice mode {action} for channel '{channel_id}'.");
 
