@@ -624,11 +624,10 @@ mod tests {
     /// `.dark, .dark[data-material] {`. Lines come back trimmed (the system
     /// mirrors sit one nesting level deeper than the `.dark` blocks they
     /// copy) with empties dropped; brace depth is tracked so a nested rule
-    /// added later won't truncate the body. Callers pass the
-    /// material-primitives SECTION of the stylesheet, not the whole file —
-    /// the color-token layer above the banner reuses the same `.dark {` /
-    /// `:root:not(.light) {` selector lines, so the exactly-once assertion
-    /// only holds within that slice.
+    /// added later won't truncate the body. Callers pass one
+    /// banner-delimited SECTION of the stylesheet (token layer = before the
+    /// banner, material primitives = after) — the exactly-once assertion
+    /// holds within each slice.
     fn css_block_body<'a>(css: &'a str, selector: &str) -> Vec<&'a str> {
         let lines: Vec<&str> = css.lines().collect();
         let starts: Vec<usize> = lines
@@ -641,7 +640,7 @@ mod tests {
             starts.len(),
             1,
             "selector line {selector:?} must appear exactly once in the \
-             material-primitives section of tailwind.css"
+             given section of tailwind.css"
         );
         let mut depth: i64 = 1;
         let mut body = Vec::new();
@@ -658,6 +657,30 @@ mod tests {
             }
         }
         panic!("unclosed block for selector {selector:?} in tailwind.css");
+    }
+
+    /// Assert every `(dark, mirror)` selector pair in `section` has a verbatim-
+    /// identical body (trimmed lines, comments included — mirrors are copies).
+    fn assert_mirror_pairs(section: &str, pairs: &[(&str, &str)]) {
+        for (dark, mirror) in pairs {
+            let dark_body = css_block_body(section, dark);
+            let mirror_body = css_block_body(section, mirror);
+            for (i, (d, m)) in dark_body.iter().zip(mirror_body.iter()).enumerate() {
+                assert_eq!(
+                    d,
+                    m,
+                    "system-mode mirror {mirror:?} drifted from {dark:?} at body \
+                     line {} — copy the `.dark` block verbatim",
+                    i + 1
+                );
+            }
+            assert_eq!(
+                dark_body.len(),
+                mirror_body.len(),
+                "system-mode mirror {mirror:?} and {dark:?} have different line \
+                 counts — copy the `.dark` block verbatim"
+            );
+        }
     }
 
     #[test]
@@ -683,24 +706,40 @@ mod tests {
                 r#":root:not(.light)[data-material="aurora"] {"#,
             ),
         ];
-        for (dark, mirror) in pairs {
-            let dark_body = css_block_body(material_section, dark);
-            let mirror_body = css_block_body(material_section, mirror);
-            for (i, (d, m)) in dark_body.iter().zip(mirror_body.iter()).enumerate() {
-                assert_eq!(
-                    d,
-                    m,
-                    "system-mode mirror {mirror:?} drifted from {dark:?} at body \
-                     line {} — copy the `.dark` block verbatim",
-                    i + 1
-                );
-            }
-            assert_eq!(
-                dark_body.len(),
-                mirror_body.len(),
-                "system-mode mirror {mirror:?} and {dark:?} have different line \
-                 counts — copy the `.dark` block verbatim"
-            );
-        }
+        assert_mirror_pairs(material_section, &pairs);
+    }
+
+    #[test]
+    fn token_mirror_blocks_are_verbatim_copies() {
+        // Same copy-verbatim discipline as the material primitives, applied to
+        // the colour-token layer ABOVE the banner: the `.dark` token block and
+        // the four dark accent overrides each keep a hand-synced
+        // `@media (prefers-color-scheme: dark)` mirror for System-mode users.
+        let css = include_str!("../styles/tailwind.css");
+        let (token_section, _) = css
+            .split_once("Material primitives")
+            .expect("material primitives banner present in tailwind.css");
+        assert_mirror_pairs(
+            token_section,
+            &[
+                (".dark {", ":root:not(.light) {"),
+                (
+                    r#"html.dark[data-accent="ocean"] {"#,
+                    r#":root:not(.light)[data-accent="ocean"] {"#,
+                ),
+                (
+                    r#"html.dark[data-accent="forest"] {"#,
+                    r#":root:not(.light)[data-accent="forest"] {"#,
+                ),
+                (
+                    r#"html.dark[data-accent="sunset"] {"#,
+                    r#":root:not(.light)[data-accent="sunset"] {"#,
+                ),
+                (
+                    r#"html.dark[data-accent="rose"] {"#,
+                    r#":root:not(.light)[data-accent="rose"] {"#,
+                ),
+            ],
+        );
     }
 }

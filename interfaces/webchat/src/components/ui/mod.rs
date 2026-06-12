@@ -6,6 +6,7 @@ pub mod channel_card;
 pub mod channel_status;
 pub mod confirm_button;
 pub mod secret_input;
+pub mod swatch_button;
 pub mod tag_list_input;
 
 pub use agent_binding_selector::AgentBindingSelector;
@@ -16,4 +17,5 @@ pub use channel_card::ChannelCard;
 pub use channel_status::{ChannelStatus, ChannelStatusBadge, ChannelStatusPill};
 pub use confirm_button::ConfirmButton;
 pub use secret_input::SecretInput;
+pub use swatch_button::SwatchButton;
 pub use tag_list_input::TagListInput;

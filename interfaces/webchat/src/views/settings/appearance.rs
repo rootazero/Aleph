@@ -11,6 +11,7 @@ use crate::appearance::{
     read_font_scale, read_material, read_mode, read_roundness, Accent, FontScale, Material,
     Roundness, ThemeMode,
 };
+use crate::components::ui::SwatchButton;
 use leptos::prelude::*;
 
 #[component]
@@ -67,24 +68,15 @@ pub fn AppearanceView() -> impl IntoView {
                         {Material::ALL.into_iter().map(|m| {
                             let active = move || material.get() == m;
                             view! {
-                                <button
-                                    on:click=move |_| { apply_material(m); material.set(m); }
+                                <SwatchButton
+                                    background=m.preview()
+                                    face="w-14 h-9 rounded-lg transition-transform group-hover:scale-105"
+                                    ring_offset="ring-offset-surface-raised"
                                     title=m.label()
-                                    class="flex flex-col items-center gap-1.5 group"
-                                >
-                                    <span
-                                        class=move || {
-                                            let base = "w-14 h-9 rounded-lg transition-transform group-hover:scale-105";
-                                            if active() {
-                                                format!("{base} ring-2 ring-offset-2 ring-offset-surface-raised ring-text-primary")
-                                            } else {
-                                                format!("{base} ring-1 ring-border")
-                                            }
-                                        }
-                                        style=format!("background: {}", m.preview())
-                                    />
-                                    <span class="text-xs text-text-secondary">{m.label()}</span>
-                                </button>
+                                    label=m.label()
+                                    active=Signal::derive(active)
+                                    on_pick=move |_| { apply_material(m); material.set(m); }
+                                />
                             }
                         }).collect::<Vec<_>>()}
                     </div>
@@ -96,24 +88,15 @@ pub fn AppearanceView() -> impl IntoView {
                         {Accent::ALL.into_iter().map(|a| {
                             let active = move || accent.get() == a;
                             view! {
-                                <button
-                                    on:click=move |_| { apply_accent(a); accent.set(a); }
+                                <SwatchButton
+                                    background=a.swatch()
+                                    face="w-9 h-9 rounded-full transition-transform group-hover:scale-110"
+                                    ring_offset="ring-offset-surface-raised"
                                     title=a.label()
-                                    class="flex flex-col items-center gap-1.5 group"
-                                >
-                                    <span
-                                        class=move || {
-                                            let base = "w-9 h-9 rounded-full transition-transform group-hover:scale-110";
-                                            if active() {
-                                                format!("{base} ring-2 ring-offset-2 ring-offset-surface-raised ring-text-primary")
-                                            } else {
-                                                format!("{base} ring-1 ring-border")
-                                            }
-                                        }
-                                        style=format!("background: {}", a.swatch())
-                                    />
-                                    <span class="text-xs text-text-secondary">{a.label()}</span>
-                                </button>
+                                    label=a.label()
+                                    active=Signal::derive(active)
+                                    on_pick=move |_| { apply_accent(a); accent.set(a); }
+                                />
                             }
                         }).collect::<Vec<_>>()}
                     </div>
@@ -203,6 +186,7 @@ fn ChoiceButton(
     view! {
         <button
             on:click=move |_| on_pick()
+            aria-pressed=move || active.get().to_string()
             class=move || {
                 let base = "px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border";
                 if active.get() {
