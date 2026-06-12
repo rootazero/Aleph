@@ -25,7 +25,7 @@ pub fn MiniMapOverlay(
         let Some(canvas_el) = canvas_ref.get() else {
             return;
         };
-        let canvas: HtmlCanvasElement = canvas_el.into();
+        let canvas: HtmlCanvasElement = canvas_el;
         let Some(ctx) = canvas
             .get_context("2d")
             .ok()
@@ -47,7 +47,7 @@ pub fn MiniMapOverlay(
         let Some(canvas_el) = canvas_ref.get() else {
             return;
         };
-        let canvas: HtmlCanvasElement = canvas_el.into();
+        let canvas: HtmlCanvasElement = canvas_el;
         let rect = canvas.get_bounding_client_rect();
         let mx = ev.client_x() as f32 - rect.left() as f32;
         let my = ev.client_y() as f32 - rect.top() as f32;
