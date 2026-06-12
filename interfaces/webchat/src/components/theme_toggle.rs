@@ -13,6 +13,7 @@ use crate::appearance::{
     apply_accent, apply_material, apply_mode, read_accent, read_material, read_mode, Accent,
     Material, ThemeMode,
 };
+use crate::components::ui::SwatchButton;
 use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
@@ -214,28 +215,19 @@ pub fn ThemeToggle() -> impl IntoView {
                             {Accent::ALL.into_iter().map(|a| {
                                 let is_active = move || accent.get() == a;
                                 view! {
-                                    <button
-                                        on:click=move |ev: web_sys::MouseEvent| {
+                                    <SwatchButton
+                                        background=a.swatch()
+                                        face="w-6 h-6 rounded-full transition-transform group-hover:scale-110"
+                                        ring_offset="ring-offset-surface-overlay"
+                                        title=a.label()
+                                        active=Signal::derive(is_active)
+                                        on_pick=move |ev: web_sys::MouseEvent| {
                                             let x = ev.client_x() as f64;
                                             let y = ev.client_y() as f64;
                                             animated_apply(x, y, move || apply_accent(a));
                                             accent.set(a);
                                         }
-                                        title=a.label()
-                                        class="flex flex-col items-center gap-1 group"
-                                    >
-                                        <span
-                                            class=move || {
-                                                let base = "w-6 h-6 rounded-full transition-transform group-hover:scale-110";
-                                                if is_active() {
-                                                    format!("{base} ring-2 ring-offset-2 ring-offset-surface-overlay ring-text-primary")
-                                                } else {
-                                                    format!("{base} ring-1 ring-border")
-                                                }
-                                            }
-                                            style=format!("background: {}", a.swatch())
-                                        />
-                                    </button>
+                                    />
                                 }
                             }).collect::<Vec<_>>()}
                         </div>
