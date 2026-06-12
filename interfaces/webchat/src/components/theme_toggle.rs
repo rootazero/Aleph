@@ -139,7 +139,7 @@ pub fn ThemeToggle() -> impl IntoView {
                         <p class="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
                             "外观"
                         </p>
-                        <div class="grid grid-cols-2 gap-1">
+                        <div class="grid grid-cols-3 gap-1">
                             {ThemeMode::ALL
                                 .into_iter()
                                 .map(|m| {
@@ -153,7 +153,7 @@ pub fn ThemeToggle() -> impl IntoView {
                                                 mode.set(m);
                                             }
                                             class=move || {
-                                                let base = "px-2 py-1.5 rounded-lg text-xs font-medium transition-colors";
+                                                let base = "px-1 py-1.5 rounded-lg text-xs font-medium transition-colors";
                                                 if is_active() {
                                                     format!("{base} bg-primary text-white")
                                                 } else {
@@ -188,7 +188,7 @@ pub fn ThemeToggle() -> impl IntoView {
                                                 material.set(m);
                                             }
                                             class=move || {
-                                                // px-1 (not px-2 like the Mode row): 4-CJK labels need the extra 8px in a third-width column
+                                                // px-1: 4-CJK labels need the extra 8px in a third-width column (same as the Mode row)
                                                 let base = "px-1 py-1.5 rounded-lg text-xs font-medium transition-colors";
                                                 if is_active() {
                                                     format!("{base} bg-primary text-white")
