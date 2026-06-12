@@ -1016,41 +1016,88 @@ blocked_hosts = ["*.malware.com"]
 
 ---
 
-## Auth UX (post-2026-05 overhaul) {#auth-ux}
+## Trust model: LAN-trust {#auth-ux}
 
-Aleph never asks the user to find, copy, or paste an access token. The
-gateway token is auto-provisioned at first daemon start and stays
-invisible. Three trust-transfer mechanisms move authentication between
-surfaces:
+Aleph has **no authentication step**. The trust boundary *is* the network
+boundary: whoever can reach the gateway socket is the owner. Every
+`connect` handshake is accepted as `operator`
+(`src/gateway/handlers/connect.rs`) — legacy `token` / `device_name`
+params from old clients are accepted and ignored, never validated.
 
-1. **Same-process (Tauri desktop app)** — the shell reads the token from
-   `~/.aleph/data/security.db` (same-UID gate) via the
-   `aleph-server bootstrap-token` subcommand and issues a one-shot
-   bootstrap nonce; the Panel webview navigates to
-   `/auth/bootstrap?nonce=…` which sets the `aleph_session` HttpOnly
-   cookie.
+### Network boundary = trust boundary
 
-2. **Same-machine browser** — `aleph open` (CLI) and the desktop app's
-   "Open in Browser" menu item issue a nonce and launch the system
-   browser at the same URL. The endpoint refuses any non-loopback peer
-   (`is_loopback_peer` in `src/gateway/auth_middleware.rs`).
+- **Default — loopback only.** `aleph-server` binds `127.0.0.1`
+  (`GatewayServerConfig::default`), so only processes on the same machine
+  can connect. A single-machine desktop install needs zero configuration.
+- **LAN opt-in.** Set `[gateway] host = "0.0.0.0"` in
+  `~/.aleph/config.toml` to listen on every interface. **This grants every
+  device on your LAN complete control over the agent** — including the
+  PTY / shell-execution tools. There is no method-level gate to fall back
+  on: the old per-RPC operator-vs-guest authorization
+  (`method_authz`) is inert under LAN-trust because the caller role is
+  always `operator`. Only enable `0.0.0.0` on a network you trust
+  end-to-end (home LAN behind your router), never on an untrusted or
+  public segment.
+- **Beyond the LAN.** To reach Aleph across the internet, front it with
+  your own reverse proxy / VPN / SSH tunnel that terminates trust
+  *upstream* of the gateway. Aleph itself adds no transport auth.
 
-3. **Cold browser / remote / mobile** — `/pair` shows a 6-digit code; the
-   desktop app's NotificationCenter renders a row with `Approve` /
-   `Reject` buttons. A QR-code variant in the Devices view covers mobile.
+### The one remaining guardrail: WS Origin check
 
-The threat model is unchanged from before the overhaul: same-UID =
-trusted. We just stopped showing the token to the user, because seeing
-it was the friction, not the security.
+Browsers attach an unforgeable `Origin` header to every WebSocket upgrade
+and cross-origin `fetch`. A malicious public web page the user happens to
+visit can still *reach* `ws://127.0.0.1:18790/ws` (loopback is not
+firewalled from the browser), so without an origin check it could open a
+control channel to the local daemon — the classic DNS-rebinding /
+cross-origin-WebSocket confused-deputy. The origin gate
+(`src/gateway/origin_policy.rs`) is therefore retained as the **only**
+validation on the browser surface. It guards against the public internet,
+**not** against LAN neighbours.
 
-For debugging: `aleph auth debug show-token` still prints the token.
+`OriginPolicy::is_allowed` decides:
 
-**Phase 4 deletions** (2026-05): the legacy `/login` + `/auth/login`
-HTML token-paste form was removed; the Panel's `?token=` URL fallback
-was removed; the desktop shell no longer falls back to writing a token
-into the URL bar. The `aleph_session` cookie (issued by
-`/auth/bootstrap` or `/auth/bootstrap/from_pairing`) is the only
-inbound auth surface for the Panel.
+| Origin | Verdict | Why |
+|--------|---------|-----|
+| **absent / empty** | allow | Native clients (CLI, bots, bridges, `tokio-tungstenite`) send none; only browsers do. |
+| **loopback** (`127.0.0.0/8`, `::1`, `localhost`, `*.localhost`) | allow | Same-machine UI. |
+| **`tauri:` scheme** | allow | The desktop shell's own webview origin, unspoofable by a remote page. |
+| **exact allow-list match** (`[gateway] allowed_origins`) | allow | Operator-configured extra origins for split panel/API deployments. |
+| **same-origin** (Origin authority == request `Host`) | allow | Remote deployments served from their own domain work without config; the DNS-rebinding defence (a page at `evil.com` carries `Origin: …evil.com`, never matching the gateway's own Host). |
+| anything else (public web domain) | **deny** | |
+
+Note the gate does **not** auto-allow arbitrary private-LAN IPs by range —
+a cross-origin browser request from another LAN host is only accepted when
+it is same-origin with the gateway's `Host`, in the allow-list, or
+loopback/`tauri:`. Native LAN clients carry no `Origin` and pass freely.
+
+**Escape hatch — `allow_any_origin`.** Set `[gateway] allow_any_origin =
+true` to trust every Origin unconditionally
+(`OriginPolicy::allow_any`). Intended only for deployments that front the
+gateway with their own reverse proxy / auth layer; it leaves the agent
+drivable by any web page the user's browser visits, so keep it `false`
+unless you know why.
+
+### Migration from the pre-revert auth model
+
+The device-authentication / pairing / token system (silent bootstrap,
+`/pair` 6-digit codes, `/login` form, `?token=` URLs, `aleph auth …` CLI)
+was removed in the LAN-trust revert. For operators upgrading:
+
+- **Old `[gateway.auth]` config is ignored, not rejected.** The config
+  root has no `deny_unknown_fields`, so dead keys (`require_auth`,
+  `enable_pairing`, `[gateway.auth]`, `[gateway.bootstrap]`, …) load
+  without error and are silently dropped
+  (`GatewayConfig::from_toml` legacy-config test). **One gotcha:** a
+  `allowed_origins` list that lived under the legacy `[gateway.auth]`
+  table is **not** migrated — move it up to the `[gateway]` root yourself.
+- **`aleph auth *` CLI subcommands are gone.** There is no
+  `aleph auth show-token` / `debug show-token` / `devices` / `pairing`
+  command any more. "Open in Browser" survives as a desktop-shell menu
+  item that hands the plain gateway URL (loopback, or the configured
+  remote) to the system browser — no nonce, no token.
+- **Orphaned `~/.aleph` token / device data is left in place.** The server
+  ignores any leftover device/token rows on startup and never deletes user
+  data; you may remove them by hand if you wish.
 
 ---
 

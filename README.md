@@ -103,7 +103,7 @@ Every tool runs inside an OS-native sandbox (Seatbelt / Landlock / AppContainer)
                                    │  JSON-RPC (local)
 ┌────────────┐  remote ┌───────────▼──────────┐ ┌────────────────┐
 │  Browser   │────────▶│      Gateway         │◀│ Telegram bot   │
-│ (Web Chat) │  WS     │  (auth · sessions ·  │ │ Discord · Slack│
+│ (Web Chat) │  WS     │  (origin · sessions  │ │ Discord · Slack│
 └────────────┘         │   channel registry)  │ │ WhatsApp · …   │
                        └───────────┬──────────┘ └────────────────┘
                                    │
@@ -129,7 +129,13 @@ Full design: [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) ·
 
 ## Install
 
-Download the installer for your platform from the [latest release](https://github.com/rootazero/Aleph/releases/latest):
+Each release ships **three** flavours — pick one. All are on the
+[latest release](https://github.com/rootazero/Aleph/releases/latest) page.
+
+### 1. Full desktop app (recommended)
+
+The complete app with `aleph-server` bundled inside — zero configuration,
+runs entirely on one machine. Download the installer and launch it:
 
 | Platform | Installer |
 |----------|-----------|
@@ -137,7 +143,34 @@ Download the installer for your platform from the [latest release](https://githu
 | Windows  | `.msi` |
 | Linux    | `.deb` · `.AppImage` |
 
-The app bundles `aleph-server`. On first launch it starts the daemon, registers launch-at-login, and lives in the system tray. Open the chat panel from the tray icon or the global hotkey.
+On first launch it starts the daemon, registers launch-at-login, and lives
+in the system tray. Open the chat panel from the tray icon or the global
+hotkey.
+
+### 2. Aleph Panel — thin-shell app
+
+A UI-only desktop app with **no** bundled server. Use it to connect to an
+`aleph-server` already running elsewhere on your LAN — point it at the
+server's IP, or let mDNS discover it. Same three installers (`Aleph
+Panel.dmg` / `.msi` / `.deb`).
+
+### 3. Standalone `aleph-server` (servers / NAS)
+
+Install just the daemon, no GUI:
+
+```bash
+curl -fsSL https://github.com/rootazero/Aleph/releases/latest/download/install.sh | bash
+```
+
+It drops the `aleph-server` binary into `/usr/local/bin` (or `~/.local/bin`
+if that isn't writable). Start it with `aleph-server start`. By default it
+binds `127.0.0.1` (local only); to let Aleph Panel or browsers on your LAN
+reach it, set `[gateway] host = "0.0.0.0"` in `~/.aleph/config.toml`.
+
+> **Trust = your network.** Aleph has no login step — binding `0.0.0.0`
+> gives every device on your LAN full control of the agent. Only do it on a
+> network you trust; to expose Aleph over the internet, front it with your
+> own reverse proxy / VPN.
 
 > Skills that need Node.js / Python runtimes: **Settings → Runtime** bootstraps them on demand.
 

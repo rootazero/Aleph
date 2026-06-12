@@ -44,25 +44,24 @@ export ANTHROPIC_BASE_URL="https://api.anthropic.com"  # 可选
 mkdir -p ~/.aleph
 ```
 
-## First-start auth (no token typing)
+## First start (LAN-trust, no auth)
 
-1. Install the desktop app (.dmg / .msi / .deb) and launch it.
-2. The Panel opens already signed in — Aleph auto-provisioned a token
-   and the shell handed it off via a one-shot bootstrap nonce.
-3. To use Aleph from a browser on the same machine, click
-   "Open in Browser" in the desktop app menu, or run `aleph open` in a
-   terminal.
-4. To pair a second machine or a phone: in the desktop app go to
-   Settings → Auth (or Devices) and use "Add browser/mobile" to display
-   a QR code; scan it from the second device and approve in the desktop
-   app.
+Aleph has no authentication step — the trust boundary is the network
+boundary (see [SECURITY.md#auth-ux](SECURITY.md#auth-ux)).
 
-For headless / CI installs without a desktop app:
-`aleph-server bootstrap-token` prints the token on stdout (same threat
-model as `aleph secret list`). The legacy `/login` HTML form was
-removed in Phase 4 of the auth UX overhaul — use the pairing flow or
-`aleph open` instead. See
-[SECURITY.md#auth-ux](SECURITY.md#auth-ux) for the full trust model.
+1. Install the desktop app (.dmg / .msi / .deb) and launch it, or install
+   the standalone server via `scripts/install.sh` and run
+   `aleph-server start`. The server binds `127.0.0.1` by default — local
+   access only.
+2. The Panel opens straight into chat; a same-machine browser can hit
+   `http://127.0.0.1:18790` (desktop app menu → "Open in Browser" opens it
+   for you).
+3. To reach the core from a second machine or a phone, set
+   `[gateway] host = "0.0.0.0"` in `~/.aleph/config.toml` and point a
+   browser or the Aleph Panel thin-shell app at the core's LAN IP. This
+   grants every device on the LAN full control of the agent — only enable
+   it on a trusted network, or front the core with your own reverse proxy
+   / VPN for internet exposure.
 
 ## 开发流程
 

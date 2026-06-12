@@ -52,6 +52,6 @@ These span config + CLI + vault (not a single config.toml section). Call
 `read_config_guide(topic)`:
 
 - `multi_channel` — 一核多端: one core serving many ends (service connection,
-  channels, device pairing)
+  channels, LAN access)
 - `cluster` — Aleph 集群: center/node cluster (enroll, node_invoke, node_file,
   approval)
