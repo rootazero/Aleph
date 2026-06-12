@@ -24,13 +24,6 @@ async fn concurrent_providers_list() {
             use tokio::time::timeout;
             use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
-            let request = json!({
-                "jsonrpc": "2.0",
-                "method": "providers.list",
-                "params": {},
-                "id": 1
-            });
-
             let (ws_stream, _) = timeout(Duration::from_secs(10), connect_async(&ws_url))
                 .await
                 .expect("connect timeout")
@@ -38,6 +31,40 @@ async fn concurrent_providers_list() {
 
             let (mut write, mut read) = ws_stream.split();
 
+            // LAN-trust session-init invariant: first frame must be `connect`.
+            let connect = json!({
+                "jsonrpc": "2.0",
+                "method": "connect",
+                "params": { "device_name": "rpc-probe-concurrent" },
+                "id": 0
+            });
+            write
+                .send(WsMessage::Text(
+                    serde_json::to_string(&connect).unwrap().into(),
+                ))
+                .await
+                .expect("connect send failed");
+            timeout(Duration::from_secs(10), async {
+                while let Some(msg) = read.next().await {
+                    if let Ok(WsMessage::Text(text)) = msg {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if val.get("id") == Some(&json!(0)) {
+                                return;
+                            }
+                        }
+                    }
+                }
+                panic!("No connect response received");
+            })
+            .await
+            .expect("connect response timeout");
+
+            let request = json!({
+                "jsonrpc": "2.0",
+                "method": "providers.list",
+                "params": {},
+                "id": 1
+            });
             write
                 .send(WsMessage::Text(
                     serde_json::to_string(&request).unwrap().into(),
@@ -49,7 +76,7 @@ async fn concurrent_providers_list() {
                 while let Some(msg) = read.next().await {
                     if let Ok(WsMessage::Text(text)) = msg {
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
-                            if val.get("id").is_some() {
+                            if val.get("id") == Some(&json!(1)) {
                                 return val;
                             }
                         }

@@ -53,16 +53,15 @@ impl AlephTestServer {
         listener.local_addr().unwrap().port()
     }
 
-    /// Write a minimal config.toml with auth disabled and a "test" provider.
+    /// Write a minimal config.toml with a "test" provider. LAN-trust has no
+    /// auth knobs; connections are trusted and `connect` is a plain
+    /// session-init handshake.
     fn write_config(dir: &std::path::Path, extra_toml: &str) {
         let config_path = dir.join("config.toml");
         let config_content = format!(
             r#"
 [gateway]
 port = 18790
-
-[gateway.auth]
-mode = "none"
 
 [agents.main]
 model = "test-model"
@@ -109,18 +108,14 @@ enabled = true
         let port = Self::find_free_port();
         let config_path = config_dir.path().join("config.toml");
 
-        // Locate the built binary (built alongside the test binary)
-        // alephcore is the workspace root package, so CARGO_MANIFEST_DIR is the
-        // workspace root and `target/` lives directly under it (no `.parent()`).
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let workspace_root = std::path::Path::new(manifest_dir);
-        let binary_path = workspace_root.join("target/debug/aleph-server");
-
-        assert!(
-            binary_path.exists(),
-            "Aleph binary not found at {:?}. Run `cargo build -p alephcore --bin aleph-server` first.",
-            binary_path
-        );
+        // Locate the built binary via cargo's canonical mechanism: cargo
+        // builds the package's binaries for integration tests and exports
+        // their absolute paths. Unlike a hand-rolled
+        // `<CARGO_MANIFEST_DIR>/target/debug/aleph-server` path, this stays
+        // correct when a machine-local `.cargo/config.toml` pins a shared
+        // `target-dir` outside the workspace root. Same pattern as
+        // `tests/spec_c_cli_no_server.rs`.
+        let binary_path = std::path::PathBuf::from(env!("CARGO_BIN_EXE_aleph-server"));
 
         // Spawn the pre-built binary directly (no cargo overhead).
         //
@@ -210,15 +205,11 @@ enabled = true
     /// Send a JSON-RPC request over a fresh WebSocket connection and return the response.
     ///
     /// Each call opens a new WS connection (stateless probe pattern).
-    /// Times out after 10 seconds.
+    /// LAN-trust session-init invariant: the first frame on every connection
+    /// must be `connect` (a credential-less handshake that bootstraps
+    /// per-connection session state), so each fresh connection performs that
+    /// handshake before the actual probe request. Times out after 10 seconds.
     pub async fn rpc_call(&self, method: &str, params: Value) -> Value {
-        let rpc_request = json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-            "id": 1
-        });
-
         let (ws_stream, _) = timeout(Duration::from_secs(10), connect_async(&self.ws_url))
             .await
             .expect("WebSocket connect timed out")
@@ -226,24 +217,59 @@ enabled = true
 
         let (mut write, mut read) = ws_stream.split();
 
-        // Send request
-        let request_text = serde_json::to_string(&rpc_request).unwrap();
+        // 1. `connect` handshake (id 0) — required first frame under LAN-trust.
+        let connect_request = json!({
+            "jsonrpc": "2.0",
+            "method": "connect",
+            "params": { "device_name": "rpc-probe" },
+            "id": 0
+        });
         write
-            .send(WsMessage::Text(request_text.into()))
+            .send(WsMessage::Text(
+                serde_json::to_string(&connect_request).unwrap().into(),
+            ))
+            .await
+            .expect("Failed to send connect handshake");
+        let _hello = Self::read_response(&mut read, &json!(0)).await;
+
+        // 2. The actual probe request (id 1).
+        let rpc_request = json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+            "id": 1
+        });
+        write
+            .send(WsMessage::Text(
+                serde_json::to_string(&rpc_request).unwrap().into(),
+            ))
             .await
             .expect("Failed to send WS message");
 
-        // Read response (skip event broadcasts, wait for the JSON-RPC response)
-        let response = timeout(Duration::from_secs(10), async {
+        let response = Self::read_response(&mut read, &json!(1)).await;
+
+        // Close gracefully
+        let _ = write.send(WsMessage::Close(None)).await;
+
+        response
+    }
+
+    /// Read frames until the JSON-RPC response carrying `expected_id`
+    /// arrives, skipping event broadcasts (no `id`) and unrelated responses.
+    /// Times out after 10 seconds.
+    async fn read_response<S>(read: &mut S, expected_id: &Value) -> Value
+    where
+        S: StreamExt<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
+    {
+        timeout(Duration::from_secs(10), async {
             while let Some(msg) = read.next().await {
                 match msg {
                     Ok(WsMessage::Text(text)) => {
                         if let Ok(val) = serde_json::from_str::<Value>(&text) {
-                            // JSON-RPC response has "id" field
-                            if val.get("id").is_some() {
+                            if val.get("id") == Some(expected_id) {
                                 return val;
                             }
-                            // Otherwise it's an event broadcast — skip it
+                            // Event broadcast or unrelated response — skip it
                         }
                     }
                     Ok(WsMessage::Close(_)) => {
@@ -258,12 +284,7 @@ enabled = true
             panic!("WebSocket stream ended without a response");
         })
         .await
-        .expect("RPC call timed out waiting for response");
-
-        // Close gracefully
-        let _ = write.send(WsMessage::Close(None)).await;
-
-        response
+        .expect("RPC call timed out waiting for response")
     }
 
     /// Send an RPC call and assert success (no error field). Returns the "result" value.
