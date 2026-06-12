@@ -188,6 +188,7 @@ pub fn ThemeToggle() -> impl IntoView {
                                                 material.set(m);
                                             }
                                             class=move || {
+                                                // px-1 (not px-2 like the Mode row): 4-CJK labels need the extra 8px in a third-width column
                                                 let base = "px-1 py-1.5 rounded-lg text-xs font-medium transition-colors";
                                                 if is_active() {
                                                     format!("{base} bg-primary text-white")
