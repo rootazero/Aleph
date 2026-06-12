@@ -5,7 +5,6 @@
 //! `main.rs` stays focused on parsing and dispatch.
 
 pub mod ask;
-pub mod auth_cmd;
 pub mod calls;
 pub mod channels_cmd;
 pub mod chat;
@@ -16,10 +15,8 @@ pub mod config_cmd;
 pub mod connect;
 pub mod cron_cmd;
 pub mod daemon;
-pub mod devices_cmd;
 pub mod doctor;
 pub mod gateway_cmd;
-pub mod guests;
 pub mod health;
 pub mod heartbeat_cmd;
 pub mod hooks_cmd;
@@ -30,7 +27,6 @@ pub mod mcp_cmd;
 pub mod memory_cmd;
 pub mod models_cmd;
 pub mod open_cmd;
-pub mod pairing_cmd;
 pub mod plugin_cmd;
 pub mod plugins_cmd;
 pub mod providers_cmd;
