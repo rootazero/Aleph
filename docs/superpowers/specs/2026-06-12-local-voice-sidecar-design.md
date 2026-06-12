@@ -132,6 +132,11 @@ Unloaded → Loading → Ready → IdleCountdown → Unloaded
 3. **自动注册**：`[voice.local].enabled = true` 时 boot 自动注册两个名为 `"local"` 的 provider；`default_transcription_provider` / `default_speech_provider` 未显式设置时默认指向 local，用户显式配置永远优先。
 4. **R8 工具 `local_voice`**：两个 action——`status`（引擎状态/下载进度/磁盘占用）、`warmup`（预拉起 + 双引擎预载）。
 5. **预热钩子**：`voice_mode_set(enabled=true)` 时 fire-and-forget 一次 warmup——"点击瞬间异步预热，用户张嘴时模型已就位"落在此处。
+6. **本地 / 云端后台切换（显式承诺，2026-06-12 补充需求）**：local 只是注册表中名为 `"local"` 的又一个 provider，云端 provider 配置与行为**原样保留**。切换面：
+   - **全局**：`default_speech_provider` / `default_transcription_provider` 设为 `"local"` 或任意云 provider 名，随配置热切换；
+   - **每渠道**：现有 `voice_mode_set(provider=...)` 覆盖（TTS），不动；
+   - **归一化只填空**：`[voice.local].enabled = true` 且 default 未显式设置时才默认指向 local，**用户显式配置（含云端）永远优先**；
+   - **降级回退**：local 故障/下载中时 STT 自动回退到其他已配置云 provider（§5），云→本地方向不自动回退（显式配置即尊重）。
 6. **配置**（core 单一来源，spawn 时经 CLI 参数下发，sidecar 无自有配置文件）：
 
 ```toml
