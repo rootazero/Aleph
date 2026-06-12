@@ -34,7 +34,6 @@
 //! | workspace | Workspace isolation management |
 //! | daemon | Daemon status, shutdown, logs |
 //! | arena | Multi-agent arena lifecycle |
-//! | guests | Guest invitation management |
 //! | teams | Team management (list, get, disband, delete) |
 
 pub mod acp_config;
@@ -73,7 +72,6 @@ pub mod generation_providers;
 pub mod graph;
 pub mod graph_types;
 pub mod group_chat;
-pub mod guests;
 pub mod health;
 pub mod heartbeat;
 pub mod hooks_admin;
@@ -120,7 +118,6 @@ pub mod wizard;
 pub mod workspace;
 
 pub use config::{handle_get_full_config, handle_patch_config};
-pub use guests::SharedInvitationManager;
 pub use identity::SharedIdentityResolver;
 
 use crate::gateway::security::SharedTokenManager;
@@ -462,29 +459,6 @@ impl HandlerRegistry {
                 INTERNAL_ERROR,
                 "identity.list requires IdentityResolver - wire SharedIdentityResolver first"
                     .to_string(),
-            )
-        });
-
-        // Guest handlers (placeholders - actual handlers wired with InvitationManager)
-        registry.register("guests.createInvitation", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "guests.createInvitation requires InvitationManager - wire SharedInvitationManager first".to_string(),
-            )
-        });
-        registry.register("guests.listPending", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "guests.listPending requires InvitationManager - wire SharedInvitationManager first".to_string(),
-            )
-        });
-        registry.register("guests.revokeInvitation", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "guests.revokeInvitation requires InvitationManager - wire SharedInvitationManager first".to_string(),
             )
         });
 

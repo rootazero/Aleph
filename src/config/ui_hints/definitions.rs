@@ -427,11 +427,6 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             help: "Address to bind the gateway (loopback, all, or specific IP)",
             group: "advanced",
         },
-        "gateway.require_auth" => {
-            label: "Require Authentication",
-            help: "Require authentication for gateway connections",
-            group: "advanced",
-        },
 
         // === Session ===
         "session.dm_scope" => {

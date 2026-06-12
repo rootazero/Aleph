@@ -18,7 +18,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use super::config::AuthMode;
 use super::event_bus::{GatewayEventBus, TopicEvent};
 use super::event_scope::EventScopeGuard;
 use super::handlers::events::SubscriptionManager;
@@ -28,8 +27,6 @@ use super::middleware::MiddlewareChain;
 use super::presence::PresenceTracker;
 use super::rate_limiter::{RateLimitConfig, RateLimiter};
 use super::security::SharedTokenManager;
-use super::security::TokenManager;
-use super::session::HttpSessionManager;
 use super::state_version::StateVersionTracker;
 use crate::providers::protocols::ProtocolLoader;
 use crate::security::headers::SecurityHeadersLayer;
@@ -44,16 +41,13 @@ pub struct ConnectionState {
     pub subscriptions: Vec<String>,
     /// Connection metadata
     pub metadata: HashMap<String, String>,
-    /// Device ID (set after successful connect)
-    pub device_id: Option<String>,
-    /// Permissions (set after successful connect)
+    /// Event-scope permissions. LAN-trust treats every connection as the
+    /// implicit operator, so the connect handshake stamps the `"*"`
+    /// wildcard here; `EventScopeGuard` then delivers guarded topics
+    /// (approval banners, config.changed) to every connected client.
     pub permissions: Vec<String>,
-    /// Guest session ID (set for guest connections)
-    pub guest_session_id: Option<String>,
-    /// Resolved real client IP (socket peer IP, or the `X-Forwarded-For`
-    /// client when the peer is a trusted proxy). The per-IP connection cap
-    /// counts established connections by this value so it isolates real
-    /// clients even when many share one reverse-proxy socket address.
+    /// Socket peer IP. The per-IP connection cap counts established
+    /// connections by this value.
     pub client_ip: std::net::IpAddr,
     /// Surface identity declared by the client on `connect` (or inferred from
     /// loopback when undeclared). Names *what kind of shell* this connection is
@@ -71,9 +65,7 @@ impl ConnectionState {
             first_message: true,
             subscriptions: vec![],
             metadata: HashMap::new(),
-            device_id: None,
             permissions: vec![],
-            guest_session_id: None,
             client_ip,
             channel_kind: None,
         }
@@ -87,8 +79,6 @@ pub struct GatewaySharedState {
     pub event_bus: Arc<GatewayEventBus>,
     pub connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
     pub subscription_manager: Arc<SubscriptionManager>,
-    pub guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
-    pub auth_mode: AuthMode,
     pub max_connections: usize,
     /// Per-IP concurrent-connection cap enforced at WS upgrade. `0` disables.
     /// Loopback is exempt. See [`GatewayConfig::max_connections_per_ip`].
@@ -119,24 +109,16 @@ pub struct GatewaySharedState {
     /// Hard-require an `idempotency_key` on mutating RPCs. See
     /// `GatewayConfig::require_idempotency_key`.
     pub require_idempotency_key: bool,
-    /// HTTP session manager used to validate the `aleph_session` cookie
-    /// during WebSocket upgrade. When `Some` AND the peer is loopback,
-    /// a valid cookie short-circuits the device-pairing flow by
-    /// auto-injecting the locally-stored shared token into the first
-    /// `connect` request — same trust class as the desktop shell's
-    /// `aleph-server bootstrap-url` handoff. `None` in auth-disabled or
-    /// legacy wiring; existing flow then runs untouched.
-    pub session_mgr: Option<Arc<HttpSessionManager>>,
-    /// Shared token manager. Read once per cookie-bootstrapped connection
-    /// to obtain the token string injected into the first `connect`.
-    /// `None` ⇒ cookie bootstrap is disabled even if `session_mgr` is set.
+    /// Vault handle (`SharedTokenManager`). The WS path no longer reads it
+    /// (the cookie-bootstrap auto-inject died with the LAN-trust revert),
+    /// but the handle is retained alongside the process-global installed by
+    /// [`GatewayServer::set_shared_token_manager`] — the vault is live
+    /// infrastructure (provider keys, channel secrets, admin IPC bearer).
     pub shared_token_mgr: Option<Arc<SharedTokenManager>>,
-    /// Device-token manager, used by the dispatch loop to re-check whether an
-    /// already-authenticated connection's device token has been revoked since
-    /// `connect`. `None` ⇒ the per-dispatch revocation re-check is disabled
-    /// (e.g. auth-disabled mode or legacy wiring); the existing flow is
-    /// untouched.
-    pub token_manager: Option<Arc<TokenManager>>,
+    /// Security store handle. The cluster node connect/disconnect paths use
+    /// it to stamp the enrolled device's `last_seen_at` for the offline
+    /// `environments.list` view. `None` in probe/legacy wiring.
+    pub security_store: Option<Arc<crate::gateway::security::SecurityStore>>,
     /// The JSON-RPC middleware chain, built **once** at server construction and
     /// cloned per connection. Building it per-connection (the previous
     /// behaviour) re-ran [`MiddlewareChain::new`], which reinstalls the global
@@ -145,11 +127,6 @@ pub struct GatewaySharedState {
     /// in-flight requests from other connections. A single shared chain keeps
     /// those metrics monotonic and drops a per-connect allocation.
     pub middleware_chain: MiddlewareChain,
-    /// Trusted reverse-proxy IPs / CIDRs. When the socket peer matches one of
-    /// these, the real client IP is taken from `X-Forwarded-For` for the
-    /// per-IP connection cap and rate limiting. Empty (default) ⇒ the socket
-    /// peer address is used verbatim, and `X-Forwarded-For` is never trusted.
-    pub trusted_proxies: Arc<crate::gateway::trusted_proxy::TrustedProxies>,
     /// Cross-origin policy enforced at the `/ws` upgrade. Rejects browser
     /// pages whose `Origin` is neither same-origin, loopback, `tauri:`, nor
     /// operator-allow-listed — the DNS-rebinding / cross-origin-WebSocket
@@ -175,8 +152,6 @@ pub struct GatewayConfig {
     /// connection slots with sockets that never authenticate. `0` disables the
     /// cap; loopback is always exempt.
     pub max_connections_per_ip: usize,
-    /// Authentication mode
-    pub auth_mode: AuthMode,
     /// Connection timeout in seconds
     pub timeout_secs: u64,
     /// How often the server sends a WebSocket Ping frame to each authenticated
@@ -196,16 +171,15 @@ pub struct GatewayConfig {
     /// carry an `idempotency_key` in params or are rejected before lane
     /// dispatch. See `GatewayServerConfig::require_idempotency_key`.
     pub require_idempotency_key: bool,
-    /// Trusted reverse-proxy IPs / CIDRs whose `X-Forwarded-For` header may be
-    /// trusted to carry the real client IP. Empty (default) ⇒ the socket peer
-    /// address is used verbatim. See `GatewayServerConfig::trusted_proxies`.
-    pub trusted_proxies: Vec<String>,
     /// Extra browser origins allowed on the `/ws` upgrade, in addition to the
     /// built-in same-origin / loopback / `tauri:` rules. Populated by the
-    /// binary from the TOML `[gateway.auth] allowed_origins`. Empty (default)
+    /// binary from the TOML `[gateway] allowed_origins`. Empty (default)
     /// ⇒ only same-origin and same-machine clients may open a WebSocket. See
     /// [`crate::gateway::origin_policy::OriginPolicy`].
     pub allowed_origins: Vec<String>,
+    /// Trust every Origin on the `/ws` upgrade (reverse-proxy escape
+    /// hatch). Mirrors `GatewayServerConfig::allow_any_origin`.
+    pub allow_any_origin: bool,
 }
 
 impl Default for GatewayConfig {
@@ -213,12 +187,11 @@ impl Default for GatewayConfig {
         Self {
             max_connections: 1000,
             max_connections_per_ip: 64,
-            auth_mode: AuthMode::default(),
             timeout_secs: 300,
             ping_interval_secs: 30,
             idle_timeout_secs: 90,
-            trusted_proxies: Vec::new(),
             allowed_origins: Vec::new(),
+            allow_any_origin: false,
             lane: LaneConfig::default(),
             require_idempotency_key: false,
         }
@@ -251,8 +224,6 @@ pub struct GatewayServer {
     pub connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
     /// Subscription manager for per-connection event filtering
     subscription_manager: Arc<SubscriptionManager>,
-    /// Guest session manager for tracking guest connections
-    guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
     /// Protocol file watcher for hot-reload (None if watching disabled/failed).
     /// Held for ownership: dropping the Debouncer stops the watcher.
     #[allow(dead_code)]
@@ -307,16 +278,13 @@ pub struct GatewayServer {
     /// 404 from the server side — the CLI is expected to take the local
     /// lock instead.
     admin_router: Option<Router>,
-    /// HTTP session manager. When set together with `shared_token_mgr`,
-    /// `ws_upgrade_handler` validates the `aleph_session` cookie on
-    /// loopback peers and auto-injects the shared token into the first
-    /// `connect` so the Tauri Panel does not have to prompt for pairing.
-    session_mgr: Option<Arc<HttpSessionManager>>,
-    /// Shared token manager. See `session_mgr` doc for the bootstrap
-    /// flow these two cooperate to enable.
+    /// Vault handle. Installed by [`GatewayServer::set_shared_token_manager`],
+    /// which also publishes the process-global used by vault consumers
+    /// (e.g. the WhatsApp vault store's crypto lookup).
     shared_token_mgr: Option<Arc<SharedTokenManager>>,
-    /// Device-token manager for the dispatch-time revocation re-check.
-    token_manager: Option<Arc<TokenManager>>,
+    /// Security store handle for the node `last_seen_at` stamping in the
+    /// WS connect/disconnect paths. See `GatewaySharedState::security_store`.
+    security_store: Option<Arc<crate::gateway::security::SecurityStore>>,
     /// 见 [`GatewaySharedState::reverse_rpc`]。`build_router` 把它 clone 进
     /// 共享状态，因此两侧指向同一张表。
     pub reverse_rpc: Arc<RwLock<HashMap<String, crate::cluster::ReverseRpcChannel>>>,
@@ -349,7 +317,6 @@ impl GatewayServer {
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             subscription_manager: Arc::new(SubscriptionManager::new()),
-            guest_session_manager: None,
             protocol_watcher,
             presence: Arc::new(PresenceTracker::new()),
             state_versions: Arc::new(StateVersionTracker::new()),
@@ -372,9 +339,8 @@ impl GatewayServer {
             orchestrator: None,
             openai_api_token: None,
             admin_router: None,
-            session_mgr: None,
             shared_token_mgr: None,
-            token_manager: None,
+            security_store: None,
             reverse_rpc: Arc::new(RwLock::new(HashMap::new())),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
@@ -401,7 +367,6 @@ impl GatewayServer {
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             subscription_manager: Arc::new(SubscriptionManager::new()),
-            guest_session_manager: None,
             protocol_watcher,
             presence: Arc::new(PresenceTracker::new()),
             state_versions: Arc::new(StateVersionTracker::new()),
@@ -424,9 +389,8 @@ impl GatewayServer {
             orchestrator: None,
             openai_api_token: None,
             admin_router: None,
-            session_mgr: None,
             shared_token_mgr: None,
-            token_manager: None,
+            security_store: None,
             reverse_rpc: Arc::new(RwLock::new(HashMap::new())),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
@@ -459,14 +423,6 @@ impl GatewayServer {
         &self.event_bus
     }
 
-    /// Set the guest session manager
-    pub fn set_guest_session_manager(
-        &mut self,
-        manager: Arc<crate::gateway::security::GuestSessionManager>,
-    ) {
-        self.guest_session_manager = Some(manager);
-    }
-
     /// Set the A2A server state (enables A2A routes in `build_router`)
     pub fn set_a2a_state(&mut self, state: Arc<crate::a2a::adapter::server::A2AServerState>) {
         self.a2a_state = Some(state);
@@ -478,27 +434,18 @@ impl GatewayServer {
         self.admin_router = Some(router);
     }
 
-    /// Install the `HttpSessionManager` whose cookies the `/ws` upgrade
-    /// handler may trust on loopback peers. Must be paired with
-    /// [`set_shared_token_manager`] for the bootstrap auto-inject to fire.
-    pub fn set_session_manager(&mut self, manager: Arc<HttpSessionManager>) {
-        self.session_mgr = Some(manager);
-    }
-
-    /// Install the `SharedTokenManager`. Required alongside
-    /// [`set_session_manager`] so the cookie-validated WS upgrade can
-    /// auto-inject the locally-stored shared token into the first
-    /// `connect` request.
+    /// Install the `SharedTokenManager` (vault handle). Also publishes the
+    /// process-global (`SharedTokenManager::set_global`) that vault
+    /// consumers resolve outside the request path.
     pub fn set_shared_token_manager(&mut self, manager: Arc<SharedTokenManager>) {
         SharedTokenManager::set_global(manager.clone());
         self.shared_token_mgr = Some(manager);
     }
 
-    /// Install the `TokenManager` so the dispatch loop can re-check device-token
-    /// revocation on each request from an already-authenticated connection.
-    /// When unset, the re-check is skipped (existing behaviour).
-    pub fn set_token_manager(&mut self, manager: Arc<TokenManager>) {
-        self.token_manager = Some(manager);
+    /// Install the `SecurityStore` so the WS node connect/disconnect paths
+    /// can stamp enrolled-node `last_seen_at` (offline fleet view honesty).
+    pub fn set_security_store(&mut self, store: Arc<crate::gateway::security::SecurityStore>) {
+        self.security_store = Some(store);
     }
 
     /// Get the current number of active connections
@@ -515,9 +462,6 @@ impl GatewayServer {
         // connections instead of resetting on every connect.
         let middleware_chain =
             MiddlewareChain::new(self.handlers.clone(), self.rate_limiter.clone());
-        let trusted_proxies = Arc::new(crate::gateway::trusted_proxy::TrustedProxies::from_config(
-            &self.config.trusted_proxies,
-        ));
 
         // Wire the embedded-PTY subsystem to this server's event bus so live
         // terminal output is broadcast on the `pty.output` / `pty.exit` topics
@@ -530,8 +474,6 @@ impl GatewayServer {
             event_bus: self.event_bus.clone(),
             connections: self.connections.clone(),
             subscription_manager: self.subscription_manager.clone(),
-            guest_session_manager: self.guest_session_manager.clone(),
-            auth_mode: self.config.auth_mode.clone(),
             max_connections: self.config.max_connections,
             max_connections_per_ip: self.config.max_connections_per_ip,
             presence: self.presence.clone(),
@@ -547,14 +489,16 @@ impl GatewayServer {
             ping_interval_secs: self.config.ping_interval_secs,
             idle_timeout_secs: self.config.idle_timeout_secs,
             require_idempotency_key: self.config.require_idempotency_key,
-            session_mgr: self.session_mgr.clone(),
             shared_token_mgr: self.shared_token_mgr.clone(),
-            token_manager: self.token_manager.clone(),
+            security_store: self.security_store.clone(),
             middleware_chain,
-            trusted_proxies,
-            origin_policy: Arc::new(crate::gateway::origin_policy::OriginPolicy::new(
-                self.config.allowed_origins.clone(),
-            )),
+            origin_policy: Arc::new(if self.config.allow_any_origin {
+                crate::gateway::origin_policy::OriginPolicy::allow_any()
+            } else {
+                crate::gateway::origin_policy::OriginPolicy::new(
+                    self.config.allowed_origins.clone(),
+                )
+            }),
             reverse_rpc: self.reverse_rpc.clone(),
             node_registry: self.node_registry.clone(),
             exec_approval_manager: self.exec_approval_manager.clone(),
@@ -787,7 +731,8 @@ mod tests {
     fn test_gateway_config_default() {
         let config = GatewayConfig::default();
         assert_eq!(config.max_connections, 1000);
-        assert_eq!(config.auth_mode, AuthMode::None);
+        assert!(!config.allow_any_origin);
+        assert!(config.allowed_origins.is_empty());
     }
 
     #[tokio::test]

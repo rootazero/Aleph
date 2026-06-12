@@ -3,8 +3,6 @@
 //! Provides type-safe namespace isolation for multi-user memory data.
 //! Enforces data isolation at compile-time using `NamespaceScope` enum.
 
-use crate::gateway::security::DeviceRole;
-
 /// Namespace scope for memory access control
 ///
 /// Enforces type-safe data isolation for multi-user scenarios.
@@ -46,33 +44,11 @@ impl NamespaceScope {
             Self::Shared => "shared".to_string(),
         }
     }
-
-    /// Creates `NamespaceScope` from authentication context
-    ///
-    /// # Arguments
-    /// * `role` - Device role from authentication
-    /// * `guest_id` - Optional guest ID (required for Node role)
-    ///
-    /// # Errors
-    /// Returns error if Node role is used without `guest_id`
-    pub fn from_auth_context(role: &DeviceRole, guest_id: Option<&str>) -> Result<Self, String> {
-        match role {
-            DeviceRole::Operator => Ok(Self::Owner),
-            DeviceRole::Node => {
-                if let Some(id) = guest_id {
-                    Ok(Self::Guest(id.to_string()))
-                } else {
-                    Err("guest_id required for Node role".to_string())
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::security::DeviceRole;
 
     #[test]
     fn test_owner_scope_no_filter() {
@@ -108,23 +84,4 @@ mod tests {
         assert_eq!(NamespaceScope::Shared.to_namespace_value(), "shared");
     }
 
-    #[test]
-    fn test_from_auth_context_owner() {
-        let scope = NamespaceScope::from_auth_context(&DeviceRole::Operator, None).unwrap();
-        assert_eq!(scope, NamespaceScope::Owner);
-    }
-
-    #[test]
-    fn test_from_auth_context_guest_requires_id() {
-        let result = NamespaceScope::from_auth_context(&DeviceRole::Node, None);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("guest_id"));
-    }
-
-    #[test]
-    fn test_from_auth_context_guest_with_id() {
-        let scope =
-            NamespaceScope::from_auth_context(&DeviceRole::Node, Some("guest-123")).unwrap();
-        assert_eq!(scope, NamespaceScope::Guest("guest-123".to_string()));
-    }
 }

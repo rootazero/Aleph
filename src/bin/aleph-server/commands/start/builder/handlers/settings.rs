@@ -177,7 +177,6 @@ pub(in crate::commands::start) fn register_config_handlers(
     config: Arc<tokio::sync::RwLock<alephcore::Config>>,
     config_patcher: Arc<alephcore::ConfigPatcher>,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
-    device_store: Arc<alephcore::gateway::device_store::DeviceStore>,
     multi_registry: Option<Arc<alephcore::MultiProviderRegistry>>,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
     acp_manager: Option<Arc<alephcore::acp::manager::AcpAdapterManager>>,
@@ -458,20 +457,6 @@ pub(in crate::commands::start) fn register_config_handlers(
         config_patcher,
         event_bus
     );
-    register_handler!(
-        server,
-        "security_config.list_devices",
-        security_config::handle_list_devices,
-        device_store
-    );
-    register_handler!(
-        server,
-        "security_config.revoke_device",
-        security_config::handle_revoke_device,
-        device_store,
-        event_bus
-    );
-
     // Generation providers (vault-backed API key storage)
     register_handler!(
         server,

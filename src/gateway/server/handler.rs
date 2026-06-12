@@ -37,7 +37,7 @@ use crate::gateway::state_version::StateVersionTracker;
 
 use super::per_client_buffer::PerClientBuffer;
 use super::{ConnectionState, GatewaySharedState};
-use crate::gateway::security::TokenManager;
+use crate::gateway::security::SecurityStore;
 
 /// Shared context for handling a WebSocket connection.
 struct ConnectionContext {
@@ -45,7 +45,6 @@ struct ConnectionContext {
     event_bus: Arc<GatewayEventBus>,
     connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
     subscription_manager: Arc<SubscriptionManager>,
-    guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
     presence: Arc<PresenceTracker>,
     state_versions: Arc<StateVersionTracker>,
     rate_limiter: Arc<RateLimiter>,
@@ -74,14 +73,13 @@ struct ConnectionContext {
     /// MUST carry an `idempotency_key` or it is rejected before lane
     /// dispatch with [`IDEMPOTENCY_KEY_REQUIRED`].
     require_idempotency_key: bool,
-    /// Device-token manager. Used by the cluster node disconnect path to stamp
-    /// `last_seen_at`. `None` in auth-disabled / legacy wiring.
-    token_manager: Option<Arc<TokenManager>>,
-    /// Resolved real client IP. Equals the socket peer IP unless the peer is a
-    /// configured trusted proxy, in which case it is taken from
-    /// `X-Forwarded-For`. Used for the per-IP connection cap, rate-limit
-    /// identity, and auth-failure lockout so those abuse protections key off
-    /// the actual client rather than a shared proxy address.
+    /// Security store handle. Used by the cluster node connect/disconnect
+    /// paths to stamp the enrolled device's `last_seen_at` so the offline
+    /// view in `environments.list` stays honest. `None` in probe/legacy
+    /// wiring — stamping is then skipped.
+    security_store: Option<Arc<SecurityStore>>,
+    /// Socket peer IP. Used for the per-IP connection cap and rate-limit
+    /// identity.
     client_ip: IpAddr,
     /// Per-connection reverse-RPC registry (shared Arc with `GatewayServer`).
     /// The connection registers its `ReverseRpcChannel` here on connect and
@@ -102,21 +100,17 @@ pub(super) async fn ws_upgrade_handler(
     State(state): State<Arc<GatewaySharedState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
-    // Resolve the real client IP up front. Equals the socket peer IP unless
-    // the peer is a configured trusted reverse proxy, in which case it is
-    // taken from `X-Forwarded-For`. All IP-keyed abuse protections (per-IP
-    // cap, rate limiting, auth-failure lockout) use this so they isolate the
-    // real client rather than a shared proxy address.
-    let client_ip = state
-        .trusted_proxies
-        .real_client_ip(peer_addr.ip(), &headers);
+    // IP-keyed abuse protections (per-IP cap, rate limiting) key off the
+    // socket peer address verbatim. The trusted-proxy / X-Forwarded-For
+    // resolution died with the LAN-trust revert.
+    let client_ip = peer_addr.ip();
 
     // Cross-origin / DNS-rebinding guard. A browser always attaches an
     // `Origin` header to a WS upgrade and cannot forge it, so a malicious page
     // that reaches this loopback socket is rejected when its origin is neither
     // same-origin nor allow-listed. Native clients (CLI, bots, bridges) send
-    // no `Origin` and pass through untouched. Enforces the long-documented
-    // `[gateway.auth] allowed_origins` contract.
+    // no `Origin` and pass through untouched. Enforces the documented
+    // `[gateway] allowed_origins` contract (`allow_any_origin` bypasses).
     {
         let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
         let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
@@ -186,7 +180,6 @@ pub(super) async fn ws_upgrade_handler(
             event_bus: state.event_bus.clone(),
             connections: state.connections.clone(),
             subscription_manager: state.subscription_manager.clone(),
-            guest_session_manager: state.guest_session_manager.clone(),
             presence: state.presence.clone(),
             state_versions: state.state_versions.clone(),
             rate_limiter: state.rate_limiter.clone(),
@@ -197,7 +190,7 @@ pub(super) async fn ws_upgrade_handler(
             ping_interval_secs: state.ping_interval_secs,
             idle_timeout_secs: state.idle_timeout_secs,
             require_idempotency_key: state.require_idempotency_key,
-            token_manager: state.token_manager.clone(),
+            security_store: state.security_store.clone(),
             client_ip,
             reverse_rpc: state.reverse_rpc.clone(),
             node_registry: state.node_registry.clone(),
@@ -429,7 +422,7 @@ async fn handle_connection(
                                 // connection must be `connect`. LAN-trust drops
                                 // all token machinery, but the handshake still
                                 // bootstraps per-connection session state (presence,
-                                // surface kind, guest session id).
+                                // surface kind, operator permissions).
                                 let is_first = {
                                     let conns = ctx.connections.read().await;
                                     conns.get(&conn_id).is_none_or(|s| s.first_message)
@@ -461,13 +454,7 @@ async fn handle_connection(
                                     // authenticated connections the rl_identity is the
                                     // device_id which never looks like a loopback IP.
                                     if !ctx.client_ip.is_loopback() {
-                                    let peer_ip_str = ctx.client_ip.to_string();
-                                    let rl_identity = {
-                                        let conns = ctx.connections.read().await;
-                                        conns.get(&conn_id)
-                                            .and_then(|s| s.device_id.clone())
-                                            .unwrap_or_else(|| peer_ip_str.clone())
-                                    };
+                                    let rl_identity = ctx.client_ip.to_string();
                                     let rl_scope = scope_for_method(&req.method);
                                     let rl_key = RateLimitKey::new(&rl_identity, rl_scope);
                                     if let Err(e) = ctx.rate_limiter.check_and_record(&rl_key) {
@@ -656,23 +643,6 @@ async fn handle_connection(
                                         if req.method == "connect" {
                                             if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
                                                 if resp.is_success() {
-                                                    let guest_session_id = resp.result
-                                                        .as_ref()
-                                                        .and_then(|r| r.get("token"))
-                                                        .and_then(|v| v.as_str())
-                                                        .and_then(|token| {
-                                                            debug!("Extracting guest_session_id from token: {}", token);
-                                                            // Guest tokens have format: guest:{session_id}:{token}
-                                                            if token.starts_with("guest:") {
-                                                                let session_id = token.split(':').nth(1).map(String::from);
-                                                                debug!("Extracted guest_session_id: {:?}", session_id);
-                                                                session_id
-                                                            } else {
-                                                                debug!("Token does not start with 'guest:'");
-                                                                None
-                                                            }
-                                                        });
-
                                                     {
                                                         let mut conns = ctx.connections.write().await;
                                                         if let Some(state) = conns.get_mut(&conn_id) {
@@ -692,10 +662,11 @@ async fn handle_connection(
                                                             };
                                                             state.channel_kind = Some(kind);
                                                             state.first_message = false;
-                                                            if let Some(ref session_id) = guest_session_id {
-                                                                state.guest_session_id = Some(session_id.clone());
-                                                                info!("Connection {} authenticated as guest (session: {})", conn_id, session_id);
-                                                            }
+                                                            // LAN-trust: every connection is the implicit
+                                                            // operator. Stamp the wildcard so EventScopeGuard
+                                                            // delivers guarded topics (approval banners,
+                                                            // config.changed) to this client.
+                                                            state.permissions = vec!["*".to_string()];
                                                         }
                                                     }
 
@@ -705,7 +676,7 @@ async fn handle_connection(
                                                         if let Some(state) = conns.get(&conn_id) {
                                                             let presence_entry = PresenceEntry {
                                                                 conn_id: conn_id.clone(),
-                                                                device_id: state.device_id.clone(),
+                                                                device_id: None,
                                                                 device_name: state.metadata.get("client_name").cloned().unwrap_or_else(|| "Unknown".to_string()),
                                                                 platform: state.metadata.get("platform").cloned().unwrap_or_else(|| "unknown".to_string()),
                                                                 role: crate::gateway::presence::ConnectionRole::User,
@@ -753,47 +724,12 @@ async fn handle_connection(
                                                             // Stamp the node device's last_seen_at so that
                                                             // once it goes offline, environments.list can
                                                             // show an honest "last seen".
-                                                            if let Some(tm) = ctx.token_manager.as_ref() {
-                                                                if let Err(e) = tm.touch_device(&node_id) {
+                                                            if let Some(store) = ctx.security_store.as_ref() {
+                                                                if let Err(e) = store.touch_device(&node_id) {
                                                                     debug!("failed to stamp node last_seen on connect for {}: {}", node_id, e);
                                                                 }
                                                             }
                                                         }
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        // Log RPC request for guest sessions
-                                        if let Some(ref gsm) = ctx.guest_session_manager {
-                                            let conns = ctx.connections.read().await;
-                                            if let Some(state) = conns.get(&conn_id) {
-                                                debug!("Checking for guest_session_id in connection state: {:?}", state.guest_session_id);
-                                                if let Some(ref session_id) = state.guest_session_id {
-                                                    debug!("Found guest_session_id: {}, looking up session", session_id);
-                                                    if let Some(session) = gsm.get_session(session_id) {
-                                                        debug!("Found guest session, logging RPC request: {}", req.method);
-                                                        // Parse response to determine status
-                                                        let status = if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
-                                                            if resp.is_success() {
-                                                                crate::gateway::security::ActivityStatus::Success
-                                                            } else {
-                                                                crate::gateway::security::ActivityStatus::Failed
-                                                            }
-                                                        } else {
-                                                            crate::gateway::security::ActivityStatus::Failed
-                                                        };
-
-                                                        gsm.activity_logger().log_rpc_request(
-                                                            session_id.clone(),
-                                                            session.guest_id.clone(),
-                                                            req.method.clone(),
-                                                            serde_json::json!({
-                                                                "params": req.params,
-                                                            }),
-                                                            status,
-                                                            None,
-                                                        );
                                                     }
                                                 }
                                             }
@@ -1013,46 +949,6 @@ async fn handle_connection(
     // Cleanup
     {
         let mut conns = ctx.connections.write().await;
-
-        // Check if this was a guest session and terminate it
-        if let Some(state) = conns.get(&conn_id) {
-            if let Some(ref session_id) = state.guest_session_id {
-                if let Some(ref manager) = ctx.guest_session_manager {
-                    info!("Terminating guest session: {}", session_id);
-
-                    // Get session details before terminating
-                    if let Some(session) = manager.get_session(session_id) {
-                        // Terminate the session
-                        if let Err(e) = manager.terminate_session(session_id) {
-                            warn!("Failed to terminate guest session {}: {}", session_id, e);
-                        }
-
-                        // Emit disconnection event
-                        let event = crate::gateway::event_bus::TopicEvent {
-                            topic: "guest.session.disconnected".to_string(),
-                            data: serde_json::json!({
-                                "session_id": session.session_id,
-                                "guest_id": session.guest_id,
-                                "guest_name": session.guest_name,
-                                "connected_at": session.connected_at,
-                                "disconnected_at": std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64,
-                                "request_count": session.request_count,
-                            }),
-                            timestamp: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64,
-                            state_version: None,
-                        };
-                        let _ = ctx.event_bus.publish_json(&event);
-                    }
-                }
-            }
-        }
-
         conns.remove(&conn_id);
     }
 
@@ -1084,8 +980,8 @@ async fn handle_connection(
             // Refresh last_seen_at at the moment the node drops, so the offline
             // entry in environments.list reads "last seen ≈ disconnect time"
             // rather than "≈ connect time" for long-lived sessions.
-            if let Some(tm) = ctx.token_manager.as_ref() {
-                if let Err(e) = tm.touch_device(&node_id) {
+            if let Some(store) = ctx.security_store.as_ref() {
+                if let Err(e) = store.touch_device(&node_id) {
                     debug!(
                         "failed to stamp node last_seen on disconnect for {}: {}",
                         node_id, e

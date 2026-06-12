@@ -1,55 +1,32 @@
 // core/src/gateway/security/mod.rs
 
-//! Security Module
+//! Security Module — vault + master-key persistence.
 //!
-//! Provides authentication and authorization for Gateway connections.
-//!
-//! ## Architecture
+//! The device-auth machinery (tokens, pairing, devices, brute-force,
+//! guest sessions, invitations, policy engine, identity map, activity
+//! logs) was removed in the LAN-trust architecture revert (2026-06).
+//! What remains is the encrypted secret vault and its supporting
+//! infrastructure:
 //!
 //! ```text
-//! SecurityManager (unified entry point)
-//!   ├── TokenManager (HMAC-signed tokens)
-//!   ├── PairingManager (8-char Base32 codes)
-//!   └── DeviceRegistry (Ed25519 public keys)
-//!          │
-//!          ▼
-//!     SecurityStore (SQLite)
+//! SharedTokenManager (vault manager; token doubles as vault master key)
+//!   ├── SecretVault (encrypted secrets file)
+//!   └── SecurityStore (SQLite: master-key/HMAC persistence)
+//! crypto (HMAC / Ed25519 / pairing-code primitives — consumed by
+//!         secrets vault, Feishu webhook, WhatsApp vault store)
+//! token_readonly (read-only shared-token lookup for the admin IPC client)
 //! ```
 
-pub mod activity_log;
-pub mod activity_logger;
-pub mod brute_force;
 pub mod crypto;
-pub mod device;
-pub mod guest_session_manager;
-pub mod identity_map;
-pub mod invitation_manager;
-pub mod pairing;
-pub mod policy_engine;
 pub mod shared_token;
 pub mod store;
-pub mod token;
 pub mod token_readonly;
 
 // Re-export commonly used types
-pub use activity_log::{
-    ActivityLogQuery, ActivityLogQueryResult, ActivityStatus, ActivityType, GuestActivityLog,
-};
-pub use activity_logger::GuestActivityLogger;
-pub use brute_force::BruteForceDetector;
 pub use crypto::{
     generate_keypair, generate_pairing_code, generate_secret, hmac_sign, hmac_verify, sign_message,
     verify_signature, CryptoError, DeviceFingerprint, PAIRING_CODE_CHARSET, PAIRING_CODE_LENGTH,
 };
-pub use device::{Device, DeviceRole, DeviceType};
-pub use guest_session_manager::{GuestSession, GuestSessionError, GuestSessionManager};
-pub use identity_map::{IdentityMap, PlatformIdentity, UserId};
-pub use invitation_manager::{InvitationError, InvitationManager};
-pub use pairing::{PairingError, PairingManager, PairingRequest, PollState};
-pub use policy_engine::{PermissionResult, PolicyEngine};
 pub use shared_token::{SharedTokenError, SharedTokenManager};
-pub use store::{
-    DeviceRow, DeviceUpsertData, PairingRequestData, PairingRequestRow, SecurityStore, TokenRow,
-};
-pub use token::{SignedToken, TokenError, TokenManager, TokenValidation};
+pub use store::{DeviceUpsertData, SecurityStore};
 pub use token_readonly::read_current_token_readonly;

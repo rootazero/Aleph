@@ -59,7 +59,7 @@ mod daemon;
 mod server_init;
 
 use clap::Parser;
-use cli::{Args, AuditAction, Command, DevicesAction, PairingAction, PluginAction, PluginsAction};
+use cli::{Args, AuditAction, Command, PluginAction, PluginsAction};
 
 /// Entry point: parse args and daemonize BEFORE starting the tokio runtime.
 ///
@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the FIRST meaningful action on the `start` path. Other subcommands
     // run their own policy dispatch (see `src/cli/policy.rs` and the
     // per-handler `with_policy` / `run_no_lock` calls in
-    // `commands/{secret,devices,pairing,plugins,gateway,audit,bootstrap_runtime}.rs`),
+    // `commands/{secret,plugins,gateway,audit,bootstrap_runtime}.rs`),
     // so we only need to acquire here when entering the long-running
     // server.
     //
@@ -126,12 +126,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Stop) => return daemon::handle_stop(&args.pid_file),
         Some(Command::Secret { action }) => return commands::handle_secret_command(action),
         Some(Command::Status { json }) => return daemon::handle_status(&args.pid_file, json),
-        Some(Command::Devices { action }) => {
-            return match action {
-                DevicesAction::List => commands::handle_devices_list(),
-                DevicesAction::Revoke { device_id } => commands::handle_devices_revoke(&device_id),
-            };
-        }
         // Shell-hook consent: pure file IO against ~/.aleph/, no tokio
         // runtime and no instance lock required (the consent module guards
         // its file with fs2 + atomic rename).
@@ -150,7 +144,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::SandboxInitWindows { args: init_args }) => {
             alephcore::sandbox::windows_init::run_init(init_args);
         }
-        Some(Command::BootstrapToken) => return commands::handle_bootstrap_token(),
         // Offline prompt-size introspection: no tokio, no network, no lock.
         Some(Command::PromptSize { path, mode, json }) => {
             return commands::prompt_size::run(&path, &mode, json);
@@ -190,13 +183,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     // Handle async subcommands
     match args.command {
-        Some(Command::Pairing { action }) => {
-            return match action {
-                PairingAction::List => commands::handle_pairing_list().await,
-                PairingAction::Approve { code } => commands::handle_pairing_approve(&code).await,
-                PairingAction::Reject { code } => commands::handle_pairing_reject(&code).await,
-            };
-        }
         Some(Command::Plugins { action }) => {
             return match action {
                 PluginsAction::List => commands::handle_plugins_list().await,
@@ -244,9 +230,6 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             let code = commands::bootstrap_runtime::run(br_args).await;
             std::process::exit(code);
         }
-        Some(Command::BootstrapUrl) => {
-            return commands::handle_bootstrap_url().await;
-        }
         Some(Command::Node {
             center,
             token,
@@ -278,7 +261,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         }
         // Sync commands already handled in main()
         Some(Command::Stop | Command::Secret { .. } | Command::Status { .. } |
-Command::Devices { .. } | Command::Hooks { .. } | Command::BootstrapToken |
+Command::Hooks { .. } |
 Command::PromptSize { .. } | Command::SandboxInit { .. } |
 Command::SandboxInitWindows { .. }) => unreachable!(),
     }

@@ -1,35 +1,22 @@
-//! Authentication types — shared context and data structures.
+//! Shared handler context types (formerly the auth module).
 //!
-//! Handler implementations for auth/pairing/devices have been removed as part
-//! of the LAN-trust architecture revert (Tasks 3-4). This module holds only the
-//! types still referenced by surviving handlers (cluster, secrets, connect).
-//! Will be further reduced in T5.
+//! The auth/pairing/devices handler family was removed in the LAN-trust
+//! architecture revert (T3-T5). This module keeps only:
+//!
+//! * [`TransportPolicy`] — keepalive policy advertised at the `connect`
+//!   handshake (consumed by `handlers::connect`).
+//! * [`AuthContext`] — the shared dependency bundle for the surviving
+//!   `secrets.*` handlers (vault) and `cluster.*` handlers
+//!   (node enrollment records + live registry).
+//!
+//! The name `AuthContext` is historical; renaming it is deferred to keep
+//! T5 churn minimal (callers: `handlers/secrets.rs`, `handlers/cluster.rs`,
+//! `aleph-server` boot wiring).
 
 use crate::sync_primitives::Arc;
 use serde::Serialize;
-use std::collections::HashMap;
-use tokio::sync::RwLock;
 
-use crate::gateway::config::AuthMode;
-use crate::gateway::device_store::DeviceStore;
-use crate::gateway::presence::PresenceTracker;
-use crate::gateway::security::SecurityStore;
-use crate::gateway::security::{PairingManager, SharedTokenManager, TokenManager};
-use crate::gateway::server::ConnectionState;
-
-/// Permission/tier helpers (previously in tier.rs submodule, inlined here).
-pub mod tier {
-    const WILDCARD: &str = "*";
-
-    /// UI-facing tier label for a device holding `permissions`.
-    pub fn tier_for_permissions(permissions: &[String]) -> &'static str {
-        if permissions.iter().any(|p| p == WILDCARD) {
-            "config"
-        } else {
-            "chat"
-        }
-    }
-}
+use crate::gateway::security::{SecurityStore, SharedTokenManager};
 
 /// Transport-layer policy advertised to the client at handshake time.
 #[derive(Debug, Clone, Serialize)]
@@ -49,95 +36,34 @@ impl TransportPolicy {
     }
 }
 
-/// Authentication context for handlers.
+/// Shared context for the `secrets.*` and `cluster.*` handlers.
 ///
-/// Shared by cluster.*/secrets.* handlers.
-/// Will be deleted in T5 when security/device stores are removed.
+/// Every field is read by a live handler:
+/// * `shared_token_mgr` — `secrets.rs` (vault CRUD).
+/// * `security_store` — `cluster.rs` (enrolled-node device records for the
+///   `environments.list` offline merge + deregister).
+/// * `node_registry` — `cluster.rs` (online sessions / eviction).
 pub struct AuthContext {
-    pub token_manager: Arc<TokenManager>,
-    pub pairing_manager: Arc<PairingManager>,
-    pub device_store: Arc<DeviceStore>,
-    pub security_store: Arc<SecurityStore>,
-    pub invitation_manager: Arc<crate::gateway::security::InvitationManager>,
-    pub guest_session_manager: Arc<crate::gateway::security::GuestSessionManager>,
-    pub event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
-    pub auth_mode: AuthMode,
-    pub allow_guest: bool,
-    pub enable_pairing: bool,
     pub shared_token_mgr: Arc<SharedTokenManager>,
-    pub state_versions: Arc<crate::gateway::state_version::StateVersionTracker>,
-    pub transport_policy: TransportPolicy,
-    pub instance_id: String,
-    pub started_at_unix: i64,
-    pub presence: Arc<PresenceTracker>,
-    pub max_connections: u32,
-    pub require_challenge: bool,
-    pub session_mgr: Arc<crate::gateway::session::HttpSessionManager>,
-    pub bind_port: u16,
-    pub connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
+    pub security_store: Arc<SecurityStore>,
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::gateway::security::store::DeviceUpsertData;
-
-    #[test]
-    fn tier_for_permissions_maps_wildcard_to_config() {
-        assert_eq!(tier::tier_for_permissions(&["*".into()]), "config");
-        assert_eq!(tier::tier_for_permissions(&["chat".into()]), "chat");
-    }
 
     pub(crate) fn create_test_context() -> Arc<AuthContext> {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
-        store
-            .upsert_device(&DeviceUpsertData {
-                device_id: "test-dev",
-                device_name: "Test",
-                device_type: None,
-                public_key: &[1u8; 32],
-                fingerprint: "fp",
-                role: "operator",
-                scopes: &[],
-            })
-            .unwrap();
-
-        let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
-        let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
-        let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
         let shared_token_mgr = Arc::new(SharedTokenManager::new(
             store.clone(),
             "/tmp/aleph_test.vault",
         ));
         let _ = shared_token_mgr.generate_token();
-        let session_mgr = Arc::new(crate::gateway::session::HttpSessionManager::new(
-            store.clone(),
-            24,
-        ));
 
         Arc::new(AuthContext {
-            token_manager: Arc::new(TokenManager::new(store.clone())),
-            pairing_manager: Arc::new(PairingManager::new(store.clone())),
-            device_store: Arc::new(DeviceStore::in_memory().unwrap()),
-            security_store: store,
-            invitation_manager,
-            guest_session_manager,
-            event_bus,
-            auth_mode: AuthMode::Token,
-            allow_guest: true,
-            enable_pairing: true,
             shared_token_mgr,
-            state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
-            transport_policy: TransportPolicy::defaults(),
-            instance_id: "test-instance".to_string(),
-            started_at_unix: 1_700_000_000,
-            presence: Arc::new(PresenceTracker::new()),
-            max_connections: 1000,
-            require_challenge: false,
-            session_mgr,
-            bind_port: 18790,
-            connections: Arc::new(RwLock::new(HashMap::new())),
+            security_store: store,
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         })
     }

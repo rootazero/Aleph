@@ -24,7 +24,7 @@ use alephcore::tasks::heartbeat::{HeartbeatService, SharedHeartbeatService};
 use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
 mod builder;
-use builder::{load_app_config, initialize_auth, register_core_handlers, register_guest_handlers, register_cron_handlers, register_heartbeat_handlers, register_agent_handlers, register_arena_handlers, register_config_handlers, register_voice_capability_handlers, register_session_handlers, register_memory_handlers, register_daemon_handlers, register_oauth_handlers, register_workspace_handlers, register_projects_handlers, register_fs_handlers, register_agents_handlers, register_mcp_handlers, register_teams_handlers, register_graph_handlers, register_identity_handlers, register_group_chat_handlers, initialize_channels, initialize_inbound_router, setup_config_watcher, start_webchat_server};
+use builder::{load_app_config, initialize_vault, register_core_handlers, register_cron_handlers, register_heartbeat_handlers, register_agent_handlers, register_arena_handlers, register_config_handlers, register_voice_capability_handlers, register_session_handlers, register_memory_handlers, register_daemon_handlers, register_oauth_handlers, register_workspace_handlers, register_projects_handlers, register_fs_handlers, register_agents_handlers, register_mcp_handlers, register_teams_handlers, register_graph_handlers, register_identity_handlers, register_group_chat_handlers, initialize_channels, initialize_inbound_router, setup_config_watcher, start_webchat_server};
 
 mod orchestrator_init;
 use orchestrator_init::initialize_orchestrator;
@@ -154,14 +154,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let server_config = ServerConfig {
         max_connections: final_max_connections,
         max_connections_per_ip: full_config.gateway.max_connections_per_ip,
-        auth_mode: full_config.gateway.auth.mode.clone(),
         timeout_secs: 300,
         ping_interval_secs: full_config.gateway.ping_interval_secs,
         idle_timeout_secs: full_config.gateway.idle_timeout_secs,
         lane: full_config.gateway.lane.clone(),
         require_idempotency_key: full_config.gateway.require_idempotency_key,
-        trusted_proxies: full_config.gateway.trusted_proxies.clone(),
-        allowed_origins: full_config.gateway.auth.allowed_origins.clone(),
+        allowed_origins: full_config.gateway.allowed_origins.clone(),
+        allow_any_origin: full_config.gateway.allow_any_origin,
     };
     let mut server = GatewayServer::with_config(addr, server_config);
 
@@ -400,72 +399,31 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         session_store
     };
 
-    // Auth subsystem construction (early — vault needed for API key resolution)
-    let auth_bundle = initialize_auth(
-        args.port,
-        event_bus.clone(),
-        full_config.gateway.auth.mode.clone(),
-        server.state_versions.clone(),
+    // Security store + vault construction (early — vault needed for API key
+    // resolution).
+    let auth_bundle = initialize_vault(args.port, server.node_registry.clone());
+    register_core_handlers(
+        &mut server,
+        &auth_bundle.auth_ctx,
         alephcore::gateway::handlers::auth::TransportPolicy {
             ping_interval_secs: full_config.gateway.ping_interval_secs,
             idle_timeout_secs: full_config.gateway.idle_timeout_secs,
         },
-        server.instance_id.clone(),
-        server.started_at_unix,
-        server.presence.clone(),
-        server.connections.clone(),
-        u32::try_from(full_config.gateway.max_connections).unwrap_or(u32::MAX),
-        full_config.gateway.require_challenge,
-        full_config.gateway.allow_guest,
-        full_config.gateway.enable_pairing,
-        full_config.gateway.auth.session_expiry_hours,
-        args.daemon,
-        server.node_registry.clone(),
     );
-    register_core_handlers(&mut server, &auth_bundle.auth_ctx);
-    register_guest_handlers(
-        &mut server,
-        &auth_bundle.invitation_manager,
-        &auth_bundle.guest_session_manager,
-        &event_bus,
-    );
-    server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
 
-    // Plumb the same HttpSessionManager + SharedTokenManager into the WS
-    // upgrade path. When a loopback peer (e.g. the Tauri Panel running on
-    // the desktop shell) presents a valid `aleph_session` cookie, the
-    // upgrade handler trusts it and auto-injects the local shared token
-    // into the first `connect` — same trust class as the cookie itself.
-    // This closes the gap where the cookie protected HTML serving but
-    // the WS handshake fell through to device-pairing on every restart.
-    server.set_session_manager(auth_bundle.session_mgr.clone());
+    // Publish the vault handle (also installs the process-global used by
+    // vault consumers outside the request path).
     server.set_shared_token_manager(auth_bundle.auth_ctx.shared_token_mgr.clone());
-    // Wire the device-token manager so the WS dispatch loop can disconnect a
-    // connection whose device token is revoked mid-session (rotation/removal).
-    server.set_token_manager(auth_bundle.auth_ctx.token_manager.clone());
+    // Wire the security store so the WS node connect/disconnect paths can
+    // stamp enrolled-node last_seen_at (offline fleet view honesty).
+    server.set_security_store(auth_bundle.security_store.clone());
 
-    // Wizard session manager — constructs real PairingFlow + OnboardingFlow factory
-    // and replaces the phase-1 service_unavailable stubs installed in HandlerRegistry::new.
+    // Wizard session manager — OnboardingFlow factory replaces the phase-1
+    // service_unavailable stubs installed in HandlerRegistry::new. (The
+    // device PairingFlow died with the LAN-trust revert.)
     {
-        let device_name: String = hostname::get()
-            .ok()
-            .and_then(|h| h.into_string().ok())
-            .unwrap_or_else(|| "Aleph Desktop".to_string());
-
-        let pairing_mgr = auth_bundle.pairing_manager.clone();
-        let security_store = auth_bundle.security_store.clone();
-        let device_store = auth_bundle.device_store.clone();
-        let token_manager = auth_bundle.token_manager.clone();
-
         let flow_factory: alephcore::gateway::handlers::wizard::WizardFlowFactory = Arc::new(
             move |wizard_type: &str, _initial: Option<serde_json::Value>| match wizard_type {
-                "pairing" => Some(Box::new(alephcore::wizard::PairingFlow::new(
-                    device_name.clone(),
-                    pairing_mgr.clone(),
-                    security_store.clone(),
-                    device_store.clone(),
-                    token_manager.clone(),
-                )) as Box<dyn alephcore::wizard::WizardFlow>),
                 "onboarding" => Some(Box::new(alephcore::wizard::OnboardingFlow::new())
                     as Box<dyn alephcore::wizard::WizardFlow>),
                 _ => None,
@@ -1183,7 +1141,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         app_config.clone(),
         config_patcher,
         event_bus.clone(),
-        auth_bundle.device_store.clone(),
         agent_result.multi_registry.clone(),
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
         acp_manager.clone(),

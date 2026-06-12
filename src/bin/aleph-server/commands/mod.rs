@@ -4,14 +4,10 @@
 
 pub mod audit;
 pub mod bootstrap_runtime;
-pub mod bootstrap_token;
-pub mod bootstrap_url;
-pub mod devices;
 pub mod doctor;
 pub mod gateway;
 pub mod hooks;
 pub mod node;
-pub mod pairing;
 pub mod plugins;
 pub mod prompt_size;
 pub mod sandbox_debug;
@@ -20,13 +16,9 @@ pub mod start;
 
 // Re-export commonly used items
 pub use audit::*;
-pub use bootstrap_token::handle_bootstrap_token;
-pub use bootstrap_url::handle_bootstrap_url;
-pub use devices::*;
 pub use doctor::handle_doctor_command;
 pub use gateway::*;
 pub use hooks::*;
-pub use pairing::*;
 pub use plugins::*;
 pub use sandbox_debug::handle_sandbox_debug;
 pub use secret::*;

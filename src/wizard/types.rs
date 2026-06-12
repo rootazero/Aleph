@@ -244,8 +244,7 @@ pub struct WizardNextResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// Final payload produced by the flow (only set when done with success).
-    /// Carries flow-specific output — e.g. `PairingFlow` returns
-    /// `{ "token": "<device-token>" }`.
+    /// Carries flow-specific output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }

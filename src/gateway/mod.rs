@@ -45,7 +45,6 @@ pub mod router;
 pub mod runtime_footer;
 pub mod security;
 pub mod server;
-pub mod session;
 pub mod shutdown_forensics;
 pub mod subagent_announce;
 pub mod surface;
@@ -73,7 +72,6 @@ pub mod channel_policy;
 pub mod channel_registry;
 pub mod coalescer;
 pub mod delivery_queue;
-pub mod device_store;
 pub mod hot_reload;
 pub mod http_server;
 pub mod inbound_context;
@@ -111,7 +109,6 @@ pub mod streaming;
 pub mod tailscale;
 pub mod tools_invalidation;
 pub mod trace_context;
-pub mod trusted_proxy;
 pub mod voice;
 pub mod webhook_receiver;
 pub mod webhooks;
@@ -142,11 +139,9 @@ pub use channel::{
     HealthStatus, InboundMessage, MessageId, OutboundMessage, SendResult, UserId,
 };
 pub use channel_registry::{ChannelHealthSummary, ChannelRegistry, ChannelStatusSummary};
-pub use device_store::{ApprovedDevice, DeviceStore};
 pub use event_bus::{topic_matches, TopicEvent, TopicFilter};
 pub use events::GatewayEventFrame;
 pub use execution_adapter::ExecutionAdapter;
-pub use handlers::auth::AuthContext;
 pub use handlers::events::{
     handle_list as handle_events_list, handle_subscribe, handle_unsubscribe, SubscriptionManager,
 };

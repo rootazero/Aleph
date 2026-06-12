@@ -10,7 +10,7 @@
 //!   → MiddlewareChain
 //!       → TraceLayer      (logs request_id, method, duration)
 //!       → MetricsLayer   (increments counters, records latency, tracks state)
-//!       → AuthLayer      (validates token, populates user_id)
+//!       → AuthLayer      (pass-through; connection identity is set at connect)
 //!       → PluginMiddlewares  (inserted by PluginMiddlewareRegistry)
 //!       → RateLimitLayer (token bucket, returns 429 on exceed)
 //!       → ValidateLayer  (schema validation)

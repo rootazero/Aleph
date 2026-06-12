@@ -109,16 +109,6 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Manage device pairing
-    Pairing {
-        #[command(subcommand)]
-        action: PairingAction,
-    },
-    /// Manage approved devices
-    Devices {
-        #[command(subcommand)]
-        action: DevicesAction,
-    },
     /// Manage plugins
     Plugins {
         #[command(subcommand)]
@@ -151,22 +141,6 @@ pub enum Command {
     },
     /// Bootstrap runtime dependencies (fnm, node, uv, playwright-cli, chromium, venv)
     BootstrapRuntime(BootstrapRuntimeArgs),
-    /// Print the auto-provisioned shared token to stdout (one line, no banner).
-    ///
-    /// Used by the desktop shell to silently bootstrap the embedded Panel —
-    /// reads `~/.aleph/data/security.db` directly (same-UID gate). Exits with
-    /// code 64 (`EX_USAGE`) and a stderr message if no token has been provisioned
-    /// yet (i.e. the server has never started).
-    BootstrapToken,
-    /// Issue a one-time bootstrap nonce against a running daemon and print
-    /// the loopback URL (`http://127.0.0.1:18790/auth/bootstrap?nonce=…`)
-    /// to stdout. Used by the desktop shell's "Open in Browser" menu to
-    /// hand the user's browser an authenticated session cookie without
-    /// ever putting a token in a URL.
-    ///
-    /// Requires the daemon to be running and a shared token provisioned.
-    /// Exits with `EX_USAGE` (64) if either precondition fails.
-    BootstrapUrl,
     /// SP-2 internal: apply landlock + seccomp then exec target. Invoked
     /// by `BubblewrapDriver` inside the bwrap namespace; not for users.
     #[command(hide = true)]
@@ -229,35 +203,6 @@ pub enum Command {
         /// Remaining argv passed through to `windows_init::run_init`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
-    },
-}
-
-/// Pairing subcommands
-#[derive(Subcommand, Debug)]
-pub enum PairingAction {
-    /// List pending pairing requests
-    List,
-    /// Approve a pairing request
-    Approve {
-        /// The 6-digit pairing code
-        code: String,
-    },
-    /// Reject a pairing request
-    Reject {
-        /// The 6-digit pairing code
-        code: String,
-    },
-}
-
-/// Devices subcommands
-#[derive(Subcommand, Debug)]
-pub enum DevicesAction {
-    /// List approved devices
-    List,
-    /// Revoke an approved device
-    Revoke {
-        /// The device ID to revoke
-        device_id: String,
     },
 }
 
@@ -743,20 +688,6 @@ mod tests {
             }
             _ => panic!("Expected Secret command with Verify action"),
         }
-    }
-
-    #[test]
-    fn parses_bootstrap_token_subcommand() {
-        use clap::Parser;
-        let args = Args::try_parse_from(["aleph-server", "bootstrap-token"]).unwrap();
-        assert!(matches!(args.command, Some(Command::BootstrapToken)));
-    }
-
-    #[test]
-    fn parses_bootstrap_url_subcommand() {
-        use clap::Parser;
-        let args = Args::try_parse_from(["aleph-server", "bootstrap-url"]).unwrap();
-        assert!(matches!(args.command, Some(Command::BootstrapUrl)));
     }
 
     #[test]

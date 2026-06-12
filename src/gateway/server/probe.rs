@@ -54,7 +54,6 @@ pub async fn handle_ready(State(state): State<Arc<GatewaySharedState>>) -> impl 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::config::AuthMode;
     use crate::gateway::event_bus::GatewayEventBus;
     use crate::gateway::event_scope::EventScopeGuard;
     use crate::gateway::handlers::events::SubscriptionManager;
@@ -65,7 +64,6 @@ mod tests {
     use crate::gateway::presence::PresenceTracker;
     use crate::gateway::rate_limiter::{RateLimitConfig, RateLimiter};
     use crate::gateway::state_version::StateVersionTracker;
-    use crate::gateway::trusted_proxy::TrustedProxies;
     use crate::sync_primitives::AtomicBool;
     use std::collections::HashMap;
     use std::time::Duration;
@@ -79,8 +77,6 @@ mod tests {
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             subscription_manager: Arc::new(SubscriptionManager::new()),
-            guest_session_manager: None,
-            auth_mode: AuthMode::default(),
             max_connections: 1000,
             max_connections_per_ip: 64,
             presence: Arc::new(PresenceTracker::new()),
@@ -96,11 +92,9 @@ mod tests {
             ping_interval_secs: 30,
             idle_timeout_secs: 90,
             require_idempotency_key: false,
-            session_mgr: None,
             shared_token_mgr: None,
-            token_manager: None,
+            security_store: None,
             middleware_chain: MiddlewareChain::new(handlers, rate_limiter),
-            trusted_proxies: Arc::new(TrustedProxies::default()),
             origin_policy: Arc::new(crate::gateway::origin_policy::OriginPolicy::loopback_only()),
             reverse_rpc: Arc::new(RwLock::new(HashMap::new())),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
