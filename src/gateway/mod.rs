@@ -149,10 +149,7 @@ pub use device_store::{ApprovedDevice, DeviceStore};
 pub use event_bus::{topic_matches, TopicEvent, TopicFilter};
 pub use events::GatewayEventFrame;
 pub use execution_adapter::ExecutionAdapter;
-pub use handlers::auth::{
-    create_hello_notification, handle_connect, handle_devices_list, handle_devices_revoke,
-    handle_pairing_approve, handle_pairing_list, handle_pairing_reject, AuthContext,
-};
+pub use handlers::auth::AuthContext;
 pub use handlers::events::{
     handle_list as handle_events_list, handle_subscribe, handle_unsubscribe, SubscriptionManager,
 };

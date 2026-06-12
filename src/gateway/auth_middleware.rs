@@ -181,17 +181,12 @@ async fn handle_anonymous_rpc(
             return (StatusCode::INTERNAL_SERVER_ERROR, "rpc not available").into_response();
         }
     };
-    let response = match req.method.as_str() {
-        "pairing.start_browser" => {
-            crate::gateway::handlers::auth::handle_pairing_start_browser(req, ctx).await
-        }
-        "pairing.poll" => crate::gateway::handlers::auth::handle_pairing_poll(req, ctx).await,
-        other => crate::gateway::protocol::JsonRpcResponse::error(
-            req.id.clone(),
-            -32601,
-            format!("method '{other}' not allowed via /rpc; use /ws"),
-        ),
-    };
+    let _ = ctx; // pairing handlers removed (LAN-trust revert)
+    let response = crate::gateway::protocol::JsonRpcResponse::error(
+        req.id.clone(),
+        -32601,
+        format!("method '{}' not allowed via /rpc; use /ws", req.method),
+    );
     Json(response).into_response()
 }
 

@@ -24,7 +24,7 @@ use alephcore::tasks::heartbeat::{HeartbeatService, SharedHeartbeatService};
 use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
 mod builder;
-use builder::{load_app_config, initialize_auth, register_auth_handlers, register_guest_handlers, register_cron_handlers, register_heartbeat_handlers, register_agent_handlers, register_arena_handlers, register_config_handlers, register_voice_capability_handlers, register_session_handlers, register_memory_handlers, register_daemon_handlers, register_oauth_handlers, register_workspace_handlers, register_projects_handlers, register_fs_handlers, register_agents_handlers, register_mcp_handlers, register_teams_handlers, register_graph_handlers, register_identity_handlers, register_group_chat_handlers, initialize_channels, initialize_inbound_router, setup_config_watcher, start_webchat_server};
+use builder::{load_app_config, initialize_auth, register_core_handlers, register_guest_handlers, register_cron_handlers, register_heartbeat_handlers, register_agent_handlers, register_arena_handlers, register_config_handlers, register_voice_capability_handlers, register_session_handlers, register_memory_handlers, register_daemon_handlers, register_oauth_handlers, register_workspace_handlers, register_projects_handlers, register_fs_handlers, register_agents_handlers, register_mcp_handlers, register_teams_handlers, register_graph_handlers, register_identity_handlers, register_group_chat_handlers, initialize_channels, initialize_inbound_router, setup_config_watcher, start_webchat_server};
 
 mod orchestrator_init;
 use orchestrator_init::initialize_orchestrator;
@@ -423,7 +423,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         args.daemon,
         server.node_registry.clone(),
     );
-    register_auth_handlers(&mut server, &auth_bundle.auth_ctx);
+    register_core_handlers(&mut server, &auth_bundle.auth_ctx);
     register_guest_handlers(
         &mut server,
         &auth_bundle.invitation_manager,

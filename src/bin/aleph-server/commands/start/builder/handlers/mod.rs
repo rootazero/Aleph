@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use alephcore::gateway::handlers::auth as auth_handlers;
-use alephcore::gateway::handlers::auth_tools as auth_tools_handlers;
 use alephcore::gateway::handlers::channel as channel_handlers;
 use alephcore::gateway::handlers::config as config_handlers;
 use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
@@ -89,7 +88,7 @@ macro_rules! register_handler {
 
 mod agents;
 mod arena;
-mod auth;
+mod core;
 mod config;
 mod mcp;
 mod memory;
@@ -99,7 +98,7 @@ mod system;
 
 pub(in crate::commands::start) use agents::*;
 pub(in crate::commands::start) use arena::*;
-pub(in crate::commands::start) use auth::*;
+pub(in crate::commands::start) use core::*;
 pub(in crate::commands::start) use config::*;
 pub(in crate::commands::start) use mcp::*;
 pub(in crate::commands::start) use memory::*;

@@ -21,9 +21,6 @@
 //! | profiles | Auth profile management |
 //! | generation | Content generation |
 //! | group_chat | Multi-agent group chat orchestration |
-//! | pairing | Device pairing |
-//! | runs | Run wait/queue |
-//! | auth | Authentication |
 //! | agent | Agent execution |
 //! | session | Session management |
 //! | channel | Channel status |
@@ -46,7 +43,6 @@ pub mod agent;
 pub mod agents;
 pub mod arena;
 pub mod auth;
-pub mod auth_tools;
 pub mod behavior_config;
 pub mod browser_config;
 pub mod channel;
