@@ -615,6 +615,8 @@ pub fn discover() -> Vec<String> {
 
 （窗口部分按 splash 现有模式实现：`grep -rn "splash" desktop/shell/src/main.rs` 找加载内联 HTML 的现成写法照抄。）
 
+> **修正注（T10 执行时裁决，2026-06-12）**：实际实现**未新建独立 WebviewWindow**，而是复用既有 `splash/connect.html`（先于本任务存在：地址输入+Connect 按钮+双变体打包+tray/menu "Connect Remote" 既有目标），lite 下渐进增强出 mDNS 发现区（`discover_servers` invoke 失败=full 变体→静默隐藏发现区，full 行为等价不变）。spec §5.3"原生小窗"的功能要求（手填 IP[:端口]+发现列表点选）全满足；单源 DRY 避免第二份连接 UI 漂移。失败重试选型：TCP-probe-before-navigate（Tauri 2.11.2 无导航失败事件，错误回调不可行）；`connection::marker_exists()` 区分首启与 marker=local。
+
 - [ ] **Step 2: main.rs 接线**
 
 lite 构建（`#[cfg(not(feature = "embedded-core"))]`）启动序列：`ConnectionTarget` marker 存在 → 直接导航；不存在 → 开 connect_setup 窗。连接失败（webview 加载错误）→ 重开设置窗（错误处理 spec §8：不白屏）。
