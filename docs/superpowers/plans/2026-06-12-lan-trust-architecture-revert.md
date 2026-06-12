@@ -835,3 +835,17 @@ git add -A && git commit -m "docs: LAN-trust distribution and security model"
   4. 完整版零配置开箱（`just shell-build` 装 .app 验证）
 - [ ] 删除量核对：`git diff --stat <计划起点>..HEAD | tail -1` 预期净删 10k+ 行
 - [ ] CHANGELOG.md 写条目后按 CLAUDE.md 发版流程 `just release`（用户触发）
+
+---
+
+## Amendment 7（controller，2026-06-13）— Host 白名单 DNS-rebinding 硬化（最终审查后，用户选定）
+
+**背景**：全部 13 task 完成后的最终代码审查（final-rev-static）判 ✅ 可合入、零 CRITICAL/HIGH，但记一条 **MEDIUM (M1)**：删除认证后 `src/gateway/origin_policy.rs` 的 WS Origin 校验成为浏览器面**唯一**护栏，其 **same-origin 放行路径挡不住经典 DNS-rebinding**——攻击者在 `evil.com:18790` 托管恶意页，把 `evil.com` 重绑到网关地址后，请求带 `Origin == Host == evil.com:18790` 即同源放行，驱动 agent（含 PTY）。`is_allowed` 逻辑与回退前逐字节相同（既有 gap），但回退删了门后的 auth 兜底使其更暴露。
+
+**决策（用户经 AskUserQuestion 选定"加 Host 白名单硬化"）**：gate 住 same-origin 放行——**仅当请求 `Host` 的主机部分是 IP 字面量或 loopback 时**才 auto-allow same-origin；域名 Host 不再自动同源放行（须走 `[gateway] allowed_origins`）。依据：DNS-rebinding 必须用域名（重绑 A 记录），纯 IP/loopback 的 Host 无法被重绑。
+
+**不破坏的已发布场景**：loopback 浏览器、LAN-IP 浏览器（`10.x:18790` Host 是 IP 字面量→放行，LAN 模式关键路径）、IPv6、tauri shell、native 无 Origin、allow-list。**有意行为变更**：零配置**域名** same-origin 现被拒，域名部署须 allow-list 其 origin——这是堵 rebinding 的必要代价。
+
+**实现**：`is_allowed` same-origin 分支加 `&& host_is_ip_or_loopback(host)` 门 + helper（剥端口含 IPv6 括号、判 loopback/IP 字面量）+ TDD 测试（rebinding 域名 Host 被拒 / LAN-IP 同源放行 / IPv6 / 域名同源无配置被拒+加 allow-list 后放行）+ 三处文档措辞改为"已防御"（origin_policy.rs / SECURITY.md / CLAUDE.md，撤回 Amendment 阶段加的"当前未实现"限制说明）。验证 `cargo clippy -p alephcore -- -D warnings`（项目 gate，不含 --all-targets）+ `cargo test -p alephcore --lib origin_policy`。
+
+**合并**：硬化完成后，用户选定由 controller 合 `lan-trust-revert → 本地 main`（main 已并发前进 32 commits，先 merge main 入分支 ort 解 webchat 冲突→验证→`--no-ff`）。全程 NOT pushed，推送/发版由用户触发。
