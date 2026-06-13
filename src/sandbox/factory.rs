@@ -63,13 +63,24 @@ pub fn build_sandbox(
     // Command-policy hard-filter runs FIRST so a catastrophic command is
     // refused before it consumes rate-limit budget or reaches the OS driver.
     // A malformed custom-rule regex fails *safe*: we log and fall back to the
-    // curated defaults rather than booting with no content filter.
+    // curated defaults rather than booting with no content filter. Every arm
+    // installs a hook carrying at least the catastrophic hardline floor — no
+    // config path leaves disk-wipe / fork-bomb protection off.
     match cfg.command_policy.clone().into_policy() {
         Ok(Some(policy)) => {
             hooks = hooks.with_before(Arc::new(CommandPolicyHook::new(policy)));
         }
         Ok(None) => {
-            tracing::info!(target: "command_policy", "command policy disabled by config");
+            // User disabled the *tunable* policy, but the catastrophic floor is
+            // not negotiable: install a hardline-only hook so fork bombs / disk
+            // wipes are still refused before reaching the OS driver.
+            tracing::info!(
+                target: "command_policy",
+                "command policy disabled by config — hardline catastrophic floor remains active"
+            );
+            hooks = hooks.with_before(Arc::new(CommandPolicyHook::new(
+                crate::sandbox::command_policy::CommandPolicy::hardline_only(),
+            )));
         }
         Err(e) => {
             tracing::error!(
@@ -347,6 +358,58 @@ mod tests {
         // WorkspaceSandbox maps a hook denial to SandboxError::Other.
         assert!(
             matches!(err, SandboxError::Other(ref m) if m.contains("command policy")),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Wiring check: even when the operator disables `[sandbox.command_policy]`,
+    /// `build_sandbox` installs the undisableable hardline floor, so a
+    /// catastrophic command is still refused before it reaches the OS driver.
+    #[tokio::test]
+    async fn build_sandbox_disabled_command_policy_still_blocks_hardline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = SandboxConfig {
+            workspace_root: tmp.path().to_path_buf(),
+            enabled: true,
+            default_timeout_seconds: 60,
+            max_output_bytes: 1024,
+            deny_read_globs: Vec::new(),
+            allow_unix_sockets: Vec::new(),
+            dangerously_allow_all_unix_sockets: false,
+            allow_local_binding: false,
+            linux: Default::default(),
+            windows: Default::default(),
+            rate_limit: Default::default(),
+            resource_governor: Default::default(),
+            command_policy: crate::sandbox::command_policy::CommandPolicyConfigSchema {
+                enabled: false,
+                ..Default::default()
+            },
+        };
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver);
+        let sandbox = build_sandbox(
+            &cfg,
+            driver,
+            make_gate(),
+            SandboxRateLimitConfig::default(),
+            &crate::config::types::ShellSecurityConfig::default(),
+        );
+
+        let err = sandbox
+            .execute(SandboxCommand {
+                session_id: make_sid(),
+                program: "bash".into(),
+                args: vec!["-c".into(), "dd if=/dev/zero of=/dev/sda".into()],
+                env: HashMap::new(),
+                stdin: None,
+                cwd: None,
+                capabilities: SandboxCapabilities::strict(),
+                timeout: None,
+            })
+            .await
+            .expect_err("hardline floor must refuse dd even with the policy disabled");
+        assert!(
+            matches!(err, SandboxError::Other(ref m) if m.contains("dd_to_block_device")),
             "unexpected error: {err}"
         );
     }

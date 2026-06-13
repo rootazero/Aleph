@@ -70,7 +70,10 @@ impl Default for CommandPolicyConfigSchema {
 
 impl CommandPolicyConfigSchema {
     /// Compile this config into a runnable [`CommandPolicy`]. Returns `Ok(None)`
-    /// when `enabled = false` (the factory then installs no hook). Custom-rule
+    /// when `enabled = false`; the factory then installs the catastrophic
+    /// [`CommandPolicy::hardline_only`] floor instead, so disabling the policy
+    /// never removes the irreversible-damage guard. A returned policy always
+    /// carries the hardline floor in addition to its tunable rules. Custom-rule
     /// regex errors are reported by rule name so a typo is easy to locate.
     pub fn into_policy(self) -> Result<Option<CommandPolicy>, String> {
         if !self.enabled {
@@ -135,7 +138,8 @@ mod tests {
     fn into_policy_compiles_defaults() {
         let cfg = CommandPolicyConfigSchema::default();
         let policy = cfg.into_policy().expect("ok").expect("some");
-        assert!(policy.rule_count() >= 8);
+        assert!(policy.rule_count() >= 4);
+        assert!(policy.hardline_count() >= 5);
     }
 
     #[test]
