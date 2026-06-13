@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.6.14]
+
+### Added
+
+- **BYO voice — OpenAI-compatible local voice endpoints** — voice mode pivots
+  to a bring-your-own-endpoint model: STT and TTS can target any
+  OpenAI-compatible server (local or cloud) the user runs, dropping the
+  self-built sidecar. Adds a `[voice]` config section and a voice-mode model
+  override so voice turns can run on a different model than chat.
+- **Immersive voice session (Siri-style)** — a full-screen voice mode with an
+  animated orb, energy-threshold VAD, an incremental sentence-splitting TTS
+  pipeline, barge-in, and a composer mini-orb entry point (tap = immersive,
+  hold = dictate, plus a hotkey).
+- **Dedicated MiniMax TTS provider** — a hex-decoding `minimax_tts` provider
+  replaces the broken `openai_compat` routing (MiniMax T2A returns hex-encoded
+  audio inside a status envelope), defaulting to `speech-2.8-turbo`.
+- **Volcengine TTS provider** — a new TTS provider over Volcengine's legacy
+  openspeech base64 API.
+- **SiliconFlow STT/TTS presets** — config-only presets for SiliconFlow's
+  Whisper-compatible STT and OpenAI-compatible TTS.
+- **Desktop screen-vision loop** — `desktop screenshot` results are now fed to
+  the model as native image blocks, so vision models can actually see the
+  screen instead of receiving only flattened OCR text.
+- **PRODUCT_TOPOLOGY.md** — documents the one-source → three-artifact product
+  topology (full app / panel-only shell / standalone server).
+
+### Changed
+
+- **Autonomous goal continuations are observable** — `/goal` continuation runs
+  now broadcast to the Panel and `aleph watch` and fan out final results to
+  Telegram/Slack, instead of being collected and silently discarded.
+  Continuation failures fail closed (Blocked + push) rather than stalling
+  silently, and lesson-capture guidance is hardened against self-poisoning.
+- **Sandbox bash policy hardened** — command-policy gains de-obfuscation
+  normalization (strips zero-width/RTL characters, folds backslash and
+  empty-quote evasions) and an undisableable hardline floor: fork-bomb, `dd`,
+  `mkfs`, `rm --no-preserve-root`, and redirect rules can no longer be turned
+  off even with enforcement disabled.
+
+### Fixed
+
+- **Cohere endpoint + empty-default presets** — fixes the Cohere API endpoint
+  and fills 6 LLM presets that shipped with unusable empty default models.
+- **Round-2 silent TTS + stuck "正在思考"** — the immersive voice session no
+  longer goes silent or hangs on "thinking" after the first exchange.
+- **Immersive TTS never firing** — the speak Effect captured zero reactive
+  dependencies and never ran; reactivity is now tracked correctly.
+- **Stale keep-alive stall on OpenAI-compatible TTS** — eliminated a hang
+  caused by stale keep-alive connections, added bounded transient retry for TTS
+  cold-start, and made immersive playback robust to incremental segments.
+- **WKWebView mini-orb clipping** — the composer mini orb is masked so
+  WKWebView clips its blend-mode children, removing a square rendering artifact.
+- **Connection-switch hardening** — switching cores blocks a blank remote
+  target and drops a redundant reload; "Reload Panel" now performs a
+  cache-clearing hard reload; switching to a remote core notes that the local
+  daemon stays resident.
+- **Glass surface render cost** — glass surfaces use a fade-only entrance that
+  kills per-frame re-blur, and overall style-recalc tax is reduced (visuals
+  unchanged).
+
 ## [26.6.13]
 
 ### Changed
