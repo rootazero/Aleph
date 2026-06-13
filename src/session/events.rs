@@ -76,6 +76,29 @@ pub struct ToolOutputMetadata {
     pub truncated: bool,
     #[serde(default)]
     pub cost_cents: Option<u64>,
+    /// Out-of-band image payloads carried alongside the (text) `value`.
+    ///
+    /// Some tools — desktop screenshots above all — produce an image the
+    /// vision-capable model must actually *see*. The text result budget
+    /// (`apply_layer_two`) would otherwise flatten and truncate the base64
+    /// into oblivion, so the image is hoisted here BEFORE truncation and
+    /// re-emitted as a `ContentBlock::Image` when the tool result is rendered
+    /// into the prompt. Empty for the overwhelming majority of tool calls.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ToolImage>,
+}
+
+/// A single out-of-band image attached to a tool result (base64 + MIME).
+///
+/// Mirrors UI-TARS-desktop's "screenshot re-injection as a post-tool side
+/// effect": the screen the model acted on is fed back as a viewable image on
+/// the next turn, closing the perceive→act loop.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolImage {
+    /// Base64-encoded image bytes (no `data:` URL prefix).
+    pub data: String,
+    /// MIME type, e.g. `image/png` or `image/jpeg`.
+    pub mime_type: String,
 }
 
 /// Terminal disposition of a harness run.

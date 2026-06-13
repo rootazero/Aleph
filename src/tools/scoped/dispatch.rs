@@ -672,6 +672,17 @@ impl ScopedToolService {
     /// `result_store` if one is wired; falls back to head+tail truncation
     /// otherwise.
     async fn apply_layer_two(&self, name: &str, mut out: ToolOutput) -> ToolOutput {
+        // Rescue any inline image payload (e.g. a `desktop` screenshot) into the
+        // out-of-band metadata channel BEFORE the structured value is flattened
+        // to text and truncated below. Otherwise the base64 is destroyed by the
+        // result-token budget and the vision model never sees the screen it just
+        // acted on. The hoist also elides the base64 from `value`, so the text
+        // below no longer carries megabytes of unusable characters.
+        let images = crate::tools::result_processing::hoist_inline_images(&mut out.value);
+        if !images.is_empty() {
+            out.metadata.images = images;
+        }
+
         // Compress first: hands JSON to the per-tool summarizer that
         // already exists in `tool_output::compressor`. The text we feed
         // into Layer 2 reflects what the LLM will ultimately see.

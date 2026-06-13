@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::retrieval::IndexOutcome;
+use crate::session::events::ToolImage;
 use crate::tools::result_store::{extract_persisted_ref, ToolResultStore};
 
 /// Global default budget for tools that neither declare an explicit
@@ -133,6 +134,64 @@ pub fn apply_result_budget(
         tokens_in_context: tokens_after,
         persisted_path: None,
     }
+}
+
+/// Rescue inline image payloads from a structured tool-result value into the
+/// out-of-band [`ToolImage`] channel, BEFORE the value is flattened to text and
+/// truncated by the result budget.
+///
+/// Without this, a `desktop` screenshot's base64 (often megabytes) is
+/// stringified into the tool-result text, blows the token budget, and is
+/// truncated into an undecodable fragment — so the vision-capable model never
+/// actually *sees* the screen it just acted on. Here we lift the base64 out,
+/// replace it in the text channel with a short marker (keeping the surrounding
+/// metadata: size, format, OCR text), and return the images for re-emission as
+/// `ContentBlock::Image` when the tool result is rendered into the prompt.
+///
+/// Targets the desktop screenshot shape `{ image_base64, format, .. }`, whether
+/// at the top level or nested under a `data` wrapper (`DesktopOutput { data }`).
+/// Non-matching values are left untouched, so this is a no-op for the ~all tool
+/// calls that produce no image.
+#[must_use]
+pub fn hoist_inline_images(value: &mut serde_json::Value) -> Vec<ToolImage> {
+    let mut images = Vec::new();
+    // `DesktopOutput` wraps the screenshot object under `data`; check there
+    // first, then the value itself (covers tools that return the image at the
+    // top level). At most one image is hoisted per object.
+    if let Some(data) = value.get_mut("data") {
+        extract_image_in_place(data, &mut images);
+    }
+    extract_image_in_place(value, &mut images);
+    images
+}
+
+/// Extract a single `{ image_base64, format }` payload from an object in place,
+/// replacing the base64 with a short marker. No-op for non-objects or objects
+/// without a substantial `image_base64` string. The `> 256` guard also makes
+/// this idempotent — the marker left behind is far shorter, so a second pass
+/// never re-hoists it.
+fn extract_image_in_place(value: &mut serde_json::Value, out: &mut Vec<ToolImage>) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    // Read phase: these immutable borrows end before the mutation below.
+    let data = match obj.get("image_base64").and_then(serde_json::Value::as_str) {
+        Some(s) if s.len() > 256 => s.to_string(),
+        _ => return,
+    };
+    let mime_type = match obj.get("format").and_then(serde_json::Value::as_str) {
+        Some("jpeg" | "jpg") => "image/jpeg",
+        _ => "image/png",
+    }
+    .to_string();
+    let chars = data.len();
+    out.push(ToolImage { data, mime_type });
+    obj.insert(
+        "image_base64".to_string(),
+        serde_json::Value::String(format!(
+            "<{chars} base64 chars returned to the model as a viewable image block>"
+        )),
+    );
 }
 
 /// Build the model-facing hint appended to a persist marker when the output
@@ -263,6 +322,55 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         let store = ToolResultStore::with_dir_for_tests(base.clone());
         (store, base)
+    }
+
+    // ---------------------------------------------------------------
+    // hoist_inline_images — the perceive→act vision loop
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn hoists_desktop_screenshot_into_out_of_band_channel() {
+        // Desktop screenshot shape: image nested under `data`.
+        let big = "A".repeat(5000); // > 256 → a real image, not a marker
+        let mut value = serde_json::json!({
+            "success": true,
+            "data": {
+                "image_base64": big,
+                "width": 1920,
+                "height": 1080,
+                "format": "png",
+            }
+        });
+        let images = hoist_inline_images(&mut value);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].data.len(), 5000);
+        assert_eq!(images[0].mime_type, "image/png");
+        // Base64 is elided from the text channel (the budget-blowing blob is gone).
+        let elided = value["data"]["image_base64"].as_str().unwrap();
+        assert!(elided.len() < 256);
+        // Surrounding metadata is preserved for the model to read.
+        assert_eq!(value["data"]["width"], 1920);
+    }
+
+    #[test]
+    fn hoist_maps_jpeg_and_is_idempotent() {
+        let mut value = serde_json::json!({
+            "data": { "image_base64": "B".repeat(400), "format": "jpeg" }
+        });
+        let first = hoist_inline_images(&mut value);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].mime_type, "image/jpeg");
+        // Second pass finds nothing — the short marker is below the 256 guard.
+        assert!(hoist_inline_images(&mut value).is_empty());
+    }
+
+    #[test]
+    fn hoist_ignores_non_image_and_tiny_outputs() {
+        let mut rows = serde_json::json!({ "ok": true, "rows": [1, 2, 3] });
+        assert!(hoist_inline_images(&mut rows).is_empty());
+        // A tiny image_base64 (< 256) is not treated as a screenshot.
+        let mut small = serde_json::json!({ "image_base64": "abc", "format": "png" });
+        assert!(hoist_inline_images(&mut small).is_empty());
     }
 
     // ---------------------------------------------------------------

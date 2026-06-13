@@ -331,6 +331,13 @@ fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
             ActionType::DesktopKeyCombo,
             args.keys.as_ref().map(|k| k.join("+")).unwrap_or_default(),
         )),
+        // Hold/release a key or chord (UI-TARS press/release). Same approval
+        // identity as key_combo — without this arm it fell through to the
+        // `_ => "unknown"` branch and was audited as an unknown action.
+        "key_button" => Some((
+            ActionType::DesktopKeyCombo,
+            args.keys.as_ref().map(|k| k.join("+")).unwrap_or_default(),
+        )),
 
         "launch_app" | "quit_app" | "restart_app" => Some((
             ActionType::DesktopLaunchApp,
@@ -496,6 +503,7 @@ Actions:
 - mouse_button: Press/release mouse at (x, y). Requires press_action (press/release/click).
 - type_text: Type text at current cursor position.
 - key_combo: Press key combination, e.g. keys=["cmd","c"].
+- key_button: Hold or release a key/chord without auto-releasing — keys=["cmd"] plus press_action="press" (hold down) then later press_action="release". Distinct from key_combo, which presses and releases atomically. Useful for drag-with-modifier or chorded shortcuts.
 - scroll: Scroll via delta_x/delta_y.
 - launch_app: Launch app by bundle_id.
 - quit_app: Close app by bundle_id.

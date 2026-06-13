@@ -109,12 +109,28 @@ pub(crate) fn build_prompt(
                 call_id, output, ..
             } => {
                 let tool_name = resolve_tool_name(events, idx, call_id).unwrap_or("unknown");
-                messages.push(UnifiedMessage::tool_result_json(
-                    call_id.clone(),
-                    tool_name.to_string(),
-                    output.value.clone(),
-                    false,
-                ));
+                // Base case: the structured tool output as a JSON block. When
+                // the tool carried out-of-band images (a `desktop` screenshot,
+                // hoisted off the truncation path in `apply_layer_two`), append
+                // them as viewable `Image` blocks so a vision-capable model sees
+                // the screen it just acted on — closing the perceive→act loop
+                // (UI-TARS "screenshot re-injection" parity). Empty for ~all
+                // other tools, leaving the JSON-only result unchanged.
+                let mut content = vec![ContentBlock::Json {
+                    value: output.value.clone(),
+                }];
+                for img in &output.metadata.images {
+                    content.push(ContentBlock::Image {
+                        data: img.data.clone(),
+                        mime_type: img.mime_type.clone(),
+                    });
+                }
+                messages.push(UnifiedMessage::ToolResult {
+                    tool_call_id: call_id.clone(),
+                    tool_name: tool_name.to_string(),
+                    content,
+                    is_error: false,
+                });
             }
             SessionEvent::ToolError { call_id, error, .. } => {
                 let tool_name = resolve_tool_name(events, idx, call_id).unwrap_or("unknown");
