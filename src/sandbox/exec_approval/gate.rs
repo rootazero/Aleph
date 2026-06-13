@@ -1,5 +1,5 @@
 use crate::sync_primitives::{Mutex, RwLock};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -179,11 +179,6 @@ impl ApprovalGate {
             .copied()
             .unwrap_or(0)
     }
-}
-
-#[must_use]
-pub fn check_always_confirm(tool_name: &str, always_confirm: &HashSet<String>) -> bool {
-    always_confirm.contains(tool_name)
 }
 
 /// The gate is itself an [`ApprovalRequester`], delegating to its own

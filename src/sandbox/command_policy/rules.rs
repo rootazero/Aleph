@@ -1,4 +1,4 @@
-//! Default catastrophic-command ruleset + action / enforcement types.
+//! Catastrophic-command rulesets + action / enforcement types.
 //!
 //! Ported in spirit from clawshell's DLP `[[patterns]]` engine (regex +
 //! `action = block|redact`), but specialised for *shell command* content
@@ -11,6 +11,16 @@
 //! patterns that are essentially never legitimate inside an agent workspace
 //! and audits a slightly larger set of high-signal suspicious shapes. The
 //! OS seatbelt/bwrap/job-object remains the real enforcer.
+//!
+//! Two tiers (see [`super::CommandPolicy`]):
+//!
+//! * [`hardline_rules`] — catastrophic, irreversible shapes (disk wipe,
+//!   filesystem-root delete, fork bomb). These are an **undisableable floor**:
+//!   enforced regardless of [`EnforcementMode`] and present even when the
+//!   tunable policy is switched off. Mirrors hermes-agent's `HARDLINE_PATTERNS`
+//!   that never bypass, even under `--yolo`.
+//! * [`default_rules`] — high-signal but occasionally-legitimate shapes that an
+//!   operator can downgrade (`warn`) or disable (`off`) for staged rollout.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -28,16 +38,21 @@ pub enum RuleAction {
 }
 
 /// Global override applied on top of per-rule [`RuleAction`]s.
+///
+/// Applies to the **tunable** ruleset only. The [`hardline_rules`] floor is
+/// always enforced and ignores this mode entirely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum EnforcementMode {
     /// Honour per-rule actions: `Block` rules deny, `Warn` rules audit.
     #[default]
     Block,
-    /// Observation mode: downgrade every `Block` to a `Warn`. Nothing is
-    /// ever denied — useful for staged rollout / measuring false positives.
+    /// Observation mode: downgrade every tunable `Block` to a `Warn`. No
+    /// tunable rule is ever denied — useful for staged rollout / measuring
+    /// false positives. The hardline floor still blocks.
     Warn,
-    /// Disable the policy entirely (the hook short-circuits to Allow).
+    /// Disable the tunable ruleset (those matches short-circuit to Allow). The
+    /// hardline floor still blocks.
     Off,
 }
 
@@ -53,17 +68,18 @@ pub struct PolicyRule {
     pub pattern: &'static str,
 }
 
-/// The curated default ruleset.
+/// The undisableable catastrophic floor.
 ///
-/// `Block` entries are patterns with essentially no legitimate use inside a
-/// per-session agent workspace; `Warn` entries are high-signal shapes that
-/// can occasionally be legitimate, so they are audited rather than refused.
+/// Each entry targets an irreversible, never-legitimate shape inside a
+/// per-session agent workspace (disk wipe, filesystem-root delete, fork bomb).
+/// [`super::CommandPolicy::evaluate`] applies these regardless of the
+/// configured [`EnforcementMode`], and the factory keeps them active even when
+/// the tunable policy is disabled, so no config change can remove this floor.
 /// All patterns are matched case-insensitively (see [`super::CommandPolicy`]).
 #[must_use]
-pub fn default_rules() -> Vec<PolicyRule> {
-    use RuleAction::{Block, Warn};
+pub fn hardline_rules() -> Vec<PolicyRule> {
+    use RuleAction::Block;
     vec![
-        // ── Block: never legitimate in a sandboxed workspace ──────────────
         PolicyRule {
             name: "fork_bomb",
             description: "fork bomb — a self-piping backgrounded function that exhausts PIDs",
@@ -97,7 +113,21 @@ pub fn default_rules() -> Vec<PolicyRule> {
             action: Block,
             pattern: r">\s*/dev/(sd|nvme|disk|hd|vd|mmcblk)",
         },
-        // ── Warn: high-signal but occasionally legitimate ─────────────────
+    ]
+}
+
+/// The curated tunable ruleset.
+///
+/// High-signal shapes that can occasionally be legitimate, so they default to
+/// `Warn` (audited, not refused) and respect the operator's [`EnforcementMode`].
+/// Operators may append `[[sandbox.command_policy.custom_rules]]` of their own,
+/// including `block`-action rules (which then respect the enforcement mode —
+/// unlike the [`hardline_rules`] floor). All patterns are matched
+/// case-insensitively (see [`super::CommandPolicy`]).
+#[must_use]
+pub fn default_rules() -> Vec<PolicyRule> {
+    use RuleAction::Warn;
+    vec![
         PolicyRule {
             name: "rm_rf_system_path",
             description: "recursive force-remove targeting an absolute root / home path",
@@ -140,14 +170,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_rules_are_nonempty_and_named_uniquely() {
-        let rules = default_rules();
-        assert!(rules.len() >= 8, "expected a meaningful default ruleset");
-        let mut names: Vec<&str> = rules.iter().map(|r| r.name).collect();
+    fn rulesets_are_nonempty_and_globally_unique() {
+        let hardline = hardline_rules();
+        let tunable = default_rules();
+        assert!(hardline.len() >= 5, "expected the full catastrophic floor");
+        assert!(tunable.len() >= 4, "expected a meaningful tunable ruleset");
+
+        // Names must be unique *across both tiers* — they all land in the same
+        // `blocked`/`warned` vectors, so a collision would be ambiguous.
+        let mut names: Vec<&str> = hardline
+            .iter()
+            .chain(tunable.iter())
+            .map(|r| r.name)
+            .collect();
         names.sort_unstable();
         let before = names.len();
         names.dedup();
-        assert_eq!(before, names.len(), "rule names must be unique");
+        assert_eq!(before, names.len(), "rule names must be globally unique");
+    }
+
+    #[test]
+    fn hardline_rules_are_all_block_action() {
+        assert!(
+            hardline_rules().iter().all(|r| r.action == RuleAction::Block),
+            "the catastrophic floor must be block-action"
+        );
     }
 
     #[test]
