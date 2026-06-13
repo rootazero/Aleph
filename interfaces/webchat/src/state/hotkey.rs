@@ -13,18 +13,26 @@
 use leptos::ev::keydown;
 use leptos::prelude::*;
 
+use crate::views::voice::VoiceMode;
+
 /// Process-wide UI hotkey state. Clone-cheap (signals are `Copy`).
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct HotkeyState {
     /// Whether the command palette is currently open.
     pub palette_open: RwSignal<bool>,
+    /// Immersive voice-mode switch, threaded in so the global keydown listener
+    /// can toggle it without `expect_context` (which would panic when invoked
+    /// from a leaked, owner-less DOM-event closure). `pub(crate)` because
+    /// `VoiceMode` is crate-private — only in-crate callers wire it.
+    pub(crate) voice: VoiceMode,
 }
 
 impl HotkeyState {
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new(voice: VoiceMode) -> Self {
         Self {
             palette_open: RwSignal::new(false),
+            voice,
         }
     }
 
@@ -48,6 +56,8 @@ impl HotkeyState {
 ///
 /// Bindings:
 /// - **⌘K / Ctrl+K** → toggle the command palette
+/// - **⌘⇧V (macOS) / Ctrl+Alt+V (Win/Linux)** → toggle immersive voice mode
+/// - **Esc** → close the voice overlay (if open), else close the palette
 ///
 /// Inputs while the palette itself is open are handled inside the palette
 /// (Esc to close, ↑↓ to navigate, Enter to run) — the global listener
@@ -65,6 +75,26 @@ pub fn install(state: HotkeyState) {
             // palette even mid-typing.
             ev.prevent_default();
             state.toggle_palette();
+            return;
+        }
+
+        // Voice mode toggle — ⌘⇧V on macOS, Ctrl+Alt+V on Win/Linux. The PC
+        // combo deliberately uses Alt to dodge Ctrl+Shift+V (paste-as-plain-
+        // text in most browsers).
+        let is_mac_combo = ev.meta_key() && ev.shift_key() && ev.key().eq_ignore_ascii_case("v");
+        let is_pc_combo = ev.ctrl_key() && ev.alt_key() && ev.key().eq_ignore_ascii_case("v");
+        if is_mac_combo || is_pc_combo {
+            ev.prevent_default();
+            state.voice.open.update(|o| *o = !*o);
+            return;
+        }
+
+        // Esc while the voice overlay is up — close it and OWN the keystroke
+        // (prevent_default + return) so the palette / sidebar Esc handlers
+        // below and in `app.rs` don't also fire on the same press.
+        if ev.key() == "Escape" && state.voice.open.get_untracked() {
+            ev.prevent_default();
+            state.voice.open.set(false);
             return;
         }
 
