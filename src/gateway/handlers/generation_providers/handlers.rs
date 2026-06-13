@@ -722,7 +722,6 @@ mod list_presets_tests {
             "suno",
             "bfl-flux",
             "cartesia",
-            "minimax-stt",
         ] {
             assert!(ids.contains(&required), "missing preset {required}");
         }

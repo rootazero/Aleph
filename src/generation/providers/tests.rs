@@ -723,17 +723,3 @@ fn test_create_cartesia_provider() {
     assert!(provider.supports(GenerationType::Speech));
     assert_eq!(provider.default_model(), Some("sonic-2"));
 }
-
-#[test]
-fn test_create_minimax_stt_provider() {
-    let config = GenerationProviderConfig {
-        provider_type: "minimax_stt".to_string(),
-        api_key: Some("minimax-key".to_string()),
-        models: vec!["whisper-1".to_string()],
-        ..Default::default()
-    };
-    let provider = create_provider("minimax-stt", &config, GenerationType::Transcription).unwrap();
-    assert_eq!(provider.name(), "minimax-stt");
-    assert!(provider.supports(GenerationType::Transcription));
-    assert_eq!(provider.default_model(), Some("whisper-1"));
-}

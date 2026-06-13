@@ -43,9 +43,9 @@ pub use types::{MinimaxBaseResp, T2aResponse};
 /// `api.minimaxi.com` is the host for the `platform.minimaxi.com` console.
 /// Accounts on the global `api.minimax.io` endpoint can override `base_url`.
 const DEFAULT_ENDPOINT: &str = "https://api.minimaxi.com";
-/// `speech-2.6-turbo` is `MiniMax`'s low-latency model recommended for voice
-/// chat / conversational scenarios — the right default for Aleph voice mode.
-const DEFAULT_MODEL: &str = "speech-2.6-turbo";
+/// `speech-2.8-turbo` is `MiniMax`'s newest low-latency turbo model — the right
+/// default for Aleph voice mode (low latency for conversational replies).
+const DEFAULT_MODEL: &str = "speech-2.8-turbo";
 /// A voice id from the modern `speech-2.x` / `speech-02` taxonomy. The classic
 /// `male-qn-*` ids only work with the `speech-01` family, so they are a poor
 /// default against `DEFAULT_MODEL`.

@@ -17,7 +17,7 @@ fn rejects_empty_api_key() {
 #[test]
 fn applies_defaults() {
     let p = MinimaxTtsProvider::new("k", None, None, None).unwrap();
-    assert_eq!(p.default_model(), Some("speech-2.6-turbo"));
+    assert_eq!(p.default_model(), Some("speech-2.8-turbo"));
     assert_eq!(p.voice, "Chinese (Mandarin)_Gentle_Boy");
     assert_eq!(p.endpoint, "https://api.minimaxi.com/v1/t2a_v2");
 }
@@ -40,7 +40,7 @@ fn honours_overrides() {
 fn blank_overrides_fall_back_to_defaults() {
     let p = MinimaxTtsProvider::new("k", Some("  ".into()), Some("  ".into()), Some("  ".into()))
         .unwrap();
-    assert_eq!(p.default_model(), Some("speech-2.6-turbo"));
+    assert_eq!(p.default_model(), Some("speech-2.8-turbo"));
     assert_eq!(p.voice, "Chinese (Mandarin)_Gentle_Boy");
     assert_eq!(p.endpoint, "https://api.minimaxi.com/v1/t2a_v2");
 }

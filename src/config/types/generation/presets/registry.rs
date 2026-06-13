@@ -352,7 +352,7 @@ const PROFILES: &[(&str, GenerationPreset)] = &[
         "minimax-tts",
         GenerationPreset::new(
             "minimax_tts",
-            "speech-2.6-turbo",
+            "speech-2.8-turbo",
             Some("https://api.minimaxi.com"),
         )
         .with_modalities(SPEECH)
@@ -414,15 +414,6 @@ const PROFILES: &[(&str, GenerationPreset)] = &[
             .with_description("Nova-3 streaming STT")
             .with_homepage("https://developers.deepgram.com")
             .with_signup("https://console.deepgram.com/signup"),
-    ),
-    (
-        "minimax-stt",
-        GenerationPreset::new("minimax_stt", "whisper-1", Some("https://api.minimaxi.com"))
-            .with_modalities(TRANSCRIPTION)
-            .with_display("MiniMax 语音转文本")
-            .with_description("Native /v1/audio_to_text; requires GroupId in params.extra")
-            .with_homepage("https://platform.minimaxi.com")
-            .with_signup("https://platform.minimaxi.com"),
     ),
 ];
 
