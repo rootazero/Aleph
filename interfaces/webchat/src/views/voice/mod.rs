@@ -20,7 +20,7 @@ use leptos::task::spawn_local;
 use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
 use crate::views::chat::ChatState;
-use audio::{MicSession, TtsPlayer};
+use audio::{MicError, MicSession, TtsPlayer};
 use machine::{on_event, Action, VoiceEvent, VoicePhase};
 use orb::VoiceOrb;
 use sentence::SentenceSplitter;
@@ -73,7 +73,7 @@ fn VoiceSession() -> impl IntoView {
     let level = RwSignal::new(0.0_f64);
     let caption = RwSignal::new(Caption::Idle);
     let error_flash = RwSignal::new(false);
-    let mic_denied = RwSignal::new(false);
+    let mic_error: RwSignal<Option<MicError>> = RwSignal::new(None);
 
     // The mic and the interval handle outlive their writer (the async mic-open
     // task) and must be reachable from `on_cleanup`, whose closure bound is
@@ -145,8 +145,8 @@ fn VoiceSession() -> impl IntoView {
         spawn_local(async move {
             let session = match MicSession::open().await {
                 Ok(s) => s,
-                Err(_) => {
-                    mic_denied.set(true);
+                Err(e) => {
+                    mic_error.set(Some(e));
                     return;
                 }
             };
@@ -256,10 +256,28 @@ fn VoiceSession() -> impl IntoView {
     });
 
     let status_text = move || match phase.get() {
-        _ if mic_denied.get() => "需要麦克风权限：系统设置 → 隐私与安全 → 麦克风".to_string(),
         VoicePhase::Listening => "正在聆听".to_string(),
         VoicePhase::Processing => "正在思考".to_string(),
         VoicePhase::Speaking => "正在说话 · 开口即可打断".to_string(),
+    };
+    // Mic-open failure replaces the phase hint. A permission denial becomes a
+    // click-through to the OS privacy pane (settings_url); other failures (busy
+    // device, insecure context) render as plain, honest text.
+    let mic_hint = move || match mic_error.get() {
+        None => view! { {status_text} }.into_any(),
+        Some(e) => match e.settings_url() {
+            Some(url) => view! {
+                <a
+                    class="underline underline-offset-2 cursor-pointer hover:text-text-primary transition-colors"
+                    href=url
+                    target="_blank"
+                >
+                    {e.caption()}
+                </a>
+            }
+            .into_any(),
+            None => view! { {e.caption()} }.into_any(),
+        },
     };
     let caption_text = move || match caption.get() {
         Caption::Idle => String::new(),
@@ -275,7 +293,7 @@ fn VoiceSession() -> impl IntoView {
                 error_flash=Signal::derive(move || error_flash.get())
             />
             <div class="voice-caption mt-8">{caption_text}</div>
-            <div class="voice-hint mt-2">{status_text}</div>
+            <div class="voice-hint mt-2">{mic_hint}</div>
             <button
                 class="voice-hint mt-10 hover:text-text-primary transition-colors"
                 on:click=move |_| voice_mode.open.set(false)

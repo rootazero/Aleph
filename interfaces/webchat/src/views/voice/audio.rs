@@ -34,26 +34,110 @@ struct ActiveSegment {
     _on_data: Closure<dyn FnMut(web_sys::BlobEvent)>,
 }
 
+/// Why [`MicSession::open`] failed, mapped from the getUserMedia DOMException so
+/// the immersive view shows an honest, actionable caption instead of always
+/// blaming microphone permission (the old behaviour collapsed every failure —
+/// busy device, insecure context, missing hardware — into "grant permission").
+#[derive(Clone)]
+pub(crate) enum MicError {
+    /// `NotAllowedError` / `SecurityError`: the user or OS refused capture.
+    Denied,
+    /// `NotFoundError` / `OverconstrainedError`: no usable mic device.
+    NotFound,
+    /// `NotReadableError` / `AbortError`: device present but unreadable (busy,
+    /// held by another app).
+    NotReadable,
+    /// `mediaDevices` / getUserMedia unavailable — non-secure context or a
+    /// webview that doesn't expose the API.
+    Unsupported,
+    /// AudioContext or graph wiring failed.
+    AudioContext,
+    /// Any other DOMException, carrying its `name: message` verbatim so the
+    /// real cause is never hidden.
+    Other(String),
+}
+
+impl MicError {
+    /// Map a getUserMedia rejection (a DOMException) to a variant by `.name`.
+    fn from_get_user_media(err: JsValue) -> Self {
+        let field = |k: &str| {
+            js_sys::Reflect::get(&err, &k.into())
+                .ok()
+                .and_then(|v| v.as_string())
+        };
+        match field("name").unwrap_or_default().as_str() {
+            "NotAllowedError" | "SecurityError" | "PermissionDeniedError" => Self::Denied,
+            "NotFoundError" | "OverconstrainedError" => Self::NotFound,
+            "NotReadableError" | "AbortError" | "TrackStartError" => Self::NotReadable,
+            "" => Self::Other("getUserMedia rejected without an error name".to_string()),
+            other => Self::Other(format!("{other}: {}", field("message").unwrap_or_default())),
+        }
+    }
+
+    /// Human-facing caption for the immersive view.
+    pub(crate) fn caption(&self) -> String {
+        match self {
+            Self::Denied => "需要麦克风权限：系统设置 → 隐私与安全 → 麦克风".to_string(),
+            Self::NotFound => "未检测到麦克风设备".to_string(),
+            Self::NotReadable => "麦克风被占用或无法读取，关闭其他占用麦克风的程序后重试".to_string(),
+            Self::Unsupported => "当前环境不支持麦克风（需安全上下文：https 或 localhost）".to_string(),
+            Self::AudioContext => "音频上下文启动失败".to_string(),
+            Self::Other(s) => format!("麦克风打开失败：{s}"),
+        }
+    }
+
+    /// macOS deep-link to the Microphone privacy pane, offered only for a
+    /// denial so the caption can become a one-tap jump to the toggle. The shell
+    /// routes this scheme to the OS via its external-link guard (opened from a
+    /// `target="_blank"` anchor); in a plain browser it degrades to the OS's
+    /// own "open System Settings?" prompt.
+    pub(crate) fn settings_url(&self) -> Option<&'static str> {
+        match self {
+            Self::Denied => {
+                Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+            }
+            _ => None,
+        }
+    }
+}
+
 impl MicSession {
     /// Open the mic with system AEC on (spec decision: 系统 AEC).
-    pub(crate) async fn open() -> Result<Rc<Self>, JsValue> {
-        let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
-        let devices = window.navigator().media_devices()?;
+    pub(crate) async fn open() -> Result<Rc<Self>, MicError> {
+        let window = web_sys::window().ok_or(MicError::Unsupported)?;
+        // `mediaDevices` is undefined outside a secure context (and in some
+        // webviews over plain http) — surface that distinctly from a denial.
+        let devices = window
+            .navigator()
+            .media_devices()
+            .map_err(|_| MicError::Unsupported)?;
         let constraints = web_sys::MediaStreamConstraints::new();
         let audio = js_sys::Object::new();
-        js_sys::Reflect::set(&audio, &"echoCancellation".into(), &true.into())?;
-        js_sys::Reflect::set(&audio, &"noiseSuppression".into(), &true.into())?;
+        js_sys::Reflect::set(&audio, &"echoCancellation".into(), &true.into())
+            .map_err(|_| MicError::Unsupported)?;
+        js_sys::Reflect::set(&audio, &"noiseSuppression".into(), &true.into())
+            .map_err(|_| MicError::Unsupported)?;
         constraints.set_audio(&audio.into());
-        let stream: web_sys::MediaStream =
-            JsFuture::from(devices.get_user_media_with_constraints(&constraints)?)
-                .await?
-                .dyn_into()?;
+        let promise = devices
+            .get_user_media_with_constraints(&constraints)
+            .map_err(|_| MicError::Unsupported)?;
+        // The getUserMedia promise rejects with a DOMException whose `name`
+        // pinpoints the cause — switch on it instead of blaming permission.
+        let stream: web_sys::MediaStream = JsFuture::from(promise)
+            .await
+            .map_err(MicError::from_get_user_media)?
+            .dyn_into()
+            .map_err(|_| MicError::Unsupported)?;
 
-        let ctx = web_sys::AudioContext::new()?;
-        let source = ctx.create_media_stream_source(&stream)?;
-        let analyser = ctx.create_analyser()?;
+        let ctx = web_sys::AudioContext::new().map_err(|_| MicError::AudioContext)?;
+        let source = ctx
+            .create_media_stream_source(&stream)
+            .map_err(|_| MicError::AudioContext)?;
+        let analyser = ctx.create_analyser().map_err(|_| MicError::AudioContext)?;
         analyser.set_fft_size(1024);
-        source.connect_with_audio_node(&analyser)?;
+        source
+            .connect_with_audio_node(&analyser)
+            .map_err(|_| MicError::AudioContext)?;
 
         Ok(Rc::new(Self {
             stream,

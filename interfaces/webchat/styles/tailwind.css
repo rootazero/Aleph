@@ -980,8 +980,16 @@ html[data-material="aurora"].dark {
   .voice-orb--processing { --voice-flow-speed: 14s; }
   .voice-orb--speaking   { --voice-flow-speed: 3.5s; }
   .voice-orb--error .voice-orb-flow { background: conic-gradient(from 0deg, var(--color-danger), var(--voice-flow-a), var(--color-danger)); }
-  /* Mini orb for composer button */
-  .voice-orb--mini { --voice-orb-size: 1.75rem; box-shadow: 0 0 0.8rem 0.15rem var(--voice-glow); }
+  /* Mini orb for composer button — sized to match the 20px sibling glyphs.
+     At this scale the voice-morph blob reads as a wobbling box, so mini stays a
+     clean circle (morph dropped); the inner flow spin + hue drift keep it alive,
+     and the glow is tightened so its halo doesn't inflate the apparent size. */
+  .voice-orb--mini {
+    --voice-orb-size: 1.25rem;
+    border-radius: 50%;
+    animation: voice-hue-drift 26s ease-in-out infinite;
+    box-shadow: 0 0 0.5rem 0.08rem var(--voice-glow);
+  }
   /* Caption + hint */
   .voice-caption { color: var(--color-text-primary); font-size: 1rem; text-align: center; max-width: 36rem; min-height: 1.6em; padding: 0 1.5rem; }
   .voice-hint { color: var(--color-text-tertiary); font-size: 0.75rem; text-align: center; }
