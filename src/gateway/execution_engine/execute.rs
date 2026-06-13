@@ -776,6 +776,53 @@ where
                             }
                         }
                     }
+
+                    // Loop continuation hook: the clock-gated sibling of the
+                    // goal hook above. Fires only when this session has an
+                    // Active loop that has not hit a safety cap. Increments the
+                    // tick counter BEFORE spawning so caps are enforced even if
+                    // a tick crashes. Re-fires via the SAME spawn machinery as
+                    // goal, but with a cadence delay.
+                    if let Some(loop_reg) = crate::looping::global() {
+                        let session_key_str = request.session_key.to_key_string();
+                        if let Some(state) = loop_reg.get_active(&session_key_str) {
+                            let now_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0, |d| d.as_millis() as u64);
+                            if crate::looping::pursuit::should_fire(&state, 0, now_ms) {
+                                let bumped = state.clone().spent_iteration();
+                                let delay = crate::looping::pursuit::tick_delay_ms(&state, now_ms);
+                                let prompt = crate::looping::pursuit::tick_prompt(&state);
+                                loop_reg.put(bumped);
+                                spawn_continuation_run(
+                                    cont_deps.registry.clone(),
+                                    cont_deps.adapter.clone(),
+                                    request.session_key.clone(),
+                                    session_key_str.clone(),
+                                    prompt,
+                                    cont_deps.event_bus.clone(),
+                                    Some(delay),
+                                );
+                                info!(session = %session_key_str, delay_ms = delay,
+                                    ticks = state.iterations_used.saturating_add(1),
+                                    "loop: enqueued next tick");
+                            } else if crate::looping::pursuit::exhausted(&state, 0, now_ms) {
+                                let note = if state
+                                    .deadline_ms
+                                    .is_some_and(|d| now_ms != 0 && now_ms > d)
+                                {
+                                    crate::looping::pursuit::deadline_reached_note(&state)
+                                } else {
+                                    crate::looping::pursuit::cap_reached_note(&state)
+                                };
+                                loop_reg.put(
+                                    state.with_status(crate::looping::LoopStatus::Stopped),
+                                );
+                                info!(session = %session_key_str, note = %note,
+                                    "loop: safety cap reached, loop stopped");
+                            }
+                        }
+                    }
                 }
 
                 Ok(())
