@@ -370,35 +370,114 @@ pub(super) fn VoiceInputButton(
 ) -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let voice_mode = expect_context::<crate::views::voice::VoiceMode>();
     let i18n = use_i18n();
 
     let state = RwSignal::new(RecState::Idle);
     let error = RwSignal::new(Option::<String>::None);
-    let handle: Handle = Rc::new(RefCell::new(Recorder::default()));
+    // The recorder handle is `Rc` (`!Send`) and is reached from several closures
+    // (the deferred long-press timer via `start_dictation`, pointerup, click),
+    // so it lives in a LocalStorage arena slot whose `Copy` handle each closure
+    // captures freely — a bare `Rc` could only be moved into one closure.
+    let handle: StoredValue<Handle, LocalStorage> =
+        StoredValue::new_local(Rc::new(RefCell::new(Recorder::default())));
 
+    // Dual-gesture state. A press starts a 450 ms timer: if it fires first the
+    // gesture is a long-press → the original dictation flow (`begin`); a
+    // pointerup before then is a tap → enter immersive voice mode. `long_press`
+    // records which branch won so pointerup knows whether to `finish` (stop the
+    // in-flight recording) or open the overlay. `pointer_used` lets the `click`
+    // fallback (keyboard activation only — keyboard fires `click`, not pointer
+    // events) tell itself apart from a mouse click that pointerup already owned.
+    let press_timer: StoredValue<Option<TimeoutHandle>, LocalStorage> =
+        StoredValue::new_local(None);
+    let long_press = StoredValue::new(false);
+    let pointer_used = StoredValue::new(false);
+
+    // Long-press dictation entry (the original Idle→record path), deferred
+    // 450 ms. Captures only `Copy` handles, so it is itself `Copy` and can be
+    // moved into a fresh timeout closure on every pointerdown.
+    let start_dictation = move || {
+        if disabled.get_untracked() {
+            return;
+        }
+        if state.get_untracked() == RecState::Idle {
+            long_press.set_value(true);
+            begin(handle.get_value(), dashboard, chat, state, error);
+        }
+    };
+
+    let on_pointer_down = move |_: web_sys::PointerEvent| {
+        if disabled.get_untracked() {
+            return;
+        }
+        pointer_used.set_value(true);
+        long_press.set_value(false);
+        // While recording, a press is a deliberate stop — don't arm the timer.
+        if state.get_untracked() != RecState::Idle {
+            return;
+        }
+        if let Ok(h) =
+            set_timeout_with_handle(start_dictation, std::time::Duration::from_millis(450))
+        {
+            press_timer.set_value(Some(h));
+        }
+    };
+
+    let on_pointer_up = move |_: web_sys::PointerEvent| {
+        if let Some(h) = press_timer.try_update_value(Option::take).flatten() {
+            h.clear();
+        }
+        if disabled.get_untracked() {
+            return;
+        }
+        if long_press.get_value() {
+            // Long-press already fired → we're recording; release stops it.
+            long_press.set_value(false);
+            if state.get_untracked() == RecState::Recording {
+                finish(handle.get_value(), dashboard, chat, state, error);
+            }
+        } else if state.get_untracked() == RecState::Recording {
+            // Recording without a long-press means a prior gesture started it
+            // (e.g. keyboard); a release here stops it.
+            finish(handle.get_value(), dashboard, chat, state, error);
+        } else if state.get_untracked() == RecState::Idle {
+            // Quick tap on an idle mic → immersive voice mode.
+            voice_mode.open.set(true);
+        }
+        // Starting / Transcribing — ignore (mid round-trip).
+    };
+
+    // Keyboard activation fallback: a `<button>` reached via Enter/Space fires
+    // `click` but never pointer events. Mouse clicks DO fire pointerup first
+    // (which owns the gesture and sets `pointer_used`), so we swallow those
+    // here to avoid double-handling.
     let on_click = move |_: web_sys::MouseEvent| {
+        if pointer_used.try_update_value(|u| std::mem::replace(u, false)) == Some(true) {
+            return;
+        }
         if disabled.get_untracked() {
             return;
         }
         match state.get_untracked() {
-            RecState::Idle => begin(handle.clone(), dashboard, chat, state, error),
-            RecState::Recording => finish(handle.clone(), dashboard, chat, state, error),
-            // Starting (mic dialog up) / Transcribing (round-tripping) — ignore
-            // extra clicks so we don't fire a duplicate record_start/stop.
+            RecState::Idle => voice_mode.open.set(true),
+            RecState::Recording => finish(handle.get_value(), dashboard, chat, state, error),
             RecState::Starting | RecState::Transcribing => {}
         }
     };
 
     let title = move || {
         let key = match state.get() {
-            RecState::Idle => t_string!(i18n, chat.voice_start),
-            RecState::Starting => t_string!(i18n, chat.voice_start),
-            RecState::Recording => t_string!(i18n, chat.voice_stop),
-            RecState::Transcribing => t_string!(i18n, chat.voice_transcribing),
+            // Idle: the mini orb is the immersive-mode entry; the hint spells
+            // out both gestures (tap = immersive, hold = dictate-to-text).
+            RecState::Idle => "点击进入语音模式 · 长按说话转文字".to_string(),
+            RecState::Starting => t_string!(i18n, chat.voice_start).to_string(),
+            RecState::Recording => t_string!(i18n, chat.voice_stop).to_string(),
+            RecState::Transcribing => t_string!(i18n, chat.voice_transcribing).to_string(),
         };
         match error.get() {
             Some(e) => format!("{key} — {e}"),
-            None => key.to_string(),
+            None => key,
         }
     };
 
@@ -438,6 +517,8 @@ pub(super) fn VoiceInputButton(
             disabled=move || disabled.get()
                 || state.get() == RecState::Starting
                 || state.get() == RecState::Transcribing
+            on:pointerdown=on_pointer_down
+            on:pointerup=on_pointer_up
             on:click=on_click
         >
             {move || match state.get() {
@@ -452,8 +533,17 @@ pub(super) fn VoiceInputButton(
                               d="M4 12a8 8 0 0 1 8-8V0C5.4 0 0 5.4 0 12h4z" />
                     </svg>
                 }.into_any(),
-                // Microphone glyph for idle + recording (recording pulses red).
-                _ => view! {
+                // Idle → the mini stream-flow orb, signalling that a tap drops
+                // into immersive voice mode (long-press still dictates).
+                RecState::Idle => view! {
+                    <div class="voice-orb voice-orb--mini voice-orb--listening">
+                        <div class="voice-orb-flow"></div>
+                        <div class="voice-orb-sheen"></div>
+                    </div>
+                }.into_any(),
+                // Recording → the original mic glyph (button_class pulses it red),
+                // keeping the long-press dictation flow visually unambiguous.
+                RecState::Recording => view! {
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5"
                          viewBox="0 0 20 20" fill="currentColor">
                         <path d="M10 2a2.5 2.5 0 0 0-2.5 2.5v5a2.5 2.5 0 0 0 5 0v-5A2.5 2.5 0 0 0 10 2Z" />

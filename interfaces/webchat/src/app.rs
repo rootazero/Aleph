@@ -60,8 +60,10 @@ fn AppContent() -> impl IntoView {
     // Immersive voice mode switch. Provided at the shell root so the composer
     // mini-orb (which flips it on) and the full-screen overlay (mounted at the
     // shell root, below) both read the same signal. The overlay reuses this
-    // same ChatState, so a voice turn lands in the live chat transcript.
-    provide_context(VoiceMode::new());
+    // same ChatState, so a voice turn lands in the live chat transcript. Also
+    // threaded into `HotkeyState` below so the ⌘⇧V / Esc bindings reach it.
+    let voice_mode = VoiceMode::new();
+    provide_context(voice_mode);
 
     // Multi-tab session registry (per-agent). Empty at boot; the chat
     // sidebar's auto-select-default-agent path is what opens the first
@@ -73,9 +75,10 @@ fn AppContent() -> impl IntoView {
     // opens Split mode on demand. Persisted in localStorage.
     provide_context(WorkspaceState::new());
 
-    // Hotkey state — owns the ⌘K command-palette open signal. Installed
-    // *before* the keydown listener below so the listener can read it.
-    let hk = HotkeyState::new();
+    // Hotkey state — owns the ⌘K command-palette open signal and carries the
+    // VoiceMode switch for the ⌘⇧V / Esc bindings. Installed *before* the
+    // keydown listener below so the listener can read it.
+    let hk = HotkeyState::new(voice_mode);
     provide_context(hk);
     hotkey::install(hk);
 
