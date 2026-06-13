@@ -162,6 +162,14 @@
      primitive blocks). */
   --glass-blur-subtle: 8px;
   --scrim-blur: 2px;
+
+  /* ── Voice orb ── flow colors derive from accent (relative OKLCH), level driven by JS */
+  --voice-flow-a: var(--color-primary);
+  --voice-flow-b: oklch(from var(--color-primary) calc(l + 0.08) calc(c * 1.15) calc(h + 60));
+  --voice-flow-c: oklch(from var(--color-primary) calc(l + 0.12) calc(c * 0.9) calc(h - 55));
+  --voice-glow: oklch(from var(--color-primary) l c h / 0.45);
+  --voice-level: 0; /* 0..1, written per-frame from AnalyserNode RMS */
+  --voice-flow-speed: 7s;
 }
 
 html {
@@ -928,6 +936,46 @@ html[data-material="aurora"].dark {
     box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.10);   /* top highlight: source of glassiness */
     font-weight: 600;
   }
+
+  /* Full-screen immersive stage */
+  .voice-stage {
+    position: fixed; inset: 0; z-index: 40;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background:
+      radial-gradient(ellipse at 50% 118%, var(--voice-glow), transparent 58%),
+      var(--color-surface);
+  }
+  /* Orb: wrapper positions, inner morphs — NEVER merge (transform clobbering) */
+  .voice-orb {
+    position: relative;
+    width: var(--voice-orb-size, 11rem); height: var(--voice-orb-size, 11rem);
+    overflow: hidden;
+    animation: voice-morph 5s ease-in-out infinite, voice-hue-drift 26s ease-in-out infinite;
+    scale: calc(1 + var(--voice-level) * 0.16);
+    transition: scale 90ms ease-out;
+    background: oklch(from var(--color-primary) 0.32 calc(c * 0.7) h);
+    box-shadow: 0 0 calc(3rem + var(--voice-level) * 2.5rem) calc(0.9rem + var(--voice-level) * 0.8rem) var(--voice-glow);
+  }
+  .voice-orb-flow {
+    position: absolute; inset: -30%; mix-blend-mode: screen; opacity: 0.9;
+    background: conic-gradient(from 0deg, var(--voice-flow-a), var(--voice-flow-b), var(--voice-flow-c), var(--voice-flow-a));
+    animation: voice-flow-spin var(--voice-flow-speed) linear infinite;
+  }
+  .voice-orb-sheen {
+    position: absolute; inset: -30%; mix-blend-mode: screen;
+    background: radial-gradient(circle at 35% 35%, oklch(1 0 0 / 0.75), transparent 45%);
+    animation: voice-sheen-drift 4.4s ease-in-out infinite;
+  }
+  /* State modifiers: flow speed is the state's voice */
+  .voice-orb--listening  { --voice-flow-speed: 7s; }
+  .voice-orb--processing { --voice-flow-speed: 14s; }
+  .voice-orb--speaking   { --voice-flow-speed: 3.5s; }
+  .voice-orb--error .voice-orb-flow { background: conic-gradient(from 0deg, var(--color-danger), var(--voice-flow-a), var(--color-danger)); }
+  /* Mini orb for composer button */
+  .voice-orb--mini { --voice-orb-size: 1.75rem; box-shadow: 0 0 0.8rem 0.15rem var(--voice-glow); }
+  /* Caption + hint */
+  .voice-caption { color: var(--color-text-primary); font-size: 1rem; text-align: center; max-width: 36rem; min-height: 1.6em; padding: 0 1.5rem; }
+  .voice-hint { color: var(--color-text-tertiary); font-size: 0.75rem; text-align: center; }
 }
 
 /* ============================================================
@@ -990,6 +1038,9 @@ html[data-material="aurora"].dark {
   }
   .aleph-session-tabs { background-color: var(--color-surface) !important; }
   .chat-scroll-fade { mask-image: none !important; -webkit-mask-image: none !important; }
+  /* Voice orb — drop blend trickery, stage becomes opaque surface. */
+  .voice-orb-flow, .voice-orb-sheen { mix-blend-mode: normal; }
+  .voice-stage { background: var(--color-surface); }
 }
 @media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
   :root:not(.light), :root:not(.light)[data-material] {
@@ -1005,6 +1056,23 @@ html[data-material="aurora"].dark {
 .animate-pop-in {
   animation: aleph-pop-in 0.16s var(--ease-spring);
   transform-origin: bottom left;
+}
+
+/* Voice orb — organic blob morph + flow rotation + sheen/hue drift. */
+@keyframes voice-morph {
+  0%, 100% { border-radius: 46% 54% 52% 48% / 50% 46% 54% 50%; rotate: 0deg; }
+  25%      { border-radius: 58% 42% 44% 56% / 42% 60% 40% 58%; rotate: 9deg; }
+  50%      { border-radius: 40% 60% 58% 42% / 56% 40% 60% 44%; rotate: -5deg; }
+  75%      { border-radius: 54% 46% 40% 60% / 46% 54% 46% 54%; rotate: 5deg; }
+}
+@keyframes voice-flow-spin { to { rotate: 360deg; } }
+@keyframes voice-sheen-drift {
+  0%, 100% { translate: 0 0; scale: 1; }
+  50%      { translate: 9% -7%; scale: 1.12; }
+}
+@keyframes voice-hue-drift {
+  0%, 100% { filter: hue-rotate(0deg) saturate(1.05); }
+  50%      { filter: hue-rotate(28deg) saturate(1.15); }
 }
 
 /* ============================================================
@@ -1026,6 +1094,10 @@ html[data-material="aurora"].dark {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+  /* Voice orb — static blob; audio level maps to flow opacity instead of motion. */
+  .voice-orb, .voice-orb-flow, .voice-orb-sheen { animation: none; }
+  .voice-orb { scale: 1; transition: none; }
+  .voice-orb-flow { opacity: calc(0.55 + var(--voice-level) * 0.4); transition: opacity 120ms linear; }
 }
 
 /* ============================================================
