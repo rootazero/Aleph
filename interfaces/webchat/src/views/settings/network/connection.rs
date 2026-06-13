@@ -35,12 +35,18 @@ pub fn ConnectionSection() -> impl IntoView {
     let error = RwSignal::new(Option::<String>::None);
     let busy = RwSignal::new(false);
     let show_confirm = RwSignal::new(false);
+    // Whether the *currently persisted* target is Local — captured at load so
+    // the confirm dialog can note (only when leaving Local for Remote) that the
+    // local service keeps running. Distinct from `use_remote`, which tracks the
+    // pending choice. Defaults true (a missing marker resolves to Local).
+    let current_is_local = RwSignal::new(true);
 
     if in_shell {
         spawn_local(async move {
             if let Ok(t) = tauri_bridge::get_connection_target().await {
                 let is_remote = t != "local";
                 use_remote.set(is_remote);
+                current_is_local.set(!is_remote);
                 if is_remote {
                     remote_input.set(t);
                 }
@@ -142,6 +148,11 @@ pub fn ConnectionSection() -> impl IntoView {
                                     t_string!(i18n, settings.network.local_target).to_string()
                                 })}
                         </p>
+                        <Show when=move || current_is_local.get() && use_remote.get()>
+                            <p class="text-xs text-text-tertiary">
+                                {t!(i18n, settings.network.local_stays_running)}
+                            </p>
+                        </Show>
                         <div class="flex justify-end gap-3">
                             <button class="px-3 py-2 text-text-secondary"
                                 on:click=move |_| show_confirm.set(false)>

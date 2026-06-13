@@ -314,7 +314,8 @@
       "apply": "Apply",
       "local_target": "Local",
       "confirm_switch": "Switch to {{ target }} and reload the Panel — confirm?",
-      "confirm_switch_action": "Confirm switch"
+      "confirm_switch_action": "Confirm switch",
+      "local_stays_running": "The local service keeps running in the background after switching to remote (it may still be serving CLI or other channels). To stop it, use Quit & Stop Aleph from the tray."
     },
     "title": "Settings",
     "welcome": "Welcome to Settings",

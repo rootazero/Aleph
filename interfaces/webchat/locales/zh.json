@@ -314,7 +314,8 @@
       "apply": "应用",
       "local_target": "本地",
       "confirm_switch": "将切换到 {{ target }} 并重新加载 Panel，确认？",
-      "confirm_switch_action": "确认切换"
+      "confirm_switch_action": "确认切换",
+      "local_stays_running": "切到远程后本地服务仍会在后台运行（可能还在服务 CLI 或其他通道）。如需停止，请用托盘的「Quit & Stop Aleph」。"
     },
     "title": "设置",
     "welcome": "欢迎使用设置",

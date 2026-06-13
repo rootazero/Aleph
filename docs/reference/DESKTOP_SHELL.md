@@ -127,6 +127,13 @@ bash-installer autostart service (the keep-alive launchd / systemd / Task
 Scheduler entry that would otherwise resurrect a stale `aleph-server`) and
 stops whatever daemon is running, so the version bundled in this app wins.
 
+Switching the Panel to a **remote** Gateway at runtime (Settings → 服务连接)
+does **not** stop the local daemon — only the webview navigates away. The
+daemon stays resident, still serving any other channels it hosts (CLI, bots,
+the dream daemon), consistent with its decoupled lifecycle. The Panel's switch
+dialog says as much; **Quit & Stop Aleph** remains the one deliberate way to
+stop the local daemon.
+
 ### Daemon health supervision
 
 The daemon can crash, be killed, or be stopped out from under the shell. A
