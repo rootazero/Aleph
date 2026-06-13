@@ -706,6 +706,7 @@ where
                                                         session_key_str.clone(),
                                                         prompt,
                                                         cont_deps.event_bus.clone(),
+                                                        None,
                                                     );
                                                 }
                                             } else {
@@ -731,6 +732,7 @@ where
                                             session_key_str.clone(),
                                             prompt,
                                             cont_deps.event_bus.clone(),
+                                            None,
                                         );
                                         info!(session = %session_key_str,
                                             continuations_used = bumped.continuations_used,
@@ -872,6 +874,7 @@ fn spawn_continuation_run(
     session_key_str: String,
     prompt: String,
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
+    delay_ms: Option<u64>,
 ) {
     let cont_request = super::RunRequest {
         run_id: uuid::Uuid::new_v4().to_string(),
@@ -895,6 +898,11 @@ fn spawn_continuation_run(
     };
     let cont_agent_id = session_key.agent_id().to_string();
     tokio::spawn(async move {
+        // Loop cadence: wait the requested delay before this tick fires. Goal
+        // continuations pass None (immediate); loop ticks pass Some(interval).
+        if let Some(d) = delay_ms {
+            tokio::time::sleep(std::time::Duration::from_millis(d)).await;
+        }
         let Some(cont_agent) = registry.get(&cont_agent_id).await else {
             warn!(
                 agent_id = %cont_agent_id,
