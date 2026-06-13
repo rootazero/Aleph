@@ -57,6 +57,12 @@ pub struct LoopOutput {
 /// Default model-paced fallback when the model never sets `next_wake`.
 const MODEL_PACED_FALLBACK_MS: u64 = 600_000; // 10 min
 
+/// Default safety cap applied when a loop is started with no explicit
+/// max_iterations AND no timeout — prevents an unattended uncapped loop from
+/// running forever on the 24/7 daemon. Generous (the model/user can raise it),
+/// but never truly unbounded by default.
+pub const DEFAULT_SOFT_MAX_ITERATIONS: u32 = 500;
+
 /// Parse a human duration ("30s","5m","2h","500ms") into ms. Rejects garbage
 /// and sub-second values (a sub-second loop would hammer the engine). No new
 /// dependency — small hand parser (R3 core minimalism).
@@ -165,8 +171,15 @@ impl LoopTool {
         let deadline = args
             .timeout_minutes
             .map(|m| now.saturating_add(u64::from(m).saturating_mul(60_000)));
+        // Safety net: a loop with no user-supplied bound at all gets a soft
+        // iteration cap so unattended pursuit cannot run unbounded forever.
+        let effective_max = match (args.max_iterations, deadline) {
+            (Some(m), _) => Some(m),
+            (None, Some(_)) => None, // a deadline is itself a bound
+            (None, None) => Some(DEFAULT_SOFT_MAX_ITERATIONS),
+        };
         let state = LoopState::new(session, &prompt, cadence, now)
-            .with_max_iterations(args.max_iterations)
+            .with_max_iterations(effective_max)
             .with_deadline_ms(deadline)
             .with_token_budget(args.token_budget);
         self.registry.put(state);
@@ -373,5 +386,43 @@ mod tests {
         .unwrap();
         // next_wake stored as an absolute epoch-ms; just assert it is now set.
         assert!(reg.get("s").unwrap().next_wake_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn start_without_any_cap_gets_default_soft_max() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
+        tool.run(LoopArgs {
+            action: LoopAction::Start,
+            interval: Some("5m".to_string()),
+            prompt: Some("p".to_string()),
+            max_iterations: None,
+            timeout_minutes: None,
+            token_budget: None,
+            next_wake: None,
+        })
+        .await
+        .unwrap();
+        // No user cap → a default soft cap is applied so unattended loops
+        // cannot run unbounded forever.
+        assert_eq!(reg.get("s").unwrap().max_iterations, Some(DEFAULT_SOFT_MAX_ITERATIONS));
+    }
+
+    #[tokio::test]
+    async fn explicit_cap_is_respected_over_default() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
+        tool.run(LoopArgs {
+            action: LoopAction::Start,
+            interval: Some("5m".to_string()),
+            prompt: Some("p".to_string()),
+            max_iterations: Some(1000),
+            timeout_minutes: None,
+            token_budget: None,
+            next_wake: None,
+        })
+        .await
+        .unwrap();
+        assert_eq!(reg.get("s").unwrap().max_iterations, Some(1000));
     }
 }
