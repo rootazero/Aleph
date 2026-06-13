@@ -85,6 +85,7 @@ pub mod goal;
 pub mod guardrails;
 mod init_unified;
 pub mod logging;
+pub mod looping;
 pub mod markdown;
 pub mod mcp;
 pub mod media;
