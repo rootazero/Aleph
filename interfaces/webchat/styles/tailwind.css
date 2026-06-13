@@ -437,6 +437,12 @@ html.dark[data-accent="rose"] {
 @layer components {
   .glass {
     position: relative;
+    /* Isolate the popover/menu/modal subtree's layout + style invalidation from
+       the document. `layout style` only — NOT `paint` (that would clip the
+       shadow-xl halo) and NOT `size` (size tracks content). Keeps reactive
+       updates inside a popover from triggering a full-document recalc. Purely
+       a perf hint; zero visual effect. */
+    contain: layout style;
     backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     /* Diagonal sheen folded into the surface itself — leaves ::before for the
@@ -1900,12 +1906,19 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
     caret-color: var(--color-primary);
 }
 
-* {
+/* `scrollbar-width` / `scrollbar-color` are INHERITED — declaring them once on
+   :root cascades to every element WITHOUT the universal-selector match + the
+   per-element color-mix recompute that a `*` rule forces on every style recalc
+   (measured ~18% of each layout pass). WebKit (WKWebView/Chrome — the only
+   targets) renders the actual scrollbar via the `::-webkit-scrollbar*` pseudos
+   below, so this is visually identical there; the inherited value only matters
+   for Firefox's idle thumb. The former `*:hover { scrollbar-color }` rule is
+   dropped: it recomputed color-mix across the whole hover chain on every
+   pointer move (menu-hover jank), and the WebKit hover accent is already
+   handled by `::-webkit-scrollbar-thumb:hover`. */
+:root {
     scrollbar-width: thin;
     scrollbar-color: color-mix(in oklch, var(--color-text-tertiary) 35%, transparent) transparent;
-}
-*:hover {
-    scrollbar-color: color-mix(in oklch, var(--color-primary) 55%, transparent) transparent;
 }
 *::-webkit-scrollbar          { width: 6px; height: 6px; }
 *::-webkit-scrollbar-track    { background: transparent; }
