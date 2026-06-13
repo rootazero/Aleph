@@ -421,8 +421,9 @@ async fn bring_target_online(handle: &tauri::AppHandle) -> bool {
 
 /// Point the main window's webview at the configured Gateway origin. Local
 /// resolves to the loopback default; Remote to the configured URL. Used for
-/// the first reveal and for a silent reload after the daemon recovers.
-fn navigate_to_target(handle: &tauri::AppHandle, target: &connection::ConnectionTarget) {
+/// the first reveal, for a silent reload after the daemon recovers, and by the
+/// "Reload Panel" menu (after clearing the WebKit data store).
+pub(crate) fn navigate_to_target(handle: &tauri::AppHandle, target: &connection::ConnectionTarget) {
     let Some(window) = handle.get_webview_window("main") else {
         tracing::error!("main window missing — cannot reach the Panel");
         return;

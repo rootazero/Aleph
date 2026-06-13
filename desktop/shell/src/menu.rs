@@ -190,15 +190,24 @@ pub fn on_event(app: &AppHandle, id: &str) {
     }
 }
 
-/// Re-fetch the Panel in the current main window (an in-window reload of the
-/// already-loaded origin).
+/// Re-fetch the Panel from scratch: clear the WebKit data store, then
+/// re-navigate to the active origin.
+///
+/// A plain `location.reload()` is a *soft* reload — WebKit reuses the
+/// in-session memory copies of css/js/wasm even under `Cache-Control:
+/// no-store`, so a freshly deployed Panel build would not show up (the classic
+/// "I rebuilt the Panel but the App still shows the old UI"). Clearing the data
+/// store (HTTP cache, memory resource cache, bfcache, localStorage) and then
+/// doing a *fresh navigation* (not a reload) forces every subresource to be
+/// re-fetched from the Gateway.
 fn reload_panel(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    if let Err(e) = window.eval("window.location.reload()") {
-        tracing::warn!("could not reload Panel: {e}");
+    if let Err(e) = window.clear_all_browsing_data() {
+        tracing::warn!("could not clear browsing data before Panel reload: {e}");
     }
+    crate::navigate_to_target(app, &crate::connection::load_target());
 }
 
 /// Open Tauri's `WebView` devtools for the main window. Only wired in
