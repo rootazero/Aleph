@@ -359,32 +359,67 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     ),
     (
         "together",
-        ProviderPreset::new("https://api.together.xyz/v1", "openai", "#6366f1", "")
-            .with_display("Together.ai")
-            .with_homepage("https://www.together.ai")
-            .with_signup("https://api.together.xyz/settings/api-keys"),
+        ProviderPreset::new(
+            "https://api.together.xyz/v1",
+            "openai",
+            "#6366f1",
+            "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        )
+        .with_display("Together.ai")
+        .with_homepage("https://www.together.ai")
+        .with_signup("https://api.together.xyz/settings/api-keys"),
     ),
     (
         "perplexity",
-        ProviderPreset::new("https://api.perplexity.ai", "openai", "#20808d", "")
+        // Legacy `pplx-*` / `llama-3.1-sonar-*-online` ids were retired; the
+        // unified `sonar*` family is the current naming. An empty default sent
+        // `model: ""` → 400, so the preset was unusable out of the box.
+        ProviderPreset::new("https://api.perplexity.ai", "openai", "#20808d", "sonar")
             .with_display("Perplexity")
             .with_homepage("https://docs.perplexity.ai")
             .with_signup("https://www.perplexity.ai/settings/api")
-            .with_description("Search-augmented LLMs"),
+            .with_description("Search-augmented LLMs")
+            .with_fallback_models(&[
+                "sonar",
+                "sonar-pro",
+                "sonar-reasoning",
+                "sonar-reasoning-pro",
+            ]),
     ),
     (
         "mistral",
-        ProviderPreset::new("https://api.mistral.ai/v1", "openai", "#ff7000", "")
-            .with_display("Mistral AI")
-            .with_homepage("https://docs.mistral.ai")
-            .with_signup("https://console.mistral.ai/api-keys"),
+        ProviderPreset::new(
+            "https://api.mistral.ai/v1",
+            "openai",
+            "#ff7000",
+            "mistral-large-latest",
+        )
+        .with_display("Mistral AI")
+        .with_homepage("https://docs.mistral.ai")
+        .with_signup("https://console.mistral.ai/api-keys")
+        .with_fallback_models(&[
+            "mistral-large-latest",
+            "mistral-medium-latest",
+            "mistral-small-latest",
+        ]),
     ),
     (
         "cohere",
-        ProviderPreset::new("https://api.cohere.ai/v1", "openai", "#39594d", "")
-            .with_display("Cohere")
-            .with_homepage("https://docs.cohere.com")
-            .with_signup("https://dashboard.cohere.com/api-keys"),
+        // Cohere's bare `/v1` is its native (non-OpenAI) API; the
+        // OpenAI-compatible Chat Completions surface lives at
+        // `/compatibility/v1`. The old base_url 404'd under the `openai`
+        // protocol's `/chat/completions` path.
+        ProviderPreset::new(
+            "https://api.cohere.ai/compatibility/v1",
+            "openai",
+            "#39594d",
+            "command-a-03-2025",
+        )
+        .with_display("Cohere")
+        .with_homepage("https://docs.cohere.com/docs/compatibility-api")
+        .with_signup("https://dashboard.cohere.com/api-keys")
+        .with_description("OpenAI-compatible endpoint (/compatibility/v1)")
+        .with_fallback_models(&["command-a-03-2025", "command-r-plus", "command-r"]),
     ),
     (
         "fireworks",
@@ -392,7 +427,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.fireworks.ai/inference/v1",
             "openai",
             "#ff6b35",
-            "",
+            "accounts/fireworks/models/llama-v3p3-70b-instruct",
         )
         .with_display("Fireworks.ai")
         .with_homepage("https://fireworks.ai")
@@ -444,9 +479,14 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     ),
     (
         "hyperbolic",
-        ProviderPreset::new("https://api.hyperbolic.xyz/v1", "openai", "#8b5cf6", "")
-            .with_display("Hyperbolic")
-            .with_homepage("https://hyperbolic.xyz"),
+        ProviderPreset::new(
+            "https://api.hyperbolic.xyz/v1",
+            "openai",
+            "#8b5cf6",
+            "meta-llama/Llama-3.3-70B-Instruct",
+        )
+        .with_display("Hyperbolic")
+        .with_homepage("https://hyperbolic.xyz"),
     ),
     (
         "huggingface",
