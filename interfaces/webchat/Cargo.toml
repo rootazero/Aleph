@@ -46,6 +46,8 @@ web-sys = { version = "0.3", features = [
     "MediaRecorder", "MediaRecorderOptions", "BlobEvent", "BlobPropertyBag",
     # voice-loop playback — speak the agent's TTS reply via a detached <audio>
     "HtmlMediaElement", "HtmlAudioElement",
+    # immersive voice mode — mic level metering via Web Audio analyser
+    "AudioContext", "AnalyserNode", "MediaStreamAudioSourceNode",
 ] }
 console_error_panic_hook = "0.1"
 
