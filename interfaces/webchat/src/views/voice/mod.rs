@@ -211,20 +211,28 @@ fn VoiceSession() -> impl IntoView {
         let speak_run = Rc::clone(&speak_run);
         let player = Rc::clone(&player);
         Effect::new(move |_| {
-            // Snapshot the active run id and release the borrow before any
-            // later `borrow_mut()` on the same cell.
+            // Subscribe to `chat.messages` UNCONDITIONALLY so this Effect keeps
+            // waking on every stream delta. `speak_run` is a plain `RefCell`,
+            // not a signal — writing it never wakes the Effect — so the reactive
+            // dependency MUST come from `chat.messages`, and Leptos only
+            // registers it when `.with()` is actually called. The Effect's first
+            // run happens at mount with `speak_run == None`; the old code read
+            // `speak_run` and `return`ed BEFORE reaching `.with()`, so that first
+            // run captured ZERO dependencies and never fired again — immersive
+            // TTS was dead from birth. Fold the run-id gate INTO the `.with()`
+            // closure so the subscription is re-established on every run.
             let run_id = speak_run.borrow().clone();
-            let Some(run_id) = run_id else {
-                return;
-            };
-            let target = format!("assistant-{run_id}");
-            let (content, streaming) = chat.messages.with(|msgs| {
+            let found = chat.messages.with(|msgs| {
+                let run_id = run_id.as_deref()?;
+                let target = format!("assistant-{run_id}");
                 msgs.iter()
                     .rev()
                     .find(|m| m.id == target)
                     .map(|m| (m.content.clone(), m.is_streaming))
-                    .unwrap_or_default()
             });
+            let Some((content, streaming)) = found else {
+                return;
+            };
             for s in splitter.borrow_mut().push(&content) {
                 player.enqueue(dash, s);
             }
