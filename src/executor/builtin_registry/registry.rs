@@ -1516,9 +1516,14 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
-            // Local voice sidecar tool — status/warmup (R8)
+            // Local voice endpoint tool — status probe (R8). Needs the live
+            // Config handle (same source as `config_audit`).
             "local_voice" => Box::pin(async move {
-                let tool = crate::builtin_tools::voice_tools::LocalVoiceTool::new();
+                let cfg = self.config.as_ref().ok_or_else(|| {
+                    AlephError::tool("local_voice not available: no Config handle configured")
+                })?;
+                let tool =
+                    crate::builtin_tools::voice_tools::LocalVoiceTool::new(Arc::clone(cfg));
                 tool.call_json(arguments).await
             }),
 

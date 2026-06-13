@@ -74,6 +74,24 @@ pub fn create_provider(
 ) -> GenerationResult<Arc<dyn GenerationProvider>> {
     let resolved_url = config.base_url.as_deref().map(resolve_base_url);
 
+    // BYO local voice endpoint (OpenAI-compatible server the user runs).
+    // Handled before the api_key gate: BYO endpoints are commonly
+    // unauthenticated, so no key is required for this provider type.
+    if config.provider_type == "local" {
+        let provider: Arc<dyn GenerationProvider> = Arc::new(
+            crate::gateway::voice::local_provider::LocalVoiceProvider::from_config(
+                gen_type, config,
+            ),
+        );
+        if !provider.supports(gen_type) {
+            return Err(GenerationError::unsupported_generation_type(
+                gen_type.to_string(),
+                name,
+            ));
+        }
+        return Ok(provider);
+    }
+
     let api_key = config.api_key.clone().ok_or_else(|| {
         GenerationError::authentication(
             format!("API key is required for provider '{name}'"),
@@ -141,11 +159,6 @@ pub fn create_provider(
             config.base_url.clone(),
             config.default_model().map(|s| s.to_string()),
         )?),
-        // Local voice sidecar (aleph-voice). Endpoint is dynamic per spawn —
-        // the provider resolves it from the supervisor at call time.
-        "local" => Arc::new(crate::gateway::voice::local_provider::LocalVoiceProvider::new(
-            gen_type,
-        )),
         "openai_compat" => {
             let base_url = config.base_url.clone().ok_or_else(|| {
                 GenerationError::invalid_parameters(

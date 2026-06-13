@@ -150,59 +150,22 @@ pub async fn generate_tts(
 }
 
 // ---------------------------------------------------------------------------
-// Outcome layer — typed result that lets the reply emitter skip the failure
-// counter when the local sidecar is still downloading its models.
+// Outcome layer — typed result for the reply emitter's 3-strike counter.
 // ---------------------------------------------------------------------------
 
-/// TTS attempt outcome — lets the reply emitter distinguish "model still
-/// downloading" (not a failure, don't count) from real failures (count,
-/// 3-strike auto-disable preserved).
+/// TTS attempt outcome (3-strike auto-disable counts `Failed`).
 pub enum TtsOutcome {
     Generated(Attachment),
-    /// Local sidecar still fetching models; carry progress for the user hint.
-    Downloading { percent: Option<u8> },
     Failed,
 }
 
-/// Pure decision: map a remote model state probe to a preflight outcome.
-/// `None` means "proceed with generation".
-pub fn preflight_outcome(
-    state: Option<&crate::gateway::voice::sidecar::RemoteModelState>,
-) -> Option<TtsOutcome> {
-    match state {
-        Some(crate::gateway::voice::sidecar::RemoteModelState::Downloading { percent }) => {
-            Some(TtsOutcome::Downloading { percent: Some(*percent) })
-        }
-        _ => None,
-    }
-}
-
-/// Like [`generate_tts`] but with a typed outcome. Preflights the local
-/// sidecar's model state when the resolved provider is "local".
+/// Like [`generate_tts`] but with a typed outcome.
 pub async fn generate_tts_outcome(
     text: &str,
     voice_state: &VoiceState,
     generation_registry: &GenerationProviderRegistry,
     generation_config: &GenerationConfig,
 ) -> TtsOutcome {
-    let resolved_local = voice_state.provider.as_deref() == Some("local")
-        || (voice_state.provider.is_none()
-            && generation_config.default_speech_provider.as_deref() == Some("local"));
-    if resolved_local {
-        if let Some(sup) = crate::gateway::voice::sidecar::global() {
-            match sup.tts_model_state().await {
-                Ok(state) => {
-                    if let Some(outcome) = preflight_outcome(Some(&state)) {
-                        return outcome;
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, "local TTS preflight failed");
-                    return TtsOutcome::Failed;
-                }
-            }
-        }
-    }
     match generate_tts(text, voice_state, generation_registry, generation_config).await {
         Some(attachment) => TtsOutcome::Generated(attachment),
         None => TtsOutcome::Failed,
@@ -248,17 +211,5 @@ mod tests {
         let ms = tts_timeout_ms(&text);
         // 100/100 = 1 → 10s + 5s = 15s
         assert_eq!(ms, 15_000);
-    }
-
-    #[test]
-    fn preflight_maps_downloading_only() {
-        use crate::gateway::voice::sidecar::RemoteModelState as S;
-        assert!(matches!(
-            preflight_outcome(Some(&S::Downloading { percent: 42 })),
-            Some(TtsOutcome::Downloading { percent: Some(42) })
-        ));
-        assert!(preflight_outcome(Some(&S::Ready)).is_none());
-        assert!(preflight_outcome(Some(&S::Other("error".into()))).is_none());
-        assert!(preflight_outcome(None).is_none());
     }
 }

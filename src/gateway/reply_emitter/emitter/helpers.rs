@@ -123,13 +123,6 @@ impl ReplyEmitter {
                         }
                     }
                 }
-                TtsOutcome::Downloading { percent } => {
-                    // Model download in progress — NOT a provider failure:
-                    // don't touch the 3-strike counter (spec §5).
-                    let pct = percent.map(|p| format!("{p}%")).unwrap_or_else(|| "…".into());
-                    let hinted = format!("{text}\n\n(语音模型下载中 {pct}，本条先以文本回复)");
-                    self.send_to_channel(&hinted).await;
-                }
                 TtsOutcome::Failed => {
                     // TTS generation failed — record and maybe auto-disable
                     let auto_disabled = self.voice_state.lock().await.record_failure();

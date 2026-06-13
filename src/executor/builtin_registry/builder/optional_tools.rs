@@ -466,13 +466,13 @@ impl BuiltinToolRegistry {
         );
         info!("Registered voice_mode_set tool in BuiltinToolRegistry");
 
-        // Local voice sidecar tool — status/warmup for on-device STT/TTS (R8)
+        // Local voice endpoint tool — status probe for the BYO STT/TTS server (R8)
         reg(
             tools,
             "local_voice",
-            "Inspect or warm up the local voice (STT/TTS) sidecar: status shows model download \
-             progress and engine state; warmup pre-loads models for instant voice. Use when the \
-             user asks about local voice readiness or wants to prepare voice mode.",
+            "Check the local voice (BYO OpenAI-compatible STT/TTS endpoint) configuration and \
+             reachability. Use when the user asks whether local voice is ready, configured, or \
+             why voice requests fail.",
             schema::<crate::builtin_tools::voice_tools::LocalVoiceArgs>("local_voice"),
         );
         info!("Registered local_voice tool in BuiltinToolRegistry");

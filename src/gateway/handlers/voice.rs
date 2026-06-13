@@ -12,7 +12,7 @@ use crate::config::Config;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
-use crate::gateway::voice::inbound::{resolve_stt_source, transcribe_bytes, SttUnavailable};
+use crate::gateway::voice::inbound::{resolve_stt_source, transcribe_with_source};
 use crate::sync_primitives::Arc;
 
 /// `OpenAI` Whisper rejects payloads larger than 25 MB; reject early so we never
@@ -81,25 +81,9 @@ pub async fn handle_transcribe(
             "No transcription provider configured. Add one in Settings → Generation Providers.",
         );
     };
-    let stt = match stt_source.materialize().await {
-        Ok(cfg) => cfg,
-        Err(SttUnavailable::Downloading { percent }) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Local voice model is still downloading ({percent}%). Try again shortly or use text."),
-            );
-        }
-        Err(SttUnavailable::Error(e)) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Local transcription unavailable: {e}"),
-            );
-        }
-    };
-
-    match transcribe_bytes(bytes, &filename, &mime, params.language.as_deref(), &stt).await {
+    match transcribe_with_source(bytes, &filename, &mime, params.language.as_deref(), &stt_source)
+        .await
+    {
         Ok(text) => {
             JsonRpcResponse::success(request.id, serde_json::json!({ "text": text.trim() }))
         }

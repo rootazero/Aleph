@@ -1,77 +1,59 @@
-//! Local voice sidecar configuration ([voice.local] in config.toml).
+//! BYO local voice configuration ([voice.local] in config.toml).
+//!
+//! Aleph does not run a voice server itself (Ollama-style BYO): users point
+//! `endpoint` at any OpenAI-compatible speech service (e.g. an mlx-audio
+//! server exposing `/v1/audio/speech` and `/v1/audio/transcriptions`).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
-/// Configuration for the aleph-voice local inference sidecar.
+/// Configuration for the user-provided local voice endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VoiceLocalConfig {
     /// Master switch. Off by default — enabling injects a "local" provider
     /// into the generation provider maps at load time (fill-empty-only).
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default = "default_stt_model")]
+    /// Base URL of the OpenAI-compatible voice server. Providers append
+    /// `/audio/speech` / `/audio/transcriptions` to it.
+    #[serde(default = "default_endpoint")]
+    pub endpoint: String,
+    /// Optional bearer token. Most BYO servers run unauthenticated — when
+    /// unset, no Authorization header is sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// STT model name. Empty (default) = let the server pick its default.
+    #[serde(default)]
     pub stt_model: String,
-    #[serde(default = "default_tts_model")]
+    /// TTS model name. Empty (default) = let the server pick its default.
+    #[serde(default)]
     pub tts_model: String,
-    #[serde(default = "default_tts_voice")]
+    /// TTS voice id. Empty (default) = let the server pick its default.
+    #[serde(default)]
     pub tts_voice: String,
     /// TTS output container: "opus" (Telegram-native) or "wav".
     #[serde(default = "default_tts_format")]
     pub tts_format: String,
-    #[serde(default = "default_idle_tts")]
-    pub idle_unload_tts_secs: u64,
-    #[serde(default = "default_idle_stt")]
-    pub idle_unload_stt_secs: u64,
-    #[serde(default = "default_idle_exit")]
-    pub idle_exit_secs: u64,
-    /// auto | github | hf-mirror.
-    #[serde(default = "default_download_source")]
-    pub download_source: String,
-    /// Override the sidecar binary path (default: sibling of aleph-server).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub binary_path: Option<PathBuf>,
 }
 
-fn default_stt_model() -> String {
-    "sense-voice-small".into()
-}
-fn default_tts_model() -> String {
-    "kokoro-v1.1-zh".into()
-}
-fn default_tts_voice() -> String {
-    "zf_001".into()
+fn default_endpoint() -> String {
+    // mlx-audio server's default port.
+    "http://127.0.0.1:8000/v1".into()
 }
 fn default_tts_format() -> String {
     "opus".into()
-}
-const fn default_idle_tts() -> u64 {
-    120
-}
-const fn default_idle_stt() -> u64 {
-    600
-}
-const fn default_idle_exit() -> u64 {
-    1800
-}
-fn default_download_source() -> String {
-    "auto".into()
 }
 
 impl Default for VoiceLocalConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            stt_model: default_stt_model(),
-            tts_model: default_tts_model(),
-            tts_voice: default_tts_voice(),
+            endpoint: default_endpoint(),
+            api_key: None,
+            stt_model: String::new(),
+            tts_model: String::new(),
+            tts_voice: String::new(),
             tts_format: default_tts_format(),
-            idle_unload_tts_secs: default_idle_tts(),
-            idle_unload_stt_secs: default_idle_stt(),
-            idle_exit_secs: default_idle_exit(),
-            download_source: default_download_source(),
-            binary_path: None,
         }
     }
 }
@@ -83,15 +65,20 @@ pub struct VoiceSection {
     pub local: VoiceLocalConfig,
 }
 
-/// Provider name the sidecar registers under.
+/// Provider name the BYO endpoint registers under.
 pub const LOCAL_PROVIDER_NAME: &str = "local";
-/// `GenerationProviderConfig.provider_type` for the sidecar.
+/// `GenerationProviderConfig.provider_type` for the BYO endpoint.
 pub const LOCAL_PROVIDER_TYPE: &str = "local";
 
 /// Load-time normalization: when local voice is enabled, inject a synthetic
 /// "local" provider into the speech/transcription maps and point the unset
 /// defaults at it. Fill-empty-only — explicit user config (cloud included)
 /// always wins. Idempotent: safe across hot reloads.
+///
+/// The synthetic entry carries the real connection values (`base_url` =
+/// endpoint, `api_key`, model/voice/format) so providers read everything from
+/// their own `GenerationProviderConfig`. An empty `api_key` means "no
+/// Authorization header".
 ///
 /// Persistence + ownership semantics:
 /// - Synthetic state may legitimately end up persisted to disk by any full
@@ -101,10 +88,10 @@ pub const LOCAL_PROVIDER_TYPE: &str = "local";
 /// - Entries with `provider_type == "local"` are owned by this mechanism:
 ///   user customizations of them survive enable-time normalization (the
 ///   `or_insert_with` never overwrites), but they are removed on disable —
-///   a "local" provider_type is meaningless without the sidecar.
+///   a "local" provider_type is meaningless without the configured endpoint.
 pub fn normalize_voice_local(cfg: &mut crate::config::structs::Config) {
     if !cfg.local_voice().enabled {
-        // Disable-cleanup: remove every sidecar-owned entry, then reset any
+        // Disable-cleanup: remove every locally-owned entry, then reset any
         // default that pointed at the now-gone "local" key. Defaults pointing
         // anywhere else are never touched.
         cfg.generation
@@ -133,27 +120,36 @@ pub fn normalize_voice_local(cfg: &mut crate::config::structs::Config) {
     }
     use crate::generation::GenerationType;
 
-    let tts_model = cfg.voice_local.local.tts_model.clone();
-    let stt_model = cfg.voice_local.local.stt_model.clone();
+    let local = cfg.voice_local.local.clone();
 
     let synth = |cap: GenerationType, model: &str| {
         let mut p = crate::GenerationProviderConfig::new(LOCAL_PROVIDER_TYPE);
-        // Placeholder key keeps existing api_key-presence walks selecting it;
-        // the real per-spawn token is injected by the supervisor at call time.
-        p.api_key = Some("local-sidecar".into());
+        p.base_url = Some(local.endpoint.clone());
+        // Empty key = unauthenticated endpoint (no Authorization header).
+        p.api_key = Some(local.api_key.clone().unwrap_or_default());
         p.capabilities = vec![cap];
-        p.models = vec![model.to_string()];
+        if !model.is_empty() {
+            p.models = vec![model.to_string()];
+        }
+        if cap == GenerationType::Speech {
+            if !local.tts_voice.is_empty() {
+                p.defaults.voice = Some(local.tts_voice.clone());
+            }
+            if !local.tts_format.is_empty() {
+                p.defaults.format = Some(local.tts_format.clone());
+            }
+        }
         p
     };
 
     cfg.generation
         .speech_providers
         .entry(LOCAL_PROVIDER_NAME.into())
-        .or_insert_with(|| synth(GenerationType::Speech, &tts_model));
+        .or_insert_with(|| synth(GenerationType::Speech, &local.tts_model));
     cfg.generation
         .transcription_providers
         .entry(LOCAL_PROVIDER_NAME.into())
-        .or_insert_with(|| synth(GenerationType::Transcription, &stt_model));
+        .or_insert_with(|| synth(GenerationType::Transcription, &local.stt_model));
 
     if cfg.generation.default_speech_provider.is_none() {
         cfg.generation.default_speech_provider = Some(LOCAL_PROVIDER_NAME.into());
@@ -191,9 +187,38 @@ mod tests {
         );
         let p = &cfg.generation.speech_providers["local"];
         assert_eq!(p.provider_type, "local");
-        assert_eq!(p.models, vec!["kokoro-v1.1-zh".to_string()]);
+        // Real connection values from [voice.local] land on the entry.
+        assert_eq!(p.base_url.as_deref(), Some("http://127.0.0.1:8000/v1"));
+        // No api_key configured → empty string = unauthenticated.
+        assert_eq!(p.api_key.as_deref(), Some(""));
+        // Empty model names are NOT propagated — server default decides.
+        assert!(p.models.is_empty());
+        assert!(p.defaults.voice.is_none());
+        assert_eq!(p.defaults.format.as_deref(), Some("opus"));
         // Validation must accept the synthetic reference (spec: validate passes).
         cfg.generation.validate().unwrap();
+    }
+
+    #[test]
+    fn enabled_propagates_explicit_models_and_key() {
+        let mut cfg = Config::default();
+        cfg.voice_local.local.enabled = true;
+        cfg.voice_local.local.endpoint = "http://nas.lan:9000/v1".into();
+        cfg.voice_local.local.api_key = Some("sk-byo".into());
+        cfg.voice_local.local.stt_model = "whisper-large-v3".into();
+        cfg.voice_local.local.tts_model = "qwen3-tts".into();
+        cfg.voice_local.local.tts_voice = "vivian".into();
+        normalize_voice_local(&mut cfg);
+
+        let tts = &cfg.generation.speech_providers["local"];
+        assert_eq!(tts.base_url.as_deref(), Some("http://nas.lan:9000/v1"));
+        assert_eq!(tts.api_key.as_deref(), Some("sk-byo"));
+        assert_eq!(tts.models, vec!["qwen3-tts".to_string()]);
+        assert_eq!(tts.defaults.voice.as_deref(), Some("vivian"));
+
+        let stt = &cfg.generation.transcription_providers["local"];
+        assert_eq!(stt.models, vec!["whisper-large-v3".to_string()]);
+        assert!(stt.defaults.voice.is_none());
     }
 
     #[test]
@@ -277,8 +302,8 @@ mod tests {
         let toml = r#"
             [voice.local]
             enabled = true
+            endpoint = "http://127.0.0.1:9876/v1"
             tts_voice = "zf_088"
-            idle_exit_secs = 900
         "#;
         #[derive(serde::Deserialize)]
         struct Wrap {
@@ -290,8 +315,11 @@ mod tests {
         }
         let w: Wrap = ::toml::from_str(toml).unwrap();
         assert!(w.voice.local.enabled);
+        assert_eq!(w.voice.local.endpoint, "http://127.0.0.1:9876/v1");
         assert_eq!(w.voice.local.tts_voice, "zf_088");
-        assert_eq!(w.voice.local.idle_exit_secs, 900);
-        assert_eq!(w.voice.local.idle_unload_tts_secs, 120);
+        assert!(w.voice.local.api_key.is_none());
+        // Unset model names stay empty = server default.
+        assert_eq!(w.voice.local.stt_model, "");
+        assert_eq!(w.voice.local.tts_format, "opus");
     }
 }

@@ -662,23 +662,11 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
-    // Local voice sidecar supervisor — installed only when enabled; the
-    // sidecar itself is spawned lazily on first voice demand.
-    if let Some(ref cfg_arc) = app_config {
-        let cfg = cfg_arc.read().await;
-        if cfg.local_voice().enabled {
-            alephcore::gateway::voice::sidecar::init_global(cfg.local_voice().clone());
-            if !daemon {
-                println!("  Local voice: sidecar supervisor armed (lazy spawn)");
-            }
-        }
-    }
-
-    // Wire the late-bound STT source from the dedicated transcription provider.
+    // Wire the STT source from the dedicated transcription provider.
     // api_key is #[serde(skip)] and injected from vault at runtime, so
     // resolution (config-inline or vault `gen:<name>`) is shared with the
-    // `voice.transcribe` panel RPC via `resolve_stt_source`. A local sidecar
-    // source materializes its (port, token) per message, not at boot.
+    // `voice.transcribe` panel RPC via `resolve_stt_source`. A local (BYO
+    // endpoint) source carries a pre-resolved cloud fallback for P7 retry.
     if let Some(ref cfg_arc) = app_config {
         let cfg = cfg_arc.read().await;
         if let Some(stt) =

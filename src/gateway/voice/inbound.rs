@@ -29,72 +29,49 @@ pub struct SttConfig {
     pub model: String,
 }
 
-/// STT unavailability, typed so callers can react without string-matching.
-#[derive(Debug)]
-pub enum SttUnavailable {
-    /// Local sidecar still downloading models.
-    Downloading { percent: u8 },
-    Error(String),
-}
-
-/// Late-bound STT source. Local resolves (port, token) per message because the
-/// sidecar port changes per spawn; Static is the existing cloud behavior.
+/// STT source. Local is the BYO endpoint (P7: a request failure against it
+/// retries once on the pre-resolved cloud fallback); Static is pure cloud.
 #[derive(Clone)]
 pub enum SttSource {
     Static(SttConfig),
-    /// Local sidecar, with an optional pre-resolved cloud fallback (spec §4.6:
-    /// local failure / model download falls back to cloud automatically; a
+    /// BYO local endpoint, with an optional pre-resolved cloud fallback (spec
+    /// §4.6: a local request failure falls back to cloud automatically; a
     /// cloud default never falls back to local).
-    Local { fallback: Option<Box<SttConfig>> },
+    Local {
+        config: SttConfig,
+        fallback: Option<Box<SttConfig>>,
+    },
 }
 
-impl SttSource {
-    /// Materialize a concrete `SttConfig`, consulting the sidecar when local.
-    pub async fn materialize(&self) -> Result<SttConfig, SttUnavailable> {
-        match self {
-            Self::Static(cfg) => Ok(cfg.clone()),
-            Self::Local { fallback } => match Self::local_config().await {
-                Ok(cfg) => Ok(cfg),
-                Err(unavailable) => match fallback {
-                    Some(cloud) => {
+/// Transcribe through an [`SttSource`]: P7 degradation lives here — when the
+/// local endpoint request fails and a cloud fallback was resolved, retry once
+/// against the cloud before surfacing the error.
+pub async fn transcribe_with_source(
+    bytes: Vec<u8>,
+    filename: &str,
+    mime: &str,
+    language: Option<&str>,
+    source: &SttSource,
+) -> Result<String, String> {
+    match source {
+        SttSource::Static(cfg) => transcribe_bytes(bytes, filename, mime, language, cfg).await,
+        SttSource::Local { config, fallback } => match fallback {
+            Some(cloud) => {
+                // Keep a copy only while a retry is possible.
+                let retry_bytes = bytes.clone();
+                match transcribe_bytes(bytes, filename, mime, language, config).await {
+                    Ok(text) => Ok(text),
+                    Err(e) => {
                         warn!(
-                            reason = ?unavailable,
-                            "local STT unavailable — falling back to cloud provider"
+                            error = %e,
+                            "local STT request failed — retrying once on cloud fallback"
                         );
-                        Ok((**cloud).clone())
+                        transcribe_bytes(retry_bytes, filename, mime, language, cloud).await
                     }
-                    None => Err(unavailable),
-                },
-            },
-        }
-    }
-
-    async fn local_config() -> Result<SttConfig, SttUnavailable> {
-        let sup = super::sidecar::global()
-            .ok_or_else(|| SttUnavailable::Error("local voice not initialized".into()))?;
-        let ep = sup
-            .ensure_endpoint()
-            .await
-            .map_err(|e| SttUnavailable::Error(format!("{e:#}")))?;
-        // Probe STT model state: if the model is still downloading, surface a
-        // typed Downloading variant so callers can show progress without treating
-        // it as an error (3-strike counters, fallback exhaustion, etc.).
-        match sup.stt_model_state().await {
-            Ok(super::sidecar::RemoteModelState::Downloading { percent }) => {
-                return Err(SttUnavailable::Downloading { percent });
+                }
             }
-            Ok(_) => {} // Ready or Other — proceed normally
-            Err(e) => {
-                // Status check failed (network blip, etc.) — log and continue
-                // so a transient status-endpoint failure doesn't block STT.
-                tracing::warn!(error = %e, "STT model state check failed, proceeding anyway");
-            }
-        }
-        Ok(SttConfig {
-            api_key: ep.token,
-            base_url: ep.base_url,
-            model: sup.config().stt_model.clone(),
-        })
+            None => transcribe_bytes(bytes, filename, mime, language, config).await,
+        },
     }
 }
 
@@ -112,9 +89,10 @@ pub fn resolve_stt_source(
 ) -> Option<SttSource> {
     let chosen = choose_transcription_provider(gen_cfg, vault, false)?;
     if chosen.1.provider_type == crate::config::types::voice_local::LOCAL_PROVIDER_TYPE {
+        let config = local_stt_config(chosen.0, chosen.1);
         let fallback = choose_transcription_provider(gen_cfg, vault, true)
             .map(|(key, pcfg)| Box::new(static_stt_config(key, pcfg)));
-        Some(SttSource::Local { fallback })
+        Some(SttSource::Local { config, fallback })
     } else {
         let (key, pcfg) = chosen;
         Some(SttSource::Static(static_stt_config(key, pcfg)))
@@ -133,6 +111,12 @@ fn choose_transcription_provider<'a>(
     skip_local: bool,
 ) -> Option<(String, &'a crate::GenerationProviderConfig)> {
     let resolve_key = |name: &str, pcfg: &crate::GenerationProviderConfig| -> Option<String> {
+        // BYO local endpoints commonly run unauthenticated — an empty key is
+        // valid for them (means "no Authorization header"), so the presence
+        // walk must not skip the entry.
+        if pcfg.provider_type == crate::config::types::voice_local::LOCAL_PROVIDER_TYPE {
+            return Some(pcfg.api_key.clone().unwrap_or_default());
+        }
         if let Some(ref key) = pcfg.api_key {
             if !key.is_empty() {
                 return Some(key.clone());
@@ -176,6 +160,22 @@ fn choose_transcription_provider<'a>(
         })
 }
 
+/// `SttConfig` for the BYO local endpoint: `base_url` is the configured
+/// endpoint verbatim (no URL rewriting — it already carries its path prefix),
+/// and an empty model means "omit the field, let the server default decide".
+fn local_stt_config(key: String, pcfg: &crate::GenerationProviderConfig) -> SttConfig {
+    SttConfig {
+        api_key: key,
+        base_url: pcfg
+            .base_url
+            .as_deref()
+            .unwrap_or("http://127.0.0.1:8000/v1")
+            .trim_end_matches('/')
+            .to_string(),
+        model: pcfg.models.first().cloned().unwrap_or_default(),
+    }
+}
+
 /// The original static `SttConfig` construction (url normalize + model pick).
 fn static_stt_config(key: String, pcfg: &crate::GenerationProviderConfig) -> SttConfig {
     let base = pcfg.base_url.as_deref().unwrap_or("https://api.openai.com");
@@ -217,7 +217,7 @@ pub fn has_audio_attachment(msg: &InboundMessage) -> bool {
 ///   - On failure: keeps attachments, appends error hint.
 pub async fn process_inbound_voice(
     mut msg: InboundMessage,
-    stt_config: &SttConfig,
+    stt_source: &SttSource,
 ) -> VoiceProcessResult {
     if !has_audio_attachment(&msg) {
         return VoiceProcessResult {
@@ -234,7 +234,7 @@ pub async fn process_inbound_voice(
 
     // Transcribe the first audio attachment.
     let first_audio = &audio_attachments[0];
-    match transcribe_attachment(first_audio, stt_config).await {
+    match transcribe_attachment(first_audio, stt_source).await {
         Ok(transcription) if transcription.trim().is_empty() => {
             // Whisper returned nothing usable — empty audio or a hallucination
             // that the filter nulled. Don't claim a transcription (no
@@ -288,10 +288,10 @@ pub async fn process_inbound_voice(
 /// Download audio bytes from an attachment and transcribe them.
 async fn transcribe_attachment(
     attachment: &Attachment,
-    config: &SttConfig,
+    source: &SttSource,
 ) -> Result<String, String> {
     let (bytes, filename) = get_audio_bytes(attachment).await?;
-    transcribe_bytes(bytes, &filename, &attachment.mime_type, None, config).await
+    transcribe_with_source(bytes, &filename, &attachment.mime_type, None, source).await
 }
 
 /// Send raw audio bytes to a Whisper-compatible API and return the transcript.
@@ -313,8 +313,11 @@ pub async fn transcribe_bytes(
 
     let mut form = reqwest::multipart::Form::new()
         .part("file", file_part)
-        .text("model", config.model.clone())
         .text("response_format", "json");
+    // Empty model = let the server's default decide (BYO endpoints).
+    if !config.model.is_empty() {
+        form = form.text("model", config.model.clone());
+    }
     if let Some(lang) = language.filter(|l| !l.is_empty()) {
         form = form.text("language", lang.to_string());
     }
@@ -326,11 +329,15 @@ pub async fn transcribe_bytes(
     debug!(url = %url, model = %config.model, "Sending Whisper transcription request");
 
     let client = reqwest::Client::new();
-    let resp = client
+    let mut req = client
         .post(&url)
-        .bearer_auth(&config.api_key)
         .multipart(form)
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(60));
+    // Empty key = unauthenticated endpoint, no Authorization header.
+    if !config.api_key.is_empty() {
+        req = req.bearer_auth(&config.api_key);
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("Whisper API request failed: {e}"))?;
@@ -470,9 +477,11 @@ mod tests {
         use crate::config::types::generation::GenerationConfig;
         let (_dir, vault) = make_vault();
         let mut gen = GenerationConfig::default();
-        // local (normalized shape) + one cloud provider with inline key
+        // local (normalized BYO shape: real endpoint, unauthenticated, no
+        // model pinned) + one cloud provider with inline key
         let mut local = crate::GenerationProviderConfig::new("local");
-        local.api_key = Some("local-sidecar".into());
+        local.api_key = Some(String::new());
+        local.base_url = Some("http://127.0.0.1:8000/v1".into());
         gen.transcription_providers.insert("local".into(), local);
         let mut cloud = crate::GenerationProviderConfig::new("openai_whisper");
         cloud.api_key = Some("sk-cloud".into());
@@ -481,8 +490,44 @@ mod tests {
         gen.default_transcription_provider = Some("local".into());
 
         match resolve_stt_source(&gen, &vault) {
-            Some(SttSource::Local { fallback: Some(f) }) => assert_eq!(f.api_key, "sk-cloud"),
+            Some(SttSource::Local {
+                config,
+                fallback: Some(f),
+            }) => {
+                // Local config built from the entry: endpoint verbatim, empty
+                // key (no auth), empty model (server default).
+                assert_eq!(config.base_url, "http://127.0.0.1:8000/v1");
+                assert_eq!(config.api_key, "");
+                assert_eq!(config.model, "");
+                assert_eq!(f.api_key, "sk-cloud");
+            }
             other => panic!("expected Local with fallback, got {:?}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn resolve_local_without_cloud_has_no_fallback() {
+        use crate::config::types::generation::GenerationConfig;
+        let (_dir, vault) = make_vault();
+        let mut gen = GenerationConfig::default();
+        let mut local = crate::GenerationProviderConfig::new("local");
+        // No api_key at all — BYO unauthenticated entries must still resolve.
+        local.api_key = None;
+        local.base_url = Some("http://127.0.0.1:8000/v1/".into());
+        local.models = vec!["whisper-large-v3".into()];
+        gen.transcription_providers.insert("local".into(), local);
+        gen.default_transcription_provider = Some("local".into());
+
+        match resolve_stt_source(&gen, &vault) {
+            Some(SttSource::Local {
+                config,
+                fallback: None,
+            }) => {
+                // Trailing slash trimmed; configured model carried.
+                assert_eq!(config.base_url, "http://127.0.0.1:8000/v1");
+                assert_eq!(config.model, "whisper-large-v3");
+            }
+            _ => panic!("expected Local without fallback"),
         }
     }
 
@@ -501,44 +546,4 @@ mod tests {
         }
     }
 
-    /// Proves the SttUnavailable::Downloading variant is produced when the
-    /// sidecar's STT model state is Downloading. Tests the mapping logic used
-    /// by local_config() via a helper that mirrors the production code path.
-    #[test]
-    fn stt_downloading_state_maps_to_unavailable_downloading() {
-        use crate::gateway::voice::sidecar::{parse_model_state, RemoteModelState};
-
-        // Simulate what local_config() does: parse the /voice/status response
-        // and map Downloading → SttUnavailable::Downloading.
-        let status_json: serde_json::Value =
-            serde_json::json!({"state": "downloading", "percent": 55});
-        let state = parse_model_state(&status_json);
-
-        let unavailable = match state {
-            RemoteModelState::Downloading { percent } => SttUnavailable::Downloading { percent },
-            RemoteModelState::Ready => panic!("expected Downloading, got Ready"),
-            RemoteModelState::Other(s) => panic!("expected Downloading, got Other({s})"),
-        };
-
-        assert!(
-            matches!(unavailable, SttUnavailable::Downloading { percent: 55 }),
-            "expected Downloading{{55}}"
-        );
-    }
-
-    /// Proves Ready and Other model states do NOT produce SttUnavailable::Downloading.
-    #[test]
-    fn stt_ready_state_does_not_block() {
-        use crate::gateway::voice::sidecar::{parse_model_state, RemoteModelState};
-
-        let ready_json: serde_json::Value = serde_json::json!({"state": "ready"});
-        let state = parse_model_state(&ready_json);
-        assert_eq!(state, RemoteModelState::Ready);
-        // Ready → local_config() proceeds, no SttUnavailable produced
-
-        let other_json: serde_json::Value = serde_json::json!({"state": "error"});
-        let state2 = parse_model_state(&other_json);
-        assert!(matches!(state2, RemoteModelState::Other(_)));
-        // Other → local_config() proceeds (treated as non-blocking)
-    }
 }

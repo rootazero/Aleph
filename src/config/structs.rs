@@ -106,7 +106,7 @@ pub struct Config {
     /// Generation providers configuration (image, speech, audio, video)
     #[serde(default)]
     pub generation: GenerationConfig,
-    /// Local voice sidecar ([voice.local]) — aleph-voice STT/TTS.
+    /// Local voice ([voice.local]) — BYO OpenAI-compatible STT/TTS endpoint.
     #[serde(default, rename = "voice")]
     pub voice_local: VoiceSection,
     /// Orchestrator configuration (Three-Layer Control architecture)
@@ -451,7 +451,7 @@ impl Config {
         Self::default()
     }
 
-    /// Convenience accessor for the local voice sidecar config.
+    /// Convenience accessor for the local voice (BYO endpoint) config.
     #[must_use]
     pub fn local_voice(&self) -> &VoiceLocalConfig {
         &self.voice_local.local

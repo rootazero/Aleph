@@ -1,12 +1,16 @@
-//! Thin providers that bridge core's existing voice seams to the aleph-voice
-//! sidecar. Ports are dynamic per spawn, so these resolve (base_url, token)
-//! from the supervisor at call time instead of static config.
+//! Thin providers for the BYO local voice endpoint (OpenAI-compatible server
+//! the user runs themselves, e.g. mlx-audio). All connection values come from
+//! the provider's own `GenerationProviderConfig` (populated by
+//! `normalize_voice_local`): `base_url` = endpoint, `api_key` (empty = no
+//! Authorization header), model/voice/format only sent when configured so the
+//! server's own defaults win.
 
 use std::future::Future;
 use std::pin::Pin;
 
 use async_trait::async_trait;
 
+use crate::config::GenerationProviderConfig;
 use crate::generation::{
     GenerationData, GenerationError, GenerationOutput, GenerationProvider, GenerationRequest,
     GenerationResult, GenerationType,
@@ -14,10 +18,24 @@ use crate::generation::{
 use crate::media::cache::CachedMedia;
 use crate::media::transcription::{TranscriptionResult, TranscriptionService};
 
-use super::sidecar;
+/// `TranscriptionService` backed by the BYO endpoint (`MediaProcessor` path).
+pub struct LocalTranscription {
+    cfg: super::inbound::SttConfig,
+}
 
-/// `TranscriptionService` backed by the sidecar (`MediaProcessor` path).
-pub struct LocalTranscription;
+impl LocalTranscription {
+    /// Build from the "local" transcription provider entry.
+    #[must_use]
+    pub fn from_config(config: &GenerationProviderConfig) -> Self {
+        Self {
+            cfg: super::inbound::SttConfig {
+                api_key: config.api_key.clone().unwrap_or_default(),
+                base_url: local_base_url(config),
+                model: config.models.first().cloned().unwrap_or_default(),
+            },
+        }
+    }
+}
 
 #[async_trait]
 impl TranscriptionService for LocalTranscription {
@@ -26,10 +44,6 @@ impl TranscriptionService for LocalTranscription {
         audio: &CachedMedia,
         language: Option<&str>,
     ) -> anyhow::Result<TranscriptionResult> {
-        let sup = sidecar::global().ok_or_else(|| {
-            anyhow::anyhow!("local voice not initialized (voice.local.enabled?)")
-        })?;
-        let ep = sup.ensure_endpoint().await?;
         let bytes = tokio::fs::read(&audio.local_path).await?;
         let filename = audio
             .local_path
@@ -38,15 +52,15 @@ impl TranscriptionService for LocalTranscription {
             .unwrap_or("audio.bin")
             .to_string();
         // Reuse the shared whisper-dialect HTTP core (same multipart shape).
-        let cfg = super::inbound::SttConfig {
-            api_key: ep.token,
-            base_url: ep.base_url,
-            model: sup.config().stt_model.clone(),
-        };
-        let text =
-            super::inbound::transcribe_bytes(bytes, &filename, &audio.mime_type, language, &cfg)
-                .await
-                .map_err(|e| anyhow::anyhow!(e))?;
+        let text = super::inbound::transcribe_bytes(
+            bytes,
+            &filename,
+            &audio.mime_type,
+            language,
+            &self.cfg,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
         Ok(TranscriptionResult {
             text,
             language: None,
@@ -54,57 +68,84 @@ impl TranscriptionService for LocalTranscription {
     }
 }
 
-/// `GenerationProvider` backed by the sidecar (TTS path through the registry).
+/// Endpoint base URL from the entry, trailing slash trimmed. The configured
+/// endpoint already carries its path prefix (e.g. `/v1`) — no URL rewriting.
+fn local_base_url(config: &GenerationProviderConfig) -> String {
+    config
+        .base_url
+        .as_deref()
+        .unwrap_or("http://127.0.0.1:8000/v1")
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// `GenerationProvider` backed by the BYO endpoint (TTS path through the registry).
 pub struct LocalVoiceProvider {
     capability: GenerationType,
+    base_url: String,
+    /// Empty = unauthenticated endpoint, no Authorization header sent.
+    api_key: String,
+    /// Empty = omit "model" from the request (server default).
+    model: String,
+    /// Empty = omit "voice" from the request (server default).
+    voice: String,
+    /// Empty = omit "response_format" from the request (server default).
+    format: String,
 }
 
 impl LocalVoiceProvider {
+    /// Build from the "local" speech provider entry.
     #[must_use]
-    pub const fn new(capability: GenerationType) -> Self {
-        Self { capability }
+    pub fn from_config(capability: GenerationType, config: &GenerationProviderConfig) -> Self {
+        Self {
+            capability,
+            base_url: local_base_url(config),
+            api_key: config.api_key.clone().unwrap_or_default(),
+            model: config.models.first().cloned().unwrap_or_default(),
+            voice: config.defaults.voice.clone().unwrap_or_default(),
+            format: config.defaults.format.clone().unwrap_or_default(),
+        }
     }
 
     async fn tts(&self, request: GenerationRequest) -> GenerationResult<GenerationOutput> {
-        let sup = sidecar::global().ok_or_else(|| {
-            GenerationError::provider("local voice not initialized", None, "local")
-        })?;
-        let ep = sup
-            .ensure_endpoint()
-            .await
-            .map_err(|e| GenerationError::provider(format!("{e:#}"), None, "local"))?;
-        let cfg = sup.config();
         let voice = request
             .params
             .voice
             .clone()
-            .unwrap_or_else(|| cfg.tts_voice.clone());
-        let body = serde_json::json!({
-            "model": cfg.tts_model,
-            "input": request.prompt,
-            "voice": voice,
-            "response_format": cfg.tts_format,
-        });
+            .unwrap_or_else(|| self.voice.clone());
+        let format = request
+            .params
+            .format
+            .clone()
+            .unwrap_or_else(|| self.format.clone());
+
+        // Only carry the fields that are actually configured — the BYO server's
+        // own defaults decide the rest.
+        let mut body = serde_json::json!({ "input": request.prompt });
+        if !self.model.is_empty() {
+            body["model"] = serde_json::Value::String(self.model.clone());
+        }
+        if !voice.is_empty() {
+            body["voice"] = serde_json::Value::String(voice);
+        }
+        if !format.is_empty() {
+            body["response_format"] = serde_json::Value::String(format.clone());
+        }
+
         let client = reqwest::Client::new();
-        let resp = client
-            .post(format!("{}/audio/speech", ep.base_url))
-            .bearer_auth(&ep.token)
+        let mut req = client
+            .post(format!("{}/audio/speech", self.base_url))
             .json(&body)
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(60));
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+        let resp = req
             .send()
             .await
             .map_err(|e| GenerationError::provider(format!("request: {e}"), None, "local"))?;
 
         let status = resp.status();
-        if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            let v: serde_json::Value = resp.json().await.unwrap_or_default();
-            let pct = v["percent"].as_u64().unwrap_or(0);
-            return Err(GenerationError::provider(
-                format!("model downloading ({pct}%)"),
-                Some(status.as_u16()),
-                "local",
-            ));
-        }
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(GenerationError::provider(
@@ -113,8 +154,9 @@ impl LocalVoiceProvider {
                 "local",
             ));
         }
-        let content_type = match cfg.tts_format.as_str() {
+        let content_type = match format.as_str() {
             "wav" => "audio/wav",
+            "mp3" => "audio/mpeg",
             _ => "audio/ogg",
         };
         let bytes = resp
@@ -137,7 +179,7 @@ impl GenerationProvider for LocalVoiceProvider {
             match request.generation_type {
                 GenerationType::Speech => self.tts(request).await,
                 other => Err(GenerationError::unsupported_feature(
-                    "only speech is served by the local sidecar provider",
+                    "only speech is served by the local voice provider",
                     format!("{other:?}"),
                     "local",
                 )),
@@ -151,5 +193,38 @@ impl GenerationProvider for LocalVoiceProvider {
 
     fn supported_types(&self) -> Vec<GenerationType> {
         vec![self.capability]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_config_reads_entry_values() {
+        let mut cfg = GenerationProviderConfig::new("local");
+        cfg.base_url = Some("http://127.0.0.1:9000/v1/".into());
+        cfg.api_key = Some("sk-byo".into());
+        cfg.models = vec!["qwen3-tts".into()];
+        cfg.defaults.voice = Some("vivian".into());
+        cfg.defaults.format = Some("wav".into());
+
+        let p = LocalVoiceProvider::from_config(GenerationType::Speech, &cfg);
+        assert_eq!(p.base_url, "http://127.0.0.1:9000/v1");
+        assert_eq!(p.api_key, "sk-byo");
+        assert_eq!(p.model, "qwen3-tts");
+        assert_eq!(p.voice, "vivian");
+        assert_eq!(p.format, "wav");
+    }
+
+    #[test]
+    fn from_config_empty_entry_means_server_defaults() {
+        let cfg = GenerationProviderConfig::new("local");
+        let p = LocalVoiceProvider::from_config(GenerationType::Speech, &cfg);
+        assert_eq!(p.base_url, "http://127.0.0.1:8000/v1");
+        assert!(p.api_key.is_empty());
+        assert!(p.model.is_empty());
+        assert!(p.voice.is_empty());
+        assert!(p.format.is_empty());
     }
 }

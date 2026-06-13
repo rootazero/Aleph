@@ -584,8 +584,8 @@ impl InboundMessageRouter {
         .await;
 
         // Voice STT: transcribe audio attachments before further processing.
-        // The source is late-bound: a local sidecar resolves (port, token) per
-        // message, so materialization only happens when audio is present.
+        // P7 degradation (local endpoint failure → one cloud retry) lives
+        // inside the source-aware transcription path.
         let has_stt = self.stt_source.is_some();
         let has_audio = super::voice::inbound::has_audio_attachment(&ctx.message);
         tracing::debug!(
@@ -596,30 +596,12 @@ impl InboundMessageRouter {
         );
         if let Some(ref stt_source) = self.stt_source {
             if has_audio {
-                match stt_source.materialize().await {
-                    Ok(stt_config) => {
-                        let result = super::voice::inbound::process_inbound_voice(
-                            ctx.message.clone(),
-                            &stt_config,
-                        )
+                let result =
+                    super::voice::inbound::process_inbound_voice(ctx.message.clone(), stt_source)
                         .await;
-                        ctx.message = result.message;
-                        if result.transcribed {
-                            ctx.voice_reply_hint = true;
-                        }
-                    }
-                    Err(super::voice::inbound::SttUnavailable::Downloading { percent }) => {
-                        // Voice model still downloading: don't transcribe and
-                        // don't fail — keep the attachments and surface an
-                        // in-conversation hint instead.
-                        if ctx.message.text.is_empty() {
-                            ctx.message.text =
-                                format!("[语音模型下载中 {percent}%，请稍候重试或改用文字]");
-                        }
-                    }
-                    Err(super::voice::inbound::SttUnavailable::Error(e)) => {
-                        tracing::warn!(error = %e, "local STT unavailable, no fallback");
-                    }
+                ctx.message = result.message;
+                if result.transcribed {
+                    ctx.voice_reply_hint = true;
                 }
             }
         }
