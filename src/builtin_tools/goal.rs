@@ -51,7 +51,12 @@ pub struct GoalArgs {
     /// gate. Use a real pass/fail command (tests/build/lint), not prose.
     pub gate_command: Option<String>,
     /// Optional lesson to append to the goal's state file — for `update`.
-    /// Record what you learned so future autonomous iterations don't repeat it.
+    /// Record a durable, transferable insight (a missed step, a constraint, an
+    /// approach that worked) so future autonomous iterations don't repeat it.
+    /// Do NOT record environment-specific failures, transient errors that are
+    /// now resolved, or negative claims that a tool / the codebase is "broken" —
+    /// those harden into self-imposed refusals the agent cites against itself
+    /// for the rest of the pursuit.
     pub lesson: Option<String>,
     /// For `set`: wall-clock budget in minutes. Converted to an absolute
     /// deadline (now + minutes) at set time. None = no time limit.
@@ -149,7 +154,9 @@ impl AlephTool for GoalTool {
          (optionally with a token_budget, pursuit_max_iterations to let \
          the system continue autonomously, and timeout_minutes to cap wall-clock pursuit). Optionally attach a gate_command (a shell test like 'cargo test' that must \
 exit 0 before an autonomous goal is accepted as complete). On action='update' \
-you may also pass a lesson to record what you learned for future iterations. \
+you may also pass a lesson to record a durable, transferable insight for future \
+iterations (never an environment-specific or transient failure, nor a 'tool is \
+broken' claim — those poison later iterations). \
          Read it with action='get'. When \
          you have achieved the objective, self-report with action='update', \
          status='complete'; if you are stuck and need the user, use \
