@@ -86,6 +86,11 @@ fn VoiceSession() -> impl IntoView {
     let vad_cfg = VadConfig::default();
     let splitter = Rc::new(RefCell::new(SentenceSplitter::default()));
     let speak_run: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    // Last-writer-wins generation guard for `speak_run`. Bumped on barge-in and
+    // at each utterance's send-arming point so an abandoned/overtaken run can
+    // neither keep speaking (its deltas find `speak_run == None`) nor clobber a
+    // newer run (the guarded final assignment checks the gen still matches).
+    let speak_gen = Rc::new(RefCell::new(0u64));
     let consecutive_errors = Rc::new(RefCell::new(0u32));
 
     // The player is constructed after `dispatch` (whose callbacks the player
@@ -135,6 +140,7 @@ fn VoiceSession() -> impl IntoView {
         let player = Rc::clone(&player);
         let splitter = Rc::clone(&splitter);
         let speak_run = Rc::clone(&speak_run);
+        let speak_gen = Rc::clone(&speak_gen);
         let consecutive_errors = Rc::clone(&consecutive_errors);
         spawn_local(async move {
             let session = match MicSession::open().await {
@@ -154,6 +160,13 @@ fn VoiceSession() -> impl IntoView {
                     match ev {
                         Some(VadEvent::SpeechStart) => {
                             if phase.get_untracked() == VoicePhase::Speaking {
+                                // Invalidate the old run BEFORE stopping audio:
+                                // bump the gen and clear speak_run so the Effect
+                                // early-returns on any further deltas from the
+                                // abandoned run (it is intentionally never
+                                // finalized), then drain queue + audio.
+                                *speak_gen.borrow_mut() += 1;
+                                *speak_run.borrow_mut() = None;
                                 dispatch(VoiceEvent::BargeIn);
                             }
                             let _ = session.start_segment();
@@ -174,6 +187,7 @@ fn VoiceSession() -> impl IntoView {
                                 Rc::clone(&player),
                                 Rc::clone(&splitter),
                                 Rc::clone(&speak_run),
+                                Rc::clone(&speak_gen),
                                 Rc::clone(&consecutive_errors),
                                 voice_mode,
                             );
@@ -283,6 +297,7 @@ fn handle_utterance(
     player: Rc<TtsPlayer>,
     splitter: Rc<RefCell<SentenceSplitter>>,
     speak_run: Rc<RefCell<Option<String>>>,
+    speak_gen: Rc<RefCell<u64>>,
     consecutive_errors: Rc<RefCell<u32>>,
     voice_mode: VoiceMode,
 ) {
@@ -322,6 +337,15 @@ fn handle_utterance(
         caption.set(Caption::User(text.clone()));
         dispatch(VoiceEvent::UtteranceSent);
 
+        // Claim this turn's generation. A later utterance or a barge-in bumps
+        // the gen; the guarded assignment below then refuses to arm a run that
+        // a newer turn has already superseded (last-writer-wins, even if our
+        // transcribe+send finished out of order).
+        let my_gen = {
+            let mut g = speak_gen.borrow_mut();
+            *g += 1;
+            *g
+        };
         // Reset the TTS pipeline for the new turn before any stream arrives.
         player.reset();
         *splitter.borrow_mut() = SentenceSplitter::default();
@@ -329,15 +353,21 @@ fn handle_utterance(
         let sk = chat.session_key.get_untracked();
         match ChatApi::send(&dash, &text, sk.as_deref(), vec![], None, None, None).await {
             Ok(resp) => {
-                chat.session_key.set(Some(resp.session_key.clone()));
-                chat.start_assistant_message(&resp.run_id);
-                // IMPORTANT: do NOT call chat.mark_speak_run — the immersive
-                // session owns TTS itself; marking the run would double-speak
-                // (the composer voice-loop reader would also synthesize it).
-                *speak_run.borrow_mut() = Some(resp.run_id);
+                // Only arm the pipeline if no newer utterance / barge-in
+                // superseded us while send was in flight.
+                if *speak_gen.borrow() == my_gen {
+                    chat.session_key.set(Some(resp.session_key.clone()));
+                    chat.start_assistant_message(&resp.run_id);
+                    // IMPORTANT: do NOT call chat.mark_speak_run — the immersive
+                    // session owns TTS itself; marking the run would double-speak
+                    // (the composer voice-loop reader would also synthesize it).
+                    *speak_run.borrow_mut() = Some(resp.run_id);
+                }
             }
             Err(_) => {
-                dispatch(VoiceEvent::RunFailed);
+                if *speak_gen.borrow() == my_gen {
+                    dispatch(VoiceEvent::RunFailed);
+                }
                 let _ = voice_mode;
             }
         }
