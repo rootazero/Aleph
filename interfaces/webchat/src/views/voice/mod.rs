@@ -89,7 +89,11 @@ fn VoiceSession() -> impl IntoView {
     let vad = Rc::new(RefCell::new(VadState::default()));
     let vad_cfg = VadConfig::default();
     let splitter = Rc::new(RefCell::new(SentenceSplitter::default()));
-    let speak_run: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    // Reactive run-id gate for the TTS Effect. It is a SIGNAL (not a plain
+    // `RefCell`) on purpose: arming it must re-run the Effect against whatever
+    // reply content is ALREADY present, so a warm round whose reply streamed in
+    // and completed BEFORE the gate was armed still gets spoken (see the Effect).
+    let speak_run = RwSignal::new(None::<String>);
     // Last-writer-wins generation guard for `speak_run`. Bumped on barge-in and
     // at each utterance's send-arming point so an abandoned/overtaken run can
     // neither keep speaking (its deltas find `speak_run == None`) nor clobber a
@@ -143,7 +147,6 @@ fn VoiceSession() -> impl IntoView {
         let vad = Rc::clone(&vad);
         let player = Rc::clone(&player);
         let splitter = Rc::clone(&splitter);
-        let speak_run = Rc::clone(&speak_run);
         let speak_gen = Rc::clone(&speak_gen);
         let consecutive_errors = Rc::clone(&consecutive_errors);
         spawn_local(async move {
@@ -183,7 +186,7 @@ fn VoiceSession() -> impl IntoView {
                                 // abandoned run (it is intentionally never
                                 // finalized), then drain queue + audio.
                                 *speak_gen.borrow_mut() += 1;
-                                *speak_run.borrow_mut() = None;
+                                speak_run.set(None);
                                 dispatch(VoiceEvent::BargeIn);
                             }
                             session.start_segment();
@@ -200,7 +203,7 @@ fn VoiceSession() -> impl IntoView {
                                 caption,
                                 Rc::clone(&player),
                                 Rc::clone(&splitter),
-                                Rc::clone(&speak_run),
+                                speak_run,
                                 Rc::clone(&speak_gen),
                                 Rc::clone(&consecutive_errors),
                                 voice_mode,
@@ -222,20 +225,20 @@ fn VoiceSession() -> impl IntoView {
     // bubble stops streaming, flushes the tail and finalizes.
     {
         let splitter = Rc::clone(&splitter);
-        let speak_run = Rc::clone(&speak_run);
         let player = Rc::clone(&player);
         Effect::new(move |_| {
-            // Subscribe to `chat.messages` UNCONDITIONALLY so this Effect keeps
-            // waking on every stream delta. `speak_run` is a plain `RefCell`,
-            // not a signal — writing it never wakes the Effect — so the reactive
-            // dependency MUST come from `chat.messages`, and Leptos only
-            // registers it when `.with()` is actually called. The Effect's first
-            // run happens at mount with `speak_run == None`; the old code read
-            // `speak_run` and `return`ed BEFORE reaching `.with()`, so that first
-            // run captured ZERO dependencies and never fired again — immersive
-            // TTS was dead from birth. Fold the run-id gate INTO the `.with()`
-            // closure so the subscription is re-established on every run.
-            let run_id = speak_run.borrow().clone();
+            // Two reactive dependencies, BOTH required:
+            //   1. `speak_run.get()` — arming the run (or clearing it on
+            //      barge-in) re-runs this Effect. This is what rescues the warm
+            //      round where the whole reply streams in and COMPLETES before
+            //      `handle_utterance` arms the gate: the arm itself triggers a
+            //      reprocess of the already-present content. Without it the run
+            //      would never be spoken and the phase would freeze at "正在思考".
+            //   2. `chat.messages` (via `.with`) — every stream delta wakes the
+            //      Effect for incremental 边流边说 while the gate is already armed.
+            // Both reads happen unconditionally on the path below, so Leptos
+            // registers both subscriptions on every run.
+            let run_id = speak_run.get();
             let found = chat.messages.with(|msgs| {
                 let run_id = run_id.as_deref()?;
                 let target = format!("assistant-{run_id}");
@@ -247,15 +250,17 @@ fn VoiceSession() -> impl IntoView {
             let Some((content, streaming)) = found else {
                 return;
             };
-            for s in splitter.borrow_mut().push(&content) {
+            let (sentences, finalized) =
+                drive_step(&mut splitter.borrow_mut(), &content, streaming);
+            for s in sentences {
                 player.enqueue(dash, s);
             }
-            if !streaming && !content.is_empty() {
-                if let Some(tail) = splitter.borrow_mut().finish_with(&content) {
-                    player.enqueue(dash, tail);
-                }
+            if finalized {
                 player.finalize(dash);
-                *speak_run.borrow_mut() = None;
+                // Clear without notifying: we are INSIDE the Effect that reads
+                // `speak_run`, so a tracked write would schedule one redundant
+                // extra run (which would just read `None` and return).
+                speak_run.update_untracked(|r| *r = None);
             }
         });
     }
@@ -338,7 +343,7 @@ fn handle_utterance(
     caption: RwSignal<Caption>,
     player: Rc<TtsPlayer>,
     splitter: Rc<RefCell<SentenceSplitter>>,
-    speak_run: Rc<RefCell<Option<String>>>,
+    speak_run: RwSignal<Option<String>>,
     speak_gen: Rc<RefCell<u64>>,
     consecutive_errors: Rc<RefCell<u32>>,
     voice_mode: VoiceMode,
@@ -399,11 +404,17 @@ fn handle_utterance(
                 // superseded us while send was in flight.
                 if *speak_gen.borrow() == my_gen {
                     chat.session_key.set(Some(resp.session_key.clone()));
-                    chat.start_assistant_message(&resp.run_id);
-                    // IMPORTANT: do NOT call chat.mark_speak_run — the immersive
-                    // session owns TTS itself; marking the run would double-speak
-                    // (the composer voice-loop reader would also synthesize it).
-                    *speak_run.borrow_mut() = Some(resp.run_id);
+                    // Do NOT open the assistant bubble here. The `run_accepted`
+                    // stream event already creates exactly one `assistant-{run}`
+                    // bubble (and `begin_step` stamps its iteration). Creating a
+                    // second one appended an empty, trailing shadow bubble that
+                    // the TTS Effect's `.rev().find` then tracked instead of the
+                    // real content bubble — so the reply was never spoken and the
+                    // phase froze at "正在思考" (the round-2 no-audio bug).
+                    // Also do NOT call chat.mark_speak_run — the immersive session
+                    // owns TTS itself; marking the run would double-speak (the
+                    // composer voice-loop reader would also synthesize it).
+                    speak_run.set(Some(resp.run_id));
                 }
             }
             Err(_) => {
@@ -414,4 +425,60 @@ fn handle_utterance(
             }
         }
     });
+}
+
+/// Pure TTS-drive step shared by the streaming Effect: feed the current
+/// accumulated bubble `content` and whether the run is still `streaming`, and
+/// get back the sentences to enqueue plus whether the run is now finalized
+/// (queue should drain → playback ends → phase returns to Listening). Kept free
+/// of the wasm player so the round-2 "armed after the reply already finished"
+/// path is host-testable.
+fn drive_step(
+    splitter: &mut SentenceSplitter,
+    content: &str,
+    streaming: bool,
+) -> (Vec<String>, bool) {
+    let mut out = splitter.push(content);
+    let finalized = !streaming && !content.is_empty();
+    if finalized {
+        if let Some(tail) = splitter.finish_with(content) {
+            out.push(tail);
+        }
+    }
+    (out, finalized)
+}
+
+#[cfg(test)]
+mod drive_tests {
+    use super::*;
+
+    #[test]
+    fn incremental_stream_emits_then_finalizes() {
+        let mut sp = SentenceSplitter::default();
+        let full = "你好！我能听到你说话。有什么我可以帮你的吗？";
+        // Mid-stream snapshot (still streaming): the first sentence is emitted,
+        // the short trailing one is held back to merge forward.
+        let (mid, fin) = drive_step(&mut sp, full, true);
+        assert_eq!(mid, vec!["你好！我能听到你说话。"]);
+        assert!(!fin);
+        // Completion snapshot (same text, no longer streaming): the held tail is
+        // flushed and the run is finalized so playback can drain.
+        let (tail, fin) = drive_step(&mut sp, full, false);
+        assert_eq!(tail, vec!["有什么我可以帮你的吗？"]);
+        assert!(fin);
+    }
+
+    #[test]
+    fn armed_after_reply_finished_emits_everything() {
+        // Regression for "round-2 silent + stuck thinking": on a warm turn the
+        // whole reply streams in and COMPLETES before the gate is armed, so the
+        // Effect's first (reactive-arm) run sees the full, finished content in
+        // one shot. That single drive must emit BOTH sentences and finalize —
+        // nothing lost, playback drains, the phase leaves "正在思考".
+        let mut sp = SentenceSplitter::default();
+        let full = "你好！我能听到你说话。有什么我可以帮你的吗？";
+        let (out, fin) = drive_step(&mut sp, full, false);
+        assert_eq!(out, vec!["你好！我能听到你说话。", "有什么我可以帮你的吗？"]);
+        assert!(fin);
+    }
 }
