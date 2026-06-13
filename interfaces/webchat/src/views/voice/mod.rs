@@ -5,6 +5,8 @@ pub(crate) mod audio;
 #[allow(dead_code)] // wired in Task 7
 pub(crate) mod machine;
 #[allow(dead_code)] // wired in Task 7
+pub(crate) mod orb;
+#[allow(dead_code)] // wired in Task 7
 pub(crate) mod sentence;
 #[allow(dead_code)] // wired in Task 7
 pub(crate) mod vad;
