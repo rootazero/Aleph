@@ -32,6 +32,8 @@ const fn get_embedding_preset_defaults(preset: &EmbeddingPreset) -> Option<(&'st
         EmbeddingPreset::SiliconFlow => Some(("https://api.siliconflow.cn/v1", "BAAI/bge-m3")),
         EmbeddingPreset::OpenAi => Some(("https://api.openai.com/v1", "text-embedding-3-small")),
         EmbeddingPreset::Ollama => Some(("http://localhost:11434/v1", "nomic-embed-text")),
+        EmbeddingPreset::Jina => Some(("https://api.jina.ai/v1", "jina-embeddings-v3")),
+        EmbeddingPreset::Mistral => Some(("https://api.mistral.ai/v1", "mistral-embed")),
         EmbeddingPreset::Custom => None,
     }
 }
@@ -597,6 +599,24 @@ pub async fn handle_presets(request: JsonRpcRequest) -> JsonRpcResponse {
             "api_key_env": null,
             "model": "nomic-embed-text",
             "dimensions": 768
+        }),
+        serde_json::json!({
+            "preset": "jina",
+            "id": "jina",
+            "name": "Jina",
+            "api_base": "https://api.jina.ai/v1",
+            "api_key_env": null,
+            "model": "jina-embeddings-v3",
+            "dimensions": 1024
+        }),
+        serde_json::json!({
+            "preset": "mistral",
+            "id": "mistral",
+            "name": "Mistral",
+            "api_base": "https://api.mistral.ai/v1",
+            "api_key_env": null,
+            "model": "mistral-embed",
+            "dimensions": 1024
         }),
     ];
 

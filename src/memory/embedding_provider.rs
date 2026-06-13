@@ -61,6 +61,10 @@ pub struct RemoteEmbeddingProvider {
     /// truncated at a char boundary before the API call to prevent
     /// 8192-token-limit failures on long compound-ingest inputs.
     max_input_chars: usize,
+    /// Whether to emit the OpenAI-style `dimensions` request field. Gated per
+    /// preset (`EmbeddingPreset::sends_dimensions_param`) so providers that
+    /// reject unknown fields (Mistral) aren't sent it.
+    send_dimensions: bool,
     provider_id: String,
 }
 
@@ -83,6 +87,7 @@ impl RemoteEmbeddingProvider {
             dimension: config.dimensions as usize,
             batch_size: config.batch_size as usize,
             max_input_chars: config.max_input_chars,
+            send_dimensions: config.preset.sends_dimensions_param(),
             provider_id: config.id.clone(),
         })
     }
@@ -141,7 +146,7 @@ impl RemoteEmbeddingProvider {
             "model": self.model,
         });
 
-        if self.dimension > 0 {
+        if self.send_dimensions && self.dimension > 0 {
             body["dimensions"] = serde_json::json!(self.dimension);
         }
 
@@ -241,11 +246,28 @@ impl EmbeddingProvider for RemoteEmbeddingProvider {
             return Ok(Vec::new());
         }
 
-        let mut all_embeddings = Vec::with_capacity(texts.len());
+        use futures::stream::StreamExt;
+        // Bounded-concurrency batch dispatch: feed each chunk's `call_api`
+        // future through `stream::iter(...).buffered(n)`, which polls at most
+        // `n` round-trips at a time AND yields completions in input order — so
+        // the flattened result preserves the caller's text order. Supersedes
+        // the previous serial `for chunk` loop that blocked on one HTTP
+        // round-trip per chunk (latency = sum of all chunks instead of the
+        // slowest `ceil(chunks / n)` waves).
+        const MAX_CONCURRENT_BATCHES: usize = 4;
+        // `chunks(0)` would panic — clamp defensively (config default is 32).
+        let batch_size = self.batch_size.max(1);
+        let chunks: Vec<&[&str]> = texts.chunks(batch_size).collect();
 
-        for chunk in texts.chunks(self.batch_size) {
-            let batch_result = self.call_api(chunk).await?;
-            all_embeddings.extend(batch_result);
+        let chunk_results: Vec<Result<Vec<Vec<f32>>, AlephError>> = futures::stream::iter(chunks)
+            .map(|chunk| self.call_api(chunk))
+            .buffered(MAX_CONCURRENT_BATCHES)
+            .collect()
+            .await;
+
+        let mut all_embeddings = Vec::with_capacity(texts.len());
+        for chunk_result in chunk_results {
+            all_embeddings.extend(chunk_result?);
         }
 
         Ok(all_embeddings)
@@ -315,6 +337,7 @@ pub(crate) mod tests {
             dimension: 8,
             batch_size: 1,
             max_input_chars,
+            send_dimensions: true,
             provider_id: "test".to_string(),
         }
     }

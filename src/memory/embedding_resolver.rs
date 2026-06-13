@@ -37,9 +37,11 @@ impl EmbeddingLocality {
     pub const fn of(preset: &EmbeddingPreset) -> Self {
         match preset {
             EmbeddingPreset::Ollama => Self::Local,
-            EmbeddingPreset::OpenAi | EmbeddingPreset::SiliconFlow | EmbeddingPreset::Custom => {
-                Self::Remote
-            }
+            EmbeddingPreset::OpenAi
+            | EmbeddingPreset::SiliconFlow
+            | EmbeddingPreset::Jina
+            | EmbeddingPreset::Mistral
+            | EmbeddingPreset::Custom => Self::Remote,
         }
     }
 }

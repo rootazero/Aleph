@@ -251,6 +251,8 @@ pub(super) fn ProviderDetailPanel(
                                 "silicon_flow" => "https://api.siliconflow.cn/v1",
                                 "open_ai" => "https://api.openai.com/v1",
                                 "ollama" => "http://localhost:11434/v1",
+                                "jina" => "https://api.jina.ai/v1",
+                                "mistral" => "https://api.mistral.ai/v1",
                                 _ => "https://api.example.com/v1",
                             };
                             default_base

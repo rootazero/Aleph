@@ -53,6 +53,8 @@ pub enum RerankProviderType {
     Pinecone,
     /// vLLM-compatible reranking endpoint
     Vllm,
+    /// Cohere reranking API (v2)
+    Cohere,
 }
 
 /// Configuration for cross-encoder reranking

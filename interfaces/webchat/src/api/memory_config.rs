@@ -105,6 +105,7 @@ pub enum RerankProviderType {
     Voyage,
     Pinecone,
     Vllm,
+    Cohere,
 }
 
 impl RerankProviderType {
@@ -116,6 +117,7 @@ impl RerankProviderType {
             Self::Voyage => "voyage",
             Self::Pinecone => "pinecone",
             Self::Vllm => "vllm",
+            Self::Cohere => "cohere",
         }
     }
 
@@ -126,6 +128,7 @@ impl RerankProviderType {
             "voyage" => Self::Voyage,
             "pinecone" => Self::Pinecone,
             "vllm" => Self::Vllm,
+            "cohere" => Self::Cohere,
             _ => Self::Jina,
         }
     }
