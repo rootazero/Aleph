@@ -987,6 +987,17 @@ html[data-material="aurora"].dark {
   .voice-orb--mini {
     --voice-orb-size: 1.25rem;
     border-radius: 50%;
+    /* WebKit/WKWebView does NOT clip the mix-blend-mode children
+       (.voice-orb-flow / .voice-orb-sheen, each promoted to its own
+       compositing layer) to the parent's border-radius + overflow:hidden — the
+       inset:-30% square gradients bleed out and the mini reads as a box (the
+       composer icon bug; Blink clips fine, hence the desktop-vs-browser split).
+       The hue-drift `filter` here is itself what composites the orb. A mask DOES
+       clip composited descendants, so pin the mini to its inscribed circle. The
+       full orb dodges this via its border-radius-morph animation forcing the
+       clip; the static mini does not. */
+    -webkit-mask: radial-gradient(circle closest-side, #000 99%, transparent 100%);
+    mask: radial-gradient(circle closest-side, #000 99%, transparent 100%);
     animation: voice-hue-drift 26s ease-in-out infinite;
     box-shadow: 0 0 0.5rem 0.08rem var(--voice-glow);
   }
