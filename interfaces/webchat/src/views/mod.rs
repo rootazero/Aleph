@@ -13,3 +13,4 @@ pub mod settings;
 pub mod tasks;
 pub mod teams;
 pub mod usage;
+pub mod voice;
