@@ -63,6 +63,18 @@ impl Default for VoiceLocalConfig {
 pub struct VoiceSection {
     #[serde(default)]
     pub local: VoiceLocalConfig,
+    /// Provider id pinned for voice-mode replies (e.g. a low-TTFT China-edge
+    /// model so the spoken reply starts faster than the global default). Empty
+    /// = no override; the run falls back to the global default. When
+    /// `llm_model` is set but this is empty, the resolver picks the provider by
+    /// model-name heuristic (`ModelOverride::Raw`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub llm_provider: String,
+    /// Model id pinned for voice-mode replies. Empty = no override. Pairs with
+    /// `llm_provider` (both set → pin both; only this set → resolver picks the
+    /// provider).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub llm_model: String,
 }
 
 /// The BYO endpoint's provider key: used both as the map entry name and as

@@ -53,6 +53,7 @@ pub mod replicate;
 pub mod stability;
 pub mod suno;
 pub mod url_normalize;
+pub mod volcengine_tts;
 
 #[cfg(test)]
 mod tests;
@@ -76,3 +77,4 @@ pub use openai_whisper::OpenAiWhisperProvider;
 pub use replicate::{ReplicateProvider, ReplicateProviderBuilder};
 pub use stability::StabilityImageProvider;
 pub use suno::SunoProvider;
+pub use volcengine_tts::VolcengineTtsProvider;

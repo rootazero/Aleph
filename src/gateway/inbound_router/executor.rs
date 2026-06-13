@@ -317,6 +317,25 @@ impl InboundMessageRouter {
             voice_enabled,
         );
 
+        // Voice mode may pin a low-TTFT model so the spoken reply starts faster
+        // than the global default (config `[voice] llm_provider/llm_model`).
+        // Empty config → `None` → the run uses the global default. Only voice
+        // turns are affected; text mode is untouched.
+        let model_override = if voice_enabled {
+            match &self.app_config {
+                Some(cfg) => {
+                    let cfg = cfg.read().await;
+                    crate::gateway::model_override::ModelOverride::from_voice(
+                        &cfg.voice_local.llm_provider,
+                        &cfg.voice_local.llm_model,
+                    )
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+
         // Channel-routed messages run in the channel's configured workspace
         // (Layer-1 lock): a Chat-tier channel pins its `default_workspace`; a
         // Config-tier channel that sets none falls back to the agent default.
@@ -333,7 +352,7 @@ impl InboundMessageRouter {
             sandbox_override: None,
             workspace_override: channel_workspace,
             max_iterations_override: None,
-            model_override: None,
+            model_override,
         };
 
         if !request.attachments.is_empty() {

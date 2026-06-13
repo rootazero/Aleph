@@ -392,6 +392,40 @@ const PROFILES: &[(&str, GenerationPreset)] = &[
             .with_homepage("https://docs.cartesia.ai")
             .with_signup("https://play.cartesia.ai"),
     ),
+    (
+        "siliconflow-tts",
+        GenerationPreset::new(
+            "openai_tts",
+            "FunAudioLLM/CosyVoice2-0.5B",
+            Some("https://api.siliconflow.cn"),
+        )
+        .with_modalities(SPEECH)
+        .with_display("SiliconFlow TTS / 硅基流动")
+        .with_description(
+            "OpenAI-compatible /v1/audio/speech (CosyVoice2 / fish-speech); \
+             China edge, low latency. Voice format is `model:voice`, e.g. \
+             `FunAudioLLM/CosyVoice2-0.5B:alex`.",
+        )
+        .with_homepage("https://docs.siliconflow.cn/cn/userguide/capabilities/text-to-speech")
+        .with_signup("https://cloud.siliconflow.cn/account/ak"),
+    ),
+    (
+        "volcengine-tts",
+        GenerationPreset::new(
+            "volcengine_tts",
+            "zh_female_cancan_mars_bigtts",
+            Some("https://openspeech.bytedance.com"),
+        )
+        .with_modalities(SPEECH)
+        .with_display("Volcengine TTS / 火山引擎豆包语音")
+        .with_description(
+            "Legacy openspeech.bytedance.com (China edge, best-in-class Chinese). \
+             Carry your appid in base_url: `https://openspeech.bytedance.com?appid=<appid>`; \
+             api_key = token; voice = voice_type (e.g. zh_female_cancan_mars_bigtts).",
+        )
+        .with_homepage("https://www.volcengine.com/docs/6561")
+        .with_signup("https://console.volcengine.com/speech/app"),
+    ),
     // ─── Transcription (STT) ──────────────────────────────────────────────────
     (
         "openai-whisper",
@@ -414,6 +448,22 @@ const PROFILES: &[(&str, GenerationPreset)] = &[
             .with_description("Nova-3 streaming STT")
             .with_homepage("https://developers.deepgram.com")
             .with_signup("https://console.deepgram.com/signup"),
+    ),
+    (
+        "siliconflow-stt",
+        GenerationPreset::new(
+            "openai_whisper",
+            "FunAudioLLM/SenseVoiceSmall",
+            Some("https://api.siliconflow.cn"),
+        )
+        .with_modalities(TRANSCRIPTION)
+        .with_display("SiliconFlow STT / 硅基流动")
+        .with_description(
+            "SenseVoice / TeleSpeechASR via OpenAI-compatible /v1/audio/transcriptions; \
+             Chinese-strong, China edge, low latency (synchronous, no submit-poll).",
+        )
+        .with_homepage("https://docs.siliconflow.cn/cn/userguide/capabilities/speech-to-text")
+        .with_signup("https://cloud.siliconflow.cn/account/ak"),
     ),
 ];
 

@@ -70,6 +70,77 @@ impl ModelOverride {
             Self::Raw { .. } => None,
         }
     }
+
+    /// Build a voice-mode override from the `[voice]` config strings.
+    ///
+    /// * empty `model` → `None` (no override; run uses the global default).
+    /// * `model` set, `provider` empty → [`Self::Raw`] (resolver picks the
+    ///   provider by model-name heuristic).
+    /// * both set → [`Self::Qualified`] (pin both, skip fallback).
+    ///
+    /// Pure for unit testing — takes plain `&str` so the config layer never
+    /// depends on the gateway.
+    #[must_use]
+    pub fn from_voice(provider: &str, model: &str) -> Option<Self> {
+        let model = model.trim();
+        if model.is_empty() {
+            return None;
+        }
+        let provider = provider.trim();
+        if provider.is_empty() {
+            Some(Self::Raw {
+                model: model.to_string(),
+            })
+        } else {
+            Some(Self::Qualified {
+                provider: provider.to_string(),
+                model: model.to_string(),
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod voice_override_tests {
+    use super::ModelOverride;
+
+    #[test]
+    fn empty_model_is_none() {
+        assert_eq!(ModelOverride::from_voice("siliconflow", ""), None);
+        assert_eq!(ModelOverride::from_voice("", "   "), None);
+    }
+
+    #[test]
+    fn model_only_is_raw() {
+        assert_eq!(
+            ModelOverride::from_voice("", "deepseek-ai/DeepSeek-V3"),
+            Some(ModelOverride::Raw {
+                model: "deepseek-ai/DeepSeek-V3".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn both_set_is_qualified() {
+        assert_eq!(
+            ModelOverride::from_voice("siliconflow", "deepseek-ai/DeepSeek-V3"),
+            Some(ModelOverride::Qualified {
+                provider: "siliconflow".to_string(),
+                model: "deepseek-ai/DeepSeek-V3".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn trims_whitespace() {
+        assert_eq!(
+            ModelOverride::from_voice("  siliconflow  ", "  m  "),
+            Some(ModelOverride::Qualified {
+                provider: "siliconflow".to_string(),
+                model: "m".to_string(),
+            })
+        );
+    }
 }
 
 #[cfg(test)]

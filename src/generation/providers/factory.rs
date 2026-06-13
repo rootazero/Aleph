@@ -1,7 +1,7 @@
 //! Factory function for creating generation providers from configuration.
 
 use super::url_normalize::resolve_base_url;
-use super::{OpenAiImageProvider, OpenAiTtsProvider, OpenAiWhisperProvider, DeepgramSttProvider, DeepgramTtsProvider, AzureSpeechProvider, SunoProvider, BflProvider, CartesiaProvider, MinimaxTtsProvider, OpenAiCompatProvider, StabilityImageProvider, GoogleImagenProvider, GoogleVeoProvider, ReplicateProvider, ElevenLabsProvider, FalProvider, MidjourneyProvider, MidjourneyMode};
+use super::{OpenAiImageProvider, OpenAiTtsProvider, OpenAiWhisperProvider, DeepgramSttProvider, DeepgramTtsProvider, AzureSpeechProvider, SunoProvider, BflProvider, CartesiaProvider, MinimaxTtsProvider, VolcengineTtsProvider, OpenAiCompatProvider, StabilityImageProvider, GoogleImagenProvider, GoogleVeoProvider, ReplicateProvider, ElevenLabsProvider, FalProvider, MidjourneyProvider, MidjourneyMode};
 use crate::config::GenerationProviderConfig;
 use crate::generation::{GenerationError, GenerationProvider, GenerationResult, GenerationType};
 use crate::sync_primitives::Arc;
@@ -155,6 +155,12 @@ pub fn create_provider(
             config.defaults.voice.clone(),
         )?),
         "minimax_tts" => Arc::new(MinimaxTtsProvider::new(
+            api_key,
+            config.base_url.clone(),
+            config.default_model().map(|s| s.to_string()),
+            config.defaults.voice.clone(),
+        )?),
+        "volcengine_tts" => Arc::new(VolcengineTtsProvider::new(
             api_key,
             config.base_url.clone(),
             config.default_model().map(|s| s.to_string()),
