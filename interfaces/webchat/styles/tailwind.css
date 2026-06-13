@@ -1066,6 +1066,23 @@ html[data-material="aurora"].dark {
   animation: aleph-pop-in 0.16s var(--ease-spring);
   transform-origin: bottom left;
 }
+/* Glass popovers/modals must NOT transform during entrance: scaling or
+   translating a backdrop-filter surface forces WebKit to re-sample + re-blur
+   the backdrop on every animation frame — a visible hitch on WKWebView for the
+   large frosted modals (command palette, notification center). Fade-only keeps
+   the resting frosted look byte-identical while dropping the per-frame re-blur.
+   It also leaves the element's own transform free, so positioning transforms
+   like the command palette's `-translate-x-1/2` centering hold throughout the
+   entrance instead of being clobbered by the keyframe. Higher specificity
+   (0,2,0) overrides only the animation-name from `.animate-pop-in`'s shorthand;
+   duration/easing are inherited. */
+.glass.animate-pop-in {
+  animation-name: aleph-pop-in-fade;
+}
+@keyframes aleph-pop-in-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
 
 /* Voice orb — organic blob morph + flow rotation + sheen/hue drift. */
 @keyframes voice-morph {
