@@ -48,6 +48,13 @@ web-sys = { version = "0.3", features = [
     "HtmlMediaElement", "HtmlAudioElement",
     # immersive voice mode — mic level metering via Web Audio analyser
     "AudioContext", "AnalyserNode", "MediaStreamAudioSourceNode",
+    # immersive capture — continuous PCM tap (pre-roll buffer, kills leading-syllable clip)
+    "ScriptProcessorNode", "AudioProcessingEvent", "AudioBuffer", "AudioDestinationNode",
+    # immersive playback — decode TTS bytes to a buffer source on the output
+    # context. WKWebView-safe: bypasses BOTH the <audio> autoplay gate and the
+    # createMediaElementSource silent-bridge bug. Blob URL kept only for the
+    # degraded <audio> fallback (no graph / decode failure / remote URL).
+    "Url", "AudioContextState", "AudioBufferSourceNode", "AudioScheduledSourceNode",
 ] }
 console_error_panic_hook = "0.1"
 

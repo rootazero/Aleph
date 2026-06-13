@@ -10,6 +10,7 @@ pub(crate) mod machine;
 pub(crate) mod orb;
 pub(crate) mod sentence;
 pub(crate) mod vad;
+pub(crate) mod wav;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -68,6 +69,9 @@ fn VoiceSession() -> impl IntoView {
     let dash = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
     let voice_mode = expect_context::<VoiceMode>();
+    // Native shell vs. browser decides how a mic denial is remediated (OS TCC
+    // deep-link vs. browser per-site permission). Resolved once at mount.
+    let native = audio::is_native_shell();
 
     let phase = RwSignal::new(VoicePhase::Listening);
     let level = RwSignal::new(0.0_f64);
@@ -151,10 +155,23 @@ fn VoiceSession() -> impl IntoView {
                 }
             };
             mic.set_value(Some(Rc::clone(&session)));
+            // Mic grant is a strong user activation — unlock the output context
+            // now so the first reply's buffer source plays (a suspended context
+            // is silent, and the reply arrives long after the entry tap).
+            player.resume_output();
             let handle = set_interval_with_handle(
                 move || {
                     let rms = session.rms();
-                    level.set(f64::from(rms.min(1.0)));
+                    // Orb level: amplified so ordinary speech (RMS ~0.06-0.2)
+                    // produces a visible pulse, not an imperceptible ~3% nudge.
+                    // While the reply is speaking the mic hears ~nothing (system
+                    // AEC), so drive the orb from the playback analyser instead.
+                    let raw = if phase.get_untracked() == VoicePhase::Speaking {
+                        player.output_level()
+                    } else {
+                        rms
+                    };
+                    level.set(f64::from((raw * 3.5).min(1.0)));
                     let (next, ev) = vad_step(*vad.borrow(), rms, &vad_cfg);
                     *vad.borrow_mut() = next;
                     match ev {
@@ -169,13 +186,10 @@ fn VoiceSession() -> impl IntoView {
                                 *speak_run.borrow_mut() = None;
                                 dispatch(VoiceEvent::BargeIn);
                             }
-                            let _ = session.start_segment();
+                            session.start_segment();
                         }
                         Some(VadEvent::Discarded) => {
-                            let s = Rc::clone(&session);
-                            spawn_local(async move {
-                                let _ = s.stop_segment().await;
-                            });
+                            session.discard_segment();
                         }
                         Some(VadEvent::UtteranceEnd { .. }) => {
                             handle_utterance(
@@ -258,7 +272,9 @@ fn VoiceSession() -> impl IntoView {
         }
         player_slot.with_value(|p| {
             if let Some(p) = p.as_ref() {
-                p.stop_all();
+                // Full teardown: stop playback AND close the output AudioContext.
+                // stop_all() alone leaks a running context per exit → coreaudiod CPU.
+                p.close();
             }
         });
     });
@@ -273,18 +289,18 @@ fn VoiceSession() -> impl IntoView {
     // device, insecure context) render as plain, honest text.
     let mic_hint = move || match mic_error.get() {
         None => view! { {status_text} }.into_any(),
-        Some(e) => match e.settings_url() {
+        Some(e) => match e.settings_url(native) {
             Some(url) => view! {
                 <a
                     class="underline underline-offset-2 cursor-pointer hover:text-text-primary transition-colors"
                     href=url
                     target="_blank"
                 >
-                    {e.caption()}
+                    {e.caption(native)}
                 </a>
             }
             .into_any(),
-            None => view! { {e.caption()} }.into_any(),
+            None => view! { {e.caption(native)} }.into_any(),
         },
     };
     let caption_text = move || match caption.get() {
@@ -328,7 +344,7 @@ fn handle_utterance(
     voice_mode: VoiceMode,
 ) {
     spawn_local(async move {
-        let Ok((base64, mime)) = session.stop_segment().await else {
+        let Some((base64, mime)) = session.take_segment_wav() else {
             dispatch(VoiceEvent::TranscribeFailed);
             return;
         };

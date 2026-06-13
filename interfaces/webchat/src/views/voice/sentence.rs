@@ -4,8 +4,14 @@
 //! has already been consumed. Code-fence bodies are skipped for speech.
 
 const TERMINALS: &[char] = &['。', '！', '？', '!', '?', '.', '\n', '；', ';'];
-/// Sentences shorter than this (in chars) are held and merged forward.
-const MIN_CHARS: usize = 3;
+/// Time-to-first-audio matters, so the FIRST chunk of a reply is emitted as soon
+/// as it has a little substance. Every later chunk merges short sentences forward
+/// until it reaches `MERGE_CHARS`, so the bulk of a long reply becomes fewer,
+/// larger TTS requests. Each chunk is a separate round-trip to a sometimes-flaky
+/// backend, so fewer-but-larger chunks mean fewer dropped fragments and fewer
+/// inter-chunk gaps — robust 边流边说 (stream-while-speaking) for long replies.
+const FIRST_CHUNK_CHARS: usize = 6;
+const MERGE_CHARS: usize = 30;
 
 #[derive(Default)]
 pub(crate) struct SentenceSplitter {
@@ -13,6 +19,9 @@ pub(crate) struct SentenceSplitter {
     consumed: usize,
     /// Short fragment held back, waiting to merge with the next sentence.
     pending: String,
+    /// Once the first chunk is out, later chunks use the larger `MERGE_CHARS`
+    /// threshold — the first chunk stays small for a fast time-to-first-audio.
+    emitted_any: bool,
     in_code_fence: bool,
 }
 
@@ -88,11 +97,16 @@ impl SentenceSplitter {
             self.pending.clear();
             return;
         }
-        if trimmed.chars().count() < MIN_CHARS {
+        // First chunk stays small (fast first audio); later chunks merge forward
+        // until they reach MERGE_CHARS, so a long reply is fewer, larger requests.
+        let threshold = if self.emitted_any { MERGE_CHARS } else { FIRST_CHUNK_CHARS };
+        if trimmed.chars().count() < threshold {
+            // Too short on its own — hold and merge it into the next segment.
             self.pending = candidate;
         } else {
             out.push(trimmed.to_string());
             self.pending.clear();
+            self.emitted_any = true;
         }
     }
 }
@@ -109,18 +123,35 @@ mod tests {
     }
 
     #[test]
-    fn handles_mixed_cjk_ascii_terminals() {
+    fn mixed_terminals_first_emits_rest_merges() {
         let mut sp = SentenceSplitter::default();
+        // "Hello there!" (12 chars) clears FIRST_CHUNK_CHARS → emits immediately
+        // (fast first audio). "你好吗？" (4 chars) is past the first chunk, so it
+        // merges forward under the larger MERGE_CHARS threshold instead of being
+        // synthesized as its own tiny request.
         let out = sp.push("Hello there! 你好吗？还行");
-        assert_eq!(out, vec!["Hello there!", "你好吗？"]);
+        assert_eq!(out, vec!["Hello there!"]);
     }
 
     #[test]
     fn short_fragment_merges_into_next() {
         let mut sp = SentenceSplitter::default();
-        // "好。" alone is below MIN_CHARS — held and merged with the next sentence
+        // "好。" alone is below FIRST_CHUNK_CHARS — held and merged with the next.
         assert!(sp.push("好。").is_empty());
         assert_eq!(sp.push("好。我马上安排今天的事项。"), vec!["好。我马上安排今天的事项。"]);
+    }
+
+    #[test]
+    fn later_short_sentences_merge_until_finish() {
+        let mut sp = SentenceSplitter::default();
+        // First chunk emits fast (6 chars).
+        assert_eq!(sp.push("我们开始吧。"), vec!["我们开始吧。"]);
+        // Now in merge mode: short sentences accumulate instead of each becoming
+        // its own TTS request — fewer round-trips to a flaky backend.
+        assert!(sp.push("我们开始吧。好。").is_empty());
+        assert!(sp.push("我们开始吧。好。行。").is_empty());
+        // The held chunk flushes at stream end, so nothing is ever lost.
+        assert_eq!(sp.finish_with("我们开始吧。好。行。"), Some("好。行。".to_string()));
     }
 
     #[test]
@@ -128,7 +159,10 @@ mod tests {
         let mut sp = SentenceSplitter::default();
         let text = "看这段代码。\n```rust\nfn main() { println!(\"x.y!\"); }\n```\n运行就好。";
         let out = sp.push(text);
-        assert_eq!(out, vec!["看这段代码。", "运行就好。"]);
+        // Fence body never reaches TTS; the trailing short line merges forward and
+        // is flushed at finish.
+        assert_eq!(out, vec!["看这段代码。"]);
+        assert_eq!(sp.finish_with(text), Some("运行就好。".to_string()));
     }
 
     #[test]
@@ -146,6 +180,13 @@ mod tests {
         for cut in ["你好。", "你好。今天", "你好。今天天气很好。", "你好。今天天气很好。出门记得带伞。"] {
             all.extend(sp.push(cut));
         }
-        assert_eq!(all, vec!["你好。", "今天天气很好。", "出门记得带伞。"]);
+        // The short lead "你好。" merges into the first chunk; the trailing short
+        // sentence is held for the next chunk. Crucially, no text is duplicated
+        // or lost across incremental pushes.
+        assert_eq!(all, vec!["你好。今天天气很好。"]);
+        assert_eq!(
+            sp.finish_with("你好。今天天气很好。出门记得带伞。"),
+            Some("出门记得带伞。".to_string())
+        );
     }
 }

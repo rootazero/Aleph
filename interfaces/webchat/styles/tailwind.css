@@ -956,11 +956,19 @@ html[data-material="aurora"].dark {
     position: relative;
     width: var(--voice-orb-size, 11rem); height: var(--voice-orb-size, 11rem);
     overflow: hidden;
-    /* Base round shape; voice-morph keyframes override into a living blob while
-       animating. Without this, reduced-motion (animation:none) leaves a square. */
     border-radius: 50%;
-    animation: voice-morph 5s ease-in-out infinite, voice-hue-drift 26s ease-in-out infinite;
-    scale: calc(1 + var(--voice-level) * 0.16);
+    /* The morph is driven by `clip-path: inset(... round ...)`, NOT by
+       border-radius + overflow:hidden. WebKit/WKWebView does NOT clip the
+       mix-blend-mode flow/sheen children (each on its own compositing layer) to
+       a rounded overflow ancestor — they bleed out and the orb reads as a box
+       (the desktop full-screen bug; Blink clips fine). `clip-path` DOES clip
+       composited descendants, and `inset round` can trace the same organic blob,
+       so it both kills the box and keeps the living morph. The base value is a
+       circle so reduced-motion (animation:none) freezes to a clean round, never
+       a square. */
+    clip-path: inset(0 round 50%);
+    animation: voice-morph-clip 5s ease-in-out infinite, voice-hue-drift 26s ease-in-out infinite;
+    scale: calc(1 + var(--voice-level) * 0.2);
     transition: scale 90ms ease-out;
     background: oklch(from var(--color-primary) 0.32 calc(c * 0.7) h);
     box-shadow: 0 0 calc(3rem + var(--voice-level) * 2.5rem) calc(0.9rem + var(--voice-level) * 0.8rem) var(--voice-glow);
@@ -1104,11 +1112,14 @@ html[data-material="aurora"].dark {
 }
 
 /* Voice orb — organic blob morph + flow rotation + sheen/hue drift. */
-@keyframes voice-morph {
-  0%, 100% { border-radius: 46% 54% 52% 48% / 50% 46% 54% 50%; rotate: 0deg; }
-  25%      { border-radius: 58% 42% 44% 56% / 42% 60% 40% 58%; rotate: 9deg; }
-  50%      { border-radius: 40% 60% 58% 42% / 56% 40% 60% 44%; rotate: -5deg; }
-  75%      { border-radius: 54% 46% 40% 60% / 46% 54% 46% 54%; rotate: 5deg; }
+/* clip-path morph: same organic radii as the old border-radius morph, but
+   driven through clip-path so WebKit clips the composited blend-mode children
+   (border-radius+overflow does not — see .voice-orb). rotate kept for parity. */
+@keyframes voice-morph-clip {
+  0%, 100% { clip-path: inset(0 round 46% 54% 52% 48% / 50% 46% 54% 50%); rotate: 0deg; }
+  25%      { clip-path: inset(0 round 58% 42% 44% 56% / 42% 60% 40% 58%); rotate: 9deg; }
+  50%      { clip-path: inset(0 round 40% 60% 58% 42% / 56% 40% 60% 44%); rotate: -5deg; }
+  75%      { clip-path: inset(0 round 54% 46% 40% 60% / 46% 54% 46% 54%); rotate: 5deg; }
 }
 @keyframes voice-flow-spin { to { rotate: 360deg; } }
 @keyframes voice-sheen-drift {
