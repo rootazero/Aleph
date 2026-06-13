@@ -19,10 +19,19 @@ pub(crate) struct MicSession {
     stream: web_sys::MediaStream,
     _ctx: web_sys::AudioContext,
     analyser: web_sys::AnalyserNode,
-    recorder: RefCell<Option<web_sys::MediaRecorder>>,
-    chunks: Rc<RefCell<Vec<web_sys::Blob>>>,
-    _on_data: RefCell<Option<Closure<dyn FnMut(web_sys::BlobEvent)>>>,
+    segment: RefCell<Option<ActiveSegment>>,
     buf: RefCell<Vec<u8>>,
+}
+
+/// One in-flight utterance capture. The chunk buffer and the `dataavailable`
+/// closure are owned per segment so a `start_segment` racing a still-awaiting
+/// `stop_segment` (VAD tick during the previous utterance's stop window) can
+/// never clobber the chunks — and the old closure stays alive until the old
+/// recorder's final `dataavailable` has fired.
+struct ActiveSegment {
+    recorder: web_sys::MediaRecorder,
+    chunks: Rc<RefCell<Vec<web_sys::Blob>>>,
+    _on_data: Closure<dyn FnMut(web_sys::BlobEvent)>,
 }
 
 impl MicSession {
@@ -50,9 +59,7 @@ impl MicSession {
             stream,
             _ctx: ctx,
             analyser,
-            recorder: RefCell::new(None),
-            chunks: Rc::new(RefCell::new(Vec::new())),
-            _on_data: RefCell::new(None),
+            segment: RefCell::new(None),
             buf: RefCell::new(vec![0u8; 1024]),
         }))
     }
@@ -71,44 +78,53 @@ impl MicSession {
         (sum / buf.len() as f32).sqrt()
     }
 
-    /// Begin capturing an utterance segment.
+    /// Begin capturing an utterance segment. Each segment gets a fresh chunk
+    /// buffer, so it cannot touch one still being merged by `stop_segment`.
     pub(crate) fn start_segment(&self) -> Result<(), JsValue> {
-        self.chunks.borrow_mut().clear();
         let recorder = web_sys::MediaRecorder::new_with_media_stream(&self.stream)?;
-        let chunks = Rc::clone(&self.chunks);
+        let chunks = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&chunks);
         let on_data = Closure::<dyn FnMut(_)>::new(move |ev: web_sys::BlobEvent| {
             if let Some(blob) = ev.data() {
-                chunks.borrow_mut().push(blob);
+                sink.borrow_mut().push(blob);
             }
         });
         recorder.set_ondataavailable(Some(on_data.as_ref().unchecked_ref()));
         recorder.start()?;
-        *self._on_data.borrow_mut() = Some(on_data);
-        *self.recorder.borrow_mut() = Some(recorder);
+        *self.segment.borrow_mut() = Some(ActiveSegment {
+            recorder,
+            chunks,
+            _on_data: on_data,
+        });
         Ok(())
     }
 
     /// Stop the segment and return (base64, mime). Mirrors composer/voice.rs's
     /// browser path: blob -> FileReader data URL -> strip prefix.
     pub(crate) async fn stop_segment(&self) -> Result<(String, String), JsValue> {
-        let recorder = self
-            .recorder
+        // Take the whole segment: its chunk buffer (and dataavailable closure)
+        // travel with the recorder, kept alive across the await below so the
+        // final dataavailable — which arrives between stop() and onstop — still
+        // lands in THIS segment's buffer even if a new segment starts meanwhile.
+        let seg = self
+            .segment
             .borrow_mut()
             .take()
             .ok_or_else(|| JsValue::from_str("no active segment"))?;
-        let mime = recorder.mime_type();
+        let mime = seg.recorder.mime_type();
         // onstop fires after the final dataavailable — await it.
         let (tx, rx) = futures::channel::oneshot::channel::<()>();
         let on_stop = Closure::once(move || {
             let _ = tx.send(());
         });
-        recorder.set_onstop(Some(on_stop.as_ref().unchecked_ref()));
-        recorder.stop()?;
+        seg.recorder
+            .set_onstop(Some(on_stop.as_ref().unchecked_ref()));
+        seg.recorder.stop()?;
         let _ = rx.await;
         drop(on_stop);
 
         let parts = js_sys::Array::new();
-        for blob in self.chunks.borrow().iter() {
+        for blob in seg.chunks.borrow().iter() {
             parts.push(blob);
         }
         let bag = web_sys::BlobPropertyBag::new();
@@ -128,8 +144,8 @@ impl MicSession {
     }
 
     pub(crate) fn close(&self) {
-        if let Some(rec) = self.recorder.borrow_mut().take() {
-            let _ = rec.stop();
+        if let Some(seg) = self.segment.borrow_mut().take() {
+            let _ = seg.recorder.stop();
         }
         for track in self.stream.get_tracks().iter() {
             if let Ok(track) = track.dyn_into::<web_sys::MediaStreamTrack>() {
