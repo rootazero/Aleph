@@ -143,3 +143,15 @@ fn static_voice_list_includes_default_voice() {
     let voices = CartesiaProvider::static_voice_list();
     assert!(voices.iter().any(|v| v.id == DEFAULT_VOICE_ID));
 }
+
+#[test]
+fn speed_multiplier_maps_onto_cartesia_offset() {
+    // 1.0 multiplier (normal) → 0.0 offset (normal), not "fastest".
+    assert_eq!(map_speed_to_cartesia(1.0), 0.0);
+    // Faster/slower map to positive/negative offsets.
+    assert_eq!(map_speed_to_cartesia(1.5), 0.5);
+    assert_eq!(map_speed_to_cartesia(0.5), -0.5);
+    // Out-of-window multipliers clamp into Cartesia's -1.0..=1.0.
+    assert_eq!(map_speed_to_cartesia(2.5), 1.0);
+    assert_eq!(map_speed_to_cartesia(-3.0), -1.0);
+}
