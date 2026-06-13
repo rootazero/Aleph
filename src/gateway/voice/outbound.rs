@@ -3,8 +3,10 @@
 use crate::config::types::generation::GenerationConfig;
 use crate::gateway::channel::Attachment;
 use crate::generation::{
-    GenerationData, GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
+    GenerationData, GenerationOutput, GenerationParams, GenerationProviderRegistry,
+    GenerationRequest, GenerationResult, GenerationType,
 };
+use std::time::Duration;
 use tracing::{debug, warn};
 
 use super::state::VoiceState;
@@ -17,6 +19,70 @@ pub fn tts_timeout_ms(text: &str) -> u64 {
     let char_count = text.chars().count() as u64;
     let extra = (char_count / 100) * 5000;
     (10_000 + extra).min(30_000)
+}
+
+/// Maximum TTS attempts per sentence. The 302 / OpenAI-compatible endpoint
+/// cold-starts: the first request after an idle gap times out or reuses a dead
+/// keep-alive connection ("error sending request"), then recovers within
+/// seconds (observed in production logs — a failed attempt is followed by a
+/// 2–7 s success). One bounded retry on a *transient* error turns that
+/// cold-start silence into (slightly delayed) audio. Capped at 2 so a
+/// genuinely-down endpoint cannot multiply the reply latency without bound —
+/// this is openclaw's lesson (attempt, then fall back) applied to a single
+/// provider: retry, never hammer.
+const TTS_MAX_ATTEMPTS: u32 = 2;
+
+/// Settle between TTS attempts — long enough to let a stale connection drop and
+/// a cold endpoint begin warming, short enough to stay imperceptible against the
+/// multi-second synth itself.
+const TTS_RETRY_BACKOFF: Duration = Duration::from_millis(300);
+
+/// Run one TTS `attempt` under a per-attempt deadline, retrying *transient*
+/// failures up to `max_attempts`.
+///
+/// A `tokio` timeout (the attempt outran `per_attempt`) is always transient. An
+/// inner [`crate::generation::GenerationError`] is retried only when it is
+/// [`is_retryable`](crate::generation::GenerationError::is_retryable) — network,
+/// timeout, 5xx, 429 or rate limit — so auth, invalid-parameter and format
+/// errors fail fast (a retry cannot fix them). Returns the first success, or
+/// `None` once attempts are exhausted or a non-retryable error is hit. The same
+/// length-aware deadline applies to every attempt.
+async fn synth_with_retry<F, Fut>(
+    per_attempt: Duration,
+    max_attempts: u32,
+    backoff: Duration,
+    provider_id: &str,
+    mut attempt: F,
+) -> Option<GenerationOutput>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = GenerationResult<GenerationOutput>>,
+{
+    for n in 1..=max_attempts {
+        match tokio::time::timeout(per_attempt, attempt()).await {
+            Ok(Ok(output)) => return Some(output),
+            Ok(Err(e)) => {
+                warn!(provider = %provider_id, attempt = n, error = %e, "TTS generation failed");
+                // Auth / invalid-param / format errors are deterministic — a
+                // retry would only burn another round-trip on the same failure.
+                if !e.is_retryable() {
+                    return None;
+                }
+            }
+            Err(_) => {
+                warn!(
+                    provider = %provider_id,
+                    attempt = n,
+                    timeout_ms = per_attempt.as_millis(),
+                    "TTS generation timed out"
+                );
+            }
+        }
+        if n < max_attempts {
+            tokio::time::sleep(backoff).await;
+        }
+    }
+    None
 }
 
 /// Generate TTS audio for the given text, returning an `Attachment` on success.
@@ -82,27 +148,26 @@ pub async fn generate_tts(
         return None;
     }
 
-    // Build request with optional voice param
+    // Build request params once. `with_params` consumes them, so each attempt
+    // rebuilds the request from a cheap clone (the prompt stays borrowed).
     let mut params = GenerationParams::default();
     if let Some(ref voice) = voice_state.voice {
         params.voice = Some(voice.clone());
     }
 
-    let request = GenerationRequest::new(GenerationType::Speech, &spoken).with_params(params);
-
-    // Execute TTS under a length-aware deadline so a wedged provider can't hang
-    // the reply path indefinitely (the provider's own timeout may be minutes).
-    let timeout = std::time::Duration::from_millis(tts_timeout_ms(&spoken));
-    let output = match tokio::time::timeout(timeout, provider.generate(request)).await {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => {
-            warn!(provider = %provider_id, error = %e, "TTS generation failed");
-            return None;
-        }
-        Err(_) => {
-            warn!(provider = %provider_id, timeout_ms = timeout.as_millis(), "TTS generation timed out");
-            return None;
-        }
+    // Execute TTS under a length-aware per-attempt deadline so a wedged provider
+    // can't hang the reply path (the provider's own timeout may be minutes), and
+    // retry transient cold-start failures so a flaky endpoint doesn't silently
+    // eat the leading sentences. `synth_with_retry` logs each failed attempt.
+    let timeout = Duration::from_millis(tts_timeout_ms(&spoken));
+    let output = synth_with_retry(timeout, TTS_MAX_ATTEMPTS, TTS_RETRY_BACKOFF, provider_id, || {
+        let request =
+            GenerationRequest::new(GenerationType::Speech, &spoken).with_params(params.clone());
+        provider.generate(request)
+    })
+    .await;
+    let Some(output) = output else {
+        return None;
     };
 
     // Convert GenerationData → Attachment
@@ -179,6 +244,107 @@ pub(crate) async fn generate_tts_outcome(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generation::GenerationError;
+    use std::cell::Cell;
+
+    fn ok_output() -> GenerationOutput {
+        GenerationOutput::new(GenerationType::Speech, GenerationData::bytes(vec![1, 2, 3]))
+    }
+
+    // The cold-start bug: the first synth attempt fails transiently (stale
+    // keep-alive connection), the endpoint recovers, the retry succeeds. Before
+    // this helper that first failure was silently dropped → the leading sentence
+    // had no audio. Now it recovers on the second attempt.
+    #[tokio::test]
+    async fn retry_recovers_after_transient_failure() {
+        let calls = Cell::new(0u32);
+        let out = synth_with_retry(
+            Duration::from_secs(5),
+            TTS_MAX_ATTEMPTS,
+            Duration::from_millis(1),
+            "test",
+            || {
+                calls.set(calls.get() + 1);
+                let first = calls.get() == 1;
+                async move {
+                    if first {
+                        Err(GenerationError::network("error sending request"))
+                    } else {
+                        Ok(ok_output())
+                    }
+                }
+            },
+        )
+        .await;
+        assert!(out.is_some(), "should recover on the second attempt");
+        assert_eq!(calls.get(), 2, "exactly two attempts");
+    }
+
+    // A deterministic error (bad key) must NOT be retried — a second round-trip
+    // would only burn latency on the same guaranteed failure.
+    #[tokio::test]
+    async fn no_retry_on_non_retryable_error() {
+        let calls = Cell::new(0u32);
+        let out = synth_with_retry(
+            Duration::from_secs(5),
+            TTS_MAX_ATTEMPTS,
+            Duration::from_millis(1),
+            "test",
+            || {
+                calls.set(calls.get() + 1);
+                async { Err(GenerationError::authentication("bad key", "test")) }
+            },
+        )
+        .await;
+        assert!(out.is_none());
+        assert_eq!(calls.get(), 1, "auth error fails fast — single attempt");
+    }
+
+    // A persistently-down endpoint stops at the attempt cap (bounded latency),
+    // returning None so the caller degrades to caption-only.
+    #[tokio::test]
+    async fn gives_up_after_max_attempts() {
+        let calls = Cell::new(0u32);
+        let out = synth_with_retry(
+            Duration::from_secs(5),
+            TTS_MAX_ATTEMPTS,
+            Duration::from_millis(1),
+            "test",
+            || {
+                calls.set(calls.get() + 1);
+                async { Err(GenerationError::network("down")) }
+            },
+        )
+        .await;
+        assert!(out.is_none());
+        assert_eq!(calls.get(), TTS_MAX_ATTEMPTS, "stops at the attempt cap");
+    }
+
+    // A timed-out attempt (the future outran the per-attempt deadline) is
+    // transient and gets retried — this is the 10 s cold-start timeout case.
+    #[tokio::test]
+    async fn timeout_is_transient_and_retried() {
+        let calls = Cell::new(0u32);
+        let out = synth_with_retry(
+            Duration::from_millis(30),
+            TTS_MAX_ATTEMPTS,
+            Duration::from_millis(1),
+            "test",
+            || {
+                calls.set(calls.get() + 1);
+                let first = calls.get() == 1;
+                async move {
+                    if first {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                    }
+                    Ok(ok_output())
+                }
+            },
+        )
+        .await;
+        assert!(out.is_some(), "a timed-out first attempt should be retried");
+        assert_eq!(calls.get(), 2);
+    }
 
     #[test]
     fn tts_timeout_short_text() {
