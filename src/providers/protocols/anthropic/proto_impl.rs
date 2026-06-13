@@ -229,8 +229,14 @@ impl AnthropicProtocol {
                     i += 1;
                 }
                 UnifiedMessage::ToolResult { .. } => {
-                    // Collect consecutive ToolResults into one user message
+                    // Collect consecutive ToolResults into one user message.
+                    // Any image blocks they carry (e.g. a `desktop` screenshot)
+                    // are emitted as sibling image blocks AFTER the tool_result
+                    // blocks in the same user turn — Anthropic accepts trailing
+                    // images in a tool-result turn, and this is what finally lets
+                    // a vision model see the screen it acted on.
                     let mut tool_blocks = Vec::new();
+                    let mut image_blocks = Vec::new();
                     while i < messages.len() {
                         if let UnifiedMessage::ToolResult {
                             tool_call_id,
@@ -239,19 +245,31 @@ impl AnthropicProtocol {
                             ..
                         } = &messages[i]
                         {
-                            let output = content
-                                .iter()
-                                .map(|b| match b {
+                            let mut parts = Vec::new();
+                            for b in content {
+                                match b {
                                     crate::providers::message::ContentBlock::Text {
                                         text, ..
-                                    } => text.clone(),
+                                    } => parts.push(text.clone()),
                                     crate::providers::message::ContentBlock::Json { value } => {
-                                        serde_json::to_string(value).unwrap_or_default()
+                                        parts.push(
+                                            serde_json::to_string(value).unwrap_or_default(),
+                                        );
                                     }
-                                    _ => String::new(),
-                                })
-                                .collect::<Vec<_>>()
-                                .join("\n");
+                                    crate::providers::message::ContentBlock::Image {
+                                        data,
+                                        mime_type,
+                                    } => image_blocks.push(ContentBlock::Image {
+                                        source: ImageSource {
+                                            source_type: "base64".to_string(),
+                                            media_type: mime_type.clone(),
+                                            data: data.clone(),
+                                        },
+                                    }),
+                                    _ => {}
+                                }
+                            }
+                            let output = parts.join("\n");
                             // Sanitize tool_use_id
                             let sanitized_id: String = tool_call_id
                                 .chars()
@@ -274,6 +292,9 @@ impl AnthropicProtocol {
                             break;
                         }
                     }
+                    // Sibling image blocks ride after the tool_result blocks in
+                    // the same user message.
+                    tool_blocks.extend(image_blocks);
                     result.push(Message {
                         role: "user".to_string(),
                         content: MessageContent::Multimodal {
