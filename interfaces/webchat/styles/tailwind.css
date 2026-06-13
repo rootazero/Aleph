@@ -950,6 +950,9 @@ html[data-material="aurora"].dark {
     position: relative;
     width: var(--voice-orb-size, 11rem); height: var(--voice-orb-size, 11rem);
     overflow: hidden;
+    /* Base round shape; voice-morph keyframes override into a living blob while
+       animating. Without this, reduced-motion (animation:none) leaves a square. */
+    border-radius: 50%;
     animation: voice-morph 5s ease-in-out infinite, voice-hue-drift 26s ease-in-out infinite;
     scale: calc(1 + var(--voice-level) * 0.16);
     transition: scale 90ms ease-out;
