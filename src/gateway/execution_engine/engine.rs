@@ -30,6 +30,12 @@ pub struct ContinuationDeps {
     /// 客观闸门 handler（与 `StopHookVerifier` 共享同一份），守护自主
     /// 续跑的完成决策。`None` → 无闸门，complete 主张立即终止。
     pub gate: Option<Arc<Vec<Arc<dyn crate::verification::stop_hooks::StopHookHandler>>>>,
+    /// Gateway event bus for broadcasting autonomous-continuation runs so the
+    /// Panel and `aleph watch` see pursuit progress live, and the final reply
+    /// fans out to the session's origin channel (G1, R5/R6). `None` in tests /
+    /// non-gateway contexts → the continuation falls back to a collect-and-drop
+    /// emitter, keeping those paths behavior-identical to before.
+    pub event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 }
 
 /// Execution engine that bridges Gateway to the `AgentLoop`

@@ -1423,6 +1423,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             registry: agent_registry.clone(),
             adapter: engine_arc.clone(),
             gate: goal_gate,
+            // Broadcast autonomous continuations live + fan the final reply to
+            // the session's origin channel (G1). Same bus the Panel/channels read.
+            event_bus: Some(event_bus.clone()),
         });
 
         // Create run_manager with real execution dependencies.

@@ -705,6 +705,7 @@ where
                                                         request.session_key.clone(),
                                                         session_key_str.clone(),
                                                         prompt,
+                                                        cont_deps.event_bus.clone(),
                                                     );
                                                 }
                                             } else {
@@ -729,6 +730,7 @@ where
                                             request.session_key.clone(),
                                             session_key_str.clone(),
                                             prompt,
+                                            cont_deps.event_bus.clone(),
                                         );
                                         info!(session = %session_key_str,
                                             continuations_used = bumped.continuations_used,
@@ -869,6 +871,7 @@ fn spawn_continuation_run(
     session_key: crate::routing::session_key::SessionKey,
     session_key_str: String,
     prompt: String,
+    event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 ) {
     let cont_request = super::RunRequest {
         run_id: uuid::Uuid::new_v4().to_string(),
@@ -900,15 +903,109 @@ fn spawn_continuation_run(
             );
             return;
         };
-        let emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(
-            crate::gateway::event_emitter::CollectingEventEmitter::new(),
-        );
+        // G1: resolve the session's bound origin channel once — used both to
+        // fan the continuation's final reply out to it (Telegram/Slack) and,
+        // on failure, to deliver the halt notice (G3). `None` for Panel-only
+        // (`gui:chat`) sessions, which still get live event-bus streaming.
+        let origin: Option<(Arc<crate::gateway::channel_registry::ChannelRegistry>, String, String)> =
+            match crate::gateway::event_emitter::origin_fanout::channel_registry() {
+                Some(reg) => cont_agent
+                    .origin_route(&session_key)
+                    .await
+                    .map(|(ch, conv)| (reg, ch, conv)),
+                None => None,
+            };
+        // G1: broadcast the continuation live (Panel + `aleph watch`) via the
+        // gateway event bus when one is wired; fall back to collect-and-drop in
+        // tests / non-gateway contexts so those paths stay behavior-identical.
+        let base: Arc<dyn EventEmitter + Send + Sync> = match event_bus {
+            Some(bus) => Arc::new(crate::gateway::event_emitter::GatewayEventEmitter::new(bus)),
+            None => Arc::new(crate::gateway::event_emitter::CollectingEventEmitter::new()),
+        };
+        // Mirror handlers::agent / subagent_announce: fan the final reply out to
+        // the origin channel when one is bound (delivery errors are swallowed by
+        // the decorator — a failed delivery must never mis-mark goal progress).
+        let emitter: Arc<dyn EventEmitter + Send + Sync> = match &origin {
+            Some((reg, ch, conv)) => Arc::new(
+                crate::gateway::event_emitter::origin_fanout::OriginFanoutEmitter::new(
+                    base,
+                    reg.clone(),
+                    ch.clone(),
+                    conv.clone(),
+                ),
+            ),
+            None => base,
+        };
         if let Err(e) = adapter.execute(cont_request, cont_agent, emitter).await {
-            warn!(
-                error = %e,
-                session = %session_key_str,
-                "goal pursuit: continuation run failed"
-            );
+            // G3: a cancelled run means the user interrupted — leave the goal
+            // Active so their next interaction resumes pursuit (same rationale
+            // as the post-run steering rescue's Completed-only guard). Any other
+            // failure ends the silent stall: block the goal and notify, so
+            // unattended pursuit never dies as a stuck `Active` with no run.
+            if matches!(e, ExecutionError::Cancelled) {
+                info!(session = %session_key_str, "goal pursuit: continuation cancelled by user");
+            } else {
+                warn!(
+                    error = %e,
+                    session = %session_key_str,
+                    "goal pursuit: continuation run failed; blocking goal for user guidance"
+                );
+                block_goal_on_failure(&session_key_str, &e, origin.as_ref()).await;
+            }
         }
     });
+}
+
+/// G3: when an autonomous continuation fails (non-cancellation), transition the
+/// session's goal to `Blocked` with the error and best-effort notify the origin
+/// channel. Without this, a transient failure leaves the goal a stuck `Active`
+/// with no in-flight run — silent stall — and a `Blocked` goal is invisible in
+/// the prompt (`active_standing_goal` only surfaces `Active`), so the channel
+/// notice is the user's signal that unattended pursuit halted.
+async fn block_goal_on_failure(
+    session_key_str: &str,
+    error: &ExecutionError,
+    origin: Option<&(Arc<crate::gateway::channel_registry::ChannelRegistry>, String, String)>,
+) {
+    let reason: String = format!("{error}").chars().take(300).collect();
+    if let Some(store) = crate::goal::global() {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        match store.get(session_key_str) {
+            // Only block a goal still actively being pursued — never clobber a
+            // goal the failed run had already marked complete/blocked.
+            Ok(Some(goal)) if goal.is_active() => {
+                let note = format!(
+                    "Autonomous pursuit was halted by an error and blocked for your \
+                     guidance: {reason}. Review progress, then clear or re-set the \
+                     goal to continue."
+                );
+                let blocked = goal
+                    .with_status(crate::goal::GoalStatus::Blocked, now_ms)
+                    .with_note(Some(note), now_ms);
+                if let Err(e) = store.put(&blocked) {
+                    warn!(error = %e, session = %session_key_str,
+                        "goal pursuit: failed to persist failure block");
+                }
+            }
+            // Already terminal (complete/blocked/paused) or no goal → nothing
+            // to block. A store error is logged, not silently swallowed.
+            Ok(_) => {}
+            Err(e) => warn!(error = %e, session = %session_key_str,
+                "goal pursuit: goal lookup failed during failure block"),
+        }
+    }
+    if let Some((reg, ch, conv)) = origin {
+        let msg = crate::gateway::channel::OutboundMessage::text(
+            conv.clone(),
+            format!("⚠️ Autonomous pursuit of your standing goal halted: {reason}"),
+        );
+        if let Err(e) = reg
+            .send(&crate::gateway::channel::ChannelId::new(ch.clone()), msg)
+            .await
+        {
+            warn!(channel = %ch, error = %e, "goal pursuit: failed to deliver halt notice");
+        }
+    }
 }
