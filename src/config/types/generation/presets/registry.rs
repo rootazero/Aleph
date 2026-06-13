@@ -351,13 +351,13 @@ const PROFILES: &[(&str, GenerationPreset)] = &[
     (
         "minimax-tts",
         GenerationPreset::new(
-            "openai_compat",
-            "speech-01-turbo",
-            Some("https://api.minimax.chat/v1/t2a_v2"),
+            "minimax_tts",
+            "speech-2.6-turbo",
+            Some("https://api.minimaxi.com"),
         )
         .with_modalities(SPEECH)
         .with_display("MiniMax T2A")
-        .with_description("Chinese + multilingual TTS")
+        .with_description("Chinese + multilingual TTS (speech-2.x / speech-02)")
         .with_homepage("https://platform.minimaxi.com")
         .with_signup("https://platform.minimaxi.com"),
     ),

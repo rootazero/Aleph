@@ -1,7 +1,7 @@
 //! Factory function for creating generation providers from configuration.
 
 use super::url_normalize::resolve_base_url;
-use super::{OpenAiImageProvider, OpenAiTtsProvider, OpenAiWhisperProvider, DeepgramSttProvider, DeepgramTtsProvider, AzureSpeechProvider, SunoProvider, BflProvider, CartesiaProvider, MinimaxSttProvider, OpenAiCompatProvider, StabilityImageProvider, GoogleImagenProvider, GoogleVeoProvider, ReplicateProvider, ElevenLabsProvider, FalProvider, MidjourneyProvider, MidjourneyMode};
+use super::{OpenAiImageProvider, OpenAiTtsProvider, OpenAiWhisperProvider, DeepgramSttProvider, DeepgramTtsProvider, AzureSpeechProvider, SunoProvider, BflProvider, CartesiaProvider, MinimaxSttProvider, MinimaxTtsProvider, OpenAiCompatProvider, StabilityImageProvider, GoogleImagenProvider, GoogleVeoProvider, ReplicateProvider, ElevenLabsProvider, FalProvider, MidjourneyProvider, MidjourneyMode};
 use crate::config::GenerationProviderConfig;
 use crate::generation::{GenerationError, GenerationProvider, GenerationResult, GenerationType};
 use crate::sync_primitives::Arc;
@@ -159,6 +159,12 @@ pub fn create_provider(
             config.base_url.clone(),
             config.default_model().map(|s| s.to_string()),
         )?),
+        "minimax_tts" => Arc::new(MinimaxTtsProvider::new(
+            api_key,
+            config.base_url.clone(),
+            config.default_model().map(|s| s.to_string()),
+            config.defaults.voice.clone(),
+        )?),
         "openai_compat" => {
             let base_url = config.base_url.clone().ok_or_else(|| {
                 GenerationError::invalid_parameters(
@@ -282,7 +288,7 @@ pub fn create_provider(
         other => {
             return Err(GenerationError::invalid_parameters(
                 format!(
-                    "Unknown provider type: '{other}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_whisper, whisper, deepgram_stt, deepgram, deepgram_tts, azure_speech, azure_tts, suno, bfl, bfl_flux, flux, cartesia, minimax_stt, local, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, fal"
+                    "Unknown provider type: '{other}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_whisper, whisper, deepgram_stt, deepgram, deepgram_tts, azure_speech, azure_tts, suno, bfl, bfl_flux, flux, cartesia, minimax_stt, minimax_tts, local, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, fal"
                 ),
                 Some("provider_type".to_string()),
             ));

@@ -167,130 +167,17 @@ fn detect_voices_by_model(
             OpenAiTtsProvider::static_voice_list()
         }
         "elevenlabs" => ElevenLabsProvider::static_voice_list(),
+        "minimax_tts" => minimax_voice_list(),
         _ => vec![],
     }
 }
 
-/// MiniMax/Hailuo (海螺) TTS voice list.
+/// MiniMax/Hailuo (海螺) TTS voice list. Delegates to the provider so the
+/// picker and the provider share one source of truth — the modern
+/// `speech-2.x` / `speech-02` voice taxonomy (the classic `male-qn-*` ids are
+/// `speech-01`-only and are rejected by the current default model).
 fn minimax_voice_list() -> Vec<crate::generation::VoiceInfo> {
-    use crate::generation::VoiceInfo;
-    vec![
-        VoiceInfo {
-            id: "male-qn-qingse".into(),
-            name: "青涩青年".into(),
-            gender: "male".into(),
-            description: "清新、年轻的男声".into(),
-        },
-        VoiceInfo {
-            id: "male-qn-jingying".into(),
-            name: "精英青年".into(),
-            gender: "male".into(),
-            description: "自信、专业的男声".into(),
-        },
-        VoiceInfo {
-            id: "male-qn-badao".into(),
-            name: "霸道青年".into(),
-            gender: "male".into(),
-            description: "有力、阳刚的男声".into(),
-        },
-        VoiceInfo {
-            id: "male-qn-daxuesheng".into(),
-            name: "大学生青年".into(),
-            gender: "male".into(),
-            description: "活泼、阳光的男声".into(),
-        },
-        VoiceInfo {
-            id: "female-shaonv".into(),
-            name: "少女".into(),
-            gender: "female".into(),
-            description: "清新、甜美的女声".into(),
-        },
-        VoiceInfo {
-            id: "female-yujie".into(),
-            name: "御姐".into(),
-            gender: "female".into(),
-            description: "成熟、知性的女声".into(),
-        },
-        VoiceInfo {
-            id: "female-chengshu".into(),
-            name: "成熟女性".into(),
-            gender: "female".into(),
-            description: "温和、优雅的女声".into(),
-        },
-        VoiceInfo {
-            id: "female-tianmei".into(),
-            name: "甜美女性".into(),
-            gender: "female".into(),
-            description: "温柔、可爱的女声".into(),
-        },
-        VoiceInfo {
-            id: "presenter_male".into(),
-            name: "男性主持人".into(),
-            gender: "male".into(),
-            description: "标准、清晰的男性播报声".into(),
-        },
-        VoiceInfo {
-            id: "presenter_female".into(),
-            name: "女性主持人".into(),
-            gender: "female".into(),
-            description: "标准、清晰的女性播报声".into(),
-        },
-        VoiceInfo {
-            id: "audiobook_male_1".into(),
-            name: "有声书男声1".into(),
-            gender: "male".into(),
-            description: "沉稳、厚重的男声".into(),
-        },
-        VoiceInfo {
-            id: "audiobook_male_2".into(),
-            name: "有声书男声2".into(),
-            gender: "male".into(),
-            description: "温暖、磁性的男声".into(),
-        },
-        VoiceInfo {
-            id: "audiobook_female_1".into(),
-            name: "有声书女声1".into(),
-            gender: "female".into(),
-            description: "温暖、亲和的女声".into(),
-        },
-        VoiceInfo {
-            id: "audiobook_female_2".into(),
-            name: "有声书女声2".into(),
-            gender: "female".into(),
-            description: "柔和、舒缓的女声".into(),
-        },
-        VoiceInfo {
-            id: "Podcast_girl".into(),
-            name: "播客女生".into(),
-            gender: "female".into(),
-            description: "活泼、自然的播客女声".into(),
-        },
-        // OpenAI-compatible voices also work through proxies
-        VoiceInfo {
-            id: "alloy".into(),
-            name: "Alloy".into(),
-            gender: "neutral".into(),
-            description: "中性、平衡 (OpenAI)".into(),
-        },
-        VoiceInfo {
-            id: "echo".into(),
-            name: "Echo".into(),
-            gender: "male".into(),
-            description: "温暖、对话感 (OpenAI)".into(),
-        },
-        VoiceInfo {
-            id: "nova".into(),
-            name: "Nova".into(),
-            gender: "female".into(),
-            description: "友好、活泼 (OpenAI)".into(),
-        },
-        VoiceInfo {
-            id: "shimmer".into(),
-            name: "Shimmer".into(),
-            gender: "female".into(),
-            description: "清晰、专业 (OpenAI)".into(),
-        },
-    ]
+    crate::generation::providers::MinimaxTtsProvider::static_voice_list()
 }
 
 /// GPT-4o-mini-tts voice list.
