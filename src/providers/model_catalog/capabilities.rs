@@ -498,6 +498,136 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: false,
         },
     ),
+    // ── Meta Llama (open weights) ──────────────────────────────────────────
+    // Served by ~10 presets (Groq, Cerebras, Together, HuggingFace, DeepInfra,
+    // NVIDIA NIM, Novita, Hyperbolic, Ollama). `meta-llama/` and `meta/` tags
+    // are peeled by `canonicalize_model_id`, so vendor-prefixed ids resolve.
+    // Specific generations precede the broad `llama` fallback. Llama is
+    // text-only (vision lives in the separate 3.2-Vision / 4 multimodal lines)
+    // and has no extended-thinking mode.
+    (
+        // Llama 4 (Scout/Maverick) is natively multimodal; conservative 1M
+        // window (Scout advertises 10M, Maverick 1M — take the lower).
+        "llama-4",
+        ModelCapabilities {
+            context_window: 1_000_000,
+            max_output_tokens: 8_192,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    (
+        "llama-3.3",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    (
+        // 3.2 Vision (11B/90B) accepts images; the 1B/3B text variants share
+        // the 128K window, so the vision flag is the only family difference.
+        "llama-3.2",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 8_192,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    (
+        "llama-3.1",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    (
+        // Original Llama 3 (8B/70B) shipped an 8K window — must precede the
+        // broad `llama` fallback so it isn't widened to 128K.
+        "llama-3",
+        ModelCapabilities {
+            context_window: 8_192,
+            max_output_tokens: 4_096,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    (
+        // Broad fallback for dotless / hosted ids (e.g. ollama `llama3.3:70b`).
+        "llama",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    // ── Cohere Command ─────────────────────────────────────────────────────
+    // OpenAI-compatible via /compatibility/v1. Command-A (256K) precedes the
+    // broad `command` (Command-R/R+ at 128K).
+    (
+        "command-a",
+        ModelCapabilities {
+            context_window: 256_000,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    (
+        "command",
+        ModelCapabilities {
+            context_window: 128_000,
+            max_output_tokens: 4_096,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    // ── Perplexity Sonar ───────────────────────────────────────────────────
+    // Search-augmented. `sonar-reasoning*` exposes CoT (reasoning=true) and
+    // must precede `sonar-pro` / broad `sonar`. Sonar has no function calling.
+    (
+        "sonar-reasoning",
+        ModelCapabilities {
+            context_window: 128_000,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: false,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "sonar-pro",
+        ModelCapabilities {
+            context_window: 200_000,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: false,
+            supports_reasoning: false,
+        },
+    ),
+    (
+        "sonar",
+        ModelCapabilities {
+            context_window: 128_000,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: false,
+            supports_reasoning: false,
+        },
+    ),
 ];
 
 /// Look up capability metadata for a model id (raw or canonical).
@@ -641,5 +771,63 @@ mod tests {
             capabilities_for("qwen-max").unwrap().context_window,
             131_072
         );
+    }
+
+    #[test]
+    fn llama_family_resolves_across_hosting_presets() {
+        // Vendor-tagged ids (HuggingFace/DeepInfra/Hyperbolic) peel `meta-llama/`.
+        assert_eq!(
+            capabilities_for("meta-llama/Llama-3.3-70B-Instruct")
+                .unwrap()
+                .context_window,
+            131_072
+        );
+        // Groq's `-versatile` suffix and NVIDIA's `meta/` tag both resolve.
+        assert_eq!(
+            capabilities_for("llama-3.3-70b-versatile")
+                .unwrap()
+                .context_window,
+            131_072
+        );
+        assert_eq!(
+            capabilities_for("meta/llama-3.3-70b-instruct")
+                .unwrap()
+                .context_window,
+            131_072
+        );
+        // Original Llama-3 keeps its 8K window — the broad `llama` fallback and
+        // the `llama-3.3` entry must not shadow it in either direction.
+        assert_eq!(
+            capabilities_for("llama-3-70b-instruct")
+                .unwrap()
+                .context_window,
+            8_192
+        );
+        // Dotless hosted id (ollama) falls through to the broad entry.
+        assert_eq!(capabilities_for("llama3.3:70b").unwrap().context_window, 131_072);
+        // Llama 4 is multimodal; 3.x text models are not.
+        assert!(capabilities_for("llama-4-maverick").unwrap().supports_vision);
+        assert!(!capabilities_for("llama-3.3-70b").unwrap().supports_vision);
+    }
+
+    #[test]
+    fn cohere_and_perplexity_resolve() {
+        // Command-A (256K) must precede the broad `command` (128K).
+        assert_eq!(
+            capabilities_for("command-a-03-2025").unwrap().context_window,
+            256_000
+        );
+        assert_eq!(
+            capabilities_for("command-r-plus").unwrap().context_window,
+            128_000
+        );
+        // sonar-reasoning* exposes CoT; plain sonar does not.
+        assert!(
+            capabilities_for("sonar-reasoning-pro")
+                .unwrap()
+                .supports_reasoning
+        );
+        assert!(!capabilities_for("sonar").unwrap().supports_reasoning);
+        assert_eq!(capabilities_for("sonar-pro").unwrap().context_window, 200_000);
     }
 }
