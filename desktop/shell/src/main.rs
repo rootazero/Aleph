@@ -604,6 +604,20 @@ impl Supervisor {
         }
     }
 
+    /// Construct the supervisor for `target`, seeded with its live reachability.
+    /// Used both at boot and when the connection target changes at runtime.
+    /// Seeding from a real probe means a freshly-switched, already-reachable
+    /// target reports `Up` immediately — instead of starting `Down` and then
+    /// firing a spurious `ReloadPanel` (a "recovery" that never happened) on the
+    /// next tick, which would needlessly reload the Panel ~one poll interval
+    /// after every switch.
+    fn for_target(target: &connection::ConnectionTarget, reachable: bool) -> Self {
+        match target {
+            connection::ConnectionTarget::Local => Self::new(reachable),
+            connection::ConnectionTarget::Remote(_) => Self::new_remote(reachable),
+        }
+    }
+
     /// The action to take when the target transitions to Down. Local mode
     /// relaunches; Remote mode surfaces a connection error instead (the remote
     /// daemon is not ours to manage).
@@ -655,26 +669,20 @@ async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
     // the state machine in the matching mode. This keeps a single resident
     // supervisor — no second loop is ever spawned.
     let mut target = connection::load_target();
-    let mut supervisor = match &target {
-        connection::ConnectionTarget::Local => Supervisor::new(up),
-        connection::ConnectionTarget::Remote(_) => Supervisor::new_remote(up),
-    };
+    let mut supervisor = Supervisor::for_target(&target, up);
     loop {
         tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
 
-        // Re-read the target; a switch resets the supervisor to the new mode.
+        // Re-read the target; a runtime switch re-arms the supervisor for the
+        // new mode.
         let current = connection::load_target();
-        if current != target {
-            tracing::info!("connection target changed — re-arming supervisor");
-            supervisor = match &current {
-                connection::ConnectionTarget::Local => Supervisor::new(false),
-                connection::ConnectionTarget::Remote(_) => Supervisor::new_remote(false),
-            };
-            target = current;
-        }
 
-        // Probe the live target: loopback `/ready` for Local, bare TCP for Remote.
-        let ready = match &target {
+        // Probe the live target first — loopback `/ready` for Local, bare TCP
+        // for Remote. Probing before the re-arm lets a freshly-switched target
+        // be seeded with its real reachability (see `Supervisor::for_target`),
+        // so a reachable new target is not mistaken for a Down→Up recovery and
+        // does not trigger a redundant Panel reload.
+        let ready = match &current {
             connection::ConnectionTarget::Local => daemon::is_ready().await,
             connection::ConnectionTarget::Remote(url) => {
                 let host = url.host_str().unwrap_or("");
@@ -682,6 +690,12 @@ async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
                 daemon::tcp_reachable(host, port).await
             }
         };
+
+        if current != target {
+            tracing::info!("connection target changed — re-arming supervisor");
+            supervisor = Supervisor::for_target(&current, ready);
+            target = current;
+        }
 
         match supervisor.tick(ready) {
             SupervisorAction::Idle => {}
@@ -871,5 +885,36 @@ mod tests {
             action = sup.tick(false);
         }
         assert_eq!(action, SupervisorAction::Relaunch);
+    }
+
+    #[test]
+    fn rearm_to_reachable_target_is_idle_not_spurious_reload() {
+        // Regression for the redundant-reload bug: a freshly-switched target
+        // that is already reachable must be seeded `Up` via `for_target`, so the
+        // next probe tick is `Idle` — not a phantom Down→Up `ReloadPanel` that
+        // would reload the Panel ~one poll interval after the switch.
+        let local = connection::ConnectionTarget::Local;
+        let mut sup_local = Supervisor::for_target(&local, true);
+        assert_eq!(sup_local.tick(true), SupervisorAction::Idle);
+
+        let remote = connection::ConnectionTarget::parse("box.lan:9000").unwrap();
+        let mut sup_remote = Supervisor::for_target(&remote, true);
+        assert_eq!(sup_remote.tick(true), SupervisorAction::Idle);
+    }
+
+    #[test]
+    fn rearm_to_unreachable_target_acts_on_first_tick() {
+        // Seeded `Down` from a failed probe: Local relaunches, Remote surfaces a
+        // connection error — both on the first tick, no slower than before.
+        let local = connection::ConnectionTarget::Local;
+        let mut sup_local = Supervisor::for_target(&local, false);
+        assert_eq!(sup_local.tick(false), SupervisorAction::Relaunch);
+
+        let remote = connection::ConnectionTarget::parse("box.lan:9000").unwrap();
+        let mut sup_remote = Supervisor::for_target(&remote, false);
+        assert_eq!(
+            sup_remote.tick(false),
+            SupervisorAction::ShowConnectionError
+        );
     }
 }
