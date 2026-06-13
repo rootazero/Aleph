@@ -243,8 +243,9 @@ impl GenerationProvider for AzureSpeechProvider {
 
             // Treat the input as SSML if it already starts with `<speak`; this
             // lets advanced users send raw SSML with prosody/breaks. Otherwise
-            // wrap plain text in a minimal envelope.
-            let body = build_ssml(&request.prompt, &voice);
+            // wrap plain text in a minimal envelope, honoring `params.speed`
+            // via a `<prosody rate>` element.
+            let body = build_ssml(&request.prompt, &voice, request.params.speed);
 
             let started_at = Instant::now();
             debug!(url = %self.endpoint, voice = %voice, format = %output_format, "sending Azure Speech request");
@@ -373,18 +374,39 @@ fn content_type_for_format(format: Option<&str>) -> &'static str {
     }
 }
 
+/// Speed multiplier bounds for `<prosody rate>`. Azure interprets the rate as a
+/// multiplier of the default (1.0 = unchanged); we clamp to the canonical
+/// `params.speed` range so an out-of-range value can never produce invalid SSML.
+const RATE_MIN: f32 = 0.5;
+const RATE_MAX: f32 = 2.0;
+
+fn clamp_rate(speed: f32) -> f32 {
+    speed.clamp(RATE_MIN, RATE_MAX)
+}
+
 /// Build an SSML envelope around the given text. If the caller already passed
 /// raw SSML (input starts with `<speak`), pass it through verbatim — this lets
 /// advanced users supply prosody/breaks without us re-wrapping it.
-fn build_ssml(input: &str, voice: &str) -> String {
+///
+/// When `speed` is supplied (and the input is plain text), the text is wrapped
+/// in a `<prosody rate>` element so the canonical `params.speed` knob actually
+/// changes the speaking rate instead of being silently dropped.
+fn build_ssml(input: &str, voice: &str, speed: Option<f32>) -> String {
     if input.trim_start().starts_with("<speak") {
         return input.to_string();
     }
     let xml_lang = locale_from_voice(voice);
     let escaped_input = xml_escape(input);
     let escaped_voice = xml_escape(voice);
+    let inner = match speed {
+        Some(s) => format!(
+            r#"<prosody rate="{rate}">{escaped_input}</prosody>"#,
+            rate = clamp_rate(s)
+        ),
+        None => escaped_input,
+    };
     format!(
-        r#"<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{xml_lang}"><voice name="{escaped_voice}">{escaped_input}</voice></speak>"#,
+        r#"<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{xml_lang}"><voice name="{escaped_voice}">{inner}</voice></speak>"#,
     )
 }
 

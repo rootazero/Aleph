@@ -90,16 +90,19 @@ mod tests {
     }
 
     #[test]
-    fn test_new_invalid_model_fails() {
-        let result =
-            ElevenLabsProvider::new("xi-test-key", None, Some("invalid-model".to_string()), None);
+    fn test_new_unknown_model_passes_through() {
+        // Unknown models are accepted (forward-compat); the provider only logs
+        // a warning rather than rejecting, so newer ElevenLabs models work
+        // without a code change.
+        let provider = ElevenLabsProvider::new(
+            "xi-test-key",
+            None,
+            Some("eleven_v99_future".to_string()),
+            None,
+        )
+        .unwrap();
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(
-            err,
-            GenerationError::InvalidParametersError { .. }
-        ));
+        assert_eq!(provider.model, "eleven_v99_future");
     }
 
     // === Voice resolution tests ===
@@ -240,6 +243,45 @@ mod tests {
         assert_eq!(body.voice_settings.similarity_boost, 0.75);
         assert!(body.voice_settings.style.is_none());
         assert!(body.voice_settings.use_speaker_boost.is_none());
+        assert!(body.voice_settings.speed.is_none());
+    }
+
+    #[test]
+    fn test_build_request_body_speed_clamped_from_params() {
+        let provider = ElevenLabsProvider::new("xi-test-key", None, None, None).unwrap();
+        // 1.5 is above ElevenLabs' 1.2 ceiling and must clamp.
+        let fast = GenerationRequest::speech("Hi")
+            .with_params(GenerationParams::builder().speed(1.5).build());
+        assert_eq!(
+            provider.build_request_body(&fast).voice_settings.speed,
+            Some(1.2)
+        );
+        // 0.3 is below the 0.7 floor and must clamp.
+        let slow = GenerationRequest::speech("Hi")
+            .with_params(GenerationParams::builder().speed(0.3).build());
+        assert_eq!(
+            provider.build_request_body(&slow).voice_settings.speed,
+            Some(0.7)
+        );
+    }
+
+    #[test]
+    fn test_build_request_body_voice_settings_from_extra() {
+        let provider = ElevenLabsProvider::new("xi-test-key", None, None, None).unwrap();
+        let request = GenerationRequest::speech("Hi").with_params(
+            GenerationParams::builder()
+                .extra("stability", serde_json::json!(0.9))
+                .extra("similarity_boost", serde_json::json!(0.4))
+                .extra("style", serde_json::json!(0.6))
+                .extra("use_speaker_boost", serde_json::json!(true))
+                .build(),
+        );
+
+        let body = provider.build_request_body(&request);
+        assert_eq!(body.voice_settings.stability, 0.9);
+        assert_eq!(body.voice_settings.similarity_boost, 0.4);
+        assert_eq!(body.voice_settings.style, Some(0.6));
+        assert_eq!(body.voice_settings.use_speaker_boost, Some(true));
     }
 
     #[test]
@@ -356,6 +398,7 @@ mod tests {
                 similarity_boost: 0.75,
                 style: None,
                 use_speaker_boost: None,
+                speed: None,
             },
         };
 
@@ -368,6 +411,7 @@ mod tests {
         // Optional fields with None should be skipped
         assert!(!json.contains("\"style\""));
         assert!(!json.contains("\"use_speaker_boost\""));
+        assert!(!json.contains("\"speed\""));
     }
 
     #[test]
@@ -380,6 +424,7 @@ mod tests {
                 similarity_boost: 0.8,
                 style: Some(0.3),
                 use_speaker_boost: Some(true),
+                speed: Some(1.1),
             },
         };
 
@@ -387,6 +432,7 @@ mod tests {
 
         assert!(json.contains("\"style\":0.3"));
         assert!(json.contains("\"use_speaker_boost\":true"));
+        assert!(json.contains("\"speed\":1.1"));
     }
 
     // === Constants tests ===
@@ -410,10 +456,11 @@ mod tests {
 
     #[test]
     fn test_models_list() {
-        assert_eq!(constants::MODELS.len(), 4);
+        assert_eq!(constants::MODELS.len(), 8);
         assert!(constants::MODELS.contains(&"eleven_monolingual_v1"));
-        assert!(constants::MODELS.contains(&"eleven_multilingual_v1"));
         assert!(constants::MODELS.contains(&"eleven_multilingual_v2"));
+        assert!(constants::MODELS.contains(&"eleven_flash_v2_5"));
+        assert!(constants::MODELS.contains(&"eleven_turbo_v2_5"));
         assert!(constants::MODELS.contains(&"eleven_turbo_v2"));
     }
 
