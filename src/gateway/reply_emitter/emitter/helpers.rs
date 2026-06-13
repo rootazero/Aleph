@@ -13,7 +13,10 @@ impl ReplyEmitter {
     /// mid-request `voice_mode_set` tool calls take effect immediately
     /// (e.g. the confirmation message itself is voiced).
     pub(crate) async fn should_voice(&self) -> bool {
-        // Static hint: user sent an audio message
+        // Static hint: user sent an audio message. Deliberate product
+        // behavior — voice input gets a voice reply even when the channel's
+        // voice mode is off (send_as_voice still falls back to text when no
+        // speech provider is available).
         if self.config.voice_reply_hint {
             debug!("should_voice=true (voice_reply_hint)");
             return true;

@@ -154,13 +154,17 @@ pub async fn generate_tts(
 // ---------------------------------------------------------------------------
 
 /// TTS attempt outcome (3-strike auto-disable counts `Failed`).
-pub enum TtsOutcome {
+///
+/// Crate-internal: the only consumer is the reply emitter's `send_as_voice`;
+/// keeping it `pub(crate)` means any future variant surfaces every match site
+/// at compile time instead of leaking into the crate API.
+pub(crate) enum TtsOutcome {
     Generated(Attachment),
     Failed,
 }
 
 /// Like [`generate_tts`] but with a typed outcome.
-pub async fn generate_tts_outcome(
+pub(crate) async fn generate_tts_outcome(
     text: &str,
     voice_state: &VoiceState,
     generation_registry: &GenerationProviderRegistry,
