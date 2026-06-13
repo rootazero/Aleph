@@ -58,6 +58,13 @@ const DEFAULT_VOICE: &str = "alloy";
 /// Default timeout for TTS requests (60 seconds)
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
+/// Connect-phase deadline. Bounds a cold TCP/TLS dial so a network black-hole at
+/// connect time fails fast instead of sitting inside the much larger overall
+/// `timeout`. Since connection pooling is disabled (see below) every request
+/// dials fresh, so this gates every request — kept well under the caller's
+/// per-attempt deadline (~10 s) so a dead route is abandoned with time to retry.
+const CONNECT_TIMEOUT_SECS: u64 = 8;
+
 /// Available TTS voices
 pub const AVAILABLE_VOICES: [&str; 6] = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
 
@@ -137,8 +144,22 @@ impl OpenAiTtsProvider {
             );
         }
 
+        // Do NOT reuse keep-alive connections. The OpenAI-compatible endpoints we
+        // target in production (e.g. api.302.ai) sit behind a load balancer that
+        // silently drops idle sockets; reqwest's pool then hands out a dead
+        // connection and the next request writes into the void and hangs the full
+        // `timeout` before failing. Production logs show the tell-tale bimodal
+        // latency — successes at 0.4–7 s, failures at *exactly* the per-attempt
+        // timeout — which is a stale pooled socket, not a slow server. TTS is
+        // low-QPS and bursty, and TLS session resumption keeps a fresh dial cheap,
+        // so `pool_max_idle_per_host(0)` trades a negligible per-request handshake
+        // for the outright elimination of the stale-connection stall (the voice
+        // mode "stuck at 正在思考" / leading-sentence-eaten bug). `connect_timeout`
+        // then bounds that fresh dial.
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+            .pool_max_idle_per_host(0)
             .build()
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 

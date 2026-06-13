@@ -21,15 +21,15 @@ pub fn tts_timeout_ms(text: &str) -> u64 {
     (10_000 + extra).min(30_000)
 }
 
-/// Maximum TTS attempts per sentence. The 302 / OpenAI-compatible endpoint
-/// cold-starts: the first request after an idle gap times out or reuses a dead
-/// keep-alive connection ("error sending request"), then recovers within
-/// seconds (observed in production logs — a failed attempt is followed by a
-/// 2–7 s success). One bounded retry on a *transient* error turns that
-/// cold-start silence into (slightly delayed) audio. Capped at 2 so a
-/// genuinely-down endpoint cannot multiply the reply latency without bound —
-/// this is openclaw's lesson (attempt, then fall back) applied to a single
-/// provider: retry, never hammer.
+/// Maximum TTS attempts per sentence. The *primary* defence against the
+/// stale-keep-alive stall now lives in the provider's HTTP client (connection
+/// pooling is disabled, so every request dials a live socket — see
+/// `OpenAiTtsProvider::new`). This retry is the residual safety net for a
+/// *genuine* transient failure on a fresh connection — the endpoint returns a
+/// 5xx/429, or a real network blip drops the request — where a second attempt
+/// recovers. Capped at 2 so a genuinely-down endpoint cannot multiply the reply
+/// latency without bound — openclaw's lesson (attempt, then fall back) applied
+/// to a single provider: retry, never hammer.
 const TTS_MAX_ATTEMPTS: u32 = 2;
 
 /// Settle between TTS attempts — long enough to let a stale connection drop and
