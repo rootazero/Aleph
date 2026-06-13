@@ -180,6 +180,15 @@ impl CartesiaProvider {
     }
 }
 
+/// Map the canonical `params.speed` multiplier (1.0 = normal, ~0.5–2.0) onto
+/// Cartesia's `speed` knob, which is an offset in `-1.0..=1.0` (0.0 = normal,
+/// negative slower, positive faster). Passing the multiplier raw would make a
+/// normal 1.0 mean "fastest" and a 2.0 fall outside the valid range, so we
+/// subtract the 1.0 baseline and clamp into Cartesia's window.
+fn map_speed_to_cartesia(multiplier: f32) -> f32 {
+    (multiplier - 1.0).clamp(-1.0, 1.0)
+}
+
 impl GenerationProvider for CartesiaProvider {
     fn generate(
         &self,
@@ -256,7 +265,7 @@ impl GenerationProvider for CartesiaProvider {
                     encoding: encoding.to_string(),
                     sample_rate,
                 },
-                speed: request.params.speed,
+                speed: request.params.speed.map(map_speed_to_cartesia),
             };
 
             let started_at = Instant::now();

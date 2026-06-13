@@ -130,19 +130,35 @@ fn locale_extracted_from_voice_name() {
 
 #[test]
 fn build_ssml_wraps_plain_text() {
-    let ssml = build_ssml("Hello & welcome", "en-US-JennyNeural");
+    let ssml = build_ssml("Hello & welcome", "en-US-JennyNeural", None);
     assert!(ssml.contains("xml:lang=\"en-US\""));
     assert!(ssml.contains("name=\"en-US-JennyNeural\""));
     // Ampersand should be escaped to satisfy XML parser.
     assert!(ssml.contains("Hello &amp; welcome"));
     assert!(!ssml.contains("Hello & welcome"));
+    // No speed → no prosody wrapper.
+    assert!(!ssml.contains("<prosody"));
 }
 
 #[test]
 fn build_ssml_passes_through_raw_ssml() {
     let raw = r#"<speak version="1.0"><voice name="en-US-AriaNeural"><prosody rate="+10%">Hi</prosody></voice></speak>"#;
-    let ssml = build_ssml(raw, "en-US-JennyNeural");
+    let ssml = build_ssml(raw, "en-US-JennyNeural", Some(1.5));
+    // Raw SSML is preserved verbatim even when a speed is supplied.
     assert_eq!(ssml, raw);
+}
+
+#[test]
+fn build_ssml_wraps_speed_in_prosody() {
+    let ssml = build_ssml("Hi", "en-US-JennyNeural", Some(1.5));
+    assert!(ssml.contains(r#"<prosody rate="1.5">Hi</prosody>"#));
+}
+
+#[test]
+fn build_ssml_clamps_out_of_range_speed() {
+    // Above the 2.0 ceiling clamps to 2; below the 0.5 floor clamps to 0.5.
+    assert!(build_ssml("Hi", "en-US-JennyNeural", Some(9.0)).contains(r#"rate="2""#));
+    assert!(build_ssml("Hi", "en-US-JennyNeural", Some(0.1)).contains(r#"rate="0.5""#));
 }
 
 #[test]

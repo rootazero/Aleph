@@ -26,6 +26,10 @@ pub struct VoiceSettings {
     /// Whether to use speaker boost
     #[serde(skip_serializing_if = "Option::is_none")]
     pub use_speaker_boost: Option<bool>,
+    /// Speaking speed multiplier. ElevenLabs accepts 0.7–1.2; values outside
+    /// that range are clamped before the request is sent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f32>,
 }
 
 /// `ElevenLabs` API error response format

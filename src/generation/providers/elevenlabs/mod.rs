@@ -99,17 +99,19 @@ impl ElevenLabsProvider {
             None => constants::DEFAULT_VOICE_ID.to_string(),
         };
 
-        // Validate model if provided
+        // Resolve the model. We do NOT hard-reject unknown names: ElevenLabs
+        // ships new models regularly (e.g. eleven_flash_v2_5), and rejecting
+        // anything not in our static list would break the moment a user picks
+        // a newer model. Mirror the openai_tts voice policy — warn and pass
+        // through, so the request reaches the API and fails there only if the
+        // model is genuinely invalid.
         let model = model.unwrap_or_else(|| constants::DEFAULT_MODEL.to_string());
         if !constants::MODELS.contains(&model.as_str()) {
-            return Err(GenerationError::invalid_parameters(
-                format!(
-                    "Invalid model '{}'. Available models: {}",
-                    model,
-                    constants::MODELS.join(", ")
-                ),
-                Some("model".to_string()),
-            ));
+            warn!(
+                model = %model,
+                known = %constants::MODELS.join(", "),
+                "Unrecognized ElevenLabs model; passing through (forward-compat)"
+            );
         }
 
         let client = Client::builder()
@@ -219,7 +221,12 @@ impl ElevenLabsProvider {
         format!("{}/v1/text-to-speech/{}", self.endpoint, voice_id)
     }
 
-    /// Build the API request body from a `GenerationRequest`
+    /// Build the API request body from a `GenerationRequest`.
+    ///
+    /// `stability`, `similarity_boost`, `style` and `use_speaker_boost` are
+    /// ElevenLabs-specific voice knobs the caller may override through the
+    /// provider-specific `params.extra` map; `speed` comes from the canonical
+    /// `params.speed` and is clamped to the API's supported 0.7–1.2 range.
     fn build_request_body(&self, request: &GenerationRequest) -> types::TtsRequest {
         let model_id = request
             .params
@@ -227,14 +234,28 @@ impl ElevenLabsProvider {
             .clone()
             .unwrap_or_else(|| self.model.clone());
 
+        let extra_f32 = |key: &str| -> Option<f32> {
+            request
+                .params
+                .extra
+                .get(key)
+                .and_then(serde_json::Value::as_f64)
+                .map(|v| v as f32)
+        };
+
         types::TtsRequest {
             text: request.prompt.clone(),
             model_id,
             voice_settings: types::VoiceSettings {
-                stability: 0.5,
-                similarity_boost: 0.75,
-                style: None,
-                use_speaker_boost: None,
+                stability: extra_f32("stability").unwrap_or(0.5),
+                similarity_boost: extra_f32("similarity_boost").unwrap_or(0.75),
+                style: extra_f32("style"),
+                use_speaker_boost: request
+                    .params
+                    .extra
+                    .get("use_speaker_boost")
+                    .and_then(serde_json::Value::as_bool),
+                speed: request.params.speed.map(clamp_speed),
             },
         }
     }
@@ -297,6 +318,16 @@ impl ElevenLabsProvider {
     }
 }
 
+/// ElevenLabs accepts a speaking-speed multiplier in the 0.7–1.2 range.
+/// Clamp out-of-range values so a caller's `params.speed` can never trigger
+/// a 422 from the API.
+const SPEED_MIN: f32 = 0.7;
+const SPEED_MAX: f32 = 1.2;
+
+fn clamp_speed(speed: f32) -> f32 {
+    speed.clamp(SPEED_MIN, SPEED_MAX)
+}
+
 impl GenerationProvider for ElevenLabsProvider {
     fn generate(
         &self,
@@ -324,14 +355,6 @@ impl GenerationProvider for ElevenLabsProvider {
                 Some(voice) => Self::resolve_voice_id(voice)?,
                 None => self.default_voice_id.clone(),
             };
-
-            // Warn about unsupported speed parameter
-            if request.params.speed.is_some() {
-                warn!(
-                    speed = ?request.params.speed,
-                    "Speed parameter is not directly supported by ElevenLabs API, ignoring"
-                );
-            }
 
             // Validate format if provided
             if let Some(ref format) = request.params.format {

@@ -25,12 +25,18 @@ pub const VOICES: &[(&str, &str)] = &[
     ("sam", "yoZ06aMxZJJ28mfd3POQ"),
 ];
 
-/// Available models
+/// Known models. This list is advisory only — unrecognized models are passed
+/// through with a warning (see `ElevenLabsProvider::new`) so newer ElevenLabs
+/// models work without a code change. Ordered roughly newest/best first.
 pub const MODELS: &[&str] = &[
-    "eleven_monolingual_v1",
-    "eleven_multilingual_v1",
+    "eleven_v3",
     "eleven_multilingual_v2",
+    "eleven_flash_v2_5",
+    "eleven_flash_v2",
+    "eleven_turbo_v2_5",
     "eleven_turbo_v2",
+    "eleven_multilingual_v1",
+    "eleven_monolingual_v1",
 ];
 
 /// Output formats
