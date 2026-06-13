@@ -1093,6 +1093,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let resolve_key = |name: &str,
                                    pcfg: &alephcore::GenerationProviderConfig|
                  -> Option<String> {
+                    // BYO local endpoints commonly run unauthenticated — an
+                    // empty key is valid for them (no Authorization header),
+                    // so the presence walk must not skip the entry.
+                    if pcfg.provider_type == alephcore::LOCAL_PROVIDER_TYPE {
+                        return Some(pcfg.api_key.clone().unwrap_or_default());
+                    }
                     // Use config api_key if present
                     if let Some(ref key) = pcfg.api_key {
                         if !key.is_empty() {
@@ -1134,15 +1140,29 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     });
 
                 if let Some((key, pcfg)) = tcfg {
-                    let whisper = WhisperTranscription::new(
-                        key,
-                        pcfg.base_url.clone(),
-                        pcfg.models.first().cloned(),
-                    );
-                    if !daemon {
-                        println!("  MediaProcessor: Whisper transcription enabled (from transcription provider)");
+                    if pcfg.provider_type == alephcore::LOCAL_PROVIDER_TYPE {
+                        // BYO endpoint: connection values live on the entry
+                        // itself (`key` is consumed by the Whisper branch
+                        // below).
+                        if !daemon {
+                            println!(
+                                "  MediaProcessor: local voice transcription enabled (BYO endpoint)"
+                            );
+                        }
+                        Some(Box::new(
+                            alephcore::gateway::voice::local_provider::LocalTranscription::from_config(pcfg),
+                        ) as Box<dyn TranscriptionService>)
+                    } else {
+                        let whisper = WhisperTranscription::new(
+                            key,
+                            pcfg.base_url.clone(),
+                            pcfg.models.first().cloned(),
+                        );
+                        if !daemon {
+                            println!("  MediaProcessor: Whisper transcription enabled (from transcription provider)");
+                        }
+                        Some(Box::new(whisper) as Box<dyn TranscriptionService>)
                     }
-                    Some(Box::new(whisper))
                 } else {
                     None
                 }

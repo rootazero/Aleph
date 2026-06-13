@@ -155,6 +155,7 @@ pub use crate::config::{
     types::resume::ResumeConfig,
     types::security::ShellSecurityConfig,
     types::stop_hooks::StopHookConfig,
+    types::voice_local::LOCAL_PROVIDER_TYPE,
     AssemblerConfig, BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig,
     FullConfig, GeneralConfig, GenerationProviderConfig, MemoryConfig, MemoryInjectionMode,
     PluginMarketplaceEntry, ProviderConfig, RoutingRuleConfig, SmartFlowConfig,

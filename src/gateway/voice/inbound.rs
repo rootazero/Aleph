@@ -29,19 +29,105 @@ pub struct SttConfig {
     pub model: String,
 }
 
-/// Resolve the active STT config from the generation config + vault.
+/// STT source. Local is the BYO endpoint (P7: a request failure against it
+/// retries once on the pre-resolved cloud fallback); Static is pure cloud.
+#[derive(Clone)]
+pub enum SttSource {
+    Static(SttConfig),
+    /// BYO local endpoint, with an optional pre-resolved cloud fallback (spec
+    /// §4.6: a local request failure falls back to cloud automatically; a
+    /// cloud default never falls back to local).
+    Local {
+        config: SttConfig,
+        fallback: Option<Box<SttConfig>>,
+    },
+}
+
+/// Shared HTTP client for the channel/RPC STT paths (connection reuse; the
+/// per-request timeout is set on each request).
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
+/// Transcribe through an [`SttSource`]: P7 degradation lives here — when the
+/// local endpoint request fails and a cloud fallback was resolved, retry once
+/// against the cloud before surfacing the error. `Bytes` clones are O(1)
+/// refcount bumps, so holding the retry copy costs nothing.
+pub async fn transcribe_with_source(
+    bytes: bytes::Bytes,
+    filename: &str,
+    mime: &str,
+    language: Option<&str>,
+    source: &SttSource,
+) -> Result<String, String> {
+    let client = http_client();
+    match source {
+        SttSource::Static(cfg) => {
+            transcribe_bytes(client, bytes, filename, mime, language, cfg).await
+        }
+        SttSource::Local { config, fallback } => match fallback {
+            Some(cloud) => {
+                match transcribe_bytes(client, bytes.clone(), filename, mime, language, config)
+                    .await
+                {
+                    Ok(text) => Ok(text),
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            "local STT request failed — retrying once on cloud fallback"
+                        );
+                        transcribe_bytes(client, bytes, filename, mime, language, cloud).await
+                    }
+                }
+            }
+            None => transcribe_bytes(client, bytes, filename, mime, language, config).await,
+        },
+    }
+}
+
+/// Resolve the active STT source from generation config + vault.
 ///
-/// Picks the `default_transcription_provider` when set and enabled, otherwise
-/// the first enabled transcription provider with a resolvable API key (config
-/// inline or vault `gen:<name>`). Returns `None` when no usable provider exists.
+/// Local (`provider_type == "local"`) wins per the normalized defaults; a cloud
+/// candidate (if any) rides along as the fallback. Pure cloud setups produce
+/// `Static` exactly as before. Returns `None` when no usable provider exists.
 ///
 /// Shared by the boot path (inbound router wiring) and the `voice.transcribe`
 /// panel RPC so both resolve the provider identically.
-pub fn resolve_stt_config(
+pub fn resolve_stt_source(
     gen_cfg: &crate::config::types::generation::GenerationConfig,
     vault: &crate::gateway::security::SharedTokenManager,
-) -> Option<SttConfig> {
+) -> Option<SttSource> {
+    let chosen = choose_transcription_provider(gen_cfg, vault, false)?;
+    if chosen.1.provider_type == crate::config::types::voice_local::LOCAL_PROVIDER_TYPE {
+        let config = local_stt_config(chosen.0, chosen.1);
+        let fallback = choose_transcription_provider(gen_cfg, vault, true)
+            .map(|(key, pcfg)| Box::new(static_stt_config(key, pcfg)));
+        Some(SttSource::Local { config, fallback })
+    } else {
+        let (key, pcfg) = chosen;
+        Some(SttSource::Static(static_stt_config(key, pcfg)))
+    }
+}
+
+/// Selection walk shared by primary + fallback resolution.
+/// `skip_local = true` excludes `provider_type == "local"` entries.
+///
+/// Picks the `default_transcription_provider` when set and enabled, otherwise
+/// the first enabled transcription provider with a resolvable API key (config
+/// inline or vault `gen:<name>`).
+fn choose_transcription_provider<'a>(
+    gen_cfg: &'a crate::config::types::generation::GenerationConfig,
+    vault: &crate::gateway::security::SharedTokenManager,
+    skip_local: bool,
+) -> Option<(String, &'a crate::GenerationProviderConfig)> {
     let resolve_key = |name: &str, pcfg: &crate::GenerationProviderConfig| -> Option<String> {
+        // BYO local endpoints commonly run unauthenticated — an empty key is
+        // valid for them (means "no Authorization header"), so the presence
+        // walk must not skip the entry.
+        if pcfg.provider_type == crate::config::types::voice_local::LOCAL_PROVIDER_TYPE {
+            return Some(pcfg.api_key.clone().unwrap_or_default());
+        }
         if let Some(ref key) = pcfg.api_key {
             if !key.is_empty() {
                 return Some(key.clone());
@@ -55,15 +141,20 @@ pub fn resolve_stt_config(
         }
         None
     };
+    let eligible = |pcfg: &crate::GenerationProviderConfig| {
+        pcfg.enabled
+            && !(skip_local
+                && pcfg.provider_type == crate::config::types::voice_local::LOCAL_PROVIDER_TYPE)
+    };
 
-    let (key, pcfg) = gen_cfg
+    gen_cfg
         .default_transcription_provider
         .as_ref()
         .and_then(|default_name| {
             gen_cfg
                 .transcription_providers
                 .get_key_value(default_name)
-                .filter(|(_, pcfg)| pcfg.enabled)
+                .filter(|(_, pcfg)| eligible(pcfg))
                 .and_then(|(name, pcfg)| resolve_key(name, pcfg).map(|key| (key, pcfg)))
         })
         .or_else(|| {
@@ -71,14 +162,33 @@ pub fn resolve_stt_config(
                 .transcription_providers
                 .iter()
                 .find_map(|(name, pcfg)| {
-                    if pcfg.enabled {
+                    if eligible(pcfg) {
                         resolve_key(name, pcfg).map(|key| (key, pcfg))
                     } else {
                         None
                     }
                 })
-        })?;
+        })
+}
 
+/// `SttConfig` for the BYO local endpoint: `base_url` is the configured
+/// endpoint verbatim (no URL rewriting — it already carries its path prefix),
+/// and an empty model means "omit the field, let the server default decide".
+fn local_stt_config(key: String, pcfg: &crate::GenerationProviderConfig) -> SttConfig {
+    SttConfig {
+        api_key: key,
+        base_url: pcfg
+            .base_url
+            .as_deref()
+            .unwrap_or("http://127.0.0.1:8000/v1")
+            .trim_end_matches('/')
+            .to_string(),
+        model: pcfg.models.first().cloned().unwrap_or_default(),
+    }
+}
+
+/// The original static `SttConfig` construction (url normalize + model pick).
+fn static_stt_config(key: String, pcfg: &crate::GenerationProviderConfig) -> SttConfig {
     let base = pcfg.base_url.as_deref().unwrap_or("https://api.openai.com");
     let resolved = crate::generation::providers::url_normalize::resolve_base_url(base);
     let stt_endpoint = resolved.primary_endpoint(crate::generation::GenerationType::Transcription);
@@ -91,11 +201,11 @@ pub fn resolve_stt_config(
         .cloned()
         .unwrap_or_else(|| "whisper-1".to_string());
 
-    Some(SttConfig {
+    SttConfig {
         api_key: key,
         base_url: stt_base,
         model: stt_model,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +228,7 @@ pub fn has_audio_attachment(msg: &InboundMessage) -> bool {
 ///   - On failure: keeps attachments, appends error hint.
 pub async fn process_inbound_voice(
     mut msg: InboundMessage,
-    stt_config: &SttConfig,
+    stt_source: &SttSource,
 ) -> VoiceProcessResult {
     if !has_audio_attachment(&msg) {
         return VoiceProcessResult {
@@ -135,7 +245,7 @@ pub async fn process_inbound_voice(
 
     // Transcribe the first audio attachment.
     let first_audio = &audio_attachments[0];
-    match transcribe_attachment(first_audio, stt_config).await {
+    match transcribe_attachment(first_audio, stt_source).await {
         Ok(transcription) if transcription.trim().is_empty() => {
             // Whisper returned nothing usable — empty audio or a hallucination
             // that the filter nulled. Don't claim a transcription (no
@@ -189,10 +299,17 @@ pub async fn process_inbound_voice(
 /// Download audio bytes from an attachment and transcribe them.
 async fn transcribe_attachment(
     attachment: &Attachment,
-    config: &SttConfig,
+    source: &SttSource,
 ) -> Result<String, String> {
     let (bytes, filename) = get_audio_bytes(attachment).await?;
-    transcribe_bytes(bytes, &filename, &attachment.mime_type, None, config).await
+    transcribe_with_source(
+        bytes::Bytes::from(bytes),
+        &filename,
+        &attachment.mime_type,
+        None,
+        source,
+    )
+    .await
 }
 
 /// Send raw audio bytes to a Whisper-compatible API and return the transcript.
@@ -201,21 +318,28 @@ async fn transcribe_attachment(
 /// ([`transcribe_attachment`]) and the `voice.transcribe` panel RPC. `language`
 /// is an optional ISO 639-1 hint passed natively to the API.
 pub async fn transcribe_bytes(
-    bytes: Vec<u8>,
+    client: &reqwest::Client,
+    bytes: bytes::Bytes,
     filename: &str,
     mime: &str,
     language: Option<&str>,
     config: &SttConfig,
 ) -> Result<String, String> {
-    let file_part = reqwest::multipart::Part::bytes(bytes)
+    // `Body::from(Bytes)` is zero-copy; the explicit length keeps the
+    // multipart part Content-Length'd like `Part::bytes` would.
+    let len = bytes.len() as u64;
+    let file_part = reqwest::multipart::Part::stream_with_length(reqwest::Body::from(bytes), len)
         .file_name(filename.to_string())
         .mime_str(mime)
         .map_err(|e| format!("Invalid MIME type: {e}"))?;
 
     let mut form = reqwest::multipart::Form::new()
         .part("file", file_part)
-        .text("model", config.model.clone())
         .text("response_format", "json");
+    // Empty model = let the server's default decide (BYO endpoints).
+    if !config.model.is_empty() {
+        form = form.text("model", config.model.clone());
+    }
     if let Some(lang) = language.filter(|l| !l.is_empty()) {
         form = form.text("language", lang.to_string());
     }
@@ -226,12 +350,15 @@ pub async fn transcribe_bytes(
     );
     debug!(url = %url, model = %config.model, "Sending Whisper transcription request");
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let mut req = client
         .post(&url)
-        .bearer_auth(&config.api_key)
         .multipart(form)
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(60));
+    // Empty key = unauthenticated endpoint, no Authorization header.
+    if !config.api_key.is_empty() {
+        req = req.bearer_auth(&config.api_key);
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("Whisper API request failed: {e}"))?;
@@ -357,4 +484,87 @@ mod tests {
         let msg = make_message(vec![]);
         assert!(!has_audio_attachment(&msg));
     }
+
+    fn make_vault() -> (tempfile::TempDir, crate::gateway::security::SharedTokenManager) {
+        use crate::gateway::security::{SecurityStore, SharedTokenManager};
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = std::sync::Arc::new(SecurityStore::in_memory().unwrap());
+        let vault = SharedTokenManager::new(store, dir.path().join("test.vault"));
+        (dir, vault)
+    }
+
+    #[test]
+    fn resolve_prefers_local_with_cloud_fallback() {
+        use crate::config::types::generation::GenerationConfig;
+        let (_dir, vault) = make_vault();
+        let mut gen = GenerationConfig::default();
+        // local (normalized BYO shape: real endpoint, unauthenticated, no
+        // model pinned) + one cloud provider with inline key
+        let mut local = crate::GenerationProviderConfig::new("local");
+        local.api_key = Some(String::new());
+        local.base_url = Some("http://127.0.0.1:8000/v1".into());
+        gen.transcription_providers.insert("local".into(), local);
+        let mut cloud = crate::GenerationProviderConfig::new("openai_whisper");
+        cloud.api_key = Some("sk-cloud".into());
+        gen.transcription_providers
+            .insert("openai_whisper".into(), cloud);
+        gen.default_transcription_provider = Some("local".into());
+
+        match resolve_stt_source(&gen, &vault) {
+            Some(SttSource::Local {
+                config,
+                fallback: Some(f),
+            }) => {
+                // Local config built from the entry: endpoint verbatim, empty
+                // key (no auth), empty model (server default).
+                assert_eq!(config.base_url, "http://127.0.0.1:8000/v1");
+                assert_eq!(config.api_key, "");
+                assert_eq!(config.model, "");
+                assert_eq!(f.api_key, "sk-cloud");
+            }
+            other => panic!("expected Local with fallback, got {:?}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn resolve_local_without_cloud_has_no_fallback() {
+        use crate::config::types::generation::GenerationConfig;
+        let (_dir, vault) = make_vault();
+        let mut gen = GenerationConfig::default();
+        let mut local = crate::GenerationProviderConfig::new("local");
+        // No api_key at all — BYO unauthenticated entries must still resolve.
+        local.api_key = None;
+        local.base_url = Some("http://127.0.0.1:8000/v1/".into());
+        local.models = vec!["whisper-large-v3".into()];
+        gen.transcription_providers.insert("local".into(), local);
+        gen.default_transcription_provider = Some("local".into());
+
+        match resolve_stt_source(&gen, &vault) {
+            Some(SttSource::Local {
+                config,
+                fallback: None,
+            }) => {
+                // Trailing slash trimmed; configured model carried.
+                assert_eq!(config.base_url, "http://127.0.0.1:8000/v1");
+                assert_eq!(config.model, "whisper-large-v3");
+            }
+            _ => panic!("expected Local without fallback"),
+        }
+    }
+
+    #[test]
+    fn resolve_pure_cloud_stays_static() {
+        use crate::config::types::generation::GenerationConfig;
+        let (_dir, vault) = make_vault();
+        let mut gen = GenerationConfig::default();
+        let mut cloud = crate::GenerationProviderConfig::new("openai_whisper");
+        cloud.api_key = Some("sk-cloud".into());
+        gen.transcription_providers
+            .insert("openai_whisper".into(), cloud);
+        match resolve_stt_source(&gen, &vault) {
+            Some(SttSource::Static(cfg)) => assert_eq!(cfg.api_key, "sk-cloud"),
+            _ => panic!("expected Static"),
+        }
+    }
+
 }

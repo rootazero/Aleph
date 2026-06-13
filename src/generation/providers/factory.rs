@@ -74,6 +74,24 @@ pub fn create_provider(
 ) -> GenerationResult<Arc<dyn GenerationProvider>> {
     let resolved_url = config.base_url.as_deref().map(resolve_base_url);
 
+    // BYO local voice endpoint (OpenAI-compatible server the user runs).
+    // Handled before the api_key gate: BYO endpoints are commonly
+    // unauthenticated, so no key is required for this provider type.
+    if config.provider_type == "local" {
+        let provider: Arc<dyn GenerationProvider> = Arc::new(
+            crate::gateway::voice::local_provider::LocalVoiceProvider::from_config(
+                gen_type, config,
+            ),
+        );
+        if !provider.supports(gen_type) {
+            return Err(GenerationError::unsupported_generation_type(
+                gen_type.to_string(),
+                name,
+            ));
+        }
+        return Ok(provider);
+    }
+
     let api_key = config.api_key.clone().ok_or_else(|| {
         GenerationError::authentication(
             format!("API key is required for provider '{name}'"),
@@ -264,7 +282,7 @@ pub fn create_provider(
         other => {
             return Err(GenerationError::invalid_parameters(
                 format!(
-                    "Unknown provider type: '{other}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_whisper, whisper, deepgram_stt, deepgram, deepgram_tts, azure_speech, azure_tts, suno, bfl, bfl_flux, flux, cartesia, minimax_stt, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, fal"
+                    "Unknown provider type: '{other}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_whisper, whisper, deepgram_stt, deepgram, deepgram_tts, azure_speech, azure_tts, suno, bfl, bfl_flux, flux, cartesia, minimax_stt, local, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, fal"
                 ),
                 Some("provider_type".to_string()),
             ));

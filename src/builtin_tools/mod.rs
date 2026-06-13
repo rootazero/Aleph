@@ -219,7 +219,10 @@ pub use team::{
 };
 pub use vault_store::{VaultAction, VaultStoreArgs, VaultStoreOutput, VaultStoreTool};
 pub use vision::{VisionAction, VisionArgs, VisionOutput, VisionTool};
-pub use voice_tools::{VoiceModeSetArgs, VoiceModeSetOutput, VoiceModeSetTool};
+pub use voice_tools::{
+    LocalVoiceArgs, LocalVoiceOutput, LocalVoiceTool, VoiceModeSetArgs, VoiceModeSetOutput,
+    VoiceModeSetTool,
+};
 pub use web_fetch::{WebFetchArgs, WebFetchTool};
 
 // ============================================================================

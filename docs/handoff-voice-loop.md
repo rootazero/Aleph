@@ -53,7 +53,7 @@ WKWebView 的 `getUserMedia` 在**未签名/ad-hoc 的 macOS App 上必然失败
 ## 待实现（完整闭环）
 
 **复用（已存在，先读懂再接）：**
-- 核 STT：`src/gateway/voice/inbound.rs`（`transcribe_bytes`、`resolve_stt_config`）——channel 入站语音管线
+- 核 STT：`src/gateway/voice/inbound.rs`（`transcribe_bytes`、`resolve_stt_source`）——channel 入站语音管线
 - `src/gateway/inbound_router/mod.rs`（入站消息路由）、`src/gateway/voice/outbound.rs`（TTS 出站）、`src/gateway/reply_emitter/emitter/helpers.rs`
 - `src/gateway/handlers/voice.rs`：现有 `voice.transcribe`（bytes→text，复用 inbound 的 STT）
 - channel 既有 TTS out（memory 记：voice backend ~80% wired）

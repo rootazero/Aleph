@@ -13,7 +13,10 @@ impl ReplyEmitter {
     /// mid-request `voice_mode_set` tool calls take effect immediately
     /// (e.g. the confirmation message itself is voiced).
     pub(crate) async fn should_voice(&self) -> bool {
-        // Static hint: user sent an audio message
+        // Static hint: user sent an audio message. Deliberate product
+        // behavior — voice input gets a voice reply even when the channel's
+        // voice mode is off (send_as_voice still falls back to text when no
+        // speech provider is available).
         if self.config.voice_reply_hint {
             debug!("should_voice=true (voice_reply_hint)");
             return true;
@@ -80,7 +83,8 @@ impl ReplyEmitter {
                 }
             };
 
-            if let Some(attachment) = crate::gateway::voice::outbound::generate_tts(
+            use crate::gateway::voice::outbound::TtsOutcome;
+            match crate::gateway::voice::outbound::generate_tts_outcome(
                 text,
                 &voice_state,
                 registry,
@@ -88,49 +92,52 @@ impl ReplyEmitter {
             )
             .await
             {
-                // Success — reset failure counter
-                self.voice_state.lock().await.record_success();
+                TtsOutcome::Generated(attachment) => {
+                    // Success — reset failure counter
+                    self.voice_state.lock().await.record_success();
 
-                // Send voice-only message (no text — voice replaces text)
-                let message = OutboundMessage {
-                    conversation_id: self.route.conversation_id.clone(),
-                    text: String::new(),
-                    attachments: vec![attachment],
-                    reply_to: self.route.reply_to.clone(),
-                    inline_keyboard: None,
-                    metadata: Default::default(),
-                };
+                    // Send voice-only message (no text — voice replaces text)
+                    let message = OutboundMessage {
+                        conversation_id: self.route.conversation_id.clone(),
+                        text: String::new(),
+                        attachments: vec![attachment],
+                        reply_to: self.route.reply_to.clone(),
+                        inline_keyboard: None,
+                        metadata: Default::default(),
+                    };
 
-                match self
-                    .channel_registry
-                    .send(&self.route.channel_id, message)
-                    .await
-                {
-                    Ok(result) => {
-                        debug!(
-                            "Sent voice reply to channel {} (message_id: {})",
-                            self.route.channel_id,
-                            result.message_id.as_str(),
+                    match self
+                        .channel_registry
+                        .send(&self.route.channel_id, message)
+                        .await
+                    {
+                        Ok(result) => {
+                            debug!(
+                                "Sent voice reply to channel {} (message_id: {})",
+                                self.route.channel_id,
+                                result.message_id.as_str(),
+                            );
+                            self.has_sent.store(true, Ordering::SeqCst);
+                        }
+                        Err(e) => {
+                            error!("Failed to send voice reply: {}", e);
+                            // Fall back to text
+                            self.send_to_channel(text).await;
+                        }
+                    }
+                }
+                TtsOutcome::Failed => {
+                    // TTS generation failed — record and maybe auto-disable
+                    let auto_disabled = self.voice_state.lock().await.record_failure();
+                    if auto_disabled {
+                        warn!(
+                            "Voice auto-disabled for channel {} after 3 consecutive TTS failures",
+                            self.route.channel_id
                         );
-                        self.has_sent.store(true, Ordering::SeqCst);
                     }
-                    Err(e) => {
-                        error!("Failed to send voice reply: {}", e);
-                        // Fall back to text
-                        self.send_to_channel(text).await;
-                    }
+                    // Fallback to plain text
+                    self.send_to_channel(text).await;
                 }
-            } else {
-                // TTS generation failed — record and maybe auto-disable
-                let auto_disabled = self.voice_state.lock().await.record_failure();
-                if auto_disabled {
-                    warn!(
-                        "Voice auto-disabled for channel {} after 3 consecutive TTS failures",
-                        self.route.channel_id
-                    );
-                }
-                // Fallback to plain text
-                self.send_to_channel(text).await;
             }
         } else {
             // No generation registry — fall back to text

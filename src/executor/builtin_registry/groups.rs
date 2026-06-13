@@ -98,6 +98,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "channel_pairing",
             "google_meet",
             "voice_mode_set",
+            "local_voice",
             "ask_user",
             "skill_status",
             "skill_install",

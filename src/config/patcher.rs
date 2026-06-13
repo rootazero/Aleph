@@ -214,9 +214,13 @@ impl ConfigPatcher {
         self.validate_schema(&patched_json)?;
 
         // 6. Deserialize back to Config
-        let new_config: Config = serde_json::from_value(patched_json.clone()).map_err(|e| {
+        let mut new_config: Config = serde_json::from_value(patched_json.clone()).map_err(|e| {
             AlephError::invalid_config(format!("Patched config failed deserialization: {e}"))
         })?;
+
+        // 6b. Normalize before validation (mirrors Config::load ordering) so
+        // validation sees the same config a fresh boot would produce.
+        crate::config::types::voice_local::normalize_voice_local(&mut new_config);
 
         // 7. Run Config::validate()
         new_config.validate()?;
@@ -279,11 +283,14 @@ impl ConfigPatcher {
             // than the one validated in steps 5-7. Without this, an invalid
             // config could be persisted and installed live under concurrency.
             self.validate_schema(&re_patched)?;
-            let final_config: Config = serde_json::from_value(re_patched).map_err(|e| {
+            let mut final_config: Config = serde_json::from_value(re_patched).map_err(|e| {
                 AlephError::invalid_config(format!(
                     "Re-patched config failed deserialization: {e}"
                 ))
             })?;
+            // Normalize before validation (mirrors Config::load ordering) so
+            // the config installed live + persisted is the normalized one.
+            crate::config::types::voice_local::normalize_voice_local(&mut final_config);
             final_config.validate()?;
             // Commit to disk first; only swap in-memory on success. If the
             // save fails, restore the previous live config so the in-memory

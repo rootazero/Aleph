@@ -1,0 +1,324 @@
+//! BYO local voice configuration ([voice.local] in config.toml).
+//!
+//! Aleph does not run a voice server itself (Ollama-style BYO): users point
+//! `endpoint` at any OpenAI-compatible speech service (e.g. an mlx-audio
+//! server exposing `/v1/audio/speech` and `/v1/audio/transcriptions`).
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// Configuration for the user-provided local voice endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VoiceLocalConfig {
+    /// Master switch. Off by default — enabling injects a "local" provider
+    /// into the generation provider maps at load time (fill-empty-only).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Base URL of the OpenAI-compatible voice server. Providers append
+    /// `/audio/speech` / `/audio/transcriptions` to it.
+    #[serde(default = "default_endpoint")]
+    pub endpoint: String,
+    /// Optional bearer token. Most BYO servers run unauthenticated — when
+    /// unset, no Authorization header is sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// STT model name. Empty (default) = let the server pick its default.
+    #[serde(default)]
+    pub stt_model: String,
+    /// TTS model name. Empty (default) = let the server pick its default.
+    #[serde(default)]
+    pub tts_model: String,
+    /// TTS voice id. Empty (default) = let the server pick its default.
+    #[serde(default)]
+    pub tts_voice: String,
+    /// TTS output container: "opus" (Telegram-native) or "wav".
+    #[serde(default = "default_tts_format")]
+    pub tts_format: String,
+}
+
+fn default_endpoint() -> String {
+    // mlx-audio server's default port.
+    "http://127.0.0.1:8000/v1".into()
+}
+fn default_tts_format() -> String {
+    "opus".into()
+}
+
+impl Default for VoiceLocalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: default_endpoint(),
+            api_key: None,
+            stt_model: String::new(),
+            tts_model: String::new(),
+            tts_voice: String::new(),
+            tts_format: default_tts_format(),
+        }
+    }
+}
+
+/// `[voice]` config section wrapper (currently only `local`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct VoiceSection {
+    #[serde(default)]
+    pub local: VoiceLocalConfig,
+}
+
+/// The BYO endpoint's provider key: used both as the map entry name and as
+/// `GenerationProviderConfig.provider_type`.
+pub const LOCAL_PROVIDER_TYPE: &str = "local";
+
+/// Load-time normalization: when local voice is enabled, inject a synthetic
+/// "local" provider into the speech/transcription maps and point the unset
+/// defaults at it. Fill-empty-only — explicit user config (cloud included)
+/// always wins. Idempotent: safe across hot reloads.
+///
+/// The synthetic entry carries the real connection values (`base_url` =
+/// endpoint, `api_key`, model/voice/format) so providers read everything from
+/// their own `GenerationProviderConfig`. An empty `api_key` means "no
+/// Authorization header".
+///
+/// Persistence + ownership semantics:
+/// - Synthetic state may legitimately end up persisted to disk by any full
+///   config save; that is accepted.
+/// - When disabled, the cleanup branch removes that state on the next
+///   load/patch, so an enable→disable round-trip is clean.
+/// - Entries with `provider_type == "local"` are owned by this mechanism:
+///   user customizations of them survive enable-time normalization (the
+///   `or_insert_with` never overwrites), but they are removed on disable —
+///   a "local" provider_type is meaningless without the configured endpoint.
+pub fn normalize_voice_local(cfg: &mut crate::config::structs::Config) {
+    if !cfg.local_voice().enabled {
+        // Disable-cleanup: remove every locally-owned entry, then reset any
+        // default that pointed at the now-gone "local" key. Defaults pointing
+        // anywhere else are never touched.
+        cfg.generation
+            .speech_providers
+            .retain(|_, p| p.provider_type != LOCAL_PROVIDER_TYPE);
+        cfg.generation
+            .transcription_providers
+            .retain(|_, p| p.provider_type != LOCAL_PROVIDER_TYPE);
+        if cfg.generation.default_speech_provider.as_deref() == Some(LOCAL_PROVIDER_TYPE)
+            && !cfg
+                .generation
+                .speech_providers
+                .contains_key(LOCAL_PROVIDER_TYPE)
+        {
+            cfg.generation.default_speech_provider = None;
+        }
+        if cfg.generation.default_transcription_provider.as_deref() == Some(LOCAL_PROVIDER_TYPE)
+            && !cfg
+                .generation
+                .transcription_providers
+                .contains_key(LOCAL_PROVIDER_TYPE)
+        {
+            cfg.generation.default_transcription_provider = None;
+        }
+        return;
+    }
+    use crate::generation::GenerationType;
+
+    let local = cfg.voice_local.local.clone();
+
+    let synth = |cap: GenerationType, model: &str| {
+        let mut p = crate::GenerationProviderConfig::new(LOCAL_PROVIDER_TYPE);
+        p.base_url = Some(local.endpoint.clone());
+        // Empty key = unauthenticated endpoint (no Authorization header).
+        p.api_key = Some(local.api_key.clone().unwrap_or_default());
+        p.capabilities = vec![cap];
+        if !model.is_empty() {
+            p.models = vec![model.to_string()];
+        }
+        if cap == GenerationType::Speech {
+            if !local.tts_voice.is_empty() {
+                p.defaults.voice = Some(local.tts_voice.clone());
+            }
+            if !local.tts_format.is_empty() {
+                p.defaults.format = Some(local.tts_format.clone());
+            }
+        }
+        p
+    };
+
+    cfg.generation
+        .speech_providers
+        .entry(LOCAL_PROVIDER_TYPE.into())
+        .or_insert_with(|| synth(GenerationType::Speech, &local.tts_model));
+    cfg.generation
+        .transcription_providers
+        .entry(LOCAL_PROVIDER_TYPE.into())
+        .or_insert_with(|| synth(GenerationType::Transcription, &local.stt_model));
+
+    if cfg.generation.default_speech_provider.is_none() {
+        cfg.generation.default_speech_provider = Some(LOCAL_PROVIDER_TYPE.into());
+    }
+    if cfg.generation.default_transcription_provider.is_none() {
+        cfg.generation.default_transcription_provider = Some(LOCAL_PROVIDER_TYPE.into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::structs::Config;
+
+    #[test]
+    fn disabled_is_a_noop() {
+        let mut cfg = Config::default();
+        normalize_voice_local(&mut cfg);
+        assert!(cfg.generation.speech_providers.is_empty());
+        assert!(cfg.generation.default_speech_provider.is_none());
+    }
+
+    #[test]
+    fn enabled_fills_empty_defaults_and_entries() {
+        let mut cfg = Config::default();
+        cfg.voice_local.local.enabled = true;
+        normalize_voice_local(&mut cfg);
+        assert_eq!(
+            cfg.generation.default_speech_provider.as_deref(),
+            Some("local")
+        );
+        assert_eq!(
+            cfg.generation.default_transcription_provider.as_deref(),
+            Some("local")
+        );
+        let p = &cfg.generation.speech_providers["local"];
+        assert_eq!(p.provider_type, "local");
+        // Real connection values from [voice.local] land on the entry.
+        assert_eq!(p.base_url.as_deref(), Some("http://127.0.0.1:8000/v1"));
+        // No api_key configured → empty string = unauthenticated.
+        assert_eq!(p.api_key.as_deref(), Some(""));
+        // Empty model names are NOT propagated — server default decides.
+        assert!(p.models.is_empty());
+        assert!(p.defaults.voice.is_none());
+        assert_eq!(p.defaults.format.as_deref(), Some("opus"));
+        // Validation must accept the synthetic reference (spec: validate passes).
+        cfg.generation.validate().unwrap();
+    }
+
+    #[test]
+    fn enabled_propagates_explicit_models_and_key() {
+        let mut cfg = Config::default();
+        cfg.voice_local.local.enabled = true;
+        cfg.voice_local.local.endpoint = "http://nas.lan:9000/v1".into();
+        cfg.voice_local.local.api_key = Some("sk-byo".into());
+        cfg.voice_local.local.stt_model = "whisper-large-v3".into();
+        cfg.voice_local.local.tts_model = "qwen3-tts".into();
+        cfg.voice_local.local.tts_voice = "vivian".into();
+        normalize_voice_local(&mut cfg);
+
+        let tts = &cfg.generation.speech_providers["local"];
+        assert_eq!(tts.base_url.as_deref(), Some("http://nas.lan:9000/v1"));
+        assert_eq!(tts.api_key.as_deref(), Some("sk-byo"));
+        assert_eq!(tts.models, vec!["qwen3-tts".to_string()]);
+        assert_eq!(tts.defaults.voice.as_deref(), Some("vivian"));
+
+        let stt = &cfg.generation.transcription_providers["local"];
+        assert_eq!(stt.models, vec!["whisper-large-v3".to_string()]);
+        assert!(stt.defaults.voice.is_none());
+    }
+
+    #[test]
+    fn explicit_cloud_defaults_win() {
+        let mut cfg = Config::default();
+        cfg.voice_local.local.enabled = true;
+        cfg.generation.default_speech_provider = Some("openai_tts".into());
+        cfg.generation.speech_providers.insert(
+            "openai_tts".into(),
+            crate::GenerationProviderConfig::new("openai_tts"),
+        );
+        normalize_voice_local(&mut cfg);
+        // Cloud default untouched — switching back to cloud is pure config.
+        assert_eq!(
+            cfg.generation.default_speech_provider.as_deref(),
+            Some("openai_tts")
+        );
+        // Local entry still registered (per-channel override can still pick it).
+        assert!(cfg.generation.speech_providers.contains_key("local"));
+        // Transcription default was unset → filled with local.
+        assert_eq!(
+            cfg.generation.default_transcription_provider.as_deref(),
+            Some("local")
+        );
+    }
+
+    #[test]
+    fn idempotent_and_preserves_user_local_entry() {
+        let mut cfg = Config::default();
+        cfg.voice_local.local.enabled = true;
+        normalize_voice_local(&mut cfg);
+        let mut user_entry = cfg.generation.speech_providers["local"].clone();
+        user_entry.models = vec!["custom".into()];
+        cfg.generation
+            .speech_providers
+            .insert("local".into(), user_entry);
+        normalize_voice_local(&mut cfg);
+        assert_eq!(
+            cfg.generation.speech_providers["local"].models,
+            vec!["custom".to_string()]
+        );
+    }
+
+    #[test]
+    fn disable_cleans_up_persisted_synthetic_state() {
+        // Enable → normalize → disable → normalize: synthetic state is gone.
+        let mut cfg = Config::default();
+        cfg.voice_local.local.enabled = true;
+        normalize_voice_local(&mut cfg);
+        assert!(cfg.generation.speech_providers.contains_key("local"));
+        assert!(cfg.generation.transcription_providers.contains_key("local"));
+
+        cfg.voice_local.local.enabled = false;
+        normalize_voice_local(&mut cfg);
+        assert!(!cfg.generation.speech_providers.contains_key("local"));
+        assert!(!cfg.generation.transcription_providers.contains_key("local"));
+        assert!(cfg.generation.default_speech_provider.is_none());
+        assert!(cfg.generation.default_transcription_provider.is_none());
+
+        // An explicit cloud default set before the disable-normalize survives.
+        let mut cfg = Config::default();
+        cfg.voice_local.local.enabled = true;
+        normalize_voice_local(&mut cfg);
+        cfg.generation.default_speech_provider = Some("openai_tts".into());
+        cfg.generation.speech_providers.insert(
+            "openai_tts".into(),
+            crate::GenerationProviderConfig::new("openai_tts"),
+        );
+        cfg.voice_local.local.enabled = false;
+        normalize_voice_local(&mut cfg);
+        assert_eq!(
+            cfg.generation.default_speech_provider.as_deref(),
+            Some("openai_tts")
+        );
+        assert!(cfg.generation.speech_providers.contains_key("openai_tts"));
+        assert!(!cfg.generation.speech_providers.contains_key("local"));
+    }
+
+    #[test]
+    fn toml_section_parses() {
+        let toml = r#"
+            [voice.local]
+            enabled = true
+            endpoint = "http://127.0.0.1:9876/v1"
+            tts_voice = "zf_088"
+        "#;
+        #[derive(serde::Deserialize)]
+        struct Wrap {
+            voice: Voice,
+        }
+        #[derive(serde::Deserialize)]
+        struct Voice {
+            local: VoiceLocalConfig,
+        }
+        let w: Wrap = ::toml::from_str(toml).unwrap();
+        assert!(w.voice.local.enabled);
+        assert_eq!(w.voice.local.endpoint, "http://127.0.0.1:9876/v1");
+        assert_eq!(w.voice.local.tts_voice, "zf_088");
+        assert!(w.voice.local.api_key.is_none());
+        // Unset model names stay empty = server default.
+        assert_eq!(w.voice.local.stt_model, "");
+        assert_eq!(w.voice.local.tts_format, "opus");
+    }
+}

@@ -466,6 +466,17 @@ impl BuiltinToolRegistry {
         );
         info!("Registered voice_mode_set tool in BuiltinToolRegistry");
 
+        // Local voice endpoint tool — status probe for the BYO STT/TTS server (R8)
+        reg(
+            tools,
+            "local_voice",
+            "Check the local voice (BYO OpenAI-compatible STT/TTS endpoint) configuration and \
+             reachability. Use when the user asks whether local voice is ready, configured, or \
+             why voice requests fail.",
+            schema::<crate::builtin_tools::voice_tools::LocalVoiceArgs>("local_voice"),
+        );
+        info!("Registered local_voice tool in BuiltinToolRegistry");
+
         // Wiki orientation tools (Spec 5 Task 12).
         // `note_schema` is always registered when a memory dir is available (LLM can always
         // read/write SCHEMA.md). `note_orient` is only exposed in Tools / Hybrid mode so the

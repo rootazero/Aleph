@@ -662,18 +662,19 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
-    // Wire STT config from dedicated transcription provider.
+    // Wire the STT source from the dedicated transcription provider.
     // api_key is #[serde(skip)] and injected from vault at runtime, so
     // resolution (config-inline or vault `gen:<name>`) is shared with the
-    // `voice.transcribe` panel RPC via `resolve_stt_config`.
+    // `voice.transcribe` panel RPC via `resolve_stt_source`. A local (BYO
+    // endpoint) source carries a pre-resolved cloud fallback for P7 retry.
     if let Some(ref cfg_arc) = app_config {
         let cfg = cfg_arc.read().await;
         if let Some(stt) =
-            alephcore::gateway::voice::inbound::resolve_stt_config(&cfg.generation, &vault)
+            alephcore::gateway::voice::inbound::resolve_stt_source(&cfg.generation, &vault)
         {
-            inbound_router = inbound_router.with_stt_config(stt);
+            inbound_router = inbound_router.with_stt_source(stt);
             if !daemon {
-                println!("  Inbound router: voice STT transcription enabled (from transcription provider)");
+                println!("  Inbound router: voice STT enabled (local-aware source)");
             }
         }
     }
@@ -694,6 +695,16 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             }
         }
     }
+
+    // Snapshot the live generation config for the voice TTS paths below —
+    // the router/emitter hold a dedicated RwLock<GenerationConfig>, and
+    // seeding it with a blank default would silently drop
+    // default_speech_provider (TTS would fall back to auto-detecting the
+    // first registered speech provider).
+    let voice_gen_config = match app_config {
+        Some(ref cfg_arc) => cfg_arc.read().await.generation.clone(),
+        None => alephcore::GenerationConfig::default(),
+    };
 
     // Wire app config for output_mode-aware reply emitters
     if let Some(cfg) = app_config {
@@ -721,9 +732,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             }
             Arc::new(new_reg)
         };
-        let gen_config = Arc::new(tokio::sync::RwLock::new(
-            alephcore::GenerationConfig::default(),
-        ));
+        let gen_config = Arc::new(tokio::sync::RwLock::new(voice_gen_config));
         inbound_router = inbound_router.with_voice_output(reg, gen_config);
         if !daemon {
             println!("  Inbound router: voice TTS output enabled");

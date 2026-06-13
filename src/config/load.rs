@@ -134,6 +134,8 @@ impl Config {
             "Builtin rules merged, checking for migrations"
         );
 
+        crate::config::types::voice_local::normalize_voice_local(&mut config);
+
         config.validate()?;
 
         if migrated {

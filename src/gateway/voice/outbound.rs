@@ -149,6 +149,33 @@ pub async fn generate_tts(
     Some(attachment)
 }
 
+// ---------------------------------------------------------------------------
+// Outcome layer — typed result for the reply emitter's 3-strike counter.
+// ---------------------------------------------------------------------------
+
+/// TTS attempt outcome (3-strike auto-disable counts `Failed`).
+///
+/// Crate-internal: the only consumer is the reply emitter's `send_as_voice`;
+/// keeping it `pub(crate)` means any future variant surfaces every match site
+/// at compile time instead of leaking into the crate API.
+pub(crate) enum TtsOutcome {
+    Generated(Attachment),
+    Failed,
+}
+
+/// Like [`generate_tts`] but with a typed outcome.
+pub(crate) async fn generate_tts_outcome(
+    text: &str,
+    voice_state: &VoiceState,
+    generation_registry: &GenerationProviderRegistry,
+    generation_config: &GenerationConfig,
+) -> TtsOutcome {
+    match generate_tts(text, voice_state, generation_registry, generation_config).await {
+        Some(attachment) => TtsOutcome::Generated(attachment),
+        None => TtsOutcome::Failed,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

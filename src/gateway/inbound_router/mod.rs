@@ -112,8 +112,8 @@ pub struct InboundMessageRouter {
     pub(super) session_store: Option<Arc<dyn super::session_store::SessionStore>>,
     /// App config for reading `output_mode` at runtime
     pub(super) app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
-    /// STT config for voice transcription
-    pub(super) stt_config: Option<super::voice::inbound::SttConfig>,
+    /// Late-bound STT source for voice transcription
+    pub(super) stt_source: Option<super::voice::inbound::SttSource>,
     /// Generation provider registry for TTS
     pub(super) generation_registry: Option<Arc<crate::generation::GenerationProviderRegistry>>,
     /// Generation config for TTS
@@ -169,7 +169,7 @@ impl InboundMessageRouter {
             command_parser: None,
             session_store: None,
             app_config: None,
-            stt_config: None,
+            stt_source: None,
             generation_registry: None,
             generation_config: None,
             coalescer: None,
@@ -275,9 +275,9 @@ impl InboundMessageRouter {
         self
     }
 
-    /// Set STT config for voice transcription
-    pub fn with_stt_config(mut self, config: super::voice::inbound::SttConfig) -> Self {
-        self.stt_config = Some(config);
+    /// Set the late-bound STT source for voice transcription
+    pub fn with_stt_source(mut self, source: super::voice::inbound::SttSource) -> Self {
+        self.stt_source = Some(source);
         self
     }
 
@@ -583,8 +583,10 @@ impl InboundMessageRouter {
         )
         .await;
 
-        // Voice STT: transcribe audio attachments before further processing
-        let has_stt = self.stt_config.is_some();
+        // Voice STT: transcribe audio attachments before further processing.
+        // P7 degradation (local endpoint failure → one cloud retry) lives
+        // inside the source-aware transcription path.
+        let has_stt = self.stt_source.is_some();
         let has_audio = super::voice::inbound::has_audio_attachment(&ctx.message);
         tracing::debug!(
             has_stt = has_stt,
@@ -592,10 +594,10 @@ impl InboundMessageRouter {
             attachments = ctx.message.attachments.len(),
             "Voice STT check"
         );
-        if let Some(ref stt_config) = self.stt_config {
+        if let Some(ref stt_source) = self.stt_source {
             if has_audio {
                 let result =
-                    super::voice::inbound::process_inbound_voice(ctx.message.clone(), stt_config)
+                    super::voice::inbound::process_inbound_voice(ctx.message.clone(), stt_source)
                         .await;
                 ctx.message = result.message;
                 if result.transcribed {

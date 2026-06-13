@@ -3782,3 +3782,29 @@ enabled = true
 
 
 
+
+---
+
+## Amendment 1 (2026-06-13): Pivot to BYO endpoint (Ollama-style) — self-built sidecar dropped
+
+**User decision** after Tier-0 spike round 2 + Qwen3-TTS research: local voice follows the Ollama model.
+Users install their own OpenAI-compatible voice server (e.g. `mlx-audio` server with Qwen3-TTS +
+Whisper/Qwen3-ASR — exposes `/v1/audio/speech` and `/v1/audio/transcriptions`); Aleph only provides
+the local interface. Rationale: sherpa-onnx quality ceiling (kokoro zh FAIL, melo "将就") can never
+reach Qwen3-TTS level; R3 (内核只调度，不搬砖); zero inference-code maintenance.
+
+**Dropped**: Tasks 6/8/14; `aleph-voice` crate is removed from the tree (Tasks 2-5/7 artifacts —
+git history keeps them); `scripts/voice_models_fetch.sh`; `src/gateway/voice/sidecar.rs` supervisor.
+Spike docs are kept as the decision record.
+
+**Kept as-is**: provider seams (`local_provider.rs` protocol shape), SttSource late binding with
+cloud fallback, TtsOutcome 3-strike degradation, config normalize (fill-empty-only + disable cleanup).
+
+**Task 16 (replaces 6/8/14): BYO rework** — see Explore map in session. Summary:
+remove crate + sidecar.rs + init_global; `VoiceLocalConfig` gains `endpoint` + optional `api_key`,
+loses `binary_path`/`idle_*`/`download_source`; providers resolve endpoint from config;
+`SttUnavailable::Downloading` / `TtsOutcome::Downloading` variants removed (zero producers under BYO);
+`local_voice` tool becomes endpoint health probe (warmup action + voice_mode_set hook removed).
+
+**Task 17 (replaces 15): human acceptance** — user runs mlx-audio server, configures
+`[voice.local] endpoint`, verifies voice round-trip + cloud fallback on endpoint-down.
