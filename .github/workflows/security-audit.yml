@@ -52,10 +52,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      # Install clippy onto the rust-toolchain.toml-pinned toolchain; the @stable
+      # component above lands on a different version and is ignored by the override.
+      - name: Add clippy to pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add clippy
       - uses: Swatinem/rust-cache@v2
-      
+
       - name: Install system dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y \
