@@ -21,6 +21,9 @@ use crate::media::transcription::{TranscriptionResult, TranscriptionService};
 /// `TranscriptionService` backed by the BYO endpoint (`MediaProcessor` path).
 pub struct LocalTranscription {
     cfg: super::inbound::SttConfig,
+    /// Reused across requests (connection pooling); per-request timeouts are
+    /// set on each request.
+    client: reqwest::Client,
 }
 
 impl LocalTranscription {
@@ -33,6 +36,7 @@ impl LocalTranscription {
                 base_url: local_base_url(config),
                 model: config.models.first().cloned().unwrap_or_default(),
             },
+            client: reqwest::Client::new(),
         }
     }
 }
@@ -53,7 +57,8 @@ impl TranscriptionService for LocalTranscription {
             .to_string();
         // Reuse the shared whisper-dialect HTTP core (same multipart shape).
         let text = super::inbound::transcribe_bytes(
-            bytes,
+            &self.client,
+            bytes::Bytes::from(bytes),
             &filename,
             &audio.mime_type,
             language,
@@ -91,6 +96,9 @@ pub struct LocalVoiceProvider {
     voice: String,
     /// Empty = omit "response_format" from the request (server default).
     format: String,
+    /// Reused across requests (connection pooling); per-request timeouts are
+    /// set on each request.
+    client: reqwest::Client,
 }
 
 impl LocalVoiceProvider {
@@ -104,6 +112,7 @@ impl LocalVoiceProvider {
             model: config.models.first().cloned().unwrap_or_default(),
             voice: config.defaults.voice.clone().unwrap_or_default(),
             format: config.defaults.format.clone().unwrap_or_default(),
+            client: reqwest::Client::new(),
         }
     }
 
@@ -132,8 +141,8 @@ impl LocalVoiceProvider {
             body["response_format"] = serde_json::Value::String(format.clone());
         }
 
-        let client = reqwest::Client::new();
-        let mut req = client
+        let mut req = self
+            .client
             .post(format!("{}/audio/speech", self.base_url))
             .json(&body)
             .timeout(std::time::Duration::from_secs(60));

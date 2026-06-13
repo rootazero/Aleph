@@ -43,34 +43,45 @@ pub enum SttSource {
     },
 }
 
+/// Shared HTTP client for the channel/RPC STT paths (connection reuse; the
+/// per-request timeout is set on each request).
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
 /// Transcribe through an [`SttSource`]: P7 degradation lives here — when the
 /// local endpoint request fails and a cloud fallback was resolved, retry once
-/// against the cloud before surfacing the error.
+/// against the cloud before surfacing the error. `Bytes` clones are O(1)
+/// refcount bumps, so holding the retry copy costs nothing.
 pub async fn transcribe_with_source(
-    bytes: Vec<u8>,
+    bytes: bytes::Bytes,
     filename: &str,
     mime: &str,
     language: Option<&str>,
     source: &SttSource,
 ) -> Result<String, String> {
+    let client = http_client();
     match source {
-        SttSource::Static(cfg) => transcribe_bytes(bytes, filename, mime, language, cfg).await,
+        SttSource::Static(cfg) => {
+            transcribe_bytes(client, bytes, filename, mime, language, cfg).await
+        }
         SttSource::Local { config, fallback } => match fallback {
             Some(cloud) => {
-                // Keep a copy only while a retry is possible.
-                let retry_bytes = bytes.clone();
-                match transcribe_bytes(bytes, filename, mime, language, config).await {
+                match transcribe_bytes(client, bytes.clone(), filename, mime, language, config)
+                    .await
+                {
                     Ok(text) => Ok(text),
                     Err(e) => {
                         warn!(
                             error = %e,
                             "local STT request failed — retrying once on cloud fallback"
                         );
-                        transcribe_bytes(retry_bytes, filename, mime, language, cloud).await
+                        transcribe_bytes(client, bytes, filename, mime, language, cloud).await
                     }
                 }
             }
-            None => transcribe_bytes(bytes, filename, mime, language, config).await,
+            None => transcribe_bytes(client, bytes, filename, mime, language, config).await,
         },
     }
 }
@@ -291,7 +302,14 @@ async fn transcribe_attachment(
     source: &SttSource,
 ) -> Result<String, String> {
     let (bytes, filename) = get_audio_bytes(attachment).await?;
-    transcribe_with_source(bytes, &filename, &attachment.mime_type, None, source).await
+    transcribe_with_source(
+        bytes::Bytes::from(bytes),
+        &filename,
+        &attachment.mime_type,
+        None,
+        source,
+    )
+    .await
 }
 
 /// Send raw audio bytes to a Whisper-compatible API and return the transcript.
@@ -300,13 +318,17 @@ async fn transcribe_attachment(
 /// ([`transcribe_attachment`]) and the `voice.transcribe` panel RPC. `language`
 /// is an optional ISO 639-1 hint passed natively to the API.
 pub async fn transcribe_bytes(
-    bytes: Vec<u8>,
+    client: &reqwest::Client,
+    bytes: bytes::Bytes,
     filename: &str,
     mime: &str,
     language: Option<&str>,
     config: &SttConfig,
 ) -> Result<String, String> {
-    let file_part = reqwest::multipart::Part::bytes(bytes)
+    // `Body::from(Bytes)` is zero-copy; the explicit length keeps the
+    // multipart part Content-Length'd like `Part::bytes` would.
+    let len = bytes.len() as u64;
+    let file_part = reqwest::multipart::Part::stream_with_length(reqwest::Body::from(bytes), len)
         .file_name(filename.to_string())
         .mime_str(mime)
         .map_err(|e| format!("Invalid MIME type: {e}"))?;
@@ -328,7 +350,6 @@ pub async fn transcribe_bytes(
     );
     debug!(url = %url, model = %config.model, "Sending Whisper transcription request");
 
-    let client = reqwest::Client::new();
     let mut req = client
         .post(&url)
         .multipart(form)

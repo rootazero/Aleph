@@ -81,8 +81,14 @@ pub async fn handle_transcribe(
             "No transcription provider configured. Add one in Settings → Generation Providers.",
         );
     };
-    match transcribe_with_source(bytes, &filename, &mime, params.language.as_deref(), &stt_source)
-        .await
+    match transcribe_with_source(
+        bytes::Bytes::from(bytes),
+        &filename,
+        &mime,
+        params.language.as_deref(),
+        &stt_source,
+    )
+    .await
     {
         Ok(text) => {
             JsonRpcResponse::success(request.id, serde_json::json!({ "text": text.trim() }))

@@ -65,9 +65,8 @@ pub struct VoiceSection {
     pub local: VoiceLocalConfig,
 }
 
-/// Provider name the BYO endpoint registers under.
-pub const LOCAL_PROVIDER_NAME: &str = "local";
-/// `GenerationProviderConfig.provider_type` for the BYO endpoint.
+/// The BYO endpoint's provider key: used both as the map entry name and as
+/// `GenerationProviderConfig.provider_type`.
 pub const LOCAL_PROVIDER_TYPE: &str = "local";
 
 /// Load-time normalization: when local voice is enabled, inject a synthetic
@@ -100,19 +99,19 @@ pub fn normalize_voice_local(cfg: &mut crate::config::structs::Config) {
         cfg.generation
             .transcription_providers
             .retain(|_, p| p.provider_type != LOCAL_PROVIDER_TYPE);
-        if cfg.generation.default_speech_provider.as_deref() == Some(LOCAL_PROVIDER_NAME)
+        if cfg.generation.default_speech_provider.as_deref() == Some(LOCAL_PROVIDER_TYPE)
             && !cfg
                 .generation
                 .speech_providers
-                .contains_key(LOCAL_PROVIDER_NAME)
+                .contains_key(LOCAL_PROVIDER_TYPE)
         {
             cfg.generation.default_speech_provider = None;
         }
-        if cfg.generation.default_transcription_provider.as_deref() == Some(LOCAL_PROVIDER_NAME)
+        if cfg.generation.default_transcription_provider.as_deref() == Some(LOCAL_PROVIDER_TYPE)
             && !cfg
                 .generation
                 .transcription_providers
-                .contains_key(LOCAL_PROVIDER_NAME)
+                .contains_key(LOCAL_PROVIDER_TYPE)
         {
             cfg.generation.default_transcription_provider = None;
         }
@@ -144,18 +143,18 @@ pub fn normalize_voice_local(cfg: &mut crate::config::structs::Config) {
 
     cfg.generation
         .speech_providers
-        .entry(LOCAL_PROVIDER_NAME.into())
+        .entry(LOCAL_PROVIDER_TYPE.into())
         .or_insert_with(|| synth(GenerationType::Speech, &local.tts_model));
     cfg.generation
         .transcription_providers
-        .entry(LOCAL_PROVIDER_NAME.into())
+        .entry(LOCAL_PROVIDER_TYPE.into())
         .or_insert_with(|| synth(GenerationType::Transcription, &local.stt_model));
 
     if cfg.generation.default_speech_provider.is_none() {
-        cfg.generation.default_speech_provider = Some(LOCAL_PROVIDER_NAME.into());
+        cfg.generation.default_speech_provider = Some(LOCAL_PROVIDER_TYPE.into());
     }
     if cfg.generation.default_transcription_provider.is_none() {
-        cfg.generation.default_transcription_provider = Some(LOCAL_PROVIDER_NAME.into());
+        cfg.generation.default_transcription_provider = Some(LOCAL_PROVIDER_TYPE.into());
     }
 }
 
