@@ -31,6 +31,7 @@ use crate::state::layout::{LayoutMode, WorkspaceState};
 use crate::state::notifications::NotificationsState;
 use crate::state::sessions::SessionMap;
 use crate::views::chat::ChatState;
+use crate::views::voice::{ImmersiveVoiceView, VoiceMode};
 
 #[component]
 #[must_use]
@@ -55,6 +56,12 @@ fn AppContent() -> impl IntoView {
     // Chat state lives above both the chat sidebar (left column) and the
     // chat view (main area) so they share one session / agent selection.
     provide_context(ChatState::new());
+
+    // Immersive voice mode switch. Provided at the shell root so the composer
+    // mini-orb (which flips it on) and the full-screen overlay (mounted at the
+    // shell root, below) both read the same signal. The overlay reuses this
+    // same ChatState, so a voice turn lands in the live chat transcript.
+    provide_context(VoiceMode::new());
 
     // Multi-tab session registry (per-agent). Empty at boot; the chat
     // sidebar's auto-select-default-agent path is what opens the first
@@ -229,6 +236,14 @@ fn AppContent() -> impl IntoView {
             // "Cannot reach core" overlay until the first connection succeeds.
             // Outside <Router> because it never navigates.
             <BootCheckGate />
+
+            // Immersive voice overlay — full-screen `.voice-stage` (fixed,
+            // z-40) hosting the mic/VAD/TTS session loop. Mounted at the shell
+            // root so it floats over every tab; `ChatView` stays mounted
+            // beneath it (MainContent toggles display, never unmounts), so the
+            // `stream.*` subscription that feeds the assistant transcript keeps
+            // running while the overlay is up. Renders nothing until opened.
+            <ImmersiveVoiceView />
         </div>
     }
 }
