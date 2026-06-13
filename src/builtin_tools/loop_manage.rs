@@ -213,8 +213,13 @@ impl LoopTool {
                 success: true,
                 message: format!(
                     "Loop: status={:?}, ticks_used={}, cadence={:?}, \
-                     max_iterations={:?}, deadline_ms={:?}",
-                    s.status, s.iterations_used, s.cadence, s.max_iterations, s.deadline_ms
+                     max_iterations={:?}, deadline_ms={:?}, token_budget={:?}",
+                    s.status,
+                    s.iterations_used,
+                    s.cadence,
+                    s.max_iterations,
+                    s.deadline_ms,
+                    s.token_budget
                 ),
             }),
             None => Ok(LoopOutput {
