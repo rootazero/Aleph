@@ -5,7 +5,7 @@
 //! normalized [`TranscriptDelta`] pushed over the `voice.transcribe.delta` topic.
 
 pub mod deepgram;
-// Adapter submodules (whisperlive / relay) are declared by Tasks 3–4 as they are created.
+pub mod whisperlive;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
