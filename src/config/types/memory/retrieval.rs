@@ -105,6 +105,69 @@ impl Default for RetrievalScoringConfig {
     }
 }
 
+const fn default_expansion_enabled() -> bool {
+    true
+}
+const fn default_max_seeds() -> usize {
+    5
+}
+const fn default_peers_per_seed() -> usize {
+    3
+}
+const fn default_max_expanded() -> usize {
+    8
+}
+const fn default_expansion_weight() -> f32 {
+    0.5
+}
+
+/// Associative graph expansion of the retrieval candidate pool. Pulls the
+/// strongest 4-signal related peers of the top direct hits into the pool before
+/// rerank, so notes tied to a match surface even without lexical/semantic
+/// overlap. Default-on and conservative: a peer's propagated score is scaled
+/// strictly below its seed, and a cold graph cache makes the stage a no-op.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ExpansionConfig {
+    /// Master switch. Default `true`. `false` restores the legacy path (zero
+    /// expansion, byte-for-byte).
+    #[serde(default = "default_expansion_enabled")]
+    pub enabled: bool,
+    /// How many top hits seed expansion. Default 5.
+    #[serde(default = "default_max_seeds")]
+    pub max_seeds: usize,
+    /// Related peers pulled per seed (passed to `related_peers`). Default 3.
+    #[serde(default = "default_peers_per_seed")]
+    pub peers_per_seed: usize,
+    /// Hard cap on total expansion candidates added to the pool. Default 8.
+    #[serde(default = "default_max_expanded")]
+    pub max_expanded: usize,
+    /// Propagation strength in `[0,1]`: a peer's score is
+    /// `seed.score * weight * (edge / seed_top_edge)`. Default 0.5 (a peer maxes
+    /// at half its seed's score). Clamped to `[0,1]` by `with_expansion_config`.
+    #[serde(default = "default_expansion_weight")]
+    pub weight: f32,
+}
+
+impl ExpansionConfig {
+    /// True when expansion will do any work.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        self.enabled && self.max_seeds > 0 && self.max_expanded > 0
+    }
+}
+
+impl Default for ExpansionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_expansion_enabled(),
+            max_seeds: default_max_seeds(),
+            peers_per_seed: default_peers_per_seed(),
+            max_expanded: default_max_expanded(),
+            weight: default_expansion_weight(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +201,23 @@ mod tests {
             ..Default::default()
         };
         assert!(cfg.is_active());
+    }
+
+    #[test]
+    fn expansion_default_is_on_and_active() {
+        let c = ExpansionConfig::default();
+        assert!(c.enabled);
+        assert!(c.is_active());
+        assert_eq!(c.max_seeds, 5);
+        assert_eq!(c.peers_per_seed, 3);
+        assert_eq!(c.max_expanded, 8);
+        assert!((c.weight - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn expansion_inactive_when_disabled_or_zero_caps() {
+        assert!(!ExpansionConfig { enabled: false, ..Default::default() }.is_active());
+        assert!(!ExpansionConfig { max_seeds: 0, ..Default::default() }.is_active());
+        assert!(!ExpansionConfig { max_expanded: 0, ..Default::default() }.is_active());
     }
 }

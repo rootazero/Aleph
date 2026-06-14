@@ -21,7 +21,7 @@ pub use ingest::{CompoundIngestConfig, CuratedSection, QueryFilerConfig};
 pub use orientation::OrientationConfig;
 pub use profile::UserProfileConfig;
 pub use reflection::ReflectionConfig;
-pub use retrieval::RetrievalScoringConfig;
+pub use retrieval::{ExpansionConfig, RetrievalScoringConfig};
 
 /// Controls how memory is surfaced to the LLM.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
