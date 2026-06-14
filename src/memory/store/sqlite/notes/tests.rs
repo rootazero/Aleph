@@ -558,4 +558,43 @@ mod tests {
         let other = backend.related_peers("agent2", "cat/a", 8).await.unwrap();
         assert!(other.is_empty());
     }
+
+    #[tokio::test]
+    async fn get_notes_with_content_returns_known_paths_skips_unknown() {
+        let backend = make_backend();
+
+        // index_note stores path = "{category}/{title}" (extensionless,
+        // verified in sqlite/notes.rs index_note). make_note uses tags/facts/
+        // content_hash with ..Default::default().
+        backend
+            .index_note(&make_note("alpha", "general"), "default", "general")
+            .await
+            .unwrap();
+        backend
+            .index_note(&make_note("beta", "general"), "default", "general")
+            .await
+            .unwrap();
+
+        let query = vec![
+            "general/alpha".to_string(),
+            "general/beta".to_string(),
+            "general/does-not-exist".to_string(),
+        ];
+        let got = backend
+            .get_notes_with_content("default", &query)
+            .await
+            .unwrap();
+        let got_paths: std::collections::HashSet<&str> =
+            got.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(got.len(), 2, "unknown path must be skipped");
+        assert!(got_paths.contains("general/alpha"));
+        assert!(got_paths.contains("general/beta"));
+
+        // Empty input -> empty output (no IN () footgun).
+        let empty = backend
+            .get_notes_with_content("default", &[])
+            .await
+            .unwrap();
+        assert!(empty.is_empty());
+    }
 }

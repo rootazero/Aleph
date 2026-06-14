@@ -21,7 +21,7 @@ pub use ingest::{CompoundIngestConfig, CuratedSection, QueryFilerConfig};
 pub use orientation::OrientationConfig;
 pub use profile::UserProfileConfig;
 pub use reflection::ReflectionConfig;
-pub use retrieval::RetrievalScoringConfig;
+pub use retrieval::{ExpansionConfig, RetrievalScoringConfig};
 
 /// Controls how memory is surfaced to the LLM.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -63,6 +63,12 @@ pub struct MemoryConfig {
     /// byte-for-byte legacy ranking).
     #[serde(default)]
     pub retrieval_scoring: RetrievalScoringConfig,
+
+    /// Associative 4-signal graph expansion of the retrieval candidate pool
+    /// (default-on; cold cache = no-op). Surfaces notes tied to a hit even
+    /// without lexical/semantic overlap.
+    #[serde(default)]
+    pub expansion: ExpansionConfig,
 
     #[serde(default = "defaults::default_dedup_similarity_threshold")]
     pub dedup_similarity_threshold: f32,
@@ -121,6 +127,7 @@ impl MemoryConfig {
         // nested assembler copies.
         cfg.retrieval_scoring = self.retrieval_scoring.clone();
         cfg.rerank = self.rerank.clone();
+        cfg.expansion = self.expansion.clone();
         cfg
     }
 }
@@ -138,6 +145,7 @@ impl Default for MemoryConfig {
             bm25_bonus_weight: defaults::default_bm25_bonus(),
             rerank: crate::memory::rerank::RerankConfig::default(),
             retrieval_scoring: RetrievalScoringConfig::default(),
+            expansion: ExpansionConfig::default(),
             dedup_similarity_threshold: defaults::default_dedup_similarity_threshold(),
             reflection: ReflectionConfig::default(),
             assembler: AssemblerConfig::default(),

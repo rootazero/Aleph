@@ -856,6 +856,32 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(results)
     }
 
+    async fn get_notes_with_content(
+        &self,
+        agent_id: &str,
+        paths: &[String],
+    ) -> Result<Vec<crate::memory::notes::NoteSearchResult>, AlephError> {
+        let mut results = Vec::with_capacity(paths.len());
+        for path in paths {
+            if let Some(entry) = self.get_note_index(path, agent_id).await? {
+                let content = load_note_content_from_disk(&entry, agent_id)
+                    .await
+                    .unwrap_or_default();
+                results.push(crate::memory::notes::NoteSearchResult {
+                    path: entry.path.clone(),
+                    filename: entry.filename.clone(),
+                    category: entry.category.clone(),
+                    tags: entry.tags.clone(),
+                    content,
+                    score: 0.0,
+                    created_at: entry.created_at,
+                    updated_at: entry.updated_at,
+                });
+            }
+        }
+        Ok(results)
+    }
+
     async fn get_notes_by_category(
         &self,
         agent_id: &str,

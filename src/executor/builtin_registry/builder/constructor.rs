@@ -312,18 +312,20 @@ impl BuiltinToolRegistry {
         ) = if let (Some(ref db), Some(ref embedder)) = (&config.memory_db, &config.embedder) {
             // Cross-encoder rerank + retrieval-scoring config (both disabled by
             // default → no behaviour change). Read once to avoid re-locking.
-            let (rerank_cfg, scoring_cfg): (
+            let (rerank_cfg, scoring_cfg, expansion_cfg): (
                 Option<crate::memory::rerank::RerankConfig>,
                 Option<crate::config::types::memory::RetrievalScoringConfig>,
+                Option<crate::config::types::memory::ExpansionConfig>,
             ) = match &config.config {
                 Some(cfg) => {
                     let guard = cfg.read().await;
                     (
                         Some(guard.memory.rerank.clone()),
                         Some(guard.memory.retrieval_scoring.clone()),
+                        Some(guard.memory.expansion.clone()),
                     )
                 }
-                None => (None, None),
+                None => (None, None, None),
             };
             let search_tool = MemorySearchTool::new_with_config(
                 db.clone(),
@@ -331,6 +333,7 @@ impl BuiltinToolRegistry {
                 config.memory_similarity_threshold,
                 rerank_cfg.as_ref(),
                 scoring_cfg.as_ref(),
+                expansion_cfg.as_ref(),
             );
             let ws_handle = search_tool.default_workspace_handle();
             let sk_handle = search_tool.default_session_key_handle();

@@ -42,6 +42,13 @@ pub struct AssemblerConfig {
     /// on-demand tool. Disabled by default → no behaviour change.
     #[serde(default)]
     pub rerank: crate::memory::rerank::RerankConfig,
+
+    /// Mirror of `MemoryConfig.expansion`, populated by the server builder so
+    /// the proactive memory-context path applies the same associative graph
+    /// expansion as the on-demand `memory_search` tool. Default-on; cold cache
+    /// = no-op.
+    #[serde(default)]
+    pub expansion: super::ExpansionConfig,
 }
 
 impl Default for AssemblerConfig {
@@ -59,6 +66,7 @@ impl Default for AssemblerConfig {
             project_scoped: false,
             retrieval_scoring: super::RetrievalScoringConfig::default(),
             rerank: crate::memory::rerank::RerankConfig::default(),
+            expansion: super::ExpansionConfig::default(),
         }
     }
 }

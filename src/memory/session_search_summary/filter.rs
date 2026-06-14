@@ -135,6 +135,7 @@ mod integration_tests {
             project_scoped: false,
             retrieval_scoring: Default::default(),
             rerank: Default::default(),
+            expansion: Default::default(),
         };
         HybridAssembler::new(
             retrieval,

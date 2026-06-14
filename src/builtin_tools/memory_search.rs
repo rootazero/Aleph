@@ -192,7 +192,7 @@ impl MemorySearchTool {
         database: MemoryBackend,
         embedder: Arc<dyn EmbeddingProvider>,
     ) -> Self {
-        Self::new_with_config(database, embedder, None, None, None)
+        Self::new_with_config(database, embedder, None, None, None, None)
     }
 
     /// Create a new `MemorySearchTool` with explicit similarity threshold from config.
@@ -209,6 +209,7 @@ impl MemorySearchTool {
         similarity_threshold: Option<f32>,
         rerank_config: Option<&crate::memory::rerank::RerankConfig>,
         scoring_config: Option<&crate::config::types::memory::RetrievalScoringConfig>,
+        expansion_config: Option<&crate::config::types::memory::ExpansionConfig>,
     ) -> Self {
         let _threshold = similarity_threshold.unwrap_or(Self::DEFAULT_SIMILARITY_THRESHOLD);
 
@@ -226,6 +227,9 @@ impl MemorySearchTool {
         }
         if let Some(cfg) = scoring_config {
             retrieval = retrieval.with_scoring_config(cfg);
+        }
+        if let Some(cfg) = expansion_config {
+            retrieval = retrieval.with_expansion_config(cfg);
         }
         let note_retrieval = Arc::new(retrieval);
 
