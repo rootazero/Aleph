@@ -85,7 +85,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(out.schema.contains("# Memory Schema"));
+        // read_snapshot returns the *compacted* schema (compact_for_prompt),
+        // which extracts the policy sections and omits the "# Memory Schema"
+        // title — assert on a section that compaction actually emits.
+        assert!(out.schema.contains("## Tag Taxonomy"));
         assert!(out.index.contains("# Index"));
         assert!(out.recent_log.contains("bootstrap"));
     }

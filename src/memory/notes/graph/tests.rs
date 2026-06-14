@@ -122,27 +122,46 @@ fn detects_isolated_and_bridge() {
         category: cat.into(),
         sources: vec![],
     };
-    // hub h links three otherwise-separate single-node clusters → bridge;
-    // lone l has no edges → isolated.
+    // hub h bridges three otherwise-separate clusters → bridge; lone l → isolated.
+    // Each cluster is a dense triangle so Louvain keeps it as its own community
+    // (a single-node leaf would instead collapse into the hub's community, so
+    // the hub would span only one community and never register as a bridge).
     let snap = GraphSnapshot {
         nodes: vec![
             node("c/h", "x"),
-            node("c/a", "a"),
-            node("c/b", "b"),
-            node("c/d", "d"),
+            node("c/a1", "a"),
+            node("c/a2", "a"),
+            node("c/a3", "a"),
+            node("c/b1", "b"),
+            node("c/b2", "b"),
+            node("c/b3", "b"),
+            node("c/d1", "d"),
+            node("c/d2", "d"),
+            node("c/d3", "d"),
             node("c/l", "z"),
         ],
         edges: vec![
-            ("c/h".into(), "c/a".into()),
-            ("c/h".into(), "c/b".into()),
-            ("c/h".into(), "c/d".into()),
+            // three internally-dense triangles
+            ("c/a1".into(), "c/a2".into()),
+            ("c/a2".into(), "c/a3".into()),
+            ("c/a1".into(), "c/a3".into()),
+            ("c/b1".into(), "c/b2".into()),
+            ("c/b2".into(), "c/b3".into()),
+            ("c/b1".into(), "c/b3".into()),
+            ("c/d1".into(), "c/d2".into()),
+            ("c/d2".into(), "c/d3".into()),
+            ("c/d1".into(), "c/d3".into()),
+            // hub h links one node of each triangle → bridges 3 communities
+            ("c/h".into(), "c/a1".into()),
+            ("c/h".into(), "c/b1".into()),
+            ("c/h".into(), "c/d1".into()),
         ],
     };
     let g = GraphIndex::build(&snap);
     let com = community::detect(&g);
     let ins = insights::detect(&g, &com);
     assert!(ins.isolated.contains(&"c/l".to_string()));
-    // h neighbours span >=3 communities (a,b,d distinct) → bridge
+    // h's neighbours span 3 distinct communities → bridge
     assert!(ins.bridges.contains(&"c/h".to_string()));
     // cross-type edges present → surprising non-empty
     assert!(!ins.surprising.is_empty());
