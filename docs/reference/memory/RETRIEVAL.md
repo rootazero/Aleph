@@ -4,7 +4,7 @@
 
 ## 1. Entry Points
 
-`NoteFactRetrieval` is the single retrieval entry point in the current codebase. It reads from `notes_index` + `notes_vec_{dim}` + `notes_fts` via the `NoteStore` trait, fuses the two ranked lists with Reciprocal Rank Fusion, then hands results to the scoring pipeline (§4) or a tool caller. The legacy `FactRetrieval` / `HybridRetrieval` structs and `retrieval_trace.rs` were deleted; `NoteFactRetrieval` returns `Vec<ScoredFact>` so downstream consumers (Smart Recall, `ContextComptroller`, `memory_search`) kept their signatures. Paths on results use the `note://{category}/{filename}` scheme.
+`NoteFactRetrieval` is the single retrieval entry point in the current codebase. It reads from `notes_index` + `notes_vec_{dim}` + `notes_fts` via the `NoteStore` trait, fuses the two ranked lists with Reciprocal Rank Fusion, expands the candidate pool with associative graph-related peers (see Associative Graph Expansion), then hands results to the scoring pipeline (§4) or a tool caller. The legacy `FactRetrieval` / `HybridRetrieval` structs and `retrieval_trace.rs` were deleted; `NoteFactRetrieval` returns `Vec<ScoredFact>` so downstream consumers (Smart Recall, `ContextComptroller`, `memory_search`) kept their signatures. Paths on results use the `note://{category}/{filename}` scheme.
 
 | Method | Source | Scope |
 |---|---|---|
@@ -121,6 +121,26 @@ The algorithm has four steps:
 ```
 
 Both lists over-fetch `limit * 2` to give RRF enough signal for the final top-k pick.
+
+## Associative Graph Expansion (pre-rerank)
+
+Between `hybrid_search_notes` and the cross-encoder rerank, `retrieve()` runs
+`note_retrieval::expansion::graph_expand`. For the top `max_seeds` direct hits it
+looks up each seed's strongest 4-signal related peers (`NoteStore::related_peers`,
+materialized per dream cycle in `notes_graph_related`), dedups them against the
+direct hits, hydrates their content (`NoteStore::get_notes_with_content`), and
+adds them to the candidate pool with a propagated score
+`seed.score * weight * (edge / seed_top_edge)` — scaled strictly below the seed,
+so a peer can displace a *weak* direct hit but never a strong one. This is
+associative / multi-hop recall: a note surfaces because it is tied to a
+query-relevant note, even without lexical or semantic overlap with the query.
+
+Controlled by `memory.expansion` (`ExpansionConfig`: `enabled`, `max_seeds`,
+`peers_per_seed`, `max_expanded`, `weight`). Default-on and conservative. A cold
+graph cache (pre-first-dream) makes `related_peers` empty, so expansion is a
+no-op and ranking is byte-for-byte legacy; `enabled = false` does the same. Store
+errors inside expansion are swallowed (logged) — a graph-cache problem never
+fails core recall. The same stage runs per-agent in `retrieve_multi_agent`.
 
 ## 4. Bridge to Legacy Types
 
