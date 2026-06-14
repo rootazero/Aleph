@@ -535,6 +535,31 @@ pub(in crate::commands::start) fn register_config_handlers(
         shared_token_mgr
     );
 
+    // Streaming STT: Panel frames → backend WS → voice.transcribe.delta events.
+    // One shared registry tracks all active streams (Arc for the macro's clone).
+    let stream_registry =
+        Arc::new(alephcore::gateway::voice::streaming::StreamRegistry::default());
+    register_handler!(
+        server,
+        "voice.stream.start",
+        voice::handle_stream_start,
+        config,
+        event_bus,
+        stream_registry
+    );
+    register_handler!(
+        server,
+        "voice.stream.audio",
+        voice::handle_stream_audio,
+        stream_registry
+    );
+    register_handler!(
+        server,
+        "voice.stream.stop",
+        voice::handle_stream_stop,
+        stream_registry
+    );
+
     // Embedding providers (vault-backed API key storage)
     register_handler!(
         server,

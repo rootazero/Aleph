@@ -9,10 +9,12 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use tokio::sync::RwLock;
 
 use crate::config::Config;
+use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
 use crate::gateway::voice::inbound::{resolve_stt_source, transcribe_with_source};
+use crate::gateway::voice::streaming::{self, StreamConfig, StreamRegistry, StreamingTarget};
 use crate::sync_primitives::Arc;
 
 /// `OpenAI` Whisper rejects payloads larger than 25 MB; reject early so we never
@@ -323,6 +325,123 @@ pub async fn handle_synthesize(
     } else {
         JsonRpcResponse::error(request.id, INTERNAL_ERROR, "TTS produced no audio")
     }
+}
+
+// ---------------------------------------------------------------------------
+// Real-time streaming STT (Panel audio frames → backend WS → delta events)
+//
+// Three pure-I/O handlers bridge the Panel to the backend streaming relay
+// ([`crate::gateway::voice::streaming::relay`]):
+//   - `voice.stream.start` opens a backend session (or reports disabled) and
+//     returns a `stream_id`.
+//   - `voice.stream.audio` pushes one s16le PCM frame into that session.
+//   - `voice.stream.stop` drops the session's audio sender so the backend
+//     finishes and the delta pump shuts down.
+// Normalized `TranscriptDelta`s are published on the `voice.transcribe.delta`
+// topic by the relay's pump task — the Panel subscribes there.
+// ---------------------------------------------------------------------------
+
+/// `voice.stream.start` — params `{ language?: String }` → `{ stream_id: String | null }`.
+///
+/// `stream_id: null` means BYO streaming is disabled in config; the Panel falls
+/// back to the batch `voice.transcribe` path. The API key is read directly from
+/// `[voice.streaming]` (LAN-trust, user-controlled config) — no vault lookup.
+pub async fn handle_stream_start(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    event_bus: Arc<GatewayEventBus>,
+    registry: Arc<StreamRegistry>,
+) -> JsonRpcResponse {
+    #[derive(serde::Deserialize, Default)]
+    struct Params {
+        #[serde(default)]
+        language: Option<String>,
+    }
+    let params: Params = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let target = {
+        let cfg = config.read().await;
+        let s = &cfg.voice_local.streaming;
+        if !s.enabled {
+            return JsonRpcResponse::success(
+                request.id,
+                serde_json::json!({ "stream_id": null }),
+            );
+        }
+        StreamingTarget {
+            provider: s.provider.clone(),
+            base_url: s.base_url.clone(),
+            api_key: s.api_key.clone(),
+            language: s.language.clone(),
+        }
+    };
+    // `open()` falls back to `target.language` when the per-call language is None.
+    let cfg = StreamConfig::new(params.language);
+    match streaming::relay::start_stream(&registry, event_bus, target, cfg).await {
+        Ok(id) => JsonRpcResponse::success(request.id, serde_json::json!({ "stream_id": id })),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("stream start failed: {e}"),
+        ),
+    }
+}
+
+/// `voice.stream.audio` — params `{ stream_id: String, pcm_base64: String }` → `{}`.
+///
+/// Pushes one s16le PCM frame into the backend session. An unknown or already
+/// closed `stream_id` is a silent no-op (the stream may have just stopped) —
+/// never an error.
+pub async fn handle_stream_audio(
+    request: JsonRpcRequest,
+    registry: Arc<StreamRegistry>,
+) -> JsonRpcResponse {
+    #[derive(serde::Deserialize)]
+    struct Params {
+        stream_id: String,
+        pcm_base64: String,
+    }
+    let params: Params = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let bytes = match BASE64.decode(params.pcm_base64.as_bytes()) {
+        Ok(b) => b,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Invalid base64 pcm: {e}"),
+            )
+        }
+    };
+    if let Some(tx) = registry.audio_sender(&params.stream_id).await {
+        let _ = tx.send(bytes).await; // Ignore send error: backend channel closed (Panel will stop the stream).
+    }
+    JsonRpcResponse::success(request.id, serde_json::json!({}))
+}
+
+/// `voice.stream.stop` — params `{ stream_id: String }` → `{}`.
+///
+/// Removes the registry entry, dropping the sole audio sender so the backend
+/// session finishes and the delta pump shuts down cleanly.
+pub async fn handle_stream_stop(
+    request: JsonRpcRequest,
+    registry: Arc<StreamRegistry>,
+) -> JsonRpcResponse {
+    #[derive(serde::Deserialize)]
+    struct Params {
+        stream_id: String,
+    }
+    let params: Params = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    registry.remove(&params.stream_id).await;
+    JsonRpcResponse::success(request.id, serde_json::json!({}))
 }
 
 /// Map a bridge-reported audio `format` (e.g. "m4a") to a MIME type the Whisper

@@ -5,7 +5,10 @@
 //! normalized [`TranscriptDelta`] pushed over the `voice.transcribe.delta` topic.
 
 pub mod deepgram;
+pub mod relay;
 pub mod whisperlive;
+
+pub use relay::StreamRegistry;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
