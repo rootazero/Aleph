@@ -12,6 +12,7 @@ use rusqlite::OptionalExtension;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::error::AlephError;
+use crate::memory::notes::graph::{GraphNode, GraphSnapshot};
 use crate::memory::notes::store::{NoteIndexEntry, NoteStore, ReviewQueueRow};
 use crate::memory::notes::{FactProvenance, KnowledgeNote, ProvenanceOrigin};
 
@@ -214,6 +215,24 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("index_note links upsert: {e}")))?;
         }
 
+        // Rebuild notes_sources from the note's `source_notes` (mirrors the
+        // links replace semantics): clear the prior rows then re-insert the
+        // current set, so the materialized graph snapshot sees exactly the
+        // sources declared in frontmatter.
+        conn.execute(
+            "DELETE FROM notes_sources WHERE agent_id=?1 AND note_path=?2",
+            params![agent_id, path],
+        )
+        .map_err(|e| AlephError::config(format!("index_note clear notes_sources: {e}")))?;
+        for src in &note.source_notes {
+            conn.execute(
+                "INSERT OR IGNORE INTO notes_sources (agent_id, note_path, source_ref) \
+                 VALUES (?1, ?2, ?3)",
+                params![agent_id, path, src],
+            )
+            .map_err(|e| AlephError::config(format!("index_note insert notes_sources: {e}")))?;
+        }
+
         // Skip notes_fts rebuild when the body text is unchanged — frontmatter-only
         // edits (e.g. updated_at bump, link reorder, tag rotation) are common and
         // each FTS5 DELETE+INSERT cascades to ~14 shadow-table writes
@@ -334,6 +353,12 @@ impl NoteStore for SqliteMemoryBackend {
             params![agent_id, path],
         )
         .map_err(|e| AlephError::config(format!("remove_note_index fts meta: {e}")))?;
+
+        tx.execute(
+            "DELETE FROM notes_sources WHERE agent_id = ?1 AND note_path = ?2",
+            params![agent_id, path],
+        )
+        .map_err(|e| AlephError::config(format!("remove_note_index sources: {e}")))?;
 
         tx.commit()
             .map_err(|e| AlephError::config(format!("remove_note_index tx commit: {e}")))?;
@@ -1017,6 +1042,187 @@ impl NoteStore for SqliteMemoryBackend {
             }
         }
         Ok(updated)
+    }
+
+    // -----------------------------------------------------------------
+    // Knowledge-graph materialization (Phase 4).
+    // -----------------------------------------------------------------
+
+    async fn load_graph_snapshot(&self, agent_id: &str) -> Result<GraphSnapshot, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        // Collect (path, category) first so the prepared-statement borrow is
+        // released before the per-node `notes_sources` lookups reuse `conn`.
+        let node_meta: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT path, category FROM notes_index WHERE agent_id = ?1")
+                .map_err(|e| AlephError::config(format!("load_graph_snapshot nodes prep: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(|e| AlephError::config(format!("load_graph_snapshot nodes query: {e}")))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(
+                    row.map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot node row: {e}"))
+                    })?,
+                );
+            }
+            out
+        };
+
+        let mut nodes = Vec::with_capacity(node_meta.len());
+        for (path, category) in node_meta {
+            let mut sources = Vec::new();
+            {
+                let mut s2 = conn
+                    .prepare(
+                        "SELECT source_ref FROM notes_sources \
+                         WHERE agent_id = ?1 AND note_path = ?2",
+                    )
+                    .map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot sources prep: {e}"))
+                    })?;
+                let srows = s2
+                    .query_map(params![agent_id, path], |r| r.get::<_, String>(0))
+                    .map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot sources query: {e}"))
+                    })?;
+                for s in srows {
+                    sources.push(s.map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot source row: {e}"))
+                    })?);
+                }
+            }
+            nodes.push(GraphNode {
+                path,
+                category,
+                sources,
+            });
+        }
+
+        // Resolved edges only (skip unresolved bare-filename links).
+        let mut edges = Vec::new();
+        {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT from_note, to_note FROM notes_links \
+                     WHERE agent_id = ?1 AND to_note <> '' AND instr(to_note, '/') > 0",
+                )
+                .map_err(|e| AlephError::config(format!("load_graph_snapshot edges prep: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(|e| AlephError::config(format!("load_graph_snapshot edges query: {e}")))?;
+            for row in rows {
+                edges.push(
+                    row.map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot edge row: {e}"))
+                    })?,
+                );
+            }
+        }
+
+        Ok(GraphSnapshot { nodes, edges })
+    }
+
+    async fn replace_graph_cache(
+        &self,
+        agent_id: &str,
+        rows: &[(String, usize, f32, usize)],
+    ) -> Result<(), AlephError> {
+        let now = chrono::Utc::now().timestamp();
+        let conn = lock_conn!(self)?;
+        conn.execute(
+            "DELETE FROM notes_graph_cache WHERE agent_id = ?1",
+            params![agent_id],
+        )
+        .map_err(|e| AlephError::config(format!("replace_graph_cache delete: {e}")))?;
+        for (path, comm, coh, deg) in rows {
+            conn.execute(
+                "INSERT OR REPLACE INTO notes_graph_cache \
+                 (agent_id, node_path, community_id, cohesion, degree, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![agent_id, path, *comm as i64, f64::from(*coh), *deg as i64, now],
+            )
+            .map_err(|e| AlephError::config(format!("replace_graph_cache insert: {e}")))?;
+        }
+        Ok(())
+    }
+
+    async fn replace_graph_insights(
+        &self,
+        agent_id: &str,
+        rows: &[(String, String)],
+    ) -> Result<(), AlephError> {
+        let now = chrono::Utc::now().timestamp();
+        let conn = lock_conn!(self)?;
+        conn.execute(
+            "DELETE FROM notes_graph_insights WHERE agent_id = ?1",
+            params![agent_id],
+        )
+        .map_err(|e| AlephError::config(format!("replace_graph_insights delete: {e}")))?;
+        for (kind, payload) in rows {
+            conn.execute(
+                "INSERT INTO notes_graph_insights (agent_id, kind, payload, created_at) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![agent_id, kind, payload, now],
+            )
+            .map_err(|e| AlephError::config(format!("replace_graph_insights insert: {e}")))?;
+        }
+        Ok(())
+    }
+
+    async fn read_graph_insights(
+        &self,
+        agent_id: &str,
+        kind: Option<&str>,
+    ) -> Result<Vec<(String, String)>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let mut out = Vec::new();
+        match kind {
+            Some(k) => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT kind, payload FROM notes_graph_insights \
+                         WHERE agent_id = ?1 AND kind = ?2",
+                    )
+                    .map_err(|e| AlephError::config(format!("read_graph_insights prep: {e}")))?;
+                let rows = stmt
+                    .query_map(params![agent_id, k], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| AlephError::config(format!("read_graph_insights query: {e}")))?;
+                for row in rows {
+                    out.push(
+                        row.map_err(|e| {
+                            AlephError::config(format!("read_graph_insights row: {e}"))
+                        })?,
+                    );
+                }
+            }
+            None => {
+                let mut stmt = conn
+                    .prepare("SELECT kind, payload FROM notes_graph_insights WHERE agent_id = ?1")
+                    .map_err(|e| AlephError::config(format!("read_graph_insights prep: {e}")))?;
+                let rows = stmt
+                    .query_map(params![agent_id], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| AlephError::config(format!("read_graph_insights query: {e}")))?;
+                for row in rows {
+                    out.push(
+                        row.map_err(|e| {
+                            AlephError::config(format!("read_graph_insights row: {e}"))
+                        })?,
+                    );
+                }
+            }
+        }
+        Ok(out)
     }
 
     // -----------------------------------------------------------------
