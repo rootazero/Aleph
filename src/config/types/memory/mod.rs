@@ -64,6 +64,12 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub retrieval_scoring: RetrievalScoringConfig,
 
+    /// Associative 4-signal graph expansion of the retrieval candidate pool
+    /// (default-on; cold cache = no-op). Surfaces notes tied to a hit even
+    /// without lexical/semantic overlap.
+    #[serde(default)]
+    pub expansion: ExpansionConfig,
+
     #[serde(default = "defaults::default_dedup_similarity_threshold")]
     pub dedup_similarity_threshold: f32,
 
@@ -138,6 +144,7 @@ impl Default for MemoryConfig {
             bm25_bonus_weight: defaults::default_bm25_bonus(),
             rerank: crate::memory::rerank::RerankConfig::default(),
             retrieval_scoring: RetrievalScoringConfig::default(),
+            expansion: ExpansionConfig::default(),
             dedup_similarity_threshold: defaults::default_dedup_similarity_threshold(),
             reflection: ReflectionConfig::default(),
             assembler: AssemblerConfig::default(),
