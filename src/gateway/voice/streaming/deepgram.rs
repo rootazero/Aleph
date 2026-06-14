@@ -1,7 +1,11 @@
 //! Deepgram `/v1/listen` streaming protocol adapter.
 //! Covers Deepgram cloud AND self-hosted WhisperLiveKit (`/v1/listen` compat).
 
-use super::TranscriptDelta;
+use super::{StreamConfig, StreamHandles, StreamingTarget, StreamingTranscriber, TranscriptDelta};
+use async_trait::async_trait;
+use futures_util::{SinkExt, StreamExt};
+use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 
 /// Stateful normalizer: folds Deepgram `Results`/`UtteranceEnd` JSON messages
 /// into the Aleph `{committed, interim}` model. Pure — no I/O, host-testable.
@@ -54,6 +58,81 @@ impl DeepgramDecoder {
             }
             _ => None,
         }
+    }
+}
+
+/// WS-connecting adapter speaking the Deepgram `/v1/listen` protocol.
+pub struct DeepgramStream {
+    target: StreamingTarget,
+}
+
+impl DeepgramStream {
+    #[must_use]
+    pub fn new(target: StreamingTarget) -> Self {
+        Self { target }
+    }
+}
+
+#[async_trait]
+impl StreamingTranscriber for DeepgramStream {
+    async fn open(&self, cfg: StreamConfig) -> anyhow::Result<StreamHandles> {
+        // /v1/listen with linear16/16k/interim_results/utterance_end so the
+        // server emits BOTH interim and final + UtteranceEnd.
+        let base = self.target.base_url.trim_end_matches('/');
+        let host = base.replace("https://", "wss://").replace("http://", "ws://");
+        let lang = cfg.language.or_else(|| self.target.language.clone()).unwrap_or_default();
+        let mut url = format!(
+            "{host}/v1/listen?encoding=linear16&sample_rate={}&channels=1&interim_results=true&utterance_end_ms=1000",
+            cfg.sample_rate
+        );
+        if !lang.is_empty() {
+            url.push_str(&format!("&language={lang}"));
+        }
+
+        let mut req = url.into_client_request()?;
+        if !self.target.api_key.is_empty() {
+            req.headers_mut()
+                .insert("Authorization", format!("Token {}", self.target.api_key).parse()?);
+        }
+        let (ws, _) = tokio_tungstenite::connect_async(req).await?;
+        let (mut sink, mut stream) = ws.split();
+
+        let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<u8>>(64);
+        let (delta_tx, delta_rx) = mpsc::channel::<TranscriptDelta>(64);
+
+        tokio::spawn(async move {
+            let mut dec = DeepgramDecoder::default();
+            loop {
+                tokio::select! {
+                    frame = audio_rx.recv() => match frame {
+                        Some(bytes) => {
+                            if sink.send(Message::Binary(bytes.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        None => {
+                            // Panel closed: send Deepgram "CloseStream" then finish.
+                            let _ = sink.send(Message::Text("{\"type\":\"CloseStream\"}".into())).await;
+                            break;
+                        }
+                    },
+                    msg = stream.next() => match msg {
+                        Some(Ok(Message::Text(t))) => {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
+                                if let Some(d) = dec.push(&v) {
+                                    if delta_tx.send(d).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(_)) | None => break,
+                    }
+                }
+            }
+        });
+        Ok(StreamHandles { audio_tx, delta_rx })
     }
 }
 

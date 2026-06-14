@@ -56,6 +56,43 @@ pub trait StreamingTranscriber: Send + Sync {
     async fn open(&self, cfg: StreamConfig) -> anyhow::Result<StreamHandles>;
 }
 
+/// Resolved streaming target (from `[voice.streaming]` config, provider-neutral).
+#[derive(Debug, Clone)]
+pub struct StreamingTarget {
+    /// `"deepgram"` | `"whisperlive"` (case-insensitive; unknown → Deepgram).
+    pub provider: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub language: Option<String>,
+}
+
+/// Which vendor wire protocol an adapter speaks.
+pub enum StreamingProvider {
+    Deepgram,
+    WhisperLive,
+}
+
+/// Map a provider string to its wire protocol. Unknown values fall back to the
+/// Deepgram `/v1/listen` protocol (the lingua franca; WhisperLiveKit speaks it).
+#[must_use]
+pub fn classify_provider(provider: &str) -> StreamingProvider {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "whisperlive" => StreamingProvider::WhisperLive,
+        // "deepgram", "whisperlivekit", unknown → Deepgram /v1/listen lingua franca
+        _ => StreamingProvider::Deepgram,
+    }
+}
+
+/// Build the adapter for a resolved target. Construction is cheap and infallible;
+/// the network connection happens lazily in [`StreamingTranscriber::open`].
+#[must_use]
+pub fn build_transcriber(t: StreamingTarget) -> Box<dyn StreamingTranscriber> {
+    match classify_provider(&t.provider) {
+        StreamingProvider::Deepgram => Box::new(deepgram::DeepgramStream::new(t)),
+        StreamingProvider::WhisperLive => Box::new(whisperlive::WhisperLiveStream::new(t)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,5 +111,42 @@ mod tests {
         let c = StreamConfig::new(None);
         assert_eq!(c.sample_rate, 16_000);
         assert!(c.language.is_none());
+    }
+
+    #[test]
+    fn build_transcriber_picks_adapter_by_provider() {
+        let cfg = StreamingTarget {
+            provider: "whisperlive".into(),
+            base_url: "ws://127.0.0.1:9090".into(),
+            api_key: String::new(),
+            language: None,
+        };
+        assert!(matches!(classify_provider(&cfg.provider), StreamingProvider::WhisperLive));
+        let cfg2 = StreamingTarget {
+            provider: "deepgram".into(),
+            base_url: "wss://api.deepgram.com".into(),
+            api_key: "k".into(),
+            language: None,
+        };
+        assert!(matches!(classify_provider(&cfg2.provider), StreamingProvider::Deepgram));
+        // unknown defaults to deepgram (the lingua-franca protocol)
+        assert!(matches!(classify_provider("mystery"), StreamingProvider::Deepgram));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live WhisperLiveKit at WL_URL; run manually"]
+    async fn deepgram_adapter_round_trips_against_whisperlivekit() {
+        let url = std::env::var("WL_URL").unwrap(); // e.g. ws://127.0.0.1:8000
+        let t = StreamingTarget {
+            provider: "deepgram".into(),
+            base_url: url,
+            api_key: String::new(),
+            language: Some("zh".into()),
+        };
+        let tr = build_transcriber(t);
+        let mut h = tr.open(StreamConfig::new(Some("zh".into()))).await.unwrap();
+        h.audio_tx.send(vec![0u8; 32_000]).await.unwrap();
+        drop(h.audio_tx);
+        let _ = h.delta_rx.recv().await;
     }
 }

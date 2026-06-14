@@ -1,6 +1,10 @@
 //! collabora WhisperLive native protocol adapter (`segments[].completed`).
 
-use super::TranscriptDelta;
+use super::{StreamConfig, StreamHandles, StreamingTarget, StreamingTranscriber, TranscriptDelta};
+use async_trait::async_trait;
+use futures_util::{SinkExt, StreamExt};
+use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Default)]
 pub struct WhisperLiveDecoder {
@@ -53,6 +57,74 @@ impl WhisperLiveDecoder {
             interim,
             utterance_end: false,
         })
+    }
+}
+
+/// WS-connecting adapter speaking the native WhisperLive protocol.
+pub struct WhisperLiveStream {
+    target: StreamingTarget,
+}
+
+impl WhisperLiveStream {
+    #[must_use]
+    pub fn new(target: StreamingTarget) -> Self {
+        Self { target }
+    }
+}
+
+#[async_trait]
+impl StreamingTranscriber for WhisperLiveStream {
+    async fn open(&self, cfg: StreamConfig) -> anyhow::Result<StreamHandles> {
+        let url = self.target.base_url.replace("https://", "wss://").replace("http://", "ws://");
+        let (ws, _) = tokio_tungstenite::connect_async(url).await?;
+        let (mut sink, mut stream) = ws.split();
+        // WhisperLive config handshake (first message). audio_format=int16 so we
+        // can forward s16le frames verbatim.
+        let handshake = serde_json::json!({
+            "uid": uuid::Uuid::new_v4().to_string(),
+            "language": cfg.language.or_else(|| self.target.language.clone()),
+            "task": "transcribe",
+            "model": "small",
+            "use_vad": true,
+            "send_last_n_segments": 10,
+            "audio_format": "int16"
+        });
+        sink.send(Message::Text(handshake.to_string().into())).await?;
+
+        let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<u8>>(64);
+        let (delta_tx, delta_rx) = mpsc::channel::<TranscriptDelta>(64);
+        tokio::spawn(async move {
+            let mut dec = WhisperLiveDecoder::default();
+            loop {
+                tokio::select! {
+                    frame = audio_rx.recv() => match frame {
+                        Some(bytes) => {
+                            if sink.send(Message::Binary(bytes.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        None => {
+                            let _ = sink.send(Message::Binary(b"END_OF_AUDIO".to_vec().into())).await;
+                            break;
+                        }
+                    },
+                    msg = stream.next() => match msg {
+                        Some(Ok(Message::Text(t))) => {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
+                                if let Some(d) = dec.push(&v) {
+                                    if delta_tx.send(d).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(_)) | None => break,
+                    }
+                }
+            }
+        });
+        Ok(StreamHandles { audio_tx, delta_rx })
     }
 }
 
