@@ -534,6 +534,39 @@ Related: [[Rust Learning]] [[Dev Environment]]
     }
 
     #[test]
+    fn to_markdown_emits_vault_fields_and_roundtrips() {
+        let mut n = KnowledgeNote {
+            title: "rust-ownership".into(),
+            category: "reference".into(),
+            tags: vec!["rust".into()],
+            ..Default::default()
+        };
+        n.note_type = Some("reference".into());
+        n.aliases = vec!["ownership".into()];
+        n.facts = vec!["fact one".into()];
+        let md = n.to_markdown();
+        assert!(md.contains("type: reference"));
+        assert!(md.contains("title: rust-ownership"));
+        // yaml_inline_array emits unquoted items when no special chars present
+        assert!(md.contains("aliases: [ownership]"));
+        let back = KnowledgeNote::from_markdown("rust-ownership", &md).unwrap();
+        assert_eq!(back.note_type.as_deref(), Some("reference"));
+        assert_eq!(back.aliases, vec!["ownership".to_string()]);
+    }
+
+    #[test]
+    fn to_markdown_defaults_type_to_category_and_title_to_filename() {
+        let n = KnowledgeNote {
+            title: "editor-prefs".into(),
+            category: "preference".into(),
+            ..Default::default()
+        };
+        let md = n.to_markdown();
+        assert!(md.contains("type: preference"));
+        assert!(md.contains("title: editor-prefs"));
+    }
+
+    #[test]
     fn parses_vault_frontmatter_fields() {
         let md = "---\ncategory: reference\ntype: reference\ntitle: Rust Ownership\naliases: [\"ownership\", \"借用\"]\ntags: [\"rust\"]\ncreated: \"2026-06-14\"\nupdated: \"2026-06-14\"\n---\n\n- borrow checker enforces aliasing xor mutability\n";
         let note = KnowledgeNote::from_markdown("rust-ownership", md).unwrap();

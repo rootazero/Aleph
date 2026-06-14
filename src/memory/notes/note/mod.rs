@@ -184,6 +184,11 @@ impl KnowledgeNote {
 
         let mut out = String::new();
         out.push_str("---\n");
+        // Vault-compat header (Obsidian / llm_wiki): type/title/aliases.
+        let note_type = self.note_type.clone().unwrap_or_else(|| self.category.clone());
+        out.push_str(&format!("type: {note_type}\n"));
+        out.push_str(&format!("title: {}\n", self.title));
+        out.push_str(&format!("aliases: {}\n", yaml_inline_array(&self.aliases)));
         out.push_str(&format!("category: {}\n", self.category));
         out.push_str(&format!("tags: {}\n", yaml_inline_array(&self.tags)));
         out.push_str(&format!("created: \"{created}\"\n"));
