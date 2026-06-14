@@ -5,10 +5,12 @@
 //! full `.workflow.js`-compatible metadata (`whenToUse`, `phases` with optional
 //! per-phase `model`, per-step `label`/`model`/`phase`/`schema`/`isolation`/
 //! `agentType`); only the executable core round-trips into `WorkflowDef`, the
-//! rest is preserved for lossless export. The extra agent-opt fields
-//! (`isolation`, `agentType`) and `phase.model` are interchange-only: the Aleph
-//! executor never consumes them (R10), exactly like the opaque `schema`
-//! pass-through.
+//! rest is preserved for lossless export. Per-step `model` is the one extra that
+//! is *also executable*: the `workflow` tool's `run` threads it past `to_def`
+//! into the materialised task metadata, where the dispatcher turns it into a
+//! per-member model override. The remaining agent-opt fields (`isolation`,
+//! `agentType`) and `phase.model` stay interchange-only — the Aleph executor
+//! never consumes them (R10), exactly like the opaque `schema` pass-through.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

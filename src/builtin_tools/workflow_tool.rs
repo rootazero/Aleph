@@ -522,10 +522,22 @@ impl AlephTool for WorkflowTool {
                 input,
             } => {
                 debug!(name = %name, team_id = %team_id, "workflow: run");
-                // Project to the executable core — `materialize` consumes only
-                // id/agent/prompt/depends_on (R10: the executor never sees the
-                // interchange metadata).
-                let def = workflow::store::load(&name)?.to_def();
+                // Load the full manifest: the executable core (`to_def`) drives
+                // materialisation, while per-step `model` overrides — which the
+                // lean `WorkflowDef` does not carry — are threaded in separately
+                // and stamped onto task metadata for the dispatcher to resolve
+                // at launch (the executable wiring of the manifest's `model`
+                // field). Other interchange-only metadata
+                // (schema/isolation/agentType/phase) the executor still ignores
+                // (R10).
+                let manifest = workflow::store::load(&name)?;
+                let def = manifest.to_def();
+                // step-local id → model override; empty when no step pins a model.
+                let models: std::collections::HashMap<String, String> = manifest
+                    .steps
+                    .iter()
+                    .filter_map(|s| s.model.as_ref().map(|m| (s.id.clone(), m.clone())))
+                    .collect();
                 // Pre-flight: reject a run the team cannot execute before any
                 // coord_task is created, so the LLM gets an immediate, actionable
                 // error instead of a "success" that the dispatcher then fails
@@ -550,6 +562,7 @@ impl AlephTool for WorkflowTool {
                     &team_id,
                     self.coord_store.as_ref(),
                     clarify_ctx.as_ref(),
+                    (!models.is_empty()).then_some(&models),
                 )
                 .await?;
                 if let Some(signal) = &self.dispatch_signal {
@@ -1016,7 +1029,7 @@ mod tests {
         def: &WorkflowDef,
         team: &str,
     ) -> (String, Vec<String>) {
-        let mat = workflow::materialize(def, "x", team, t.coord_store.as_ref(), None)
+        let mat = workflow::materialize(def, "x", team, t.coord_store.as_ref(), None, None)
             .await
             .expect("materialise");
         (mat.run_id, mat.task_ids)

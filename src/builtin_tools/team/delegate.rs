@@ -275,6 +275,9 @@ impl AlephTool for TeamDelegateTool {
             args.task.clone(),
             args.timeout_secs,
             false,
+            // team_delegate is the synchronous leader path with no per-step
+            // model override — keep the member on its default model.
+            None,
         )
         .await;
         let _ = self
