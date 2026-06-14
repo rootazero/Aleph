@@ -178,10 +178,40 @@
 > 1. `just wasm` — 重建 `interfaces/webchat/dist/{aleph_panel.js, aleph_panel_bg.wasm, tailwind.css, index.html}`
 > 2. `cargo build --release -p alephcore --bin aleph-server` — 让 `rust_embed` 把新 dist 烧进 binary
 > 3. 替换正在跑的 binary，让 supervisor relaunch：
->    - **dev** (`cargo run` 启动的 daemon)：`./target/release/aleph-server stop` → `cargo run --release -p alephcore --bin aleph-server start`
->    - **.app daemon**：`mv /Applications/Aleph.app/Contents/MacOS/aleph-server{,.bak}` → `cp target/release/aleph-server /Applications/Aleph.app/Contents/MacOS/` → `kill <pid>`（Tauri shell 的 supervisor 会自动 relaunch 新 binary 并 reload webview）
+>    - **dev** (`cargo run` 启动的 daemon)：`./target/release/aleph-server stop` → `cargo run --release -p alephcore --bin aleph-server start`（Windows 同理，二进制为 `aleph-server.exe`）
+>    - **.app daemon (macOS)**：`mv /Applications/Aleph.app/Contents/MacOS/aleph-server{,.bak}` → `cp target/release/aleph-server /Applications/Aleph.app/Contents/MacOS/` → `kill <pid>`（Tauri shell 的 supervisor 会自动 relaunch 新 binary 并 reload webview）
+>    - **安装版 App daemon (Windows)**：先停（`aleph-server stop` 或 `taskkill /IM aleph-server.exe /F`）——**Windows 无法覆盖正在运行的 exe，必须先停**——再 `Copy-Item target\release\aleph-server.exe "$env:LOCALAPPDATA\Aleph\aleph-server.exe" -Force`（NSIS 默认按用户安装；旧 `aleph-server.exe` 与 `Aleph.exe` 同目录），最后重启 `Aleph.exe`，supervisor 会拉起新 binary 并 reload webview
 >
 > 单跑 `just wasm` / `just dev` **不够**——前者只更磁盘，后者只在 daemon 还没启动时有效。已经在跑的 daemon 必须替换 binary 才能感知 panel 改动。
+
+### Windows 构建
+
+> macOS 的 `just shell-build` / `just shell-dev` 在 Windows 上**同样适用**——justfile 已把 Swift bridge 等 macOS 专属步骤用 `$OSTYPE == darwin*` 守卫，并自动为产物追加 `.exe`。无需独立的 Windows 配方。产物是 NSIS `.exe` + `.msi` 安装包（`tauri.conf.json` 的 `bundle.targets = "all"`），通过 `externalBin` 内置 `aleph-server.exe`，单机零配置。
+
+**一次性前置**（CI runner 自带；本机首次构建需手动装。justfile 配方经 Git Bash 执行——`set shell := ["bash", …]`——故需 Git for Windows）：
+
+| 依赖 | 安装 | 说明 |
+|------|------|------|
+| MSVC C++ 生成工具 | Visual Studio「使用 C++ 的桌面开发」工作负载 | 提供 `x86_64-pc-windows-msvc` 链接器 |
+| WebView2 Runtime | Windows 11 自带 | Tauri webview 宿主 |
+| `protoc` | `scoop install protobuf`（或 `choco install protoc`） | 编译 `aleph-server` 的 protobuf 构建依赖（CI 同样安装） |
+| wasm 目标 | `rustup target add wasm32-unknown-unknown` | 编译 Panel WASM |
+| `wasm-bindgen-cli` | `cargo install wasm-bindgen-cli --version 0.2.122 --locked` | **版本必须与 `Cargo.lock` 里的 `wasm-bindgen` 完全一致**，否则 bindgen 拒绝生成 |
+| `cargo-tauri` | `cargo install tauri-cli --version "^2.11" --locked` | 提供 `cargo tauri build/dev`；版本随 Cargo.lock 中 `tauri` 主版本 |
+| `just` | `scoop install just`（或 `cargo install just`） | 跑 justfile 配方 |
+| Git for Windows `usr\bin` 在 PATH | 把 `…\git\current\usr\bin` 加进 PATH | justfile 的 shebang 配方（`wasm` 等）需要 `cygpath`，否则 just 报 `could not find cygpath`；scoop 默认不把它加进 PATH |
+| `wasm-opt`（可选） | `scoop install binaryen` | 缺失时 `just wasm` 跳过 WASM 压缩，不影响功能 |
+
+**全量构建 + 启动**（PowerShell）：
+
+```powershell
+just shell-build                          # WASM → release server → cargo tauri build
+# 安装包产物：target\release\bundle\nsis\Aleph_<ver>_x64-setup.exe
+#             target\release\bundle\msi\Aleph_<ver>_x64_en-US.msi
+.\target\release\aleph-desktop-shell.exe  # 直接运行已打包的壳（同目录已带 aleph-server.exe），免装安装包即可验证
+```
+
+dev 模式：`just shell-dev`（debug 编译 + staging daemon，热跑，不出安装包）。
 
 ### 版本管理
 

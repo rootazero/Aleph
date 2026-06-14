@@ -28,13 +28,19 @@ dev: wasm
 # Full build: WASM → Swift Bridge → Server (release)
 all: build
 
-# Build Swift bridge (macOS only)
+# Build Swift bridge (macOS only; no-op on Windows/Linux so `build` stays cross-platform)
 swift-bridge:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "✓ Swift bridge: skipped (non-macOS)"
+        exit 0
+    fi
     cd desktop/macos/bridge && swift build -c release
     mkdir -p {{release_dir}} {{debug_dir}}
     ln -sf "$PWD/desktop/macos/bridge/.build/release/AlephBridge" {{release_dir}}/aleph-bridge
     ln -sf "$PWD/desktop/macos/bridge/.build/release/AlephBridge" {{debug_dir}}/aleph-bridge
-    @echo "✓ Swift bridge: desktop/macos/bridge/.build/release/AlephBridge"
+    echo "✓ Swift bridge: desktop/macos/bridge/.build/release/AlephBridge"
 
 # Build server (release)
 build: wasm swift-bridge
