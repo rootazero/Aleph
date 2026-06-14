@@ -91,14 +91,39 @@ pub async fn gather_related<S: NoteStore + Send + Sync + 'static>(
 
     // 1-hop expand: outgoing links of the top-ranked seeds (up to 6).
     let expand_roots: Vec<String> = ranked.iter().take(6).map(|(p, _)| p.clone()).collect();
-    for root in expand_roots {
-        let outgoing = store.get_outgoing_links(&root, agent_id).await?;
+    for root in &expand_roots {
+        let outgoing = store.get_outgoing_links(root, agent_id).await?;
         for link in outgoing {
             if seen.contains(&link) {
                 continue;
             }
             if store.get_note_index(&link, agent_id).await?.is_some() && seen.insert(link.clone()) {
                 ranked.push((link, 0.0));
+            }
+        }
+    }
+
+    // 4-signal materialized relatedness (richer than community membership):
+    // fold top related peers with their real score. Cold cache → empty → no-op.
+    // Runs BEFORE the community loop so scored peers win the `seen.insert` race
+    // over the 0.0-scored community peers below.
+    for root in &expand_roots {
+        for (peer, score) in store.related_peers(agent_id, root, 8).await? {
+            if seen.insert(peer.clone()) {
+                ranked.push((peer, score));
+            }
+        }
+    }
+
+    // Graph-cache community expansion (Louvain membership): peers in the same
+    // community as each seed root are complementary cluster-recall candidates,
+    // folded into the SAME candidate pool as the link expansion above. A cold
+    // cache (pre-first-dream) makes `community_peers` return an empty vec, so the
+    // candidate set — and therefore the result ordering — is unchanged.
+    for root in &expand_roots {
+        for peer in store.community_peers(agent_id, root, 8).await? {
+            if seen.insert(peer.clone()) {
+                ranked.push((peer, 0.0));
             }
         }
     }

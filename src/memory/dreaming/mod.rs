@@ -177,6 +177,11 @@ impl DreamPipeline {
                 }),
                 Box::new(stages::NoteDriftStage),
                 Box::new(stages::IndexRefresherStage),
+                // Materialize the note knowledge graph (community/cohesion +
+                // insights) BEFORE weave/decay consume it: weave reads the
+                // freshly-computed `isolated` set and decay benefits from the
+                // recomputed link topology. Pure deterministic, zero LLM.
+                Box::new(stages::GraphRecomputeStage),
                 // Weave orphan notes into the link graph BEFORE decay scores
                 // them: a freshly woven link immediately counts toward
                 // link_weight / the >=3-incoming-links protection, breaking
@@ -221,12 +226,14 @@ impl DreamPipeline {
                 // synthesize path — see `WorkflowProposalStage` for the R7
                 // boundary. Drafts are gated; nothing auto-activates.
                 Box::new(stages::WorkflowProposalStage::default()),
+                Box::new(stages::CorpusNarrativeStage),
                 Box::new(stages::DailyDigestStage),
             ],
             DreamStrategy::Conserve => vec![
                 Box::new(stages::NoteLintStage),
                 Box::new(stages::NoteReviewStage::default()),
                 Box::new(stages::IndexRefresherStage),
+                Box::new(stages::GraphRecomputeStage),
             ],
         };
         Self::new(stage_list)
@@ -241,6 +248,7 @@ impl DreamPipeline {
     /// - `workflow_proposal`: mines the global skill co-occurrence rings and
     ///   writes to the single global `workflows/proposals/` dir.
     const GLOBAL_ONLY_STAGES: &'static [&'static str] = &[
+        "corpus_narrative",
         "feedback_distill",
         "skill_lifecycle",
         "daily_digest",
@@ -1166,6 +1174,7 @@ mod tests {
                 "feedback_distill",
                 "note_drift",
                 "index_refresher",
+                "graph_recompute",
                 "note_weave",
                 "note_decay",
                 "skill_lifecycle",
@@ -1190,6 +1199,7 @@ mod tests {
                 "skill_distill",
                 "feedback_distill",
                 "workflow_proposal",
+                "corpus_narrative",
                 "daily_digest"
             ]
         );
@@ -1243,7 +1253,15 @@ mod tests {
         let decay = MemoryDecayPolicy::default();
         let pipeline = DreamPipeline::from_strategy(DreamStrategy::Conserve, &cfg, &decay);
         let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
-        assert_eq!(names, vec!["note_lint", "note_review", "index_refresher"]);
+        assert_eq!(
+            names,
+            vec![
+                "note_lint",
+                "note_review",
+                "index_refresher",
+                "graph_recompute"
+            ]
+        );
     }
 
     // -----------------------------------------------------------------

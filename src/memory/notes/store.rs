@@ -231,6 +231,99 @@ pub trait NoteStore: Send + Sync {
     }
 
     // -----------------------------------------------------------------
+    // Knowledge-graph materialization (Phase 4). Default impls keep any
+    // non-SQLite store compiling; the real bodies live on
+    // `SqliteMemoryBackend`.
+    // -----------------------------------------------------------------
+
+    /// Load the full note graph for `agent_id`: every node (`path`/`category`)
+    /// plus its `source_notes`, and every resolved edge from `notes_links`.
+    async fn load_graph_snapshot(
+        &self,
+        agent_id: &str,
+    ) -> Result<crate::memory::notes::graph::GraphSnapshot, AlephError> {
+        let _ = agent_id;
+        Ok(crate::memory::notes::graph::GraphSnapshot::default())
+    }
+
+    /// Replace the materialized graph cache (community/cohesion/degree) for
+    /// `agent_id`. Rows are `(node_path, community_id, cohesion, degree)`.
+    async fn replace_graph_cache(
+        &self,
+        agent_id: &str,
+        rows: &[(String, usize, f32, usize)],
+    ) -> Result<(), AlephError> {
+        let _ = (agent_id, rows);
+        Ok(())
+    }
+
+    /// Replace materialized insights for `agent_id`. Rows are
+    /// `(kind, payload_json)`.
+    async fn replace_graph_insights(
+        &self,
+        agent_id: &str,
+        rows: &[(String, String)],
+    ) -> Result<(), AlephError> {
+        let _ = (agent_id, rows);
+        Ok(())
+    }
+
+    /// Read materialized insights for `agent_id`, optionally filtered by `kind`.
+    /// Returns `(kind, payload_json)` rows.
+    async fn read_graph_insights(
+        &self,
+        agent_id: &str,
+        kind: Option<&str>,
+    ) -> Result<Vec<(String, String)>, AlephError> {
+        let _ = (agent_id, kind);
+        Ok(Vec::new())
+    }
+
+    /// Node paths sharing `node_path`'s materialized community (from
+    /// `notes_graph_cache`), excluding `node_path` itself, capped at `limit`.
+    ///
+    /// Used by note retrieval to expand a seed hit with its strongest-relatedness
+    /// peers. Default impl (and a cold cache before the first dream recompute)
+    /// returns an empty vec, so callers degrade to their existing expansion.
+    async fn community_peers(
+        &self,
+        agent_id: &str,
+        node_path: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, AlephError> {
+        let _ = (agent_id, node_path, limit);
+        Ok(vec![])
+    }
+
+    /// Replace the materialized 4-signal relatedness edges for `agent_id`.
+    /// Rows are `(node_path, related_path, score)`.
+    async fn replace_graph_related(
+        &self,
+        agent_id: &str,
+        rows: &[(String, String, f32)],
+    ) -> Result<(), AlephError> {
+        let _ = (agent_id, rows);
+        Ok(())
+    }
+
+    /// Top related peers for `node_path` by materialized 4-signal score
+    /// (descending), capped at `limit`. Returns `(related_path, score)`.
+    ///
+    /// Complements `community_peers`: where community membership gives coarse
+    /// cluster recall, this gives the scored 4-signal relatedness. A cold cache
+    /// (and the default impl) returns an empty vec, so callers degrade to their
+    /// existing expansion.
+    async fn related_peers(
+        &self,
+        agent_id: &str,
+        node_path: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, f32)>, AlephError> {
+        let _ = (agent_id, node_path, limit);
+        Ok(vec![])
+    }
+
+    // -----------------------------------------------------------------
     // Phase C2.9.2 governance: per-fact provenance + async review queue.
     // Default impls return empty/no-op so existing test mocks keep
     // compiling; the real bodies live on `SqliteMemoryBackend`.

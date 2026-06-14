@@ -51,7 +51,27 @@ impl DreamStage for NoteWeaveStage {
         // --- Phase 1: orphan detection (store queries only, no LLM) ---
         // Orphans are the relink targets; non-orphans are still extracted so an
         // orphan can attach to an already-linked note via a shared entity.
-        let mut orphans: Vec<String> = Vec::new();
+        //
+        // The local degree-0 scan below still runs every cycle to produce the
+        // `others` pool (non-orphan link targets). The orphan SOURCE, however,
+        // prefers the materialized `isolated` insight: `GraphRecomputeStage` runs
+        // earlier in this same Consolidate cycle (Phase 4) and writes a fresh
+        // degree<=1 isolated set, so weave and decay share one graph-health
+        // source. A cold cache (pre-first-dream) yields an empty payload and the
+        // scan's own orphan set is used instead (unchanged behaviour).
+        let materialized_isolated: Vec<String> = match ctx
+            .indexer
+            .store()
+            .read_graph_insights(&ctx.agent_id, Some("isolated"))
+            .await
+        {
+            Ok(rows) if !rows.is_empty() => {
+                serde_json::from_str::<Vec<String>>(&rows[0].1).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+
+        let mut scan_orphans: Vec<String> = Vec::new();
         let mut others: Vec<String> = Vec::new();
         for note in &ctx.notes {
             let Some((_, filename)) = note.path.split_once('/') else {
@@ -75,11 +95,26 @@ impl DreamStage for NoteWeaveStage {
                 .await
                 .unwrap_or_default();
             if outgoing.is_empty() && incoming.is_empty() {
-                orphans.push(note.path.clone());
+                scan_orphans.push(note.path.clone());
             } else {
                 others.push(note.path.clone());
             }
         }
+
+        // Unified health source: materialized isolated set when fresh, else the
+        // local scan. When the materialized set is used, drop any of its paths
+        // from `others` so a degree-1 note (isolated per the degree<=1 insight,
+        // non-orphan per the degree-0 scan) is not extracted twice or paired
+        // with itself.
+        let orphans: Vec<String> = if materialized_isolated.is_empty() {
+            scan_orphans
+        } else {
+            let orphan_lookup: std::collections::HashSet<&str> =
+                materialized_isolated.iter().map(String::as_str).collect();
+            others.retain(|p| !orphan_lookup.contains(p.as_str()));
+            materialized_isolated
+        };
+
         if orphans.is_empty() {
             info!("NoteWeave: no orphan notes");
             return Ok(ctx);
@@ -377,6 +412,92 @@ mod tests {
             back.iter()
                 .any(|(to, rel)| to == "entity/us-iran-conflict" && rel == "us-iran-conflict"),
             "backward typed relation missing: {back:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn materialized_isolated_overrides_local_scan() {
+        use crate::providers::recording_mock::RecordingMockProvider;
+        // `a` and `b` each link to a distinct third note, so the local degree-0
+        // scan classifies BOTH as non-orphans → scan_orphans is empty and,
+        // without the materialized path, weave would early-return (woven == 0).
+        // We materialize an `isolated` insight naming a + b (the degree<=1 set
+        // GraphRecomputeStage would emit), and they share a keyword. Weave must
+        // prefer the materialized set, treat a/b as orphans, and weave the pair.
+        let llm = r#"{"notes":[
+            {"path":"learning/a","keywords":["shared-entity","alpha"]},
+            {"path":"learning/b","keywords":["shared-entity","beta"]}
+        ]}"#;
+        let temp = std::env::temp_dir().join(format!("aleph_weave_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+        let indexer = NoteIndexer::new(temp.clone(), store.clone());
+        let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
+            std::sync::Arc::new(RecordingMockProvider::new(llm.into()));
+        let embedder: std::sync::Arc<dyn EmbeddingProvider> = std::sync::Arc::new(StubEmbedder);
+        let mut ctx = DreamContext {
+            notes: Vec::new(),
+            note_contents: std::collections::HashMap::new(),
+            agent_id: "default".into(),
+            database: store.clone(),
+            indexer,
+            provider,
+            embedder,
+            report: crate::memory::dreaming::DreamReport::default(),
+            pipeline_type: "consolidate".into(),
+            activity_checker: std::sync::Arc::new(|| false),
+            strategy: crate::memory::dreaming::DreamStrategy::Consolidate,
+            orientation: None,
+        };
+
+        // a -> learning/x, b -> learning/y : both are non-orphans to the scan.
+        for (title, link) in [("a", "learning/x"), ("b", "learning/y")] {
+            store
+                .index_note(
+                    &KnowledgeNote {
+                        title: title.into(),
+                        category: "learning".into(),
+                        facts: vec![format!("see [[{link}]]")],
+                        links: vec![link.into()],
+                        content_hash: format!("h-{title}"),
+                        ..Default::default()
+                    },
+                    "default",
+                    "learning",
+                )
+                .await
+                .unwrap();
+        }
+
+        // Materialize the isolated insight (what GraphRecomputeStage writes this
+        // cycle). Payload is a JSON array of path strings, per Phase 4.
+        store
+            .replace_graph_insights(
+                "default",
+                &[(
+                    "isolated".to_string(),
+                    serde_json::to_string(&vec!["learning/a", "learning/b"]).unwrap(),
+                )],
+            )
+            .await
+            .unwrap();
+
+        ctx.notes = vec![entry("learning/a"), entry("learning/b")];
+
+        let out = NoteWeaveStage::default().execute(ctx).await.unwrap();
+        assert_eq!(
+            out.report.notes_woven, 1,
+            "materialized isolated set must drive weave even when the local scan sees no orphans"
+        );
+        let typed = store
+            .get_typed_relations("learning/a", "default")
+            .await
+            .unwrap();
+        assert!(
+            typed
+                .iter()
+                .any(|(to, rel)| to == "learning/b" && rel == "shared-entity"),
+            "expected a->b typed relation from the materialized-driven weave: {typed:?}"
         );
     }
 

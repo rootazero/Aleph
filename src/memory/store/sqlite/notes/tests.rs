@@ -469,4 +469,90 @@ mod tests {
             "expected typed relation cat/a -> cat/b with 'shared-topic', got: {rels:?}"
         );
     }
+
+    #[tokio::test]
+    async fn community_peers_returns_same_community_excluding_self() {
+        const AGENT: &str = "agent1";
+        let backend = make_backend();
+
+        // Materialize a cache: a + b share community 0, c is in community 1.
+        // Rows are (node_path, community_id, cohesion, degree).
+        backend
+            .replace_graph_cache(
+                AGENT,
+                &[
+                    ("cat/a".to_string(), 0, 0.5, 2),
+                    ("cat/b".to_string(), 0, 0.5, 2),
+                    ("cat/c".to_string(), 1, 0.3, 1),
+                ],
+            )
+            .await
+            .unwrap();
+
+        // a's peers = same community (0) minus a itself → [b], never c.
+        let peers = backend.community_peers(AGENT, "cat/a", 8).await.unwrap();
+        assert_eq!(peers, vec!["cat/b".to_string()]);
+        assert!(!peers.contains(&"cat/a".to_string()), "self excluded");
+        assert!(
+            !peers.contains(&"cat/c".to_string()),
+            "other community excluded"
+        );
+
+        // A path with no cache row (cold/absent) → empty, graceful fallback.
+        let none = backend
+            .community_peers(AGENT, "cat/missing", 8)
+            .await
+            .unwrap();
+        assert!(none.is_empty());
+
+        // A different agent has no cache rows → empty (scoping holds).
+        let other = backend.community_peers("agent2", "cat/a", 8).await.unwrap();
+        assert!(other.is_empty());
+    }
+
+    #[tokio::test]
+    async fn related_peers_returns_scored_rows_descending() {
+        const AGENT: &str = "agent1";
+        let backend = make_backend();
+
+        // Materialize 4-signal related edges for cat/a.
+        // Rows are (node_path, related_path, score).
+        backend
+            .replace_graph_related(
+                AGENT,
+                &[
+                    ("cat/a".to_string(), "cat/b".to_string(), 1.5),
+                    ("cat/a".to_string(), "cat/c".to_string(), 9.0),
+                    ("cat/a".to_string(), "cat/d".to_string(), 4.0),
+                ],
+            )
+            .await
+            .unwrap();
+
+        // a's related peers, ordered by score descending.
+        let peers = backend.related_peers(AGENT, "cat/a", 8).await.unwrap();
+        assert_eq!(
+            peers,
+            vec![
+                ("cat/c".to_string(), 9.0),
+                ("cat/d".to_string(), 4.0),
+                ("cat/b".to_string(), 1.5),
+            ]
+        );
+
+        // limit truncates after the highest scores.
+        let top = backend.related_peers(AGENT, "cat/a", 2).await.unwrap();
+        assert_eq!(
+            top,
+            vec![("cat/c".to_string(), 9.0), ("cat/d".to_string(), 4.0)]
+        );
+
+        // A node with no related rows (cold/absent) → empty, graceful fallback.
+        let none = backend.related_peers(AGENT, "cat/missing", 8).await.unwrap();
+        assert!(none.is_empty());
+
+        // A different agent has no related rows → empty (scoping holds).
+        let other = backend.related_peers("agent2", "cat/a", 8).await.unwrap();
+        assert!(other.is_empty());
+    }
 }

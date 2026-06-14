@@ -44,6 +44,27 @@ mod tests {
     }
 
     #[test]
+    fn graph_tables_created() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("init_schema");
+        for table in [
+            "notes_sources",
+            "notes_graph_cache",
+            "notes_graph_insights",
+            "notes_graph_related",
+        ] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    rusqlite::params![table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "missing table {table}");
+        }
+    }
+
+    #[test]
     fn drop_obsolete_tables_is_idempotent() {
         let conn = Connection::open_in_memory().expect("in-memory db");
         drop_obsolete_facts_tables(&conn).expect("first drop");

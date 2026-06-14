@@ -61,6 +61,9 @@ pub enum NoteManageAction {
     List,
     /// Delete a note file and remove it from the index.
     Delete,
+    /// Read materialized graph-health insights (knowledge gaps, bridges,
+    /// surprising connections). Read-only.
+    Insights,
 }
 
 /// Arguments for the `note_manage` tool.
@@ -251,7 +254,9 @@ impl NoteManageTool {
                     )
                     .await
             }
-            NoteManageAction::Query | NoteManageAction::List => return,
+            NoteManageAction::Query | NoteManageAction::List | NoteManageAction::Insights => {
+                return
+            }
         };
         if let Err(e) = outcome {
             warn!(path = %note_path, error = %e, "note_manage: failed to record lifecycle event");
@@ -754,6 +759,40 @@ impl NoteManageTool {
             notes: None,
         })
     }
+
+    /// Read materialized knowledge-graph health insights for the agent: knowledge
+    /// gaps (isolated notes), sparse communities, bridge notes, and surprising
+    /// cross-community connections. Read-only — the insights are materialized by
+    /// `GraphRecomputeStage` during dreaming, so an empty result simply means the
+    /// graph has not been recomputed yet rather than an error.
+    async fn handle_insights(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
+        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id = agent_id_owned.as_str();
+        let rows = self
+            .indexer
+            .store()
+            .read_graph_insights(agent_id, None)
+            .await
+            .map_err(|e| AlephError::tool(format!("read insights failed: {e}")))?;
+        let mut content = String::from("# Knowledge Graph Insights\n\n");
+        if rows.is_empty() {
+            content.push_str(
+                "_No materialized insights yet (graph recompute runs during dreaming)._\n",
+            );
+        } else {
+            for (kind, payload) in &rows {
+                content.push_str(&format!("## {kind}\n```json\n{payload}\n```\n\n"));
+            }
+        }
+        Ok(NoteManageResult {
+            related_notes: None,
+            success: true,
+            message: format!("Graph insights ({} kinds)", rows.len()),
+            note_path: None,
+            content: Some(content),
+            notes: None,
+        })
+    }
 }
 
 // =============================================================================
@@ -795,6 +834,7 @@ impl AlephTool for NoteManageTool {
             NoteManageAction::Query => self.handle_query(&args).await,
             NoteManageAction::List => self.handle_list(&args).await,
             NoteManageAction::Delete => self.handle_delete(&args).await,
+            NoteManageAction::Insights => self.handle_insights(&args).await,
         }?;
         // Best-effort audit trail for the memory_timeline tool.
         self.record_lifecycle_event(&args, &result).await;
@@ -805,26 +845,6 @@ impl AlephTool for NoteManageTool {
 // =============================================================================
 // Helpers
 // =============================================================================
-
-/// Build a category-specific YAML frontmatter block.
-///
-/// Used by tests to verify template output.
-#[must_use]
-pub fn frontmatter_template(category: &str, title: &str, tags: &[String]) -> String {
-    let now = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let tags_str = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
-    match category {
-        "reference" => format!(
-            "---\ntitle: {title}\naliases: []\ntags: {tags_str}\nsources: []\ncreated: \"{now}\"\nupdated: \"{now}\"\n---"
-        ),
-        "skill" => format!(
-            "---\ntitle: {title}\nscope: persona\ntags: {tags_str}\ncreated: \"{now}\"\nupdated: \"{now}\"\n---"
-        ),
-        _ => format!(
-            "---\ncategory: {category}\ntags: {tags_str}\ncreated: \"{now}\"\nupdated: \"{now}\"\n---"
-        ),
-    }
-}
 
 /// Extract up to 4 significant keywords (length >= 4, lowercased, deduped,
 /// input order preserved) from a note's title+content for the per-keyword
@@ -869,35 +889,6 @@ mod tests {
     #[test]
     fn validate_category_accepts_contradiction() {
         assert!(validate_category("contradiction").is_ok());
-    }
-
-    #[test]
-    fn test_frontmatter_wiki_template() {
-        let tags = vec!["rust".to_string(), "memory".to_string()];
-        let fm = frontmatter_template("reference", "Rust Ownership", &tags);
-        assert!(fm.contains("title: Rust Ownership"));
-        assert!(fm.contains("aliases: []"));
-        assert!(fm.contains("sources: []"));
-        assert!(fm.contains("tags:"));
-    }
-
-    #[test]
-    fn test_frontmatter_skill_template() {
-        let tags = vec!["coding".to_string()];
-        let fm = frontmatter_template("skill", "Async Rust", &tags);
-        assert!(fm.contains("title: Async Rust"));
-        assert!(fm.contains("scope: persona"));
-        assert!(fm.contains("tags:"));
-    }
-
-    #[test]
-    fn test_frontmatter_default_template() {
-        let tags: Vec<String> = vec![];
-        let fm = frontmatter_template("preference", "Editor Config", &tags);
-        assert!(fm.contains("category: preference"));
-        assert!(fm.contains("tags: []"));
-        assert!(fm.contains("created:"));
-        assert!(fm.contains("updated:"));
     }
 
     #[test]
@@ -965,6 +956,26 @@ mod tests {
         assert!(related.iter().all(|n| n.path != "learning/tokio-advanced"));
         // The message carries the linking nudge.
         assert!(r2.message.contains("consider linking"));
+    }
+
+    #[tokio::test]
+    async fn insights_action_returns_ok_on_empty_graph() {
+        let (_d, tool) = mk_tool();
+        let args = NoteManageArgs {
+            action: NoteManageAction::Insights,
+            category: None,
+            filename: None,
+            title: None,
+            content: None,
+            facts: None,
+            links: None,
+            tags: None,
+            query: None,
+            limit: None,
+            agent_id: None,
+        };
+        let r = tool.call(args).await.unwrap();
+        assert!(r.success);
     }
 
     #[tokio::test]

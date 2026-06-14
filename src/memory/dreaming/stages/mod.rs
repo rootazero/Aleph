@@ -1,8 +1,10 @@
 //! Dream pipeline stages: trait definition and stage implementations.
 
+pub mod corpus_narrative;
 pub mod daily_digest;
 pub mod feedback_distill;
 pub mod goal_lessons_promote;
+pub mod graph_recompute;
 pub mod index_refresher;
 pub mod note_consolidate;
 pub mod note_decay;
@@ -16,9 +18,11 @@ pub mod skill_lifecycle;
 pub mod types;
 pub mod workflow_proposal;
 
+pub use corpus_narrative::CorpusNarrativeStage;
 pub use daily_digest::DailyDigestStage;
 pub use feedback_distill::FeedbackDistillStage;
 pub use goal_lessons_promote::GoalLessonsPromoteStage;
+pub use graph_recompute::GraphRecomputeStage;
 pub use index_refresher::IndexRefresherStage;
 pub use note_consolidate::NoteConsolidateStage;
 pub use note_decay::NoteDecayStage;

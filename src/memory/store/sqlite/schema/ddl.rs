@@ -113,6 +113,49 @@ CREATE INDEX IF NOT EXISTS idx_notes_links_from ON notes_links(agent_id, from_no
 CREATE INDEX IF NOT EXISTS idx_notes_links_to ON notes_links(agent_id, to_note);
 "#;
 
+pub const NOTES_SOURCES_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS notes_sources (
+    agent_id   TEXT NOT NULL DEFAULT 'default',
+    note_path  TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    UNIQUE(agent_id, note_path, source_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_notes_sources_ref ON notes_sources(agent_id, source_ref);
+"#;
+
+pub const NOTES_GRAPH_CACHE_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS notes_graph_cache (
+    agent_id     TEXT NOT NULL DEFAULT 'default',
+    node_path    TEXT NOT NULL,
+    community_id INTEGER NOT NULL,
+    cohesion     REAL NOT NULL DEFAULT 0,
+    degree       INTEGER NOT NULL DEFAULT 0,
+    updated_at   INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, node_path)
+);
+"#;
+
+pub const NOTES_GRAPH_INSIGHTS_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS notes_graph_insights (
+    agent_id   TEXT NOT NULL DEFAULT 'default',
+    kind       TEXT NOT NULL,
+    payload    TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notes_graph_insights ON notes_graph_insights(agent_id, kind);
+"#;
+
+pub const NOTES_GRAPH_RELATED_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS notes_graph_related (
+    agent_id     TEXT NOT NULL DEFAULT 'default',
+    node_path    TEXT NOT NULL,
+    related_path TEXT NOT NULL,
+    score        REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (agent_id, node_path, related_path)
+);
+CREATE INDEX IF NOT EXISTS idx_notes_graph_related ON notes_graph_related(agent_id, node_path);
+"#;
+
 pub const NOTES_FTS_DDL: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     path,
