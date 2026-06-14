@@ -57,7 +57,9 @@ node_modules/
 platforms/macos/Aleph/Frameworks/*.dylib
 platforms/macos/Aleph/Frameworks/*.dylib.*
 
-# Claude Code
+# AI agent scaffolding (untracked, kept locally)
+.agent/
+.claude/
 **/.claude/
 
 # Git worktrees
@@ -69,10 +71,8 @@ _bmad/
 # Test / scratch / local files
 core/test.txt
 newinstall*.txt
-*.py
 test-results/
 playwright-report/
-SystemPrompt.md
 
 # Build pipeline artifacts
 apps/macos-native/Aleph/Resources/aleph
@@ -80,35 +80,21 @@ apps/macos-native/build/
 
 # Misc
 agentstructure/
-icons/
-!apps/desktop/src-tauri/icons/
 Aleph.dmg
-apps/macos-native/Aleph/Resources/aleph-server
-# archive/  - intentionally tracked for preserved modules
-bridges/
-clients/
-platforms/
-!src/sandbox/platforms/
 examples/*
 !examples/plugins/
 !examples/protocols/
 !examples/protocols/**
 
 # UI node artifacts
-core/ui/
-# archive/  - intentionally tracked for preserved modules
-.superpowers/
-.omc/
+archive/
 graphify-out/
 **/graphify-out/
+.superpowers/
+.omc/
 .worktrees/
-.worktrees
 .understand-anything/
 .codegraph/
-
-# AI agent scaffolding (untracked, kept locally)
-/.agent/
-/.claude/
 
 # Docs: untrack everything except the README-referenced reference/ docs and
 # the guides/ directory — docs/guides/*.md are compile-time build assets
