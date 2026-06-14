@@ -110,9 +110,10 @@ Example:
         }
 
         let input = MediaInput::FilePath { path };
-        let prompt = args
-            .language
-            .as_deref().map_or_else(|| "Transcribe this audio.".to_string(), |lang| format!("Transcribe this audio. Language: {lang}"));
+        let prompt = args.language.as_deref().map_or_else(
+            || "Transcribe this audio.".to_string(),
+            |lang| format!("Transcribe this audio. Language: {lang}"),
+        );
 
         match self.pipeline.process(&input, &mt, Some(&prompt)).await {
             Ok(output) => {

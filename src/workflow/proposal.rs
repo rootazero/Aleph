@@ -163,13 +163,11 @@ pub fn accept(name: &str) -> Result<PathBuf> {
 #[must_use]
 pub fn already_covered(chain: &[String]) -> bool {
     let name = canonical_name(chain);
-    let in_active = store::list()
-        .is_ok_and(|v| v.iter().any(|m| m.name == name));
+    let in_active = store::list().is_ok_and(|v| v.iter().any(|m| m.name == name));
     if in_active {
         return true;
     }
-    list_proposals()
-        .is_ok_and(|v| v.iter().any(|m| m.name == name))
+    list_proposals().is_ok_and(|v| v.iter().any(|m| m.name == name))
 }
 
 /// True when the active store already contains a user-authored workflow whose

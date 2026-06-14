@@ -22,9 +22,7 @@ impl From<QQError> for ChannelError {
     fn from(e: QQError) -> Self {
         match e {
             QQError::AuthFailed(msg) => Self::AuthFailed(msg),
-            QQError::RateLimited { retry_after_secs } => {
-                Self::RateLimited { retry_after_secs }
-            }
+            QQError::RateLimited { retry_after_secs } => Self::RateLimited { retry_after_secs },
             QQError::HttpError { status, body } => {
                 Self::SendFailed(format!("HTTP {status}: {body}"))
             }

@@ -111,7 +111,10 @@ mod tests {
         let events = cap.events.lock().unwrap();
         match &events[0] {
             LoopTraceEvent::TextEmitted { text, .. } => {
-                assert!(!text.contains("sk-ant-api03-AAAABBBBCCCCDDDD"), "secret leaked: {text}");
+                assert!(
+                    !text.contains("sk-ant-api03-AAAABBBBCCCCDDDD"),
+                    "secret leaked: {text}"
+                );
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -152,7 +155,10 @@ mod tests {
         let events = cap.events.lock().unwrap();
         match &events[0] {
             LoopTraceEvent::SessionCompleted { final_text, .. } => {
-                assert!(!final_text.as_ref().unwrap().contains("AKIAIOSFODNN7EXAMPLE"));
+                assert!(!final_text
+                    .as_ref()
+                    .unwrap()
+                    .contains("AKIAIOSFODNN7EXAMPLE"));
             }
             other => panic!("unexpected event: {other:?}"),
         }

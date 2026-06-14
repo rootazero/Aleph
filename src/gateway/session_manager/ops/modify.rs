@@ -394,9 +394,8 @@ impl SessionManager {
         }
         params.push(&key_str);
 
-        conn.execute(&sql, params.as_slice()).map_err(|e| {
-            SessionManagerError::DatabaseError(format!("Usage update failed: {e}"))
-        })?;
+        conn.execute(&sql, params.as_slice())
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Usage update failed: {e}")))?;
 
         drop(conn);
         self.emit_session_updated(&key_str);

@@ -34,8 +34,11 @@ mod tests;
 
 use std::fmt;
 
-use markdown_to_platform::{markdown_to_telegram_html, markdown_to_slack_mrkdwn, markdown_to_discord, markdown_to_irc, markdown_to_plain};
-use platform_to_markdown::{telegram_html_to_markdown, slack_mrkdwn_to_markdown, irc_to_markdown};
+use markdown_to_platform::{
+    markdown_to_discord, markdown_to_irc, markdown_to_plain, markdown_to_slack_mrkdwn,
+    markdown_to_telegram_html,
+};
+use platform_to_markdown::{irc_to_markdown, slack_mrkdwn_to_markdown, telegram_html_to_markdown};
 use splitting::split_message;
 
 // ---------------------------------------------------------------------------

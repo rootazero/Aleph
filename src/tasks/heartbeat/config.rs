@@ -131,10 +131,14 @@ impl HeartbeatTask {
     #[must_use]
     pub fn new(name: String, agent_id: String, interval_ms: u64, probe: ProbeConfig) -> Self {
         let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).map_or_else(|_| {
-                tracing::warn!("system clock before Unix epoch, using 0");
-                0
-            }, |d| d.as_millis() as i64);
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or_else(
+                |_| {
+                    tracing::warn!("system clock before Unix epoch, using 0");
+                    0
+                },
+                |d| d.as_millis() as i64,
+            );
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name,

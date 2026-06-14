@@ -53,7 +53,8 @@ impl MatrixSdkClient {
             .map_err(|e| ChannelError::Internal(format!("Failed to build Matrix client: {e}")))?;
 
         let device_id = whoami["device_id"]
-            .as_str().map_or_else(|| uuid::Uuid::new_v4().to_string(), |s| s.to_string());
+            .as_str()
+            .map_or_else(|| uuid::Uuid::new_v4().to_string(), |s| s.to_string());
 
         let parsed_user_id = user_id
             .parse()

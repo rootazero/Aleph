@@ -4,7 +4,10 @@ use rusqlite::{params, OptionalExtension};
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_manager::{SessionManager, SessionManagerConfig, SessionState};
 use crate::gateway::session_store::error::SessionStoreError;
-use crate::gateway::session_store::types::{SearchHit, SessionMetadata, SessionFilter, DeleteResult, MessageRecord, CompactStrategy, CompactResult, TruncateResult, CheckpointSummary, SessionPatch, SessionPreview};
+use crate::gateway::session_store::types::{
+    CheckpointSummary, CompactResult, CompactStrategy, DeleteResult, MessageRecord, SearchHit,
+    SessionFilter, SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
+};
 use crate::gateway::session_store::SessionStore;
 
 pub type SqliteSessionStore = SessionManager;

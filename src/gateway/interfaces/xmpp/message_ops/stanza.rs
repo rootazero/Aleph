@@ -35,9 +35,7 @@ pub fn build_auth_stanza(jid: &str, password: &str) -> String {
     let plain = format!("\0{local}\0{password}");
     let encoded = base64_encode(plain.as_bytes());
 
-    format!(
-        "<auth xmlns='urn:ietf:params:xml:ns:xmpp-sasl' mechanism='PLAIN'>{encoded}</auth>"
-    )
+    format!("<auth xmlns='urn:ietf:params:xml:ns:xmpp-sasl' mechanism='PLAIN'>{encoded}</auth>")
 }
 
 /// Build a presence stanza for going online.

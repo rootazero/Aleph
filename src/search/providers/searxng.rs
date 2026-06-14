@@ -218,9 +218,7 @@ impl crate::search::ProviderFactory for SearxngFactory {
     ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>>
     {
         let Some(base) = backend.base_url.as_deref().filter(|s| !s.is_empty()) else {
-            log::warn!(
-                "search backend '{name}' ({NAME}) skipped: base_url missing"
-            );
+            log::warn!("search backend '{name}' ({NAME}) skipped: base_url missing");
             return Ok(None);
         };
         match SearxngProvider::new(

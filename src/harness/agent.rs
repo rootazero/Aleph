@@ -270,9 +270,9 @@ impl AgentHarness {
     /// has not started (test fixtures that call accessors without driving
     /// the loop).
     pub fn duration_ms(&self) -> u64 {
-        self.started_at
-            .get()
-            .map_or(0, |t| t.elapsed().as_millis().try_into().unwrap_or(u64::MAX))
+        self.started_at.get().map_or(0, |t| {
+            t.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
+        })
     }
 
     /// Helper for `act.rs` — append one tool invocation to the timeline.

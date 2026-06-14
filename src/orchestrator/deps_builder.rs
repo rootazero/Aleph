@@ -501,12 +501,7 @@ struct ChainMinBudget {
 /// undefined provider is dropped here exactly as it would be at chain assembly,
 /// so it can never drag the budget down for a route that can't actually happen.
 fn resolve_chain_provider_keys(config: &Config, primary_provider_key: &str) -> Vec<String> {
-    let enabled = |name: &str| {
-        config
-            .providers
-            .get(name)
-            .is_some_and(|p| p.enabled)
-    };
+    let enabled = |name: &str| config.providers.get(name).is_some_and(|p| p.enabled);
     let mut fallbacks: Vec<String> = Vec::new();
     if let Some(fb) = config.fallback_provider.as_ref() {
         for name in fb.resolved_chain() {

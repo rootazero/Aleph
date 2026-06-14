@@ -188,6 +188,5 @@ mod proptest_channel;
 #[cfg(test)]
 mod proptest_protocol;
 
-
 #[cfg(all(test, feature = "loom"))]
 mod loom_concurrency;

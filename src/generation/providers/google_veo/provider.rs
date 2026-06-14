@@ -1,8 +1,14 @@
 //! Google Veo Provider implementation
 
-use super::constants::{DEFAULT_TIMEOUT_SECS, DEFAULT_ENDPOINT, DEFAULT_MODEL, DEFAULT_RESOLUTION, ASPECT_RATIOS, DEFAULT_ASPECT_RATIO, DEFAULT_DURATION_SECS, VEO3_DURATIONS, VEO2_DURATION_RANGE, MAX_POLL_ATTEMPTS, POLL_INTERVAL_SECS};
+use super::constants::{
+    ASPECT_RATIOS, DEFAULT_ASPECT_RATIO, DEFAULT_DURATION_SECS, DEFAULT_ENDPOINT, DEFAULT_MODEL,
+    DEFAULT_RESOLUTION, DEFAULT_TIMEOUT_SECS, MAX_POLL_ATTEMPTS, POLL_INTERVAL_SECS,
+    VEO2_DURATION_RANGE, VEO3_DURATIONS,
+};
 use super::helpers::parse_error_response;
-use super::types::{VeoRequest, VeoInstance, VeoParameters, VeoOperationResponse, VeoPredictResponse};
+use super::types::{
+    VeoInstance, VeoOperationResponse, VeoParameters, VeoPredictResponse, VeoRequest,
+};
 use crate::generation::{
     GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationProvider,
     GenerationRequest, GenerationResult, GenerationType,
@@ -337,10 +343,12 @@ impl GoogleVeoProvider {
     pub(crate) async fn download_video(&self, uri: &str) -> GenerationResult<Vec<u8>> {
         debug!(uri = %uri, "Downloading video from URI");
 
-        let response =
-            self.client.get(uri).send().await.map_err(|e| {
-                GenerationError::network(format!("Failed to download video: {e}"))
-            })?;
+        let response = self
+            .client
+            .get(uri)
+            .send()
+            .await
+            .map_err(|e| GenerationError::network(format!("Failed to download video: {e}")))?;
 
         if !response.status().is_success() {
             return Err(GenerationError::network(format!(

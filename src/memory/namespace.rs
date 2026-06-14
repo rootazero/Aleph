@@ -83,5 +83,4 @@ mod tests {
         );
         assert_eq!(NamespaceScope::Shared.to_namespace_value(), "shared");
     }
-
 }

@@ -205,9 +205,7 @@ pub(crate) async fn edit_image_impl(
     } else if let Some(b64) = &first_image.b64_json {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(b64)
-            .map_err(|e| {
-                GenerationError::serialization(format!("Failed to decode base64: {e}"))
-            })?;
+            .map_err(|e| GenerationError::serialization(format!("Failed to decode base64: {e}")))?;
         GenerationData::bytes(bytes)
     } else {
         return Err(GenerationError::provider(

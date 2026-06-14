@@ -2,7 +2,10 @@
 
 use async_trait::async_trait;
 
-use crate::pim_types::{NoteInfo, NoteContent, CalendarEvent, NewCalendarEvent, CalendarInfo, Reminder, NewReminder, ReminderList, Contact, ContactDetail, ContactGroup};
+use crate::pim_types::{
+    CalendarEvent, CalendarInfo, Contact, ContactDetail, ContactGroup, NewCalendarEvent,
+    NewReminder, NoteContent, NoteInfo, Reminder, ReminderList,
+};
 use crate::Result;
 
 /// Access to the user's personal information: Notes, Calendar, Reminders, Contacts.

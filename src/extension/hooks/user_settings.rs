@@ -216,9 +216,10 @@ fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
             // a single group is rare and easy to express by splitting.
             let timeout_secs = a_or_group_timeout(&g);
 
-            let kind = g
-                .kind
-                .as_deref().map_or_else(|| default_kind_for_event(event), HookKind::from_str_or_default);
+            let kind = g.kind.as_deref().map_or_else(
+                || default_kind_for_event(event),
+                HookKind::from_str_or_default,
+            );
             let priority = g
                 .priority
                 .as_deref()

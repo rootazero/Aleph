@@ -123,9 +123,7 @@ impl crate::search::ProviderFactory for ExaFactory {
     ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>>
     {
         let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
-            log::warn!(
-                "search backend '{name}' ({NAME}) skipped: no api_key in vault"
-            );
+            log::warn!("search backend '{name}' ({NAME}) skipped: no api_key in vault");
             return Ok(None);
         };
         match ExaProvider::new(key.to_string()) {

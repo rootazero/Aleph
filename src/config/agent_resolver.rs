@@ -203,7 +203,8 @@ impl AgentDefinitionResolver {
         if agent.workspace.is_some() {
             let root = defaults
                 .workspace_root
-                .as_ref().map_or_else(default_workspace_root, |p| resolve_user_path(p));
+                .as_ref()
+                .map_or_else(default_workspace_root, |p| resolve_user_path(p));
             tracing::warn!(
                 "Agent '{}': explicit workspace path is deprecated, using {}/{}",
                 agent.id,
@@ -215,7 +216,8 @@ impl AgentDefinitionResolver {
         // Enforce 1:1 binding: workspace dir = agent_id
         let root = defaults
             .workspace_root
-            .as_ref().map_or_else(default_workspace_root, |p| resolve_user_path(p));
+            .as_ref()
+            .map_or_else(default_workspace_root, |p| resolve_user_path(p));
 
         root.join(&agent.id)
     }
@@ -224,7 +226,8 @@ impl AgentDefinitionResolver {
     pub fn resolve_agent_dir(&self, agent: &AgentDefinition, defaults: &AgentDefaults) -> PathBuf {
         let root = defaults
             .agents_root
-            .as_ref().map_or_else(default_agents_root, |p| resolve_user_path(p));
+            .as_ref()
+            .map_or_else(default_agents_root, |p| resolve_user_path(p));
         root.join(&agent.id)
     }
 
@@ -273,8 +276,8 @@ impl AgentDefinitionResolver {
         let old_sessions = workspace_path.join("sessions");
         if old_sessions.is_dir() && !agent_dir.join("sessions").join(".migrated").exists() {
             // Check if there are actual session files to migrate
-            let has_files = fs::read_dir(&old_sessions)
-                .is_ok_and(|mut entries| entries.next().is_some());
+            let has_files =
+                fs::read_dir(&old_sessions).is_ok_and(|mut entries| entries.next().is_some());
             if has_files {
                 let new_sessions = agent_dir.join("sessions");
                 tracing::info!(
@@ -295,8 +298,7 @@ impl AgentDefinitionResolver {
                                 if dest.exists() {
                                     continue;
                                 }
-                                let is_file =
-                                    entry.file_type().is_ok_and(|t| t.is_file());
+                                let is_file = entry.file_type().is_ok_and(|t| t.is_file());
                                 if !is_file || fs::copy(entry.path(), &dest).is_err() {
                                     all_copied = false;
                                 }

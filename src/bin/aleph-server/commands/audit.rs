@@ -184,9 +184,7 @@ pub async fn handle_audit_tool(
     if history.is_empty() {
         println!("\nNo execution history found");
     } else {
-        println!(
-            "\n{COLOR_BOLD}Execution History (last {limit}):{COLOR_RESET}"
-        );
+        println!("\n{COLOR_BOLD}Execution History (last {limit}):{COLOR_RESET}");
         println!("{}", "-".repeat(80));
 
         for record in history {
@@ -223,9 +221,7 @@ pub async fn handle_audit_escalations(limit: usize) -> Result<(), Box<dyn std::e
     }
 
     // Print header
-    println!(
-        "\n{COLOR_BOLD}Escalation Events (last {limit}){COLOR_RESET}"
-    );
+    println!("\n{COLOR_BOLD}Escalation Events (last {limit}){COLOR_RESET}");
     println!("{}", "=".repeat(100));
 
     for record in escalations {

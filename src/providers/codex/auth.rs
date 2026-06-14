@@ -407,9 +407,10 @@ impl CodexAuth {
             ));
         }
 
-        let token_resp: TokenResponse = response.json().await.map_err(|e| {
-            AlephError::provider(format!("Failed to parse refresh response: {e}"))
-        })?;
+        let token_resp: TokenResponse = response
+            .json()
+            .await
+            .map_err(|e| AlephError::provider(format!("Failed to parse refresh response: {e}")))?;
 
         self.access_token = token_resp.access_token;
         if let Some(new_refresh) = token_resp.refresh_token {

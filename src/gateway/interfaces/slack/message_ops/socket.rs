@@ -1,4 +1,7 @@
-use super::{SlackMessageOps, Arc, RwLock, ChannelId, SlackConfig, InboundMessageSender, UserDirectory, INITIAL_BACKOFF, SlackDebouncer, MAX_BACKOFF, Duration, InboundMessage};
+use super::{
+    Arc, ChannelId, Duration, InboundMessage, InboundMessageSender, RwLock, SlackConfig,
+    SlackDebouncer, SlackMessageOps, UserDirectory, INITIAL_BACKOFF, MAX_BACKOFF,
+};
 
 impl SlackMessageOps {
     pub async fn run_socket_mode_loop(

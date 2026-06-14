@@ -21,7 +21,10 @@ const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 
 use crate::error::{AlephError, Result};
 
-use super::types::{SkillSearchResult, SearchApiResponse, SortOrder, BrowseResponse, BrowseApiResponse, SkillDetail, DetailApiResponse, VersionInfo, VersionsResponse};
+use super::types::{
+    BrowseApiResponse, BrowseResponse, DetailApiResponse, SearchApiResponse, SkillDetail,
+    SkillSearchResult, SortOrder, VersionInfo, VersionsResponse,
+};
 
 const DEFAULT_REGISTRY: &str = "https://clawhub.ai";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -319,9 +322,7 @@ impl ClawHubClient {
                     .get("retry-after")
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("60");
-                format!(
-                    "ClawHub rate limit exceeded. Retry after {retry_after} seconds"
-                )
+                format!("ClawHub rate limit exceeded. Retry after {retry_after} seconds")
             }
             _ => {
                 let body = resp

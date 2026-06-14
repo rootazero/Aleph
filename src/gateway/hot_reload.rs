@@ -70,7 +70,10 @@ pub struct ConfigWatcherConfig {
 impl Default for ConfigWatcherConfig {
     fn default() -> Self {
         Self {
-            config_path: dirs::home_dir().map_or_else(|| PathBuf::from("config.toml"), |h| h.join(".aleph/config.toml")),
+            config_path: dirs::home_dir().map_or_else(
+                || PathBuf::from("config.toml"),
+                |h| h.join(".aleph/config.toml"),
+            ),
             debounce_duration: Duration::from_millis(500),
             channel_capacity: 16,
         }

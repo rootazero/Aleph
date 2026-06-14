@@ -276,7 +276,8 @@ impl ElevenLabsProvider {
         if let Ok(error_response) = serde_json::from_str::<types::ElevenLabsErrorResponse>(body) {
             let message = error_response
                 .detail
-                .as_ref().map_or_else(|| body.to_string(), |d| d.message.clone());
+                .as_ref()
+                .map_or_else(|| body.to_string(), |d| d.message.clone());
 
             // Check for validation errors
             if status.as_u16() == 422 {

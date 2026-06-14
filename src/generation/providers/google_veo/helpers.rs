@@ -1,6 +1,8 @@
 //! Helper functions for Google Veo Provider
 
-use super::constants::{ASPECT_RATIOS, RESOLUTIONS, VEO3_DURATIONS, VEO2_DURATION_RANGE, DEFAULT_MODEL};
+use super::constants::{
+    ASPECT_RATIOS, DEFAULT_MODEL, RESOLUTIONS, VEO2_DURATION_RANGE, VEO3_DURATIONS,
+};
 use super::types::GoogleErrorResponse;
 use crate::generation::GenerationError;
 

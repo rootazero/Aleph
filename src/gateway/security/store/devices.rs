@@ -1,4 +1,4 @@
-use super::types::{DeviceUpsertData, DeviceRow};
+use super::types::{DeviceRow, DeviceUpsertData};
 use super::{current_timestamp_ms, SecurityStore};
 use rusqlite::{params, Result as SqliteResult};
 

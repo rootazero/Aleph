@@ -92,13 +92,11 @@ impl ImageData {
             )));
         }
 
-        let after_data = header
-            .strip_prefix("data:")
-            .ok_or_else(|| {
-                AlephError::other(format!(
-                    "Invalid Base64 data URI format: missing 'data:' prefix in header: {header}"
-                ))
-            })?;
+        let after_data = header.strip_prefix("data:").ok_or_else(|| {
+            AlephError::other(format!(
+                "Invalid Base64 data URI format: missing 'data:' prefix in header: {header}"
+            ))
+        })?;
 
         let has_base64_param = after_data
             .split(';')

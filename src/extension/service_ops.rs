@@ -1,6 +1,6 @@
 //! Service management operations for `ExtensionManager`
 
-use crate::extension::error::{ExtensionResult, ExtensionError};
+use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::types::ServiceInfo;
 
 use super::ExtensionManager;

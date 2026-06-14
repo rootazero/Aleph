@@ -167,7 +167,8 @@ fn render_item_markdown(out: &mut String, item: &EnvelopeItem, slot: SlotKind) {
 fn format_date(ts: i64) -> String {
     use chrono::{TimeZone, Utc};
     Utc.timestamp_opt(ts, 0)
-        .single().map_or_else(|| ts.to_string(), |dt| dt.format("%Y-%m-%d").to_string())
+        .single()
+        .map_or_else(|| ts.to_string(), |dt| dt.format("%Y-%m-%d").to_string())
 }
 
 fn render_xml(env: &MemoryEnvelope) -> String {

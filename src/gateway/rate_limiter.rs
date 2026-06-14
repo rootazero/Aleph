@@ -361,17 +361,14 @@ impl RateLimiter {
             // to ZERO if the deque is empty (only possible if a window is
             // configured with max_requests == 0, where `len >= max` is true
             // even with no timestamps) rather than panicking.
-            let retry_after = sw
-                .timestamps
-                .front()
-                .map_or(Duration::ZERO, |oldest| {
-                    let expires_at = *oldest + window_dur;
-                    if expires_at > now {
-                        expires_at.duration_since(now)
-                    } else {
-                        Duration::ZERO
-                    }
-                });
+            let retry_after = sw.timestamps.front().map_or(Duration::ZERO, |oldest| {
+                let expires_at = *oldest + window_dur;
+                if expires_at > now {
+                    expires_at.duration_since(now)
+                } else {
+                    Duration::ZERO
+                }
+            });
             return Err(RateLimitError::Exceeded {
                 scope: key.scope.clone(),
                 retry_after_ms: retry_after.as_millis() as u64,

@@ -318,9 +318,7 @@ impl McpClient {
         let mut best: Option<&Arc<McpServerConnection>> = None;
         for (id, conn) in servers {
             if name.starts_with(&format!("{id}:"))
-                && best
-                    .as_ref()
-                    .is_none_or(|b| b.name().len() < id.len())
+                && best.as_ref().is_none_or(|b| b.name().len() < id.len())
             {
                 best = Some(conn);
             }
@@ -366,9 +364,7 @@ impl McpClient {
         if let Some(connection) = servers.get(server) {
             connection.subscribe_resource(uri).await
         } else {
-            Err(AlephError::NotFound(format!(
-                "Server not found: {server}"
-            )))
+            Err(AlephError::NotFound(format!("Server not found: {server}")))
         }
     }
 
@@ -378,9 +374,7 @@ impl McpClient {
         if let Some(connection) = servers.get(server) {
             connection.unsubscribe_resource(uri).await
         } else {
-            Err(AlephError::NotFound(format!(
-                "Server not found: {server}"
-            )))
+            Err(AlephError::NotFound(format!("Server not found: {server}")))
         }
     }
 

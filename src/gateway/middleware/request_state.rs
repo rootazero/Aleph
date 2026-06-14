@@ -194,7 +194,8 @@ impl RequestStateData {
         }
 
         let now = current_timestamp_ms();
-        self.state.store(u64::from(new_state.as_u8()), Ordering::SeqCst);
+        self.state
+            .store(u64::from(new_state.as_u8()), Ordering::SeqCst);
         self.stage_entered_at.store(now, Ordering::SeqCst);
 
         // If entering a terminal state, record total duration

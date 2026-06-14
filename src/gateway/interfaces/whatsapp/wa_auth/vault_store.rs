@@ -110,8 +110,8 @@ impl WaAuthManager {
             entry.ciphertext.clone()
         };
 
-        let data: WaAuthData = bincode::deserialize(&bytes)
-            .map_err(|e| WaAuthError::Serialization(e.to_string()))?;
+        let data: WaAuthData =
+            bincode::deserialize(&bytes).map_err(|e| WaAuthError::Serialization(e.to_string()))?;
         Ok(data)
     }
 
@@ -124,7 +124,10 @@ impl WaAuthManager {
     /// Returns the `SQLite` database path for whatsapp-rust backend storage.
     #[must_use]
     pub fn db_path(&self) -> String {
-        let base = dirs::data_dir().map_or_else(|| std::env::temp_dir().join("aleph").join("whatsapp"), |p| p.join("aleph").join("whatsapp"));
+        let base = dirs::data_dir().map_or_else(
+            || std::env::temp_dir().join("aleph").join("whatsapp"),
+            |p| p.join("aleph").join("whatsapp"),
+        );
         let _ = std::fs::create_dir_all(&base);
         base.join(format!("auth_{}.db", self.account_id))
             .to_string_lossy()

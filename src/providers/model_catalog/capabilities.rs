@@ -804,9 +804,16 @@ mod tests {
             8_192
         );
         // Dotless hosted id (ollama) falls through to the broad entry.
-        assert_eq!(capabilities_for("llama3.3:70b").unwrap().context_window, 131_072);
+        assert_eq!(
+            capabilities_for("llama3.3:70b").unwrap().context_window,
+            131_072
+        );
         // Llama 4 is multimodal; 3.x text models are not.
-        assert!(capabilities_for("llama-4-maverick").unwrap().supports_vision);
+        assert!(
+            capabilities_for("llama-4-maverick")
+                .unwrap()
+                .supports_vision
+        );
         assert!(!capabilities_for("llama-3.3-70b").unwrap().supports_vision);
     }
 
@@ -814,7 +821,9 @@ mod tests {
     fn cohere_and_perplexity_resolve() {
         // Command-A (256K) must precede the broad `command` (128K).
         assert_eq!(
-            capabilities_for("command-a-03-2025").unwrap().context_window,
+            capabilities_for("command-a-03-2025")
+                .unwrap()
+                .context_window,
             256_000
         );
         assert_eq!(
@@ -828,6 +837,9 @@ mod tests {
                 .supports_reasoning
         );
         assert!(!capabilities_for("sonar").unwrap().supports_reasoning);
-        assert_eq!(capabilities_for("sonar-pro").unwrap().context_window, 200_000);
+        assert_eq!(
+            capabilities_for("sonar-pro").unwrap().context_window,
+            200_000
+        );
     }
 }

@@ -257,7 +257,8 @@ impl HarnessRunner for AgentHarnessRunner {
         // being shadowed by that provider's static catalog. (3) is byte-identical
         // to before — directive-less requests send `model: None`, which the
         // failover primary ignores, walking its catalog as usual.
-        let session_pref_key = SessionKey::from_key_string(&session_key).map_or_else(|| session_key.clone(), |s| s.to_key_string());
+        let session_pref_key = SessionKey::from_key_string(&session_key)
+            .map_or_else(|| session_key.clone(), |s| s.to_key_string());
         let model_directive: Option<(Option<String>, String)> =
             crate::providers::session_model_handle::get_session_model(&session_pref_key)
                 .map(|p| (p.provider, p.model))
@@ -1092,14 +1093,12 @@ impl AgentHarnessRunner {
         if let Some(text) = memory_text {
             builder = builder.with_memory_user_message(text);
         }
-        let identity_chars = identity_files
-            .as_ref()
-            .map_or(0, |f| {
-                f.files
-                    .iter()
-                    .filter_map(|file| file.content.as_ref().map(String::len))
-                    .sum::<usize>()
-            });
+        let identity_chars = identity_files.as_ref().map_or(0, |f| {
+            f.files
+                .iter()
+                .filter_map(|file| file.content.as_ref().map(String::len))
+                .sum::<usize>()
+        });
         if let Some(files) = identity_files {
             if has_identity {
                 builder = builder.with_identity_files(files);
@@ -1194,7 +1193,8 @@ impl AgentHarnessRunner {
         // different model family can advertise the correct target
         // (e.g., `protocol = "openai"`, override = `"anthropic"`).
         let provider_protocol = provider
-            .model_behavior_override().map_or_else(|| provider.protocol().to_string(), |s| s.to_string());
+            .model_behavior_override()
+            .map_or_else(|| provider.protocol().to_string(), |s| s.to_string());
         builder = builder.with_provider_protocol(provider_protocol);
         // Phase 4 (F2): surface the resolved iteration cap to
         // `SessionBudgetLayer`. Saturating to `u32::MAX` (instead of

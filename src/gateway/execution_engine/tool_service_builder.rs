@@ -169,8 +169,17 @@ mod tests {
         reg.register(Box::new(StubTool));
         let registry = Arc::new(reg);
 
-        let svc =
-            build_request_tool_service(registry, BTreeSet::new(), None, None, None, None, "", None, false);
+        let svc = build_request_tool_service(
+            registry,
+            BTreeSet::new(),
+            None,
+            None,
+            None,
+            None,
+            "",
+            None,
+            false,
+        );
         let defs = svc.list().await;
         assert!(defs.iter().any(|d| d.name == "read_file"));
     }
@@ -182,7 +191,8 @@ mod tests {
         let registry = Arc::new(reg);
 
         let allowed: BTreeSet<String> = ["other".to_string()].into_iter().collect();
-        let svc = build_request_tool_service(registry, allowed, None, None, None, None, "", None, false);
+        let svc =
+            build_request_tool_service(registry, allowed, None, None, None, None, "", None, false);
         let defs = svc.list().await;
         assert!(
             defs.iter().all(|d| d.name != "read_file"),

@@ -145,9 +145,7 @@ impl StateDatabase {
             })
             .map_err(|e| AlephError::config(format!("Failed to query group chat turns: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| {
-                AlephError::config(format!("Failed to collect group chat turns: {e}"))
-            })?;
+            .map_err(|e| AlephError::config(format!("Failed to collect group chat turns: {e}")))?;
 
         Ok(turns)
     }

@@ -113,7 +113,10 @@ impl EscapeAbort for EscapeListener {
         // Hold the lock across the entire check-and-install sequence to prevent
         // a race where another thread calls stop() between the emptiness check
         // and monitor installation.
-        let mut monitors = self.monitors.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut monitors = self
+            .monitors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // Re-entrant: if already active, return immediately.
         if !monitors.is_empty() {
@@ -160,7 +163,10 @@ impl EscapeAbort for EscapeListener {
     }
 
     fn stop(&self) {
-        let mut monitors = self.monitors.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut monitors = self
+            .monitors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for handle in monitors.drain(..) {
             // SAFETY: monitors were returned by addGlobal/LocalMonitor.
             unsafe { NSEvent::removeMonitor(&handle.0) };

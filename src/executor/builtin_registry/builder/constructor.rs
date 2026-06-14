@@ -329,14 +329,17 @@ impl BuiltinToolRegistry {
             );
             let ws_handle = search_tool.default_workspace_handle();
             let sk_handle = search_tool.default_session_key_handle();
-        let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-            dirs::home_dir().map_or_else(|| {
-                    std::env::temp_dir()
-                        .join("aleph")
-                        .join("memory")
-                        .join("note")
-                }, |p| p.join(".aleph").join("memory").join("note"))
-        });
+            let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+                dirs::home_dir().map_or_else(
+                    || {
+                        std::env::temp_dir()
+                            .join("aleph")
+                            .join("memory")
+                            .join("note")
+                    },
+                    |p| p.join(".aleph").join("memory").join("note"),
+                )
+            });
             let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string());
             let explore_tool = MemoryExploreTool::new(db.clone(), Arc::clone(embedder));
             info!("Created memory_search, memory_browse, and memory_explore tools");
@@ -349,13 +352,16 @@ impl BuiltinToolRegistry {
             )
         } else if config.memory_db.is_some() {
             let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                dirs::home_dir().map_or_else(|| {
+                dirs::home_dir().map_or_else(
+                    || {
                         std::env::temp_dir()
                             .join("aleph")
                             .join("memory")
                             .join("note")
-                    }, |p| p.join(".aleph").join("memory").join("note"))
-        });
+                    },
+                    |p| p.join(".aleph").join("memory").join("note"),
+                )
+            });
             let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string());
             info!("Created memory_browse tool (no embedder for memory_search)");
             (None, Some(browse_tool), None, None, None)
@@ -1542,13 +1548,16 @@ impl BuiltinToolRegistry {
         // Note management tool — unified CRUD for all note categories
         let note_manage_tool = if let Some(ref db) = config.memory_db {
             let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                dirs::home_dir().map_or_else(|| {
+                dirs::home_dir().map_or_else(
+                    || {
                         std::env::temp_dir()
                             .join("aleph")
                             .join("data")
                             .join("memory")
                             .join("note")
-                    }, |p| p.join(".aleph").join("data").join("memory").join("note"))
+                    },
+                    |p| p.join(".aleph").join("data").join("memory").join("note"),
+                )
             });
             let mut tool =
                 crate::builtin_tools::note_manage::NoteManageTool::new(memory_dir, db.clone())

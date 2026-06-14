@@ -3,7 +3,7 @@ use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::a2a::domain::{AgentCard, A2AError, A2AMessage, Part, ListTasksParams};
+use crate::a2a::domain::{A2AError, A2AMessage, AgentCard, ListTasksParams, Part};
 use crate::a2a::port::authenticator::{A2AAction, A2AAuthPrincipal, A2AAuthenticator};
 use crate::a2a::port::message_handler::A2AMessageHandler;
 use crate::a2a::port::streaming::A2AStreamingHandler;
@@ -174,7 +174,8 @@ impl A2ARequestProcessor {
         let task_id = request
             .params
             .get("taskId")
-            .and_then(|v| v.as_str()).map_or_else(|| uuid::Uuid::new_v4().to_string(), String::from);
+            .and_then(|v| v.as_str())
+            .map_or_else(|| uuid::Uuid::new_v4().to_string(), String::from);
 
         let session_id = request
             .params

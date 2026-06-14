@@ -4,7 +4,10 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 
-use super::types::{ArenaId, ArenaManifest, AgentId, ArenaSlot, ArenaProgress, ArenaStatus, SharedFact, AgentProgress, Artifact, SlotStatus};
+use super::types::{
+    AgentId, AgentProgress, ArenaId, ArenaManifest, ArenaProgress, ArenaSlot, ArenaStatus,
+    Artifact, SharedFact, SlotStatus,
+};
 use crate::domain::{AggregateRoot, Entity};
 
 const MAX_SHARED_FACTS: usize = 10_000;

@@ -433,10 +433,12 @@ impl SlackChannel {
     }
 
     async fn download_url(&self, url: &str) -> ChannelResult<Vec<u8>> {
-        let response =
-            self.client.get(url).send().await.map_err(|e| {
-                ChannelError::SendFailed(format!("Failed to download {url}: {e}"))
-            })?;
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to download {url}: {e}")))?;
 
         if !response.status().is_success() {
             return Err(ChannelError::SendFailed(format!(
@@ -445,9 +447,10 @@ impl SlackChannel {
             )));
         }
 
-        let bytes = response.bytes().await.map_err(|e| {
-            ChannelError::SendFailed(format!("Failed to read download body: {e}"))
-        })?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to read download body: {e}")))?;
 
         Ok(bytes.to_vec())
     }

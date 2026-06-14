@@ -1,4 +1,8 @@
-use aleph_desktop::pim_types::{MailFolder, MailMessage, MailMessageDetail, NoteInfo, NoteContent, CalendarEvent, NewCalendarEvent, CalendarInfo, Reminder, NewReminder, ReminderList, Contact, ContactDetail, ContactGroup};
+use aleph_desktop::pim_types::{
+    CalendarEvent, CalendarInfo, Contact, ContactDetail, ContactGroup, MailFolder, MailMessage,
+    MailMessageDetail, NewCalendarEvent, NewReminder, NoteContent, NoteInfo, Reminder,
+    ReminderList,
+};
 use aleph_desktop::traits::PimCapability;
 use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;

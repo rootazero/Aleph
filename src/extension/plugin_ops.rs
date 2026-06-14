@@ -1,6 +1,6 @@
 //! Plugin execution operations for `ExtensionManager`
 
-use crate::extension::error::{ExtensionResult, ExtensionError};
+use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest;
 use crate::extension::registry::PluginRegistry;
 use crate::extension::types::{DirectCommandResult, PluginInfo, PluginRecord};

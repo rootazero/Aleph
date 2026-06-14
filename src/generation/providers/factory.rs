@@ -1,7 +1,13 @@
 //! Factory function for creating generation providers from configuration.
 
 use super::url_normalize::resolve_base_url;
-use super::{OpenAiImageProvider, OpenAiTtsProvider, OpenAiWhisperProvider, DeepgramSttProvider, DeepgramTtsProvider, AzureSpeechProvider, SunoProvider, BflProvider, CartesiaProvider, MinimaxTtsProvider, VolcengineTtsProvider, OpenAiCompatProvider, StabilityImageProvider, GoogleImagenProvider, GoogleVeoProvider, ReplicateProvider, ElevenLabsProvider, FalProvider, MidjourneyProvider, MidjourneyMode};
+use super::{
+    AzureSpeechProvider, BflProvider, CartesiaProvider, DeepgramSttProvider, DeepgramTtsProvider,
+    ElevenLabsProvider, FalProvider, GoogleImagenProvider, GoogleVeoProvider, MidjourneyMode,
+    MidjourneyProvider, MinimaxTtsProvider, OpenAiCompatProvider, OpenAiImageProvider,
+    OpenAiTtsProvider, OpenAiWhisperProvider, ReplicateProvider, StabilityImageProvider,
+    SunoProvider, VolcengineTtsProvider,
+};
 use crate::config::GenerationProviderConfig;
 use crate::generation::{GenerationError, GenerationProvider, GenerationResult, GenerationType};
 use crate::sync_primitives::Arc;
@@ -93,10 +99,7 @@ pub fn create_provider(
     }
 
     let api_key = config.api_key.clone().ok_or_else(|| {
-        GenerationError::authentication(
-            format!("API key is required for provider '{name}'"),
-            name,
-        )
+        GenerationError::authentication(format!("API key is required for provider '{name}'"), name)
     })?;
 
     let provider: Arc<dyn GenerationProvider> = match config.provider_type.as_str() {
@@ -270,9 +273,7 @@ pub fn create_provider(
                     "relax" | "mj-relax" => MidjourneyMode::Relax,
                     _ => {
                         return Err(GenerationError::invalid_parameters(
-                            format!(
-                                "Invalid midjourney mode: '{model}'. Supported: fast, relax"
-                            ),
+                            format!("Invalid midjourney mode: '{model}'. Supported: fast, relax"),
                             Some("model".to_string()),
                         ));
                     }

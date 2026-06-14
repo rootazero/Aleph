@@ -11,9 +11,7 @@ use aleph_desktop::{DesktopError, Result};
 pub async fn send_notification(title: &str, body: &str) -> Result<()> {
     let escaped_title = title.replace('\\', "\\\\").replace('"', "\\\"");
     let escaped_body = body.replace('\\', "\\\\").replace('"', "\\\"");
-    let script = format!(
-        "display notification \"{escaped_body}\" with title \"{escaped_title}\""
-    );
+    let script = format!("display notification \"{escaped_body}\" with title \"{escaped_title}\"");
 
     let output = tokio::process::Command::new("osascript")
         .arg("-e")

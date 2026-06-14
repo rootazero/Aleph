@@ -3,7 +3,18 @@
 //! The pipeline holds an ordered list of [`PromptLayer`] implementations
 //! and executes them in priority order for a given [`AssemblyPath`].
 
-use super::layers::{SoulLayer, AgentRoleLayer, CuratedMemoryLayer, InboundContextLayer, ChainContextLayer, McpInstructionsLayer, VoiceModeLayer, ProfileLayer, RoleLayer, RuntimeContextLayer, EnvironmentLayer, RuntimeCapabilitiesLayer, ToolsLayer, HydratedToolsLayer, ToolRuntimeStateLayer, AgentCatalogLayer, ToolUsageGrammarLayer, SecurityLayer, ProtocolTokensLayer, HeartbeatLayer, OperationalGuidelinesLayer, ProviderGuidanceLayer, SessionBudgetLayer, CitationStandardsLayer, GenerationModelsLayer, SkillInstructionsLayer, SpecialActionsLayer, GuidelinesLayer, ThinkingGuidanceLayer, SkillModeLayer, CustomInstructionsLayer, IdentityFilesLayer, ExtraFilesLayer, MemoryAugmentationLayer, MemoryProtocolLayer, SessionContextGuideLayer, StandingGoalLayer, ExecutionPlanLayer, SessionResumeLayer, LanguageLayer};
+use super::layers::{
+    AgentCatalogLayer, AgentRoleLayer, ChainContextLayer, CitationStandardsLayer,
+    CuratedMemoryLayer, CustomInstructionsLayer, EnvironmentLayer, ExecutionPlanLayer,
+    ExtraFilesLayer, GenerationModelsLayer, GuidelinesLayer, HeartbeatLayer, HydratedToolsLayer,
+    IdentityFilesLayer, InboundContextLayer, LanguageLayer, McpInstructionsLayer,
+    MemoryAugmentationLayer, MemoryProtocolLayer, OperationalGuidelinesLayer, ProfileLayer,
+    ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
+    RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
+    SessionResumeLayer, SkillInstructionsLayer, SkillModeLayer, SoulLayer, SpecialActionsLayer,
+    StandingGoalLayer, ThinkingGuidanceLayer, ToolRuntimeStateLayer, ToolUsageGrammarLayer,
+    ToolsLayer, VoiceModeLayer,
+};
 use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_mode::PromptMode;

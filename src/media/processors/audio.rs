@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 use crate::media::error::MediaError;
 use crate::media::provider::MediaProvider;
-use crate::media::types::{MediaType, AudioFormat, MediaInput, MediaOutput};
+use crate::media::types::{AudioFormat, MediaInput, MediaOutput, MediaType};
 
 /// Placeholder audio provider that returns a "not configured" error.
 ///

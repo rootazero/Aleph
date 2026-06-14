@@ -529,14 +529,17 @@ mod tests {
         // Neither → None (Round 1 terminal behavior).
         assert!(effective_gate(None, None).is_none());
         // Global only → the global vector (length preserved).
-        let global: Arc<Vec<Arc<dyn StopHookHandler>>> =
-            Arc::new(vec![Arc::new(ShellStopHook::new("g", "true")) as Arc<dyn StopHookHandler>]);
+        let global: Arc<Vec<Arc<dyn StopHookHandler>>> = Arc::new(vec![
+            Arc::new(ShellStopHook::new("g", "true")) as Arc<dyn StopHookHandler>,
+        ]);
         assert_eq!(effective_gate(Some(&global), None).unwrap().len(), 1);
         // Per-goal only → one hook.
         assert_eq!(effective_gate(None, Some("cargo test")).unwrap().len(), 1);
         // Both → global ⧺ per-goal.
         assert_eq!(
-            effective_gate(Some(&global), Some("cargo test")).unwrap().len(),
+            effective_gate(Some(&global), Some("cargo test"))
+                .unwrap()
+                .len(),
             2
         );
     }

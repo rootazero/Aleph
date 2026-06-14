@@ -37,7 +37,11 @@ impl AnthropicProtocol {
         let raw_base_url = config
             .base_url
             .as_ref()
-            .filter(|s| !s.is_empty()).map_or_else(|| "https://api.anthropic.com".to_string(), |s| s.to_string());
+            .filter(|s| !s.is_empty())
+            .map_or_else(
+                || "https://api.anthropic.com".to_string(),
+                |s| s.to_string(),
+            );
 
         // Normalize URL
         let base_url = raw_base_url
@@ -252,9 +256,8 @@ impl AnthropicProtocol {
                                         text, ..
                                     } => parts.push(text.clone()),
                                     crate::providers::message::ContentBlock::Json { value } => {
-                                        parts.push(
-                                            serde_json::to_string(value).unwrap_or_default(),
-                                        );
+                                        parts
+                                            .push(serde_json::to_string(value).unwrap_or_default());
                                     }
                                     crate::providers::message::ContentBlock::Image {
                                         data,

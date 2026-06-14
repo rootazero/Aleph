@@ -16,12 +16,10 @@ use crate::memory::notes::governance::gate::{
 };
 use crate::memory::notes::indexer::NoteIndexer;
 use crate::memory::notes::ingest::plan::{IngestPlan, PageOp, SchemaProposal};
-use crate::memory::notes::keyword_linker::{
-    extract_keywords, pair_by_overlap, NoteForExtraction,
-};
 use crate::memory::notes::ingest::prompts::{build_compound_system_prompt, PROMPT_LINK_REPAIR};
 use crate::memory::notes::ingest::ref_table::{RefTable, ResolveStats};
 use crate::memory::notes::ingest::retrieve::{RelatedBudget, RelatedPage};
+use crate::memory::notes::keyword_linker::{extract_keywords, pair_by_overlap, NoteForExtraction};
 use crate::memory::notes::orientation::NoteOrientation;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::KnowledgeNote;
@@ -933,7 +931,10 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
             }
         }
         if linked > 0 {
-            info!(linked, "keyword link: merged FTS-overlap links into creates");
+            info!(
+                linked,
+                "keyword link: merged FTS-overlap links into creates"
+            );
         }
         ops
     }

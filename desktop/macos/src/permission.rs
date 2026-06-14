@@ -286,7 +286,9 @@ const fn av_status_to_permission(status: AVAuthorizationStatus) -> PermissionSta
     }
 }
 
-const fn sf_status_to_permission(status: SFSpeechRecognizerAuthorizationStatus) -> PermissionStatus {
+const fn sf_status_to_permission(
+    status: SFSpeechRecognizerAuthorizationStatus,
+) -> PermissionStatus {
     match status {
         SFSpeechRecognizerAuthorizationStatus::Authorized => PermissionStatus::Granted,
         SFSpeechRecognizerAuthorizationStatus::Denied => PermissionStatus::Denied,

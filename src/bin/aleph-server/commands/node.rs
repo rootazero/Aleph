@@ -247,7 +247,9 @@ async fn run_session(
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(64);
     let channel = ReverseRpcChannel::new(out_tx.clone());
     let pending = channel.pending();
-    *approval_slot.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(channel);
+    *approval_slot
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(channel);
 
     let writer = tokio::spawn(async move {
         while let Some(frame) = out_rx.recv().await {
@@ -290,7 +292,9 @@ async fn run_session(
     .await;
 
     // Cleanup on every exit path: fail-close the approval slot + stop the writer.
-    *approval_slot.write().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    *approval_slot
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     writer.abort();
     loop_result?;
     Ok(())

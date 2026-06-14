@@ -257,7 +257,8 @@ impl McpManagerActor {
         for server_id in to_restart {
             let server_name = self
                 .config
-                .get_server(&server_id).map_or_else(|| server_id.clone(), |c| c.name.clone());
+                .get_server(&server_id)
+                .map_or_else(|| server_id.clone(), |c| c.name.clone());
             // Emit ServerCrashed first so the tool bridge drops the dead
             // server's tools from the registry before the restart re-publishes
             // a fresh set via the ServerStarted event.
@@ -473,7 +474,8 @@ impl McpManagerActor {
         // Get server name before removal for event
         let server_name = self
             .config
-            .get_server(server_id).map_or_else(|| server_id.to_string(), |c| c.name.clone());
+            .get_server(server_id)
+            .map_or_else(|| server_id.to_string(), |c| c.name.clone());
 
         // Stop if running
         self.stop_server_internal(server_id).await;
@@ -607,7 +609,8 @@ impl McpManagerActor {
 
         let server_name = self
             .config
-            .get_server(server_id).map_or_else(|| server_id.to_string(), |c| c.name.clone());
+            .get_server(server_id)
+            .map_or_else(|| server_id.to_string(), |c| c.name.clone());
 
         self.stop_server_internal(server_id).await;
 

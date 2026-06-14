@@ -118,7 +118,10 @@ fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
     ProviderConfig {
         protocol: preset.map(|p| p.protocol.to_string()),
         api_key: None,
-        models: vec![preset.map_or_else(|| "gpt-5.3-codex".to_string(), |p| p.default_model.to_string())],
+        models: vec![preset.map_or_else(
+            || "gpt-5.3-codex".to_string(),
+            |p| p.default_model.to_string(),
+        )],
         base_url: preset.map(|p| p.base_url.to_string()),
         color: preset.map_or_else(|| "#808080".to_string(), |p| p.color.to_string()),
         timeout_seconds: 300,

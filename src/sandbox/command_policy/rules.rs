@@ -192,7 +192,9 @@ mod tests {
     #[test]
     fn hardline_rules_are_all_block_action() {
         assert!(
-            hardline_rules().iter().all(|r| r.action == RuleAction::Block),
+            hardline_rules()
+                .iter()
+                .all(|r| r.action == RuleAction::Block),
             "the catastrophic floor must be block-action"
         );
     }

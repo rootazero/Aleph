@@ -2,8 +2,12 @@
 //!
 //! Implements the multi-directory scanning strategy with upward traversal.
 
-use super::paths::{aleph_home_dir, claude_home_dir, find_git_root, find_dir_upward, CLAUDE_HOME_DIR, validate_path_component, find_file_upward, PLUGINS_DIR, AGENT_FILE, SKILL_FILE, PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE, MCP_CONFIG_FILE};
-use super::types::{ScanDirectory, DiscoverySource, DiscoveredPath};
+use super::paths::{
+    aleph_home_dir, claude_home_dir, find_dir_upward, find_file_upward, find_git_root,
+    validate_path_component, AGENT_FILE, CLAUDE_HOME_DIR, MCP_CONFIG_FILE, PLUGINS_DIR,
+    PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE, SKILL_FILE,
+};
+use super::types::{DiscoveredPath, DiscoverySource, ScanDirectory};
 use super::{DiscoveryConfig, DiscoveryError, DiscoveryResult};
 use std::path::{Path, PathBuf};
 use tracing::{debug, trace};

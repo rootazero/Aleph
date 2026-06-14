@@ -1,4 +1,6 @@
-use super::{GatewayServer, Arc, AgentEnvStore, MemoryBackend, workspace_handlers, config_handlers};
+use super::{
+    config_handlers, workspace_handlers, AgentEnvStore, Arc, GatewayServer, MemoryBackend,
+};
 
 pub(in crate::commands::start) fn register_workspace_handlers(
     server: &mut GatewayServer,

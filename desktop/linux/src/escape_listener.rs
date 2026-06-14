@@ -86,7 +86,9 @@ impl EscapeAbort for LinuxEscapeListener {
                 path = %path.display(),
                 "Linux escape listener armed — `touch` this file to abort desktop control"
             );
-        } else { warn!("HOME is unset — Linux desktop-abort sentinel is unavailable") }
+        } else {
+            warn!("HOME is unset — Linux desktop-abort sentinel is unavailable")
+        }
         Ok(())
     }
 

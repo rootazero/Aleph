@@ -583,10 +583,8 @@ impl Channel for TelegramChannel {
                     let channel_id = channel_id_for_cb.clone();
                     let access = access_for_cb.clone();
                     async move {
-                        let (raw_chat_id, thread_id_val) = q
-                            .message
-                            .as_ref()
-                            .map_or((0, None), |m| {
+                        let (raw_chat_id, thread_id_val) =
+                            q.message.as_ref().map_or((0, None), |m| {
                                 let chat = m.chat().id.0;
                                 let tid = match m {
                                     teloxide::types::MaybeInaccessibleMessage::Regular(msg) => {

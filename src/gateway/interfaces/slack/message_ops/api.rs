@@ -1,4 +1,7 @@
-use super::{ChannelError, SLACK_API_BASE, SendResult, MessageFormatter, MarkupFormat, SLACK_MSG_LIMIT, MessageId, Utc, ChannelResult};
+use super::{
+    ChannelError, ChannelResult, MarkupFormat, MessageFormatter, MessageId, SendResult, Utc,
+    SLACK_API_BASE, SLACK_MSG_LIMIT,
+};
 
 pub struct SlackMessageOps;
 

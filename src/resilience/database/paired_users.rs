@@ -19,17 +19,17 @@ impl StateDatabase {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT user_id FROM paired_users WHERE channel_id = ?1")
-            .map_err(|e| {
-                AlephError::config(format!("Failed to prepare load_paired_users: {e}"))
-            })?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare load_paired_users: {e}")))?;
         let rows = stmt
             .query_map(params![channel_id], |row| row.get(0))
             .map_err(|e| AlephError::config(format!("Failed to load paired users: {e}")))?;
         let mut user_ids = Vec::new();
         for row in rows {
-            user_ids.push(row.map_err(|e| {
-                AlephError::config(format!("Failed to read paired user row: {e}"))
-            })?);
+            user_ids.push(
+                row.map_err(|e| {
+                    AlephError::config(format!("Failed to read paired user row: {e}"))
+                })?,
+            );
         }
         Ok(user_ids)
     }

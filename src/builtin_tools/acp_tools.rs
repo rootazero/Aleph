@@ -235,9 +235,7 @@ impl AlephTool for AcpSwitchTool {
             .display_name(&args.target)
             .await
             .unwrap_or_else(|| args.target.clone());
-        let msg = format!(
-            "Switched to {display_name}. Messages will be forwarded to this agent."
-        );
+        let msg = format!("Switched to {display_name}. Messages will be forwarded to this agent.");
 
         info!(target = %args.target, "ACP agent switch");
         notify_tool_result(Self::NAME, &msg, true);
@@ -445,9 +443,10 @@ fn parse_mode(s: &str) -> Result<AdapterMode> {
 }
 
 fn resolve_cwd(cwd: Option<&str>) -> String {
-    cwd.map_or_else(|| {
-        dirs::home_dir().map_or_else(|| ".".to_string(), |p| p.to_string_lossy().into_owned())
-    }, |s| s.to_string())
+    cwd.map_or_else(
+        || dirs::home_dir().map_or_else(|| ".".to_string(), |p| p.to_string_lossy().into_owned()),
+        |s| s.to_string(),
+    )
 }
 
 /// Truncate a string to at most `max_len` characters, appending "..." if truncated.

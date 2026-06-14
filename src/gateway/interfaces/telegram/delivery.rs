@@ -23,7 +23,9 @@ use super::error_cooldown::{ErrorCooldown, ErrorKind};
 ///
 /// Returns `None` for [`LinkPreviewMode::Enabled`] — Telegram's default
 /// behaviour, so the request is left untouched (no API field emitted).
-const fn link_preview_options(mode: LinkPreviewMode) -> Option<teloxide::types::LinkPreviewOptions> {
+const fn link_preview_options(
+    mode: LinkPreviewMode,
+) -> Option<teloxide::types::LinkPreviewOptions> {
     use teloxide::types::LinkPreviewOptions;
     match mode {
         LinkPreviewMode::Enabled => None,

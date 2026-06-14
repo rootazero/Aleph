@@ -52,9 +52,7 @@ pub fn validate_plugin(plugin_dir: &Path) -> ValidationResult {
     let manifest = match super::manifest::parse_manifest_from_dir_sync(plugin_dir) {
         Ok(m) => m,
         Err(e) => {
-            result
-                .errors
-                .push(format!("Failed to parse manifest: {e}"));
+            result.errors.push(format!("Failed to parse manifest: {e}"));
             return result;
         }
     };

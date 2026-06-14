@@ -114,7 +114,10 @@ pub async fn run(args: BootstrapRuntimeArgs) -> i32 {
 
 fn resolve_targets(args: &BootstrapRuntimeArgs) -> Vec<String> {
     let base: Vec<String> = if args.only.is_empty() {
-        DEFAULT_TARGETS.iter().map(std::string::ToString::to_string).collect()
+        DEFAULT_TARGETS
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect()
     } else {
         args.only.clone()
     };

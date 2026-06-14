@@ -172,8 +172,10 @@ impl LocalVoiceProvider {
             .bytes()
             .await
             .map_err(|e| GenerationError::provider(format!("body: {e}"), None, "local"))?;
-        let mut output =
-            GenerationOutput::new(GenerationType::Speech, GenerationData::Bytes(bytes.to_vec()));
+        let mut output = GenerationOutput::new(
+            GenerationType::Speech,
+            GenerationData::Bytes(bytes.to_vec()),
+        );
         output.metadata.content_type = Some(content_type.to_string());
         Ok(output)
     }

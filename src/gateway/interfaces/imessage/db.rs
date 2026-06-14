@@ -126,7 +126,11 @@ impl MessagesDb {
     }
 
     /// Configure attachment handling (from `IMessageConfig`).
-    pub const fn set_attachment_policy(&mut self, include_attachments: bool, max_attachment_size: u64) {
+    pub const fn set_attachment_policy(
+        &mut self,
+        include_attachments: bool,
+        max_attachment_size: u64,
+    ) {
         self.include_attachments = include_attachments;
         self.max_attachment_size = max_attachment_size;
     }

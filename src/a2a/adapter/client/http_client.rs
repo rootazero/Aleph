@@ -5,7 +5,9 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::a2a::domain::{AgentCard, A2AError, A2AMessage, A2ATask, UpdateEvent, ListTasksParams, ListTasksResult};
+use crate::a2a::domain::{
+    A2AError, A2AMessage, A2ATask, AgentCard, ListTasksParams, ListTasksResult, UpdateEvent,
+};
 use crate::a2a::port::A2AResult;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;

@@ -631,9 +631,7 @@ impl McpServerConnection {
                     use base64::Engine;
                     let data = base64::engine::general_purpose::STANDARD
                         .decode(&blob)
-                        .map_err(|e| {
-                            AlephError::IoError(format!("Failed to decode blob: {e}"))
-                        })?;
+                        .map_err(|e| AlephError::IoError(format!("Failed to decode blob: {e}")))?;
                     Ok(crate::mcp::resources::ResourceContent::Binary {
                         data,
                         mime_type: mime_type

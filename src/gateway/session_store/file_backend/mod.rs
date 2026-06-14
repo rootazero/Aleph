@@ -6,7 +6,11 @@ use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_manager::{SessionIdentityMeta, SessionState};
 use crate::gateway::session_store::error::SessionStoreError;
-use crate::gateway::session_store::types::{SessionMetadata, SessionChangedEvent, MessageRecord, SessionFilter, DeleteResult, SearchHit, CompactStrategy, CompactResult, CheckpointSummary, TruncateResult, SessionPatch, SessionPreview};
+use crate::gateway::session_store::types::{
+    CheckpointSummary, CompactResult, CompactStrategy, DeleteResult, MessageRecord, SearchHit,
+    SessionChangedEvent, SessionFilter, SessionMetadata, SessionPatch, SessionPreview,
+    TruncateResult,
+};
 use crate::gateway::session_store::SessionStore;
 use crate::sync_primitives::Arc;
 
@@ -234,9 +238,7 @@ impl FileSessionStore {
             .append(true)
             .open(&path)
             .await
-            .map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Open transcript failed: {e}"))
-            })?
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Open transcript failed: {e}")))?
             .write_all(line.as_bytes())
             .await
             .map_err(|e| {
@@ -584,9 +586,8 @@ impl SessionStore for FileSessionStore {
         let path = self.transcript_path(&key_str);
         let mut contents = String::new();
         for msg in &messages {
-            let line = serde_json::to_string(msg).map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Serialize failed: {e}"))
-            })?;
+            let line = serde_json::to_string(msg)
+                .map_err(|e| SessionStoreError::DatabaseError(format!("Serialize failed: {e}")))?;
             contents.push_str(&line);
             contents.push('\n');
         }
@@ -664,9 +665,8 @@ impl SessionStore for FileSessionStore {
             meta.total_tokens += msg.input_tokens + msg.output_tokens;
             meta.input_tokens += msg.input_tokens;
             meta.output_tokens += msg.output_tokens;
-            let line = serde_json::to_string(msg).map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Serialize failed: {e}"))
-            })?;
+            let line = serde_json::to_string(msg)
+                .map_err(|e| SessionStoreError::DatabaseError(format!("Serialize failed: {e}")))?;
             contents.push_str(&line);
             contents.push('\n');
         }
@@ -696,9 +696,8 @@ impl SessionStore for FileSessionStore {
         let path = self.transcript_path(&key_str);
         let mut contents = String::new();
         for msg in &checkpoint_messages {
-            let line = serde_json::to_string(msg).map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Serialize failed: {e}"))
-            })?;
+            let line = serde_json::to_string(msg)
+                .map_err(|e| SessionStoreError::DatabaseError(format!("Serialize failed: {e}")))?;
             contents.push_str(&line);
             contents.push('\n');
         }

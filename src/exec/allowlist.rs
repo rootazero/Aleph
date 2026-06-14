@@ -55,16 +55,13 @@ fn matches_entry(entry: &AllowlistEntry, resolution: &CommandResolution) -> bool
             return false;
         }
         return glob_match(pattern, &resolution.executable_name)
-            || resolution
-                .resolved_path
-                .as_ref()
-                .is_some_and(|p| {
-                    let filename = p
-                        .file_name()
-                        .map(|f| f.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    glob_match(pattern, &filename)
-                });
+            || resolution.resolved_path.as_ref().is_some_and(|p| {
+                let filename = p
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                glob_match(pattern, &filename)
+            });
     }
 
     // Absolute or relative path match

@@ -232,9 +232,7 @@ async fn handle_continue_with_targets(
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!(
-                "Round limit exceeded: maximum rounds reached: {max_rounds}"
-            ),
+            format!("Round limit exceeded: maximum rounds reached: {max_rounds}"),
         );
     }
 

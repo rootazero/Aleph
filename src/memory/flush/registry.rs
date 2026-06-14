@@ -46,7 +46,11 @@ impl FlushRegistry {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(agent.to_string(), notify.clone());
-        FlushGuard { notify, reg: self.clone(), agent: agent.to_string() }
+        FlushGuard {
+            notify,
+            reg: self.clone(),
+            agent: agent.to_string(),
+        }
     }
 
     /// Wait until `agent` has no in-progress flush, or `timeout` elapses.
@@ -66,7 +70,9 @@ impl FlushRegistry {
                 None => return true, // idle → ready
             }
         };
-        tokio::time::timeout(timeout, notify.notified()).await.is_ok()
+        tokio::time::timeout(timeout, notify.notified())
+            .await
+            .is_ok()
     }
 }
 
@@ -87,9 +93,7 @@ mod tests {
         let reg = FlushRegistry::new();
         let guard = reg.begin("main");
         let reg2 = reg.clone();
-        let h = tokio::spawn(async move {
-            reg2.await_ready("main", Duration::from_secs(2)).await
-        });
+        let h = tokio::spawn(async move { reg2.await_ready("main", Duration::from_secs(2)).await });
         tokio::time::sleep(Duration::from_millis(50)).await;
         drop(guard); // flush completed
         assert!(h.await.unwrap(), "waiter unblocks once flush finishes");

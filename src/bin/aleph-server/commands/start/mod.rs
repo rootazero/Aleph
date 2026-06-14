@@ -24,7 +24,17 @@ use alephcore::tasks::heartbeat::{HeartbeatService, SharedHeartbeatService};
 use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
 mod builder;
-use builder::{load_app_config, initialize_vault, register_core_handlers, register_cron_handlers, register_heartbeat_handlers, register_agent_handlers, register_arena_handlers, register_config_handlers, register_voice_capability_handlers, register_session_handlers, register_memory_handlers, register_daemon_handlers, register_oauth_handlers, register_workspace_handlers, register_projects_handlers, register_fs_handlers, register_agents_handlers, register_mcp_handlers, register_teams_handlers, register_graph_handlers, register_identity_handlers, register_group_chat_handlers, initialize_channels, initialize_inbound_router, setup_config_watcher, start_webchat_server};
+use builder::{
+    initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
+    register_agent_handlers, register_agents_handlers, register_arena_handlers,
+    register_config_handlers, register_core_handlers, register_cron_handlers,
+    register_daemon_handlers, register_fs_handlers, register_graph_handlers,
+    register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
+    register_mcp_handlers, register_memory_handlers, register_oauth_handlers,
+    register_projects_handlers, register_session_handlers, register_teams_handlers,
+    register_voice_capability_handlers, register_workspace_handlers, setup_config_watcher,
+    start_webchat_server,
+};
 
 mod orchestrator_init;
 use orchestrator_init::initialize_orchestrator;
@@ -307,9 +317,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Notify user if old LanceDB data directory exists
     let lance_path = data_dir.join("memory.lance");
     if lance_path.exists() {
-        println!(
-            "  Note: Old LanceDB data found at {lance_path:?}. Run: rm -rf {lance_path:?}"
-        );
+        println!("  Note: Old LanceDB data found at {lance_path:?}. Run: rm -rf {lance_path:?}");
     }
 
     let memory_db: Arc<alephcore::memory::store::SqliteMemoryBackend> =
@@ -447,9 +455,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             vault,
         );
         if migrated > 0 && !args.daemon {
-            println!(
-                "  Secrets migrated to vault: {migrated} (config plaintext stripped)"
-            );
+            println!("  Secrets migrated to vault: {migrated} (config plaintext stripped)");
         }
     }
 
@@ -530,7 +536,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Find default agent
     let default_agent_id = resolved_agents
         .iter()
-        .find(|a| a.is_default).map_or_else(|| "main".to_string(), |a| a.id.clone());
+        .find(|a| a.is_default)
+        .map_or_else(|| "main".to_string(), |a| a.id.clone());
 
     if !args.daemon {
         for agent in &resolved_agents {
@@ -1947,9 +1954,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_pairing.db"));
         let store = SqlitePairingStore::new(&pairing_store_path)
             .or_else(|e| {
-                eprintln!(
-                    "Warning: Failed to create pairing store: {e}. Using in-memory."
-                );
+                eprintln!("Warning: Failed to create pairing store: {e}. Using in-memory.");
                 SqlitePairingStore::in_memory()
             })
             .map_err(|e| format!("Failed to create pairing store: {e}"))?;

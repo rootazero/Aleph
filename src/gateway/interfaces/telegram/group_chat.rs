@@ -6,7 +6,9 @@
 use crate::group_chat::channel::{
     DefaultGroupChatCommandParser, GroupChatCommandParser, GroupChatRenderer,
 };
-use crate::group_chat::protocol::{GroupChatMessage, RenderedContent, Speaker, Persona, GroupChatRequest};
+use crate::group_chat::protocol::{
+    GroupChatMessage, GroupChatRequest, Persona, RenderedContent, Speaker,
+};
 
 // =============================================================================
 // Renderer

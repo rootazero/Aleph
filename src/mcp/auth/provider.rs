@@ -110,10 +110,12 @@ impl OAuthProvider {
             self.server_url.trim_end_matches('/')
         );
 
-        let response =
-            self.client.get(&url).send().await.map_err(|e| {
-                AlephError::IoError(format!("Failed to fetch OAuth metadata: {e}"))
-            })?;
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| AlephError::IoError(format!("Failed to fetch OAuth metadata: {e}")))?;
 
         if !response.status().is_success() {
             return Err(AlephError::IoError(format!(
@@ -375,9 +377,7 @@ impl OAuthProvider {
                 tracing::warn!(error = %e, "Failed to read token refresh error response body");
                 format!("<failed to read body: {e}>")
             });
-            return Err(AlephError::IoError(format!(
-                "Token refresh failed: {body}"
-            )));
+            return Err(AlephError::IoError(format!("Token refresh failed: {body}")));
         }
 
         let tokens = parse_token_response(response).await?;

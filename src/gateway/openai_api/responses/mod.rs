@@ -163,17 +163,18 @@ pub async fn handle(
             }));
         }
 
-        let usage = response
-            .usage
-            .map_or(ResponsesUsage {
+        let usage = response.usage.map_or(
+            ResponsesUsage {
                 input_tokens: 0,
                 output_tokens: 0,
                 total_tokens: 0,
-            }, |u| ResponsesUsage {
+            },
+            |u| ResponsesUsage {
                 input_tokens: u.input_tokens,
                 output_tokens: u.output_tokens,
                 total_tokens: u.input_tokens + u.output_tokens,
-            });
+            },
+        );
 
         let resp = ResponsesResponse {
             id: format!("resp-{}", uuid::Uuid::new_v4()),

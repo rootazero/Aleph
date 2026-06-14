@@ -180,12 +180,10 @@ impl HotkeyListener {
                             // Fetch the guide for actionable user-facing info.
                             let guide: Option<PermissionGuide> =
                                 bridge.call(METHOD_GUIDE, &GuideParams { kind }).await.ok();
-                            let deep_link = guide
-                                .as_ref()
-                                .map_or("<unknown>", |g| g.deep_link.as_str());
-                            let rationale = guide
-                                .as_ref()
-                                .map_or("<unknown>", |g| g.rationale.as_str());
+                            let deep_link =
+                                guide.as_ref().map_or("<unknown>", |g| g.deep_link.as_str());
+                            let rationale =
+                                guide.as_ref().map_or("<unknown>", |g| g.rationale.as_str());
                             warn!(
                                 kind = ?kind,
                                 deep_link = deep_link,

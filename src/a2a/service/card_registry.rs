@@ -1,6 +1,6 @@
 use crate::a2a::config::A2AConfig;
-use crate::a2a::domain::{TrustLevel, AgentCard, A2AError};
-use crate::a2a::port::{RegisteredAgent, AgentHealth, AgentResolver, A2AResult};
+use crate::a2a::domain::{A2AError, AgentCard, TrustLevel};
+use crate::a2a::port::{A2AResult, AgentHealth, AgentResolver, RegisteredAgent};
 use crate::sync_primitives::AsyncRwLock;
 use chrono::Utc;
 

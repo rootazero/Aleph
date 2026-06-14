@@ -247,9 +247,10 @@ impl GenerationProvider for DeepgramSttProvider {
                 .with_size_bytes(text.len() as u64);
 
             if let Some(conf) = alt.confidence {
-                metadata
-                    .extra
-                    .insert("confidence".into(), serde_json::Value::from(f64::from(conf)));
+                metadata.extra.insert(
+                    "confidence".into(),
+                    serde_json::Value::from(f64::from(conf)),
+                );
             }
             if let Some(lang) = channel.detected_language.clone() {
                 metadata

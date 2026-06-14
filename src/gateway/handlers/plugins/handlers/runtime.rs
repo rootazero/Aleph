@@ -1,6 +1,8 @@
 use serde_json::json;
 
-use super::super::types::{CallToolParams, ExecuteCommandParams, LoadPluginParams, UnloadPluginParams, ReloadPluginParams};
+use super::super::types::{
+    CallToolParams, ExecuteCommandParams, LoadPluginParams, ReloadPluginParams, UnloadPluginParams,
+};
 use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::plugins::handlers::get_extension_manager;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
@@ -39,11 +41,9 @@ pub async fn handle_call_tool(request: JsonRpcRequest) -> JsonRpcResponse {
         .await
     {
         Ok(result) => JsonRpcResponse::success(request.id, json!({ "result": result })),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Tool call failed: {e}"),
-        ),
+        Err(e) => {
+            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Tool call failed: {e}"))
+        }
     }
 }
 

@@ -98,7 +98,8 @@ pub async fn validate_token(token: &str) -> Result<BotIdentity, String> {
     });
 
     let discriminator = user
-        .discriminator.map_or_else(|| "0".to_string(), |d| format!("{d:04}"));
+        .discriminator
+        .map_or_else(|| "0".to_string(), |d| format!("{d:04}"));
 
     Ok(BotIdentity {
         valid: true,

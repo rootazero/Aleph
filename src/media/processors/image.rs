@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use crate::media::error::MediaError;
 use crate::media::provider::MediaProvider;
-use crate::media::types::{MediaImageFormat, MediaInput, MediaType, MediaOutput};
+use crate::media::types::{MediaImageFormat, MediaInput, MediaOutput, MediaType};
 use crate::sync_primitives::Arc;
 use crate::vision::types::{ImageFormat as VisionImageFormat, ImageInput};
 use crate::vision::{VisionError, VisionPipeline};

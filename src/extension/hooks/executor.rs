@@ -403,8 +403,7 @@ impl HookExecutor {
     /// Effective timeout for a single hook execution (per-hook override or
     /// the executor default).
     fn effective_timeout(&self, override_secs: Option<u64>) -> Duration {
-        override_secs
-            .map_or(self.command_timeout, Duration::from_secs)
+        override_secs.map_or(self.command_timeout, Duration::from_secs)
     }
 
     /// Execute a shell command
@@ -509,9 +508,10 @@ impl HookExecutor {
                 let _ = stdin.write_all(payload.as_bytes()).await;
                 let _ = stdin.shutdown().await;
             }
-            child.wait_with_output().await.map_err(|e| {
-                ExtensionError::HookExecution(format!("Failed to await command: {e}"))
-            })
+            child
+                .wait_with_output()
+                .await
+                .map_err(|e| ExtensionError::HookExecution(format!("Failed to await command: {e}")))
         })
         .await
         {

@@ -68,9 +68,7 @@ impl Config {
     pub(crate) fn migrate_vector_db_in_toml(contents: &str) -> Result<String> {
         // Parse as raw TOML value
         let mut value: toml::Value = toml::from_str(contents).map_err(|e| {
-            AlephError::invalid_config(format!(
-                "Failed to parse TOML for vector_db migration: {e}"
-            ))
+            AlephError::invalid_config(format!("Failed to parse TOML for vector_db migration: {e}"))
         })?;
 
         // Check if migration is needed

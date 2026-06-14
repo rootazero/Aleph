@@ -5,9 +5,15 @@ use serde_json::json;
 use tokio::sync::RwLock;
 use tracing::{error, info};
 
-use super::helpers::{resolve_api_key, build_provider_config_for_persistence, vault_key, save_config, normalize_optional_string};
+use super::helpers::{
+    build_provider_config_for_persistence, normalize_optional_string, resolve_api_key, save_config,
+    vault_key,
+};
 use super::parse_params;
-use super::types::{ProviderInfo, GetParams, UpdateParams, CreateParams, DeleteParams, TestParams, TestResult, ProviderHealthRow, SetDefaultParams, CatalogParams, CatalogEntryView};
+use super::types::{
+    CatalogEntryView, CatalogParams, CreateParams, DeleteParams, GetParams, ProviderHealthRow,
+    ProviderInfo, SetDefaultParams, TestParams, TestResult, UpdateParams,
+};
 use crate::config::{Config, ProviderConfig};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
@@ -764,7 +770,8 @@ pub async fn handle_catalog(
             let models = cfg.map(|c| c.models.clone()).unwrap_or_default();
 
             let display_name = preset
-                .display_name.map_or_else(|| entry.name.to_string(), String::from);
+                .display_name
+                .map_or_else(|| entry.name.to_string(), String::from);
 
             // Per-model metadata for the default model. Best-effort: both
             // resolve to `None` for unknown/unpriced families, leaving the

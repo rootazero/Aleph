@@ -134,7 +134,10 @@ mod tests {
     #[test]
     fn strips_inline_markdown() {
         assert_eq!(sanitize_for_tts("**bold** and _italic_"), "bold and italic");
-        assert_eq!(sanitize_for_tts("use `cargo build` now"), "use cargo build now");
+        assert_eq!(
+            sanitize_for_tts("use `cargo build` now"),
+            "use cargo build now"
+        );
     }
 
     #[test]
@@ -149,7 +152,10 @@ mod tests {
 
     #[test]
     fn keeps_link_label_drops_target() {
-        assert_eq!(sanitize_for_tts("see [the docs](https://x.com/y)"), "see the docs");
+        assert_eq!(
+            sanitize_for_tts("see [the docs](https://x.com/y)"),
+            "see the docs"
+        );
     }
 
     #[test]

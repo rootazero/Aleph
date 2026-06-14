@@ -141,9 +141,7 @@ impl AlephTool for ChannelPairingTool {
             PairingAction::Generate => {
                 let channel = channel_handle.read().await;
                 let pairing_data = channel.get_pairing_data().await.map_err(|e| {
-                    crate::error::AlephError::tool(format!(
-                        "Failed to generate pairing code: {e}"
-                    ))
+                    crate::error::AlephError::tool(format!("Failed to generate pairing code: {e}"))
                 })?;
 
                 match pairing_data {
@@ -193,9 +191,7 @@ impl AlephTool for ChannelPairingTool {
                     message: if count == 0 {
                         format!("No active pairing codes for channel '{channel_id}'.")
                     } else {
-                        format!(
-                            "{count} active pairing code(s) for channel '{channel_id}'."
-                        )
+                        format!("{count} active pairing code(s) for channel '{channel_id}'.")
                     },
                     code: None,
                     codes: Some(entries),

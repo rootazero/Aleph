@@ -37,7 +37,10 @@ use crate::sync_primitives::Arc;
 use self::api::BotFrameworkClient;
 use self::auth::{validate_service_url, JwtValidator, TokenCache};
 use self::graph::{GraphChannel, GraphGroup, GraphUser};
-use self::types::{Activity, ActivityAttachment, inject_ai_entity, strip_mentions, extract_quote_info, build_welcome_card};
+use self::types::{
+    build_welcome_card, extract_quote_info, inject_ai_entity, strip_mentions, Activity,
+    ActivityAttachment,
+};
 
 // ── ConversationReference ────────────────────────────────────────────────────
 
@@ -770,7 +773,10 @@ impl MsTeamsChannel {
         let target_message_id = activity.reply_to_id.as_deref();
         let from = activity.from.as_ref();
 
-        let from_info = from.map_or_else(|| "unknown".to_string(), |f| format!("{} ({})", f.name.as_deref().unwrap_or("unknown"), f.id));
+        let from_info = from.map_or_else(
+            || "unknown".to_string(),
+            |f| format!("{} ({})", f.name.as_deref().unwrap_or("unknown"), f.id),
+        );
 
         if let Some(reactions) = reactions_added {
             for reaction in reactions {
@@ -799,8 +805,8 @@ impl MsTeamsChannel {
 #[cfg(test)]
 #[allow(deprecated)]
 mod tests {
-    use super::*;
     use super::types::{ChannelAccount, ConversationAccount};
+    use super::*;
 
     #[test]
     fn test_new_channel() {

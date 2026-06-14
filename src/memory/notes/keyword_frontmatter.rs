@@ -33,7 +33,8 @@ mod tests {
 
     #[test]
     fn parses_keywords_line() {
-        let fm = "category: entity\nkeywords: [us-iran-conflict, monitoring, ceasefire]\ntags: []\n";
+        let fm =
+            "category: entity\nkeywords: [us-iran-conflict, monitoring, ceasefire]\ntags: []\n";
         assert_eq!(
             parse_keywords(fm),
             vec!["us-iran-conflict", "monitoring", "ceasefire"]

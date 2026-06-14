@@ -426,9 +426,7 @@ impl AlephError {
                     .to_string()
             }
             Self::InvalidConfig { message, .. } => {
-                format!(
-                    "Configuration error: {message}. Please check your settings."
-                )
+                format!("Configuration error: {message}. Please check your settings.")
             }
             Self::ProviderError { message, .. } => {
                 // Show the actual error message for debugging
@@ -436,14 +434,10 @@ impl AlephError {
                 format!("AI service error: {message}. Please try again.")
             }
             Self::HotkeyError { message, .. } => {
-                format!(
-                    "Hotkey error: {message}. Please check your system permissions."
-                )
+                format!("Hotkey error: {message}. Please check your system permissions.")
             }
             Self::ClipboardError { message, .. } => {
-                format!(
-                    "Clipboard error: {message}. Please check your system permissions."
-                )
+                format!("Clipboard error: {message}. Please check your system permissions.")
             }
             Self::InputSimulationError { message, .. } => {
                 format!(
@@ -451,19 +445,13 @@ impl AlephError {
                 )
             }
             Self::ConfigError { message, .. } => {
-                format!(
-                    "Configuration error: {message}. Please check your settings file."
-                )
+                format!("Configuration error: {message}. Please check your settings file.")
             }
             Self::KeychainError { message, .. } => {
-                format!(
-                    "Keychain access error: {message}. Please check your system permissions."
-                )
+                format!("Keychain access error: {message}. Please check your system permissions.")
             }
             Self::CallbackError { message, .. } => {
-                format!(
-                    "Internal error: {message}. Please restart the application."
-                )
+                format!("Internal error: {message}. Please restart the application.")
             }
             Self::Other { message, .. } => {
                 format!("An error occurred: {message}. Please try again.")
@@ -519,19 +507,13 @@ impl AlephError {
                 )
             }
             Self::CorruptData(msg) => {
-                format!(
-                    "Data corruption detected: {msg}. Please try again or restore from backup."
-                )
+                format!("Data corruption detected: {msg}. Please try again or restore from backup.")
             }
             Self::ChannelClosed(msg) => {
-                format!(
-                    "Internal communication failed: {msg}. Please restart the application."
-                )
+                format!("Internal communication failed: {msg}. Please restart the application.")
             }
             Self::SandboxUnavailable { reason } => {
-                format!(
-                    "Sandbox unavailable: {reason}. Please check your system configuration."
-                )
+                format!("Sandbox unavailable: {reason}. Please check your system configuration.")
             }
             Self::ExecutionTimeout { timeout_secs } => {
                 format!(

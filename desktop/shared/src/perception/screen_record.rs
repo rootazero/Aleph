@@ -44,11 +44,16 @@ pub(super) mod sc_recording_delegate {
                 tracing::error!("SCRecordingOutput: recording failed: {}", msg);
                 let ivars = self.ivars();
                 {
-                    let mut guard = ivars.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let mut guard = ivars
+                        .error
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     *guard = Some(msg);
                 }
                 let (ref lock, ref cvar) = *ivars.finished;
-                let mut finished = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut finished = lock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 *finished = true;
                 cvar.notify_all();
             }
@@ -58,7 +63,9 @@ pub(super) mod sc_recording_delegate {
                 tracing::debug!("SCRecordingOutput: recording finished");
                 let ivars = self.ivars();
                 let (ref lock, ref cvar) = *ivars.finished;
-                let mut finished = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut finished = lock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 *finished = true;
                 cvar.notify_all();
             }
@@ -313,13 +320,19 @@ fn sc_recording_output_record(
 
     // 12. Wait for delegate's didFinishRecording callback
     let (lock, cvar) = &*finished_signal;
-    let guard = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let guard = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let _result = cvar
         .wait_timeout_while(guard, Duration::from_secs(15), |finished| !*finished)
         .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     // Check for recording errors
-    if let Some(err_msg) = error_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+    if let Some(err_msg) = error_slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+    {
         return Err(DesktopError::ScreenCapture(format!(
             "Recording failed: {err_msg}"
         )));

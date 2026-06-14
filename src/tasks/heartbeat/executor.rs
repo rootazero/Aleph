@@ -119,9 +119,7 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
         let agent = match agent {
             Some(a) => a,
             None => self.agent_registry.get("main").await.ok_or_else(|| {
-                format!(
-                    "Agent '{agent_id}' not found and fallback 'main' unavailable"
-                )
+                format!("Agent '{agent_id}' not found and fallback 'main' unavailable")
             })?,
         };
 

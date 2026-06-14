@@ -76,9 +76,8 @@ pub fn extract_value(json: &Value, path: &str) -> Result<String> {
         Value::Null => "null".to_string(),
         Value::Object(_) | Value::Array(_) => {
             // Serialize complex types to JSON string
-            serde_json::to_string(first_match).map_err(|e| {
-                AlephError::provider(format!("Failed to serialize JSON value: {e}"))
-            })?
+            serde_json::to_string(first_match)
+                .map_err(|e| AlephError::provider(format!("Failed to serialize JSON value: {e}")))?
         }
     };
 

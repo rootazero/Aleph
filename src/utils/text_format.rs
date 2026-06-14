@@ -7,7 +7,10 @@ use chrono::{DateTime, Utc};
 /// Format a Unix timestamp as a human-readable UTC string
 #[must_use]
 pub fn format_timestamp(timestamp: i64) -> String {
-    DateTime::<Utc>::from_timestamp(timestamp, 0).map_or_else(|| "Unknown".to_string(), |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+    DateTime::<Utc>::from_timestamp(timestamp, 0).map_or_else(
+        || "Unknown".to_string(),
+        |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+    )
 }
 
 #[must_use]

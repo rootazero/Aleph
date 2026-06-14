@@ -55,7 +55,9 @@ pub fn is_process_running(pid: i32) -> bool {
     }
     // SAFETY: kill(pid, 0) performs error checking without sending a signal.
     // It is async-signal-safe and the only way to check process existence on Unix.
-    if unsafe { libc::kill(pid, 0) } == 0 { true } else {
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        true
+    } else {
         let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
         // EPERM means process exists but we lack permission; ESRCH means it does not exist.
         errno == libc::EPERM
@@ -146,10 +148,9 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
 
-                return Err(format!(
-                    "Gateway process (PID {pid}) did not exit even after SIGKILL"
-                )
-                .into());
+                return Err(
+                    format!("Gateway process (PID {pid}) did not exit even after SIGKILL").into(),
+                );
             }
 
             #[cfg(not(unix))]

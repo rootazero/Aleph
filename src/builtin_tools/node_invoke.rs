@@ -86,7 +86,8 @@ node is offline or the command isn't permitted, you get a clear error."#;
             Ok(resp) => Err(AlephError::tool(format!(
                 "node '{}' returned error: {}",
                 args.node,
-                resp.error.map_or_else(|| "unknown".to_string(), |e| e.message)
+                resp.error
+                    .map_or_else(|| "unknown".to_string(), |e| e.message)
             ))),
             Err(e) => Err(AlephError::tool(format!(
                 "node '{}' reverse-rpc failed: {e}",

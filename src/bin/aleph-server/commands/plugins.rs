@@ -327,7 +327,9 @@ pub async fn handle_plugin_update(
     let plugin_scope = parse_scope(scope)?;
 
     // Resolve the set of plugin names to update.
-    let names: Vec<String> = if let Some(n) = name { vec![n] } else {
+    let names: Vec<String> = if let Some(n) = name {
+        vec![n]
+    } else {
         let dir = scope_install_dir(plugin_scope, None)?;
         let mut found = Vec::new();
         if let Ok(entries) = std::fs::read_dir(&dir) {
@@ -375,9 +377,7 @@ pub async fn handle_plugin_update(
         }
     }
 
-    println!(
-        "\nDone: {updated} updated, {unchanged} unchanged, {failed} failed."
-    );
+    println!("\nDone: {updated} updated, {unchanged} unchanged, {failed} failed.");
     if failed > 0 {
         std::process::exit(1);
     }
@@ -479,19 +479,21 @@ pub async fn handle_marketplace_command(
                 Err(e) => println!(" failed: {e}"),
             }
         }
-        MarketplaceAction::Update { name } => if let Some(n) = name {
-            println!("Updating marketplace '{n}'...");
-            match manager.update(&n) {
-                Ok(path) => println!("Updated: {path:?}"),
-                Err(e) => eprintln!("Error: {e}"),
+        MarketplaceAction::Update { name } => {
+            if let Some(n) = name {
+                println!("Updating marketplace '{n}'...");
+                match manager.update(&n) {
+                    Ok(path) => println!("Updated: {path:?}"),
+                    Err(e) => eprintln!("Error: {e}"),
+                }
+            } else {
+                println!("Updating all marketplaces...");
+                match manager.update_all() {
+                    Ok(()) => println!("All marketplaces updated."),
+                    Err(e) => eprintln!("Some updates failed: {e}"),
+                }
             }
-        } else {
-            println!("Updating all marketplaces...");
-            match manager.update_all() {
-                Ok(()) => println!("All marketplaces updated."),
-                Err(e) => eprintln!("Some updates failed: {e}"),
-            }
-        },
+        }
         MarketplaceAction::Remove { name } => {
             manager.remove(&name)?;
 

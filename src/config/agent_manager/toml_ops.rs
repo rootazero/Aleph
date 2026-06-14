@@ -44,9 +44,9 @@ impl AgentManager {
             ))
         })?;
 
-        content.parse::<DocumentMut>().map_err(|e| {
-            AlephError::invalid_config(format!("Failed to parse config as TOML: {e}"))
-        })
+        content
+            .parse::<DocumentMut>()
+            .map_err(|e| AlephError::invalid_config(format!("Failed to parse config as TOML: {e}")))
     }
 
     /// Atomic write: write to .tmp, fsync, then rename

@@ -12,7 +12,9 @@ use crate::sync_primitives::{Arc, RwLock};
 
 use super::aggregate::SharedArena;
 use super::handle::ArenaHandle;
-use super::types::{ArenaId, ArenaManifest, AgentId, ArenaStatus, ArenaSlot, SettleReport, SharedFact};
+use super::types::{
+    AgentId, ArenaId, ArenaManifest, ArenaSlot, ArenaStatus, SettleReport, SharedFact,
+};
 
 /// Manages `SharedArena` creation, handle distribution, and settling lifecycle.
 pub struct ArenaManager {
@@ -78,9 +80,7 @@ impl ArenaManager {
             .iter()
             .find(|p| p.agent_id == *agent_id)
             .ok_or_else(|| {
-                format!(
-                    "Agent '{agent_id}' is not a participant in arena {arena_id}"
-                )
+                format!("Agent '{agent_id}' is not a participant in arena {arena_id}")
             })?;
 
         let handle = ArenaHandle::new(
@@ -214,7 +214,9 @@ impl Default for ArenaManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arena::types::{ArenaPermissions, CoordinationStrategy, Participant, ParticipantRole};
+    use crate::arena::types::{
+        ArenaPermissions, CoordinationStrategy, Participant, ParticipantRole,
+    };
     use chrono::Utc;
 
     fn test_manifest(agent_ids: &[&str]) -> ArenaManifest {

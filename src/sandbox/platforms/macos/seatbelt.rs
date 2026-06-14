@@ -516,8 +516,7 @@ impl SeatbeltDriver {
 
     /// Check if `sandbox-exec` is available and executable.
     fn check_sandbox_exec(&self) -> bool {
-        std::fs::metadata(SANDBOX_EXEC_PATH)
-            .is_ok_and(|m| m.is_file())
+        std::fs::metadata(SANDBOX_EXEC_PATH).is_ok_and(|m| m.is_file())
     }
 
     /// Generate SBPL profile from `SandboxPolicy`.
@@ -700,8 +699,7 @@ impl SeatbeltDriver {
                     }
                     if let Some(path_str) = path.to_str() {
                         let path_str = escape_sbpl(path_str);
-                        profile
-                            .push_str(&format!("(deny file-write* (subpath \"{path_str}\"))\n"));
+                        profile.push_str(&format!("(deny file-write* (subpath \"{path_str}\"))\n"));
                     }
                 }
             }

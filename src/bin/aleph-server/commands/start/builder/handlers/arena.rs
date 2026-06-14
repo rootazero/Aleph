@@ -1,4 +1,4 @@
-use super::{GatewayServer, Arc};
+use super::{Arc, GatewayServer};
 
 pub(in crate::commands::start) fn register_arena_handlers(
     server: &mut GatewayServer,

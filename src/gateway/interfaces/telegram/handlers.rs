@@ -200,7 +200,8 @@ pub(crate) async fn extract_attachments(
                     doc.document.file.id.0.clone(),
                     doc.document
                         .mime_type
-                        .as_ref().map_or_else(|| "application/octet-stream".to_string(), |m| m.to_string()),
+                        .as_ref()
+                        .map_or_else(|| "application/octet-stream".to_string(), |m| m.to_string()),
                     doc.document.file_name.clone(),
                     u64::from(doc.document.file.size),
                 )),
@@ -209,7 +210,8 @@ pub(crate) async fn extract_attachments(
                     audio
                         .audio
                         .mime_type
-                        .as_ref().map_or_else(|| "audio/mpeg".to_string(), |m| m.to_string()),
+                        .as_ref()
+                        .map_or_else(|| "audio/mpeg".to_string(), |m| m.to_string()),
                     audio.audio.file_name.clone(),
                     u64::from(audio.audio.file.size),
                 )),
@@ -218,7 +220,8 @@ pub(crate) async fn extract_attachments(
                     video
                         .video
                         .mime_type
-                        .as_ref().map_or_else(|| "video/mp4".to_string(), |m| m.to_string()),
+                        .as_ref()
+                        .map_or_else(|| "video/mp4".to_string(), |m| m.to_string()),
                     video.video.file_name.clone(),
                     u64::from(video.video.file.size),
                 )),
@@ -227,7 +230,8 @@ pub(crate) async fn extract_attachments(
                     voice
                         .voice
                         .mime_type
-                        .as_ref().map_or_else(|| "audio/ogg".to_string(), |m| m.to_string()),
+                        .as_ref()
+                        .map_or_else(|| "audio/ogg".to_string(), |m| m.to_string()),
                     None,
                     u64::from(voice.voice.file.size),
                 )),

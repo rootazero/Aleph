@@ -45,7 +45,10 @@ pub const fn partition_fresh_tail(messages: &[UnifiedMessage], fresh_tail_count:
 
 /// Same as [`partition_fresh_tail`] but for `(role, content)` string pairs.
 #[must_use]
-pub const fn partition_fresh_tail_pairs(messages: &[(String, String)], fresh_tail_count: usize) -> usize {
+pub const fn partition_fresh_tail_pairs(
+    messages: &[(String, String)],
+    fresh_tail_count: usize,
+) -> usize {
     if messages.len() <= fresh_tail_count {
         0
     } else {

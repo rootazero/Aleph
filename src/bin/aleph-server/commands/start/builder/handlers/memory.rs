@@ -1,4 +1,4 @@
-use super::{GatewayServer, MemoryBackend, memory_handlers};
+use super::{memory_handlers, GatewayServer, MemoryBackend};
 
 /// Rebuild the embedder from the *current* config so a provider switched via
 /// `embedding_providers.setActive` takes effect for reembed without restarting

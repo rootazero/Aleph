@@ -103,8 +103,7 @@ fn glob_to_regex_str(pattern: &str) -> String {
 /// uses pre-compiled regexes instead.
 #[must_use]
 pub fn matches_glob(value: &str, pattern: &str) -> bool {
-    regex::Regex::new(&glob_to_regex_str(pattern))
-        .is_ok_and(|re| re.is_match(value))
+    regex::Regex::new(&glob_to_regex_str(pattern)).is_ok_and(|re| re.is_match(value))
 }
 
 /// A compiled policy rule, pairing the original glob pattern with its regex.
@@ -226,7 +225,8 @@ impl ConfigApprovalPolicy {
 
     /// Return the expected path for the configuration file.
     fn config_path() -> PathBuf {
-        dirs::home_dir().map_or_else(|| {
+        dirs::home_dir().map_or_else(
+            || {
                 warn!(
                     "Cannot determine home directory; approval policy will use current dir fallback"
                 );
@@ -234,7 +234,9 @@ impl ConfigApprovalPolicy {
                     .unwrap_or_else(|_| std::env::temp_dir())
                     .join(".aleph")
                     .join("approval-policy.json")
-            }, |home| home.join(".aleph").join("approval-policy.json"))
+            },
+            |home| home.join(".aleph").join("approval-policy.json"),
+        )
     }
 
     /// Safe fallback when the policy file exists but cannot be read or parsed.

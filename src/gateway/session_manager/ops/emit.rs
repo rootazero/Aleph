@@ -116,7 +116,11 @@ pub(crate) fn emit_session_end_raw_with_registry(
         if let Some(cs) = crate::thinker::memory_context_provider::session_end_compression() {
             let reg = crate::memory::flush::global_registry();
             let flush_agent = agent_id.clone();
-            rt.spawn(crate::memory::flush::session_end_flush(reg, flush_agent, cs));
+            rt.spawn(crate::memory::flush::session_end_flush(
+                reg,
+                flush_agent,
+                cs,
+            ));
         }
 
         rt.spawn(async move {

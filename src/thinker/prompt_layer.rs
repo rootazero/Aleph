@@ -204,7 +204,11 @@ impl<'a> LayerInput<'a> {
 
     /// Input for the `Soul` path — config + tools + soul manifest.
     #[must_use]
-    pub const fn soul(config: &'a PromptConfig, tools: &'a [ToolInfo], soul: &'a SoulManifest) -> Self {
+    pub const fn soul(
+        config: &'a PromptConfig,
+        tools: &'a [ToolInfo],
+        soul: &'a SoulManifest,
+    ) -> Self {
         Self {
             config,
             tools: Some(tools),

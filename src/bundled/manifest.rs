@@ -99,9 +99,7 @@ impl InstallRegistry {
             .filter(|e| {
                 // Use symlink_metadata so we don't follow symlinks — a symlink
                 // pointing outside the skills dir should not be treated as a skill.
-                e.path()
-                    .symlink_metadata()
-                    .is_ok_and(|m| m.is_dir())
+                e.path().symlink_metadata().is_ok_and(|m| m.is_dir())
             })
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();

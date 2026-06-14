@@ -107,7 +107,10 @@ mod tests {
     #[test]
     fn backslash_escape_is_folded() {
         // `d\d`/`o\f` are how a caller hides `dd`/`of` from a literal matcher.
-        assert_eq!(norm(r"d\d if=/dev/zero o\f=/dev/sda"), "dd if=/dev/zero of=/dev/sda");
+        assert_eq!(
+            norm(r"d\d if=/dev/zero o\f=/dev/sda"),
+            "dd if=/dev/zero of=/dev/sda"
+        );
     }
 
     #[test]

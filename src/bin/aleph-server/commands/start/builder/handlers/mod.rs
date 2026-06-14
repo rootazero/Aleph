@@ -88,8 +88,8 @@ macro_rules! register_handler {
 
 mod agents;
 mod arena;
-mod core;
 mod config;
+mod core;
 mod mcp;
 mod memory;
 mod session;
@@ -98,8 +98,8 @@ mod system;
 
 pub(in crate::commands::start) use agents::*;
 pub(in crate::commands::start) use arena::*;
-pub(in crate::commands::start) use core::*;
 pub(in crate::commands::start) use config::*;
+pub(in crate::commands::start) use core::*;
 pub(in crate::commands::start) use mcp::*;
 pub(in crate::commands::start) use memory::*;
 pub(in crate::commands::start) use session::*;

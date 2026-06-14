@@ -1,4 +1,7 @@
-use super::{GatewayServer, PathBuf, Arc, ConfigWatcher, ConfigWatcherConfig, config_handlers, ConfigEvent, Args, serve_webchat};
+use super::{
+    config_handlers, serve_webchat, Arc, Args, ConfigEvent, ConfigWatcher, ConfigWatcherConfig,
+    GatewayServer, PathBuf,
+};
 
 pub(in crate::commands::start) async fn setup_config_watcher(
     server: &mut GatewayServer,
@@ -181,8 +184,7 @@ pub(in crate::commands::start) async fn start_webchat_server(
     if let Some(webchat_path) = webchat_dir {
         if webchat_path.exists() {
             let webchat_port = args.webchat_port.unwrap_or(final_port);
-            let webchat_addr: SocketAddr = match format!("{final_bind}:{webchat_port}").parse()
-            {
+            let webchat_addr: SocketAddr = match format!("{final_bind}:{webchat_port}").parse() {
                 Ok(addr) => addr,
                 Err(e) => {
                     eprintln!(

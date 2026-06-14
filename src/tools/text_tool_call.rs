@@ -171,7 +171,8 @@ fn parse_json_tool_call(body: &str) -> Option<PromotedToolCall> {
         .get("arguments")
         .or_else(|| obj.get("parameters"))
         .or_else(|| obj.get("args"))
-        .cloned().map_or_else(|| Value::Object(Map::new()), coerce_arguments);
+        .cloned()
+        .map_or_else(|| Value::Object(Map::new()), coerce_arguments);
     Some(PromotedToolCall { name, arguments })
 }
 

@@ -137,7 +137,8 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                     return Err(AlephError::tool(format!(
                         "node '{}' file.write error: {}",
                         args.node,
-                        resp.error.map_or_else(|| "unknown".to_string(), |e| e.message)
+                        resp.error
+                            .map_or_else(|| "unknown".to_string(), |e| e.message)
                     )));
                 }
                 Ok(json!({
@@ -160,7 +161,8 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                     return Err(AlephError::tool(format!(
                         "node '{}' file.read error: {}",
                         args.node,
-                        resp.error.map_or_else(|| "unknown".to_string(), |e| e.message)
+                        resp.error
+                            .map_or_else(|| "unknown".to_string(), |e| e.message)
                     )));
                 }
                 let result = resp.result.unwrap_or(Value::Null);

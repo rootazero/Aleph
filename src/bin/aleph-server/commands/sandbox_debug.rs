@@ -104,7 +104,9 @@ pub async fn handle_sandbox_debug(
 
     // 2. Build + execute the command.
     let session_id = alephcore::routing::session_key::SessionKey::ephemeral("sandbox-debug");
-    let (program, args) = if let Some(p) = split_program_args(&command) { p } else {
+    let (program, args) = if let Some(p) = split_program_args(&command) {
+        p
+    } else {
         eprintln!("Error: no command given (pass after `--`)");
         std::process::exit(2);
     };

@@ -30,10 +30,7 @@ impl VerificationResult {
     /// Returns true if the signature is valid or verification is disabled
     #[must_use]
     pub const fn is_ok(&self) -> bool {
-        matches!(
-            self,
-            Self::Valid | Self::Disabled
-        )
+        matches!(self, Self::Valid | Self::Disabled)
     }
 
     /// Returns true if the signature verification failed

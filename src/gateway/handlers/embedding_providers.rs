@@ -27,7 +27,9 @@ use tracing::{error, warn};
 
 /// Get preset defaults for an embedding provider based on its preset field.
 /// Returns (`default_api_base`, `default_model`).
-const fn get_embedding_preset_defaults(preset: &EmbeddingPreset) -> Option<(&'static str, &'static str)> {
+const fn get_embedding_preset_defaults(
+    preset: &EmbeddingPreset,
+) -> Option<(&'static str, &'static str)> {
     match preset {
         EmbeddingPreset::SiliconFlow => Some(("https://api.siliconflow.cn/v1", "BAAI/bge-m3")),
         EmbeddingPreset::OpenAi => Some(("https://api.openai.com/v1", "text-embedding-3-small")),

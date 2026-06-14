@@ -1,4 +1,7 @@
-use super::{GatewayServer, Arc, MemoryBackend, session_handlers, ChannelRegistry, channel_handlers, discord_panel_handlers};
+use super::{
+    channel_handlers, discord_panel_handlers, session_handlers, Arc, ChannelRegistry,
+    GatewayServer, MemoryBackend,
+};
 
 // ─── register_session_handlers ───────────────────────────────────────────────
 

@@ -668,9 +668,7 @@ impl Certificate {
             private_key = Some(
                 base64::engine::general_purpose::STANDARD
                     .decode(&cleaned)
-                    .map_err(|e| {
-                        CertificateError::ParseError(format!("key base64 error: {e}"))
-                    })?,
+                    .map_err(|e| CertificateError::ParseError(format!("key base64 error: {e}")))?,
             );
         }
 

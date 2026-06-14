@@ -1,4 +1,7 @@
-use super::{SlackMessageOps, ChannelId, SlackConfig, InboundMessage, MessageFormatter, MarkupFormat, Utc, MessageId, ConversationId, UserId, MessageMeta};
+use super::{
+    ChannelId, ConversationId, InboundMessage, MarkupFormat, MessageFormatter, MessageId,
+    MessageMeta, SlackConfig, SlackMessageOps, UserId, Utc,
+};
 
 impl SlackMessageOps {
     pub fn convert_app_mention_to_inbound(

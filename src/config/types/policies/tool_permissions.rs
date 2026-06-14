@@ -68,10 +68,7 @@ impl ToolPermissionsConfig {
     /// The effective default is `min(global.default, agent.default)`.
     /// Overrides are merged: if both layers specify a tool, the most
     /// restrictive level is used.
-    pub fn merge(
-        global: &Self,
-        agent: &Self,
-    ) -> Self {
+    pub fn merge(global: &Self, agent: &Self) -> Self {
         let default = restrictive_min(global.default, agent.default);
 
         let mut overrides = HashMap::new();

@@ -160,9 +160,7 @@ impl From<SignalError> for crate::gateway::channel::ChannelError {
             SignalError::ApiError { status, message } => {
                 Self::ReceiveFailed(format!("({status}): {message}"))
             }
-            SignalError::RateLimited { retry_after_secs } => {
-                Self::RateLimited { retry_after_secs }
-            }
+            SignalError::RateLimited { retry_after_secs } => Self::RateLimited { retry_after_secs },
             SignalError::MessageTooLarge { size, max_size } => {
                 Self::MessageTooLarge { size, max_size }
             }
@@ -170,9 +168,7 @@ impl From<SignalError> for crate::gateway::channel::ChannelError {
             SignalError::NotConnected => Self::NotConnected("Signal".to_string()),
             SignalError::InvalidPhoneNumber(msg) => Self::ConfigError(msg),
             SignalError::InvalidApiUrl(msg) => Self::ConfigError(msg),
-            SignalError::ChannelClosed => {
-                Self::Internal("Signal channel closed".to_string())
-            }
+            SignalError::ChannelClosed => Self::Internal("Signal channel closed".to_string()),
             // SSE, JSON, envelope errors map to ReceiveFailed
             SignalError::SseConnection(e) => Self::ReceiveFailed(e.to_string()),
             SignalError::SseStream(e) => Self::ReceiveFailed(e.to_string()),

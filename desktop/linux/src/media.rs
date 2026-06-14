@@ -128,11 +128,10 @@ impl MediaCapability for LinuxMedia {
                 DesktopError::PlatformError(format!("Failed to read captured frame: {e}"))
             })?;
 
-        let (width, height) = image::load_from_memory(&bytes)
-            .map_or((0, 0), |img| {
-                use image::GenericImageView as _;
-                img.dimensions()
-            });
+        let (width, height) = image::load_from_memory(&bytes).map_or((0, 0), |img| {
+            use image::GenericImageView as _;
+            img.dimensions()
+        });
 
         let _ = std::fs::remove_file(&out_str);
 

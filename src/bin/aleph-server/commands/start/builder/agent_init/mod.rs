@@ -228,8 +228,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             c
         };
         let has_key = |name: &str, cfg: &alephcore::ProviderConfig| -> bool {
-            cfg.api_key.as_ref().is_some_and(|k| !k.is_empty())
-                || vault_lookup(name).is_some()
+            cfg.api_key.as_ref().is_some_and(|k| !k.is_empty()) || vault_lookup(name).is_some()
         };
 
         // Determine default provider name. When no explicit default is
@@ -1106,8 +1105,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         }
                     }
                     // Fall back to vault
-                    if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("gen:{name}"))
-                    {
+                    if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("gen:{name}")) {
                         let val = secret.expose().to_string();
                         if !val.is_empty() {
                             return Some(val);
@@ -1363,9 +1361,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let trace_get_db = trace_db.clone();
             server.handlers_mut().register("trace.get", move |req| {
                 let db = trace_get_db.clone();
-                async move {
-                    alephcore::gateway::handlers::trace_replay::handle_get(req, db).await
-                }
+                async move { alephcore::gateway::handlers::trace_replay::handle_get(req, db).await }
             });
 
             let trace_by_runs_db = trace_db;

@@ -635,12 +635,10 @@ where
                                 // 但客观闸门（stop_hooks 退出码）尚未确认。
                                 // 在接受 complete 为终止前先跑闸门（Ralph
                                 // Wiggum 营救）。结构化退出码，零 LLM 调用（R7）。
-                                let gate_configured = cont_deps.gate.is_some()
-                                    || goal.gate_command.is_some();
-                                if crate::tasks::goal_pursuit::awaiting_gate(
-                                    &goal,
-                                    gate_configured,
-                                ) {
+                                let gate_configured =
+                                    cont_deps.gate.is_some() || goal.gate_command.is_some();
+                                if crate::tasks::goal_pursuit::awaiting_gate(&goal, gate_configured)
+                                {
                                     let gate = crate::verification::stop_hooks::effective_gate(
                                         cont_deps.gate.as_ref(),
                                         goal.gate_command.as_deref(),
@@ -658,9 +656,8 @@ where
                                         &CancellationToken::new(),
                                     )
                                     .await;
-                                    let vetoed = result
-                                        .halt_reason()
-                                        .or_else(|| result.blocking_reason());
+                                    let vetoed =
+                                        result.halt_reason().or_else(|| result.blocking_reason());
                                     match vetoed {
                                         None => {
                                             // 闸门通过 → 确认完成，循环终止。
@@ -907,14 +904,17 @@ fn spawn_continuation_run(
         // fan the continuation's final reply out to it (Telegram/Slack) and,
         // on failure, to deliver the halt notice (G3). `None` for Panel-only
         // (`gui:chat`) sessions, which still get live event-bus streaming.
-        let origin: Option<(Arc<crate::gateway::channel_registry::ChannelRegistry>, String, String)> =
-            match crate::gateway::event_emitter::origin_fanout::channel_registry() {
-                Some(reg) => cont_agent
-                    .origin_route(&session_key)
-                    .await
-                    .map(|(ch, conv)| (reg, ch, conv)),
-                None => None,
-            };
+        let origin: Option<(
+            Arc<crate::gateway::channel_registry::ChannelRegistry>,
+            String,
+            String,
+        )> = match crate::gateway::event_emitter::origin_fanout::channel_registry() {
+            Some(reg) => cont_agent
+                .origin_route(&session_key)
+                .await
+                .map(|(ch, conv)| (reg, ch, conv)),
+            None => None,
+        };
         // G1: broadcast the continuation live (Panel + `aleph watch`) via the
         // gateway event bus when one is wired; fall back to collect-and-drop in
         // tests / non-gateway contexts so those paths stay behavior-identical.
@@ -965,7 +965,11 @@ fn spawn_continuation_run(
 async fn block_goal_on_failure(
     session_key_str: &str,
     error: &ExecutionError,
-    origin: Option<&(Arc<crate::gateway::channel_registry::ChannelRegistry>, String, String)>,
+    origin: Option<&(
+        Arc<crate::gateway::channel_registry::ChannelRegistry>,
+        String,
+        String,
+    )>,
 ) {
     let reason: String = format!("{error}").chars().take(300).collect();
     if let Some(store) = crate::goal::global() {

@@ -172,14 +172,24 @@ impl MinimaxTtsProvider {
                 "neutral",
                 "English, expressive narrator",
             ),
-            ("Wise_Woman", "Wise Woman", "female", "English, calm and wise"),
+            (
+                "Wise_Woman",
+                "Wise Woman",
+                "female",
+                "English, calm and wise",
+            ),
             (
                 "Friendly_Person",
                 "Friendly Person",
                 "neutral",
                 "English, warm and friendly",
             ),
-            ("Deep_Voice_Man", "Deep Voice Man", "male", "English, deep male"),
+            (
+                "Deep_Voice_Man",
+                "Deep Voice Man",
+                "male",
+                "English, deep male",
+            ),
             ("Calm_Woman", "Calm Woman", "female", "English, calm female"),
             ("Casual_Guy", "Casual Guy", "male", "English, relaxed male"),
             ("Patient_Man", "Patient Man", "male", "English, gentle male"),
@@ -200,7 +210,10 @@ impl MinimaxTtsProvider {
         // with status_code != 0.
         if let Ok(parsed) = serde_json::from_str::<T2aResponse>(body) {
             if !parsed.base_resp.is_success() {
-                return map_status_code(parsed.base_resp.status_code, parsed.base_resp.best_message());
+                return map_status_code(
+                    parsed.base_resp.status_code,
+                    parsed.base_resp.best_message(),
+                );
             }
         }
         match status.as_u16() {
@@ -256,12 +269,22 @@ impl GenerationProvider for MinimaxTtsProvider {
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| self.voice.clone());
 
-            let body = build_request(&model, &request.prompt, &voice, request.params.speed, format);
+            let body = build_request(
+                &model,
+                &request.prompt,
+                &voice,
+                request.params.speed,
+                format,
+            );
 
             // Append the optional per-account GroupId (sourced from params.extra).
             let url = append_group_id(
                 &self.endpoint,
-                request.params.extra.get("group_id").and_then(|v| v.as_str()),
+                request
+                    .params
+                    .extra
+                    .get("group_id")
+                    .and_then(|v| v.as_str()),
             );
 
             let started_at = Instant::now();
@@ -286,10 +309,9 @@ impl GenerationProvider for MinimaxTtsProvider {
                 })?;
 
             let status = response.status();
-            let text = response
-                .text()
-                .await
-                .map_err(|e| GenerationError::network(format!("Failed to read response body: {e}")))?;
+            let text = response.text().await.map_err(|e| {
+                GenerationError::network(format!("Failed to read response body: {e}"))
+            })?;
             if !status.is_success() {
                 error!(status = %status, body = %text, "MiniMax T2A HTTP failure");
                 return Err(self.parse_error(status, &text));

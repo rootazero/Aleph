@@ -102,9 +102,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        let mode: serde_json::Value = serde_json::from_str(mode_json).map_err(|e| {
-            ExecutionError::Failed(format!("Invalid slash command metadata: {e}"))
-        })?;
+        let mode: serde_json::Value = serde_json::from_str(mode_json)
+            .map_err(|e| ExecutionError::Failed(format!("Invalid slash command metadata: {e}")))?;
 
         let mode_type = mode["type"].as_str().unwrap_or("");
 

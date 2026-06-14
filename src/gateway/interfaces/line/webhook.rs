@@ -309,16 +309,22 @@ async fn dispatch_event(event: &LineEvent, ctx: &WebhookContext) -> Result<(), S
         source
             .group_id
             .as_ref()
-            .or(source.room_id.as_ref()).map_or_else(|| ConversationId::new("unknown".to_string()), |s| ConversationId::new(s.clone()))
+            .or(source.room_id.as_ref())
+            .map_or_else(
+                || ConversationId::new("unknown".to_string()),
+                |s| ConversationId::new(s.clone()),
+            )
     } else {
-        source
-            .user_id
-            .as_ref().map_or_else(|| ConversationId::new("unknown".to_string()), |s| ConversationId::new(s.clone()))
+        source.user_id.as_ref().map_or_else(
+            || ConversationId::new("unknown".to_string()),
+            |s| ConversationId::new(s.clone()),
+        )
     };
 
-    let user_id = source
-        .user_id
-        .as_ref().map_or_else(|| UserId::new("unknown".to_string()), |s| UserId::new(s.clone()));
+    let user_id = source.user_id.as_ref().map_or_else(
+        || UserId::new("unknown".to_string()),
+        |s| UserId::new(s.clone()),
+    );
 
     let raw = reply_token.as_ref().map(|token| {
         serde_json::json!({ "reply_token": token })

@@ -64,7 +64,11 @@ pub(super) fn init_generation_registry(
             while let Ok(event_json) = rx.recv().await {
                 let is_gen_event = serde_json::from_str::<serde_json::Value>(&event_json)
                     .ok()
-                    .and_then(|v| v.get("topic")?.as_str().map(std::string::ToString::to_string))
+                    .and_then(|v| {
+                        v.get("topic")?
+                            .as_str()
+                            .map(std::string::ToString::to_string)
+                    })
                     == Some("config.generation.providers.changed".to_string());
                 if !is_gen_event {
                     continue;
@@ -114,7 +118,9 @@ pub(super) fn init_generation_registry(
                     }
                 }
 
-                let mut guard = gen_reg.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut guard = gen_reg
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 *guard = new_registry;
                 tracing::info!(
                     "Generation provider registry reloaded ({} providers)",

@@ -214,9 +214,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream) -> Option<Callback
 
         send_success_response(
             &mut stream,
-            &format!(
-                "Authorization failed: {error} - {description}. You can close this window."
-            ),
+            &format!("Authorization failed: {error} - {description}. You can close this window."),
         )
         .await;
         return None;

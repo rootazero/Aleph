@@ -13,7 +13,10 @@ use crate::providers::protocols::openai_common::tools::{
     desanitize_tool_name as desanitize_tool_name_pub, ensure_properties_recursive,
     sanitize_tool_name as sanitize_tool_name_pub,
 };
-use crate::providers::responses::types::{InputItem, InputContentPart, MessageContent, ReasoningConfig, FunctionToolDef, ResponseResource, OutputItem, StreamEvent};
+use crate::providers::responses::types::{
+    FunctionToolDef, InputContentPart, InputItem, MessageContent, OutputItem, ReasoningConfig,
+    ResponseResource, StreamEvent,
+};
 use crate::tool_metadata::ToolDefinition;
 
 /// Convert `UnifiedMessages` to Responses API `InputItems`
@@ -353,8 +356,8 @@ pub(crate) fn parse_sse_data(data: &str) -> Option<StreamEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::responses::types::ContentPart;
     use crate::providers::message::UnifiedMessage;
+    use crate::providers::responses::types::ContentPart;
 
     // ─── convert_messages tests ─────────────────────────────────────
 

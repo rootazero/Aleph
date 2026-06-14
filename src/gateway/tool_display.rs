@@ -181,10 +181,7 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
         s.to_string()
     } else {
         let end_chars = max_chars.saturating_sub(3);
-        let boundary = s
-            .char_indices()
-            .nth(end_chars)
-            .map_or(s.len(), |(i, _)| i);
+        let boundary = s.char_indices().nth(end_chars).map_or(s.len(), |(i, _)| i);
         format!("{}...", &s[..boundary])
     }
 }

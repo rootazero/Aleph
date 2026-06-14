@@ -42,9 +42,7 @@ impl PromptLayer for VoiceModeLayer {
         // `input.inbound` is never populated in production (no
         // `PromptBuilder.inbound` field, no production caller), so reading it
         // left this layer permanently dead.
-        let active = input
-            .context
-            .is_some_and(|ctx| ctx.voice_mode_active);
+        let active = input.context.is_some_and(|ctx| ctx.voice_mode_active);
         if active {
             output.push_str(VOICE_MODE_PROMPT);
             output.push('\n');

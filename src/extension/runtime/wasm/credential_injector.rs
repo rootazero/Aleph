@@ -94,8 +94,7 @@ pub fn inject_credential(
 
         CredentialInject::Basic { username } => {
             use base64::{engine::general_purpose, Engine as _};
-            let encoded =
-                general_purpose::STANDARD.encode(format!("{username}:{secret_value}"));
+            let encoded = general_purpose::STANDARD.encode(format!("{username}:{secret_value}"));
             headers.push(("Authorization".to_string(), format!("Basic {encoded}")));
             Ok(None)
         }

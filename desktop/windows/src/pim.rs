@@ -1,4 +1,8 @@
-use aleph_desktop::pim_types::{MailFolder, MailMessage, MailMessageDetail, MailAttachment, NoteInfo, NoteContent, CalendarEvent, NewCalendarEvent, CalendarInfo, Reminder, NewReminder, ReminderList, Contact, ContactDetail, ContactGroup};
+use aleph_desktop::pim_types::{
+    CalendarEvent, CalendarInfo, Contact, ContactDetail, ContactGroup, MailAttachment, MailFolder,
+    MailMessage, MailMessageDetail, NewCalendarEvent, NewReminder, NoteContent, NoteInfo, Reminder,
+    ReminderList,
+};
 use aleph_desktop::traits::PimCapability;
 use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
@@ -287,8 +291,10 @@ impl PimCapability for WindowsPim {
             .get("date")
             .and_then(|d| d.as_str())
             .unwrap_or("1970-01-01T00:00:00Z");
-        let date = DateTime::parse_from_rfc3339(date_str)
-            .ok().map_or_else(|| Utc.timestamp_opt(0, 0).single().unwrap_or(Utc::now()), |d| d.with_timezone(&Utc));
+        let date = DateTime::parse_from_rfc3339(date_str).ok().map_or_else(
+            || Utc.timestamp_opt(0, 0).single().unwrap_or(Utc::now()),
+            |d| d.with_timezone(&Utc),
+        );
 
         let recipients = v
             .get("recipients")
@@ -351,7 +357,10 @@ impl PimCapability for WindowsPim {
                 .and_then(|s| s.as_str())
                 .unwrap_or("")
                 .to_string(),
-            is_read: v.get("is_read").and_then(serde_json::Value::as_bool).unwrap_or(true),
+            is_read: v
+                .get("is_read")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
             attachments,
         })
     }

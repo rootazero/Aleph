@@ -64,9 +64,10 @@ impl SubmitPolling for MidjourneyProvider {
             })?;
 
         let status = response.status();
-        let response_text = response.text().await.map_err(|e| {
-            GenerationError::network(format!("Failed to read response body: {e}"))
-        })?;
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| GenerationError::network(format!("Failed to read response body: {e}")))?;
 
         // Handle non-success status codes
         if !status.is_success() {

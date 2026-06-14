@@ -2,7 +2,10 @@
 
 use async_trait::async_trait;
 
-use crate::media_types::{CameraSnapConfig, CameraSnapResult, CameraClipConfig, CameraClipResult, AudioDeviceInfo, AudioRecordConfig, AudioRecordResult, SpeechToTextConfig, SpeechToTextResult};
+use crate::media_types::{
+    AudioDeviceInfo, AudioRecordConfig, AudioRecordResult, CameraClipConfig, CameraClipResult,
+    CameraSnapConfig, CameraSnapResult, SpeechToTextConfig, SpeechToTextResult,
+};
 use crate::Result;
 
 /// Camera capture and audio device management.

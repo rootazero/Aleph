@@ -184,19 +184,17 @@ pub async fn handle_usage_db(
             let session_meta = sessions.iter().find(|s| s.key == session_key);
 
             let (input_tokens, output_tokens, total, message_count, created_at, last_active_at) =
-                session_meta
-                    .map_or((0, 0, 0, 0, None, None), |s| {
-                        (
-                            s.input_tokens as u64,
-                            s.output_tokens as u64,
-                            s.total_tokens as u64,
-                            s.message_count as u64,
-                            chrono::DateTime::from_timestamp(s.created_at, 0)
-                                .map(|dt| dt.to_rfc3339()),
-                            chrono::DateTime::from_timestamp(s.last_active_at, 0)
-                                .map(|dt| dt.to_rfc3339()),
-                        )
-                    });
+                session_meta.map_or((0, 0, 0, 0, None, None), |s| {
+                    (
+                        s.input_tokens as u64,
+                        s.output_tokens as u64,
+                        s.total_tokens as u64,
+                        s.message_count as u64,
+                        chrono::DateTime::from_timestamp(s.created_at, 0).map(|dt| dt.to_rfc3339()),
+                        chrono::DateTime::from_timestamp(s.last_active_at, 0)
+                            .map(|dt| dt.to_rfc3339()),
+                    )
+                });
 
             JsonRpcResponse::success(
                 request.id,

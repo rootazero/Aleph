@@ -6,7 +6,10 @@ pub mod types;
 
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::error::SessionStoreError;
-use crate::gateway::session_store::types::{SessionMetadata, SessionFilter, DeleteResult, MessageRecord, SearchHit, CompactStrategy, CompactResult, TruncateResult, CheckpointSummary, SessionPatch, SessionPreview};
+use crate::gateway::session_store::types::{
+    CheckpointSummary, CompactResult, CompactStrategy, DeleteResult, MessageRecord, SearchHit,
+    SessionFilter, SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
+};
 use async_trait::async_trait;
 
 #[async_trait]

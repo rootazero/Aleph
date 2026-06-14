@@ -28,8 +28,7 @@ impl ContextTokenStore {
     }
 
     fn cache_path(&self, account_id: &str) -> std::path::PathBuf {
-        self.root
-            .join(format!("{account_id}.context-tokens.json"))
+        self.root.join(format!("{account_id}.context-tokens.json"))
     }
 
     /// Get context token for a user.

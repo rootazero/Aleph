@@ -186,9 +186,7 @@ impl AcpAdapterManager {
             if !harness.supported_modes().contains(&effective) {
                 return Err(AcpOperationError::new(
                     AcpErrorCode::ModeUnsupported,
-                    format!(
-                        "Harness '{harness_id}' does not support {effective:?} mode"
-                    ),
+                    format!("Harness '{harness_id}' does not support {effective:?} mode"),
                 )
                 .into());
             }

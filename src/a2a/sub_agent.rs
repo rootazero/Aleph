@@ -198,7 +198,11 @@ impl A2ASubAgent {
                     task.history
                         .iter()
                         .rev()
-                        .find(|m| m.role == A2ARole::Agent).map_or_else(|| format!("Task {} completed", task.id), |m| m.text_content())
+                        .find(|m| m.role == A2ARole::Agent)
+                        .map_or_else(
+                            || format!("Task {} completed", task.id),
+                            |m| m.text_content(),
+                        )
                 } else if let Some(ref msg) = task.status.message {
                     msg.text_content()
                 } else {

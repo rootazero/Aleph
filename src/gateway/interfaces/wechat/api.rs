@@ -6,7 +6,11 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::Client;
 use std::collections::HashMap;
 
-use super::types::{ILINK_APP_ID, ILINK_APP_CLIENT_VERSION, CHANNEL_VERSION, GetUpdatesResponse, EP_GET_UPDATES, SendMessagePayload, EP_SEND_MESSAGE, SendTypingPayload, EP_SEND_TYPING, ConfigResponse, EP_GET_CONFIG, QrCodeResponse, EP_GET_BOT_QR, QrStatusResponse, EP_GET_QR_STATUS};
+use super::types::{
+    ConfigResponse, GetUpdatesResponse, QrCodeResponse, QrStatusResponse, SendMessagePayload,
+    SendTypingPayload, CHANNEL_VERSION, EP_GET_BOT_QR, EP_GET_CONFIG, EP_GET_QR_STATUS,
+    EP_GET_UPDATES, EP_SEND_MESSAGE, EP_SEND_TYPING, ILINK_APP_CLIENT_VERSION, ILINK_APP_ID,
+};
 
 const SESSION_EXPIRED_CODE: i32 = -14;
 

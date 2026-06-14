@@ -799,9 +799,7 @@ impl AgentRegistry {
 
         // Create workspace directory (runtime output, project files)
         std::fs::create_dir_all(&workspace_path).map_err(|e| {
-            AgentInstanceError::InitFailed(format!(
-                "Failed to create workspace for '{id}': {e}"
-            ))
+            AgentInstanceError::InitFailed(format!("Failed to create workspace for '{id}': {e}"))
         })?;
 
         // Initialize all identity files (SOUL.md, AGENTS.md, IDENTITY.md, etc.)
@@ -815,9 +813,7 @@ impl AgentRegistry {
         if !soul_content.is_empty() {
             let soul_path = agent_dir.join("SOUL.md");
             std::fs::write(&soul_path, soul_content).map_err(|e| {
-                AgentInstanceError::InitFailed(format!(
-                    "Failed to write SOUL.md for '{id}': {e}"
-                ))
+                AgentInstanceError::InitFailed(format!("Failed to write SOUL.md for '{id}': {e}"))
             })?;
         }
 

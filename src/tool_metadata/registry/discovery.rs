@@ -171,12 +171,7 @@ impl ToolDiscovery {
         let tools = self.tools.read().await;
         tools
             .values()
-            .filter(|t| {
-                t.name == name
-                    || t.id
-                        .rsplit_once(':')
-                        .is_some_and(|(_, n)| n == name)
-            })
+            .filter(|t| t.name == name || t.id.rsplit_once(':').is_some_and(|(_, n)| n == name))
             .max_by(|a, b| {
                 let a_exact = a.name == name;
                 let b_exact = b.name == name;

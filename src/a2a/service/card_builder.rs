@@ -1,5 +1,7 @@
 use crate::a2a::config::A2AServerConfig;
-use crate::a2a::domain::{AgentCard, AgentSkill, SecurityScheme, AgentProvider, AgentInterface, TransportProtocol};
+use crate::a2a::domain::{
+    AgentCard, AgentInterface, AgentProvider, AgentSkill, SecurityScheme, TransportProtocol,
+};
 
 /// Builds Aleph's own `AgentCard` from server configuration.
 ///

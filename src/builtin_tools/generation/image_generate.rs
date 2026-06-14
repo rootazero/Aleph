@@ -135,8 +135,7 @@ impl ImageGenerateTool {
 
                 // Check if provider supports image generation
                 if !provider.supports(GenerationType::Image) {
-                    let error_msg =
-                        format!("Provider '{name}' does not support image generation");
+                    let error_msg = format!("Provider '{name}' does not support image generation");
                     notify_tool_result(Self::NAME, &error_msg, false);
                     return Err(ToolError::InvalidArgs(error_msg));
                 }
@@ -213,9 +212,7 @@ impl ImageGenerateTool {
         );
 
         // Notify success
-        let result_summary = format!(
-            "图像生成完成 ({duration_ms} ms, provider: {provider_name})"
-        );
+        let result_summary = format!("图像生成完成 ({duration_ms} ms, provider: {provider_name})");
         notify_tool_result(Self::NAME, &result_summary, true);
 
         let display = if location_type == "data_url" {

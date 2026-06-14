@@ -35,9 +35,7 @@ impl TrustLevel {
                 Some(url::Host::Domain("localhost")) => Self::Local,
                 Some(url::Host::Ipv4(ip)) if ip.is_loopback() => Self::Local,
                 Some(url::Host::Ipv6(ip)) if ip.is_loopback() => Self::Local,
-                Some(url::Host::Ipv4(ip)) if ip.is_private() || ip.is_link_local() => {
-                    Self::Trusted
-                }
+                Some(url::Host::Ipv4(ip)) if ip.is_private() || ip.is_link_local() => Self::Trusted,
                 // Mirror the IPv4 arm and the `infer_from_addr` path: a private
                 // (ULA fc00::/7) or link-local (fe80::/10) IPv6 host is a LAN
                 // peer, not a public one. Without this arm such hosts fell to

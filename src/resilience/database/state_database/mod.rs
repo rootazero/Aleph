@@ -277,9 +277,7 @@ impl StateDatabase {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| {
-                AlephError::config(format!("Failed to read embedding dimension: {e}"))
-            })?;
+            .map_err(|e| AlephError::config(format!("Failed to read embedding dimension: {e}")))?;
 
         match stored {
             Some(dim_str) => match dim_str.parse::<u32>() {
@@ -330,9 +328,7 @@ impl StateDatabase {
                 "#,
                 [],
             )
-            .map_err(|e| {
-                AlephError::config(format!("Failed to migrate memories to vec0: {e}"))
-            })?;
+            .map_err(|e| AlephError::config(format!("Failed to migrate memories to vec0: {e}")))?;
 
             tracing::info!("Memories migration complete");
         }
@@ -359,9 +355,7 @@ impl StateDatabase {
                     [],
                     |row| row.get(0),
                 )
-                .map_err(|e| {
-                    AlephError::config(format!("Failed to check memories table: {e}"))
-                })?;
+                .map_err(|e| AlephError::config(format!("Failed to check memories table: {e}")))?;
 
             // If old memories table exists but no schema_info, needs migration
             return Ok(memories_exists);
@@ -375,9 +369,7 @@ impl StateDatabase {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| {
-                AlephError::config(format!("Failed to read embedding dimension: {e}"))
-            })?;
+            .map_err(|e| AlephError::config(format!("Failed to read embedding dimension: {e}")))?;
 
         match current_dimension {
             Some(dim_str) => match dim_str.parse::<u32>() {
@@ -435,9 +427,9 @@ impl StateDatabase {
                 "SELECT description FROM sticker_descriptions WHERE file_unique_id = ?1 LIMIT 1",
             )
             .map_err(|e| AlephError::config(format!("Failed to prepare sticker query: {e}")))?;
-        let mut rows = stmt.query([file_unique_id]).map_err(|e| {
-            AlephError::config(format!("Failed to query sticker description: {e}"))
-        })?;
+        let mut rows = stmt
+            .query([file_unique_id])
+            .map_err(|e| AlephError::config(format!("Failed to query sticker description: {e}")))?;
         if let Some(row) = rows
             .next()
             .map_err(|e| AlephError::config(format!("Failed to read sticker row: {e}")))?

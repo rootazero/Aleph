@@ -79,7 +79,8 @@ impl DiscoveredPath {
     pub fn new(path: PathBuf, source: DiscoverySource, priority: u32) -> Self {
         let name = path
             .file_name()
-            .and_then(|n| n.to_str()).map_or_else(|| path.to_string_lossy().into_owned(), |s| s.to_string());
+            .and_then(|n| n.to_str())
+            .map_or_else(|| path.to_string_lossy().into_owned(), |s| s.to_string());
 
         Self {
             path,
@@ -91,7 +92,12 @@ impl DiscoveredPath {
 
     /// Create with explicit name
     #[must_use]
-    pub const fn with_name(path: PathBuf, source: DiscoverySource, priority: u32, name: String) -> Self {
+    pub const fn with_name(
+        path: PathBuf,
+        source: DiscoverySource,
+        priority: u32,
+        name: String,
+    ) -> Self {
         Self {
             path,
             source,

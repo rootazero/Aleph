@@ -35,7 +35,8 @@ impl SkillTemplate {
     #[must_use]
     pub fn new(content: &str, source_path: &Path) -> Self {
         let base_dir = source_path
-            .parent().map_or_else(|| PathBuf::from("."), |p| p.to_path_buf());
+            .parent()
+            .map_or_else(|| PathBuf::from("."), |p| p.to_path_buf());
 
         Self {
             content: content.to_string(),
@@ -166,9 +167,9 @@ impl SkillTemplate {
 
     /// Read a file's content
     async fn read_file(&self, path: &Path) -> ExtensionResult<String> {
-        tokio::fs::read_to_string(path).await.map_err(|e| {
-            ExtensionError::file_reference(path, format!("Failed to read file: {e}"))
-        })
+        tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| ExtensionError::file_reference(path, format!("Failed to read file: {e}")))
     }
 }
 

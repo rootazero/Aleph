@@ -202,17 +202,21 @@ impl SpeechGenerateTool {
         let format = output
             .metadata
             .content_type
-            .as_ref().map_or_else(|| args.format.as_deref().unwrap_or("mp3"), |ct| {
-                // Extract format from content type (e.g., "audio/mpeg" -> "mp3")
-                match ct.as_str() {
-                    "audio/mpeg" => "mp3",
-                    "audio/opus" => "opus",
-                    "audio/aac" => "aac",
-                    "audio/flac" => "flac",
-                    "audio/wav" => "wav",
-                    _ => "mp3",
-                }
-            })
+            .as_ref()
+            .map_or_else(
+                || args.format.as_deref().unwrap_or("mp3"),
+                |ct| {
+                    // Extract format from content type (e.g., "audio/mpeg" -> "mp3")
+                    match ct.as_str() {
+                        "audio/mpeg" => "mp3",
+                        "audio/opus" => "opus",
+                        "audio/aac" => "aac",
+                        "audio/flac" => "flac",
+                        "audio/wav" => "wav",
+                        _ => "mp3",
+                    }
+                },
+            )
             .to_string();
 
         info!(

@@ -67,9 +67,7 @@ impl SkillStatusEntry {
         api_key_set: bool,
         usage: Option<UsageStats>,
     ) -> Self {
-        let disabled = entry_config
-            .and_then(|c| c.enabled)
-            .is_some_and(|e| !e);
+        let disabled = entry_config.and_then(|c| c.enabled).is_some_and(|e| !e);
 
         let scope = entry_config
             .and_then(|c| c.scope_override.clone())

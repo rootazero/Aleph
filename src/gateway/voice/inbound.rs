@@ -485,7 +485,10 @@ mod tests {
         assert!(!has_audio_attachment(&msg));
     }
 
-    fn make_vault() -> (tempfile::TempDir, crate::gateway::security::SharedTokenManager) {
+    fn make_vault() -> (
+        tempfile::TempDir,
+        crate::gateway::security::SharedTokenManager,
+    ) {
         use crate::gateway::security::{SecurityStore, SharedTokenManager};
         let dir = tempfile::TempDir::new().unwrap();
         let store = std::sync::Arc::new(SecurityStore::in_memory().unwrap());
@@ -566,5 +569,4 @@ mod tests {
             _ => panic!("expected Static"),
         }
     }
-
 }

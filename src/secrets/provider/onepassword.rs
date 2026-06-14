@@ -165,7 +165,8 @@ impl SecretProvider for OnePasswordProvider {
                     let updated_at = item
                         .get("updated_at")
                         .and_then(|v| v.as_str())
-                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).map_or_else(Utc::now, |dt| dt.with_timezone(&Utc));
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map_or_else(Utc::now, |dt| dt.with_timezone(&Utc));
                     Some(SecretMetadata {
                         name,
                         provider: "1password".into(),

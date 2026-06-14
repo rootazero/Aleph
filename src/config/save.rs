@@ -407,9 +407,8 @@ impl Config {
 
         // Write with atomic operation (same as save_to_file)
         let temp_path = path.with_extension("tmp");
-        fs::write(&temp_path, &new_contents).map_err(|e| {
-            AlephError::invalid_config(format!("Failed to write temp config: {e}"))
-        })?;
+        fs::write(&temp_path, &new_contents)
+            .map_err(|e| AlephError::invalid_config(format!("Failed to write temp config: {e}")))?;
 
         // fsync on Unix
         #[cfg(unix)]

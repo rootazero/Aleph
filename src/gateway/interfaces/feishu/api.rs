@@ -2,7 +2,10 @@ use crate::sync_primitives::Arc;
 use reqwest::multipart;
 
 use super::auth::TokenManager;
-use super::types::{BotInfo, BotInfoResponse, WsEndpointResponse, SendMessageResponse, UploadImageResponse, CardCreateResponse, ReactionResponse, UserInfoResponse};
+use super::types::{
+    BotInfo, BotInfoResponse, CardCreateResponse, ReactionResponse, SendMessageResponse,
+    UploadImageResponse, UserInfoResponse, WsEndpointResponse,
+};
 
 /// Truncate a string to at most `max_chars` characters, respecting UTF-8 boundaries.
 fn truncate_chars(s: &str, max_chars: usize) -> &str {

@@ -28,10 +28,7 @@ pub enum ApprovalOutcome {
 impl ApprovalOutcome {
     #[must_use]
     pub const fn is_approved(&self) -> bool {
-        matches!(
-            self,
-            Self::Approved | Self::ApprovedForSession
-        )
+        matches!(self, Self::Approved | Self::ApprovedForSession)
     }
 
     /// True only for a session-scoped grant — the caller should remember it so

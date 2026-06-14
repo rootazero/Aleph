@@ -2,7 +2,10 @@ use crate::config::types::generation::presets::{generation_metadata, PRESETS};
 use crate::config::types::generation::GenerationProviderConfig;
 use crate::config::Config;
 use crate::gateway::event_bus::GatewayEventBus;
-use crate::gateway::handlers::generation_providers::helpers::{parse_generation_type, provider_exists, get_typed_provider_map_mut, find_provider_type, get_typed_provider_map};
+use crate::gateway::handlers::generation_providers::helpers::{
+    find_provider_type, get_typed_provider_map, get_typed_provider_map_mut, parse_generation_type,
+    provider_exists,
+};
 use crate::gateway::handlers::generation_providers::{
     build_generation_provider_for_persistence, resolve_api_key, save_config, vault_key,
     GenerationProviderEntry, TestConnectionResult,

@@ -52,7 +52,10 @@ mod tests {
         assert!(resp.is_success(), "{resp:?}");
         let result = resp.result.unwrap();
         // Panel reads `role`; LAN-trust always reports operator.
-        assert_eq!(result.get("role").and_then(|v| v.as_str()), Some("operator"));
+        assert_eq!(
+            result.get("role").and_then(|v| v.as_str()),
+            Some("operator")
+        );
         assert!(result.get("state_version").is_some());
         assert!(result.get("keepalive").is_some());
     }

@@ -545,9 +545,8 @@ impl SseTransport {
             },
         });
 
-        let response_json = serde_json::to_string(&response).map_err(|e| {
-            AlephError::IoError(format!("Failed to serialize error response: {e}"))
-        })?;
+        let response_json = serde_json::to_string(&response)
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize error response: {e}")))?;
 
         let http_response = self
             .build_request(response_json)

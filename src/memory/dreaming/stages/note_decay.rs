@@ -215,8 +215,7 @@ impl DreamStage for NoteDecayStage {
             // lightweight index `tags` (checked in the first loop) cannot see.
             // Only archival candidates are read here, so this stays cheap.
             if let Ok(content) = tokio::fs::read_to_string(&source_path).await {
-                if KnowledgeNote::from_markdown(filename, &content)
-                    .is_ok_and(|n| n.is_permanent())
+                if KnowledgeNote::from_markdown(filename, &content).is_ok_and(|n| n.is_permanent())
                 {
                     notes_protected += 1;
                     tracing::debug!(path, "NoteDecay: permanent note exempt from archival");
@@ -674,11 +673,21 @@ mod tests {
 
     #[async_trait::async_trait]
     impl EmbeddingProvider for DecayStubEmbedder {
-        async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> { Ok(Vec::new()) }
-        async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> { Ok(Vec::new()) }
-        fn dimensions(&self) -> usize { 0 }
-        fn model_name(&self) -> &str { "stub" }
-        fn provider_id(&self) -> &str { "stub" }
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> {
+            Ok(Vec::new())
+        }
+        async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+            Ok(Vec::new())
+        }
+        fn dimensions(&self) -> usize {
+            0
+        }
+        fn model_name(&self) -> &str {
+            "stub"
+        }
+        fn provider_id(&self) -> &str {
+            "stub"
+        }
     }
 
     async fn build_decay_ctx() -> (DreamContext, Arc<SqliteMemoryBackend>) {
@@ -688,7 +697,8 @@ mod tests {
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
         let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
             std::sync::Arc::new(MockProvider::new("{}"));
-        let embedder: std::sync::Arc<dyn EmbeddingProvider> = std::sync::Arc::new(DecayStubEmbedder);
+        let embedder: std::sync::Arc<dyn EmbeddingProvider> =
+            std::sync::Arc::new(DecayStubEmbedder);
         let ctx = DreamContext {
             notes: Vec::new(),
             note_contents: std::collections::HashMap::new(),

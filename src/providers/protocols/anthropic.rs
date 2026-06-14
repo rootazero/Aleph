@@ -46,10 +46,7 @@ pub(crate) fn sanitize_anthropic_tool_name(name: &str) -> String {
             }
         })
         .collect();
-    let needs_prefix = out
-        .chars()
-        .next()
-        .is_none_or(|c| !c.is_ascii_alphabetic());
+    let needs_prefix = out.chars().next().is_none_or(|c| !c.is_ascii_alphabetic());
     if needs_prefix {
         out = format!("t_{out}");
     }

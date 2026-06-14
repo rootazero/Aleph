@@ -78,9 +78,7 @@ impl MemoryReflector {
     /// short-circuit). For non-empty envelopes the full LLM synthesis path runs.
     pub async fn reflect(&self, query: &str, opts: ReflectOpts) -> Result<Synthesis, AlephError> {
         let budget = AssemblyBudget {
-            total_tokens: opts
-                .max_tokens
-                .map_or(DEFAULT_BUDGET_TOKENS, |n| n as u32),
+            total_tokens: opts.max_tokens.map_or(DEFAULT_BUDGET_TOKENS, |n| n as u32),
         };
 
         let envelope = self

@@ -758,8 +758,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                 // LLM-generated, and an unsanitized `old_cat` (e.g. "..")
                 // would let the remove_file below escape the agent directory.
                 // Mirrors `merge_source_notes_into_note` / `append_to_note`.
-                let safe_old_cat =
-                    sanitize_title(old_cat).unwrap_or_else(|_| "other".to_string());
+                let safe_old_cat = sanitize_title(old_cat).unwrap_or_else(|_| "other".to_string());
                 let old_file = self
                     .memory_dir
                     .join(agent_id)

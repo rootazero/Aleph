@@ -363,7 +363,8 @@ impl TokenCost {
     #[must_use]
     pub fn calculate(&self, usage: &TokenUsage) -> f64 {
         let input_cost = f64::from(usage.input_tokens) * self.input_cost_per_million / 1_000_000.0;
-        let output_cost = f64::from(usage.output_tokens) * self.output_cost_per_million / 1_000_000.0;
+        let output_cost =
+            f64::from(usage.output_tokens) * self.output_cost_per_million / 1_000_000.0;
         input_cost + output_cost
     }
 }

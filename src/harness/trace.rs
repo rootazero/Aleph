@@ -214,16 +214,14 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 stream: stream.into(),
                 text,
             },
-            LoopTraceEvent::ToolCallStarted { iteration, call } => {
-                Self::ToolCallStarted {
-                    iteration,
-                    call: aleph_protocol::AgentTraceToolCallStart {
-                        tool_id: call.tool_id,
-                        tool_name: call.tool_name,
-                        input: call.input,
-                    },
-                }
-            }
+            LoopTraceEvent::ToolCallStarted { iteration, call } => Self::ToolCallStarted {
+                iteration,
+                call: aleph_protocol::AgentTraceToolCallStart {
+                    tool_id: call.tool_id,
+                    tool_name: call.tool_name,
+                    input: call.input,
+                },
+            },
             LoopTraceEvent::ToolCallCompleted {
                 iteration,
                 call,
@@ -245,15 +243,11 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                     }
                 },
             },
-            LoopTraceEvent::TurnStarted { iteration } => {
-                Self::TurnStarted { iteration }
-            }
-            LoopTraceEvent::TurnStateEntered { iteration, state } => {
-                Self::TurnStateEntered {
-                    iteration,
-                    state: state.into(),
-                }
-            }
+            LoopTraceEvent::TurnStarted { iteration } => Self::TurnStarted { iteration },
+            LoopTraceEvent::TurnStateEntered { iteration, state } => Self::TurnStateEntered {
+                iteration,
+                state: state.into(),
+            },
             LoopTraceEvent::TurnCompleted {
                 iteration,
                 outcome,
@@ -296,9 +290,7 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                     .filter_map(|inv| serde_json::to_value(inv).ok())
                     .collect(),
             },
-            LoopTraceEvent::WorktreeCreated { path } => {
-                Self::WorktreeCreated { path }
-            }
+            LoopTraceEvent::WorktreeCreated { path } => Self::WorktreeCreated { path },
             LoopTraceEvent::WorktreeCleanedUp { path, leaked } => {
                 Self::WorktreeCleanedUp { path, leaked }
             }
@@ -374,13 +366,9 @@ impl From<LoopTraceTurnOutcome> for aleph_protocol::AgentTraceTurnOutcome {
 impl From<LoopTraceSessionOutcome> for aleph_protocol::AgentTraceSessionOutcome {
     fn from(outcome: LoopTraceSessionOutcome) -> Self {
         match outcome {
-            LoopTraceSessionOutcome::Completed => {
-                Self::Completed
-            }
+            LoopTraceSessionOutcome::Completed => Self::Completed,
             LoopTraceSessionOutcome::HitLimit => Self::HitLimit,
-            LoopTraceSessionOutcome::Cancelled => {
-                Self::Cancelled
-            }
+            LoopTraceSessionOutcome::Cancelled => Self::Cancelled,
         }
     }
 }

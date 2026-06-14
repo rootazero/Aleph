@@ -477,9 +477,7 @@ fn build_effective_task(
 ) -> String {
     match context_summary {
         Some(summary) if context_mode == crate::agents::types::ContextMode::Summary => {
-            format!(
-                "## Context from parent agent\n\n{summary}\n\n---\n\n{task}"
-            )
+            format!("## Context from parent agent\n\n{summary}\n\n---\n\n{task}")
         }
         _ => task.to_string(),
     }

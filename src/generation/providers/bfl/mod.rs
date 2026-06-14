@@ -136,9 +136,10 @@ impl BflProvider {
                 .await
                 .map_err(|e| GenerationError::network(format!("Poll request failed: {e}")))?;
             let status = response.status();
-            let body = response.text().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read poll body: {e}"))
-            })?;
+            let body = response
+                .text()
+                .await
+                .map_err(|e| GenerationError::network(format!("Failed to read poll body: {e}")))?;
             if !status.is_success() {
                 error!(status = %status, body = %body, "BFL poll failed");
                 return Err(self.parse_error(status, &body));
@@ -199,10 +200,12 @@ impl BflProvider {
 
     async fn download(&self, url: &str) -> GenerationResult<Vec<u8>> {
         debug!(url, "downloading BFL image");
-        let response =
-            self.client.get(url).send().await.map_err(|e| {
-                GenerationError::network(format!("Failed to download image: {e}"))
-            })?;
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| GenerationError::network(format!("Failed to download image: {e}")))?;
         if !response.status().is_success() {
             return Err(GenerationError::network(format!(
                 "Image download failed with status: {}",
@@ -316,9 +319,7 @@ impl GenerationProvider for BflProvider {
             }
 
             let submit: types::BflSubmitResponse = response.json().await.map_err(|e| {
-                GenerationError::serialization(format!(
-                    "Failed to parse BFL submit response: {e}"
-                ))
+                GenerationError::serialization(format!("Failed to parse BFL submit response: {e}"))
             })?;
             info!(id = %submit.id, model = %model, "BFL render submitted, polling");
 
@@ -351,9 +352,10 @@ impl GenerationProvider for BflProvider {
                     .insert("seed".into(), serde_json::Value::from(seed));
             }
             if let Some(d) = result.duration {
-                metadata
-                    .extra
-                    .insert("render_seconds".into(), serde_json::Value::from(f64::from(d)));
+                metadata.extra.insert(
+                    "render_seconds".into(),
+                    serde_json::Value::from(f64::from(d)),
+                );
             }
             metadata.extra.insert(
                 "task_id".into(),

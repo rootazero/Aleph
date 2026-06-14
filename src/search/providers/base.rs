@@ -40,7 +40,8 @@ pub async fn parse_json<T: serde::de::DeserializeOwned>(
     response: Response,
     provider_name: &str,
 ) -> Result<T> {
-    response.json::<T>().await.map_err(|e| {
-        AlephError::provider(format!("Failed to parse {provider_name} response: {e}"))
-    })
+    response
+        .json::<T>()
+        .await
+        .map_err(|e| AlephError::provider(format!("Failed to parse {provider_name} response: {e}")))
 }

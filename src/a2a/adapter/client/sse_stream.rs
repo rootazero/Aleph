@@ -3,7 +3,10 @@ use std::time::Duration;
 
 use futures::Stream;
 
-use crate::a2a::domain::{UpdateEvent, A2AError, TaskStatusUpdateEvent, TaskArtifactUpdateEvent, Artifact, Part, TaskState};
+use crate::a2a::domain::{
+    A2AError, Artifact, Part, TaskArtifactUpdateEvent, TaskState, TaskStatusUpdateEvent,
+    UpdateEvent,
+};
 use crate::a2a::port::A2AResult;
 
 /// Parse an SSE HTTP response body into a stream of `UpdateEvent`s.

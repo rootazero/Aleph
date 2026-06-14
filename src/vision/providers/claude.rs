@@ -204,9 +204,7 @@ impl ClaudeVisionProvider {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(VisionError::ProviderError(format!(
-                "API {status}: {body}"
-            )));
+            return Err(VisionError::ProviderError(format!("API {status}: {body}")));
         }
 
         let response = resp

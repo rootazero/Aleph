@@ -144,10 +144,7 @@ pub fn resolve_route(
 
     // 4. Account match (specific, not wildcard)
     if let Some(b) = candidates.iter().find(|b| {
-        b.match_rule
-            .account_id
-            .as_ref()
-            .is_some_and(|a| a != "*")
+        b.match_rule.account_id.as_ref().is_some_and(|a| a != "*")
             && b.match_rule.peer.is_none()
             && b.match_rule.guild_id.is_none()
             && b.match_rule.team_id.is_none()
@@ -165,10 +162,7 @@ pub fn resolve_route(
     // is a legitimate channel-level default route — treat it like "*" rather
     // than dropping it to the default agent.
     if let Some(b) = candidates.iter().find(|b| {
-        b.match_rule
-            .account_id
-            .as_ref()
-            .is_none_or(|a| a == "*")
+        b.match_rule.account_id.as_ref().is_none_or(|a| a == "*")
             && b.match_rule.peer.is_none()
             && b.match_rule.guild_id.is_none()
             && b.match_rule.team_id.is_none()

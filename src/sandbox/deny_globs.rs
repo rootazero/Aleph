@@ -64,11 +64,10 @@ pub fn resolve_deny_read_paths_under(root: &Path, deny_read_globs: &[String]) ->
     }
 
     let matches_any = |path: &Path| -> bool {
-        path.to_str()
-            .is_some_and(|s| {
-                let normalised = s.replace('\\', "/");
-                regexes.iter().any(|re| re.is_match(&normalised))
-            })
+        path.to_str().is_some_and(|s| {
+            let normalised = s.replace('\\', "/");
+            regexes.iter().any(|re| re.is_match(&normalised))
+        })
     };
 
     let mut matched = Vec::new();

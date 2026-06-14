@@ -43,9 +43,7 @@ impl ConfigurableProtocol {
             ProtocolRegistry::global()
                 .get(extends)
                 .ok_or_else(|| {
-                    AlephError::provider(format!(
-                        "Base protocol '{extends}' not found in registry"
-                    ))
+                    AlephError::provider(format!("Base protocol '{extends}' not found in registry"))
                 })?
                 .into()
         } else {

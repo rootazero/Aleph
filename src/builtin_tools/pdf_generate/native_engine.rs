@@ -5,7 +5,10 @@
 
 use std::path::{Path, PathBuf};
 
-use printpdf::{PdfDocument, Mm, PdfSaveOptions, PdfPage, Op, PdfFontHandle, Pt, Point, TextItem, ParsedFont, BuiltinFont};
+use printpdf::{
+    BuiltinFont, Mm, Op, ParsedFont, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions, Point,
+    Pt, TextItem,
+};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use tracing::{debug, info, warn};
 
@@ -255,9 +258,8 @@ pub fn generate(
 
     // Create parent directories if needed
     if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            ToolError::Execution(format!("Failed to create output directory: {e}"))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| ToolError::Execution(format!("Failed to create output directory: {e}")))?;
     }
 
     // Write the PDF bytes to disk.

@@ -230,11 +230,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             let code = commands::bootstrap_runtime::run(br_args).await;
             std::process::exit(code);
         }
-        Some(Command::Node {
-            center,
-            name,
-            tags,
-        }) => {
+        Some(Command::Node { center, name, tags }) => {
             return commands::node::handle_node(center, name, tags).await;
         }
         Some(Command::SandboxDebug {
@@ -259,10 +255,15 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             // Continue with start logic
         }
         // Sync commands already handled in main()
-        Some(Command::Stop | Command::Secret { .. } | Command::Status { .. } |
-Command::Hooks { .. } |
-Command::PromptSize { .. } | Command::SandboxInit { .. } |
-Command::SandboxInitWindows { .. }) => unreachable!(),
+        Some(
+            Command::Stop
+            | Command::Secret { .. }
+            | Command::Status { .. }
+            | Command::Hooks { .. }
+            | Command::PromptSize { .. }
+            | Command::SandboxInit { .. }
+            | Command::SandboxInitWindows { .. },
+        ) => unreachable!(),
     }
 
     // Start the gateway server

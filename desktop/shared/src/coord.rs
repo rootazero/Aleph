@@ -46,7 +46,10 @@ impl CoordinateSpace {
             Self::Normalized { factor_w, factor_h } => {
                 let fw = f64::from(factor_w.max(1));
                 let fh = f64::from(factor_h.max(1));
-                ((x / fw) * f64::from(viewport_w), (y / fh) * f64::from(viewport_h))
+                (
+                    (x / fw) * f64::from(viewport_w),
+                    (y / fh) * f64::from(viewport_h),
+                )
             }
         }
     }

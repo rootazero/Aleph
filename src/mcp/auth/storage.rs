@@ -264,9 +264,8 @@ impl OAuthStorage {
             })?;
         }
 
-        let content = serde_json::to_string_pretty(storage).map_err(|e| {
-            AlephError::IoError(format!("Failed to serialize OAuth storage: {e}"))
-        })?;
+        let content = serde_json::to_string_pretty(storage)
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize OAuth storage: {e}")))?;
 
         fs::write(&self.file_path, content)
             .await

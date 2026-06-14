@@ -268,11 +268,8 @@ pub async fn handle_update(
         serde_json::to_value(&security_config.sandbox_rate_limit),
     );
 
-    let needs_restart = host_changed
-        || ssrf_changed
-        || shell_changed
-        || secrets_changed
-        || sandbox_changed;
+    let needs_restart =
+        host_changed || ssrf_changed || shell_changed || secrets_changed || sandbox_changed;
 
     let config_path = crate::config::Config::default_path();
 

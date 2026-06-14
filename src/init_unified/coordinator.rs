@@ -413,9 +413,8 @@ impl InitializationCoordinator {
 
         info!("Initializing runtime ledger (zero-install)...");
 
-        let runtimes_dir = crate::utils::paths::get_runtimes_dir().map_err(|e| {
-            InitError::new("runtimes", format!("Failed to get runtimes dir: {e}"))
-        })?;
+        let runtimes_dir = crate::utils::paths::get_runtimes_dir()
+            .map_err(|e| InitError::new("runtimes", format!("Failed to get runtimes dir: {e}")))?;
 
         // Create directory if needed
         tokio::fs::create_dir_all(&runtimes_dir)
@@ -451,9 +450,7 @@ impl InitializationCoordinator {
                 };
                 InitError::new("runtimes", msg)
             })?
-            .map_err(|e| {
-                InitError::new("runtimes", format!("Failed to initialize ledger: {e}"))
-            })?;
+            .map_err(|e| InitError::new("runtimes", format!("Failed to initialize ledger: {e}")))?;
 
         info!("Runtime ledger initialized (no downloads, runtimes provisioned on-demand)");
         Ok(())
@@ -477,10 +474,7 @@ impl InitializationCoordinator {
         // Initialize and validate skills system
         let system = SkillSystem::new();
         system.init(vec![skills_dir.clone()]).await.map_err(|e| {
-            InitError::new(
-                "skills",
-                format!("Failed to initialize skill system: {e}"),
-            )
+            InitError::new("skills", format!("Failed to initialize skill system: {e}"))
         })?;
 
         let skill_count = system.list_skills().await.len();

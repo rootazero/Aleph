@@ -73,7 +73,10 @@ mod tests {
     #[test]
     fn links_on_one_shared_specific_entity() {
         let notes = vec![
-            kw("entity/us-iran-conflict-2026", &["us-iran-conflict", "ceasefire"]),
+            kw(
+                "entity/us-iran-conflict-2026",
+                &["us-iran-conflict", "ceasefire"],
+            ),
             kw("personal/news-monitoring", &["us-iran-conflict", "cron"]),
         ];
         let links = pair_by_overlap(&notes);

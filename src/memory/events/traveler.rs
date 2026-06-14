@@ -156,9 +156,7 @@ fn describe_event(env: &MemoryEventEnvelope) -> String {
             new_value,
             ..
         } => {
-            format!(
-                "Metadata '{field}' changed from '{old_value}' to '{new_value}'"
-            )
+            format!("Metadata '{field}' changed from '{old_value}' to '{new_value}'")
         }
         MemoryEvent::NoteAccessed {
             query,

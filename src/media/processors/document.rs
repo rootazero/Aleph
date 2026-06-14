@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use crate::media::error::MediaError;
 use crate::media::provider::MediaProvider;
-use crate::media::types::{MediaType, DocFormat, MediaInput, MediaOutput};
+use crate::media::types::{DocFormat, MediaInput, MediaOutput, MediaType};
 
 /// Document provider for plain text formats (TXT, Markdown, HTML).
 ///
@@ -66,12 +66,17 @@ impl MediaProvider for TextDocumentProvider {
         match input {
             MediaInput::FilePath { path } => {
                 const MAX_TEXT_FILE_BYTES: u64 = 10 * 1024 * 1024;
-                let meta = tokio::fs::metadata(path)
-                    .await
-                    .map_err(|e| MediaError::ProviderError {
-                        provider: "text-document".into(),
-                        message: format!("Failed to read metadata for {}: {}", path.display(), e),
-                    })?;
+                let meta =
+                    tokio::fs::metadata(path)
+                        .await
+                        .map_err(|e| MediaError::ProviderError {
+                            provider: "text-document".into(),
+                            message: format!(
+                                "Failed to read metadata for {}: {}",
+                                path.display(),
+                                e
+                            ),
+                        })?;
                 if meta.len() > MAX_TEXT_FILE_BYTES {
                     return Err(MediaError::ProviderError {
                         provider: "text-document".into(),

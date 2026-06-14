@@ -218,9 +218,7 @@ impl GoogleMeetTool {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
-                AlephError::tool(format!(
-                    "`{field}` is required for the `{action}` action"
-                ))
+                AlephError::tool(format!("`{field}` is required for the `{action}` action"))
             })
     }
 
@@ -331,7 +329,11 @@ impl GoogleMeetTool {
         let detail = result
             .get("detail")
             .or_else(|| result.get("message"))
-            .and_then(|v| v.as_str()).map_or_else(|| format!("{} completed", args.action.rpc_method()), str::to_string);
+            .and_then(|v| v.as_str())
+            .map_or_else(
+                || format!("{} completed", args.action.rpc_method()),
+                str::to_string,
+            );
 
         info!(action = ?args.action, "Google Meet bridge action ok");
         Ok(GoogleMeetOutput {

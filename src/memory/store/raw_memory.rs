@@ -147,7 +147,8 @@ impl RawMemorySource {
                     .unwrap_or_else(|| serde_json::json!({}));
                 let severity = parsed
                     .get("severity")
-                    .and_then(|x| x.as_str()).map_or_else(|| "low".to_string(), str::to_string);
+                    .and_then(|x| x.as_str())
+                    .map_or_else(|| "low".to_string(), str::to_string);
                 let suggested_rule = parsed
                     .get("suggested_rule")
                     .and_then(|x| x.as_str())

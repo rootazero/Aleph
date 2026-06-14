@@ -278,9 +278,9 @@ impl ClawHubTool {
 
             // Read and write the file (bounded by the entry size check above).
             let mut content = Vec::new();
-            entry.read_to_end(&mut content).map_err(|e| {
-                AlephError::tool(format!("Failed to read ZIP entry content: {e}"))
-            })?;
+            entry
+                .read_to_end(&mut content)
+                .map_err(|e| AlephError::tool(format!("Failed to read ZIP entry content: {e}")))?;
 
             // Accumulate per-file security verdict before writing anything.
             let file_label = out_path
@@ -452,7 +452,8 @@ impl AlephTool for ClawHubTool {
                     v.to_string()
                 } else {
                     detail
-                        .latest_version.map_or_else(|| "unknown".to_string(), |v| v.number)
+                        .latest_version
+                        .map_or_else(|| "unknown".to_string(), |v| v.number)
                 };
 
                 // Download the ZIP (after version is known)
@@ -462,9 +463,7 @@ impl AlephTool for ClawHubTool {
                     Self::install_from_zip(&zip_path, &slug, &version, self.client.base_url())?;
 
                 Ok(ClawHubOutput {
-                    message: format!(
-                        "Skill '{slug}' v{installed_version} installed successfully"
-                    ),
+                    message: format!("Skill '{slug}' v{installed_version} installed successfully"),
                     skills: None,
                     cursor: None,
                     has_more: None,
@@ -507,7 +506,8 @@ impl AlephTool for ClawHubTool {
                 }
 
                 let remote_version = detail
-                    .latest_version.map_or_else(|| "unknown".to_string(), |v| v.number);
+                    .latest_version
+                    .map_or_else(|| "unknown".to_string(), |v| v.number);
 
                 if !ClawHubClient::is_newer_version(&local_meta.version, &remote_version) {
                     return Ok(ClawHubOutput {

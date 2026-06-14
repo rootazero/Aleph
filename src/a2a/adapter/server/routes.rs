@@ -150,7 +150,8 @@ async fn stream_message_send(
     let task_id = request
         .params
         .get("taskId")
-        .and_then(|v| v.as_str()).map_or_else(|| uuid::Uuid::new_v4().to_string(), String::from);
+        .and_then(|v| v.as_str())
+        .map_or_else(|| uuid::Uuid::new_v4().to_string(), String::from);
 
     let session_id = request
         .params

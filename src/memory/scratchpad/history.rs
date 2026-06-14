@@ -39,9 +39,7 @@ impl SessionHistory {
         }
 
         let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S");
-        let entry = format!(
-            "\n--- Archived: {timestamp} (Session: {session_id}) ---\n{content}\n"
-        );
+        let entry = format!("\n--- Archived: {timestamp} (Session: {session_id}) ---\n{content}\n");
 
         let mut file = OpenOptions::new()
             .create(true)

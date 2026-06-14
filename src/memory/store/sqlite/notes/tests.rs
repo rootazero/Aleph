@@ -462,12 +462,10 @@ mod tests {
             .unwrap();
 
         // get_typed_relations returns (to_note, relation) for rows with non-NULL relation.
-        let rels = backend
-            .get_typed_relations("cat/a", AGENT)
-            .await
-            .unwrap();
+        let rels = backend.get_typed_relations("cat/a", AGENT).await.unwrap();
         assert!(
-            rels.iter().any(|(to, rel)| to == "cat/b" && rel == "shared-topic"),
+            rels.iter()
+                .any(|(to, rel)| to == "cat/b" && rel == "shared-topic"),
             "expected typed relation cat/a -> cat/b with 'shared-topic', got: {rels:?}"
         );
     }

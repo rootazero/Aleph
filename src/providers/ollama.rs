@@ -166,14 +166,13 @@ impl OllamaProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout_seconds))
             .build()
-            .map_err(|e| {
-                AlephError::invalid_config(format!("Failed to build HTTP client: {e}"))
-            })?;
+            .map_err(|e| AlephError::invalid_config(format!("Failed to build HTTP client: {e}")))?;
 
         // Build API endpoint
-        let base_url = config
-            .base_url
-            .as_ref().map_or_else(|| DEFAULT_OLLAMA_URL.to_string(), |s| s.trim_end_matches('/').to_string());
+        let base_url = config.base_url.as_ref().map_or_else(
+            || DEFAULT_OLLAMA_URL.to_string(),
+            |s| s.trim_end_matches('/').to_string(),
+        );
         let endpoint = format!("{base_url}/api/chat");
 
         info!(

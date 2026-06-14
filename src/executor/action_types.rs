@@ -169,12 +169,10 @@ impl ActionResult {
     #[must_use]
     pub fn first_tool_output(&self) -> Option<Value> {
         match self {
-            Self::ToolResults { results } => {
-                results.first().and_then(|r| match &r.result {
-                    SingleToolResult::Success { output, .. } => Some(output.clone()),
-                    _ => None,
-                })
-            }
+            Self::ToolResults { results } => results.first().and_then(|r| match &r.result {
+                SingleToolResult::Success { output, .. } => Some(output.clone()),
+                _ => None,
+            }),
             _ => None,
         }
     }
@@ -183,12 +181,10 @@ impl ActionResult {
     #[must_use]
     pub fn first_tool_error(&self) -> Option<String> {
         match self {
-            Self::ToolResults { results } => {
-                results.first().and_then(|r| match &r.result {
-                    SingleToolResult::Error { error, .. } => Some(error.clone()),
-                    _ => None,
-                })
-            }
+            Self::ToolResults { results } => results.first().and_then(|r| match &r.result {
+                SingleToolResult::Error { error, .. } => Some(error.clone()),
+                _ => None,
+            }),
             _ => None,
         }
     }

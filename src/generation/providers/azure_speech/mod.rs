@@ -348,9 +348,7 @@ fn resolve_endpoint(input: &str) -> String {
             format!("{}/cognitiveservices/v1", trimmed.trim_end_matches('/'))
         }
     } else {
-        format!(
-            "https://{trimmed}.tts.speech.microsoft.com/cognitiveservices/v1"
-        )
+        format!("https://{trimmed}.tts.speech.microsoft.com/cognitiveservices/v1")
     }
 }
 

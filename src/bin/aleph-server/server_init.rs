@@ -181,8 +181,7 @@ where
     let output_mode = {
         let cfg = app_config.read().await;
         let behavior = cfg.behavior.as_ref();
-        let mode_str = behavior
-            .map_or("typewriter", |b| b.output_mode.as_str());
+        let mode_str = behavior.map_or("typewriter", |b| b.output_mode.as_str());
         alephcore::gateway::OutputMode::from_config(mode_str)
     };
     let emitter = Arc::new(GatewayEventEmitter::with_output_mode(
@@ -374,8 +373,7 @@ where
     let output_mode = {
         let cfg = app_config.read().await;
         let behavior = cfg.behavior.as_ref();
-        let mode_str = behavior
-            .map_or("typewriter", |b| b.output_mode.as_str());
+        let mode_str = behavior.map_or("typewriter", |b| b.output_mode.as_str());
         alephcore::gateway::OutputMode::from_config(mode_str)
     };
     let emitter = Arc::new(GatewayEventEmitter::with_output_mode(

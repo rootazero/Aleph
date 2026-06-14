@@ -116,7 +116,10 @@ fn append_group_id_adds_query_when_supplied() {
 
 #[test]
 fn append_group_id_noop_when_absent_or_blank() {
-    assert_eq!(append_group_id("https://h/v1/t2a_v2", None), "https://h/v1/t2a_v2");
+    assert_eq!(
+        append_group_id("https://h/v1/t2a_v2", None),
+        "https://h/v1/t2a_v2"
+    );
     assert_eq!(
         append_group_id("https://h/v1/t2a_v2", Some("   ")),
         "https://h/v1/t2a_v2"
@@ -192,7 +195,10 @@ fn resolve_format_accepts_supported() {
 #[test]
 fn resolve_format_rejects_unknown() {
     let err = resolve_format(Some("ogg")).unwrap_err();
-    assert!(matches!(err, GenerationError::UnsupportedFormatError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::UnsupportedFormatError { .. }
+    ));
 }
 
 #[test]
@@ -263,7 +269,9 @@ fn status_code_mapping() {
 fn voice_list_uses_modern_taxonomy() {
     let voices = MinimaxTtsProvider::static_voice_list();
     assert!(!voices.is_empty());
-    assert!(voices.iter().any(|v| v.id == "Chinese (Mandarin)_Gentle_Boy"));
+    assert!(voices
+        .iter()
+        .any(|v| v.id == "Chinese (Mandarin)_Gentle_Boy"));
     assert!(voices.iter().any(|v| v.id == "English_expressive_narrator"));
     // Classic speech-01-only ids must not appear (they break the default model).
     assert!(voices.iter().all(|v| !v.id.starts_with("male-qn-")));
@@ -274,7 +282,10 @@ fn voice_list_uses_modern_taxonomy() {
 #[tokio::test]
 async fn rejects_wrong_generation_type() {
     let p = MinimaxTtsProvider::new("k", None, None, None).unwrap();
-    let err = p.generate(GenerationRequest::image("a cat")).await.unwrap_err();
+    let err = p
+        .generate(GenerationRequest::image("a cat"))
+        .await
+        .unwrap_err();
     assert!(matches!(
         err,
         GenerationError::UnsupportedGenerationTypeError { .. }
@@ -285,15 +296,24 @@ async fn rejects_wrong_generation_type() {
 async fn rejects_empty_input() {
     let p = MinimaxTtsProvider::new("k", None, None, None).unwrap();
     let err = p.generate(GenerationRequest::speech("")).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[tokio::test]
 async fn rejects_oversized_input() {
     let text = "a".repeat(MAX_INPUT_CHARS + 1);
     let p = MinimaxTtsProvider::new("k", None, None, None).unwrap();
-    let err = p.generate(GenerationRequest::speech(text)).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    let err = p
+        .generate(GenerationRequest::speech(text))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[tokio::test]
@@ -302,5 +322,8 @@ async fn rejects_unknown_format() {
     let params = GenerationParams::builder().format("ogg").build();
     let request = GenerationRequest::speech("hi").with_params(params);
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::UnsupportedFormatError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::UnsupportedFormatError { .. }
+    ));
 }

@@ -45,8 +45,8 @@ impl AgentManager {
             .map_err(|e| AlephError::IoError(format!("Failed to read agent dir: {e}")))?;
 
         for entry in entries {
-            let entry = entry
-                .map_err(|e| AlephError::IoError(format!("Failed to read dir entry: {e}")))?;
+            let entry =
+                entry.map_err(|e| AlephError::IoError(format!("Failed to read dir entry: {e}")))?;
             let metadata = entry
                 .metadata()
                 .map_err(|e| AlephError::IoError(format!("Failed to read metadata: {e}")))?;

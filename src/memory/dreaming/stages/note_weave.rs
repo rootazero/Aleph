@@ -331,7 +331,10 @@ mod tests {
             orientation: None,
         };
 
-        for (cat, title) in [("entity", "us-iran-conflict"), ("personal", "news-monitoring")] {
+        for (cat, title) in [
+            ("entity", "us-iran-conflict"),
+            ("personal", "news-monitoring"),
+        ] {
             store
                 .index_note(
                     &KnowledgeNote {
@@ -347,7 +350,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        ctx.notes = vec![entry("entity/us-iran-conflict"), entry("personal/news-monitoring")];
+        ctx.notes = vec![
+            entry("entity/us-iran-conflict"),
+            entry("personal/news-monitoring"),
+        ];
 
         let out = NoteWeaveStage::default().execute(ctx).await.unwrap();
 

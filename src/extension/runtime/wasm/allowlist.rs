@@ -132,9 +132,7 @@ impl AllowlistValidator {
 /// For `https://host:port/path?query#frag`, returns `/path`.
 fn extract_raw_path(url_str: &str) -> &str {
     // Skip past the scheme ("https://")
-    let after_scheme = url_str
-        .find("://")
-        .map_or(url_str, |i| &url_str[i + 3..]);
+    let after_scheme = url_str.find("://").map_or(url_str, |i| &url_str[i + 3..]);
 
     // Skip past the authority (host[:port]) — find the first '/'
     let path_start = after_scheme.find('/').unwrap_or(after_scheme.len());

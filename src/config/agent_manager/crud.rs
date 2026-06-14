@@ -266,9 +266,9 @@ impl AgentManager {
             .and_then(|v| v.as_array_of_tables_mut())
             .ok_or_else(|| AlephError::invalid_config("[[agents.list]] not found"))?;
 
-        let agent_table = list.get_mut(idx).ok_or_else(|| {
-            AlephError::invalid_config(format!("Agent at index {idx} not found"))
-        })?;
+        let agent_table = list
+            .get_mut(idx)
+            .ok_or_else(|| AlephError::invalid_config(format!("Agent at index {idx} not found")))?;
 
         // Apply patch fields
         if let Some(name) = &patch.name {

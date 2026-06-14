@@ -155,9 +155,7 @@ impl AcpAdapterManager {
         if adapters.contains_key(&id) {
             return Err(AcpOperationError::new(
                 AcpErrorCode::HarnessDenied,
-                format!(
-                    "Harness '{id}' is already registered. Use update_harness to modify it."
-                ),
+                format!("Harness '{id}' is already registered. Use update_harness to modify it."),
             )
             .into());
         }

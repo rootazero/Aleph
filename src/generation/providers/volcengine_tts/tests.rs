@@ -58,9 +58,8 @@ fn resolve_endpoint_blank_appid_is_none() {
 
 #[test]
 fn new_parses_appid_into_struct() {
-    let p =
-        VolcengineTtsProvider::new("tok", Some("https://h?appid=999".to_string()), None, None)
-            .unwrap();
+    let p = VolcengineTtsProvider::new("tok", Some("https://h?appid=999".to_string()), None, None)
+        .unwrap();
     assert_eq!(p.appid, "999");
     assert_eq!(p.cluster, DEFAULT_CLUSTER);
     assert_eq!(p.voice, DEFAULT_VOICE);

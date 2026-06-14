@@ -361,7 +361,8 @@ pub async fn handle_start(
         // Resolve channel type: explicit "type" field, or fall back to the channel id
         let channel_type = channel_config
             .get("type")
-            .and_then(|v| v.as_str()).map_or_else(|| channel_id.as_str().to_string(), |s| s.to_string());
+            .and_then(|v| v.as_str())
+            .map_or_else(|| channel_id.as_str().to_string(), |s| s.to_string());
 
         // Strip the "type" field from config before passing to constructor
         let mut clean_config = channel_config.clone();

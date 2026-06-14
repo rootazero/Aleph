@@ -139,9 +139,7 @@ impl NoteType {
             Self::Preference => MemoryCategory::Preferences,
             Self::Plan | Self::Personal => MemoryCategory::Profile,
             Self::Learning | Self::Project | Self::Other => MemoryCategory::Entities,
-            Self::Tool | Self::Skill | Self::Reference | Self::Feedback => {
-                MemoryCategory::Patterns
-            }
+            Self::Tool | Self::Skill | Self::Reference | Self::Feedback => MemoryCategory::Patterns,
             Self::Lesson => MemoryCategory::Cases,
             Self::SubagentRun | Self::SubagentSession | Self::SubagentCheckpoint => {
                 MemoryCategory::Cases

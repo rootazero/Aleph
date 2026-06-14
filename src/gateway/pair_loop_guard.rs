@@ -355,14 +355,12 @@ pub fn resolve_pair_loop_settings(
         enabled: default_enabled,
         ..PairLoopGuardConfig::default()
     };
-    let merged_defaults = defaults
-        .cloned()
-        .map_or(base, |d| PairLoopGuardConfig {
-            enabled: d.enabled,
-            max_events_per_window: d.max_events_per_window.max(1),
-            window_seconds: d.window_seconds.max(1),
-            cooldown_seconds: d.cooldown_seconds,
-        });
+    let merged_defaults = defaults.cloned().map_or(base, |d| PairLoopGuardConfig {
+        enabled: d.enabled,
+        max_events_per_window: d.max_events_per_window.max(1),
+        window_seconds: d.window_seconds.max(1),
+        cooldown_seconds: d.cooldown_seconds,
+    });
     match channel.cloned() {
         Some(c) => PairLoopGuardConfig {
             enabled: c.enabled,

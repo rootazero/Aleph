@@ -154,7 +154,10 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
     if let ScheduleKind::At { at, .. } = &schedule_kind {
         let now_ms = chrono::Utc::now().timestamp_millis();
         if *at <= now_ms {
-            let at_human = chrono::DateTime::from_timestamp_millis(*at).map_or_else(|| format!("{at}ms"), |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string());
+            let at_human = chrono::DateTime::from_timestamp_millis(*at).map_or_else(
+                || format!("{at}ms"),
+                |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+            );
             let now_human = chrono::Utc::now()
                 .format("%Y-%m-%d %H:%M:%S UTC")
                 .to_string();

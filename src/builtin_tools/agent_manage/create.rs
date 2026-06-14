@@ -316,9 +316,8 @@ impl AlephTool for AgentCreateTool {
         let identity_path = agent_state_dir.join("IDENTITY.md");
         if !identity_path.exists() {
             let identity_name = args.name.as_deref().unwrap_or(&args.id);
-            let identity_content = format!(
-                "- Name: {identity_name}\n- Emoji: \u{1f916}\n- Theme: professional\n"
-            );
+            let identity_content =
+                format!("- Name: {identity_name}\n- Emoji: \u{1f916}\n- Theme: professional\n");
             if let Err(e) = std::fs::write(&identity_path, identity_content) {
                 warn!(agent_id = %args.id, path = %identity_path.display(), error = %e,
                     "Failed to write IDENTITY.md template (non-fatal)");

@@ -94,30 +94,28 @@ pub fn is_static_file_request(uri: &Uri) -> bool {
     let path = uri.path();
 
     // Check for file extensions
-    let has_extension = path
-        .rfind('.')
-        .is_some_and(|i| {
-            let ext = &path[i + 1..];
-            matches!(
-                ext.to_lowercase().as_str(),
-                "html"
-                    | "css"
-                    | "js"
-                    | "mjs"
-                    | "json"
-                    | "svg"
-                    | "png"
-                    | "jpg"
-                    | "jpeg"
-                    | "gif"
-                    | "ico"
-                    | "woff"
-                    | "woff2"
-                    | "ttf"
-                    | "eot"
-                    | "map"
-            )
-        });
+    let has_extension = path.rfind('.').is_some_and(|i| {
+        let ext = &path[i + 1..];
+        matches!(
+            ext.to_lowercase().as_str(),
+            "html"
+                | "css"
+                | "js"
+                | "mjs"
+                | "json"
+                | "svg"
+                | "png"
+                | "jpg"
+                | "jpeg"
+                | "gif"
+                | "ico"
+                | "woff"
+                | "woff2"
+                | "ttf"
+                | "eot"
+                | "map"
+        )
+    });
 
     // Check for common static paths
     let is_static_path = path.starts_with("/assets/")

@@ -707,13 +707,9 @@ mod tests {
 
     #[test]
     fn test_cli_node_name_defaults() {
-        let args = Args::try_parse_from([
-            "aleph-server",
-            "node",
-            "--center",
-            "ws://127.0.0.1:18790",
-        ])
-        .unwrap();
+        let args =
+            Args::try_parse_from(["aleph-server", "node", "--center", "ws://127.0.0.1:18790"])
+                .unwrap();
         match args.command {
             Some(Command::Node { name, .. }) => assert_eq!(name, "aleph-node"),
             _ => panic!("Expected Node command"),

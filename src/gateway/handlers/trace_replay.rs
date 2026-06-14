@@ -169,12 +169,8 @@ pub async fn handle_get(request: JsonRpcRequest, db: Arc<StateDatabase>) -> Json
         },
         // No task row (e.g. root-agent run): synthesize from the trace stream.
         _ => {
-            let first_ts = traces
-                .first()
-                .map_or(0, |t| t.timestamp.max(0) as u64);
-            let last_ts = traces
-                .last()
-                .map_or(0, |t| t.timestamp.max(0) as u64);
+            let first_ts = traces.first().map_or(0, |t| t.timestamp.max(0) as u64);
+            let last_ts = traces.last().map_or(0, |t| t.timestamp.max(0) as u64);
             AgentTraceTaskSummary {
                 task_id: task_id.clone(),
                 session_id: String::new(),

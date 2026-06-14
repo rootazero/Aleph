@@ -96,9 +96,7 @@ impl From<TriggerConditionInput> for TriggerCondition {
             TriggerConditionInput::Always => Self::Always,
             TriggerConditionInput::NonEmpty => Self::NonEmpty,
             TriggerConditionInput::Changed => Self::Changed,
-            TriggerConditionInput::GreaterThan { threshold } => {
-                Self::GreaterThan(threshold)
-            }
+            TriggerConditionInput::GreaterThan { threshold } => Self::GreaterThan(threshold),
             TriggerConditionInput::Contains { text } => Self::Contains(text),
         }
     }
@@ -281,9 +279,7 @@ impl AlephTool for HeartbeatUpdateTool {
                 .update_task(&args.id, updates, &clock)
                 .await
                 .map_err(|e| {
-                    crate::error::AlephError::tool(format!(
-                        "Failed to update heartbeat task: {e}"
-                    ))
+                    crate::error::AlephError::tool(format!("Failed to update heartbeat task: {e}"))
                 })?;
         }
 

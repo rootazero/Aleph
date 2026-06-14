@@ -252,8 +252,7 @@ async fn install_from_zip(source: &str, skills_dir: &std::path::Path) -> Result<
     if dest_path.exists() {
         let _ = std::fs::remove_dir_all(&dest_path);
     }
-    std::fs::create_dir_all(&dest_path)
-        .map_err(|e| format!("Failed to create directory: {e}"))?;
+    std::fs::create_dir_all(&dest_path).map_err(|e| format!("Failed to create directory: {e}"))?;
 
     archive
         .extract(&dest_path)
@@ -296,8 +295,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
             let src = source.clone();
             let dir = skills_dir.clone();
             let flatten = params.flatten;
-            match tokio::task::spawn_blocking(move || install_from_git(&src, &dir, flatten)).await
-            {
+            match tokio::task::spawn_blocking(move || install_from_git(&src, &dir, flatten)).await {
                 Ok(Ok(path)) => path,
                 Ok(Err(e)) => {
                     return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e);

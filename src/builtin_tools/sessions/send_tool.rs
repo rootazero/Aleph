@@ -261,10 +261,7 @@ impl SessionsSendTool {
             Some(key_str) => match parse_session_key(key_str) {
                 Ok(key) => key,
                 Err(e) => {
-                    return SessionsSendOutput::error(
-                        run_id,
-                        format!("Invalid session key: {e}"),
-                    );
+                    return SessionsSendOutput::error(run_id, format!("Invalid session key: {e}"));
                 }
             },
             None => {

@@ -17,7 +17,10 @@ use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::resilience::database::StateDatabase;
 use crate::routing::DEFAULT_AGENT_ID;
 
-use super::commands::{CreateNoteCommand, UpdateContentCommand, InvalidateNoteCommand, RestoreNoteCommand, RecordNoteAccessCommand, ConsolidateCommand, DeleteNoteCommand};
+use super::commands::{
+    ConsolidateCommand, CreateNoteCommand, DeleteNoteCommand, InvalidateNoteCommand,
+    RecordNoteAccessCommand, RestoreNoteCommand, UpdateContentCommand,
+};
 
 pub struct MemoryCommandHandler {
     db: Arc<StateDatabase>,

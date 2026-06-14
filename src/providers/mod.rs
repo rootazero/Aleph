@@ -178,12 +178,7 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
     // 1. Apply preset configuration if available
     if let Some(preset) = presets::get_preset(&name_lower) {
         // Set base_url if not provided
-        if config.base_url.is_none()
-            || config
-                .base_url
-                .as_ref()
-                .is_some_and(|s| s.is_empty())
-        {
+        if config.base_url.is_none() || config.base_url.as_ref().is_some_and(|s| s.is_empty()) {
             config.base_url = Some(preset.base_url.to_string());
         }
         // Set protocol if not provided

@@ -639,11 +639,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     use crate::providers::health::ResolvedModel;
                     let provider_name = match override_.provider() {
                         Some(p) => p.to_string(),
-                        None => self
-                            .provider_registry
-                            .get(override_.model()).map_or_else(|| {
-                                self.provider_registry.default_provider().name().to_string()
-                            }, |prov| prov.name().to_string()),
+                        None => self.provider_registry.get(override_.model()).map_or_else(
+                            || self.provider_registry.default_provider().name().to_string(),
+                            |prov| prov.name().to_string(),
+                        ),
                     };
                     ResolvedModel {
                         provider_name,
@@ -718,8 +717,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let mut allowed_names: std::collections::BTreeSet<String> =
                 allowed_tools.iter().map(|t| t.name.clone()).collect();
 
-            let unattended =
-                request.metadata.get("unattended").map(String::as_str) == Some("true");
+            let unattended = request.metadata.get("unattended").map(String::as_str) == Some("true");
 
             // External MCP tools: snapshot the bridge-maintained registry
             // (boot installs it via `set_mcp_tool_registry`) and join each

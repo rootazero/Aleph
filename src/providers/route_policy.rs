@@ -388,9 +388,9 @@ where
         }
         // Lowest rate-window utilisation first — spread load toward whoever has
         // the most remaining headroom. `0‰` (no limit / idle) sorts first.
-        LoadBalanceStrategy::UsageBased => {
-            sort_by_metric(group, metric_of, name_of, |m| u64::from(m.utilization_permille))
-        }
+        LoadBalanceStrategy::UsageBased => sort_by_metric(group, metric_of, name_of, |m| {
+            u64::from(m.utilization_permille)
+        }),
     }
 }
 

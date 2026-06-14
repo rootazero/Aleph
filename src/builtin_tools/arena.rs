@@ -205,7 +205,8 @@ impl AlephTool for ArenaQueryTool {
                 let agent = agent_str.clone();
                 let artifacts = handle.list_artifacts(&agent).unwrap_or_default();
                 let slot_status = handle
-                    .slot_status(&agent).map_or_else(|| "Idle".to_string(), |s| format!("{s:?}"));
+                    .slot_status(&agent)
+                    .map_or_else(|| "Idle".to_string(), |s| format!("{s:?}"));
                 slot_summaries.push(SlotSummary {
                     agent_id: agent.as_str().to_string(),
                     status: slot_status,

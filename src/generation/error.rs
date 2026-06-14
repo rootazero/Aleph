@@ -478,20 +478,14 @@ impl GenerationError {
             }
             Self::InvalidParametersError { parameter, message } => {
                 if let Some(param) = parameter {
-                    format!(
-                        "Invalid parameter '{param}': {message}. Please adjust your settings."
-                    )
+                    format!("Invalid parameter '{param}': {message}. Please adjust your settings.")
                 } else {
-                    format!(
-                        "Invalid parameters: {message}. Please check your request."
-                    )
+                    format!("Invalid parameters: {message}. Please check your request.")
                 }
             }
             Self::ContentFilteredError { category, .. } => {
                 if let Some(cat) = category {
-                    format!(
-                        "Content was filtered for '{cat}' category. Please modify your prompt."
-                    )
+                    format!("Content was filtered for '{cat}' category. Please modify your prompt.")
                 } else {
                     "Content was filtered by safety systems. Please modify your prompt.".to_string()
                 }
@@ -590,9 +584,7 @@ impl From<GenerationError> for AlephError {
             GenerationError::ContentFilteredError { message, .. } => {
                 Self::provider(format!("Content filtered: {message}"))
             }
-            GenerationError::UnsupportedFeatureError { message, .. } => {
-                Self::provider(message)
-            }
+            GenerationError::UnsupportedFeatureError { message, .. } => Self::provider(message),
             GenerationError::ProviderError { message, .. } => Self::provider(message),
             GenerationError::Cancelled => Self::cancelled(),
             GenerationError::InternalError { message } => Self::other(message),

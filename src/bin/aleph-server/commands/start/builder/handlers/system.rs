@@ -1,4 +1,7 @@
-use super::{GatewayServer, oauth_handlers, Arc, SharedIdentityResolver, identity_handlers, SharedOrchestrator, GroupChatExecutor, group_chat_handlers};
+use super::{
+    group_chat_handlers, identity_handlers, oauth_handlers, Arc, GatewayServer, GroupChatExecutor,
+    SharedIdentityResolver, SharedOrchestrator,
+};
 
 pub(in crate::commands::start) fn register_daemon_handlers(
     server: &mut GatewayServer,

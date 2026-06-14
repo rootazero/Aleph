@@ -309,9 +309,7 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
                 serde_json::Value::Null,
             )
             .map_err(|e| -> Box<dyn Error> { format!("{e:#}").into() })?;
-            println!(
-                "Secret '{name}' is available ({len} bytes, value redacted)"
-            );
+            println!("Secret '{name}' is available ({len} bytes, value redacted)");
             Ok(())
         }
         SecretAction::Providers => {

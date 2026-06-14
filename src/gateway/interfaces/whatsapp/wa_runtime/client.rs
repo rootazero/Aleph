@@ -134,9 +134,7 @@ impl WaRuntime {
     ) -> ChannelResult<Arc<dyn whatsapp_rust::store::traits::Backend>> {
         let backend = whatsapp_rust::store::SqliteStore::new(db_path)
             .await
-            .map_err(|e| {
-                ChannelError::Internal(format!("Failed to create SQLite backend: {e}"))
-            })?;
+            .map_err(|e| ChannelError::Internal(format!("Failed to create SQLite backend: {e}")))?;
         Ok(Arc::new(backend) as Arc<dyn whatsapp_rust::store::traits::Backend>)
     }
 
@@ -264,9 +262,11 @@ impl WaRuntime {
             .parse()
             .map_err(|e| ChannelError::Internal(format!("Invalid JID: {e}")))?;
 
-        client.chatstate().send_composing(&jid).await.map_err(|e| {
-            ChannelError::Internal(format!("Failed to send typing indicator: {e}"))
-        })?;
+        client
+            .chatstate()
+            .send_composing(&jid)
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Failed to send typing indicator: {e}")))?;
 
         Ok(())
     }

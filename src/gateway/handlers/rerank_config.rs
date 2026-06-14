@@ -61,7 +61,8 @@ pub async fn handle_get(
         .params
         .as_ref()
         .and_then(|p| p.get("provider"))
-        .and_then(|v| v.as_str()).map_or_else(|| provider_name(&cfg.memory.rerank.provider), String::from);
+        .and_then(|v| v.as_str())
+        .map_or_else(|| provider_name(&cfg.memory.rerank.provider), String::from);
 
     // Security (3def857c6): never echo the stored secret. Report presence only
     // via `has_api_key` so the Panel can render its key-status hint; the editable

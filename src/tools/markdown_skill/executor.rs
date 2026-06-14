@@ -225,9 +225,7 @@ impl MarkdownCliTool {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             match exit_code {
-                125 => anyhow::bail!(
-                    "Docker runtime error (container failed to start): {stderr}"
-                ),
+                125 => anyhow::bail!("Docker runtime error (container failed to start): {stderr}"),
                 126 => anyhow::bail!("Command cannot be executed in container: {stderr}"),
                 127 => anyhow::bail!(
                     "Command '{}' not found in container image '{}'. \

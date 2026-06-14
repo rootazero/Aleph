@@ -336,11 +336,15 @@ pub async fn handle_test(
         let cfg = config.read().await;
         cfg.search
             .as_ref()
-            .and_then(|s| s.backends.get(&params.name)).map_or_else(|| params.name.clone(), |b| b.provider_type.clone())
+            .and_then(|s| s.backends.get(&params.name))
+            .map_or_else(|| params.name.clone(), |b| b.provider_type.clone())
     };
 
     // Create a temporary search provider and test it
-    use crate::search::providers::{TavilyProvider, BraveProvider, SearxngProvider, GoogleProvider, BingProvider, ExaProvider, JinaProvider, DuckDuckGoProvider};
+    use crate::search::providers::{
+        BingProvider, BraveProvider, DuckDuckGoProvider, ExaProvider, GoogleProvider, JinaProvider,
+        SearxngProvider, TavilyProvider,
+    };
     use crate::search::{SearchOptions, SearchProvider};
 
     let test_result: SearchTestResult = match provider_type.as_str() {

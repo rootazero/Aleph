@@ -90,13 +90,14 @@ async fn build_harness_info(
         .await
         .unwrap_or_else(|| entry.display_name.clone());
 
-    let mode = manager
-        .harness_mode(id)
-        .await.map_or_else(|| {
+    let mode = manager.harness_mode(id).await.map_or_else(
+        || {
             crate::acp::adapter::AdapterMode::from_serde(&entry.default_mode)
                 .as_str()
                 .to_string()
-        }, |m| m.as_str().to_string());
+        },
+        |m| m.as_str().to_string(),
+    );
 
     let executable = entry.executable.clone().unwrap_or_default();
 
@@ -593,10 +594,10 @@ pub async fn handle_sessions_cancel(
     request: JsonRpcRequest,
     manager: Arc<AcpAdapterManager>,
 ) -> JsonRpcResponse {
-    let params: SessionCancelParams = match request
-        .params
-        .clone().map_or_else(|| Err(serde::de::Error::missing_field("params")), serde_json::from_value)
-    {
+    let params: SessionCancelParams = match request.params.clone().map_or_else(
+        || Err(serde::de::Error::missing_field("params")),
+        serde_json::from_value,
+    ) {
         Ok(p) => p,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -621,10 +622,10 @@ pub async fn handle_sessions_shutdown(
     request: JsonRpcRequest,
     manager: Arc<AcpAdapterManager>,
 ) -> JsonRpcResponse {
-    let params: SessionCancelParams = match request
-        .params
-        .clone().map_or_else(|| Err(serde::de::Error::missing_field("params")), serde_json::from_value)
-    {
+    let params: SessionCancelParams = match request.params.clone().map_or_else(
+        || Err(serde::de::Error::missing_field("params")),
+        serde_json::from_value,
+    ) {
         Ok(p) => p,
         Err(e) => {
             return JsonRpcResponse::error(

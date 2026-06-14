@@ -3,8 +3,11 @@
 use std::collections::HashMap;
 
 use crate::extension::config;
-use crate::extension::error::{ExtensionResult, ExtensionError};
-use crate::extension::types::{ExtensionSkill, ExtensionCommand, SkillType, ExtensionAgent, SkillToolResult, HookEvent, McpServerConfig};
+use crate::extension::error::{ExtensionError, ExtensionResult};
+use crate::extension::types::{
+    ExtensionAgent, ExtensionCommand, ExtensionSkill, HookEvent, McpServerConfig, SkillToolResult,
+    SkillType,
+};
 
 use super::ExtensionManager;
 

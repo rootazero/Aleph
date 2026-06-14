@@ -363,9 +363,9 @@ impl SessionKey {
                     PeerKind::Thread => "thread",
                 };
                 match thread_id {
-                    Some(tid) => format!(
-                        "agent:{agent_id}:{channel}:{kind}:{peer_id}:thread:{tid}"
-                    ),
+                    Some(tid) => {
+                        format!("agent:{agent_id}:{channel}:{kind}:{peer_id}:thread:{tid}")
+                    }
                     None => format!("agent:{agent_id}:{channel}:{kind}:{peer_id}"),
                 }
             }

@@ -489,9 +489,14 @@ mod tests {
         let out = tool
             .call(GoalArgs {
                 action: GoalAction::Get,
-                objective: None, status: None, note: None,
-                token_budget: None, pursuit_max_iterations: None,
-                gate_command: None, lesson: None, timeout_minutes: None,
+                objective: None,
+                status: None,
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: None,
+                gate_command: None,
+                lesson: None,
+                timeout_minutes: None,
             })
             .await
             .unwrap();
@@ -504,8 +509,12 @@ mod tests {
         tool.call(GoalArgs {
             action: GoalAction::Set,
             objective: Some("Y".into()),
-            status: None, note: None, token_budget: None,
-            pursuit_max_iterations: None, gate_command: None, lesson: None,
+            status: None,
+            note: None,
+            token_budget: None,
+            pursuit_max_iterations: None,
+            gate_command: None,
+            lesson: None,
             timeout_minutes: None,
         })
         .await
@@ -513,9 +522,13 @@ mod tests {
         let out = tool
             .call(GoalArgs {
                 action: GoalAction::Update,
-                objective: None, status: None, note: None,
-                token_budget: None, pursuit_max_iterations: None,
-                gate_command: None, lesson: Some("don't skip lint".into()),
+                objective: None,
+                status: None,
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: None,
+                gate_command: None,
+                lesson: Some("don't skip lint".into()),
                 timeout_minutes: None,
             })
             .await
@@ -530,8 +543,12 @@ mod tests {
         tool.call(GoalArgs {
             action: GoalAction::Set,
             objective: Some("bounded run".into()),
-            status: None, note: None, token_budget: None,
-            pursuit_max_iterations: Some(5), gate_command: None, lesson: None,
+            status: None,
+            note: None,
+            token_budget: None,
+            pursuit_max_iterations: Some(5),
+            gate_command: None,
+            lesson: None,
             timeout_minutes: Some(30),
         })
         .await
@@ -539,9 +556,14 @@ mod tests {
         let out = tool
             .call(GoalArgs {
                 action: GoalAction::Get,
-                objective: None, status: None, note: None,
-                token_budget: None, pursuit_max_iterations: None,
-                gate_command: None, lesson: None, timeout_minutes: None,
+                objective: None,
+                status: None,
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: None,
+                gate_command: None,
+                lesson: None,
+                timeout_minutes: None,
             })
             .await
             .unwrap();

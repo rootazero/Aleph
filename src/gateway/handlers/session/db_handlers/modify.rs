@@ -254,10 +254,7 @@ pub async fn handle_compact_db(
     };
 
     // Get message count before compact
-    let before_msgs = manager
-        .get_history(&key, None)
-        .await
-        .map_or(0, |m| m.len());
+    let before_msgs = manager.get_history(&key, None).await.map_or(0, |m| m.len());
 
     match manager
         .compact(
@@ -335,11 +332,9 @@ pub async fn handle_truncate_db(
                 "tokens_removed_estimate": result.tokens_removed_estimate,
             }),
         ),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Truncate failed: {e}"),
-        ),
+        Err(e) => {
+            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Truncate failed: {e}"))
+        }
     }
 }
 

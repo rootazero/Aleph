@@ -34,10 +34,7 @@ impl ToolSafetyLevel {
     /// Check if this safety level requires user confirmation
     #[must_use]
     pub const fn requires_confirmation(&self) -> bool {
-        matches!(
-            self,
-            Self::IrreversibleLowRisk | Self::IrreversibleHighRisk
-        )
+        matches!(self, Self::IrreversibleLowRisk | Self::IrreversibleHighRisk)
     }
 
     /// Get a human-readable label for this safety level

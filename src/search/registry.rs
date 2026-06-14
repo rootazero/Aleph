@@ -257,9 +257,7 @@ impl SearchRegistry {
                 }
                 match provider.search(query, options).await {
                     Ok(results) => {
-                        log::info!(
-                            "Search succeeded with fallback provider '{provider_name}'"
-                        );
+                        log::info!("Search succeeded with fallback provider '{provider_name}'");
                         return Ok(results);
                     }
                     Err(e) => {

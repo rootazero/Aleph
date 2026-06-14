@@ -213,9 +213,7 @@ impl RunEvent {
     pub const fn is_terminal(&self) -> bool {
         matches!(
             self,
-            Self::RunCompleted { .. }
-                | Self::RunFailed { .. }
-                | Self::RunCancelled { .. }
+            Self::RunCompleted { .. } | Self::RunFailed { .. } | Self::RunCancelled { .. }
         )
     }
 }

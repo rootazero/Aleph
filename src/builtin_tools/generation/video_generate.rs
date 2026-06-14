@@ -95,8 +95,7 @@ impl VideoGenerateTool {
                     ToolError::InvalidArgs(error_msg)
                 })?;
                 if !p.supports(GenerationType::Video) {
-                    let error_msg =
-                        format!("Provider '{name}' does not support video generation");
+                    let error_msg = format!("Provider '{name}' does not support video generation");
                     notify_tool_result(Self::NAME, &error_msg, false);
                     return Err(ToolError::InvalidArgs(error_msg));
                 }
@@ -141,9 +140,7 @@ impl VideoGenerateTool {
         };
 
         // Notify success
-        let result_summary = format!(
-            "视频生成完成 ({duration_ms} ms, provider: {provider_name})"
-        );
+        let result_summary = format!("视频生成完成 ({duration_ms} ms, provider: {provider_name})");
         notify_tool_result(Self::NAME, &result_summary, true);
 
         let display = if location_type == "data_url" {

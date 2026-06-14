@@ -251,9 +251,7 @@ impl SecurityContext {
         // 1. Check blacklist first (highest priority)
         if self.denied_tools.contains(tool_name) {
             return ToolPermission::Denied {
-                reason: format!(
-                    "Tool '{tool_name}' is explicitly denied by security policy"
-                ),
+                reason: format!("Tool '{tool_name}' is explicitly denied by security policy"),
             };
         }
 
@@ -274,9 +272,7 @@ impl SecurityContext {
         // 4. Check network policy for network tools
         if !self.network_allowed && is_network_tool(tool_name) {
             return ToolPermission::Denied {
-                reason: format!(
-                    "Tool '{tool_name}' requires network access which is not allowed"
-                ),
+                reason: format!("Tool '{tool_name}' requires network access which is not allowed"),
             };
         }
 

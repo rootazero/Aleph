@@ -402,9 +402,7 @@ pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> 
 /// - Uses savepoint for atomic migration
 pub fn migrate_add_paired_users(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch("SAVEPOINT migration_paired_users")
-        .map_err(|e| {
-            AlephError::config(format!("Failed to begin paired_users migration: {e}"))
-        })?;
+        .map_err(|e| AlephError::config(format!("Failed to begin paired_users migration: {e}")))?;
 
     let table_exists: i64 = conn
         .query_row(
@@ -443,9 +441,7 @@ pub fn migrate_add_paired_users(conn: &Connection) -> Result<(), AlephError> {
     }
 
     conn.execute_batch("RELEASE migration_paired_users")
-        .map_err(|e| {
-            AlephError::config(format!("Failed to commit paired_users migration: {e}"))
-        })?;
+        .map_err(|e| AlephError::config(format!("Failed to commit paired_users migration: {e}")))?;
 
     Ok(())
 }

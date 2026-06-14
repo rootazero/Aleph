@@ -65,9 +65,7 @@ pub(super) fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayCo
 pub(super) fn initialize_tracing(args: &Args) {
     let filter = format!("aleph_server={0},alephcore={0}", args.log_level);
     if let Err(e) = aleph_logging::init_component_logging("server", 7, &filter) {
-        eprintln!(
-            "Warning: Failed to initialize file logging: {e}. Falling back to console only."
-        );
+        eprintln!("Warning: Failed to initialize file logging: {e}. Falling back to console only.");
         use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
         tracing_subscriber::registry()
             .with(
@@ -167,10 +165,8 @@ pub(super) async fn initialize_session_store(
                         println!("Migrating legacy SQLite sessions to file backend ...");
                     }
                     if let Err(e) =
-                        alephcore::gateway::session_store::migration::export_legacy_messages(
-                            &store,
-                        )
-                        .await
+                        alephcore::gateway::session_store::migration::export_legacy_messages(&store)
+                            .await
                     {
                         eprintln!("Warning: Session migration failed: {e}");
                     }
@@ -180,9 +176,7 @@ pub(super) async fn initialize_session_store(
                 }
                 Ok((Arc::new(store), None))
             }
-            Err(e) => {
-                Err(format!("Error: Failed to initialize file session store: {e}").into())
-            }
+            Err(e) => Err(format!("Error: Failed to initialize file session store: {e}").into()),
         }
     } else {
         // SQLite default
@@ -191,7 +185,8 @@ pub(super) async fn initialize_session_store(
             Err(e) => {
                 return Err(format!(
                     "Error: Failed to initialize SQLite session store: {e}. Sessions are required."
-                ).into());
+                )
+                .into());
             }
         };
         if !daemon {
@@ -345,7 +340,12 @@ pub(super) fn build_http_provider(
 
     // Apply preset
     if let Some(preset) = presets::get_preset(&name_lower) {
-        if cfg.base_url.is_none() || cfg.base_url.as_ref().is_some_and(std::string::String::is_empty) {
+        if cfg.base_url.is_none()
+            || cfg
+                .base_url
+                .as_ref()
+                .is_some_and(std::string::String::is_empty)
+        {
             cfg.base_url = Some(preset.base_url.to_string());
         }
         if cfg.protocol.is_none() {

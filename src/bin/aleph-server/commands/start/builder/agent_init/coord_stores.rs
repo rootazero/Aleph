@@ -96,9 +96,7 @@ pub(super) async fn init_team_store(daemon: bool) -> Option<Arc<dyn alephcore::t
         Ok(c) => c,
         Err(e) => {
             if !daemon {
-                eprintln!(
-                    "Warning: Failed to open teams.db: {e}. Team management tools disabled."
-                );
+                eprintln!("Warning: Failed to open teams.db: {e}. Team management tools disabled.");
             }
             return None;
         }

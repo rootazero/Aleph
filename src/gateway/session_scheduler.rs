@@ -292,9 +292,7 @@ impl<'a> QueueDepthFuture<'a> {
     #[must_use]
     pub fn get(self) -> usize {
         let queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
-        queues
-            .get(&self.session_key)
-            .map_or(0, |q| q.pending.len())
+        queues.get(&self.session_key).map_or(0, |q| q.pending.len())
     }
 }
 

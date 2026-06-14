@@ -7,7 +7,10 @@ use crate::domain::Entity;
 use crate::sync_primitives::{Arc, RwLock};
 
 use super::aggregate::SharedArena;
-use super::types::{AgentId, ParticipantRole, ArenaPermissions, Artifact, ArtifactId, ArenaProgress, SharedFact, ArenaStatus, SlotStatus};
+use super::types::{
+    AgentId, ArenaPermissions, ArenaProgress, ArenaStatus, Artifact, ArtifactId, ParticipantRole,
+    SharedFact, SlotStatus,
+};
 
 /// Permission-guarded handle for an agent to interact with a `SharedArena`.
 ///

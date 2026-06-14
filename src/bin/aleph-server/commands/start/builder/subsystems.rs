@@ -715,7 +715,9 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     if let Some(gen_reg) = generation_registry {
         // Build a fresh registry snapshot from current config
         let reg = {
-            let guard = gen_reg.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let guard = gen_reg
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             // Rebuild a fresh registry with same providers
             let mut new_reg = alephcore::generation::GenerationProviderRegistry::new();
             for name in guard.names() {

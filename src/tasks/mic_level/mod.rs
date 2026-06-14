@@ -101,8 +101,8 @@ impl MicLevelReporter {
                 let Some(snap) = self.collect_once().await else {
                     continue;
                 };
-                let should_emit = !self.config.emit_on_change_only
-                    || last_state.is_none_or(|s| s != snap.state);
+                let should_emit =
+                    !self.config.emit_on_change_only || last_state.is_none_or(|s| s != snap.state);
                 if should_emit {
                     debug!(state = ?snap.state, level = ?snap.level, "mic_level: publish");
                     self.publish(&snap);

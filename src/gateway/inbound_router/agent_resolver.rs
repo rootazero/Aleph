@@ -43,20 +43,17 @@ impl InboundMessageRouter {
             };
 
             // Extract guild_id and team_id from raw metadata (set by channel implementations)
-            let (guild_id, team_id) = msg
-                .raw
-                .as_ref()
-                .map_or((None, None), |raw| {
-                    let guild = raw
-                        .get("guild_id")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let team = raw
-                        .get("team_id")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    (guild, team)
-                });
+            let (guild_id, team_id) = msg.raw.as_ref().map_or((None, None), |raw| {
+                let guild = raw
+                    .get("guild_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let team = raw
+                    .get("team_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                (guild, team)
+            });
 
             let input = RouteInput {
                 channel: msg.channel_id.as_str().to_string(),

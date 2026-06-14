@@ -284,9 +284,7 @@ impl ConfigPatcher {
             // config could be persisted and installed live under concurrency.
             self.validate_schema(&re_patched)?;
             let mut final_config: Config = serde_json::from_value(re_patched).map_err(|e| {
-                AlephError::invalid_config(format!(
-                    "Re-patched config failed deserialization: {e}"
-                ))
+                AlephError::invalid_config(format!("Re-patched config failed deserialization: {e}"))
             })?;
             // Normalize before validation (mirrors Config::load ordering) so
             // the config installed live + persisted is the normalized one.
@@ -359,9 +357,7 @@ impl ConfigPatcher {
 
         let current_mtime = std::fs::metadata(&self.config_path)
             .and_then(|m| m.modified())
-            .map_err(|e| {
-                AlephError::invalid_config(format!("Failed to read config mtime: {e}"))
-            })?;
+            .map_err(|e| AlephError::invalid_config(format!("Failed to read config mtime: {e}")))?;
 
         if current_mtime != stored_mtime {
             return Err(AlephError::invalid_config(
@@ -415,9 +411,7 @@ impl ConfigPatcher {
             })?
         };
         let restored_json = serde_json::to_value(&restored).map_err(|e| {
-            AlephError::invalid_config(format!(
-                "Failed to serialize restored config to JSON: {e}"
-            ))
+            AlephError::invalid_config(format!("Failed to serialize restored config to JSON: {e}"))
         })?;
         let diff = compute_diff("", Some(&current_json), &restored_json);
 

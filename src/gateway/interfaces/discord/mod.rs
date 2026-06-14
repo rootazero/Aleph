@@ -225,9 +225,10 @@ impl DiscordChannel {
                 .map_err(|e| ChannelError::Internal(format!("Invalid user ID: {e}")))?;
 
             let user = serenity::all::UserId::new(user_id);
-            let dm = user.create_dm_channel(http).await.map_err(|e| {
-                ChannelError::Internal(format!("Failed to create DM channel: {e}"))
-            })?;
+            let dm = user
+                .create_dm_channel(http)
+                .await
+                .map_err(|e| ChannelError::Internal(format!("Failed to create DM channel: {e}")))?;
             Ok(dm.id)
         } else {
             conversation_id

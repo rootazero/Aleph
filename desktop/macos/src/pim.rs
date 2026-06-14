@@ -6,11 +6,30 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
-use aleph_desktop::pim_types::{NoteInfo, CalendarInfo, Reminder, ReminderList, ContactGroup, MailFolder, NoteContent, CalendarEvent, NewCalendarEvent, NewReminder, Contact, ContactDetail, MailMessage, MailMessageDetail};
+use aleph_desktop::pim_types::{
+    CalendarEvent, CalendarInfo, Contact, ContactDetail, ContactGroup, MailFolder, MailMessage,
+    MailMessageDetail, NewCalendarEvent, NewReminder, NoteContent, NoteInfo, Reminder,
+    ReminderList,
+};
 use aleph_desktop::traits::PimCapability;
 use aleph_desktop::SwiftBridge;
 use aleph_desktop::{DesktopError, Result};
-use aleph_protocol::desktop_bridge::methods::pim::{NotesListResult, METHOD_NOTES_LIST, NotesListParams, METHOD_NOTES_GET, NotesGetParams, NotesCreateResult, METHOD_NOTES_CREATE, NotesCreateParams, METHOD_NOTES_UPDATE, NotesUpdateParams, METHOD_NOTES_DELETE, NotesDeleteParams, NotesFoldersResult, METHOD_NOTES_FOLDERS, CalendarEventsResult, METHOD_CALENDAR_EVENTS, CalendarEventsParams, METHOD_CALENDAR_GET, CalendarGetParams, CalendarCreateResult, METHOD_CALENDAR_CREATE, CalendarCreateParams, METHOD_CALENDAR_UPDATE, CalendarUpdateParams, METHOD_CALENDAR_DELETE, CalendarDeleteParams, CalendarListsResult, METHOD_CALENDAR_LISTS, RemindersListResult, METHOD_REMINDERS_LIST, RemindersListParams, METHOD_REMINDERS_GET, RemindersGetParams, RemindersCreateResult, METHOD_REMINDERS_CREATE, RemindersCreateParams, METHOD_REMINDERS_COMPLETE, RemindersCompleteParams, METHOD_REMINDERS_DELETE, RemindersDeleteParams, RemindersListsResult, METHOD_REMINDERS_LISTS, ContactsSearchResult, METHOD_CONTACTS_SEARCH, ContactsSearchParams, METHOD_CONTACTS_GET, ContactsGetParams, ContactsGroupsResult, METHOD_CONTACTS_GROUPS, MailSearchResult, METHOD_MAIL_SEARCH, MailSearchParams, MailGetResult, METHOD_MAIL_GET, MailGetParams, MailFoldersResult, METHOD_MAIL_FOLDERS};
+use aleph_protocol::desktop_bridge::methods::pim::{
+    CalendarCreateParams, CalendarCreateResult, CalendarDeleteParams, CalendarEventsParams,
+    CalendarEventsResult, CalendarGetParams, CalendarListsResult, CalendarUpdateParams,
+    ContactsGetParams, ContactsGroupsResult, ContactsSearchParams, ContactsSearchResult,
+    MailFoldersResult, MailGetParams, MailGetResult, MailSearchParams, MailSearchResult,
+    NotesCreateParams, NotesCreateResult, NotesDeleteParams, NotesFoldersResult, NotesGetParams,
+    NotesListParams, NotesListResult, NotesUpdateParams, RemindersCompleteParams,
+    RemindersCreateParams, RemindersCreateResult, RemindersDeleteParams, RemindersGetParams,
+    RemindersListParams, RemindersListResult, RemindersListsResult, METHOD_CALENDAR_CREATE,
+    METHOD_CALENDAR_DELETE, METHOD_CALENDAR_EVENTS, METHOD_CALENDAR_GET, METHOD_CALENDAR_LISTS,
+    METHOD_CALENDAR_UPDATE, METHOD_CONTACTS_GET, METHOD_CONTACTS_GROUPS, METHOD_CONTACTS_SEARCH,
+    METHOD_MAIL_FOLDERS, METHOD_MAIL_GET, METHOD_MAIL_SEARCH, METHOD_NOTES_CREATE,
+    METHOD_NOTES_DELETE, METHOD_NOTES_FOLDERS, METHOD_NOTES_GET, METHOD_NOTES_LIST,
+    METHOD_NOTES_UPDATE, METHOD_REMINDERS_COMPLETE, METHOD_REMINDERS_CREATE,
+    METHOD_REMINDERS_DELETE, METHOD_REMINDERS_GET, METHOD_REMINDERS_LIST, METHOD_REMINDERS_LISTS,
+};
 
 /// Simple TTL cache for PIM list data.
 ///

@@ -285,7 +285,10 @@ mod tests {
             "fresh goal can still continue"
         );
         g.continuations_used = 3;
-        assert!(exhausted_while_active(&g, 0, 0), "at cap while still active");
+        assert!(
+            exhausted_while_active(&g, 0, 0),
+            "at cap while still active"
+        );
     }
 
     #[test]
@@ -371,8 +374,7 @@ mod tests {
 
     #[test]
     fn continuation_prompt_includes_prior_lessons() {
-        let g = active_goal(5)
-            .with_lesson_appended("forgot to run migrations".into(), 2);
+        let g = active_goal(5).with_lesson_appended("forgot to run migrations".into(), 2);
         let p = continuation_prompt(&g);
         assert!(p.contains("Lessons from earlier iterations"), "got: {p}");
         assert!(p.contains("forgot to run migrations"));
@@ -417,6 +419,8 @@ mod tests {
     #[test]
     fn deadline_reached_note_mentions_wall_clock() {
         let g = active_goal(5);
-        assert!(deadline_reached_note(&g).to_lowercase().contains("wall-clock"));
+        assert!(deadline_reached_note(&g)
+            .to_lowercase()
+            .contains("wall-clock"));
     }
 }
