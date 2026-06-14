@@ -435,10 +435,7 @@ impl SessionStore for SessionManager {
         self.get_state(key).await.map_err(map_err)
     }
 
-    async fn get_total_tokens(
-        &self,
-        key: &SessionKey,
-    ) -> Result<Option<u64>, SessionStoreError> {
+    async fn get_total_tokens(&self, key: &SessionKey) -> Result<Option<u64>, SessionStoreError> {
         // Resolves to the inherent SessionManager::get_total_tokens (inherent
         // methods shadow trait methods on the concrete type — same pattern as
         // get_state above).

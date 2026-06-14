@@ -139,10 +139,7 @@ pub trait SessionStore: Send + Sync {
     /// against the live session counter. Default `Ok(None)` — backends without
     /// token accounting leave the budget unenforced (iteration and deadline caps
     /// still apply), so only the SQLite-backed store needs to override this.
-    async fn get_total_tokens(
-        &self,
-        key: &SessionKey,
-    ) -> Result<Option<u64>, SessionStoreError> {
+    async fn get_total_tokens(&self, key: &SessionKey) -> Result<Option<u64>, SessionStoreError> {
         let _ = key;
         Ok(None)
     }

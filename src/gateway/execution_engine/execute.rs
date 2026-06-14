@@ -644,36 +644,35 @@ where
                                 // fire — the budget was advertised but dead.
                                 let (goal, tokens_now) = if goal.token_budget.is_some() {
                                     match self.session_manager.as_ref() {
-                                        Some(sm) => match sm
-                                            .get_total_tokens(&request.session_key)
-                                            .await
-                                        {
-                                            Ok(Some(total)) if goal.baseline_captured => {
-                                                (goal, total)
-                                            }
-                                            Ok(Some(total)) => {
-                                                let seeded =
-                                                    goal.clone().with_baseline(total, now_ms);
-                                                if let Err(e) = store.put(&seeded) {
-                                                    warn!(error = %e, session = %session_key_str,
+                                        Some(sm) => {
+                                            match sm.get_total_tokens(&request.session_key).await {
+                                                Ok(Some(total)) if goal.baseline_captured => {
+                                                    (goal, total)
+                                                }
+                                                Ok(Some(total)) => {
+                                                    let seeded =
+                                                        goal.clone().with_baseline(total, now_ms);
+                                                    if let Err(e) = store.put(&seeded) {
+                                                        warn!(error = %e, session = %session_key_str,
                                                         "goal pursuit: failed to persist token baseline; budget unenforced this turn");
+                                                        (goal, 0)
+                                                    } else {
+                                                        // Baseline just captured → 0 spent
+                                                        // so far; never a false over-budget.
+                                                        (seeded, total)
+                                                    }
+                                                }
+                                                // No row yet / read error → skip budget
+                                                // enforcement this turn (graceful: iteration
+                                                // and deadline caps still apply).
+                                                Ok(None) => (goal, 0),
+                                                Err(e) => {
+                                                    warn!(error = %e, session = %session_key_str,
+                                                    "goal pursuit: session token read failed; budget unenforced this turn");
                                                     (goal, 0)
-                                                } else {
-                                                    // Baseline just captured → 0 spent
-                                                    // so far; never a false over-budget.
-                                                    (seeded, total)
                                                 }
                                             }
-                                            // No row yet / read error → skip budget
-                                            // enforcement this turn (graceful: iteration
-                                            // and deadline caps still apply).
-                                            Ok(None) => (goal, 0),
-                                            Err(e) => {
-                                                warn!(error = %e, session = %session_key_str,
-                                                    "goal pursuit: session token read failed; budget unenforced this turn");
-                                                (goal, 0)
-                                            }
-                                        },
+                                        }
                                         None => (goal, 0),
                                     }
                                 } else {

@@ -467,6 +467,9 @@ mod tests {
             .with_baseline(10_000, 1);
         assert!(should_continue(&g, 10_500, 0), "500 spent < 1000 budget");
         assert!(!should_continue(&g, 11_200, 0), "1200 spent > 1000 budget");
-        assert!(exhausted_while_active(&g, 11_200, 0), "budget is binding stop");
+        assert!(
+            exhausted_while_active(&g, 11_200, 0),
+            "budget is binding stop"
+        );
     }
 }
