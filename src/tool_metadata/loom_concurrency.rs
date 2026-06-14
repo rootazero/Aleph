@@ -3,7 +3,8 @@
 //! Tests abstract concurrency patterns extracted from tool_metadata internals.
 //! Run with: `just test-loom`
 
-use crate::sync_primitives::{Arc, AtomicBool, AtomicU64, Ordering, RwLock};
+use loom::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use loom::sync::{Arc, RwLock};
 use loom::thread;
 use std::collections::HashMap;
 

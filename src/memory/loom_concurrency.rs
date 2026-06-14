@@ -3,7 +3,8 @@
 //! Tests abstract concurrency patterns extracted from memory internals.
 //! Run with: `just test-loom`
 
-use crate::sync_primitives::{Arc, AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering, RwLock};
+use loom::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use loom::sync::{Arc, Mutex, RwLock};
 use loom::thread;
 
 /// Verify singleton initialization via compare_exchange — exactly one thread wins.

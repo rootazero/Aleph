@@ -3,7 +3,8 @@
 //! Tests abstract concurrency patterns extracted from gateway internals.
 //! Run with: `just test-loom`
 
-use crate::sync_primitives::{Arc, AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
+use loom::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use loom::sync::{Arc, Mutex};
 use loom::thread;
 
 /// Verify sequence counter allocates unique values under concurrent access.

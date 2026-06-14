@@ -1,8 +1,12 @@
 //! Conditional sync primitives for loom compatibility.
 //!
-//! Under normal compilation, these re-export `std::sync` types at zero cost.
-//! Under `--features loom`, Mutex/RwLock/atomics switch to loom's instrumented
-//! versions that enable exhaustive concurrency testing.
+//! These re-export `std::sync` types at zero cost. The loom concurrency tests
+//! (`*/loom_concurrency.rs`, gated behind `cfg(all(test, feature = "loom"))`)
+//! import loom's instrumented types directly rather than having them swapped in
+//! globally here. A global swap would break the crate's many `static` items and
+//! `const fn` constructors that initialise atomics/mutexes, because loom's
+//! `new()` is not `const`. The loom tests model self-contained patterns, so they
+//! gain nothing from a global swap.
 //!
 //! Note: `Arc` is always `std::sync::Arc` because `loom::sync::Arc` is not a
 //! drop-in replacement when used with external crate APIs (tokio, etc.).
@@ -28,15 +32,6 @@ pub use std::sync::Arc;
 /// loom tests target sync concurrency patterns only.
 pub use tokio::sync::RwLock as AsyncRwLock;
 
-#[cfg(feature = "loom")]
-pub use loom::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-#[cfg(feature = "loom")]
-pub use loom::sync::{Mutex, MutexGuard, RwLock};
-#[cfg(feature = "loom")]
-pub use std::sync::{PoisonError, RwLockWriteGuard};
-
-#[cfg(not(feature = "loom"))]
 #[allow(unused_imports)] // AtomicUsize used by test code only
 pub use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-#[cfg(not(feature = "loom"))]
 pub use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockWriteGuard};
