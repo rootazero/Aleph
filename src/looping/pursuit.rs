@@ -80,7 +80,14 @@ mod tests {
     use crate::looping::types::{Cadence, LoopState, LoopStatus};
 
     fn fixed() -> LoopState {
-        LoopState::new("s", "check CI", Cadence::Fixed { interval_ms: 300_000 }, 1_000)
+        LoopState::new(
+            "s",
+            "check CI",
+            Cadence::Fixed {
+                interval_ms: 300_000,
+            },
+            1_000,
+        )
     }
 
     #[test]
@@ -136,22 +143,43 @@ mod tests {
 
     #[test]
     fn model_paced_uses_next_wake_relative_to_now() {
-        let l = LoopState::new("s", "p", Cadence::ModelPaced { fallback_ms: 600_000 }, 0)
-            .with_next_wake_ms(Some(10_000));
+        let l = LoopState::new(
+            "s",
+            "p",
+            Cadence::ModelPaced {
+                fallback_ms: 600_000,
+            },
+            0,
+        )
+        .with_next_wake_ms(Some(10_000));
         // next wake at epoch 10_000, now 4_000 → 6_000 ms from now.
         assert_eq!(tick_delay_ms(&l, 4_000), 6_000);
     }
 
     #[test]
     fn model_paced_past_next_wake_clamps_to_zero() {
-        let l = LoopState::new("s", "p", Cadence::ModelPaced { fallback_ms: 600_000 }, 0)
-            .with_next_wake_ms(Some(3_000));
+        let l = LoopState::new(
+            "s",
+            "p",
+            Cadence::ModelPaced {
+                fallback_ms: 600_000,
+            },
+            0,
+        )
+        .with_next_wake_ms(Some(3_000));
         assert_eq!(tick_delay_ms(&l, 9_000), 0);
     }
 
     #[test]
     fn model_paced_without_next_wake_uses_fallback() {
-        let l = LoopState::new("s", "p", Cadence::ModelPaced { fallback_ms: 600_000 }, 0);
+        let l = LoopState::new(
+            "s",
+            "p",
+            Cadence::ModelPaced {
+                fallback_ms: 600_000,
+            },
+            0,
+        );
         assert_eq!(tick_delay_ms(&l, 9_000), 600_000);
     }
 

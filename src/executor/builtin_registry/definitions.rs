@@ -1046,9 +1046,8 @@ pub fn create_tool_boxed(
         }),
         // Loop tool — backed by the process-global in-memory LoopRegistry
         // (init_global at boot). None before boot, same as goal.
-        "loop" => crate::looping::global().map(|reg| {
-            Box::new(crate::builtin_tools::LoopTool::new(reg)) as Box<dyn AlephToolDyn>
-        }),
+        "loop" => crate::looping::global()
+            .map(|reg| Box::new(crate::builtin_tools::LoopTool::new(reg)) as Box<dyn AlephToolDyn>),
         // Memory lifecycle & knowledge-wiki tools require a memory backend / wiki /
         // profile synthesizer + per-session context — built dynamically in
         // BuiltinToolRegistry::with_config(), same as note_manage below.

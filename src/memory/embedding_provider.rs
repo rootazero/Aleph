@@ -259,8 +259,13 @@ impl EmbeddingProvider for RemoteEmbeddingProvider {
         let batch_size = self.batch_size.max(1);
         let chunks: Vec<&[&str]> = texts.chunks(batch_size).collect();
 
-        let chunk_results: Vec<Result<Vec<Vec<f32>>, AlephError>> = futures::stream::iter(chunks)
-            .map(|chunk| self.call_api(chunk))
+        // Build the per-chunk futures eagerly with `Iterator::map` (not
+        // `StreamExt::map`): feeding a stored closure into a stream combinator
+        // trips a higher-ranked-lifetime check under `#[async_trait]`'s boxed
+        // future ("FnOnce is not general enough"). `stream::iter` over concrete
+        // futures sidesteps it while keeping bounded concurrency + input order.
+        let pending = chunks.into_iter().map(|chunk| self.call_api(chunk));
+        let chunk_results: Vec<Result<Vec<Vec<f32>>, AlephError>> = futures::stream::iter(pending)
             .buffered(MAX_CONCURRENT_BATCHES)
             .collect()
             .await;

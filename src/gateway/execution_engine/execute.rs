@@ -804,17 +804,15 @@ where
                                     ticks = state.iterations_used.saturating_add(1),
                                     "loop: enqueued next tick");
                             } else if crate::looping::pursuit::exhausted(&state, 0, now_ms) {
-                                let note = if state
-                                    .deadline_ms
-                                    .is_some_and(|d| now_ms != 0 && now_ms > d)
-                                {
-                                    crate::looping::pursuit::deadline_reached_note(&state)
-                                } else {
-                                    crate::looping::pursuit::cap_reached_note(&state)
-                                };
-                                loop_reg.put(
-                                    state.with_status(crate::looping::LoopStatus::Stopped),
-                                );
+                                let note =
+                                    if state.deadline_ms.is_some_and(|d| now_ms != 0 && now_ms > d)
+                                    {
+                                        crate::looping::pursuit::deadline_reached_note(&state)
+                                    } else {
+                                        crate::looping::pursuit::cap_reached_note(&state)
+                                    };
+                                loop_reg
+                                    .put(state.with_status(crate::looping::LoopStatus::Stopped));
                                 info!(session = %session_key_str, note = %note,
                                     "loop: safety cap reached, loop stopped");
                             }

@@ -334,7 +334,12 @@ mod tests {
         let st = reg.get("sess-x").unwrap();
         assert!(st.is_active());
         assert_eq!(st.prompt, "check deploy");
-        assert!(matches!(st.cadence, crate::looping::Cadence::Fixed { interval_ms: 300_000 }));
+        assert!(matches!(
+            st.cadence,
+            crate::looping::Cadence::Fixed {
+                interval_ms: 300_000
+            }
+        ));
     }
 
     #[tokio::test]
@@ -353,7 +358,10 @@ mod tests {
         .await
         .unwrap();
         let st = reg.get("s").unwrap();
-        assert!(matches!(st.cadence, crate::looping::Cadence::ModelPaced { .. }));
+        assert!(matches!(
+            st.cadence,
+            crate::looping::Cadence::ModelPaced { .. }
+        ));
         assert_eq!(st.max_iterations, Some(20));
     }
 
@@ -361,13 +369,20 @@ mod tests {
     async fn stop_marks_loop_stopped() {
         let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
         reg.put(crate::looping::LoopState::new(
-            "s", "p", crate::looping::Cadence::Fixed { interval_ms: 1000 }, 0,
+            "s",
+            "p",
+            crate::looping::Cadence::Fixed { interval_ms: 1000 },
+            0,
         ));
         let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
         tool.run(LoopArgs {
             action: LoopAction::Stop,
-            interval: None, prompt: None, max_iterations: None,
-            timeout_minutes: None, token_budget: None, next_wake: None,
+            interval: None,
+            prompt: None,
+            max_iterations: None,
+            timeout_minutes: None,
+            token_budget: None,
+            next_wake: None,
         })
         .await
         .unwrap();
@@ -378,13 +393,21 @@ mod tests {
     async fn update_sets_next_wake_for_model_paced() {
         let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
         reg.put(crate::looping::LoopState::new(
-            "s", "p", crate::looping::Cadence::ModelPaced { fallback_ms: 600_000 }, 0,
+            "s",
+            "p",
+            crate::looping::Cadence::ModelPaced {
+                fallback_ms: 600_000,
+            },
+            0,
         ));
         let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
         tool.run(LoopArgs {
             action: LoopAction::Update,
-            interval: None, prompt: None, max_iterations: None,
-            timeout_minutes: None, token_budget: None,
+            interval: None,
+            prompt: None,
+            max_iterations: None,
+            timeout_minutes: None,
+            token_budget: None,
             next_wake: Some("8m".to_string()),
         })
         .await
@@ -410,7 +433,10 @@ mod tests {
         .unwrap();
         // No user cap → a default soft cap is applied so unattended loops
         // cannot run unbounded forever.
-        assert_eq!(reg.get("s").unwrap().max_iterations, Some(DEFAULT_SOFT_MAX_ITERATIONS));
+        assert_eq!(
+            reg.get("s").unwrap().max_iterations,
+            Some(DEFAULT_SOFT_MAX_ITERATIONS)
+        );
     }
 
     #[tokio::test]

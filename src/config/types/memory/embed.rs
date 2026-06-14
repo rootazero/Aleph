@@ -38,11 +38,7 @@ impl EmbeddingPreset {
             // OpenAI `text-embedding-3-*`, Jina v3, and SiliconFlow's bge-m3
             // endpoint all accept (or harmlessly ignore) `dimensions`. Ollama's
             // OpenAI-compat shim ignores unknown fields.
-            Self::OpenAi
-            | Self::Jina
-            | Self::SiliconFlow
-            | Self::Ollama
-            | Self::Custom => true,
+            Self::OpenAi | Self::Jina | Self::SiliconFlow | Self::Ollama | Self::Custom => true,
             // Mistral's embeddings endpoint rejects unknown fields.
             Self::Mistral => false,
         }

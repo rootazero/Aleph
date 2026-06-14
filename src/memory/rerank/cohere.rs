@@ -104,10 +104,9 @@ impl RerankProvider for CohereRerankProvider {
             )));
         }
 
-        let parsed: CohereResponse = resp
-            .json()
-            .await
-            .map_err(|e| AlephError::provider(format!("Cohere rerank response parse error: {e}")))?;
+        let parsed: CohereResponse = resp.json().await.map_err(|e| {
+            AlephError::provider(format!("Cohere rerank response parse error: {e}"))
+        })?;
 
         Ok(parsed
             .results

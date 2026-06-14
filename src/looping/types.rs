@@ -121,7 +121,9 @@ mod tests {
         LoopState::new(
             "sess-1",
             "check deploy status",
-            Cadence::Fixed { interval_ms: 300_000 },
+            Cadence::Fixed {
+                interval_ms: 300_000,
+            },
             1_000,
         )
     }
@@ -156,15 +158,24 @@ mod tests {
 
     #[test]
     fn with_caps_sets_optional_bounds() {
-        let l = sample().with_max_iterations(Some(20)).with_deadline_ms(Some(99_999));
+        let l = sample()
+            .with_max_iterations(Some(20))
+            .with_deadline_ms(Some(99_999));
         assert_eq!(l.max_iterations, Some(20));
         assert_eq!(l.deadline_ms, Some(99_999));
     }
 
     #[test]
     fn with_next_wake_sets_model_paced_delay() {
-        let l = LoopState::new("s", "p", Cadence::ModelPaced { fallback_ms: 600_000 }, 0)
-            .with_next_wake_ms(Some(480_000));
+        let l = LoopState::new(
+            "s",
+            "p",
+            Cadence::ModelPaced {
+                fallback_ms: 600_000,
+            },
+            0,
+        )
+        .with_next_wake_ms(Some(480_000));
         assert_eq!(l.next_wake_ms, Some(480_000));
     }
 
