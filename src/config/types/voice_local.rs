@@ -58,11 +58,86 @@ impl Default for VoiceLocalConfig {
     }
 }
 
-/// `[voice]` config section wrapper (currently only `local`).
+/// Real-time streaming STT configuration (`[voice.streaming]`).
+///
+/// Points at a WebSocket-based streaming ASR endpoint. Two protocol adapters
+/// are supported:
+/// - `"deepgram"` — Deepgram `/v1/listen` wire protocol (also used by
+///   self-hosted WhisperLiveKit, which exposes a compatible API).
+/// - `"whisperlive"` — collabora WhisperLive segments protocol.
+///
+/// `enabled = false` (default) means voice input uses the non-streaming
+/// `/v1/audio/transcriptions` path instead.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct StreamingConfig {
+    pub enabled: bool,
+    /// Protocol adapter: "deepgram" (covers Deepgram cloud + WhisperLiveKit) | "whisperlive".
+    pub provider: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub base_url: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub api_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
+impl Default for StreamingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: "deepgram".into(),
+            base_url: String::new(),
+            api_key: String::new(),
+            language: None,
+        }
+    }
+}
+
+/// Post-transcription formatting pass configuration (`[voice.format]`).
+///
+/// When enabled, a fast LLM pass ("言语精炼师") cleans up raw transcription
+/// output (punctuation, capitalization, filler-word removal) before the text
+/// reaches the main agent loop.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct FormatConfig {
+    pub enabled: bool,
+    /// Fast model for the "言语精炼师" pass, via ModelOverride::from_voice(provider, model).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub provider: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    /// Override the default system prompt (empty → built-in default).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub prompt: String,
+}
+
+impl Default for FormatConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            provider: String::new(),
+            model: String::new(),
+            prompt: String::new(),
+        }
+    }
+}
+
+/// `[voice]` config section wrapper — local BYO endpoint, streaming STT, and
+/// post-transcription formatting.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct VoiceSection {
     #[serde(default)]
     pub local: VoiceLocalConfig,
+    /// Real-time streaming STT (`[voice.streaming]`). Disabled by default;
+    /// enable and configure a WebSocket endpoint to use streaming ASR.
+    #[serde(default)]
+    pub streaming: StreamingConfig,
+    /// Post-transcription LLM formatting pass (`[voice.format]`). Enabled by
+    /// default with empty provider/model (falls back to global default model).
+    #[serde(default)]
+    pub format: FormatConfig,
     /// Provider id pinned for voice-mode replies (e.g. a low-TTFT China-edge
     /// model so the spoken reply starts faster than the global default). Empty
     /// = no override; the run falls back to the global default. When
@@ -306,6 +381,23 @@ mod tests {
         );
         assert!(cfg.generation.speech_providers.contains_key("openai_tts"));
         assert!(!cfg.generation.speech_providers.contains_key("local"));
+    }
+
+    #[test]
+    fn streaming_config_defaults_disabled_and_neutral() {
+        let c: StreamingConfig = toml::from_str("").unwrap();
+        assert!(!c.enabled);
+        assert_eq!(c.provider, "deepgram"); // lingua-franca default protocol, NOT a vendor preference
+    }
+
+    #[test]
+    fn streaming_config_accepts_self_hosted_endpoint() {
+        let c: StreamingConfig = toml::from_str(
+            "enabled = true\nprovider = \"whisperlive\"\nbase_url = \"ws://192.168.1.50:9090\"\n",
+        )
+        .unwrap();
+        assert!(c.enabled);
+        assert_eq!(c.base_url, "ws://192.168.1.50:9090");
     }
 
     #[test]

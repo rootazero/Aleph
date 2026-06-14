@@ -465,6 +465,35 @@ const PROFILES: &[(&str, GenerationPreset)] = &[
         .with_homepage("https://docs.siliconflow.cn/cn/userguide/capabilities/speech-to-text")
         .with_signup("https://cloud.siliconflow.cn/account/ak"),
     ),
+    // ─── Streaming STT (WebSocket real-time) ─────────────────────────────────
+    (
+        "whisperlivekit",
+        GenerationPreset::new("deepgram_stream", "whisper", None)
+            .with_modalities(TRANSCRIPTION)
+            .with_display("WhisperLiveKit（自托管）")
+            .with_description(
+                "Self-hosted streaming STT, /v1/listen compatible \
+                 (set base_url to point at your instance).",
+            ),
+    ),
+    (
+        "whisperlive",
+        GenerationPreset::new("whisperlive", "small", None)
+            .with_modalities(TRANSCRIPTION)
+            .with_display("WhisperLive（自托管）")
+            .with_description(
+                "collabora WhisperLive, segments protocol \
+                 (set base_url to point at your instance).",
+            ),
+    ),
+    (
+        "deepgram-stream",
+        GenerationPreset::new("deepgram_stream", "nova-3", Some("wss://api.deepgram.com"))
+            .with_modalities(TRANSCRIPTION)
+            .with_display("Deepgram 流式 STT（云）")
+            .with_description("Deepgram Nova-3 real-time streaming /v1/listen")
+            .with_homepage("https://developers.deepgram.com"),
+    ),
 ];
 
 /// Registry of known generation provider presets, keyed by preset ID.
