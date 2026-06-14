@@ -105,3 +105,13 @@ graphify-out/
 .worktrees
 .understand-anything/
 .codegraph/
+
+# AI agent scaffolding (untracked, kept locally)
+/.agent/
+/.claude/
+
+# Docs: untrack everything except the README-referenced reference/ docs.
+# Engineering artifacts (audit / logic-review reports, result dumps) are moved
+# under docs/engineering-reports/ and stay untracked.
+/docs/*
+!/docs/reference/
