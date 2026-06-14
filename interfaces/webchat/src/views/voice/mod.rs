@@ -20,9 +20,10 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::chat::ChatApi;
-use crate::context::DashboardState;
+use crate::context::{DashboardState, GatewayEvent};
 use crate::views::chat::ChatState;
 use audio::{MicError, MicSession, TtsPlayer};
+use caption_state::{apply_delta, lock, CaptionState, Delta};
 use machine::{on_event, Action, VoiceEvent, VoicePhase};
 use orb::VoiceOrb;
 use sentence::SentenceSplitter;
@@ -47,6 +48,12 @@ impl VoiceMode {
 #[derive(Clone, PartialEq)]
 enum Caption {
     Idle,
+    /// Live streaming transcript: render the two-stage [`CaptionState`] held in
+    /// the `caption_state` signal (committed solid + interim gray, `.voice-lock`
+    /// when the utterance has ended). Carries no text itself — the content lives
+    /// in `caption_state` so the delta subscription and the lock point can mutate
+    /// it independently of which mode the caption is in.
+    Live,
     User(String),
     Assistant(String),
     Error(String),
@@ -77,8 +84,32 @@ fn VoiceSession() -> impl IntoView {
     let phase = RwSignal::new(VoicePhase::Listening);
     let level = RwSignal::new(0.0_f64);
     let caption = RwSignal::new(Caption::Idle);
+    // Two-stage live transcript for the streaming path. Rendered when `caption`
+    // is `Caption::Live`; mutated by the `voice.transcribe.delta` subscription
+    // (`apply_delta`) and at the VAD utterance-end point (`lock`). A `RwSignal`
+    // (not a `RefCell`) so the subscription closure can write it through a
+    // `Copy + Send + Sync` handle (the subscribe handler bound is `Send + Sync`).
+    let caption_state = RwSignal::new(CaptionState::default());
     let error_flash = RwSignal::new(false);
     let mic_error: RwSignal<Option<MicError>> = RwSignal::new(None);
+
+    // Current streaming stream_id (None ⇒ batch fallback, i.e. BYO streaming
+    // disabled in core). Lives in a LocalStorage slot so the (Send + Sync)
+    // delta-subscription closure, the frame sink, the VAD utterance-end branch,
+    // and the async mic-open task can all reach it. `StoredValue` handles are
+    // `Copy + Send + Sync` for any payload (wasm is single-threaded).
+    let stream_id: StoredValue<Option<String>, LocalStorage> = StoredValue::new_local(None);
+    // Monotonic "open generation" guarding `start_listening_stream` against an
+    // in-flight-overwrite leak: if two Listening-entries fire while the first
+    // `voice.stream.start` is still pending, the slot is still None at the
+    // second entry (the synchronous defensive stop can't see it), so both
+    // resolve and the first id would be overwritten and never stopped. Each
+    // open bumps the gen; only the latest installs — a superseded open closes
+    // the stream it just opened. Both guards together fully close the leak.
+    let stream_gen: StoredValue<u64, LocalStorage> = StoredValue::new_local(0);
+    // Handle for the one `voice.transcribe.delta` subscription, released in
+    // `on_cleanup` so closing/reopening the overlay does not leak handlers.
+    let voice_sub_id: StoredValue<Option<usize>, LocalStorage> = StoredValue::new_local(None);
 
     // The mic and the interval handle outlive their writer (the async mic-open
     // task) and must be reachable from `on_cleanup`, whose closure bound is
@@ -140,6 +171,53 @@ fn VoiceSession() -> impl IntoView {
     );
     player_slot.set_value(Some(Rc::clone(&player)));
 
+    // Subscribe ONCE to `voice.transcribe.delta` for the whole session (not per
+    // utterance — that would leak handlers). The core fan-out gates on an
+    // `events.subscribe` first, mirroring the chat `stream.*` / approval paths.
+    // The handler bound is `Send + Sync`; it captures only the `Copy` signal /
+    // slot handles (wasm is single-threaded — the bound is a type formality).
+    {
+        spawn_local(async move {
+            let _ = dash.subscribe_topic("voice.transcribe.delta").await;
+        });
+        let id = dash.subscribe_events(move |event: GatewayEvent| {
+            if event.topic != "voice.transcribe.delta" {
+                return;
+            }
+            // Drop deltas that belong to a previous utterance's stream so stale
+            // text from a just-closed stream can't bleed into the new one.
+            let ev_sid = event.data.get("stream_id").and_then(|s| s.as_str());
+            let matches = stream_id.with_value(|cur| {
+                cur.as_deref().is_some_and(|cur| Some(cur) == ev_sid)
+            });
+            if !matches {
+                return;
+            }
+            let Some(delta) = event.data.get("delta") else {
+                return;
+            };
+            let committed = delta
+                .get("committed")
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .to_string();
+            let interim = delta
+                .get("interim")
+                .and_then(|i| i.as_str())
+                .unwrap_or("")
+                .to_string();
+            // The Panel VAD is authoritative for the lock (the UtteranceEnd
+            // branch fires it); `delta.utterance_end` is intentionally ignored
+            // here so a backend end signal can't pre-empt the local wave.
+            caption_state.update(|s| apply_delta(s, Delta { committed, interim }));
+            // Switch the caption into live two-stage rendering on first delta.
+            if caption.get_untracked() != Caption::Live {
+                caption.set(Caption::Live);
+            }
+        });
+        voice_sub_id.set_value(Some(id));
+    }
+
     // Mic open + 50 ms VAD tick loop. Async because getUserMedia awaits a
     // permission grant; the interval handle is stashed (LocalStorage, same
     // reason as `mic`) for cleanup.
@@ -163,6 +241,14 @@ fn VoiceSession() -> impl IntoView {
             // now so the first reply's buffer source plays (a suspended context
             // is silent, and the reply arrives long after the entry tap).
             player.resume_output();
+
+            // Open the first streaming session now that the mic exists. Every
+            // subsequent listening period re-opens a FRESH stream via the
+            // phase-watching Effect below (the mic slot is populated by then, so
+            // that Effect handles re-entries; this one-shot covers the very first
+            // entry, which fires before the mic is ready).
+            start_listening_stream(Rc::clone(&session), dash, stream_id, stream_gen, caption_state);
+
             let handle = set_interval_with_handle(
                 move || {
                     let rms = session.rms();
@@ -196,19 +282,72 @@ fn VoiceSession() -> impl IntoView {
                             session.discard_segment();
                         }
                         Some(VadEvent::UtteranceEnd { .. }) => {
-                            handle_utterance(
-                                Rc::clone(&session),
-                                dash,
-                                chat,
-                                dispatch,
-                                caption,
-                                Rc::clone(&player),
-                                Rc::clone(&splitter),
-                                speak_run,
-                                Rc::clone(&speak_gen),
-                                Rc::clone(&consecutive_errors),
-                                voice_mode,
-                            );
+                            match stream_id.with_value(Clone::clone) {
+                                // Streaming mode: the live transcript is already
+                                // on screen via deltas. Lock it (CSS wave fires),
+                                // send the RAW committed text to the agent with
+                                // zero extra latency (no `voice.transcribe`
+                                // round-trip), and close the backend stream.
+                                Some(id) => {
+                                    let raw = caption_state.get_untracked().committed;
+                                    if raw.trim().is_empty() {
+                                        // Empty utterance-end (a noise blip, or
+                                        // deltas still lagging): keep the SAME
+                                        // stream running and stay listening. Do
+                                        // NOT lock/close here — that would kill
+                                        // the decoder while the phase stays in
+                                        // Listening (no edge for the Effect to
+                                        // re-open it), leaving the next utterance
+                                        // with a dead stream.
+                                        dispatch(VoiceEvent::TranscribeFailed);
+                                    } else {
+                                        // Real utterance:
+                                        // 1) lock caption → committed gray→white wave
+                                        caption_state.update(lock);
+                                        // stop the local frame tap (about to close)
+                                        session.stop_streaming();
+                                        // 2) raw committed text → Agent (reuse send
+                                        //    half). UtteranceSent flips the phase to
+                                        //    Processing; the return to Listening
+                                        //    re-opens a fresh stream via the Effect.
+                                        let player = Rc::clone(&player);
+                                        let splitter = Rc::clone(&splitter);
+                                        let speak_gen = Rc::clone(&speak_gen);
+                                        spawn_local(send_utterance(
+                                            raw, dash, chat, dispatch, player, splitter,
+                                            speak_run, speak_gen,
+                                        ));
+                                        // 3) close the stream (its delta pump exits)
+                                        spawn_local(async move {
+                                            let _ = dash
+                                                .rpc_call(
+                                                    "voice.stream.stop",
+                                                    serde_json::json!({ "stream_id": id }),
+                                                )
+                                                .await;
+                                        });
+                                        // 4) clear the slot so the next listening
+                                        //    period opens a FRESH backend decoder.
+                                        stream_id.set_value(None);
+                                    }
+                                }
+                                // Batch fallback (streaming disabled in core):
+                                // unchanged WAV transcribe → send pipeline.
+                                None => {
+                                    handle_utterance(
+                                        Rc::clone(&session),
+                                        dash,
+                                        chat,
+                                        dispatch,
+                                        caption,
+                                        Rc::clone(&player),
+                                        Rc::clone(&splitter),
+                                        speak_run,
+                                        Rc::clone(&speak_gen),
+                                        Rc::clone(&consecutive_errors),
+                                    );
+                                }
+                            }
                         }
                         None => {}
                     }
@@ -220,6 +359,28 @@ fn VoiceSession() -> impl IntoView {
             }
         });
     }
+
+    // One fresh stream per LISTENING period. Watches `phase` and fires on the
+    // `!= Listening → == Listening` edge — which is every path back to Listening:
+    // normal turn completion (PlaybackDrained), barge-in (the user cuts in during
+    // Speaking), and the error returns. This guarantees utterance 2+ each get a
+    // brand-new backend decoder (the previous one was closed at its UtteranceEnd),
+    // and that streaming is active ONLY while listening — never during the AI's
+    // own TTS playback (Speaking), where the mic would otherwise feed the AI's
+    // voice back to the transcriber. The very first entry fires before the mic is
+    // ready (slot still None) and is skipped here — the mic-open task does that
+    // first open; this Effect owns every re-entry. `Effect::new`'s prev-value
+    // arg carries the last phase so we detect the edge without a separate Cell.
+    Effect::new(move |prev: Option<VoicePhase>| {
+        let cur = phase.get();
+        let entering = prev != Some(VoicePhase::Listening) && cur == VoicePhase::Listening;
+        if entering {
+            if let Some(session) = mic.with_value(Clone::clone) {
+                start_listening_stream(session, dash, stream_id, stream_gen, caption_state);
+            }
+        }
+        cur
+    });
 
     // Drive TTS from the streaming assistant message. Reacts to `chat.messages`
     // growing; pushes newly-completed sentences into the player and, once the
@@ -283,6 +444,19 @@ fn VoiceSession() -> impl IntoView {
                 p.close();
             }
         });
+        // Release the delta subscription (the handler slot is reused as a no-op)
+        // and stop any still-open backend stream so reopening the overlay starts
+        // clean. Both are best-effort.
+        if let Some(id) = voice_sub_id.try_update_value(Option::take).flatten() {
+            dash.unsubscribe_events(id);
+        }
+        if let Some(sid) = stream_id.try_update_value(Option::take).flatten() {
+            spawn_local(async move {
+                let _ = dash
+                    .rpc_call("voice.stream.stop", serde_json::json!({ "stream_id": sid }))
+                    .await;
+            });
+        }
     });
 
     let status_text = move || match phase.get() {
@@ -309,10 +483,29 @@ fn VoiceSession() -> impl IntoView {
             None => view! { {e.caption(native)} }.into_any(),
         },
     };
-    let caption_text = move || match caption.get() {
-        Caption::Idle => String::new(),
-        Caption::User(t) => format!("“{t}”"),
-        Caption::Assistant(t) | Caption::Error(t) => t,
+    // Caption renderer. `Live` (streaming) renders the two-stage transcript from
+    // `caption_state` — committed (solid `.voice-committed`) + interim (gray
+    // `.voice-interim`), with `.voice-lock` on the row once the utterance ends
+    // (Task 10 styles the wave). All other variants render plain/quoted text.
+    let caption_view = move || match caption.get() {
+        Caption::Idle => view! { "" }.into_any(),
+        Caption::Live => {
+            let s = caption_state.get();
+            let row_class = if s.locked {
+                "voice-live voice-lock"
+            } else {
+                "voice-live"
+            };
+            view! {
+                <span class=row_class>
+                    <span class="voice-committed">{s.committed}</span>
+                    <span class="voice-interim">{s.interim}</span>
+                </span>
+            }
+            .into_any()
+        }
+        Caption::User(t) => view! { {format!("“{t}”")} }.into_any(),
+        Caption::Assistant(t) | Caption::Error(t) => view! { {t} }.into_any(),
     };
 
     view! {
@@ -322,7 +515,7 @@ fn VoiceSession() -> impl IntoView {
                 level=Signal::derive(move || level.get())
                 error_flash=Signal::derive(move || error_flash.get())
             />
-            <div class="voice-caption mt-8">{caption_text}</div>
+            <div class="voice-caption mt-8">{caption_view}</div>
             <div class="voice-hint mt-2">{mic_hint}</div>
             <button
                 class="voice-hint mt-10 hover:text-text-primary transition-colors"
@@ -334,7 +527,88 @@ fn VoiceSession() -> impl IntoView {
     }
 }
 
-/// One utterance: stop capture, transcribe, send to chat, arm the speak Effect.
+/// Open ONE fresh streaming session for the listening period that is about to
+/// begin: ask core for a `stream_id`, and — when streaming is enabled — reset
+/// the live caption, install the frame sink, and start the mic's streaming tap.
+///
+/// `stream_id == None` means BYO streaming is disabled in core; the slot stays
+/// None and the batch path (`handle_utterance`) handles the utterance unchanged.
+/// Called from the mic-open task (first entry) and the phase-watching Effect
+/// (every re-entry into Listening). Each call gives the next utterance its own
+/// backend decoder — the previous stream was closed at its UtteranceEnd.
+fn start_listening_stream(
+    session: Rc<MicSession>,
+    dash: DashboardState,
+    stream_id: StoredValue<Option<String>, LocalStorage>,
+    stream_gen: StoredValue<u64, LocalStorage>,
+    caption_state: RwSignal<CaptionState>,
+) {
+    // Defensive (guard A): a stale id should never survive (UtteranceEnd clears
+    // it), but if one does, stop that backend stream and clear the slot before
+    // opening a new one so we never leak a decoder or feed two streams at once.
+    if let Some(stale) = stream_id.try_update_value(Option::take).flatten() {
+        spawn_local(async move {
+            let _ = dash
+                .rpc_call("voice.stream.stop", serde_json::json!({ "stream_id": stale }))
+                .await;
+        });
+    }
+    // Guard B: claim a generation. Covers the case guard A can't — the slot is
+    // still None because a PRIOR open's `voice.stream.start` hasn't returned
+    // yet. Only the open whose generation is still the latest installs its
+    // stream; an open that was superseded mid-flight closes the stream it just
+    // opened instead of overwriting (and leaking) the newer one.
+    let my_gen = stream_gen.try_update_value(|g| {
+        *g += 1;
+        *g
+    }).unwrap_or(0);
+    spawn_local(async move {
+        let resp = dash
+            .rpc_call(
+                "voice.stream.start",
+                serde_json::json!({ "language": Option::<String>::None }),
+            )
+            .await;
+        let sid = resp
+            .ok()
+            .and_then(|v| v.get("stream_id").and_then(|s| s.as_str()).map(str::to_string));
+        let still_current = stream_gen.try_with_value(|g| *g == my_gen).unwrap_or(false);
+        if still_current {
+            stream_id.set_value(sid.clone());
+            if let Some(id) = sid {
+                // Fresh listening period → blank the live caption so the previous
+                // utterance's committed/interim text isn't shown under the new one.
+                caption_state.set(CaptionState::default());
+                session.set_frame_sink(move |b64| {
+                    let id = id.clone();
+                    spawn_local(async move {
+                        let _ = dash
+                            .rpc_call(
+                                "voice.stream.audio",
+                                serde_json::json!({ "stream_id": id, "pcm_base64": b64 }),
+                            )
+                            .await;
+                    });
+                });
+                session.start_streaming();
+            }
+            // sid == None → batch fallback, slot stays None (as before).
+        } else if let Some(id) = sid {
+            // A newer Listening-entry superseded this open while its start RPC
+            // was in flight. Do NOT install (no slot write, no caption reset) —
+            // just close this orphaned decoder so it can't leak.
+            let _ = dash
+                .rpc_call("voice.stream.stop", serde_json::json!({ "stream_id": id }))
+                .await;
+        }
+    });
+}
+
+/// Batch path: one utterance → stop capture, transcribe (WAV round-trip), then
+/// hand the text to [`send_utterance`]. Runs only when streaming is disabled in
+/// core (`voice.stream.start` returned `stream_id: null`). The streaming path
+/// skips this transcribe and feeds `send_utterance` the committed text from the
+/// live deltas directly.
 #[allow(clippy::too_many_arguments)]
 fn handle_utterance(
     session: Rc<MicSession>,
@@ -347,7 +621,6 @@ fn handle_utterance(
     speak_run: RwSignal<Option<String>>,
     speak_gen: Rc<RefCell<u64>>,
     consecutive_errors: Rc<RefCell<u32>>,
-    voice_mode: VoiceMode,
 ) {
     spawn_local(async move {
         let Some((base64, mime)) = session.take_segment_wav() else {
@@ -383,49 +656,67 @@ fn handle_utterance(
         };
         *consecutive_errors.borrow_mut() = 0;
         caption.set(Caption::User(text.clone()));
-        dispatch(VoiceEvent::UtteranceSent);
+        send_utterance(text, dash, chat, dispatch, player, splitter, speak_run, speak_gen).await;
+    });
+}
 
-        // Claim this turn's generation. A later utterance or a barge-in bumps
-        // the gen; the guarded assignment below then refuses to arm a run that
-        // a newer turn has already superseded (last-writer-wins, even if our
-        // transcribe+send finished out of order).
-        let my_gen = {
-            let mut g = speak_gen.borrow_mut();
-            *g += 1;
-            *g
-        };
-        // Reset the TTS pipeline for the new turn before any stream arrives.
-        player.reset();
-        *splitter.borrow_mut() = SentenceSplitter::default();
-        chat.push_user_message(&text);
-        let sk = chat.session_key.get_untracked();
-        match ChatApi::send(&dash, &text, sk.as_deref(), vec![], None, None, None).await {
-            Ok(resp) => {
-                // Only arm the pipeline if no newer utterance / barge-in
-                // superseded us while send was in flight.
-                if *speak_gen.borrow() == my_gen {
-                    chat.session_key.set(Some(resp.session_key.clone()));
-                    // Do NOT open the assistant bubble here. The `run_accepted`
-                    // stream event already creates exactly one `assistant-{run}`
-                    // bubble (and `begin_step` stamps its iteration). Creating a
-                    // second one appended an empty, trailing shadow bubble that
-                    // the TTS Effect's `.rev().find` then tracked instead of the
-                    // real content bubble — so the reply was never spoken and the
-                    // phase froze at "正在思考" (the round-2 no-audio bug).
-                    // Also do NOT call chat.mark_speak_run — the immersive session
-                    // owns TTS itself; marking the run would double-speak (the
-                    // composer voice-loop reader would also synthesize it).
-                    speak_run.set(Some(resp.run_id));
-                }
-            }
-            Err(_) => {
-                if *speak_gen.borrow() == my_gen {
-                    dispatch(VoiceEvent::RunFailed);
-                }
-                let _ = voice_mode;
+/// Send half shared by both paths (DRY): claim this turn's generation, reset the
+/// TTS pipeline, push the user bubble, fire the run, and arm the speak Effect.
+/// `text` is the final user utterance — the WAV transcript (batch) or the raw
+/// committed streaming text (streaming). The caller owns showing the user
+/// caption (batch sets `Caption::User`; streaming keeps the locked live line).
+#[allow(clippy::too_many_arguments)]
+async fn send_utterance(
+    text: String,
+    dash: DashboardState,
+    chat: ChatState,
+    dispatch: impl Fn(VoiceEvent) + Clone + 'static,
+    player: Rc<TtsPlayer>,
+    splitter: Rc<RefCell<SentenceSplitter>>,
+    speak_run: RwSignal<Option<String>>,
+    speak_gen: Rc<RefCell<u64>>,
+) {
+    dispatch(VoiceEvent::UtteranceSent);
+
+    // Claim this turn's generation. A later utterance or a barge-in bumps the
+    // gen; the guarded assignment below then refuses to arm a run that a newer
+    // turn has already superseded (last-writer-wins, even if our send finished
+    // out of order).
+    let my_gen = {
+        let mut g = speak_gen.borrow_mut();
+        *g += 1;
+        *g
+    };
+    // Reset the TTS pipeline for the new turn before any stream arrives.
+    player.reset();
+    *splitter.borrow_mut() = SentenceSplitter::default();
+    chat.push_user_message(&text);
+    let sk = chat.session_key.get_untracked();
+    match ChatApi::send(&dash, &text, sk.as_deref(), vec![], None, None, None).await {
+        Ok(resp) => {
+            // Only arm the pipeline if no newer utterance / barge-in superseded
+            // us while send was in flight.
+            if *speak_gen.borrow() == my_gen {
+                chat.session_key.set(Some(resp.session_key.clone()));
+                // Do NOT open the assistant bubble here. The `run_accepted`
+                // stream event already creates exactly one `assistant-{run}`
+                // bubble (and `begin_step` stamps its iteration). Creating a
+                // second one appended an empty, trailing shadow bubble that the
+                // TTS Effect's `.rev().find` then tracked instead of the real
+                // content bubble — so the reply was never spoken and the phase
+                // froze at "正在思考" (the round-2 no-audio bug). Also do NOT call
+                // chat.mark_speak_run — the immersive session owns TTS itself;
+                // marking the run would double-speak (the composer voice-loop
+                // reader would also synthesize it).
+                speak_run.set(Some(resp.run_id));
             }
         }
-    });
+        Err(_) => {
+            if *speak_gen.borrow() == my_gen {
+                dispatch(VoiceEvent::RunFailed);
+            }
+        }
+    }
 }
 
 /// Pure TTS-drive step shared by the streaming Effect: feed the current
