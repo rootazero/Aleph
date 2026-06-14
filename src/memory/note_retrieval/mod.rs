@@ -4,6 +4,7 @@
 //! instead of the legacy facts table. Returns `Vec<ScoredFact>` so downstream
 //! consumers don't require changes.
 
+pub mod expansion;
 pub mod hybrid;
 pub mod scoring;
 
