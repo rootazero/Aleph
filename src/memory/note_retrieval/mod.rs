@@ -10,7 +10,7 @@ pub mod scoring;
 
 use std::collections::HashMap;
 
-use crate::config::types::memory::RetrievalScoringConfig;
+use crate::config::types::memory::{ExpansionConfig, RetrievalScoringConfig};
 use crate::error::AlephError;
 use crate::memory::context::{MemoryFact, NoteType};
 use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
@@ -47,6 +47,9 @@ pub struct NoteFactRetrieval<S: NoteStore + Send + Sync + 'static> {
     /// Retrieval-time recency decay + MMR diversity. Default-inactive, so the
     /// base `new()` reproduces legacy ranking byte-for-byte.
     scoring: RetrievalScoringConfig,
+    /// Associative graph expansion of the candidate pool before rerank.
+    /// Default-on; a cold graph cache makes it a no-op.
+    expansion: ExpansionConfig,
 }
 
 impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
@@ -57,6 +60,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             reranker: None,
             rerank_weight: 0.6,
             scoring: RetrievalScoringConfig::default(),
+            expansion: ExpansionConfig::default(),
         }
     }
 
@@ -66,6 +70,15 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
     #[must_use]
     pub fn with_scoring_config(mut self, cfg: &RetrievalScoringConfig) -> Self {
         self.scoring = cfg.clone();
+        self
+    }
+
+    /// Attach associative graph-expansion config. `new()` is already on; this
+    /// lets callers tune or disable it. `weight` is clamped to `[0,1]`.
+    #[must_use]
+    pub fn with_expansion_config(mut self, cfg: &ExpansionConfig) -> Self {
+        self.expansion = cfg.clone();
+        self.expansion.weight = self.expansion.weight.clamp(0.0, 1.0);
         self
     }
 
@@ -269,11 +282,31 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         };
         let dim = embedding.len() as u32;
 
-        let results = self
+        let mut results = self
             .indexer
             .store()
             .hybrid_search_notes(&embedding, query, agent_id, dim, self.fetch_limit(limit))
             .await?;
+
+        if self.expansion.is_active() {
+            let peers = expansion::graph_expand(
+                self.indexer.store().as_ref(),
+                agent_id,
+                &results,
+                &self.expansion,
+            )
+            .await;
+            results.extend(peers);
+            // Bound the merged pool so rerank cost stays capped despite expansion.
+            if results.len() > RERANK_MAX_CANDIDATES {
+                results.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                results.truncate(RERANK_MAX_CANDIDATES);
+            }
+        }
 
         let facts: Vec<ScoredFact> = results.iter().map(|r| r.to_scored_fact(agent_id)).collect();
         let ranked = self.apply_rerank(query, facts).await;
@@ -351,11 +384,21 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         let per_agent_limit = limit.max(10);
 
         for agent_id in agent_ids {
-            let results = self
+            let mut results = self
                 .indexer
                 .store()
                 .hybrid_search_notes(&embedding, query, agent_id, dim, per_agent_limit)
                 .await?;
+            if self.expansion.is_active() {
+                let peers = expansion::graph_expand(
+                    self.indexer.store().as_ref(),
+                    agent_id,
+                    &results,
+                    &self.expansion,
+                )
+                .await;
+                results.extend(peers);
+            }
             for r in results {
                 all_results.push(r.to_scored_fact(agent_id));
             }
@@ -537,6 +580,63 @@ mod tests {
             .await
             .unwrap();
         assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retrieve_surfaces_graph_peer_only_when_materialized() {
+        use crate::memory::notes::KnowledgeNote;
+
+        let dir = tempdir().unwrap();
+        let backend: Arc<SqliteMemoryBackend> =
+            Arc::new(SqliteMemoryBackend::new(dir.path()).unwrap());
+
+        // A matches the query token "dreame"; B is unrelated lexically.
+        let a = KnowledgeNote {
+            title: "alpha".to_string(),
+            category: "general".to_string(),
+            facts: vec!["dreame brand incident".to_string()],
+            content_hash: "h_a".to_string(),
+            ..Default::default()
+        };
+        let b = KnowledgeNote {
+            title: "beta".to_string(),
+            category: "general".to_string(),
+            facts: vec!["unrelated vacuum robotics note".to_string()],
+            content_hash: "h_b".to_string(),
+            ..Default::default()
+        };
+        backend.index_note(&a, "default", "general").await.unwrap();
+        backend.index_note(&b, "default", "general").await.unwrap();
+
+        let indexer = Arc::new(NoteIndexer::new(dir.path().to_path_buf(), backend.clone()));
+        // MockEmbeddingProvider (not Failing): retrieve() must reach
+        // hybrid_search_notes + the expansion stage. FailingEmbeddingProvider
+        // would divert to text_retrieve, which does NOT run expansion. Notes
+        // have no stored vectors, so the vector leg is empty and FTS surfaces A.
+        let retrieval =
+            NoteFactRetrieval::new(indexer, Arc::new(MockEmbeddingProvider::new(1024, "mock")));
+
+        // Cold cache: B must NOT surface for a query that only matches A.
+        let cold = retrieval.retrieve("dreame", "default", 10).await.unwrap();
+        assert!(
+            cold.iter().all(|f| f.fact.id != "general/beta"),
+            "without a materialized edge, the unrelated note must not surface"
+        );
+
+        // Materialize A -> B; now B surfaces via associative expansion.
+        backend
+            .replace_graph_related("default", &[(
+                "general/alpha".to_string(),
+                "general/beta".to_string(),
+                4.0,
+            )])
+            .await
+            .unwrap();
+        let warm = retrieval.retrieve("dreame", "default", 10).await.unwrap();
+        assert!(
+            warm.iter().any(|f| f.fact.id == "general/beta"),
+            "with a materialized edge, the graph peer must surface"
+        );
     }
 
     // --- Hot-floating recall-signal producer wiring ------------------------
