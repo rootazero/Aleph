@@ -136,7 +136,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteOrientation for FsNoteOrientation
         let schema_text = SchemaStore::new(&dir)
             .read()
             .await?
-            .map(|d| d.raw)
+            .map(|d| d.compact_for_prompt())
             .unwrap_or_default();
         let index_text = tokio::fs::read_to_string(dir.join("index.md"))
             .await
@@ -264,9 +264,47 @@ mod tests {
             .read_snapshot("default", TokenBudget::default())
             .await
             .unwrap();
-        assert!(snap.schema_text.contains("# Memory Schema"));
+        // compact_for_prompt() returns Tag Taxonomy / Page Thresholds / Update Policy
+        // sections only — not the full document header.
+        assert!(snap.schema_text.contains("Tag Taxonomy"));
         assert!(snap.index_text.contains("# Index"));
         assert!(snap.recent_log_tail.contains("bootstrap"));
+    }
+
+    #[tokio::test]
+    async fn read_snapshot_schema_uses_compact_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = fresh_backend(dir.path());
+        let orient = FsNoteOrientation::new(dir.path().join("note"), backend);
+
+        // Write a SCHEMA.md that has the required "## Tag Taxonomy" section.
+        let schema_path = dir.path().join("note/default");
+        tokio::fs::create_dir_all(&schema_path).await.unwrap();
+        tokio::fs::write(
+            schema_path.join("SCHEMA.md"),
+            "---\nschema_version: 1\nupdated: \"2026-01-01\"\n---\n# Memory Schema\n\n## Tag Taxonomy\n- rust\n- async\n\n## Page Thresholds\n- create: 2+ sources\n\n## Update Policy\n- Conflict: keep both\n",
+        )
+        .await
+        .unwrap();
+
+        // Also create the index.md and log.md so read_snapshot doesn't fail.
+        orient.bootstrap("default").await.unwrap();
+
+        let snap = orient
+            .read_snapshot("default", TokenBudget::default())
+            .await
+            .unwrap();
+        // The snapshot's schema section must come from compact_for_prompt —
+        // it contains Tag Taxonomy but omits Domain / Categories sections.
+        assert!(
+            snap.schema_text.contains("Tag Taxonomy"),
+            "schema_text must contain Tag Taxonomy; got: {:?}",
+            snap.schema_text
+        );
+        assert!(
+            !snap.schema_text.contains("## Domain"),
+            "compact schema must not include Domain section"
+        );
     }
 
     #[tokio::test]
