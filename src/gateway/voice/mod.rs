@@ -5,4 +5,5 @@ pub mod outbound;
 pub mod sanitize;
 pub mod session_mode;
 pub mod state;
+pub mod streaming;
 pub use state::VoiceState;
