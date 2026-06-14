@@ -33,6 +33,41 @@ pub const WORKFLOW_STEP_KEY: &str = "workflow_step";
 /// Two runs of the same template on the same team are only distinguishable by
 /// this id — it is what `workflow(action='status'|'cancel')` groups on.
 pub const WORKFLOW_RUN_ID_KEY: &str = "workflow_run_id";
+/// Metadata key carrying a step's per-step model override (when the template's
+/// AWI manifest set one). The dispatcher reads it via [`workflow_model_override`]
+/// and turns it into a `RunRequest.model_override` so the member run executes on
+/// the requested model — the executable wiring of the manifest's `model` field.
+/// Absent on steps with no override (byte-identical legacy rows).
+pub const WORKFLOW_MODEL_KEY: &str = "workflow_model";
+
+/// Read a step's per-step model override off its materialised `coord_task`
+/// metadata and build a [`ModelOverride`](crate::gateway::model_override::ModelOverride).
+///
+/// `"provider/model"` pins both (Qualified); a bare `"model"` is Raw and lets the
+/// provider registry resolve the provider. Empty / missing → `None` (the run uses
+/// the agent's default model). Pure — the dispatcher calls it at launch time.
+#[must_use]
+pub fn workflow_model_override(
+    metadata: &serde_json::Value,
+) -> Option<crate::gateway::model_override::ModelOverride> {
+    use crate::gateway::model_override::ModelOverride;
+    let raw = metadata.get(WORKFLOW_MODEL_KEY).and_then(|v| v.as_str())?;
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    match raw.split_once('/') {
+        Some((provider, model)) if !provider.trim().is_empty() && !model.trim().is_empty() => {
+            Some(ModelOverride::Qualified {
+                provider: provider.trim().to_string(),
+                model: model.trim().to_string(),
+            })
+        }
+        _ => Some(ModelOverride::Raw {
+            model: raw.to_string(),
+        }),
+    }
+}
 
 /// The set of `coord_task` ids minted for one workflow run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,12 +93,19 @@ pub struct MaterializedWorkflow {
 /// When `None` (e.g. a non-interactive run), clarify steps still materialise but
 /// have no channel to reach — the dispatcher fails them with a clear reason
 /// rather than stalling the DAG.
+///
+/// `models` maps step-local id → model override (e.g. `"opus"`,
+/// `"openai/gpt-5"`); a present entry is stamped under [`WORKFLOW_MODEL_KEY`] on
+/// that agent step so its member run executes on the requested model. `None` (or
+/// a step with no entry) leaves the run on the agent's default model — the
+/// pre-existing behaviour. Clarify steps run no agent, so they are never stamped.
 pub async fn materialize(
     def: &WorkflowDef,
     input: &str,
     team_id: &str,
     store: &dyn CoordTaskStore,
     clarify_ctx: Option<&ClarifyContext>,
+    models: Option<&std::collections::HashMap<String, String>>,
 ) -> Result<MaterializedWorkflow> {
     def.validate()?;
     let order = def.topo_order()?;
@@ -138,6 +180,18 @@ pub async fn materialize(
             if step.review {
                 if let Some(obj) = meta.as_object_mut() {
                     obj.insert(LEAD_REVIEW_METADATA_KEY.to_string(), json!(true));
+                }
+            }
+            // Per-step model override (from the AWI manifest): stamp the model
+            // string the dispatcher turns into a RunRequest.model_override at
+            // launch. Absent when the step has no override (byte-identical rows).
+            if let Some(model) = models
+                .and_then(|m| m.get(step.id.as_str()))
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                if let Some(obj) = meta.as_object_mut() {
+                    obj.insert(WORKFLOW_MODEL_KEY.to_string(), json!(model));
                 }
             }
             (step.agent.clone(), meta)
@@ -242,7 +296,7 @@ mod tests {
     #[tokio::test]
     async fn materialize_creates_one_task_per_step() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "the topic", "team-1", &store, None)
+        let mat = materialize(&linear_def(), "the topic", "team-1", &store, None, None)
             .await
             .expect("materialise");
         assert_eq!(mat.task_ids.len(), 2);
@@ -251,7 +305,7 @@ mod tests {
     #[tokio::test]
     async fn materialize_substitutes_input_and_tags_dispatcher() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "quantum computing", "team-1", &store, None)
+        let mat = materialize(&linear_def(), "quantum computing", "team-1", &store, None, None)
             .await
             .unwrap();
 
@@ -272,7 +326,7 @@ mod tests {
     #[tokio::test]
     async fn materialize_stamps_one_run_id_on_every_task() {
         let store = setup_store().await;
-        let first = materialize(&linear_def(), "x", "team-1", &store, None)
+        let first = materialize(&linear_def(), "x", "team-1", &store, None, None)
             .await
             .unwrap();
         assert!(!first.run_id.is_empty(), "run id is minted");
@@ -287,7 +341,7 @@ mod tests {
             );
         }
         // A second run of the same template mints a distinct identity.
-        let second = materialize(&linear_def(), "x", "team-1", &store, None)
+        let second = materialize(&linear_def(), "x", "team-1", &store, None, None)
             .await
             .unwrap();
         assert_ne!(first.run_id, second.run_id, "runs are distinguishable");
@@ -296,7 +350,7 @@ mod tests {
     #[tokio::test]
     async fn materialize_wires_dependency_so_dependent_is_blocked() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "x", "team-1", &store, None)
+        let mat = materialize(&linear_def(), "x", "team-1", &store, None, None)
             .await
             .unwrap();
 
@@ -337,7 +391,7 @@ mod tests {
             description: String::new(),
             steps: vec![step("a", "w", &[]), step("b", "w", &["a", "a"])],
         };
-        let mat = materialize(&def, "x", "t", &store, None)
+        let mat = materialize(&def, "x", "t", &store, None, None)
             .await
             .expect("duplicate dep collapses instead of aborting");
         assert_eq!(mat.task_ids.len(), 2);
@@ -351,7 +405,7 @@ mod tests {
         let store = setup_store().await;
         let mut def = linear_def();
         def.steps[1].depends_on = vec!["ghost".into()];
-        assert!(materialize(&def, "x", "team-1", &store, None)
+        assert!(materialize(&def, "x", "team-1", &store, None, None)
             .await
             .is_err());
     }
@@ -369,7 +423,7 @@ mod tests {
                 step("d", "w", &["b", "c"]),
             ],
         };
-        let mat = materialize(&def, "x", "t", &store, None).await.unwrap();
+        let mat = materialize(&def, "x", "t", &store, None, None).await.unwrap();
         assert_eq!(mat.task_ids.len(), 4);
         // The final task "d" must be blocked until both b and c complete.
         let last = store
@@ -398,7 +452,7 @@ mod tests {
             conversation_id: "user-1".into(),
             session_key: "telegram:bot:1:user-1".into(),
         };
-        let mat = materialize(&def, "us-east", "team-1", &store, Some(&ctx))
+        let mat = materialize(&def, "us-east", "team-1", &store, Some(&ctx), None)
             .await
             .unwrap();
 
@@ -424,7 +478,7 @@ mod tests {
         let store = setup_store().await;
         let mut def = linear_def();
         def.steps[1].review = true;
-        let mat = materialize(&def, "x", "team-1", &store, None)
+        let mat = materialize(&def, "x", "team-1", &store, None, None)
             .await
             .unwrap();
 
@@ -451,10 +505,55 @@ mod tests {
             description: String::new(),
             steps: vec![clarify_step("ask", "Which file?", &[], &[])],
         };
-        let mat = materialize(&def, "x", "t", &store, None).await.unwrap();
+        let mat = materialize(&def, "x", "t", &store, None, None).await.unwrap();
         let ask = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
         let meta = ClarifyTaskMeta::from_metadata(&ask.metadata).expect("clarify meta present");
         assert!(meta.channel_id.is_empty());
         assert!(meta.session_key.is_empty());
+    }
+
+    #[tokio::test]
+    async fn materialize_stamps_per_step_model_override() {
+        // A model map keyed by step id stamps WORKFLOW_MODEL_KEY onto exactly
+        // the matching agent step; an unlisted step stays byte-identical (no
+        // key), so non-overridden runs keep the agent's default model.
+        let store = setup_store().await;
+        let mut models = std::collections::HashMap::new();
+        models.insert("gather".to_string(), "opus".to_string());
+        let mat = materialize(&linear_def(), "x", "team-1", &store, None, Some(&models))
+            .await
+            .unwrap();
+
+        let gather = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
+        assert_eq!(
+            gather.metadata.get(WORKFLOW_MODEL_KEY).and_then(|v| v.as_str()),
+            Some("opus"),
+            "listed step carries its model override"
+        );
+        let write = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
+        assert!(
+            write.metadata.get(WORKFLOW_MODEL_KEY).is_none(),
+            "unlisted step has no override key (legacy byte-identical row)"
+        );
+    }
+
+    #[test]
+    fn workflow_model_override_parses_raw_and_qualified() {
+        use crate::gateway::model_override::ModelOverride;
+        // Bare model → Raw (registry resolves the provider).
+        let raw = workflow_model_override(&json!({ WORKFLOW_MODEL_KEY: "opus" }));
+        assert_eq!(raw, Some(ModelOverride::Raw { model: "opus".into() }));
+        // "provider/model" → Qualified (both pinned).
+        let qual = workflow_model_override(&json!({ WORKFLOW_MODEL_KEY: "openai/gpt-5" }));
+        assert_eq!(
+            qual,
+            Some(ModelOverride::Qualified {
+                provider: "openai".into(),
+                model: "gpt-5".into(),
+            })
+        );
+        // Missing / empty → None (run stays on the default model).
+        assert!(workflow_model_override(&json!({})).is_none());
+        assert!(workflow_model_override(&json!({ WORKFLOW_MODEL_KEY: "  " })).is_none());
     }
 }

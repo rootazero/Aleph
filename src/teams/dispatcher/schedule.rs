@@ -493,6 +493,10 @@ impl TeamDispatcher {
         // process owns its own cwd. Only in-process agents benefit from
         // git worktree isolation.
         let isolate = matches!(target, MemberDispatchTarget::Agent { .. });
+        // A workflow step may pin its member run to a specific model; plain team
+        // tasks carry no such key, so this is `None` and the run keeps its
+        // default model.
+        let model_override = crate::workflow::workflow_model_override(&task.metadata);
         let outcome = execute_member_task(
             &self.context,
             &target,
@@ -501,6 +505,7 @@ impl TeamDispatcher {
             input,
             self.config.task_timeout_secs,
             isolate,
+            model_override,
         )
         .await;
 

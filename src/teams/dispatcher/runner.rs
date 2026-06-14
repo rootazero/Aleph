@@ -116,6 +116,10 @@ pub struct MemberRunOutcome {
 ///
 /// On return — happy path, error, or timeout — the worktree handle (if any)
 /// is cleaned up via `WorktreeHandle::cleanup` or its `Drop` safety-net.
+///
+/// `model_override` pins the member run to a specific model (a workflow step's
+/// per-step `model`); `None` keeps the run on the agent's default. It is ignored
+/// for `AcpSession` targets — an external coding CLI owns its own model.
 pub async fn execute_member_task(
     context: &GatewayContext,
     target: &MemberDispatchTarget,
@@ -124,6 +128,7 @@ pub async fn execute_member_task(
     task_text: String,
     timeout_secs: u64,
     isolate_workspace: bool,
+    model_override: Option<crate::gateway::model_override::ModelOverride>,
 ) -> MemberRunOutcome {
     // ACP-backed members short-circuit through the adapter pool — they
     // never visit the in-process registry, never take a worktree handle.
@@ -226,7 +231,9 @@ pub async fn execute_member_task(
         sandbox_override,
         workspace_override: inherited_workspace,
         max_iterations_override: None,
-        model_override: None,
+        // Per-step model override (workflow `model`); `None` for plain team
+        // tasks → the run stays on the agent's default model.
+        model_override,
     };
 
     let execution_adapter = Arc::clone(context.execution_adapter());

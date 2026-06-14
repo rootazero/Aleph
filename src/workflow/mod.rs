@@ -27,7 +27,8 @@ pub use clarify::{
     is_clarify_task, ClarifyContext, ClarifyTaskMeta, CLARIFY_META_KEY, CLARIFY_OWNER,
 };
 pub use compile::{
-    materialize, MaterializedWorkflow, WORKFLOW_NAME_KEY, WORKFLOW_RUN_ID_KEY, WORKFLOW_STEP_KEY,
+    materialize, workflow_model_override, MaterializedWorkflow, WORKFLOW_MODEL_KEY,
+    WORKFLOW_NAME_KEY, WORKFLOW_RUN_ID_KEY, WORKFLOW_STEP_KEY,
 };
 pub use def::{render_prompt, WorkflowDef, WorkflowStepDef, WorkflowStepKind};
 pub use interop::{parse_workflow_js, render_workflow_js, ImportOutcome, WorkflowManifest};
