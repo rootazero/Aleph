@@ -103,6 +103,7 @@ fn default_cfg() -> AssemblerConfig {
         project_scoped: false,
         retrieval_scoring: Default::default(),
         rerank: Default::default(),
+        expansion: Default::default(),
     }
 }
 

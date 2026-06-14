@@ -185,7 +185,8 @@ impl MemoryContextProvider {
         let retrieval = Arc::new(
             NoteFactRetrieval::new(indexer, embedder)
                 .with_rerank_config(&assembler_config.rerank)
-                .with_scoring_config(&assembler_config.retrieval_scoring),
+                .with_scoring_config(&assembler_config.retrieval_scoring)
+                .with_expansion_config(&assembler_config.expansion),
         );
         // Snapshots live under ~/.aleph/data/sessions by convention; we pass
         // whatever the `session_resume` defaults produce, falling back to the

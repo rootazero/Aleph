@@ -127,6 +127,7 @@ impl MemoryConfig {
         // nested assembler copies.
         cfg.retrieval_scoring = self.retrieval_scoring.clone();
         cfg.rerank = self.rerank.clone();
+        cfg.expansion = self.expansion.clone();
         cfg
     }
 }
