@@ -114,6 +114,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteOrientation for FsNoteOrientation
         }
 
         self.rebuild_index(agent_id).await?;
+        crate::memory::notes::orientation::ensure_obsidian_config(&dir).await?;
         self.append(
             agent_id,
             LogEntry {

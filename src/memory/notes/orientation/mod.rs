@@ -7,11 +7,13 @@
 pub mod fs_orientation;
 pub mod index_md;
 pub mod log_md;
+pub mod obsidian_config;
 pub mod prompts;
 pub mod schema;
 pub mod types;
 
 pub use fs_orientation::{FsNoteOrientation, NoteOrientation};
+pub use obsidian_config::ensure_obsidian_config;
 pub use index_md::{IndexMdGenerator, INDEX_FILENAME};
 pub use log_md::{LogMdWriter, LOG_FILENAME, LOG_ROTATE_LINES};
 pub use prompts::{schema_via_llm, PROMPT_ORIENTATION_BOOTSTRAP};
