@@ -305,9 +305,16 @@ mod tests {
     #[tokio::test]
     async fn materialize_substitutes_input_and_tags_dispatcher() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "quantum computing", "team-1", &store, None, None)
-            .await
-            .unwrap();
+        let mat = materialize(
+            &linear_def(),
+            "quantum computing",
+            "team-1",
+            &store,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
         let first = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
         assert_eq!(first.subject, "pipeline:gather");
@@ -423,7 +430,9 @@ mod tests {
                 step("d", "w", &["b", "c"]),
             ],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None).await.unwrap();
+        let mat = materialize(&def, "x", "t", &store, None, None)
+            .await
+            .unwrap();
         assert_eq!(mat.task_ids.len(), 4);
         // The final task "d" must be blocked until both b and c complete.
         let last = store
@@ -505,7 +514,9 @@ mod tests {
             description: String::new(),
             steps: vec![clarify_step("ask", "Which file?", &[], &[])],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None).await.unwrap();
+        let mat = materialize(&def, "x", "t", &store, None, None)
+            .await
+            .unwrap();
         let ask = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
         let meta = ClarifyTaskMeta::from_metadata(&ask.metadata).expect("clarify meta present");
         assert!(meta.channel_id.is_empty());
@@ -526,7 +537,10 @@ mod tests {
 
         let gather = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
         assert_eq!(
-            gather.metadata.get(WORKFLOW_MODEL_KEY).and_then(|v| v.as_str()),
+            gather
+                .metadata
+                .get(WORKFLOW_MODEL_KEY)
+                .and_then(|v| v.as_str()),
             Some("opus"),
             "listed step carries its model override"
         );
@@ -542,7 +556,12 @@ mod tests {
         use crate::gateway::model_override::ModelOverride;
         // Bare model → Raw (registry resolves the provider).
         let raw = workflow_model_override(&json!({ WORKFLOW_MODEL_KEY: "opus" }));
-        assert_eq!(raw, Some(ModelOverride::Raw { model: "opus".into() }));
+        assert_eq!(
+            raw,
+            Some(ModelOverride::Raw {
+                model: "opus".into()
+            })
+        );
         // "provider/model" → Qualified (both pinned).
         let qual = workflow_model_override(&json!({ WORKFLOW_MODEL_KEY: "openai/gpt-5" }));
         assert_eq!(

@@ -493,7 +493,10 @@ mod tests {
         .unwrap();
         let st = reg.get("s").unwrap();
         assert_eq!(st.prompt, "watch staging");
-        assert!(st.deadline_ms.is_some(), "deadline set from timeout_minutes");
+        assert!(
+            st.deadline_ms.is_some(),
+            "deadline set from timeout_minutes"
+        );
     }
 
     #[tokio::test]

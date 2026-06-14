@@ -201,7 +201,9 @@ mod tests {
 
     #[test]
     fn with_prompt_retargets_without_touching_other_fields() {
-        let l = sample().with_max_iterations(Some(9)).with_prompt("watch staging");
+        let l = sample()
+            .with_max_iterations(Some(9))
+            .with_prompt("watch staging");
         assert_eq!(l.prompt, "watch staging");
         assert_eq!(l.max_iterations, Some(9), "other fields preserved");
     }
