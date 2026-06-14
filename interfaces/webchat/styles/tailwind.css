@@ -1012,6 +1012,23 @@ html[data-material="aurora"].dark {
   /* Caption + hint */
   .voice-caption { color: var(--color-text-primary); font-size: 1rem; text-align: center; max-width: 36rem; min-height: 1.6em; padding: 0 1.5rem; }
   .voice-hint { color: var(--color-text-tertiary); font-size: 0.75rem; text-align: center; }
+  /* Two-stage caption: floating hypothesis (gray) vs committed text (solid white). */
+  .voice-interim  { color: var(--color-text-tertiary); }
+  .voice-committed { color: var(--color-text-primary, #f5f5f7); }
+  /* C·水波拂过: utterance-end lock triggers clip wipe + sheen sweep, ~160ms. */
+  .voice-lock .voice-committed { animation: voice-wave-final .16s ease-out both; position: relative; }
+  .voice-lock .voice-committed::after {
+    content: ""; position: absolute; inset: -40% auto -40% 0; width: 46px;
+    background: linear-gradient(90deg, transparent, color-mix(in oklch, var(--color-primary, #7c8cff) 60%, white) 50%, transparent);
+    filter: blur(3px); mix-blend-mode: screen; animation: voice-wave-sheen .16s ease-out both;
+  }
+  @keyframes voice-wave-final { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+  @keyframes voice-wave-sheen { from { transform: translateX(-60px); opacity: .9; } to { transform: translateX(360px); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .voice-lock .voice-committed { animation: voice-fade-in .16s ease-out both; }
+    .voice-lock .voice-committed::after { display: none; }
+    @keyframes voice-fade-in { from { opacity: .3; } to { opacity: 1; } }
+  }
 }
 
 /* ============================================================
@@ -1077,6 +1094,8 @@ html[data-material="aurora"].dark {
   /* Voice orb — drop blend trickery, stage becomes opaque surface. */
   .voice-orb-flow, .voice-orb-sheen { mix-blend-mode: normal; }
   .voice-stage { background: var(--color-surface); }
+  /* Wave sheen — drop screen blend when transparency is reduced. */
+  .voice-lock .voice-committed::after { mix-blend-mode: normal; }
 }
 @media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
   :root:not(.light), :root:not(.light)[data-material] {
