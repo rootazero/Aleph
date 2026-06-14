@@ -103,6 +103,61 @@ pub async fn handle_transcribe(
     }
 }
 
+/// `voice.format` — AI speech-formatting pass: turn a raw disfluent transcript
+/// into clean written text for display. Display-level polish only — it does NOT
+/// gate the Agent (the raw text was already sent earlier in the pipeline).
+///
+/// Params: `{ text: String, prompt?: String }`. `prompt` overrides the
+/// configured system head for this one call. Success: `{ "formatted": String }`.
+///
+/// Pure I/O glue (R4/R10): parse → `format_text` → respond. When
+/// `[voice.format] enabled = false`, returns the text unchanged. The formatting
+/// pass itself degrades gracefully — a provider/network failure yields the raw
+/// text, never an RPC error — so this handler effectively always succeeds.
+pub async fn handle_format(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
+) -> JsonRpcResponse {
+    #[derive(serde::Deserialize)]
+    struct Params {
+        text: String,
+        #[serde(default)]
+        prompt: Option<String>,
+    }
+
+    let params: Params = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    // Snapshot the format config; disabled → unchanged passthrough.
+    let format = { config.read().await.voice_local.format.clone() };
+    if !format.enabled {
+        return JsonRpcResponse::success(
+            request.id,
+            serde_json::json!({ "formatted": params.text }),
+        );
+    }
+
+    // A per-call `prompt` overrides the configured system head for this request.
+    let effective = match params.prompt {
+        Some(p) if !p.trim().is_empty() => crate::config::types::voice_local::FormatConfig {
+            prompt: p,
+            ..format
+        },
+        _ => format,
+    };
+
+    let formatted = crate::gateway::voice::format::format_text(&params.text, &effective, &config, &vault)
+        .await
+        // `format_text` degrades to the raw text on any failure, so this is
+        // belt-and-suspenders: never surface an error for display polish.
+        .unwrap_or(params.text);
+
+    JsonRpcResponse::success(request.id, serde_json::json!({ "formatted": formatted }))
+}
+
 /// Map a MIME type to a filename the Whisper multipart endpoint accepts.
 /// The extension is what most servers sniff for the codec, so an accurate
 /// one matters more than the part name.

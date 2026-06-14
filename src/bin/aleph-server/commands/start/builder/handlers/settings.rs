@@ -560,6 +560,17 @@ pub(in crate::commands::start) fn register_config_handlers(
         stream_registry
     );
 
+    // AI speech-formatting: fast-model pass cleaning a raw transcript into
+    // written text for display (does NOT gate the agent). Same ctx as
+    // voice.transcribe (config + vault for provider/api_key resolution).
+    register_handler!(
+        server,
+        "voice.format",
+        voice::handle_format,
+        config,
+        shared_token_mgr
+    );
+
     // Embedding providers (vault-backed API key storage)
     register_handler!(
         server,
