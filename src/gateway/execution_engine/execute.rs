@@ -704,6 +704,7 @@ where
                                                         prompt,
                                                         cont_deps.event_bus.clone(),
                                                         None,
+                                                        ContinuationKind::Goal,
                                                     );
                                                 }
                                             } else {
@@ -730,6 +731,7 @@ where
                                             prompt,
                                             cont_deps.event_bus.clone(),
                                             None,
+                                            ContinuationKind::Goal,
                                         );
                                         info!(session = %session_key_str,
                                             continuations_used = bumped.continuations_used,
@@ -799,6 +801,7 @@ where
                                     prompt,
                                     cont_deps.event_bus.clone(),
                                     Some(delay),
+                                    ContinuationKind::Loop,
                                 );
                                 info!(session = %session_key_str, delay_ms = delay,
                                     ticks = state.iterations_used.saturating_add(1),
@@ -906,9 +909,21 @@ where
     }
 }
 
+/// Which subsystem scheduled an autonomous continuation. Decides how a *run
+/// failure* is routed: a goal continuation blocks the goal for user guidance,
+/// a loop tick stops the clock-driven loop. Both leave a user-*cancelled* run
+/// untouched so the next interaction resumes. Without this, the shared failure
+/// path blocked only goals — a failed loop tick left the loop a stuck `Active`
+/// that never re-fired (silent stall).
+#[derive(Clone, Copy, Debug)]
+enum ContinuationKind {
+    Goal,
+    Loop,
+}
+
 /// 入队一次自主续跑 run（同一 session、同一 agent，给定 prompt）。
-/// 被 `should_continue` 续跑分支与 gate-failure 续跑分支共用——消除重复的
-/// `RunRequest` 构造与 `tokio::spawn` 样板。
+/// 被 goal 续跑（`should_continue` / gate-failure）与 loop tick 续跑共用——
+/// 消除重复的 `RunRequest` 构造与 `tokio::spawn` 样板。`kind` 路由失败处理。
 fn spawn_continuation_run(
     registry: Arc<crate::gateway::agent_instance::AgentRegistry>,
     adapter: Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
@@ -917,6 +932,7 @@ fn spawn_continuation_run(
     prompt: String,
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     delay_ms: Option<u64>,
+    kind: ContinuationKind,
 ) {
     let cont_request = super::RunRequest {
         run_id: uuid::Uuid::new_v4().to_string(),
@@ -990,20 +1006,27 @@ fn spawn_continuation_run(
             None => base,
         };
         if let Err(e) = adapter.execute(cont_request, cont_agent, emitter).await {
-            // G3: a cancelled run means the user interrupted — leave the goal
-            // Active so their next interaction resumes pursuit (same rationale
-            // as the post-run steering rescue's Completed-only guard). Any other
-            // failure ends the silent stall: block the goal and notify, so
-            // unattended pursuit never dies as a stuck `Active` with no run.
+            // A cancelled run means the user interrupted — leave the goal/loop
+            // as-is so the next interaction resumes (same rationale as the
+            // post-run steering rescue's Completed-only guard). Any other
+            // failure ends the silent stall: block the goal / stop the loop and
+            // notify, so unattended work never dies as a stuck `Active`.
             if matches!(e, ExecutionError::Cancelled) {
-                info!(session = %session_key_str, "goal pursuit: continuation cancelled by user");
+                info!(session = %session_key_str, kind = ?kind,
+                    "continuation cancelled by user");
             } else {
-                warn!(
-                    error = %e,
-                    session = %session_key_str,
-                    "goal pursuit: continuation run failed; blocking goal for user guidance"
-                );
-                block_goal_on_failure(&session_key_str, &e, origin.as_ref()).await;
+                match kind {
+                    ContinuationKind::Goal => {
+                        warn!(error = %e, session = %session_key_str,
+                            "goal pursuit: continuation run failed; blocking goal for user guidance");
+                        block_goal_on_failure(&session_key_str, &e, origin.as_ref()).await;
+                    }
+                    ContinuationKind::Loop => {
+                        warn!(error = %e, session = %session_key_str,
+                            "loop: tick run failed; stopping loop for user guidance");
+                        stop_loop_on_failure(&session_key_str, &e, origin.as_ref()).await;
+                    }
+                }
             }
         }
     });
@@ -1063,6 +1086,42 @@ async fn block_goal_on_failure(
             .await
         {
             warn!(channel = %ch, error = %e, "goal pursuit: failed to deliver halt notice");
+        }
+    }
+}
+
+/// Loop sibling of [`block_goal_on_failure`]: when a clock-driven loop tick run
+/// fails (non-cancellation), mark the loop `Stopped` and best-effort notify the
+/// origin channel. Without this, a failed tick left the loop a stuck `Active`
+/// in the registry that the continuation hook never re-fired (it only runs on a
+/// run's success path) — a silent stall where `loop(action='status')` lies.
+async fn stop_loop_on_failure(
+    session_key_str: &str,
+    error: &ExecutionError,
+    origin: Option<&(
+        Arc<crate::gateway::channel_registry::ChannelRegistry>,
+        String,
+        String,
+    )>,
+) {
+    let reason: String = format!("{error}").chars().take(300).collect();
+    if let Some(reg) = crate::looping::global() {
+        // Only stop a loop still Active — never clobber one the user already
+        // stopped between the tick firing and its failure landing.
+        if let Some(state) = reg.get_active(session_key_str) {
+            reg.put(state.with_status(crate::looping::LoopStatus::Stopped));
+        }
+    }
+    if let Some((reg, ch, conv)) = origin {
+        let msg = crate::gateway::channel::OutboundMessage::text(
+            conv.clone(),
+            format!("⚠️ Your timer loop halted on an error and was stopped: {reason}"),
+        );
+        if let Err(e) = reg
+            .send(&crate::gateway::channel::ChannelId::new(ch.clone()), msg)
+            .await
+        {
+            warn!(channel = %ch, error = %e, "loop: failed to deliver halt notice");
         }
     }
 }
