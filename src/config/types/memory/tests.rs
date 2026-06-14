@@ -96,6 +96,7 @@ mod tests {
         cfg.retrieval_scoring.reinforcement_enabled = true;
         cfg.retrieval_scoring.mmr_enabled = true;
         cfg.rerank.enabled = true;
+        cfg.expansion.max_seeds = 2;
         cfg.project_scoped = true;
 
         let assembler = cfg.assembler_config();
@@ -104,6 +105,7 @@ mod tests {
         assert!(assembler.retrieval_scoring.reinforcement_enabled);
         assert!(assembler.retrieval_scoring.mmr_enabled);
         assert!(assembler.rerank.enabled);
+        assert_eq!(assembler.expansion.max_seeds, 2);
         assert!(assembler.project_scoped);
     }
 
