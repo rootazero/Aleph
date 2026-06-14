@@ -165,6 +165,7 @@ mod tests {
 
     #[serial_test::serial]
     #[test]
+    #[cfg(unix)] // POSIX-only: uses /bin/sh as the sentinel executable
     fn test_env_override() {
         // /bin/sh exists on all Unix systems and serves as a reliable test target
         let sentinel = "/bin/sh";

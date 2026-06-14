@@ -338,7 +338,10 @@ mod tests {
     fn test_extend_path_prepends_existing_candidate() {
         let tmp = tempfile::TempDir::new().unwrap();
         let cand = tmp.path().to_path_buf();
-        let base = OsString::from("/usr/bin:/bin");
+        // Build the base PATH with the platform separator (':' on POSIX, ';' on
+        // Windows) so split_paths round-trips it correctly on every platform.
+        let base =
+            std::env::join_paths([PathBuf::from("/usr/bin"), PathBuf::from("/bin")]).unwrap();
         let out = extend_path(&base, std::slice::from_ref(&cand));
         let dirs: Vec<PathBuf> = std::env::split_paths(&out).collect();
         assert_eq!(

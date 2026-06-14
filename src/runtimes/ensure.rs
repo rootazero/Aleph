@@ -293,6 +293,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
+    #[cfg(unix)] // POSIX-only: uses /bin/sh as the pre-populated "ready" binary
     async fn test_ensure_already_ready() {
         let dir = TempDir::new().unwrap();
         let ledger_path = dir.path().join("ledger.json");

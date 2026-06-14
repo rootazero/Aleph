@@ -208,22 +208,33 @@ mod tests {
     fn test_expand_home_with_var() {
         let _home = HomeEnvGuard::acquire_and_set("/tmp/fake-home");
         let out = expand_home("$HOME/.aleph/skills").unwrap();
+        // expand_home rewrites '/' to '\' on Windows, so the expected separator
+        // is platform-dependent.
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(out, "/tmp/fake-home/.aleph/skills");
+        #[cfg(target_os = "windows")]
+        assert_eq!(out, r"\tmp\fake-home\.aleph\skills");
     }
 
     #[test]
     fn test_expand_home_no_placeholder() {
         let out = expand_home("/absolute/no/expansion").unwrap();
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(out, "/absolute/no/expansion");
+        #[cfg(target_os = "windows")]
+        assert_eq!(out, r"\absolute\no\expansion");
     }
 
     #[test]
     fn test_expand_home_multiple_placeholders() {
         let _home = HomeEnvGuard::acquire_and_set("/tmp/fake-home");
         let out = expand_home("$HOME/a/$HOME/b").unwrap();
-        assert_eq!(out, "/tmp/fake-home/a/$HOME/b");
         // Only the first occurrence is replaced — caller should pass templates
         // with a single $HOME placeholder per arg. Document this contract.
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(out, "/tmp/fake-home/a/$HOME/b");
+        #[cfg(target_os = "windows")]
+        assert_eq!(out, r"\tmp\fake-home\a\$HOME\b");
     }
 
     #[cfg(not(target_os = "windows"))]

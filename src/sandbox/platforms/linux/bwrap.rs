@@ -127,11 +127,11 @@ impl BubblewrapDriver {
     ) -> Result<Vec<String>, SandboxError> {
         self.check_wsl();
 
-        let mut args = Vec::new();
-
-        args.push("--new-session".into());
-        args.push("--die-with-parent".into());
-        args.push("--unshare-user".into());
+        let mut args = vec![
+            "--new-session".into(),
+            "--die-with-parent".into(),
+            "--unshare-user".into(),
+        ];
 
         // Drop every Linux capability unconditionally. A sandboxed command has
         // no legitimate need for CAP_SYS_ADMIN / CAP_NET_RAW / CAP_DAC_OVERRIDE
@@ -302,7 +302,7 @@ impl BubblewrapDriver {
                 // the writable `--bind` is what makes these read-only.
                 let mut all = vec![cwd];
                 all.extend(paths.iter().map(|p| p.as_path()));
-                push_metadata_protection_args(args, all.into_iter())?;
+                push_metadata_protection_args(args, all)?;
             }
             FsPolicy::FullRead { exclude } => {
                 args.push("--ro-bind".into());

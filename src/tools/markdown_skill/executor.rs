@@ -639,6 +639,7 @@ mod tests {
     /// halves (env vars + warn). A reviewer dropping the env line will see
     /// this test as a reminder that the contract is binding.
     #[test]
+    #[cfg(unix)] // POSIX-only: netns egress control / no_proxy env injection
     fn host_network_none_contract_sets_no_proxy() {
         let mut cmd = std::process::Command::new("true");
         let spec = make_spec(NetworkMode::None, SandboxMode::Host);

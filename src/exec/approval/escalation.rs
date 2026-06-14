@@ -209,6 +209,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // POSIX-only: asserts /etc/passwd-style lexical path normalization
     fn test_resolve_path_with_symlinks_nonexistent() {
         // Non-existent path falls back to lexical normalization
         let path = PathBuf::from("/nonexistent/../etc/passwd");

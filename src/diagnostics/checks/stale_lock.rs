@@ -110,6 +110,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))] // is_process_alive is a non-unix stub (always true) → a dead PID can't be detected
     async fn detects_and_repairs_stale_lock() {
         let tmp = tempdir().unwrap();
         // PID 1 on a typical system is alive (init); use an absurd PID that

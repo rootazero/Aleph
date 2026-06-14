@@ -187,6 +187,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))] // POSIX-only: Windows LockFileEx blocks the held-lock PID readback
     fn try_with_policy_lock_only_returns_err_when_held() {
         let dir = tempfile::tempdir().unwrap();
         let _hold = match crate::utils::instance_lock::try_acquire(dir.path()).unwrap() {

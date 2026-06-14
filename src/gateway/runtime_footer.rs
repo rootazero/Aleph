@@ -285,7 +285,11 @@ mod tests {
             Some("/Users/zoe"),
         )
         .expect("renders");
+        // The home-collapsed path uses the platform separator (MAIN_SEPARATOR).
+        #[cfg(not(windows))]
         assert_eq!(line, "claude-opus-4-7 · 2048t · ~/work");
+        #[cfg(windows)]
+        assert_eq!(line, "claude-opus-4-7 · 2048t · ~\\work");
     }
 
     #[test]

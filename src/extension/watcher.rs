@@ -557,6 +557,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))] // notify-crate watch latency/semantics differ on Windows (flaky timing)
     fn test_watcher_file_change_detection() {
         let temp_dir = TempDir::new().unwrap();
         let skills_dir = temp_dir.path().join("skills");

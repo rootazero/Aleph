@@ -1482,6 +1482,7 @@ mod tests {
     // ── Phase B — Linux netns bridge orchestration (cross-platform path) ──
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(target_os = "linux")] // Linux netns host-bridge orchestration only
     async fn proxy_injects_route_spec_and_host_bridge_on_linux() {
         // The host bridge derives its UDS path from $HOME (via
         // `create_proxy_socket_dir()` → `dirs::home_dir()`). Other tests mutate

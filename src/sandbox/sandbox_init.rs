@@ -333,7 +333,7 @@ fn rewrite_proxy_env_value(proxy_url: &str, local_port: u16) -> Option<String> {
 /// - 66 → cannot parse argv (bad policy JSON, missing `--`, etc.)
 /// - 67 → `execvp` failed (target binary not found or not executable)
 /// - 68 → proxy-route bridge activation failed (Phase B netns bridge); fail
-///        closed rather than run the target with broken egress control.
+///   closed rather than run the target with broken egress control.
 #[cfg(target_os = "linux")]
 pub fn run_init(args: Vec<String>) -> ! {
     use std::os::unix::process::CommandExt as _;

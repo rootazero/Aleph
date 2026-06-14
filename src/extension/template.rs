@@ -208,6 +208,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)] // POSIX-only: @/absolute file-ref syntax (a Windows C:\ path isn't matched)
     async fn test_file_reference_absolute_blocked() {
         let temp = TempDir::new().unwrap();
         let file_path = temp.path().join("test.txt");

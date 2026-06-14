@@ -426,6 +426,10 @@ mod tests {
         );
     }
 
+    // Backdating an `Instant` by an hour underflows on Windows (its monotonic
+    // clock epoch can be <1h old), so this time-travel test is POSIX-only; the
+    // expiry logic itself is platform-agnostic and uses `Instant::elapsed`.
+    #[cfg(not(windows))]
     #[tokio::test]
     async fn test_pairing_expired_code() {
         let ctrl = AccessController::new(make_config(

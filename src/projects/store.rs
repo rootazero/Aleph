@@ -273,7 +273,10 @@ impl ProjectStore {
     /// route the user through `add` for existing folders.
     pub fn create_blank(&self, parent: &Path, name: &str) -> Result<Project, ProjectError> {
         let trimmed = name.trim();
-        if trimmed.is_empty() || trimmed.contains(std::path::MAIN_SEPARATOR) {
+        // Reject both separators on every platform: a name is a single path
+        // component, and `MAIN_SEPARATOR` alone would miss '/' on Windows
+        // (where it is '\\'), letting "nested/bad" through as a traversal risk.
+        if trimmed.is_empty() || trimmed.contains('/') || trimmed.contains('\\') {
             return Err(ProjectError::InvalidName(name.to_string()));
         }
         let parent_abs = canonical_dir(parent)?;

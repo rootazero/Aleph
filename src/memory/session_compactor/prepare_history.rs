@@ -309,6 +309,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)] // POSIX-only: shell observer hook uses sh / touch fixtures
     async fn fire_compaction_hook_runs_only_the_matching_observer() {
         let dir = tempfile::tempdir().expect("tempdir");
         let sentinel = dir.path().join("after.flag");
@@ -363,6 +364,7 @@ mod tests {
     /// (fire-and-forget) but pins NOTHING — observers can never steer
     /// compaction, so the compacted history stays byte-identical.
     #[tokio::test]
+    #[cfg(unix)] // POSIX-only: shell observer hook uses sh / touch fixtures
     async fn before_compaction_observer_only_pins_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");
         let sentinel = dir.path().join("before.flag");

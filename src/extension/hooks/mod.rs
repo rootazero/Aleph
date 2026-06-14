@@ -797,6 +797,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / '/tmp' fixtures)
     async fn test_hook_executor_command_with_context() {
         let hooks = vec![HookConfig {
             event: HookEvent::AfterToolCall,
@@ -825,6 +826,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / '/tmp' fixtures)
     async fn test_hook_executor_command() {
         let hooks = vec![HookConfig {
             event: HookEvent::BeforeToolCall,
@@ -955,6 +957,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / '/tmp' fixtures)
     async fn approved_shell_hook_runs_normally() {
         use crate::sync_primitives::Arc;
         let dir = tempfile::tempdir().expect("tempdir");
@@ -982,6 +985,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / '/tmp' fixtures)
     async fn shell_hook_runs_freely_when_no_consent_gate_attached() {
         // Back-compat: a `HookExecutor` with no consent gate (the default)
         // executes command hooks exactly as before.
@@ -1022,6 +1026,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / '/tmp' fixtures)
     async fn fire_observer_runs_only_the_matching_observer() {
         let dir = tempfile::tempdir().expect("tempdir");
         let sentinel = dir.path().join("fired.flag");

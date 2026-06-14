@@ -572,6 +572,7 @@ fn parse_tool_output(value: &Value) -> Value {
 }
 
 #[tokio::test]
+#[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / printf / '/tmp')
 async fn before_tool_hook_block_returns_execution_error() {
     let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
         HookEvent::BeforeToolCall,
@@ -594,6 +595,7 @@ async fn before_tool_hook_block_returns_execution_error() {
 }
 
 #[tokio::test]
+#[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / printf / '/tmp')
 async fn before_tool_hook_deny_returns_permission_denied() {
     let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
         HookEvent::BeforeToolCall,
@@ -616,6 +618,7 @@ async fn before_tool_hook_deny_returns_permission_denied() {
 }
 
 #[tokio::test]
+#[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / printf / '/tmp')
 async fn before_tool_hook_update_input_rewrites_args() {
     // Hook rewrites the tool input to a fixed JSON value. The EchoTool
     // returns whatever input it receives, so we can assert by reading the
@@ -639,6 +642,7 @@ async fn before_tool_hook_update_input_rewrites_args() {
 }
 
 #[tokio::test]
+#[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / printf / '/tmp')
 async fn before_tool_hook_context_wraps_tool_output_for_llm() {
     // BeforeToolCall hook emits `context:` lines. Historically these
     // landed in `HookResult.additional_contexts` but nothing consumed
@@ -673,6 +677,7 @@ async fn before_tool_hook_context_wraps_tool_output_for_llm() {
 }
 
 #[tokio::test]
+#[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / printf / '/tmp')
 async fn after_tool_hook_observer_fires_on_success() {
     // Observer writes the tool name to a tempfile so we can prove it
     // fired with the right context. Run inside a per-test tempdir to
@@ -699,6 +704,7 @@ async fn after_tool_hook_observer_fires_on_success() {
 }
 
 #[tokio::test]
+#[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / printf / '/tmp')
 async fn after_tool_failure_hook_fires_when_tool_errors() {
     // Construct a registry with a tool that always errors.
     struct ErrTool;

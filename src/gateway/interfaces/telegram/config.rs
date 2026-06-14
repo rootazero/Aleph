@@ -419,6 +419,10 @@ mod tests {
         assert!(err.to_string().contains("accounts"));
     }
 
+    // Backdating an `Instant` by an hour underflows on Windows (its monotonic
+    // clock epoch can be <1h old); the expiry logic is platform-agnostic, so
+    // this time-travel test is POSIX-only.
+    #[cfg(not(windows))]
     #[test]
     fn test_pairing_entry_expired() {
         let mut entry = PairingEntry::new("XYZ789".to_string());

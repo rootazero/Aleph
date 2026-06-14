@@ -112,8 +112,15 @@ impl FileSessionStore {
     }
 
     fn session_dir(&self, key: &str) -> PathBuf {
-        // Simple sanitization: replace filesystem-dangerous chars
+        // Replace path separators and NUL on every platform.
         let safe = key.replace(['/', '\\', '\0'], "_");
+        // Windows additionally forbids : * ? " < > | in filenames, and session
+        // keys use ':' as a separator (e.g. "agent:main:reflect"), which makes
+        // the directory name invalid (os error 123). Sanitize those on Windows
+        // only, so POSIX directory names stay byte-for-byte stable and existing
+        // on-disk sessions remain locatable.
+        #[cfg(windows)]
+        let safe = safe.replace([':', '*', '?', '"', '<', '>', '|'], "_");
         self.config.base_dir.join(safe)
     }
 

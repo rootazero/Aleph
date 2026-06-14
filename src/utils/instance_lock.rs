@@ -168,6 +168,12 @@ mod tests {
         assert!(matches!(outcome, AcquireOutcome::Acquired(_)));
     }
 
+    // POSIX-only: reading the holder PID back while the lock is held relies on
+    // `flock` being advisory. On Windows `fs2` uses `LockFileEx`, whose
+    // exclusive lock blocks reads from every other handle (even same-process),
+    // so the PID readback cannot succeed while the lock is held. Mutual
+    // exclusion itself still works on Windows; only this diagnostic does not.
+    #[cfg(not(windows))]
     #[test]
     fn second_acquire_in_same_process_returns_held_by_live() {
         let dir = tempfile::tempdir().unwrap();
@@ -202,6 +208,9 @@ mod tests {
         assert!(diagnose_holder(dir.path()).is_none());
     }
 
+    // POSIX-only: see `second_acquire_in_same_process_returns_held_by_live` —
+    // Windows `LockFileEx` blocks reading the holder PID while the lock is held.
+    #[cfg(not(windows))]
     #[test]
     fn diagnose_holder_returns_pid_when_held() {
         let dir = tempfile::tempdir().unwrap();
