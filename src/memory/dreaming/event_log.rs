@@ -67,6 +67,13 @@ impl EventLog {
             .await
             .map_err(|e| AlephError::config(format!("write event log: {e}")))?;
 
+        // tokio::fs::File buffers writes; dropping the handle does NOT flush
+        // (Drop cannot be async). Without this, a subsequent read_last/next_cycle
+        // can miss the just-appended line — an intermittent durability race.
+        file.flush()
+            .await
+            .map_err(|e| AlephError::config(format!("flush event log: {e}")))?;
+
         Ok(())
     }
 

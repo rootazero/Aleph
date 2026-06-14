@@ -297,7 +297,7 @@ mod tests {
         assert_eq!(parse_interval_ms("30s").unwrap(), 30_000);
         assert_eq!(parse_interval_ms("5m").unwrap(), 300_000);
         assert_eq!(parse_interval_ms("2h").unwrap(), 7_200_000);
-        assert_eq!(parse_interval_ms("500ms").unwrap(), 500);
+        assert_eq!(parse_interval_ms("1500ms").unwrap(), 1500);
     }
 
     #[test]
