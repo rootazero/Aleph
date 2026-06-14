@@ -4,7 +4,8 @@
 //! per-adapter submodules. Panel never sees a vendor wire format — only the
 //! normalized [`TranscriptDelta`] pushed over the `voice.transcribe.delta` topic.
 
-// Adapter submodules (deepgram / whisperlive / relay) are declared by Tasks 2–4 as they are created.
+pub mod deepgram;
+// Adapter submodules (whisperlive / relay) are declared by Tasks 3–4 as they are created.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
