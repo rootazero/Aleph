@@ -246,33 +246,32 @@ impl EmbeddingProvider for RemoteEmbeddingProvider {
             return Ok(Vec::new());
         }
 
-        use futures::stream::StreamExt;
-        // Bounded-concurrency batch dispatch: feed each chunk's `call_api`
-        // future through `stream::iter(...).buffered(n)`, which polls at most
-        // `n` round-trips at a time AND yields completions in input order — so
-        // the flattened result preserves the caller's text order. Supersedes
-        // the previous serial `for chunk` loop that blocked on one HTTP
-        // round-trip per chunk (latency = sum of all chunks instead of the
-        // slowest `ceil(chunks / n)` waves).
+        // Bounded-concurrency batch dispatch in input order: split the texts
+        // into `batch_size` chunks, then drive at most `MAX_CONCURRENT_BATCHES`
+        // chunks per wave via `try_join_all`. Supersedes the previous serial
+        // `for chunk` loop (latency = sum of all chunks) with `ceil(chunks / n)`
+        // waves instead. The futures are built in an explicit `for` loop rather
+        // than `.map(|chunk| self.call_api(chunk))`: under `#[async_trait]`'s
+        // boxed future, the mapping closure must satisfy a higher-ranked
+        // lifetime bound for `call_api` futures borrowing both `self` and the
+        // nested `&[&str]` chunk slice, which fails with "FnOnce is not general
+        // enough". An explicit loop polls concrete futures without that bound
+        // while preserving order within each wave.
         const MAX_CONCURRENT_BATCHES: usize = 4;
         // `chunks(0)` would panic — clamp defensively (config default is 32).
         let batch_size = self.batch_size.max(1);
         let chunks: Vec<&[&str]> = texts.chunks(batch_size).collect();
 
-        // Build the per-chunk futures eagerly with `Iterator::map` (not
-        // `StreamExt::map`): feeding a stored closure into a stream combinator
-        // trips a higher-ranked-lifetime check under `#[async_trait]`'s boxed
-        // future ("FnOnce is not general enough"). `stream::iter` over concrete
-        // futures sidesteps it while keeping bounded concurrency + input order.
-        let pending = chunks.into_iter().map(|chunk| self.call_api(chunk));
-        let chunk_results: Vec<Result<Vec<Vec<f32>>, AlephError>> = futures::stream::iter(pending)
-            .buffered(MAX_CONCURRENT_BATCHES)
-            .collect()
-            .await;
-
         let mut all_embeddings = Vec::with_capacity(texts.len());
-        for chunk_result in chunk_results {
-            all_embeddings.extend(chunk_result?);
+        for wave in chunks.chunks(MAX_CONCURRENT_BATCHES) {
+            let mut wave_futures = Vec::with_capacity(wave.len());
+            for chunk in wave {
+                wave_futures.push(self.call_api(chunk));
+            }
+            let wave_results = futures::future::try_join_all(wave_futures).await?;
+            for chunk_embeddings in wave_results {
+                all_embeddings.extend(chunk_embeddings);
+            }
         }
 
         Ok(all_embeddings)
