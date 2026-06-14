@@ -61,8 +61,6 @@ platforms/macos/Aleph/Frameworks/*.dylib.*
 .agent/
 .claude/
 **/.claude/
-/CLAUDE.md
-/AGENTS.md
 
 # Git worktrees
 .worktrees/
