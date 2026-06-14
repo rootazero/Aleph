@@ -594,17 +594,23 @@ mod tests {
     async fn run_child_with_drain_timeout_captures_partial_output() {
         use tokio::process::Command;
         // Emit *bulk* output, then hang so the wall-clock timeout trips and the
-        // drain captures the buffered prefix. Earlier this used a single
-        // `echo started; exec 1>&-`, but macOS bash (3.2) block-buffers a
-        // builtin echo to a pipe and `exec 1>&-` closed the fd discarding the
-        // unflushed buffer, so partial_stdout came back empty (the test was
-        // green on Linux bash 5.x, flaky/failing on macOS runners). Streaming
-        // ~1000 lines through `head` — a real binary that writes via libc and
-        // flushes — reliably lands data in the OS pipe buffer on every
-        // platform; `sleep` then keeps stdout open until the timeout kill.
+        // drain captures the buffered prefix. Two macOS-specific pitfalls were
+        // hit getting here:
+        //   1. `echo started; exec 1>&-` — macOS bash (3.2) block-buffers a
+        //      builtin echo to a pipe and `exec 1>&-` closed the fd discarding
+        //      the unflushed buffer, so partial_stdout came back empty.
+        //   2. `yes started | head -n 1000; sleep 30` — `head` exits, but the
+        //      trailing `sleep` is a *separate child* of bash that inherits the
+        //      stdout pipe. start_kill() SIGKILLs bash; the orphaned `sleep`
+        //      keeps the pipe write-end open, so the drain's `read_to_end`
+        //      never sees EOF and KILL_DRAIN_TIMEOUT expires → empty again.
+        // `exec sleep 30` makes the child process *itself* hold stdout, so the
+        // SIGKILL closes the pipe immediately and the drain returns the
+        // already-buffered ~1000 lines. `head` (a real binary) flushes via
+        // libc so the data reliably lands in the pipe on every platform.
         let child = Command::new("bash")
             .arg("-c")
-            .arg("yes started | head -n 1000; sleep 30")
+            .arg("yes started | head -n 1000; exec sleep 30")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::piped())

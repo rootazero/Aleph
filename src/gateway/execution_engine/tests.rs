@@ -299,32 +299,35 @@ async fn test_wait_for_deadline_fires_at_deadline() {
 
 #[tokio::test]
 async fn test_wait_for_deadline_extension_delays_firing() {
+    // Margins are generous (extension lands ~90ms before the initial deadline,
+    // lower bound sits ~100ms above the initial deadline) so a loaded CI runner
+    // with coarse (~15ms) timer granularity that starves the extender task does
+    // not make this flake — a tight margin fired early on Windows runners.
     let deadline = Arc::new(tokio::sync::Mutex::new(
-        tokio::time::Instant::now() + tokio::time::Duration::from_millis(100),
+        tokio::time::Instant::now() + tokio::time::Duration::from_millis(150),
     ));
 
     let deadline_clone = deadline.clone();
 
-    // Spawn a task that extends the deadline after 50ms
+    // Extend the deadline at ~60ms (well before the 150ms initial deadline).
     tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        // Extend deadline by 200ms from now
+        tokio::time::sleep(tokio::time::Duration::from_millis(60)).await;
         *deadline_clone.lock().await =
-            tokio::time::Instant::now() + tokio::time::Duration::from_millis(200);
+            tokio::time::Instant::now() + tokio::time::Duration::from_millis(250);
     });
 
     let start = tokio::time::Instant::now();
     wait_for_deadline(deadline).await;
     let elapsed = start.elapsed();
 
-    // Should fire after ~250ms (50ms wait + 200ms extended), not at 100ms
+    // Should fire after ~310ms (60ms wait + 250ms extended), not at 150ms.
     assert!(
-        elapsed >= tokio::time::Duration::from_millis(200),
+        elapsed >= tokio::time::Duration::from_millis(250),
         "deadline extension was ignored, fired too early: {:?}",
         elapsed
     );
     assert!(
-        elapsed < tokio::time::Duration::from_secs(1),
+        elapsed < tokio::time::Duration::from_secs(2),
         "fired too late: {:?}",
         elapsed
     );
@@ -332,28 +335,33 @@ async fn test_wait_for_deadline_extension_delays_firing() {
 
 #[tokio::test]
 async fn test_wait_for_deadline_multiple_extensions() {
+    // Generous margins (each extension lands >100ms before the deadline it must
+    // beat; lower bound sits 100ms above the initial deadline) keep this from
+    // flaking when a loaded Windows CI runner starves the extender task — the
+    // original 20ms first-extension margin fired early under scheduler pressure.
     let deadline = Arc::new(tokio::sync::Mutex::new(
-        tokio::time::Instant::now() + tokio::time::Duration::from_millis(50),
+        tokio::time::Instant::now() + tokio::time::Duration::from_millis(250),
     ));
 
     let dl = deadline.clone();
 
-    // Extend twice: at 30ms and at 100ms
+    // Extend twice: at ~80ms (before the 250ms initial deadline) and at ~260ms
+    // (before the ~380ms first-extended deadline).
     tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
-        *dl.lock().await = tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
-
         tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
-        *dl.lock().await = tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
+        *dl.lock().await = tokio::time::Instant::now() + tokio::time::Duration::from_millis(300);
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(180)).await;
+        *dl.lock().await = tokio::time::Instant::now() + tokio::time::Duration::from_millis(300);
     });
 
     let start = tokio::time::Instant::now();
     wait_for_deadline(deadline).await;
     let elapsed = start.elapsed();
 
-    // Should fire after ~210ms (30 + 80 + 100), not at 50ms
+    // Should fire after ~560ms (80 + 180 + 300), not at the 250ms initial.
     assert!(
-        elapsed >= tokio::time::Duration::from_millis(180),
+        elapsed >= tokio::time::Duration::from_millis(350),
         "multiple extensions were ignored: {:?}",
         elapsed
     );
