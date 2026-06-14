@@ -146,6 +146,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) scratchpad_tool: crate::builtin_tools::ScratchpadTool,
     /// Standing-goal tool instance (persistent objective, R8).
     pub(crate) goal_tool: crate::builtin_tools::GoalTool,
+    /// Loop tool instance (in-session timer loop, R8). In-memory only.
+    pub(crate) loop_tool: crate::builtin_tools::LoopTool,
     /// Memory search tool instance (optional - requires `memory_db` + embedder)
     pub(crate) memory_search_tool: Option<crate::builtin_tools::MemorySearchTool>,
     /// Memory context provider — used by the `remember` tool to resolve the
@@ -790,6 +792,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                 Box::pin(async move { self.scratchpad_tool.call_json(arguments).await })
             }
             "goal" => Box::pin(async move { self.goal_tool.call_json(arguments).await }),
+            "loop" => Box::pin(async move { self.loop_tool.call_json(arguments).await }),
 
             // Memory tools - search and browse personal memory
             "memory_search" => Box::pin(async move {

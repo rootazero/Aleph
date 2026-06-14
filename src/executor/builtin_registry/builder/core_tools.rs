@@ -194,6 +194,12 @@ impl BuiltinToolRegistry {
         );
         reg(
             tools,
+            "loop",
+            crate::builtin_tools::LoopTool::DESCRIPTION,
+            schema::<crate::builtin_tools::loop_manage::LoopArgs>("loop"),
+        );
+        reg(
+            tools,
             "clawhub",
             crate::builtin_tools::clawhub::ClawHubTool::DESCRIPTION,
             schema::<crate::builtin_tools::clawhub::ClawHubArgs>("clawhub"),

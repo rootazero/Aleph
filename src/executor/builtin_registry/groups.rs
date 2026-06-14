@@ -109,6 +109,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "automation",
             "media",
             "goal",
+            "loop",
         ],
     },
     ToolCategory {

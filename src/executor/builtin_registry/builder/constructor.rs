@@ -253,6 +253,11 @@ impl BuiltinToolRegistry {
         crate::goal::init_global(goal_store.clone());
         let goal_tool = crate::builtin_tools::GoalTool::new(goal_store);
 
+        // Loop subsystem — in-memory only (never tasks.db); cleared on restart.
+        let loop_registry = Arc::new(crate::looping::LoopRegistry::default());
+        crate::looping::init_global(loop_registry.clone());
+        let loop_tool = crate::builtin_tools::LoopTool::new(loop_registry);
+
         // Browser tools — always available, use ProfileManager from config or create default
         let browser_profile_manager = config.browser_profile_manager.clone().unwrap_or_else(|| {
             Arc::new(crate::browser::manager::ProfileManager::new(
@@ -1728,6 +1733,7 @@ impl BuiltinToolRegistry {
             scratchpad_tool: scratchpad_tool
                 .with_session_key_handle(memory_session_key_handle.clone()),
             goal_tool: goal_tool.with_session_key_handle(memory_session_key_handle.clone()),
+            loop_tool: loop_tool.with_session_key_handle(memory_session_key_handle.clone()),
             memory_search_tool,
             memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
             node_registry: Arc::new(tokio::sync::OnceCell::new()),
