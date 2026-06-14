@@ -806,26 +806,6 @@ impl AlephTool for NoteManageTool {
 // Helpers
 // =============================================================================
 
-/// Build a category-specific YAML frontmatter block.
-///
-/// Used by tests to verify template output.
-#[must_use]
-pub fn frontmatter_template(category: &str, title: &str, tags: &[String]) -> String {
-    let now = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let tags_str = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
-    match category {
-        "reference" => format!(
-            "---\ntitle: {title}\naliases: []\ntags: {tags_str}\nsources: []\ncreated: \"{now}\"\nupdated: \"{now}\"\n---"
-        ),
-        "skill" => format!(
-            "---\ntitle: {title}\nscope: persona\ntags: {tags_str}\ncreated: \"{now}\"\nupdated: \"{now}\"\n---"
-        ),
-        _ => format!(
-            "---\ncategory: {category}\ntags: {tags_str}\ncreated: \"{now}\"\nupdated: \"{now}\"\n---"
-        ),
-    }
-}
-
 /// Extract up to 4 significant keywords (length >= 4, lowercased, deduped,
 /// input order preserved) from a note's title+content for the per-keyword
 /// related-note FTS search after `create`.
@@ -869,35 +849,6 @@ mod tests {
     #[test]
     fn validate_category_accepts_contradiction() {
         assert!(validate_category("contradiction").is_ok());
-    }
-
-    #[test]
-    fn test_frontmatter_wiki_template() {
-        let tags = vec!["rust".to_string(), "memory".to_string()];
-        let fm = frontmatter_template("reference", "Rust Ownership", &tags);
-        assert!(fm.contains("title: Rust Ownership"));
-        assert!(fm.contains("aliases: []"));
-        assert!(fm.contains("sources: []"));
-        assert!(fm.contains("tags:"));
-    }
-
-    #[test]
-    fn test_frontmatter_skill_template() {
-        let tags = vec!["coding".to_string()];
-        let fm = frontmatter_template("skill", "Async Rust", &tags);
-        assert!(fm.contains("title: Async Rust"));
-        assert!(fm.contains("scope: persona"));
-        assert!(fm.contains("tags:"));
-    }
-
-    #[test]
-    fn test_frontmatter_default_template() {
-        let tags: Vec<String> = vec![];
-        let fm = frontmatter_template("preference", "Editor Config", &tags);
-        assert!(fm.contains("category: preference"));
-        assert!(fm.contains("tags: []"));
-        assert!(fm.contains("created:"));
-        assert!(fm.contains("updated:"));
     }
 
     #[test]
