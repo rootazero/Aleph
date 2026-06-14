@@ -221,6 +221,7 @@ impl DreamPipeline {
                 // synthesize path — see `WorkflowProposalStage` for the R7
                 // boundary. Drafts are gated; nothing auto-activates.
                 Box::new(stages::WorkflowProposalStage::default()),
+                Box::new(stages::CorpusNarrativeStage),
                 Box::new(stages::DailyDigestStage),
             ],
             DreamStrategy::Conserve => vec![
@@ -241,6 +242,7 @@ impl DreamPipeline {
     /// - `workflow_proposal`: mines the global skill co-occurrence rings and
     ///   writes to the single global `workflows/proposals/` dir.
     const GLOBAL_ONLY_STAGES: &'static [&'static str] = &[
+        "corpus_narrative",
         "feedback_distill",
         "skill_lifecycle",
         "daily_digest",
@@ -1190,6 +1192,7 @@ mod tests {
                 "skill_distill",
                 "feedback_distill",
                 "workflow_proposal",
+                "corpus_narrative",
                 "daily_digest"
             ]
         );

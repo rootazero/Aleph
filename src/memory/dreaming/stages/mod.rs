@@ -1,5 +1,6 @@
 //! Dream pipeline stages: trait definition and stage implementations.
 
+pub mod corpus_narrative;
 pub mod daily_digest;
 pub mod feedback_distill;
 pub mod goal_lessons_promote;
@@ -16,6 +17,7 @@ pub mod skill_lifecycle;
 pub mod types;
 pub mod workflow_proposal;
 
+pub use corpus_narrative::CorpusNarrativeStage;
 pub use daily_digest::DailyDigestStage;
 pub use feedback_distill::FeedbackDistillStage;
 pub use goal_lessons_promote::GoalLessonsPromoteStage;
