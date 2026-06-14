@@ -177,6 +177,11 @@ impl DreamPipeline {
                 }),
                 Box::new(stages::NoteDriftStage),
                 Box::new(stages::IndexRefresherStage),
+                // Materialize the note knowledge graph (community/cohesion +
+                // insights) BEFORE weave/decay consume it: weave reads the
+                // freshly-computed `isolated` set and decay benefits from the
+                // recomputed link topology. Pure deterministic, zero LLM.
+                Box::new(stages::GraphRecomputeStage),
                 // Weave orphan notes into the link graph BEFORE decay scores
                 // them: a freshly woven link immediately counts toward
                 // link_weight / the >=3-incoming-links protection, breaking
@@ -228,6 +233,7 @@ impl DreamPipeline {
                 Box::new(stages::NoteLintStage),
                 Box::new(stages::NoteReviewStage::default()),
                 Box::new(stages::IndexRefresherStage),
+                Box::new(stages::GraphRecomputeStage),
             ],
         };
         Self::new(stage_list)
@@ -1168,6 +1174,7 @@ mod tests {
                 "feedback_distill",
                 "note_drift",
                 "index_refresher",
+                "graph_recompute",
                 "note_weave",
                 "note_decay",
                 "skill_lifecycle",
@@ -1246,7 +1253,15 @@ mod tests {
         let decay = MemoryDecayPolicy::default();
         let pipeline = DreamPipeline::from_strategy(DreamStrategy::Conserve, &cfg, &decay);
         let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
-        assert_eq!(names, vec!["note_lint", "note_review", "index_refresher"]);
+        assert_eq!(
+            names,
+            vec![
+                "note_lint",
+                "note_review",
+                "index_refresher",
+                "graph_recompute"
+            ]
+        );
     }
 
     // -----------------------------------------------------------------
