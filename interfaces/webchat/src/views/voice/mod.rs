@@ -6,6 +6,7 @@
 //! `stream.*` subscription that feeds `chat.messages` keeps running underneath.
 
 pub(crate) mod audio;
+pub(crate) mod caption_state;
 pub(crate) mod machine;
 pub(crate) mod orb;
 pub(crate) mod sentence;
