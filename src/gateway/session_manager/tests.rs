@@ -364,3 +364,29 @@ fn test_session_identity_meta_to_identity_context_guest() {
     assert_eq!(ctx.source_channel, "telegram");
     assert_eq!(ctx.scope, Some(scope));
 }
+
+#[tokio::test]
+async fn test_get_total_tokens_none_then_accumulates() {
+    let temp = tempdir().unwrap();
+    let config = test_config(temp.path().join("test.db"));
+    let manager = SessionManager::new(config).unwrap();
+    let key = SessionKey::main("tok");
+
+    // No row yet → None.
+    assert_eq!(manager.get_total_tokens(&key).await.unwrap(), None);
+
+    manager.get_or_create(&key).await.unwrap();
+    // Fresh row → 0.
+    assert_eq!(manager.get_total_tokens(&key).await.unwrap(), Some(0));
+
+    manager
+        .update_session_usage(&key, 100, 40, None, None)
+        .await
+        .unwrap();
+    manager
+        .update_session_usage(&key, 10, 5, None, None)
+        .await
+        .unwrap();
+    // Cumulative input+output across both turns: 140 + 15 = 155.
+    assert_eq!(manager.get_total_tokens(&key).await.unwrap(), Some(155));
+}

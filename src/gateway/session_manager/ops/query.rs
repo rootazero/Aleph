@@ -181,6 +181,35 @@ impl SessionManager {
         Ok(SessionPreview { meta, messages })
     }
 
+    /// Read a session's cumulative `total_tokens` (input + output across its
+    /// lifetime). Used by the autonomous-goal continuation hook to enforce a
+    /// goal's token budget against the live session counter. Returns `None` when
+    /// the session row does not exist yet. Mirrors `get_state`'s single-row
+    /// pattern (synchronous `query_row` under the conn lock).
+    pub async fn get_total_tokens(
+        &self,
+        key: &SessionKey,
+    ) -> Result<Option<u64>, SessionManagerError> {
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+
+        let total: Option<i64> = conn
+            .query_row(
+                "SELECT total_tokens FROM sessions WHERE key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        // SQLite stores the counter as a signed INTEGER; clamp any negative
+        // sentinel to 0 before widening to u64 (token counts are non-negative).
+        Ok(total.map(|t| u64::try_from(t).unwrap_or(0)))
+    }
+
     /// Get current session state
     pub async fn get_state(&self, key: &SessionKey) -> Result<SessionState, SessionManagerError> {
         let key_str = key.to_key_string();

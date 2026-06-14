@@ -194,11 +194,13 @@ broken' claim — those poison later iterations). \
                     AlephError::tool("goal 'set' requires 'objective'".to_string())
                 })?;
                 // `tokens_at_start` is seeded to 0 here: the tool has no live
-                // per-session token counter at call time, so the budget is a
-                // soft guardrail surfaced to the model, not measured from the
-                // real turn baseline. Do NOT "fix" this to a nonzero value
-                // without threading the live token count in — the structural
-                // backstop for autonomous runs is pursuit_max_iterations.
+                // per-session token counter at call time. The autonomous driver
+                // captures the real baseline lazily on the first continuation
+                // hook that sees a budget set (`Goal::with_baseline`, codex's
+                // `tokenStartFresh` pattern) and then enforces `token_budget`
+                // against the live session total. Until then only the iteration
+                // and deadline caps apply, so an interactive (non-pursuit) goal's
+                // budget remains a soft, surfaced guardrail.
                 let mut goal = Goal::new(&session, objective, 0, now)
                     .with_budget(args.token_budget)
                     .with_note(args.note.clone(), now);

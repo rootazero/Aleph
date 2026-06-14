@@ -133,6 +133,19 @@ pub trait SessionStore: Send + Sync {
         &self,
         key: &SessionKey,
     ) -> Result<crate::gateway::session_manager::SessionState, SessionStoreError>;
+    /// Cumulative `total_tokens` for a session (input + output over its
+    /// lifetime), or `None` if the session row does not exist yet. Used by the
+    /// autonomous-goal continuation hook to enforce a goal's token budget
+    /// against the live session counter. Default `Ok(None)` — backends without
+    /// token accounting leave the budget unenforced (iteration and deadline caps
+    /// still apply), so only the SQLite-backed store needs to override this.
+    async fn get_total_tokens(
+        &self,
+        key: &SessionKey,
+    ) -> Result<Option<u64>, SessionStoreError> {
+        let _ = key;
+        Ok(None)
+    }
     async fn get_identity_context(
         &self,
         session_key: &str,
