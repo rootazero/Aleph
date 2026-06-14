@@ -1,15 +1,30 @@
+# ==============================================================================
+# Languages & build systems
+# ==============================================================================
+
 # Rust
 /target/
 **/target/
-# Per-machine local cargo settings (e.g. a shared absolute target-dir for
-# parallel worktree builds). Machine-specific — must never be committed, or it
-# breaks CI runners that lack the hardcoded path.
-.cargo/config.toml
 **/*.rs.bk
 *.pdb
 *.rlib
 *.so
 *.a
+# Per-machine local cargo settings (e.g. a shared absolute target-dir for
+# parallel worktree builds). Machine-specific — must never be committed, or it
+# breaks CI runners that lack the hardcoded path.
+.cargo/config.toml
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Node.js
+node_modules/
+
+# ==============================================================================
+# Editors & OS
+# ==============================================================================
 
 # macOS
 .DS_Store
@@ -41,12 +56,9 @@ DerivedData/
 !default.perspectivev3
 *.xcodeproj.backup
 
-# Swift Package Manager
-.build/
-.swiftpm/
-
-# Node.js
-node_modules/
+# ==============================================================================
+# Build & runtime artifacts
+# ==============================================================================
 
 # Database files
 *.db
@@ -57,8 +69,33 @@ node_modules/
 platforms/macos/Aleph/Frameworks/*.dylib
 platforms/macos/Aleph/Frameworks/*.dylib.*
 
-# AI agent scaffolding — root .agent/ and .claude/ are shared with the team.
-# Nested copies (in worktrees/subdirs) stay local.
+# Build pipeline artifacts
+apps/macos-native/Aleph/Resources/aleph
+apps/macos-native/build/
+
+# Packaged installers
+Aleph.dmg
+
+# ==============================================================================
+# Generated tooling output (analysis / scratch dirs)
+# ==============================================================================
+graphify-out/
+**/graphify-out/
+.understand-anything/
+.codegraph/
+.superpowers/
+.omc/
+
+# ==============================================================================
+# Git worktrees
+# ==============================================================================
+.worktrees/
+
+# ==============================================================================
+# AI agent scaffolding
+# ==============================================================================
+# Root .agent/ and .claude/ are shared with the team; nested copies
+# (in worktrees / subdirs) stay local.
 **/.claude/
 !/.claude/
 # Root .claude/ is shared except these local-only bits:
@@ -66,45 +103,31 @@ platforms/macos/Aleph/Frameworks/*.dylib.*
 /.claude/scheduled_tasks.lock
 /.claude/worktrees/
 
-# Git worktrees
-.worktrees/
-
-# Docs
-_bmad/
-
-# Test / scratch / local files
+# ==============================================================================
+# Project scratch & misc
+# ==============================================================================
 core/test.txt
 newinstall*.txt
 test-results/
 playwright-report/
-
-# Build pipeline artifacts
-apps/macos-native/Aleph/Resources/aleph
-apps/macos-native/build/
-
-# Misc
 agentstructure/
-Aleph.dmg
+archive/
+_bmad/
+
+# Examples — track curated subdirs only
 examples/*
 !examples/plugins/
 !examples/protocols/
 !examples/protocols/**
 
-# UI node artifacts
-archive/
-graphify-out/
-**/graphify-out/
-.superpowers/
-.omc/
-.worktrees/
-.understand-anything/
-.codegraph/
-
-# Docs: untrack everything except the README-referenced reference/ docs and
-# the guides/ directory — docs/guides/*.md are compile-time build assets
+# ==============================================================================
+# Docs
+# ==============================================================================
+# Untrack everything except the README-referenced reference/ docs and the
+# guides/ directory — docs/guides/*.md are compile-time build assets
 # (src/config embeds them via include_str!), so they must stay tracked.
-# Engineering artifacts (audit / logic-review reports, result dumps) are moved
-# under docs/engineering-reports/ and stay untracked.
+# Engineering artifacts (audit / logic-review reports, result dumps) live under
+# docs/engineering-reports/ and stay untracked.
 /docs/*
 !/docs/reference/
 !/docs/guides/
