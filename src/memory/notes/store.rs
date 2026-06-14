@@ -295,6 +295,34 @@ pub trait NoteStore: Send + Sync {
         Ok(vec![])
     }
 
+    /// Replace the materialized 4-signal relatedness edges for `agent_id`.
+    /// Rows are `(node_path, related_path, score)`.
+    async fn replace_graph_related(
+        &self,
+        agent_id: &str,
+        rows: &[(String, String, f32)],
+    ) -> Result<(), AlephError> {
+        let _ = (agent_id, rows);
+        Ok(())
+    }
+
+    /// Top related peers for `node_path` by materialized 4-signal score
+    /// (descending), capped at `limit`. Returns `(related_path, score)`.
+    ///
+    /// Complements `community_peers`: where community membership gives coarse
+    /// cluster recall, this gives the scored 4-signal relatedness. A cold cache
+    /// (and the default impl) returns an empty vec, so callers degrade to their
+    /// existing expansion.
+    async fn related_peers(
+        &self,
+        agent_id: &str,
+        node_path: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, f32)>, AlephError> {
+        let _ = (agent_id, node_path, limit);
+        Ok(vec![])
+    }
+
     // -----------------------------------------------------------------
     // Phase C2.9.2 governance: per-fact provenance + async review queue.
     // Default impls return empty/no-op so existing test mocks keep

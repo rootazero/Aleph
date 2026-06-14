@@ -9,6 +9,7 @@ use async_trait::async_trait;
 
 use crate::error::AlephError;
 use crate::memory::dreaming::DreamContext;
+use crate::memory::notes::graph::relevance::{all_related, SignalWeights};
 use crate::memory::notes::graph::{community, insights, GraphIndex, GraphSnapshot};
 use crate::memory::notes::store::NoteStore;
 
@@ -42,6 +43,9 @@ impl DreamStage for GraphRecomputeStage {
         store
             .replace_graph_insights(&agent_id, &computed.insights)
             .await?;
+        store
+            .replace_graph_related(&agent_id, &computed.related)
+            .await?;
         tracing::info!(agent = %agent_id, nodes = computed.node_count, "graph cache recomputed");
         Ok(ctx)
     }
@@ -52,6 +56,8 @@ struct Computed {
     cache: Vec<(String, usize, f32, usize)>,
     /// `(kind, json_payload)`.
     insights: Vec<(String, String)>,
+    /// `(node_path, related_path, score)` — top-K 4-signal relatedness edges.
+    related: Vec<(String, String, f32)>,
     node_count: usize,
 }
 
@@ -63,11 +69,24 @@ fn compute(snap: &GraphSnapshot) -> Computed {
         return Computed {
             cache: vec![],
             insights: vec![],
+            related: vec![],
             node_count: 0,
         };
     }
     let com = community::detect(&g);
     let ins = insights::detect(&g, &com);
+
+    // 4-signal relatedness: materialize each node's top-K scored peers, flattened
+    // into `(seed, peer, score)` rows. CPU-bound, std-thread parallel (already
+    // inside `spawn_blocking`).
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let related_rows: Vec<(String, String, f32)> =
+        all_related(&g, &SignalWeights::default(), 8, threads)
+            .into_iter()
+            .flat_map(|(seed, peers)| {
+                peers.into_iter().map(move |(p, s)| (seed.clone(), p, s))
+            })
+            .collect();
 
     let cache = (0..g.len())
         .map(|i| {
@@ -124,6 +143,7 @@ fn compute(snap: &GraphSnapshot) -> Computed {
     Computed {
         cache,
         insights: insights_rows,
+        related: related_rows,
         node_count: g.len(),
     }
 }
@@ -139,6 +159,7 @@ mod tests {
         assert_eq!(c.node_count, 0);
         assert!(c.cache.is_empty());
         assert!(c.insights.is_empty());
+        assert!(c.related.is_empty());
     }
 
     #[test]
@@ -158,5 +179,18 @@ mod tests {
         // Exactly four insight kinds, in order.
         let kinds: Vec<&str> = c.insights.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(kinds, vec!["isolated", "sparse", "bridge", "surprising"]);
+        // The directly-linked a—b pair yields scored relatedness edges in both
+        // directions; the isolated c contributes none.
+        assert!(
+            !c.related.is_empty(),
+            "connected graph must materialize relatedness edges"
+        );
+        assert!(
+            c.related
+                .iter()
+                .any(|(seed, peer, score)| seed == "g/a" && peer == "g/b" && *score > 0.0),
+            "expected a scored g/a -> g/b related edge, got: {:?}",
+            c.related
+        );
     }
 }

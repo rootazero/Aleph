@@ -94,6 +94,10 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
         AlephError::config(format!("Failed to create notes_graph_insights table: {e}"))
     })?;
 
+    conn.execute_batch(ddl::NOTES_GRAPH_RELATED_DDL).map_err(|e| {
+        AlephError::config(format!("Failed to create notes_graph_related table: {e}"))
+    })?;
+
     conn.execute_batch(ddl::NOTES_FTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_fts table: {e}")))?;
 

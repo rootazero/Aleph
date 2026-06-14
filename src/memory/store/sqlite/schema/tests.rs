@@ -47,7 +47,12 @@ mod tests {
     fn graph_tables_created() {
         let conn = Connection::open_in_memory().expect("in-memory db");
         init_schema(&conn).expect("init_schema");
-        for table in ["notes_sources", "notes_graph_cache", "notes_graph_insights"] {
+        for table in [
+            "notes_sources",
+            "notes_graph_cache",
+            "notes_graph_insights",
+            "notes_graph_related",
+        ] {
             let n: i64 = conn
                 .query_row(
                     "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",

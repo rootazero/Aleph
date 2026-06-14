@@ -1263,6 +1263,55 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(out)
     }
 
+    async fn replace_graph_related(
+        &self,
+        agent_id: &str,
+        rows: &[(String, String, f32)],
+    ) -> Result<(), AlephError> {
+        let conn = lock_conn!(self)?;
+        conn.execute(
+            "DELETE FROM notes_graph_related WHERE agent_id = ?1",
+            params![agent_id],
+        )
+        .map_err(|e| AlephError::config(format!("replace_graph_related delete: {e}")))?;
+        for (node, related, score) in rows {
+            conn.execute(
+                "INSERT OR REPLACE INTO notes_graph_related \
+                 (agent_id, node_path, related_path, score) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![agent_id, node, related, f64::from(*score)],
+            )
+            .map_err(|e| AlephError::config(format!("replace_graph_related insert: {e}")))?;
+        }
+        Ok(())
+    }
+
+    async fn related_peers(
+        &self,
+        agent_id: &str,
+        node_path: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, f32)>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT related_path, score FROM notes_graph_related \
+                 WHERE agent_id = ?1 AND node_path = ?2 \
+                 ORDER BY score DESC LIMIT ?3",
+            )
+            .map_err(|e| AlephError::config(format!("related_peers prepare: {e}")))?;
+        let rows = stmt
+            .query_map(params![agent_id, node_path, limit as i64], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)? as f32))
+            })
+            .map_err(|e| AlephError::config(format!("related_peers query: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AlephError::config(format!("related_peers row: {e}")))?);
+        }
+        Ok(out)
+    }
+
     // -----------------------------------------------------------------
     // Phase C2.9.2 governance: per-fact provenance + async review queue.
     // -----------------------------------------------------------------

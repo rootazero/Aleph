@@ -145,6 +145,17 @@ CREATE TABLE IF NOT EXISTS notes_graph_insights (
 CREATE INDEX IF NOT EXISTS idx_notes_graph_insights ON notes_graph_insights(agent_id, kind);
 "#;
 
+pub const NOTES_GRAPH_RELATED_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS notes_graph_related (
+    agent_id     TEXT NOT NULL DEFAULT 'default',
+    node_path    TEXT NOT NULL,
+    related_path TEXT NOT NULL,
+    score        REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (agent_id, node_path, related_path)
+);
+CREATE INDEX IF NOT EXISTS idx_notes_graph_related ON notes_graph_related(agent_id, node_path);
+"#;
+
 pub const NOTES_FTS_DDL: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     path,
