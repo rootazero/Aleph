@@ -85,6 +85,17 @@ pub(super) struct Frontmatter {
     /// Typed relation edges (Gap A). Absent in legacy notes → empty.
     #[serde(default)]
     pub(super) relations: Vec<super::relation::Relation>,
+    /// Obsidian / llm_wiki page-type (mirrors category). Absent in legacy notes → None.
+    #[serde(default, rename = "type")]
+    pub(super) note_type: Option<String>,
+    /// Obsidian title frontmatter. Not mapped into KnowledgeNote.title (filename is SSOT).
+    /// Round-trip only: kept so serde does not error on the field.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub(super) title: Option<String>,
+    /// Obsidian aliases from frontmatter `aliases:`. Absent in legacy notes → empty.
+    #[serde(default)]
+    pub(super) aliases: Vec<String>,
 }
 
 /// Accept a YAML date field as either a quoted string, a native YAML date

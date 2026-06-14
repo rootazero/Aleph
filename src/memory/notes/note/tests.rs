@@ -534,6 +534,23 @@ Related: [[Rust Learning]] [[Dev Environment]]
     }
 
     #[test]
+    fn parses_vault_frontmatter_fields() {
+        let md = "---\ncategory: reference\ntype: reference\ntitle: Rust Ownership\naliases: [\"ownership\", \"借用\"]\ntags: [\"rust\"]\ncreated: \"2026-06-14\"\nupdated: \"2026-06-14\"\n---\n\n- borrow checker enforces aliasing xor mutability\n";
+        let note = KnowledgeNote::from_markdown("rust-ownership", md).unwrap();
+        assert_eq!(note.note_type.as_deref(), Some("reference"));
+        assert_eq!(note.aliases, vec!["ownership".to_string(), "借用".to_string()]);
+        assert_eq!(note.title, "rust-ownership"); // title stays from filename arg
+    }
+
+    #[test]
+    fn legacy_note_without_vault_fields_defaults_empty() {
+        let md = "---\ncategory: learning\ntags: []\ncreated: \"2026-01-01\"\nupdated: \"2026-01-01\"\n---\n\n- fact\n";
+        let note = KnowledgeNote::from_markdown("x", md).unwrap();
+        assert!(note.note_type.is_none());
+        assert!(note.aliases.is_empty());
+    }
+
+    #[test]
     fn date_reader_accepts_quoted_iso_date() {
         let md = "---\ncategory: skill\ntags: []\ncreated: \"2026-04-01\"\nupdated: \"2026-04-01\"\n---\n\n- fact\n";
         let n = KnowledgeNote::from_markdown("t", md).expect("must parse quoted date");

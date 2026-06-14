@@ -84,6 +84,12 @@ pub struct KnowledgeNote {
     /// `pinned` skill idiom in `skill_lifecycle`). `false` for legacy notes —
     /// see [`KnowledgeNote::is_permanent`] for the tag-based fallback.
     pub permanent: bool,
+    /// Obsidian / llm_wiki page-type (mirrors category). `None` for legacy notes.
+    /// Single source of truth remains the directory; this field enables vault
+    /// byte-compatibility with Obsidian and llm_wiki readers.
+    pub note_type: Option<String>,
+    /// Obsidian aliases from frontmatter `aliases:`. Empty for legacy notes.
+    pub aliases: Vec<String>,
 }
 
 impl Default for KnowledgeNote {
@@ -106,6 +112,8 @@ impl Default for KnowledgeNote {
             superseded_by: Vec::new(),
             fact_provenance: Vec::new(),
             permanent: false,
+            note_type: None,
+            aliases: Vec::new(),
         }
     }
 }
@@ -149,6 +157,8 @@ impl KnowledgeNote {
             superseded_by: frontmatter.superseded_by,
             fact_provenance,
             permanent: frontmatter.permanent,
+            note_type: frontmatter.note_type,
+            aliases: frontmatter.aliases,
         })
     }
 
