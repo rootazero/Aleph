@@ -83,9 +83,7 @@ fn compute(snap: &GraphSnapshot) -> Computed {
     let related_rows: Vec<(String, String, f32)> =
         all_related(&g, &SignalWeights::default(), 8, threads)
             .into_iter()
-            .flat_map(|(seed, peers)| {
-                peers.into_iter().map(move |(p, s)| (seed.clone(), p, s))
-            })
+            .flat_map(|(seed, peers)| peers.into_iter().map(move |(p, s)| (seed.clone(), p, s)))
             .collect();
 
     let cache = (0..g.len())

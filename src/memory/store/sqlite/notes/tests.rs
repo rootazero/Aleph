@@ -548,7 +548,10 @@ mod tests {
         );
 
         // A node with no related rows (cold/absent) → empty, graceful fallback.
-        let none = backend.related_peers(AGENT, "cat/missing", 8).await.unwrap();
+        let none = backend
+            .related_peers(AGENT, "cat/missing", 8)
+            .await
+            .unwrap();
         assert!(none.is_empty());
 
         // A different agent has no related rows → empty (scoping holds).

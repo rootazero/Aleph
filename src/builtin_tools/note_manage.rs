@@ -254,9 +254,7 @@ impl NoteManageTool {
                     )
                     .await
             }
-            NoteManageAction::Query | NoteManageAction::List | NoteManageAction::Insights => {
-                return
-            }
+            NoteManageAction::Query | NoteManageAction::List | NoteManageAction::Insights => return,
         };
         if let Err(e) = outcome {
             warn!(path = %note_path, error = %e, "note_manage: failed to record lifecycle event");

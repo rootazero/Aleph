@@ -24,7 +24,9 @@ pub struct CorpusNarrativeStage;
 
 #[async_trait]
 impl DreamStage for CorpusNarrativeStage {
-    fn name(&self) -> &'static str { "corpus_narrative" }
+    fn name(&self) -> &'static str {
+        "corpus_narrative"
+    }
 
     async fn should_run(&self, ctx: &DreamContext) -> bool {
         ctx.notes.len() >= MIN_NOTES_FOR_NARRATIVE
@@ -61,7 +63,8 @@ If a current purpose is given, refine it minimally rather than rewriting wholesa
         );
 
         let msgs = vec![UnifiedMessage::user(&prompt)];
-        let response = ctx.provider
+        let response = ctx
+            .provider
             .process(RequestPayload::new(&msgs).with_system(Some(system)))
             .await
             .map_err(|e| AlephError::other(format!("corpus narrative LLM call failed: {e}")))?;

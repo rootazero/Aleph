@@ -1064,11 +1064,9 @@ impl NoteStore for SqliteMemoryBackend {
                 .map_err(|e| AlephError::config(format!("load_graph_snapshot nodes query: {e}")))?;
             let mut out = Vec::new();
             for row in rows {
-                out.push(
-                    row.map_err(|e| {
-                        AlephError::config(format!("load_graph_snapshot node row: {e}"))
-                    })?,
-                );
+                out.push(row.map_err(|e| {
+                    AlephError::config(format!("load_graph_snapshot node row: {e}"))
+                })?);
             }
             out
         };
@@ -1118,11 +1116,9 @@ impl NoteStore for SqliteMemoryBackend {
                 })
                 .map_err(|e| AlephError::config(format!("load_graph_snapshot edges query: {e}")))?;
             for row in rows {
-                edges.push(
-                    row.map_err(|e| {
-                        AlephError::config(format!("load_graph_snapshot edge row: {e}"))
-                    })?,
-                );
+                edges.push(row.map_err(|e| {
+                    AlephError::config(format!("load_graph_snapshot edge row: {e}"))
+                })?);
             }
         }
 
@@ -1146,7 +1142,14 @@ impl NoteStore for SqliteMemoryBackend {
                 "INSERT OR REPLACE INTO notes_graph_cache \
                  (agent_id, node_path, community_id, cohesion, degree, updated_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![agent_id, path, *comm as i64, f64::from(*coh), *deg as i64, now],
+                params![
+                    agent_id,
+                    path,
+                    *comm as i64,
+                    f64::from(*coh),
+                    *deg as i64,
+                    now
+                ],
             )
             .map_err(|e| AlephError::config(format!("replace_graph_cache insert: {e}")))?;
         }
@@ -1197,11 +1200,9 @@ impl NoteStore for SqliteMemoryBackend {
                     })
                     .map_err(|e| AlephError::config(format!("read_graph_insights query: {e}")))?;
                 for row in rows {
-                    out.push(
-                        row.map_err(|e| {
-                            AlephError::config(format!("read_graph_insights row: {e}"))
-                        })?,
-                    );
+                    out.push(row.map_err(|e| {
+                        AlephError::config(format!("read_graph_insights row: {e}"))
+                    })?);
                 }
             }
             None => {
@@ -1214,11 +1215,9 @@ impl NoteStore for SqliteMemoryBackend {
                     })
                     .map_err(|e| AlephError::config(format!("read_graph_insights query: {e}")))?;
                 for row in rows {
-                    out.push(
-                        row.map_err(|e| {
-                            AlephError::config(format!("read_graph_insights row: {e}"))
-                        })?,
-                    );
+                    out.push(row.map_err(|e| {
+                        AlephError::config(format!("read_graph_insights row: {e}"))
+                    })?);
                 }
             }
         }

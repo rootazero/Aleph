@@ -5,8 +5,16 @@ fn direct_link_and_type_affinity_score() {
     use crate::memory::notes::graph::*;
     let snap = GraphSnapshot {
         nodes: vec![
-            GraphNode { path: "learning/a".into(), category: "learning".into(), sources: vec![] },
-            GraphNode { path: "learning/b".into(), category: "learning".into(), sources: vec![] },
+            GraphNode {
+                path: "learning/a".into(),
+                category: "learning".into(),
+                sources: vec![],
+            },
+            GraphNode {
+                path: "learning/b".into(),
+                category: "learning".into(),
+                sources: vec![],
+            },
         ],
         edges: vec![("learning/a".into(), "learning/b".into())],
     };
@@ -21,8 +29,16 @@ fn source_overlap_scores() {
     use crate::memory::notes::graph::*;
     let snap = GraphSnapshot {
         nodes: vec![
-            GraphNode { path: "p/a".into(), category: "x".into(), sources: vec!["raw/1".into()] },
-            GraphNode { path: "p/b".into(), category: "y".into(), sources: vec!["raw/1".into()] },
+            GraphNode {
+                path: "p/a".into(),
+                category: "x".into(),
+                sources: vec!["raw/1".into()],
+            },
+            GraphNode {
+                path: "p/b".into(),
+                category: "y".into(),
+                sources: vec!["raw/1".into()],
+            },
         ],
         edges: vec![],
     };
@@ -36,13 +52,28 @@ fn source_overlap_scores() {
 fn louvain_splits_barbell_into_two_communities() {
     use crate::memory::notes::graph::*;
     // Two triangles {a,b,c} and {d,e,f}, joined by a single c-d bridge edge.
-    let node = |p: &str| GraphNode { path: p.into(), category: "x".into(), sources: vec![] };
+    let node = |p: &str| GraphNode {
+        path: p.into(),
+        category: "x".into(),
+        sources: vec![],
+    };
     let snap = GraphSnapshot {
-        nodes: vec![node("g/a"), node("g/b"), node("g/c"), node("g/d"), node("g/e"), node("g/f")],
+        nodes: vec![
+            node("g/a"),
+            node("g/b"),
+            node("g/c"),
+            node("g/d"),
+            node("g/e"),
+            node("g/f"),
+        ],
         edges: vec![
-            ("g/a".into(),"g/b".into()), ("g/b".into(),"g/c".into()), ("g/a".into(),"g/c".into()),
-            ("g/d".into(),"g/e".into()), ("g/e".into(),"g/f".into()), ("g/d".into(),"g/f".into()),
-            ("g/c".into(),"g/d".into()),
+            ("g/a".into(), "g/b".into()),
+            ("g/b".into(), "g/c".into()),
+            ("g/a".into(), "g/c".into()),
+            ("g/d".into(), "g/e".into()),
+            ("g/e".into(), "g/f".into()),
+            ("g/d".into(), "g/f".into()),
+            ("g/c".into(), "g/d".into()),
         ],
     };
     let g = GraphIndex::build(&snap);
@@ -60,11 +91,22 @@ fn louvain_splits_barbell_into_two_communities() {
 #[test]
 fn louvain_empty_and_edgeless() {
     use crate::memory::notes::graph::*;
-    let g0 = GraphIndex::build(&GraphSnapshot::default());
+    let empty_snap = GraphSnapshot::default();
+    let g0 = GraphIndex::build(&empty_snap);
     assert!(community::detect(&g0).of_node.is_empty());
     let snap = GraphSnapshot {
-        nodes: vec![GraphNode{path:"p/a".into(),category:"x".into(),sources:vec![]},
-                    GraphNode{path:"p/b".into(),category:"x".into(),sources:vec![]}],
+        nodes: vec![
+            GraphNode {
+                path: "p/a".into(),
+                category: "x".into(),
+                sources: vec![],
+            },
+            GraphNode {
+                path: "p/b".into(),
+                category: "x".into(),
+                sources: vec![],
+            },
+        ],
         edges: vec![],
     };
     let g = GraphIndex::build(&snap);
@@ -75,12 +117,26 @@ fn louvain_empty_and_edgeless() {
 #[test]
 fn detects_isolated_and_bridge() {
     use crate::memory::notes::graph::*;
-    let node = |p: &str, cat: &str| GraphNode { path: p.into(), category: cat.into(), sources: vec![] };
+    let node = |p: &str, cat: &str| GraphNode {
+        path: p.into(),
+        category: cat.into(),
+        sources: vec![],
+    };
     // hub h links three otherwise-separate single-node clusters → bridge;
     // lone l has no edges → isolated.
     let snap = GraphSnapshot {
-        nodes: vec![node("c/h","x"), node("c/a","a"), node("c/b","b"), node("c/d","d"), node("c/l","z")],
-        edges: vec![("c/h".into(),"c/a".into()), ("c/h".into(),"c/b".into()), ("c/h".into(),"c/d".into())],
+        nodes: vec![
+            node("c/h", "x"),
+            node("c/a", "a"),
+            node("c/b", "b"),
+            node("c/d", "d"),
+            node("c/l", "z"),
+        ],
+        edges: vec![
+            ("c/h".into(), "c/a".into()),
+            ("c/h".into(), "c/b".into()),
+            ("c/h".into(), "c/d".into()),
+        ],
     };
     let g = GraphIndex::build(&snap);
     let com = community::detect(&g);

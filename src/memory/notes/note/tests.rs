@@ -571,7 +571,10 @@ Related: [[Rust Learning]] [[Dev Environment]]
         let md = "---\ncategory: reference\ntype: reference\ntitle: Rust Ownership\naliases: [\"ownership\", \"借用\"]\ntags: [\"rust\"]\ncreated: \"2026-06-14\"\nupdated: \"2026-06-14\"\n---\n\n- borrow checker enforces aliasing xor mutability\n";
         let note = KnowledgeNote::from_markdown("rust-ownership", md).unwrap();
         assert_eq!(note.note_type.as_deref(), Some("reference"));
-        assert_eq!(note.aliases, vec!["ownership".to_string(), "借用".to_string()]);
+        assert_eq!(
+            note.aliases,
+            vec!["ownership".to_string(), "借用".to_string()]
+        );
         assert_eq!(note.title, "rust-ownership"); // title stays from filename arg
     }
 

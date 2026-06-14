@@ -15,12 +15,12 @@ pub mod schema;
 pub mod types;
 
 pub use fs_orientation::{FsNoteOrientation, NoteOrientation};
-pub use obsidian_config::ensure_obsidian_config;
 pub use index_md::{IndexMdGenerator, INDEX_FILENAME};
-pub use overview_md::OverviewMd;
-pub use purpose_md::PurposeMd;
 pub use log_md::{LogMdWriter, LOG_FILENAME, LOG_ROTATE_LINES};
+pub use obsidian_config::ensure_obsidian_config;
+pub use overview_md::OverviewMd;
 pub use prompts::{schema_via_llm, PROMPT_ORIENTATION_BOOTSTRAP};
+pub use purpose_md::PurposeMd;
 pub use schema::{SchemaDoc, SchemaStore, DEFAULT_SCHEMA, SCHEMA_FILENAME, SCHEMA_SECTIONS};
 pub use types::{
     IndexStats, IngestBatchSummary, LogAction, LogEntry, OrientationSnapshot, TokenBudget,
