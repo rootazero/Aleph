@@ -593,20 +593,18 @@ mod tests {
     #[tokio::test]
     async fn run_child_with_drain_timeout_captures_partial_output() {
         use tokio::process::Command;
-        // Print a line, *flush* it (close stdout via `exec 1>&-` so the reader
-        // hits EOF and captures it immediately), then sleep to trip the
-        // timeout. The captured partial stdout proves the drain works —
-        // codex's IO_DRAIN_TIMEOUT pattern in miniature. The timeout only
-        // bounds the *hang*: bash closes stdout right after the echo, so the
-        // reader finishes long before the timeout fires. The bound must be far
-        // larger than the worst-case scheduling delay of bash spawn + first
-        // write under a CPU-starved CI runner (12k tests contending for a few
-        // cores); a tight 2s bound let the kill land before "started" was ever
-        // scheduled, leaving partial_stdout empty. 10s makes that practically
-        // impossible while still tripping well before the 30s sleep.
+        // Emit *bulk* output, then hang so the wall-clock timeout trips and the
+        // drain captures the buffered prefix. Earlier this used a single
+        // `echo started; exec 1>&-`, but macOS bash (3.2) block-buffers a
+        // builtin echo to a pipe and `exec 1>&-` closed the fd discarding the
+        // unflushed buffer, so partial_stdout came back empty (the test was
+        // green on Linux bash 5.x, flaky/failing on macOS runners). Streaming
+        // ~1000 lines through `head` — a real binary that writes via libc and
+        // flushes — reliably lands data in the OS pipe buffer on every
+        // platform; `sleep` then keeps stdout open until the timeout kill.
         let child = Command::new("bash")
             .arg("-c")
-            .arg("echo started; exec 1>&-; sleep 30")
+            .arg("yes started | head -n 1000; sleep 30")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::piped())
@@ -614,7 +612,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let err = run_child_with_drain(child, None, Duration::from_secs(10), 1024)
+        let err = run_child_with_drain(child, None, Duration::from_secs(3), 1024)
             .await
             .expect_err("should time out");
         match err {
@@ -624,10 +622,16 @@ mod tests {
                 partial_stderr,
             } => {
                 assert!(elapsed_ms >= 400, "elapsed_ms = {elapsed_ms}");
-                assert_eq!(
-                    String::from_utf8_lossy(&partial_stdout),
-                    "started\n",
+                // The drain captured the buffered stream prefix (truncated to
+                // max_output_bytes); every line is "started".
+                assert!(
+                    !partial_stdout.is_empty(),
                     "partial stdout must be drained after kill"
+                );
+                assert!(
+                    String::from_utf8_lossy(&partial_stdout).starts_with("started\n"),
+                    "partial stdout = {:?}",
+                    String::from_utf8_lossy(&partial_stdout)
                 );
                 assert!(partial_stderr.is_empty());
             }
