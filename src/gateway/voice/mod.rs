@@ -1,3 +1,4 @@
+pub mod format;
 pub mod hallucination;
 pub mod inbound;
 pub mod local_provider;
@@ -5,4 +6,5 @@ pub mod outbound;
 pub mod sanitize;
 pub mod session_mode;
 pub mod state;
+pub mod streaming;
 pub use state::VoiceState;

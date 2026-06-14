@@ -38,6 +38,27 @@ struct Capture {
     preroll_cap: usize,
     segment: Option<Vec<f32>>,
     max_segment: usize,
+    /// Streaming-ASR tap (independent of the batch WAV segment). When `true`,
+    /// the audio callback accumulates device-rate samples and, once a chunk is
+    /// full, resamples → 16 kHz s16le → base64 and hands it to `on_frame`.
+    streaming: bool,
+    /// Device-rate mono accumulator flushed once it holds ~200 ms of audio.
+    frame_accum: Vec<f32>,
+    /// Upward sink for one base64 s16le-16k frame. Single-threaded wasm, so `Rc`
+    /// (no `Send`/`Sync`). `None` until `set_frame_sink` is called.
+    on_frame: Option<Rc<dyn Fn(String)>>,
+}
+
+/// Convert mono f32 [-1,1] PCM to little-endian s16 bytes (clamped). Scales by
+/// 32768 so the full negative bound is reachable (`-1.0 → -32768`); the positive
+/// side saturates at the i16 max (`1.0 → 32767`) via the clamp.
+pub(crate) fn f32_to_s16le(pcm: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pcm.len() * 2);
+    for &s in pcm {
+        let v = (s.clamp(-1.0, 1.0) * 32768.0).round() as i32;
+        out.extend_from_slice(&(v.clamp(-32768, 32767) as i16).to_le_bytes());
+    }
+    out
 }
 
 /// Microphone session: one getUserMedia stream feeding two taps — an
@@ -199,6 +220,9 @@ impl MicSession {
             preroll_cap,
             segment: None,
             max_segment,
+            streaming: false,
+            frame_accum: Vec::new(),
+            on_frame: None,
         }));
 
         let processor = ctx
@@ -207,6 +231,9 @@ impl MicSession {
             )
             .map_err(|_| MicError::AudioContext)?;
         let cap_w = Rc::clone(&cap);
+        // Flush a streaming frame once the accumulator holds ~200 ms of
+        // device-rate audio. Kept ≥ 1 so a degenerate rate can't divide to 0.
+        let frame_chunk = (sample_rate / 5).max(1) as usize;
         let on_audio = Closure::<dyn FnMut(_)>::new(move |ev: web_sys::AudioProcessingEvent| {
             let Ok(input) = ev.input_buffer() else { return };
             let Ok(data) = input.get_channel_data(0) else {
@@ -224,6 +251,42 @@ impl MicSession {
             if let Some(seg) = c.segment.as_mut() {
                 if seg.len() < mc {
                     seg.extend_from_slice(&data);
+                }
+            }
+            // Streaming tap: accumulate device-rate samples, then emit fixed
+            // ~200 ms frames resampled to 16 kHz s16le. Independent of the batch
+            // WAV segment above (which is the fallback path).
+            if !c.streaming {
+                return;
+            }
+            c.frame_accum.extend_from_slice(&data);
+            // Drain whole chunks; a single callback (≈85 ms) won't fill a 200 ms
+            // chunk, but draining in a loop is robust to larger buffers/rates.
+            let mut frames: Vec<String> = Vec::new();
+            while c.frame_accum.len() >= frame_chunk {
+                let chunk: Vec<f32> = c.frame_accum.drain(..frame_chunk).collect();
+                // Resample device rate → 16 kHz (nearest-neighbor decimation;
+                // STT is robust to this). Handles non-integer ratios (44100→16000).
+                let out_len = chunk.len() * 16_000 / sample_rate as usize;
+                let mut resampled = Vec::with_capacity(out_len);
+                for i in 0..out_len {
+                    let src = i * sample_rate as usize / 16_000;
+                    resampled.push(chunk[src.min(chunk.len() - 1)]);
+                }
+                let bytes = f32_to_s16le(&resampled);
+                frames.push(wav::base64_encode(&bytes));
+            }
+            // Snapshot the sink and DROP the borrow before invoking it: the
+            // callback spawns an RPC upward and must not re-enter `Capture`
+            // while it is mutably borrowed (BorrowMutError guard).
+            if frames.is_empty() {
+                return;
+            }
+            let sink = c.on_frame.clone();
+            drop(c);
+            if let Some(sink) = sink {
+                for b64 in frames {
+                    sink(b64);
                 }
             }
         });
@@ -289,6 +352,27 @@ impl MicSession {
         }
         let wav_bytes = wav::encode_wav_mono(&seg, self.sample_rate);
         Some((wav::base64_encode(&wav_bytes), "audio/wav".to_string()))
+    }
+
+    /// Install the upward sink for streaming s16le-16k base64 frames. Stored as
+    /// `Rc` (single-threaded wasm; no `Send`/`Sync`).
+    pub(crate) fn set_frame_sink(&self, cb: impl Fn(String) + 'static) {
+        self.cap.borrow_mut().on_frame = Some(Rc::new(cb));
+    }
+
+    /// Begin emitting streaming frames from the live tap. Clears any stale
+    /// accumulator so the first frame starts at a chunk boundary.
+    pub(crate) fn start_streaming(&self) {
+        let mut c = self.cap.borrow_mut();
+        c.streaming = true;
+        c.frame_accum.clear();
+    }
+
+    /// Stop emitting streaming frames and drop the partial accumulator.
+    pub(crate) fn stop_streaming(&self) {
+        let mut c = self.cap.borrow_mut();
+        c.streaming = false;
+        c.frame_accum.clear();
     }
 
     pub(crate) fn close(&self) {
@@ -704,4 +788,21 @@ async fn synthesize(dash: &DashboardState, text: &str) -> Option<Audio> {
     resp.get("audio_url")
         .and_then(|v| v.as_str())
         .map(|u| Audio::Url(u.to_string()))
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    #[test]
+    fn f32_to_s16le_clamps_and_scales() {
+        let pcm = [0.0f32, 1.0, -1.0, 2.0, -2.0];
+        let bytes = f32_to_s16le(&pcm);
+        assert_eq!(bytes.len(), pcm.len() * 2);
+        // 0.0 → 0
+        assert_eq!(i16::from_le_bytes([bytes[0], bytes[1]]), 0);
+        // 1.0 → 32767 (clamped), -1.0 → -32768, 2.0 → clamped 32767
+        assert_eq!(i16::from_le_bytes([bytes[2], bytes[3]]), 32767);
+        assert_eq!(i16::from_le_bytes([bytes[4], bytes[5]]), -32768);
+        assert_eq!(i16::from_le_bytes([bytes[6], bytes[7]]), 32767);
+    }
 }
