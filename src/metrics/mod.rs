@@ -251,9 +251,13 @@ mod tests {
         thread::sleep(Duration::from_millis(100));
         let elapsed = timer.elapsed_ms();
 
-        // Allow generous tolerance for CI variability (±50ms)
+        // The lower bound proves the timer actually accumulates the slept time;
+        // the upper bound only guards against a unit error (e.g. reporting ns/us
+        // as ms). It must stay generous: a loaded CI runner can let a 100ms
+        // sleep overshoot well past any tight ceiling, which made this test
+        // flaky at ±50ms. 5s is comfortably above any scheduler jitter.
         assert!(
-            (50..=150).contains(&elapsed),
+            (50..=5_000).contains(&elapsed),
             "Timer accuracy: {}ms",
             elapsed
         );

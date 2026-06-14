@@ -4,7 +4,7 @@ use std::fs;
 
 use serde::Deserialize;
 use toml_edit::{Array, DocumentMut, Item, Table};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::config::types::agents_def::{AgentDefinition, AgentModelRef, AgentsConfig};
 use crate::error::{AlephError, Result};
@@ -87,7 +87,7 @@ impl AgentManager {
                 let mut perms = metadata.permissions();
                 perms.set_mode(0o600);
                 if let Err(e) = fs::set_permissions(&self.config_path, perms) {
-                    warn!("Failed to set config file permissions: {}", e);
+                    tracing::warn!("Failed to set config file permissions: {}", e);
                 }
             }
         }

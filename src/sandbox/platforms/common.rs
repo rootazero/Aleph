@@ -594,8 +594,13 @@ mod tests {
     async fn run_child_with_drain_timeout_captures_partial_output() {
         use tokio::process::Command;
         // Print a line, *flush* it, then sleep long enough to trip the
-        // 500ms timeout. The captured partial stdout proves the drain
-        // works — codex's IO_DRAIN_TIMEOUT pattern in miniature.
+        // timeout. The captured partial stdout proves the drain works —
+        // codex's IO_DRAIN_TIMEOUT pattern in miniature. The timeout must be
+        // comfortably longer than bash's own startup: on a loaded CI runner,
+        // process spawn can itself take >500ms, so a tight timeout fired
+        // before "started" was ever emitted, leaving partial_stdout empty and
+        // making this test flaky. 2s gives ample startup margin while still
+        // tripping well before the 30s sleep.
         let child = Command::new("bash")
             .arg("-c")
             .arg("echo started; exec 1>&-; sleep 30")
@@ -606,7 +611,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let err = run_child_with_drain(child, None, Duration::from_millis(500), 1024)
+        let err = run_child_with_drain(child, None, Duration::from_millis(2000), 1024)
             .await
             .expect_err("should time out");
         match err {
