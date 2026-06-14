@@ -91,14 +91,27 @@ pub async fn gather_related<S: NoteStore + Send + Sync + 'static>(
 
     // 1-hop expand: outgoing links of the top-ranked seeds (up to 6).
     let expand_roots: Vec<String> = ranked.iter().take(6).map(|(p, _)| p.clone()).collect();
-    for root in expand_roots {
-        let outgoing = store.get_outgoing_links(&root, agent_id).await?;
+    for root in &expand_roots {
+        let outgoing = store.get_outgoing_links(root, agent_id).await?;
         for link in outgoing {
             if seen.contains(&link) {
                 continue;
             }
             if store.get_note_index(&link, agent_id).await?.is_some() && seen.insert(link.clone()) {
                 ranked.push((link, 0.0));
+            }
+        }
+    }
+
+    // Graph-cache community expansion (4-signal materialized): peers in the same
+    // Louvain community as each seed root are strong relatedness candidates,
+    // folded into the SAME candidate pool as the link expansion above. A cold
+    // cache (pre-first-dream) makes `community_peers` return an empty vec, so the
+    // candidate set — and therefore the result ordering — is unchanged.
+    for root in &expand_roots {
+        for peer in store.community_peers(agent_id, root, 8).await? {
+            if seen.insert(peer.clone()) {
+                ranked.push((peer, 0.0));
             }
         }
     }

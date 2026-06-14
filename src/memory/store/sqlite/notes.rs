@@ -1225,6 +1225,44 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(out)
     }
 
+    async fn community_peers(
+        &self,
+        agent_id: &str,
+        node_path: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let cid: Option<i64> = conn
+            .query_row(
+                "SELECT community_id FROM notes_graph_cache \
+                 WHERE agent_id = ?1 AND node_path = ?2",
+                params![agent_id, node_path],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| AlephError::config(format!("community_peers lookup: {e}")))?;
+        let Some(cid) = cid else {
+            return Ok(vec![]);
+        };
+        let mut stmt = conn
+            .prepare(
+                "SELECT node_path FROM notes_graph_cache \
+                 WHERE agent_id = ?1 AND community_id = ?2 AND node_path <> ?3 \
+                 LIMIT ?4",
+            )
+            .map_err(|e| AlephError::config(format!("community_peers prepare: {e}")))?;
+        let rows = stmt
+            .query_map(params![agent_id, cid, node_path, limit as i64], |r| {
+                r.get::<_, String>(0)
+            })
+            .map_err(|e| AlephError::config(format!("community_peers query: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AlephError::config(format!("community_peers row: {e}")))?);
+        }
+        Ok(out)
+    }
+
     // -----------------------------------------------------------------
     // Phase C2.9.2 governance: per-fact provenance + async review queue.
     // -----------------------------------------------------------------

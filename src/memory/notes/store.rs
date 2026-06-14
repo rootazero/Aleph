@@ -279,6 +279,22 @@ pub trait NoteStore: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Node paths sharing `node_path`'s materialized community (from
+    /// `notes_graph_cache`), excluding `node_path` itself, capped at `limit`.
+    ///
+    /// Used by note retrieval to expand a seed hit with its strongest-relatedness
+    /// peers. Default impl (and a cold cache before the first dream recompute)
+    /// returns an empty vec, so callers degrade to their existing expansion.
+    async fn community_peers(
+        &self,
+        agent_id: &str,
+        node_path: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, AlephError> {
+        let _ = (agent_id, node_path, limit);
+        Ok(vec![])
+    }
+
     // -----------------------------------------------------------------
     // Phase C2.9.2 governance: per-fact provenance + async review queue.
     // Default impls return empty/no-op so existing test mocks keep
