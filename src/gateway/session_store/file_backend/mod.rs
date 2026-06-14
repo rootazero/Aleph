@@ -240,17 +240,22 @@ impl FileSessionStore {
             SessionStoreError::DatabaseError(format!("Failed to serialize message: {e}"))
         })?;
         let line = format!("{line}\n");
-        tokio::fs::OpenOptions::new()
+        let mut f = tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
             .await
-            .map_err(|e| SessionStoreError::DatabaseError(format!("Open transcript failed: {e}")))?
-            .write_all(line.as_bytes())
-            .await
             .map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
+                SessionStoreError::DatabaseError(format!("Open transcript failed: {e}"))
             })?;
+        f.write_all(line.as_bytes()).await.map_err(|e| {
+            SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
+        })?;
+        // tokio::fs::File buffers writes and does not flush on drop (Drop is not
+        // async); flush so an immediately-following read_transcript sees the row.
+        f.flush().await.map_err(|e| {
+            SessionStoreError::DatabaseError(format!("Flush transcript failed: {e}"))
+        })?;
         Ok(())
     }
 

@@ -63,6 +63,12 @@ impl LogMdWriter {
         f.write_all(buf.as_bytes())
             .await
             .map_err(|e| AlephError::other(format!("write log: {e}")))?;
+        // tokio::fs::File buffers writes and does not flush on drop (Drop is not
+        // async); without this an immediately-following read can miss the just-
+        // appended entry — an intermittent durability race.
+        f.flush()
+            .await
+            .map_err(|e| AlephError::other(format!("flush log: {e}")))?;
         Ok(())
     }
 
