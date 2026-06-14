@@ -271,14 +271,27 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
         tokio::fs::write(&staged_path, &body)
             .await
             .map_err(|e| ApplyError::Other(AlephError::other(format!("tx write: {e}"))))?;
-        self.staged.push(StagedWrite {
+        let write = StagedWrite {
             staged_path,
             target_path,
             category: category.to_string(),
             filename: filename.to_string(),
             note,
             op_label,
-        });
+        };
+        // Last-write-wins dedup: two ops on the same (category, filename) share
+        // one staged file (the write above overwrote it). A duplicate StagedWrite
+        // would make commit rename the same source twice — the second rename
+        // fails with ENOENT because the first already consumed the staged file.
+        if let Some(existing) = self
+            .staged
+            .iter_mut()
+            .find(|w| w.target_path == write.target_path)
+        {
+            *existing = write;
+        } else {
+            self.staged.push(write);
+        }
         Ok(())
     }
 
