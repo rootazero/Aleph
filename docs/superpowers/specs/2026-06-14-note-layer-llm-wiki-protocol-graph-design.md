@@ -32,10 +32,10 @@
 
 ## 2. 三大根本决策（已与用户确认）
 
-1. **图算法**：全盘移植参考算法（Louvain 社区检测 + Adamic-Adar + 4 信号 + 图谱洞察），用 Rust 类型安全 + Rayon 并发实现，定位为**检索/分析基础设施**（与向量检索同级的赋能层），性能力争超越 TS 参考。
+1. **图算法**：全盘移植参考算法（Louvain 社区检测 + Adamic-Adar + 4 信号 + 图谱洞察），用 Rust 类型安全 + 标准库线程（std::thread::scope） 并发实现，定位为**检索/分析基础设施**（与向量检索同级的赋能层），性能力争超越 TS 参考。
 2. **标准化目标**：**Vault 级字节兼容** — 同一 `~/.aleph/memory/note/{agent_id}/` 目录可同时被 Obsidian / llm_wiki 打开。**类目（preference/plan/...）保留为子目录**，不改名 entities/concepts（vault 兼容不需要）。
 3. **overview/purpose 来源**：**新建独立 LLM 维护文档**，由专用 dream 阶段读全语料生成维护，与 Soul/Goal 解耦。
-4. **集成方案**：**A+B 混合** — 独立 `graph/` 模块 + `notes_graph_cache` 物化表（Rayon 并发重算兑现性能超越）+ 4 信号注入检索 + insights 连 dream/tool。**暂缓 Panel 可视化**（C，另开 spec）。
+4. **集成方案**：**A+B 混合** — 独立 `graph/` 模块 + `notes_graph_cache` 物化表（标准库线程（std::thread::scope） 并发重算兑现性能超越）+ 4 信号注入检索 + insights 连 dream/tool。**暂缓 Panel 可视化**（C，另开 spec）。
 
 ---
 
@@ -93,7 +93,7 @@
   - `adamic_adar ×1.5` — `Σ 1/ln(deg(c))` 遍历公共邻居 c（二阶邻居强度）。
   - `type_affinity ×1.0` — 同 category 加成。
   - 权重走 `[memory.graph]` config 可调（默认对齐参考 3/4/1.5/1）。
-  - `related(seed, k) -> Vec<(path, score)>`；Rayon 并行候选对评分（`par_iter`）。
+  - `related(seed, k) -> Vec<(path, score)>`；候选对评分用 `std::thread::scope` 分块并行（在 `spawn_blocking` 内），无新依赖。
 - **`community.rs` — 手写 Louvain**：模块度最大化双阶段（局部移动 + 社区聚合迭代至收敛）。**不引入图算法 crate**（守 R3 核心轻量化，~200 行）。`cohesion = 实际内部边 / 可能内部边`。输出 `node -> community_id` + 每社区 cohesion。
 - **`insights.rs` — 图谱洞察**：
   - 孤岛 `isolated`：degree ≤ 1。
@@ -109,8 +109,8 @@
   - `notes_sources(agent_id, note_path, source_ref, UNIQUE(agent_id,note_path,source_ref))` — 源重叠信号的快速 join 面，`index_note` 落盘时从 `source_notes` 填充（镜像 `notes_links` 的写法，`store/sqlite/notes.rs`）。
   - `notes_graph_cache(agent_id, node_path, community_id, cohesion, degree, updated_at, PRIMARY KEY(agent_id,node_path))` + `notes_graph_insights(agent_id, kind, payload_json, created_at)` — 物化社区/度/洞察。
 - 新 dream 阶段 `GraphRecomputeStage`（`dreaming/stages/graph_recompute.rs`），注册进 **Consolidate + Conserve**（与 `IndexRefresherStage` 同周期，`dreaming/mod.rs:179,229`）：
-  - 读全图（`get_graph_data` + `notes_sources`）→ Rayon 并发跑 4 信号 + Louvain + insights → upsert 物化表。
-  - **这是"超越参考性能"的发力点**：参考项目在 JS 主线程串行计算，Aleph 用 Rayon 数据并行。
+  - 读全图（`get_graph_data` + `notes_sources`）→ 标准库线程（std::thread::scope） 并发跑 4 信号 + Louvain + insights → upsert 物化表。
+  - **这是"超越参考性能"的发力点**：参考项目在 JS 主线程串行计算，Aleph 用 标准库线程（std::thread::scope） 数据并行。
   - 纯确定性聚合，零 LLM 调用（R7/R10 安全：定位为分析基础设施）。
 - `NoteIndexer::full_rebuild` 路径不受影响（物化表可由 recompute 重建）。
 
@@ -152,7 +152,7 @@
 ```
 src/memory/notes/graph/
 ├── mod.rs            # GraphSnapshot + 对外 API
-├── relevance.rs      # 4 信号（Rayon 并行）
+├── relevance.rs      # 4 信号（标准库线程（std::thread::scope） 并行）
 ├── community.rs      # 手写 Louvain + cohesion
 ├── insights.rs       # isolated/sparse/bridge/surprising
 └── tests.rs
@@ -163,7 +163,7 @@ src/memory/notes/orientation/
 
 src/memory/dreaming/stages/
 ├── corpus_narrative.rs   # 新增（LLM 维护 overview/purpose，Synthesize）
-└── graph_recompute.rs    # 新增（Rayon 并发重算物化表，Consolidate+Conserve）
+└── graph_recompute.rs    # 新增（标准库线程（std::thread::scope） 并发重算物化表，Consolidate+Conserve）
 ```
 
 ---
@@ -172,7 +172,7 @@ src/memory/dreaming/stages/
 
 | 红线 | 对账 |
 |---|---|
-| **R3 核心轻量化** | 手写 Louvain，不引图算法 crate；Rayon 已在依赖树。 |
+| **R3 核心轻量化** | 手写 Louvain，不引图算法 crate；并发用**标准库 `std::thread::scope`**（在 `tokio::task::spawn_blocking` 内），**零新增依赖**（rayon 不在依赖树，刻意不引）。 |
 | **R7 LLM 主权** | 图算法定位为**检索/分析基础设施**（与向量检索同级赋能层，用户已确认全盘移植）；overview/purpose **语义综述仍 LLM 驱动**，不用确定性代码替代推理。 |
 | **R8 工具即一切** | insights 经 `note_manage(action=insights)` 暴露给 LLM 自然语言驱动。 |
 | **R10 笨循环** | 全部改动在 `src/memory/`，**零触碰 `src/harness/`**；新 dream 阶段是离线维护非循环内推理。 |
@@ -187,7 +187,7 @@ src/memory/dreaming/stages/
 2. **Vault 兼容外壳**：to_markdown/parser frontmatter 字段；`.obsidian` 配置。
 3. **图模块（纯函数）**：graph/{relevance,community,insights} + 单测（输入图快照，不碰存储）。
 4. **物化层**：notes_sources/notes_graph_cache 表 + index_note 填充 + NoteStore 方法。
-5. **并发重算阶段**：GraphRecomputeStage（Rayon）注册。
+5. **并发重算阶段**：GraphRecomputeStage（标准库线程（std::thread::scope））注册。
 6. **overview/purpose**：orientation 生成器 + CorpusNarrativeStage。
 7. **连线**：4 信号注入检索；insights 连 note_weave/note_lint + note_manage Insights action；prompt 注入。
 
