@@ -253,7 +253,8 @@ struct CompiledPattern {
 
 /// Compiled once on first scan. In-crate patterns are trusted, so a failure to
 /// compile is a programming error (caught by the `all_patterns_compile` test),
-/// not a runtime condition — `expect` is appropriate here.
+/// not a runtime condition — panicking on a bad hardcoded regex is appropriate.
+#[allow(clippy::panic)]
 static COMPILED: Lazy<Vec<CompiledPattern>> = Lazy::new(|| {
     PATTERN_DEFS
         .iter()

@@ -32,6 +32,10 @@ impl Default for HandlerLayer {
 impl<S> Layer<S> for HandlerLayer {
     type Service = HandlerService<S>;
 
+    // This `Layer` impl exists only to satisfy the trait bound; the handler
+    // middleware is always constructed via `HandlerService::new`, never through
+    // the tower `Layer` path, so reaching here is a wiring bug.
+    #[allow(clippy::panic)]
     fn layer(&self, _inner: S) -> Self::Service {
         panic!("HandlerLayer must be used with HandlerService::new(Arc<HandlerRegistry>)")
     }

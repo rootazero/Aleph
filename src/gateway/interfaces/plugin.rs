@@ -9,12 +9,13 @@ static PLUGINS: std::sync::LazyLock<
     crate::sync_primitives::RwLock<HashMap<&'static str, ChannelFactoryFn>>,
 > = std::sync::LazyLock::new(|| crate::sync_primitives::RwLock::new(HashMap::new()));
 
+// Duplicate registration is a static wiring bug (each channel registers its
+// factory exactly once at startup), not a runtime condition — fail loudly.
+#[allow(clippy::panic)]
 pub fn register(channel_type: &'static str, create: ChannelFactoryFn) {
     let mut guard = PLUGINS.write().unwrap_or_else(|e| e.into_inner());
     if guard.contains_key(channel_type) {
-        panic!(
-            "Duplicate ChannelFactory registration for type: {channel_type}"
-        );
+        panic!("Duplicate ChannelFactory registration for type: {channel_type}");
     }
     guard.insert(channel_type, create);
 }

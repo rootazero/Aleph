@@ -155,7 +155,7 @@ pub(crate) fn evdev_modifier(name: &str) -> Option<u16> {
 /// supported; shifted-punctuation chords are not.
 pub(crate) fn evdev_keycode(name: &str) -> Option<u16> {
     if name.chars().count() == 1 {
-        if let Some(code) = ascii_char_keycode(name.chars().next().unwrap()) {
+        if let Some(code) = name.chars().next().and_then(ascii_char_keycode) {
             return Some(code);
         }
     }

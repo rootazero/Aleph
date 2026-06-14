@@ -160,15 +160,19 @@ pub async fn generate_tts(
     // retry transient cold-start failures so a flaky endpoint doesn't silently
     // eat the leading sentences. `synth_with_retry` logs each failed attempt.
     let timeout = Duration::from_millis(tts_timeout_ms(&spoken));
-    let output = synth_with_retry(timeout, TTS_MAX_ATTEMPTS, TTS_RETRY_BACKOFF, provider_id, || {
-        let request =
-            GenerationRequest::new(GenerationType::Speech, &spoken).with_params(params.clone());
-        provider.generate(request)
-    })
+    let output = synth_with_retry(
+        timeout,
+        TTS_MAX_ATTEMPTS,
+        TTS_RETRY_BACKOFF,
+        provider_id,
+        || {
+            let request =
+                GenerationRequest::new(GenerationType::Speech, &spoken).with_params(params.clone());
+            provider.generate(request)
+        },
+    )
     .await;
-    let Some(output) = output else {
-        return None;
-    };
+    let output = output?;
 
     // Convert GenerationData → Attachment
     let id = uuid::Uuid::new_v4().to_string();

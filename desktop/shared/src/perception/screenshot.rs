@@ -336,7 +336,9 @@ fn fit_within_budget(
         current = current.resize(next_width, u32::MAX, image::imageops::FilterType::Lanczos3);
     }
 
-    let (bytes, w, h) = smallest.expect("budget loop always encodes at least once");
+    let (bytes, w, h) = smallest.ok_or_else(|| {
+        DesktopError::ScreenCapture("screenshot budget loop produced no encoding".into())
+    })?;
     debug!(
         "Screenshot could not reach {}-byte budget; returning smallest encoding ({} bytes, {}x{})",
         max_bytes,

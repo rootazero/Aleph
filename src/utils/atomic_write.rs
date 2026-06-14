@@ -47,7 +47,13 @@ pub async fn atomic_write_file(path: &Path, content: &str) -> Result<(), AlephEr
             suggestion: None,
         })?;
 
-    let file = fs::File::open(&tmp_path)
+    // Reopen with write access for the durability fsync. Windows'
+    // `FlushFileBuffers` (what `sync_all` calls) requires a handle with write
+    // access and fails with `ERROR_ACCESS_DENIED` (os error 5) on a read-only
+    // handle; POSIX tolerates either, so a write handle is correct on both.
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .open(&tmp_path)
         .await
         .map_err(|e| AlephError::ConfigError {
             message: format!("Failed to open temp file for sync: {e}"),

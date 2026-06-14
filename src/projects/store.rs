@@ -92,6 +92,10 @@ pub(crate) fn aleph_home() -> PathBuf {
             return pb;
         }
     }
+    // Deliberate fatal invariant: without a home directory there is no safe,
+    // persistent location for the project registry, and a volatile fallback
+    // would silently lose registered projects on reboot.
+    #[allow(clippy::panic)]
     let home = dirs::home_dir().unwrap_or_else(|| {
         panic!(
             "projects: $HOME unavailable and $ALEPH_HOME unset; refusing to fall back to a \
