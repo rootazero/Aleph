@@ -110,8 +110,11 @@ graphify-out/
 /.agent/
 /.claude/
 
-# Docs: untrack everything except the README-referenced reference/ docs.
+# Docs: untrack everything except the README-referenced reference/ docs and
+# the guides/ directory — docs/guides/*.md are compile-time build assets
+# (src/config embeds them via include_str!), so they must stay tracked.
 # Engineering artifacts (audit / logic-review reports, result dumps) are moved
 # under docs/engineering-reports/ and stay untracked.
 /docs/*
 !/docs/reference/
+!/docs/guides/
