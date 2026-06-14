@@ -107,6 +107,26 @@ impl LoopState {
         self
     }
 
+    /// Re-target the watch: swap the prompt re-injected each tick without a
+    /// stop/start cycle. Empty input is ignored by the caller.
+    #[must_use]
+    pub fn with_prompt(mut self, prompt: &str) -> Self {
+        self.prompt = prompt.to_string();
+        self
+    }
+
+    /// Re-pace the loop in place: change a Fixed interval, or convert a
+    /// model-paced loop to a fixed cadence (and vice-versa). Clears any stale
+    /// `next_wake_ms` when switching to Fixed, where it is meaningless.
+    #[must_use]
+    pub fn with_cadence(mut self, cadence: Cadence) -> Self {
+        if matches!(cadence, Cadence::Fixed { .. }) {
+            self.next_wake_ms = None;
+        }
+        self.cadence = cadence;
+        self
+    }
+
     #[must_use]
     pub fn is_active(&self) -> bool {
         self.status == LoopStatus::Active
@@ -177,6 +197,38 @@ mod tests {
         )
         .with_next_wake_ms(Some(480_000));
         assert_eq!(l.next_wake_ms, Some(480_000));
+    }
+
+    #[test]
+    fn with_prompt_retargets_without_touching_other_fields() {
+        let l = sample().with_max_iterations(Some(9)).with_prompt("watch staging");
+        assert_eq!(l.prompt, "watch staging");
+        assert_eq!(l.max_iterations, Some(9), "other fields preserved");
+    }
+
+    #[test]
+    fn with_cadence_to_fixed_clears_stale_next_wake() {
+        // A model-paced loop carrying a next_wake, re-paced to Fixed: the
+        // next_wake is meaningless for Fixed and must be cleared.
+        let l = LoopState::new(
+            "s",
+            "p",
+            Cadence::ModelPaced {
+                fallback_ms: 600_000,
+            },
+            0,
+        )
+        .with_next_wake_ms(Some(123_456))
+        .with_cadence(Cadence::Fixed {
+            interval_ms: 120_000,
+        });
+        assert!(matches!(
+            l.cadence,
+            Cadence::Fixed {
+                interval_ms: 120_000
+            }
+        ));
+        assert!(l.next_wake_ms.is_none(), "stale next_wake cleared on Fixed");
     }
 
     #[test]

@@ -236,12 +236,31 @@ impl LoopTool {
                 message: "No loop in this session.".to_string(),
             });
         };
+        // Re-pace a Fixed loop (or convert model-paced → fixed) without a
+        // stop/start cycle. `with_cadence` clears any stale next_wake.
+        if let Some(i) = &args.interval {
+            state = state.with_cadence(Cadence::Fixed {
+                interval_ms: parse_interval_ms(i)?,
+            });
+        }
         if let Some(nw) = &args.next_wake {
             let delta = parse_interval_ms(nw)?;
             state = state.with_next_wake_ms(Some(now_ms().saturating_add(delta)));
         }
         if args.max_iterations.is_some() {
             state = state.with_max_iterations(args.max_iterations);
+        }
+        // Reset the wall-clock deadline relative to now (a fresh watch window).
+        if let Some(m) = args.timeout_minutes {
+            let deadline = now_ms().saturating_add(u64::from(m).saturating_mul(60_000));
+            state = state.with_deadline_ms(Some(deadline));
+        }
+        if args.token_budget.is_some() {
+            state = state.with_token_budget(args.token_budget);
+        }
+        // Re-target the watch prompt (ignore empty, which would blank the loop).
+        if let Some(p) = args.prompt.as_deref().filter(|p| !p.trim().is_empty()) {
+            state = state.with_prompt(p);
         }
         self.registry.put(state);
         Ok(LoopOutput {
@@ -260,7 +279,10 @@ impl AlephTool for LoopTool {
          clock and never self-stops — end it with action='stop'. Use \
          action='start' with `interval` (e.g. '5m') for a fixed cadence, or omit \
          `interval` for model-paced (call action='update' with `next_wake` each \
-         tick to set the next delay). Optional safety caps: max_iterations, \
+         tick to set the next delay). action='update' also re-paces a running \
+         loop in place — pass `interval` to change a fixed cadence, or \
+         `prompt`/`timeout_minutes`/`max_iterations` to re-target or re-bound it \
+         without stop/start. Optional safety caps: max_iterations, \
          timeout_minutes. Use for watch/poll duties (e.g. 'every 5 minutes check \
          the deploy and tell me if it changed').";
 
@@ -272,6 +294,7 @@ impl AlephTool for LoopTool {
             "loop(action='start', interval='5m', prompt='Check the deploy status; tell me if it changed')".into(),
             "loop(action='start', prompt='Triage the PR queue', max_iterations=20)".into(),
             "loop(action='update', next_wake='8m')".into(),
+            "loop(action='update', interval='10m')".into(),
             "loop(action='status')".into(),
             "loop(action='stop')".into(),
         ])
@@ -414,6 +437,63 @@ mod tests {
         .unwrap();
         // next_wake stored as an absolute epoch-ms; just assert it is now set.
         assert!(reg.get("s").unwrap().next_wake_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn update_repaces_fixed_interval_in_place() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        reg.put(crate::looping::LoopState::new(
+            "s",
+            "p",
+            crate::looping::Cadence::Fixed {
+                interval_ms: 300_000,
+            },
+            0,
+        ));
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
+        tool.run(LoopArgs {
+            action: LoopAction::Update,
+            interval: Some("10m".to_string()),
+            prompt: None,
+            max_iterations: None,
+            timeout_minutes: None,
+            token_budget: None,
+            next_wake: None,
+        })
+        .await
+        .unwrap();
+        assert!(matches!(
+            reg.get("s").unwrap().cadence,
+            crate::looping::Cadence::Fixed {
+                interval_ms: 600_000
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn update_retargets_prompt_and_resets_deadline() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        reg.put(crate::looping::LoopState::new(
+            "s",
+            "old",
+            crate::looping::Cadence::Fixed { interval_ms: 1000 },
+            0,
+        ));
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
+        tool.run(LoopArgs {
+            action: LoopAction::Update,
+            interval: None,
+            prompt: Some("watch staging".to_string()),
+            max_iterations: None,
+            timeout_minutes: Some(30),
+            token_budget: None,
+            next_wake: None,
+        })
+        .await
+        .unwrap();
+        let st = reg.get("s").unwrap();
+        assert_eq!(st.prompt, "watch staging");
+        assert!(st.deadline_ms.is_some(), "deadline set from timeout_minutes");
     }
 
     #[tokio::test]
