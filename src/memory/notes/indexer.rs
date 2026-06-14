@@ -262,6 +262,13 @@ impl<S: NoteStore> NoteIndexer<S> {
             }
         }
 
+        // Re-resolve cross-note wikilinks. The category scan above runs each
+        // category in its own task, so a note can be indexed before the note it
+        // links to exists in `notes_index` — `resolve_target` then falls back to
+        // the raw wikilink text. Now that every note is indexed, retry those raw
+        // edges so links resolve regardless of which category task ran first.
+        self.store.relink_unresolved(agent_id).await?;
+
         Ok(total)
     }
 
