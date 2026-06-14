@@ -323,6 +323,20 @@ pub trait NoteStore: Send + Sync {
         Ok(vec![])
     }
 
+    /// Batch-fetch notes (with full content) by exact path, for `agent_id`.
+    /// Unknown/deleted paths are omitted; order follows `paths`. The `score`
+    /// field is `0.0` (callers assign their own). Mirrors the row ->
+    /// `NoteSearchResult` shape of `hybrid_search_notes`. Default impl returns
+    /// empty so non-`SQLite` stores / test mocks keep compiling.
+    async fn get_notes_with_content(
+        &self,
+        agent_id: &str,
+        paths: &[String],
+    ) -> Result<Vec<crate::memory::notes::NoteSearchResult>, AlephError> {
+        let _ = (agent_id, paths);
+        Ok(Vec::new())
+    }
+
     // -----------------------------------------------------------------
     // Phase C2.9.2 governance: per-fact provenance + async review queue.
     // Default impls return empty/no-op so existing test mocks keep
