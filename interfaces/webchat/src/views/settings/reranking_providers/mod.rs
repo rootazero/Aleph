@@ -65,6 +65,13 @@ pub(super) const RERANK_PRESETS: &[RerankPreset] = &[
         default_api_base: "http://localhost:8000/v1",
         default_model: "BAAI/bge-reranker-v2-m3",
     },
+    RerankPreset {
+        key: "cohere",
+        name: "Cohere",
+        icon_color: "#A78BFA",
+        default_api_base: "https://api.cohere.com/v2",
+        default_model: "rerank-v3.5",
+    },
 ];
 
 #[component]

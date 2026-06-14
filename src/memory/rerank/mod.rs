@@ -1,7 +1,7 @@
 //! Cross-encoder reranking module
 //!
-//! Provides HTTP-based cross-encoder reranking with 5 provider backends:
-//! Jina, `SiliconFlow`, Voyage, Pinecone, and vLLM.
+//! Provides HTTP-based cross-encoder reranking with 6 provider backends:
+//! Jina, `SiliconFlow`, Voyage, Pinecone, vLLM, and Cohere.
 //!
 //! ## Usage
 //!
@@ -15,6 +15,7 @@
 //! let blended = blend_scores(&originals, &results, config.rerank_weight);
 //! ```
 
+pub mod cohere;
 pub mod jina;
 pub mod pinecone;
 pub mod provider;
@@ -24,6 +25,7 @@ pub mod voyage;
 
 pub use provider::{RerankConfig, RerankProvider, RerankProviderType, RerankResult};
 
+use cohere::CohereRerankProvider;
 use jina::JinaRerankProvider;
 use pinecone::PineconeRerankProvider;
 use siliconflow::SiliconFlowRerankProvider;
@@ -39,6 +41,7 @@ pub fn build_provider(config: &RerankConfig) -> Box<dyn RerankProvider> {
         RerankProviderType::Voyage => Box::new(VoyageRerankProvider::new(config.clone())),
         RerankProviderType::Pinecone => Box::new(PineconeRerankProvider::new(config.clone())),
         RerankProviderType::Vllm => Box::new(VllmRerankProvider::new(config.clone())),
+        RerankProviderType::Cohere => Box::new(CohereRerankProvider::new(config.clone())),
     }
 }
 
@@ -158,6 +161,9 @@ mod tests {
 
         config.provider = RerankProviderType::Vllm;
         assert_eq!(build_provider(&config).provider_id(), "vllm");
+
+        config.provider = RerankProviderType::Cohere;
+        assert_eq!(build_provider(&config).provider_id(), "cohere");
     }
 
     #[test]
