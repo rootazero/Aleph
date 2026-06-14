@@ -147,7 +147,10 @@ mod tests {
     #[tokio::test]
     async fn disabled_config_yields_no_expansion() {
         let b = backend();
-        let cfg = ExpansionConfig { enabled: false, ..Default::default() };
+        let cfg = ExpansionConfig {
+            enabled: false,
+            ..Default::default()
+        };
         let out = graph_expand(&b, "default", &[hit("general/a", 0.9)], &cfg).await;
         assert!(out.is_empty());
     }
@@ -157,8 +160,13 @@ mod tests {
         // related_peers returns empty when nothing materialized -> legacy.
         let b = backend();
         let _ = index(&b, "a").await;
-        let out = graph_expand(&b, "default", &[hit("general/a", 0.9)],
-            &ExpansionConfig::default()).await;
+        let out = graph_expand(
+            &b,
+            "default",
+            &[hit("general/a", 0.9)],
+            &ExpansionConfig::default(),
+        )
+        .await;
         assert!(out.is_empty());
     }
 
@@ -171,8 +179,7 @@ mod tests {
         b.replace_graph_related("default", &[(a.clone(), bp.clone(), 4.0)])
             .await
             .unwrap();
-        let out = graph_expand(&b, "default", &[hit(&a, 0.8)],
-            &ExpansionConfig::default()).await;
+        let out = graph_expand(&b, "default", &[hit(&a, 0.8)], &ExpansionConfig::default()).await;
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].path, bp);
         assert!((out[0].score - 0.4).abs() < 1e-6, "got {}", out[0].score);
@@ -185,12 +192,13 @@ mod tests {
         let a = index(&b, "a").await;
         let p1 = index(&b, "p1").await;
         let p2 = index(&b, "p2").await;
-        b.replace_graph_related("default", &[
-            (a.clone(), p1.clone(), 4.0),
-            (a.clone(), p2.clone(), 2.0),
-        ]).await.unwrap();
-        let out = graph_expand(&b, "default", &[hit(&a, 0.8)],
-            &ExpansionConfig::default()).await;
+        b.replace_graph_related(
+            "default",
+            &[(a.clone(), p1.clone(), 4.0), (a.clone(), p2.clone(), 2.0)],
+        )
+        .await
+        .unwrap();
+        let out = graph_expand(&b, "default", &[hit(&a, 0.8)], &ExpansionConfig::default()).await;
         let by: std::collections::HashMap<&str, f32> =
             out.iter().map(|r| (r.path.as_str(), r.score)).collect();
         // p1: 0.8*0.5*(4/4)=0.4 ; p2: 0.8*0.5*(2/4)=0.2
@@ -224,7 +232,11 @@ mod tests {
             rows.push((a.clone(), p, (10 - i) as f32));
         }
         b.replace_graph_related("default", &rows).await.unwrap();
-        let cfg = ExpansionConfig { peers_per_seed: 10, max_expanded: 3, ..Default::default() };
+        let cfg = ExpansionConfig {
+            peers_per_seed: 10,
+            max_expanded: 3,
+            ..Default::default()
+        };
         let out = graph_expand(&b, "default", &[hit(&a, 0.9)], &cfg).await;
         assert_eq!(out.len(), 3, "global cap must bound total expansion");
     }
@@ -238,8 +250,7 @@ mod tests {
         b.replace_graph_related("default", &[(a.clone(), "general/ghost".to_string(), 4.0)])
             .await
             .unwrap();
-        let out = graph_expand(&b, "default", &[hit(&a, 0.9)],
-            &ExpansionConfig::default()).await;
+        let out = graph_expand(&b, "default", &[hit(&a, 0.9)], &ExpansionConfig::default()).await;
         assert!(out.is_empty());
     }
 
@@ -251,10 +262,15 @@ mod tests {
         let shared = index(&b, "shared").await;
         // `shared` is a peer of BOTH seeds; expansion must score it via s1
         // (the stronger, earlier hit) and not re-add it for s2.
-        b.replace_graph_related("default", &[
-            (s1.clone(), shared.clone(), 4.0),
-            (s2.clone(), shared.clone(), 4.0),
-        ]).await.unwrap();
+        b.replace_graph_related(
+            "default",
+            &[
+                (s1.clone(), shared.clone(), 4.0),
+                (s2.clone(), shared.clone(), 4.0),
+            ],
+        )
+        .await
+        .unwrap();
         // s1 stronger (0.9) than s2 (0.5); single edge each -> factor 1.0.
         let hits = vec![hit(&s1, 0.9), hit(&s2, 0.5)];
         let out = graph_expand(&b, "default", &hits, &ExpansionConfig::default()).await;

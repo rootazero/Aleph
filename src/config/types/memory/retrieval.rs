@@ -216,8 +216,20 @@ mod tests {
 
     #[test]
     fn expansion_inactive_when_disabled_or_zero_caps() {
-        assert!(!ExpansionConfig { enabled: false, ..Default::default() }.is_active());
-        assert!(!ExpansionConfig { max_seeds: 0, ..Default::default() }.is_active());
-        assert!(!ExpansionConfig { max_expanded: 0, ..Default::default() }.is_active());
+        assert!(!ExpansionConfig {
+            enabled: false,
+            ..Default::default()
+        }
+        .is_active());
+        assert!(!ExpansionConfig {
+            max_seeds: 0,
+            ..Default::default()
+        }
+        .is_active());
+        assert!(!ExpansionConfig {
+            max_expanded: 0,
+            ..Default::default()
+        }
+        .is_active());
     }
 }

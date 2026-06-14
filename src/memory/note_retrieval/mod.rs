@@ -625,11 +625,10 @@ mod tests {
 
         // Materialize A -> B; now B surfaces via associative expansion.
         backend
-            .replace_graph_related("default", &[(
-                "general/alpha".to_string(),
-                "general/beta".to_string(),
-                4.0,
-            )])
+            .replace_graph_related(
+                "default",
+                &[("general/alpha".to_string(), "general/beta".to_string(), 4.0)],
+            )
             .await
             .unwrap();
         let warm = retrieval.retrieve("dreame", "default", 10).await.unwrap();
