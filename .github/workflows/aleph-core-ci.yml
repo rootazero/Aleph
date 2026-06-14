@@ -130,6 +130,16 @@ jobs:
             libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
             libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev
       - name: Run benchmarks
+        # `--no-run` only verifies the bench targets compile; CI never runs
+        # them. The default bench profile (opt-level 3) compiling the full
+        # alephcore lib in a single rustc/LLVM pass exhausts the hosted
+        # runner's memory — the VM becomes unresponsive and GitHub terminates
+        # it ("runner has received a shutdown signal", exit 143). Compile the
+        # bench targets unoptimised: cheap, low-memory, and sufficient for a
+        # build check.
+        env:
+          CARGO_PROFILE_BENCH_OPT_LEVEL: "0"
+          CARGO_PROFILE_BENCH_DEBUG: "0"
         run: cargo bench --no-run
 
   loom-tests:
