@@ -1,6 +1,7 @@
 name: Rust Core
 
 on:
+  workflow_dispatch:
   push:
     paths:
       - 'src/**'
