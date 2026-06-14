@@ -51,9 +51,30 @@ All note categories are enumerated by `CATEGORY_DIRS` in `src/memory/notes/index
 
 ## 3. Frontmatter Schema
 
-### 3.1 Common fields (default template)
+### 3.1 Fields
 
-Notes parsed by `KnowledgeNote::from_markdown` (`src/memory/notes/note.rs`) use this frontmatter shape, emitted by the default branch of `frontmatter_template` in `src/builtin_tools/note_manage.rs`:
+Notes are read and written by `KnowledgeNote::from_markdown` / `KnowledgeNote::to_markdown` (`src/memory/notes/note/mod.rs`). The real `Frontmatter` struct (`src/memory/notes/note/parsing.rs`) declares:
+
+```rust
+pub(super) struct Frontmatter {
+    pub(super) category: String,            // #[serde(default)]
+    pub(super) tags: Vec<String>,           // #[serde(default)]
+    pub(super) created: Option<String>,     // YYYY-MM-DD; #[serde(default)]
+    pub(super) updated: Option<String>,     // YYYY-MM-DD; #[serde(default)]
+    pub(super) confidence: f32,             // default 1.0
+    pub(super) severity: Severity,          // #[serde(default)]
+    pub(super) source_notes: Vec<String>,   // alias "source_facts"; #[serde(default)]
+    pub(super) status: NoteStatus,          // #[serde(default)]
+    pub(super) supersedes: Vec<String>,     // #[serde(default)]
+    pub(super) superseded_by: Vec<String>,  // #[serde(default)]
+    pub(super) permanent: bool,             // true → exempt from decay; #[serde(default)]
+    pub(super) relations: Vec<Relation>,    // typed relation edges; #[serde(default)]
+}
+```
+
+Every field is `#[serde(default)]`, so missing values fall through to sane defaults rather than erroring. Dates are parsed as `YYYY-MM-DD` (UTC midnight) by `parse_date_to_unix`; empty / missing dates yield `0`. `to_markdown` serializes all non-default fields back to YAML frontmatter.
+
+The minimum on-disk shape for a note created via `NoteManageTool` is:
 
 ```yaml
 ---
@@ -64,36 +85,7 @@ updated: "{YYYY-MM-DD}"
 ---
 ```
 
-The parser's `Frontmatter` struct declares every field `#[serde(default)]`, so missing values fall through to empty strings / empty vectors rather than erroring. Dates are parsed as `YYYY-MM-DD` (UTC midnight) by `parse_date_to_unix`; empty / missing dates yield `0`.
-
-### 3.2 Reference-specific (`category = "reference"`)
-
-```yaml
----
-title: {title}
-aliases: []
-tags: {tags_json}
-sources: []
-created: "{YYYY-MM-DD}"
-updated: "{YYYY-MM-DD}"
----
-```
-
-`title`, `aliases`, and `sources` are reference-specific extensions emitted by `frontmatter_template("reference", ...)`. The current `KnowledgeNote` parser does **not** bind `title`, `aliases`, or `sources` into struct fields — they are preserved on disk but not surfaced in the in-memory `KnowledgeNote` beyond the filename-derived `title` field and the common `tags` vector. Treat them as forward-compatible metadata.
-
-### 3.3 Skill-specific (`category = "skill"`)
-
-```yaml
----
-title: {title}
-scope: persona
-tags: {tags_json}
-created: "{YYYY-MM-DD}"
-updated: "{YYYY-MM-DD}"
----
-```
-
-The literal string `scope: persona` is emitted verbatim by `frontmatter_template("skill", ...)`. This marks skill notes as agent-persona-scoped content so downstream consumers can distinguish them from regular knowledge entries. As with reference, the `scope` field is preserved in the file but not parsed into the `KnowledgeNote` struct.
+Additional fields (`confidence`, `severity`, `status`, `supersedes`, `superseded_by`, `permanent`, `relations`, `source_notes`) are emitted when non-default. Forward-compatible: unknown fields are ignored by the parser.
 
 ## 4. `KnowledgeNote` Data Model
 
@@ -142,12 +134,12 @@ It strips `/ \ \0 : * ? " < > |`, removes every occurrence of `..`, and trims su
 
 ```rust
 static WIKILINK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[\[([^\]]+)\]\]").unwrap());
+    LazyLock::new(|| Regex::new(r"\[\[([^\]\|]+)(?:\|([^\]]*))?\]\]").unwrap());
 ```
 
-Only `[[target]]` is matched. The `[[target|alias]]` pipe-alias form is **not** recognized by the regex — if a note body contains `[[foo|Foo]]`, the entire string `foo|Foo` becomes the link target. Documented here as the code's truth, not as a limitation; if piped aliases matter, fix the regex before relying on them.
+Both `[[target]]` and `[[target|alias]]` are matched. `extract_wikilinks` returns only the target part (capture group 1); `extract_wikilinks_with_alias` returns `(target, Option<alias>)` pairs. `rewrite_wikilinks(text, old, new)` replaces `[[old]]` → `[[new]]` and `[[old|alias]]` → `[[new|alias]]`, leaving unrelated links intact.
 
-`extract_wikilinks(text: &str) -> Vec<String>` returns every bracketed target in document order. `rewrite_wikilinks(text, old, new) -> String` replaces every `[[old]]` with `[[new]]`, leaving unrelated bracketed text alone.
+`extract_wikilinks(text: &str) -> Vec<String>` returns every bracketed target in document order. `rewrite_wikilinks(text, old, new) -> String` replaces every `[[old]]` (and `[[old|alias]]`) with `[[new]]` (preserving alias), leaving unrelated bracketed text alone.
 
 ### 5.2 Resolution algorithm
 
@@ -301,11 +293,15 @@ CREATE TABLE IF NOT EXISTS notes_links (
     agent_id    TEXT NOT NULL DEFAULT 'default',
     from_note   TEXT NOT NULL,
     to_note     TEXT NOT NULL,
+    to_raw      TEXT NOT NULL,
+    relation    TEXT,
     UNIQUE(agent_id, from_note, to_note)
 );
 CREATE INDEX IF NOT EXISTS idx_notes_links_from ON notes_links(agent_id, from_note);
 CREATE INDEX IF NOT EXISTS idx_notes_links_to ON notes_links(agent_id, to_note);
 ```
+
+`to_raw` stores the raw wikilink text as written in the source note (before resolution), and `relation` carries an optional typed relation label (from the `Relation` frontmatter field). Both were added when the note graph subsystem landed.
 
 `notes_fts`:
 
@@ -365,11 +361,21 @@ CREATE INDEX IF NOT EXISTS idx_recall_day_bucket
 
 `init_schema` also calls `drop_obsolete_facts_tables`, which runs `DROP TABLE IF EXISTS facts / facts_fts / facts_vec_768 / facts_vec_1024 / facts_vec_1536 / graph_nodes / graph_edges / memory_entities` as a one-time cleanup on existing databases.
 
-## 9. Reference Post-Write Hooks
+## 9. Orientation Layer (`index.md` / `log.md` / `SCHEMA.md`)
 
-`src/wiki/git.rs` defines `WikiGitManager` — `ensure_repo` runs `git init`, `ensure_agent_dir` creates per-agent directories, and `commit_changes` auto-commits on page changes. `src/wiki/index.rs` defines `generate_index_content` (builds a markdown table of every wiki page) and `write_index` (writes `index.md` into the agent's wiki directory).
+Three generated files live in each agent's note directory and are managed by `src/memory/notes/orientation/`:
 
-**However**, nothing in the current write path invokes either module. A codebase-wide grep for `WikiGitManager`, `wiki_git`, `generate_index_content`, and `write_index` returns only `src/wiki/git.rs` and `src/wiki/index.rs` themselves — there are no call sites in `src/builtin_tools/note_manage.rs`, `src/memory/notes/indexer.rs`, or `src/memory/compression/service.rs`. When a `reference`-category note is created or updated through `note_manage` or the compression pipeline, the markdown file is written and indexed normally, but **no git commit is produced and no `index.md` is regenerated**. The wiki-specific machinery exists as a dormant module; wiring it to the note write path is future work.
+| File | Generator | Purpose |
+|---|---|---|
+| `SCHEMA.md` | `SchemaStore` (`orientation/schema.rs`) | Per-agent memory schema: tag taxonomy, page thresholds, update policy |
+| `index.md` | `IndexMdGenerator` (`orientation/index_md.rs`) | Category-grouped note listing, rebuilt by `FsNoteOrientation::rebuild_index` |
+| `log.md` | `LogMdWriter` (`orientation/log_md.rs`) | Append-only audit log of ingest, query, lint, and session events |
+
+`FsNoteOrientation::bootstrap` creates all three on first use. `IndexRefresherStage` (wired into the ingest path) calls `refresh_index_after_ingest` after each batch so `index.md` stays current.
+
+`read_snapshot` assembles these three files into an `OrientationSnapshot` that is injected into agent prompts: `schema_text` comes from `SchemaDoc::compact_for_prompt()` (Tag Taxonomy + Page Thresholds + Update Policy sections only, to reduce prompt tokens); `index_text` is the full `index.md`; `recent_log_tail` is the last 20 log entries.
+
+> The `src/wiki/` directory and its `WikiGitManager` / `generate_index_content` were removed. All orientation functionality now lives in `src/memory/notes/orientation/`.
 
 ## 10. Skills as Notes
 
@@ -413,12 +419,12 @@ pub struct NoteManageArgs {
 
 Every action runs `validate_category(category)` against the tool's own copy of the category list (which matches `CATEGORY_DIRS` plus the four `subagent-*` categories, see lines 22–38 of `note_manage.rs`). Unknown categories are rejected with a listing of valid values. Create and update both run input through `sanitize_title` before the filename is ever joined into a path.
 
-Category-specific frontmatter comes from `frontmatter_template(category, title, tags)` at the bottom of `note_manage.rs`. The three branches (`reference`, `skill`, default) produce the YAML shown in §3.
+Frontmatter is produced by `KnowledgeNote::to_markdown` (the single real write path). The YAML fields written are those described in §3.
 
 **Deprecation status (verified by grep):**
 
 - `src/builtin_tools/skill_manage.rs` is still present and active — but it configures **extension skills** (§10), not skill-category notes. The module exists; it does not overlap with `note_manage`.
-- `wiki_manage` is **removed**. `src/executor/builtin_registry/registry.rs` line 928 contains the single remaining reference, a redirect: `"wiki_manage has been removed. Use note_manage instead."`. The argument-builder struct at `src/wiki/tools/manage.rs` is vestigial scaffolding with no live callers.
+- `wiki_manage` is **removed**. The `src/wiki/` directory has been deleted; orientation functionality moved to `src/memory/notes/orientation/` (§9).
 
 ## 12. Event Sourcing
 
@@ -485,6 +491,10 @@ pub enum NamespaceScope {
 `NamespaceScope::to_sql_filter` returns the WHERE clause fragment (`1=1` for `Owner`, `namespace = ?` with bind for `Guest` and `Shared`), and `to_namespace_value` returns the column value written on insert (`"owner"`, `"guest:{id}"`, or `"shared"`). `from_auth_context(role, guest_id)` maps `DeviceRole::Operator` → `Owner` and `DeviceRole::Node` → `Guest(guest_id)` (required; returns an error if missing). The `recall_signals` table carries a `namespace` column defaulting to `'owner'`; per-user memory access filtering happens through this enum.
 
 Note scoping itself is orthogonal: notes are keyed by `agent_id` in the filesystem path and the `notes_index` primary key. `agent_id` and `namespace` are independent axes — the former partitions the markdown filesystem, the latter partitions rows visible to a given authenticated caller.
+
+## 14. Graph Subsystem (upcoming)
+
+`src/memory/notes/graph/` is the planned home for the note protocol-graph subsystem — a typed, queryable knowledge graph built on top of the existing `notes_links` table (§8). The subsystem will provide structured graph traversal (BFS/DFS), relation-typed edge queries, and graph-aware retrieval to complement the existing FTS and vector search paths. Design documentation lives in `docs/reference/memory/notes-graph-spec.md` and `notes-graph-plan.md` (Phase 0–3 implementation roadmap).
 
 ## See Also
 
