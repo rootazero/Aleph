@@ -23,7 +23,7 @@ use crate::api::chat::ChatApi;
 use crate::context::{DashboardState, GatewayEvent};
 use crate::views::chat::ChatState;
 use audio::{MicError, MicSession, TtsPlayer};
-use caption_state::{apply_delta, lock, CaptionState, Delta};
+use caption_state::{apply_delta, apply_formatted, lock, CaptionState, Delta};
 use machine::{on_event, Action, VoiceEvent, VoicePhase};
 use orb::VoiceOrb;
 use sentence::SentenceSplitter;
@@ -306,6 +306,9 @@ fn VoiceSession() -> impl IntoView {
                                         caption_state.update(lock);
                                         // stop the local frame tap (about to close)
                                         session.stop_streaming();
+                                        // Snapshot the raw text for AI-formatting
+                                        // before `raw` is moved into the agent send.
+                                        let raw_for_format = raw.clone();
                                         // 2) raw committed text → Agent (reuse send
                                         //    half). UtteranceSent flips the phase to
                                         //    Processing; the return to Listening
@@ -329,6 +332,45 @@ fn VoiceSession() -> impl IntoView {
                                         // 4) clear the slot so the next listening
                                         //    period opens a FRESH backend decoder.
                                         stream_id.set_value(None);
+                                        // 5) AI-polish the raw transcript
+                                        //    (display-only, non-blocking). On success,
+                                        //    quietly fade-swap the locked caption text
+                                        //    — this NEVER changes what was sent to the
+                                        //    agent. A slow format response must not
+                                        //    bleed stale text into the NEXT utterance:
+                                        //    a later Listening-entry resets
+                                        //    caption_state, so only swap while THIS
+                                        //    utterance's locked text is still on screen
+                                        //    (`locked && committed == raw_for_format`).
+                                        //    Any failure → keep the raw white line
+                                        //    (voice.format also degrades to raw
+                                        //    server-side; P7 graceful degradation).
+                                        spawn_local(async move {
+                                            let polished = dash
+                                                .rpc_call(
+                                                    "voice.format",
+                                                    serde_json::json!({
+                                                        "text": &raw_for_format
+                                                    }),
+                                                )
+                                                .await
+                                                .ok()
+                                                .and_then(|v| {
+                                                    v.get("formatted")
+                                                        .and_then(|s| s.as_str())
+                                                        .filter(|s| !s.is_empty())
+                                                        .map(str::to_string)
+                                                });
+                                            if let Some(p) = polished {
+                                                caption_state.update(|s| {
+                                                    if s.locked
+                                                        && s.committed == raw_for_format
+                                                    {
+                                                        apply_formatted(s, &p);
+                                                    }
+                                                });
+                                            }
+                                        });
                                     }
                                 }
                                 // Batch fallback (streaming disabled in core):
@@ -496,9 +538,16 @@ fn VoiceSession() -> impl IntoView {
             } else {
                 "voice-live"
             };
+            // `.formatted` toggles the quiet fade-swap (vs the lock C-wave) once
+            // AI-polished text has replaced the raw committed line.
+            let committed_class = if s.formatted {
+                "voice-committed formatted"
+            } else {
+                "voice-committed"
+            };
             view! {
                 <span class=row_class>
-                    <span class="voice-committed">{s.committed}</span>
+                    <span class=committed_class>{s.committed}</span>
                     <span class="voice-interim">{s.interim}</span>
                 </span>
             }

@@ -1024,10 +1024,16 @@ html[data-material="aurora"].dark {
   }
   @keyframes voice-wave-final { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
   @keyframes voice-wave-sheen { from { transform: translateX(-60px); opacity: .9; } to { transform: translateX(360px); opacity: 0; } }
+  /* AI-formatted text quietly fades in over the locked white line (a micro fade,
+     NOT a second C-wave). Top-level @keyframes so it resolves outside the
+     reduced-motion query; `.formatted` placed AFTER the wave rule so its equal-
+     specificity `animation`/`::after { display:none }` win the cascade. */
+  @keyframes voice-fade-in { from { opacity: .3; } to { opacity: 1; } }
+  .voice-committed.formatted { animation: voice-fade-in .12s ease-out both; }
+  .voice-committed.formatted::after { display: none; }
   @media (prefers-reduced-motion: reduce) {
     .voice-lock .voice-committed { animation: voice-fade-in .16s ease-out both; }
     .voice-lock .voice-committed::after { display: none; }
-    @keyframes voice-fade-in { from { opacity: .3; } to { opacity: 1; } }
   }
 }
 
