@@ -57,10 +57,14 @@ node_modules/
 platforms/macos/Aleph/Frameworks/*.dylib
 platforms/macos/Aleph/Frameworks/*.dylib.*
 
-# AI agent scaffolding (untracked, kept locally)
-.agent/
-.claude/
+# AI agent scaffolding — root .agent/ and .claude/ are shared with the team.
+# Nested copies (in worktrees/subdirs) stay local.
 **/.claude/
+!/.claude/
+# Root .claude/ is shared except these local-only bits:
+/.claude/settings.local.json
+/.claude/scheduled_tasks.lock
+/.claude/worktrees/
 
 # Git worktrees
 .worktrees/
