@@ -631,6 +631,55 @@ where
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .map_or(0, |d| d.as_millis() as u64);
 
+                                // Token-budget accounting (codex/openclaw parity).
+                                // ONLY runs when the goal carries a token_budget —
+                                // the common no-budget path reads no session state
+                                // and stays behavior-identical. On the first hook
+                                // that sees a budget, capture the real baseline
+                                // (the session's cumulative total at this moment)
+                                // and persist it; thereafter pass the live total so
+                                // `should_continue`/`exhausted_while_active` enforce
+                                // the budget. Previously these calls hardcoded
+                                // `tokens_now = 0`, so `over_budget` could never
+                                // fire — the budget was advertised but dead.
+                                let (goal, tokens_now) = if goal.token_budget.is_some() {
+                                    match self.session_manager.as_ref() {
+                                        Some(sm) => match sm
+                                            .get_total_tokens(&request.session_key)
+                                            .await
+                                        {
+                                            Ok(Some(total)) if goal.baseline_captured => {
+                                                (goal, total)
+                                            }
+                                            Ok(Some(total)) => {
+                                                let seeded =
+                                                    goal.clone().with_baseline(total, now_ms);
+                                                if let Err(e) = store.put(&seeded) {
+                                                    warn!(error = %e, session = %session_key_str,
+                                                        "goal pursuit: failed to persist token baseline; budget unenforced this turn");
+                                                    (goal, 0)
+                                                } else {
+                                                    // Baseline just captured → 0 spent
+                                                    // so far; never a false over-budget.
+                                                    (seeded, total)
+                                                }
+                                            }
+                                            // No row yet / read error → skip budget
+                                            // enforcement this turn (graceful: iteration
+                                            // and deadline caps still apply).
+                                            Ok(None) => (goal, 0),
+                                            Err(e) => {
+                                                warn!(error = %e, session = %session_key_str,
+                                                    "goal pursuit: session token read failed; budget unenforced this turn");
+                                                (goal, 0)
+                                            }
+                                        },
+                                        None => (goal, 0),
+                                    }
+                                } else {
+                                    (goal, 0)
+                                };
+
                                 // 闸门分支：模型在 Active 续跑下自报 Complete，
                                 // 但客观闸门（stop_hooks 退出码）尚未确认。
                                 // 在接受 complete 为终止前先跑闸门（Ralph
@@ -713,7 +762,7 @@ where
                                         }
                                     }
                                 } else if crate::tasks::goal_pursuit::should_continue(
-                                    &goal, 0, now_ms,
+                                    &goal, tokens_now, now_ms,
                                 ) {
                                     let bumped = goal.clone().spent_continuation(now_ms);
                                     if let Err(e) = store.put(&bumped) {
@@ -736,12 +785,14 @@ where
                                             "goal pursuit: enqueued autonomous continuation");
                                     }
                                 } else if crate::tasks::goal_pursuit::exhausted_while_active(
-                                    &goal, 0, now_ms,
+                                    &goal, tokens_now, now_ms,
                                 ) {
-                                    // Distinguish wall-clock exhaustion from the
-                                    // iteration cap so the user sees the real
-                                    // stop reason on their next turn.
-                                    let note = if goal
+                                    // Distinguish token-budget / wall-clock
+                                    // exhaustion from the iteration cap so the user
+                                    // sees the real stop reason on their next turn.
+                                    let note = if goal.over_budget(tokens_now) {
+                                        crate::tasks::goal_pursuit::budget_reached_note(&goal)
+                                    } else if goal
                                         .deadline_ms
                                         .is_some_and(|d| now_ms != 0 && now_ms > d)
                                     {

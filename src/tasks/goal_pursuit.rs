@@ -140,6 +140,24 @@ pub fn deadline_reached_note(_goal: &Goal) -> String {
         .to_string()
 }
 
+/// Note stamped when autonomous pursuit is cut off specifically by the token
+/// budget (distinct from the iteration cap and the wall-clock deadline). The
+/// continuation hook picks this when `over_budget` is the binding stop reason,
+/// so the user sees the true cause instead of a misleading "iteration cap"
+/// message.
+#[must_use]
+pub fn budget_reached_note(goal: &Goal) -> String {
+    match goal.token_budget {
+        Some(budget) => format!(
+            "Autonomous pursuit reached its token budget ({budget} tokens) \
+             without completing. Blocked for your guidance — review progress, \
+             then clear or re-set the goal to continue."
+        ),
+        // No budget set → token budget cannot be the binding stop; fall back.
+        None => cap_reached_note(goal),
+    }
+}
+
 /// 模型在 `Active` 续跑下自报 `Complete`，但客观闸门尚未确认。
 /// 调用方据此在续跑钩子里跑闸门。被动/交互 goal（非 Active 续跑）永远
 /// 返回 false——它们的 complete 立即终止，不经闸门。
@@ -422,5 +440,33 @@ mod tests {
         assert!(deadline_reached_note(&g)
             .to_lowercase()
             .contains("wall-clock"));
+    }
+
+    #[test]
+    fn budget_reached_note_mentions_token_budget() {
+        let g = active_goal(5).with_budget(Some(50_000));
+        let note = budget_reached_note(&g);
+        assert!(note.contains("token budget"), "got: {note}");
+        assert!(note.contains("50000"), "states the budget: {note}");
+    }
+
+    #[test]
+    fn budget_reached_note_falls_back_without_budget() {
+        // No budget set → cannot be the binding stop; reuse the cap note.
+        let g = active_goal(7);
+        assert_eq!(budget_reached_note(&g), cap_reached_note(&g));
+    }
+
+    #[test]
+    fn over_budget_with_captured_baseline_stops_continuation() {
+        // End-to-end of the wiring fix: a real baseline + live token count makes
+        // `should_continue` enforce the budget (previously dead — tokens_now was
+        // hardcoded to 0 at the call site).
+        let g = active_goal(5)
+            .with_budget(Some(1_000))
+            .with_baseline(10_000, 1);
+        assert!(should_continue(&g, 10_500, 0), "500 spent < 1000 budget");
+        assert!(!should_continue(&g, 11_200, 0), "1200 spent > 1000 budget");
+        assert!(exhausted_while_active(&g, 11_200, 0), "budget is binding stop");
     }
 }

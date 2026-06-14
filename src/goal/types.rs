@@ -78,6 +78,15 @@ pub struct Goal {
     /// `None`.
     #[serde(default)]
     pub deadline_ms: Option<u64>,
+    /// Whether `tokens_at_start` has been seeded with a real session-token
+    /// baseline. The `goal` tool seeds `tokens_at_start = 0` at set time (it has
+    /// no live token counter), so the autonomous driver captures the true
+    /// baseline lazily on the first continuation hook that sees a budget set —
+    /// codex's `tokenStartFresh` pattern. Until captured, the token budget is
+    /// not enforced (only iteration/deadline caps apply). `#[serde(default)]` →
+    /// old payloads read `false`.
+    #[serde(default)]
+    pub baseline_captured: bool,
 }
 
 /// Ring cap on accumulated lessons kept per goal (newest retained). Bounds the
@@ -107,6 +116,7 @@ impl Goal {
             gate_command: None,
             lessons: Vec::new(),
             deadline_ms: None,
+            baseline_captured: false,
         }
     }
 
@@ -185,6 +195,18 @@ impl Goal {
     #[must_use]
     pub const fn with_deadline_ms(mut self, deadline_ms: Option<u64>) -> Self {
         self.deadline_ms = deadline_ms;
+        self
+    }
+
+    /// Seed the real token baseline (the session's cumulative total at the
+    /// moment autonomous pursuit begins consuming budget) and mark it captured.
+    /// Capturing the baseline is a lifecycle event, so it bumps `updated_at_ms`
+    /// (like `with_status`). Returns a new `Goal` (§不可变性).
+    #[must_use]
+    pub const fn with_baseline(mut self, tokens_at_start: u64, now_ms: u64) -> Self {
+        self.tokens_at_start = tokens_at_start;
+        self.baseline_captured = true;
+        self.updated_at_ms = now_ms;
         self
     }
 
@@ -376,5 +398,36 @@ mod tests {
             "note":null,"continuations_used":0,"gate_outcome":"unchecked"}"#;
         let g: Goal = serde_json::from_str(json).expect("deserialize old payload");
         assert_eq!(g.deadline_ms, None);
+    }
+
+    #[test]
+    fn new_goal_baseline_not_captured() {
+        assert!(!sample().baseline_captured);
+    }
+
+    #[test]
+    fn with_baseline_seeds_tokens_and_marks_captured_and_bumps_updated_at() {
+        let g = sample();
+        let after = g.clone().with_baseline(12_345, 9_000);
+        assert_eq!(after.tokens_at_start, 12_345);
+        assert!(after.baseline_captured);
+        assert_eq!(after.updated_at_ms, 9_000);
+        // original unchanged (§不可变性)
+        assert_eq!(g.tokens_at_start, 1_000);
+        assert!(!g.baseline_captured);
+        // budget now measures from the seeded baseline, not session lifetime
+        let budgeted = after.with_budget(Some(100));
+        assert_eq!(budgeted.tokens_used(12_345), 0, "no spend at baseline");
+        assert!(budgeted.over_budget(12_500), "250 over a 100 budget");
+    }
+
+    #[test]
+    fn old_payload_without_baseline_captured_deserializes_false() {
+        let json = r#"{"id":"goal-1","session_id":"s","objective":"o",
+            "status":"active","token_budget":null,"tokens_at_start":0,
+            "pursuit":{"mode":"passive"},"created_at_ms":1,"updated_at_ms":1,
+            "note":null,"continuations_used":0,"gate_outcome":"unchecked"}"#;
+        let g: Goal = serde_json::from_str(json).expect("deserialize old payload");
+        assert!(!g.baseline_captured);
     }
 }
