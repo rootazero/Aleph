@@ -203,6 +203,55 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
     //   a list of request_ids. The caller is then responsible for polling
     //   `check_status` on each one. (Useful for very long-running batches.)
 
+    // Mixture-of-Agents (MoA) inputs.
+    let proposer_models = input
+        .get("proposer_models")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|v| !v.is_empty());
+
+    let synthesize = input
+        .get("synthesize")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let aggregator_model = input
+        .get("aggregator_model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let synthesis_instruction = input
+        .get("synthesis_instruction")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // `proposer_models` replicates the top-level `task`, so that task must be
+    // present. (Explicit `batch_tasks` carry their own per-entry tasks and
+    // take precedence — proposer_models is the convenience shorthand.)
+    if proposer_models.is_some() && !has_batch && task.trim().is_empty() {
+        return Err(
+            "'proposer_models' replicates the top-level 'task' across models — 'task' must be set"
+                .to_string(),
+        );
+    }
+
+    // Synthesis is a reduce over a foreground fan-out; it has nothing to fold
+    // when the batch is fire-and-forget.
+    if synthesize && run_in_background {
+        return Err(
+            "'synthesize' requires a foreground batch (set run_in_background=false) so the \
+             aggregator has completed proposals to fold"
+                .to_string(),
+        );
+    }
+
     Ok(SubagentAction::Run(RunArgs {
         task,
         agent_type,
@@ -213,5 +262,9 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         name,
         team_name,
         batch_tasks,
+        proposer_models,
+        synthesize,
+        aggregator_model,
+        synthesis_instruction,
     }))
 }

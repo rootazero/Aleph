@@ -8,7 +8,8 @@ use tokio_stream::StreamExt;
 
 use crate::a2a::domain::{TaskArtifactUpdateEvent, TaskStatusUpdateEvent, UpdateEvent};
 use crate::a2a::port::{A2AResult, A2AStreamingHandler};
-use crate::sync_primitives::AsyncRwLock;
+use crate::a2a::service::notification::NotificationService;
+use crate::sync_primitives::{Arc, AsyncRwLock};
 
 const DEFAULT_CHANNEL_CAPACITY: usize = 256;
 
@@ -17,9 +18,18 @@ const DEFAULT_CHANNEL_CAPACITY: usize = 256;
 /// Uses `tokio::sync::broadcast` channels to support multiple concurrent
 /// subscribers per task. Channels are lazily created on first access and
 /// can be cleaned up via `remove_channel` after task completion.
+///
+/// When constructed with a [`NotificationService`], every broadcast also fans
+/// the event out to registered push-notification webhooks (fire-and-forget),
+/// so clients that registered a push config via
+/// `tasks/pushNotificationConfig/set` but are not attached to the SSE stream
+/// still receive task updates.
 pub struct StreamHub {
     channels: AsyncRwLock<HashMap<String, broadcast::Sender<UpdateEvent>>>,
     capacity: usize,
+    /// Optional push-notification sink. When `Some`, broadcasts are also
+    /// delivered to webhooks registered for the task.
+    notification: Option<Arc<NotificationService>>,
 }
 
 impl StreamHub {
@@ -28,6 +38,7 @@ impl StreamHub {
         Self {
             channels: AsyncRwLock::new(HashMap::new()),
             capacity: DEFAULT_CHANNEL_CAPACITY,
+            notification: None,
         }
     }
 
@@ -38,6 +49,18 @@ impl StreamHub {
         Self {
             channels: AsyncRwLock::new(HashMap::new()),
             capacity,
+            notification: None,
+        }
+    }
+
+    /// Build a hub that also delivers every broadcast to push-notification
+    /// webhooks via the shared [`NotificationService`].
+    #[must_use]
+    pub fn with_notification(notification: Arc<NotificationService>) -> Self {
+        Self {
+            channels: AsyncRwLock::new(HashMap::new()),
+            capacity: DEFAULT_CHANNEL_CAPACITY,
+            notification: Some(notification),
         }
     }
 
@@ -140,6 +163,16 @@ impl A2AStreamingHandler for StreamHub {
         task_id: &str,
         update: TaskStatusUpdateEvent,
     ) -> A2AResult<()> {
+        // Fan out to push-notification webhooks before moving `update` into the
+        // SSE channel. Spawned fire-and-forget so a slow or unreachable webhook
+        // never stalls SSE delivery or the calling bridge.
+        if let Some(notification) = self.notification.clone() {
+            let task_id_owned = task_id.to_string();
+            let event = update.clone();
+            tokio::spawn(async move {
+                notification.notify_status_update(&task_id_owned, &event).await;
+            });
+        }
         let sender = self.get_or_create_sender(task_id).await;
         // Ignore SendError — no subscribers is OK
         let _ = sender.send(UpdateEvent::StatusUpdate(update));
@@ -151,6 +184,15 @@ impl A2AStreamingHandler for StreamHub {
         task_id: &str,
         update: TaskArtifactUpdateEvent,
     ) -> A2AResult<()> {
+        if let Some(notification) = self.notification.clone() {
+            let task_id_owned = task_id.to_string();
+            let event = update.clone();
+            tokio::spawn(async move {
+                notification
+                    .notify_artifact_update(&task_id_owned, &event)
+                    .await;
+            });
+        }
         let sender = self.get_or_create_sender(task_id).await;
         let _ = sender.send(UpdateEvent::ArtifactUpdate(update));
         Ok(())
@@ -330,5 +372,26 @@ mod tests {
     async fn with_capacity_sets_custom_capacity() {
         let hub = StreamHub::with_capacity(64);
         assert_eq!(hub.capacity, 64);
+    }
+
+    #[tokio::test]
+    async fn with_notification_still_delivers_sse() {
+        use crate::sync_primitives::Arc;
+        // No push config registered → notify_* is a cheap no-op (no webhook
+        // POST), so this exercises the fan-out path without network access.
+        let hub = StreamHub::with_notification(Arc::new(NotificationService::new()));
+        let mut stream = hub.subscribe_all("task-1").await.unwrap();
+
+        let event = make_status_event("task-1", TaskState::Completed, true);
+        hub.broadcast_status("task-1", event).await.unwrap();
+
+        let received = stream.next().await.unwrap().unwrap();
+        match received {
+            UpdateEvent::StatusUpdate(e) => {
+                assert_eq!(e.task_id, "task-1");
+                assert_eq!(e.status.state, TaskState::Completed);
+            }
+            _ => panic!("Expected StatusUpdate"),
+        }
     }
 }
