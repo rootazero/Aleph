@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
 
+use super::process_alive::is_process_alive;
+
 const LOCK_FILENAME: &str = "aleph.lock";
 
 #[derive(Debug)]
@@ -140,22 +142,10 @@ pub fn diagnose_holder(data_dir: &Path) -> Option<HolderDiagnostic> {
     })
 }
 
-#[cfg(unix)]
-fn is_process_alive(pid: i32) -> bool {
-    if pid <= 0 {
-        return false;
-    }
-    // SAFETY: `kill(pid, 0)` only checks process existence + permissions.
-    // Returns 0 if process exists, -1 + ESRCH otherwise. No memory effects.
-    unsafe { libc::kill(pid, 0) == 0 }
-}
-
-#[cfg(not(unix))]
-fn is_process_alive(_pid: i32) -> bool {
-    // Best-effort fallback for non-Unix; always assume alive to err on the
-    // safe side (caller will fail back to a "lock held" branch).
-    true
-}
+// Process-liveness now lives in `super::process_alive` (cross-platform).
+// Previously this file carried a `#[cfg(not(unix))]` fallback that always
+// reported "alive" on Windows, so a crashed daemon's orphaned lock was never
+// classified as `HeldByOrphaned`. The shared helper probes the real process.
 
 #[cfg(test)]
 mod tests {

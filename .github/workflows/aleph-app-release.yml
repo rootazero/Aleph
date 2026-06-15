@@ -341,5 +341,6 @@ jobs:
             artifacts/**/*.sig
             artifacts/server-*/aleph-server-*
             scripts/install.sh
+            scripts/install.ps1
             latest.json
             latest-panel.json

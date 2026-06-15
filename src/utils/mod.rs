@@ -7,6 +7,7 @@ pub mod one_or_many;
 pub mod path_within;
 pub mod paths;
 pub mod pii;
+pub mod process_alive;
 pub mod sqlite_open;
 pub mod text_format;
 pub mod vault_io;
