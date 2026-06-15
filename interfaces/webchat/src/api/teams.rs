@@ -95,6 +95,36 @@ impl TeamsApi {
         serde_json::from_value(value).map_err(|e| e.to_string())
     }
 
+    /// Ad-hoc team assembly: create a persistent team with an explicit leader_id
+    /// + members. Returns the new team_id. Wraps the `teams.create` RPC.
+    pub async fn create(
+        state: &DashboardState,
+        name: &str,
+        description: &str,
+        leader_id: &str,
+        members: &[(String, String)], // (agent_id, role)
+    ) -> Result<String, String> {
+        let members_json: Vec<Value> = members
+            .iter()
+            .map(|(id, role)| json!({ "agent_id": id, "role": role }))
+            .collect();
+        let result = state
+            .rpc_call(
+                "teams.create",
+                json!({
+                    "name": name,
+                    "description": description,
+                    "leader_id": leader_id,
+                    "members": members_json,
+                }),
+            )
+            .await?;
+        result
+            .get("team_id")
+            .and_then(|v| v.as_str().map(String::from))
+            .ok_or_else(|| "teams.create did not return team_id".to_string())
+    }
+
     /// Materialize a team from a template via the `team_from_template` builtin
     /// tool. Returns the freshly-created team id so the caller can refresh and
     /// open the team detail.
