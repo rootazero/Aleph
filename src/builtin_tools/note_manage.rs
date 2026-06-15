@@ -805,6 +805,10 @@ impl AlephTool for NoteManageTool {
          Notes are markdown files organized by category (preference, plan, learning, \
          project, personal, tool, lesson, skill, reference, transcript, other). \
          Use this tool to store and retrieve long-term knowledge and preferences. \
+         This is the DURABLE tier — searchable and recalled on relevance, not always \
+         in-prompt. If a fact is identity-level and worth re-reading EVERY session \
+         regardless of topic (a core preference, standing correction), also pin it to \
+         the hot zone with `remember`. \
          IMPORTANT: notes form a wiki — when creating a note, ALWAYS connect it to \
          related notes via the `links` parameter; linkless notes become orphan \
          islands and are archived early. The create result returns `related_notes` \

@@ -136,22 +136,28 @@ impl RememberTool {
 impl AlephTool for RememberTool {
     const NAME: &'static str = "remember";
     const DESCRIPTION: &'static str =
-        "Save durable agent-side memory that persists across sessions and is auto-injected \
-         into your future system prompt. Memory is small and curated — keep entries compact, \
-         factual, and useful next session.\n\n\
+        "Save durable agent-side memory to the curated MEMORY.md hot zone — a small, \
+         always-loaded file auto-injected into every future system prompt. This is the \
+         HOT tier: reserve it for the handful of facts worth re-reading every single \
+         session. Keep entries compact, factual, declarative.\n\n\
          WHEN TO USE (proactively, don't wait):\n\
          - User corrects you (\"don't do X again\", \"remember this\")\n\
          - You discover a stable environment fact (project layout, tooling quirk, OS detail)\n\
          - You learn a workflow / convention specific to this user\n\n\
-         DO NOT save: task progress, session outcomes, completed-work logs, transient TODOs. \
-         For those, use scratchpad or session_search.\n\n\
+         WHERE ELSE memory can go (pick the right tier — don't overload the hot zone):\n\
+         - Durable, searchable knowledge (project facts, learnings, references, lessons) → \
+         `note_manage` (the notes DB, recalled on relevance, not always in-prompt).\n\
+         - Transient task plan / in-progress TODOs → `scratchpad`.\n\
+         - Session outcomes & completed-work logs → captured automatically on session end; \
+         don't hand-save them (and you can't save to `session_search`, which is read-only).\n\n\
          ACTIONS:\n\
          - add: append a new fact (rejects duplicates / over-budget; suggests replace)\n\
          - replace: substitute via a short unique substring of an existing entry\n\
          - remove: delete via a short unique substring\n\n\
-         Memory is bounded. When full, replace or remove first. The current session's system \
-         prompt won't show your write until next compression or session start, but the tool \
-         response always reflects live state.";
+         Memory is bounded. When full (over-budget rejection), don't just delete knowledge — \
+         DEMOTE the least-hot entry to a durable note via `note_manage`, then `remove` it \
+         here to free space. The current session's system prompt won't show your write until \
+         next compression or session start, but the tool response always reflects live state.";
 
     type Args = RememberArgs;
     type Output = RememberOutput;

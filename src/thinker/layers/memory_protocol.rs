@@ -79,6 +79,18 @@ impl PromptLayer for MemoryProtocolLayer {
              (duplicate, over-budget, no-match) returns `message: \"rejected: …\"`; \
              recover by rephrasing or switching action, not by aborting the turn.\n\
              \n\
+             Where a NEW memory goes — two write tiers, pick by how often it's needed:\n\
+             - HOT (always in-prompt, tiny) → `remember` → MEMORY.md. A few identity-level \
+             facts re-read every session: who the user is, stable preferences, environment \
+             quirks, standing corrections.\n\
+             - DURABLE (searchable, recalled on relevance) → `note_manage` → notes DB. \
+             Everything else worth keeping: project facts, learnings, references, lessons. \
+             Larger, organized by category, surfaced only when a query matches.\n\
+             Rule of thumb: want this in front of you EVERY session regardless of topic? → \
+             `remember`. Only when the topic comes up? → `note_manage`. When the hot zone is \
+             full, demote the least-hot entry to a note, then `remove` it from MEMORY.md — \
+             preserve the knowledge, free the hot space.\n\
+             \n\
              When you recognize a mistake — your own or one the user corrected — \
              record the lesson immediately with `note_manage` (create a \
              `feedback/lessons` note): state the cause (why it happened) and how to \
@@ -176,6 +188,23 @@ mod tests {
         );
         assert!(!out_no_session.is_empty());
         assert_eq!(out_no_session, out_with_session, "text must not vary");
+    }
+
+    #[test]
+    fn injects_write_routing_two_tiers() {
+        // The user's core question — when recording a long-term memory, how does
+        // the agent distinguish the hot identity file (remember/MEMORY.md) from
+        // the durable searchable DB (note_manage)? The guidance must spell out
+        // both tiers and the overflow-valve (demote-to-note) recovery.
+        let layer = MemoryProtocolLayer;
+        let config = PromptConfig::default();
+        let mut out = String::new();
+        layer.inject(&mut out, &LayerInput::basic(&config, &[]));
+        assert!(out.contains("two write tiers"), "must name the two tiers");
+        assert!(out.contains("HOT") && out.contains("DURABLE"));
+        assert!(out.contains("MEMORY.md") && out.contains("notes DB"));
+        // Overflow valve: full hot zone demotes to a note rather than dropping it.
+        assert!(out.contains("demote"));
     }
 
     #[test]
