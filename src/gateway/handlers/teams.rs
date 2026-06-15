@@ -21,7 +21,7 @@ use crate::agents::swarm::tasks::{
 use crate::resilience::{AgentUsageTotal, StateDatabase};
 use crate::sync_primitives::Arc;
 use crate::teams::snapshots::{capture_snapshot, restore_snapshot, SqliteSnapshotStore};
-use crate::teams::{NewTeamMember, TeamMemberKind, TeamStore};
+use crate::teams::{NewTeam, NewTeamMember, TeamMemberKind, TeamStore};
 
 use super::super::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
@@ -161,6 +161,115 @@ pub async fn handle_delete(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -
             format!("Failed to delete team '{}': {}", params.team_id, e),
         ),
     }
+}
+
+// =============================================================================
+// teams.create — create a persistent team with explicit leader + members
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct CreateMemberSpec {
+    pub agent_id: String,
+    #[serde(default = "default_member_role")]
+    pub role: String,
+}
+
+fn default_member_role() -> String {
+    "member".to_string()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTeamParams {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub leader_id: String,
+    #[serde(default)]
+    pub members: Vec<CreateMemberSpec>,
+}
+
+/// teams.create — create a persistent team with explicit leader_id + members.
+///
+/// Thin I/O: only wraps `TeamStore::create_team` + `add_member`, no orchestration
+/// or business logic (R4/R10). Leader is auto-enrolled with role="leader";
+/// members duplicating the leader are skipped.
+pub async fn handle_create(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -> JsonRpcResponse {
+    debug!("Handling teams.create request");
+
+    let params: CreateTeamParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    if params.name.trim().is_empty() || params.leader_id.trim().is_empty() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "name and leader_id are required".to_string(),
+        );
+    }
+
+    // Duplicate-name check intentionally omitted at this thin I/O layer; see
+    // TeamCreateTool for LLM-facing dup-name validation.
+    let team = match store
+        .create_team(NewTeam {
+            name: params.name.clone(),
+            description: params.description.clone(),
+            leader_id: params.leader_id.clone(),
+        })
+        .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to create team: {e}"),
+            )
+        }
+    };
+
+    // Auto-enroll the leader with role="leader" (mirrors team_create tool semantics).
+    if let Err(e) = store
+        .add_member(NewTeamMember {
+            team_id: team.id.clone(),
+            agent_id: params.leader_id.clone(),
+            role: "leader".to_string(),
+            ..Default::default()
+        })
+        .await
+    {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to enroll leader: {e}"),
+        );
+    }
+
+    for spec in params.members {
+        if spec.agent_id == params.leader_id {
+            continue; // leader already enrolled
+        }
+        if let Err(e) = store
+            .add_member(NewTeamMember {
+                team_id: team.id.clone(),
+                agent_id: spec.agent_id.clone(),
+                role: spec.role.clone(),
+                ..Default::default()
+            })
+            .await
+        {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to enroll member '{}': {e}", spec.agent_id),
+            );
+        }
+    }
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({ "team_id": team.id, "name": team.name, "leader_id": team.leader_id }),
+    )
 }
 
 /// Handle agents.teams — list all teams an agent belongs to (as leader or member)
@@ -691,6 +800,97 @@ pub async fn handle_task_trace(
 }
 
 // =============================================================================
+// teams.chat.thread — durable team work thread (tasks + artifacts)
+// =============================================================================
+
+/// A single item in the team's durable work thread (task or artifact).
+#[derive(Debug, serde::Serialize)]
+pub struct ThreadItem {
+    /// "task" or "artifact"
+    pub kind: String,
+    /// Agent that owns the task / submitted the artifact (empty string if unknown).
+    pub agent_id: String,
+    /// Human-readable title: task subject or artifact title.
+    pub title: String,
+    /// Task result (falling back to description) or artifact content body.
+    pub content: String,
+    /// Creation timestamp in milliseconds since epoch, used for chronological merge.
+    pub timestamp: i64,
+    /// Set only for kind == "artifact".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<String>,
+}
+
+/// teams.chat.thread — hydrate a team's DURABLE work thread for the Panel:
+/// coordination tasks (subject + owner + result) merged chronologically with
+/// their submitted artifacts (deliverables). Read-only, no side effects.
+///
+/// NOTE: live conversational bubbles (leader/member narrative) are streamed
+/// over `team.<id>.*` during the run and are not persisted as queryable team
+/// messages, so they are intentionally NOT part of this hydrate — on reload
+/// the Panel shows the durable record (tasks + deliverables only). The
+/// autonomous dispatcher's task `result` text carries each member's outcome.
+pub async fn handle_chat_thread(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>,
+    artifact_store: Option<Arc<dyn crate::teams::artifacts::ArtifactStore>>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.chat.thread request");
+
+    let params: TeamIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    let mut items: Vec<ThreadItem> = Vec::new();
+
+    let tasks = coord_store
+        .list_tasks(crate::agents::swarm::tasks::CoordTaskFilter {
+            team_id: Some(params.team_id.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap_or_default();
+
+    for t in &tasks {
+        // created_at is stored as seconds since epoch; multiply to millis for
+        // a common chronological sort basis with artifact DateTime::timestamp_millis().
+        let ts = (t.created_at as i64).saturating_mul(1000);
+
+        items.push(ThreadItem {
+            kind: "task".to_string(),
+            agent_id: t.owner.as_deref().unwrap_or_default().to_string(),
+            title: t.subject.clone(),
+            content: t.result.clone().unwrap_or_else(|| t.description.clone()),
+            timestamp: ts,
+            artifact_id: None,
+        });
+
+        // One artifact query per task (N+1): a team's task count is small/bounded,
+        // and this is a cold hydrate path, not a hot loop.
+        // Artifacts submitted for this task — only when the optional store exists.
+        // Failure is silently ignored (best-effort observability, mirrors task.trace).
+        if let Some(store) = artifact_store.as_ref() {
+            if let Ok(arts) = store.get_artifacts_for_task(&t.id).await {
+                for a in arts {
+                    items.push(ThreadItem {
+                        kind: "artifact".to_string(),
+                        agent_id: a.agent_id,
+                        title: a.title,
+                        content: a.content,
+                        timestamp: a.created_at.timestamp_millis(),
+                        artifact_id: Some(a.id),
+                    });
+                }
+            }
+        }
+    }
+
+    items.sort_by_key(|i| i.timestamp);
+    JsonRpcResponse::success(request.id, serde_json::json!({ "items": items }))
+}
+
+// =============================================================================
 // teams.task.journal.{get,list} — R3 T3 read surface for exit journals
 // =============================================================================
 
@@ -865,6 +1065,257 @@ mod tests {
             task["metadata"]["managed_by"], "team_delegate",
             "caller-supplied managed_by must win over auto-injection"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // handle_create tests
+    // -------------------------------------------------------------------------
+
+    async fn team_store() -> Arc<dyn crate::teams::TeamStore> {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        let store = crate::teams::store::SqliteTeamStore::new(conn);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+
+    fn create_team_req(params: serde_json::Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "teams.create".to_string(),
+            params: Some(params),
+            id: Some(json!(1)),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_create_persists_team_with_leader_and_members() {
+        let store = team_store().await;
+        let req = create_team_req(json!({
+            "name": "ResearchSquad",
+            "description": "ad-hoc",
+            "leader_id": "agent-main",
+            "members": [{"agent_id": "agent-alice", "role": "researcher"}]
+        }));
+        let resp = handle_create(req, store.clone()).await;
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+
+        let team_id = resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("team_id"))
+            .and_then(|v| v.as_str())
+            .expect("team_id in response")
+            .to_string();
+
+        let team = store.get_team(&team_id).await.unwrap().unwrap();
+        assert_eq!(team.leader_id, "agent-main");
+
+        let members = store.get_members(&team_id).await.unwrap();
+        let ids: Vec<&str> = members.iter().map(|m| m.agent_id.as_str()).collect();
+        assert!(ids.contains(&"agent-main"), "leader auto-enrolled");
+        assert!(ids.contains(&"agent-alice"), "member enrolled");
+
+        let leader_member = members.iter().find(|m| m.agent_id == "agent-main").unwrap();
+        assert_eq!(leader_member.role, "leader", "leader has role=leader");
+    }
+
+    #[tokio::test]
+    async fn handle_create_rejects_empty_name() {
+        let store = team_store().await;
+        let resp =
+            handle_create(create_team_req(json!({"name": "", "leader_id": "a"})), store).await;
+        let err = resp.error.expect("expected error");
+        assert_eq!(err.code, INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn handle_create_deduplicates_leader_in_members_list() {
+        let store = team_store().await;
+        let resp = handle_create(
+            create_team_req(json!({
+                "name": "Dup",
+                "leader_id": "bot",
+                "members": [{"agent_id": "bot", "role": "worker"}]
+            })),
+            store.clone(),
+        )
+        .await;
+        assert!(resp.error.is_none());
+        let team_id = resp
+            .result
+            .unwrap()
+            .get("team_id")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
+        let members = store.get_members(&team_id).await.unwrap();
+        let bot_entries: Vec<_> = members.iter().filter(|m| m.agent_id == "bot").collect();
+        assert_eq!(bot_entries.len(), 1, "leader enrolled exactly once");
+    }
+
+    // -------------------------------------------------------------------------
+    // handle_chat_thread tests
+    // -------------------------------------------------------------------------
+
+    fn chat_thread_req(team_id: &str) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "teams.chat.thread".to_string(),
+            params: Some(json!({ "team_id": team_id })),
+            id: Some(json!(1)),
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_thread_empty_store_returns_items_array() {
+        // Verifies: "returns items array structure" + "None artifact_store degrades gracefully"
+        let store = coord_store().await;
+        let resp = handle_chat_thread(
+            chat_thread_req("team-x"),
+            store,
+            None, // no artifact store — must not error
+        )
+        .await;
+
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let result = resp.result.expect("result present");
+        assert!(
+            result["items"].is_array(),
+            "response must contain an 'items' array, got: {result:?}"
+        );
+        assert_eq!(
+            result["items"].as_array().unwrap().len(),
+            0,
+            "empty store must yield empty items"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_thread_tasks_appear_as_items_sorted_by_timestamp() {
+        use crate::agents::swarm::tasks::NewCoordTask;
+
+        let store = coord_store().await;
+
+        // Create two tasks; store assigns created_at=now_epoch() (seconds).
+        // We cannot control the exact timestamp, but we can assert ordering is stable.
+        store
+            .create_task(NewCoordTask {
+                team_id: Some("team-y".to_string()),
+                subject: "First task".to_string(),
+                description: "desc-1".to_string(),
+                owner: Some("agent-a".to_string()),
+                priority: crate::agents::swarm::tasks::Priority::default(),
+                blocked_by: vec![],
+                metadata: serde_json::Value::Object(Default::default()),
+            })
+            .await
+            .expect("create first task");
+        store
+            .create_task(NewCoordTask {
+                team_id: Some("team-y".to_string()),
+                subject: "Second task".to_string(),
+                description: "desc-2".to_string(),
+                owner: None,
+                priority: crate::agents::swarm::tasks::Priority::default(),
+                blocked_by: vec![],
+                metadata: serde_json::Value::Object(Default::default()),
+            })
+            .await
+            .expect("create second task");
+
+        let resp = handle_chat_thread(chat_thread_req("team-y"), store, None).await;
+
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let items = resp.result.expect("result")["items"].clone();
+        let arr = items.as_array().expect("items is array");
+        assert_eq!(arr.len(), 2, "two tasks should produce two items");
+
+        // All are kind=task
+        for item in arr {
+            assert_eq!(item["kind"], "task");
+        }
+
+        // Items are sorted by timestamp (non-decreasing)
+        let timestamps: Vec<i64> = arr
+            .iter()
+            .map(|i| i["timestamp"].as_i64().expect("timestamp is i64"))
+            .collect();
+        let mut sorted = timestamps.clone();
+        sorted.sort();
+        assert_eq!(timestamps, sorted, "items must be sorted by timestamp");
+    }
+
+    #[tokio::test]
+    async fn chat_thread_includes_artifacts_when_store_present() {
+        use crate::agents::swarm::tasks::NewCoordTask;
+        use crate::teams::artifacts::{
+            ArtifactStore, ArtifactType, NewArtifact, SqliteArtifactStore, TaskStatus,
+        };
+
+        let coord = coord_store().await;
+        let artifacts: Arc<dyn ArtifactStore> = Arc::new(SqliteArtifactStore::new_in_memory().await);
+
+        // Create one task and capture its id so the artifact can reference it.
+        let task = coord
+            .create_task(NewCoordTask {
+                team_id: Some("team-z".to_string()),
+                subject: "Build it".to_string(),
+                description: "desc".to_string(),
+                owner: Some("agent-builder".to_string()),
+                priority: crate::agents::swarm::tasks::Priority::default(),
+                blocked_by: vec![],
+                metadata: serde_json::Value::Object(Default::default()),
+            })
+            .await
+            .expect("create task");
+
+        artifacts
+            .create_artifact(NewArtifact {
+                task_id: task.id.clone(),
+                agent_id: "agent-author".to_string(),
+                artifact_type: ArtifactType::Report,
+                title: "Deliverable".to_string(),
+                content: "# Done\n\nbody".to_string(),
+                status: TaskStatus::Completed,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
+                metadata: serde_json::Value::Object(Default::default()),
+            })
+            .await
+            .expect("create artifact");
+
+        let resp = handle_chat_thread(chat_thread_req("team-z"), coord, Some(artifacts)).await;
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let items = resp.result.expect("result")["items"].clone();
+        let arr = items.as_array().expect("items is array");
+
+        // Both a task item and an artifact item should be present.
+        let task_item = arr
+            .iter()
+            .find(|i| i["kind"] == "task")
+            .expect("a task item must be present");
+        assert_eq!(task_item["title"], "Build it");
+
+        let artifact_item = arr
+            .iter()
+            .find(|i| i["kind"] == "artifact")
+            .expect("an artifact item must be present");
+        assert_eq!(artifact_item["agent_id"], "agent-author");
+        assert_eq!(artifact_item["title"], "Deliverable");
+        assert!(
+            artifact_item["artifact_id"].is_string(),
+            "artifact item must carry a Some(artifact_id), got: {artifact_item:?}"
+        );
+
+        // The merged list is sorted by timestamp (non-decreasing).
+        let timestamps: Vec<i64> = arr
+            .iter()
+            .map(|i| i["timestamp"].as_i64().expect("timestamp is i64"))
+            .collect();
+        let mut sorted = timestamps.clone();
+        sorted.sort();
+        assert_eq!(timestamps, sorted, "merged items must be sorted by timestamp");
     }
 }
 
@@ -2378,6 +2829,134 @@ pub async fn handle_workflow_import_canvas(
             "tasks": created,
         }),
     )
+}
+
+// =============================================================================
+// teams.chat.send — spawn the team leader on a single harness run
+//
+// Registered in agent_init/mod.rs (needs GatewayContext + ExecutionAdapter),
+// not in register_teams_handlers (which is store-only).
+// =============================================================================
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ChatSendParams {
+    pub team_id: String,
+    pub message: String,
+}
+
+/// teams.chat.send — spawn the team's leader agent on a single harness run with
+/// an orchestration prompt. The leader uses team tools to decompose/delegate;
+/// the autonomous dispatcher runs members. The leader run emits to team.<id>.*
+/// via TeamFanoutEmitter so its narrative + final synthesis appear in the unified
+/// team chat stream. R10: resolve + spawn only, no orchestration reasoning here.
+pub async fn handle_chat_send(
+    request: JsonRpcRequest,
+    store: Arc<dyn TeamStore>,
+    context: Arc<crate::gateway::context::GatewayContext>,
+) -> JsonRpcResponse {
+    let params: ChatSendParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    debug!(team_id = %params.team_id, "Handling teams.chat.send request");
+    if params.team_id.trim().is_empty() || params.message.trim().is_empty() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "team_id and message are required".to_string(),
+        );
+    }
+
+    let team = match store.get_team(&params.team_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return JsonRpcResponse::error(
+                request.id,
+                RESOURCE_NOT_FOUND,
+                format!("Team '{}' not found", params.team_id),
+            )
+        }
+        Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("{e}")),
+    };
+
+    let members = store
+        .get_members(&params.team_id)
+        .await
+        .inspect_err(|e| tracing::warn!(team_id = %params.team_id, error = %e, "teams.chat.send: get_members failed; spawning leader with empty roster"))
+        .unwrap_or_default();
+    let roster = members
+        .iter()
+        .filter(|m| m.agent_id != team.leader_id)
+        .map(|m| format!("{} ({})", m.agent_id, m.role))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    // Resolve the leader agent from the registry.
+    let leader_agent = match context.agent_registry().get(&team.leader_id).await {
+        Some(a) => a,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Leader agent '{}' not found in registry", team.leader_id),
+            )
+        }
+    };
+
+    let prompt = crate::teams::leader_prompt::build(
+        &team.name,
+        &roster,
+        team.protocol.as_deref(),
+        &params.message,
+    );
+
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let session_key = crate::routing::session_key::SessionKey::task(
+        &team.leader_id,
+        "team_chat",
+        &params.team_id,
+    );
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert("team_id".to_string(), params.team_id.clone());
+
+    let run_request = crate::gateway::execution_engine::RunRequest {
+        run_id: run_id.clone(),
+        input: prompt,
+        session_key,
+        timeout_secs: None,
+        metadata,
+        attachments: Vec::new(),
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
+        workspace_override: None,
+        max_iterations_override: None,
+        model_override: None,
+    };
+
+    // Leader run fans out to team.<id>.* (unified stream the Panel team view
+    // subscribes to). Falls back to NoOp if no event bus was wired at boot.
+    let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
+        match crate::gateway::event_emitter::team_fanout::team_event_bus() {
+            Some(bus) => Arc::new(
+                crate::gateway::event_emitter::team_fanout::TeamFanoutEmitter::new(
+                    bus,
+                    params.team_id.clone(),
+                    team.leader_id.clone(),
+                    None,
+                ),
+            ),
+            None => Arc::new(crate::gateway::event_emitter::NoOpEventEmitter::new()),
+        };
+
+    let execution_adapter = Arc::clone(context.execution_adapter());
+    let team_id_for_log = params.team_id.clone();
+    tokio::spawn(async move {
+        if let Err(e) = execution_adapter.execute(run_request, leader_agent, emitter).await {
+            tracing::warn!(team_id = %team_id_for_log, error = %e, "team leader run failed");
+        }
+    });
+
+    JsonRpcResponse::success(request.id, serde_json::json!({ "run_id": run_id }))
 }
 
 #[cfg(test)]

@@ -1238,6 +1238,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Agent management (agent_manager created earlier for tool config sharing)
     register_agents_handlers(&mut server, &agent_manager, &event_bus);
 
+    // Wire the event bus into the global slot read by the team dispatcher's
+    // member-run path, so member runs fan out to team.<id>.*. Mirrors the
+    // origin_fanout::set_channel_registry injection in start/builder/subsystems.rs.
+    alephcore::gateway::event_emitter::team_fanout::set_team_event_bus(event_bus.clone());
+
     // MCP server management — only when the manager actor spawned. The handle
     // was created above next to the tool bridge.
     if let Some(ref h) = mcp_handle {

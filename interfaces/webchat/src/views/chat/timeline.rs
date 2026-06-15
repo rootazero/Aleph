@@ -321,6 +321,7 @@ mod tests {
             text_finalized: false,
             timestamp: ts,
             iteration: None,
+            agent_id: None,
         }
     }
 
@@ -338,6 +339,7 @@ mod tests {
             text_finalized: false,
             iteration: None,
             timestamp: None,
+            agent_id: None,
         }
     }
 
@@ -355,6 +357,7 @@ mod tests {
             text_finalized: false,
             iteration: Some(it),
             timestamp: None,
+            agent_id: None,
         }
     }
 
@@ -372,6 +375,7 @@ mod tests {
             text_finalized: false,
             iteration: None,
             timestamp: None,
+            agent_id: None,
         }
     }
 
@@ -442,6 +446,7 @@ mod tests {
             text_finalized: false,
             iteration: Some(it),
             timestamp: None,
+            agent_id: None,
         }
     }
 
@@ -463,6 +468,7 @@ mod tests {
             text_finalized: false,
             iteration: Some(it),
             timestamp: None,
+            agent_id: None,
         }
     }
 

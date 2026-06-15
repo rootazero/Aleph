@@ -37,6 +37,7 @@ pub mod sessions;
 pub mod settings;
 pub mod system;
 pub mod tauri_bridge;
+pub mod team_chat;
 pub mod teams;
 pub mod trace;
 pub mod workspace;

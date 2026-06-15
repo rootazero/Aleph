@@ -135,6 +135,7 @@ async fn hydrate_session_history(
                             iteration: None,
                             is_final: false,
                             text_finalized: false,
+                            agent_id: None,
                         });
                     });
                 }
@@ -172,6 +173,8 @@ pub fn ChatSidebar() -> impl IntoView {
     let is_loading = RwSignal::new(false);
     // Which agent is selected in the dropdown (synced with chat.agent_id)
     let selected_agent = RwSignal::new(Option::<String>::None);
+    // Team compose popover visibility
+    let show_compose = RwSignal::new(false);
 
     // Session action states (edit/delete/menu — mutually exclusive)
     let editing_key = RwSignal::new(Option::<String>::None);
@@ -570,7 +573,22 @@ pub fn ChatSidebar() -> impl IntoView {
                     >
                         {move || t_string!(i18n, chat.new).to_string()}
                     </button>
+                    <button
+                        class="px-3 py-1.5 rounded-lg bg-surface-sunken border border-border text-sm
+                               whitespace-nowrap hover:border-primary transition-colors"
+                        title="团队群聊"
+                        on:click=move |_| show_compose.set(true)
+                    >
+                        "👥 团队"
+                    </button>
                 </div>
+
+                // Team compose popover
+                <Show when=move || show_compose.get()>
+                    <crate::views::chat::team_compose::TeamCompose
+                        on_close=Callback::new(move |()| show_compose.set(false))
+                    />
+                </Show>
 
                 // Search — client-side filter over the session list.
                 <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-sunken border border-border text-sm focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/30">

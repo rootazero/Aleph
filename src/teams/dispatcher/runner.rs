@@ -25,6 +25,7 @@
 use std::collections::HashMap;
 
 use crate::gateway::context::GatewayContext;
+use crate::gateway::event_emitter::team_fanout;
 use crate::gateway::event_emitter::NoOpEventEmitter;
 use crate::gateway::execution_engine::RunRequest;
 use crate::gateway::router::SessionKey;
@@ -237,8 +238,20 @@ pub async fn execute_member_task(
     };
 
     let execution_adapter = Arc::clone(context.execution_adapter());
+    // Member runs were previously silent to the Panel (NoOp). Team chat needs the
+    // Panel to see each member's contribution + live status, so fan run events out
+    // to team.<team_id>.* when a gateway event bus was wired at boot. Falls back to
+    // NoOp in non-gateway contexts (unit tests / CLI) where no bus is injected.
     let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
-        Arc::new(NoOpEventEmitter::new());
+        match team_fanout::team_event_bus() {
+            Some(bus) => Arc::new(team_fanout::TeamFanoutEmitter::new(
+                bus,
+                team_id.to_string(),
+                agent_id.to_string(),
+                None,
+            )),
+            None => Arc::new(NoOpEventEmitter::new()),
+        };
 
     // Spawn the execution so it can be aborted on timeout.
     let agent_for_exec = target_agent.clone();

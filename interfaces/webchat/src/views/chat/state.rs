@@ -207,6 +207,11 @@ pub struct ChatMessage {
     /// `push_str` a duplicate copy on top of it.
     #[serde(default)]
     pub text_finalized: bool,
+    /// Team chat: the agent this bubble is attributed to. `None` = single-agent
+    /// legacy path (zero regression; old snapshots without the field deserialize
+    /// to None). `Some(..)` → MessageBubble renders attribution (color + name).
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 /// Minimal tool call record for display.
@@ -217,6 +222,26 @@ pub struct ToolCallEntry {
     pub status: String, // "running" | "completed" | "failed"
     #[serde(default)]
     pub duration_ms: Option<u64>,
+}
+
+/// Panel-side team member view (roster rail rendering + attribution coloring).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TeamMemberView {
+    pub agent_id: String,
+    pub name: String,
+    pub role: String, // backend role, e.g. "leader" | "member" | "researcher"
+    pub is_leader: bool,
+    pub status: MemberStatus,
+}
+
+/// Live execution status of a team member (drives the roster rail status dot).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MemberStatus {
+    #[default]
+    Idle,
+    Working,
+    Done,
+    Error,
 }
 
 /// Top-level Chat UI phase.
@@ -314,6 +339,13 @@ pub struct ChatState {
     pub provider_retry: RwSignal<Option<ProviderRetryNotice>>,
     /// Monotonic counter for generating unique user message IDs.
     next_msg_id: RwSignal<u64>,
+    /// Team chat mode marker. `Some(team_id)` → render 3-pane team view; composer
+    /// routes to teams.chat.send. `None` = single-agent chat (zero regression).
+    /// NOTE (MVP): not persisted in SessionSnapshot — team mode is ephemeral and
+    /// does not survive a session-tab swap; re-enter via the 团队 compose button.
+    pub team_id: RwSignal<Option<String>>,
+    /// Team roster + live status (left roster rail data source). Empty = non-team.
+    pub team_members: RwSignal<Vec<TeamMemberView>>,
 }
 
 impl Default for ChatState {
@@ -346,6 +378,8 @@ impl ChatState {
             voice_run_ids: RwSignal::new(Vec::new()),
             provider_retry: RwSignal::new(None),
             next_msg_id: RwSignal::new(0),
+            team_id: RwSignal::new(None),
+            team_members: RwSignal::new(Vec::new()),
         }
     }
 
@@ -457,6 +491,7 @@ impl ChatState {
                 text_finalized: false,
                 timestamp: Some(super::timeline::now_millis()),
                 iteration: None,
+                agent_id: None,
             });
         });
         self.error_message.set(None);
@@ -479,6 +514,7 @@ impl ChatState {
                 text_finalized: false,
                 timestamp: Some(super::timeline::now_millis()),
                 iteration: None,
+                agent_id: None,
             });
         });
         self.active_run_id.set(Some(run_id.to_string()));
@@ -527,6 +563,7 @@ impl ChatState {
                         timestamp: Some(super::timeline::now_millis()),
                         is_final: false,
                         text_finalized: false,
+                        agent_id: None,
                     });
                 } else {
                     msgs[idx].iteration = Some(iteration);
@@ -735,6 +772,8 @@ impl ChatState {
         self.error_message.set(None);
         self.send_error.set(None);
         self.prompt_queue.set(Vec::new());
+        self.team_id.set(None);
+        self.team_members.set(Vec::new());
         // agent_id is intentionally preserved
     }
 
@@ -1041,5 +1080,22 @@ mod step_tests {
             assert!(!bubble.is_final, "empty final text is a no-op");
             assert_eq!(bubble.content, "kept");
         });
+    }
+
+    #[test]
+    fn chat_message_agent_id_defaults_none_for_legacy_json() {
+        let legacy = serde_json::json!({ "id": "a", "role": "assistant", "content": "hi" });
+        let msg: ChatMessage = serde_json::from_value(legacy).unwrap();
+        assert_eq!(msg.agent_id, None);
+    }
+
+    #[test]
+    fn chat_message_roundtrips_agent_id() {
+        let msg: ChatMessage = serde_json::from_value(serde_json::json!({
+            "id": "m", "role": "assistant", "content": "x", "agent_id": "alice"
+        })).unwrap();
+        assert_eq!(msg.agent_id.as_deref(), Some("alice"));
+        let v = serde_json::to_value(&msg).unwrap();
+        assert_eq!(v.get("agent_id").and_then(|a| a.as_str()), Some("alice"));
     }
 }

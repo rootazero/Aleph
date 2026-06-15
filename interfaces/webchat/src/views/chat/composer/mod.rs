@@ -126,6 +126,23 @@ pub(super) fn InputArea() -> impl IntoView {
         attachments.set(Vec::new());
         chat.push_user_message(&text);
 
+        // Team chat mode: route the requirement to the leader orchestration RPC
+        // instead of the single-agent ChatApi::send. Early return skips the
+        // single-agent path below.
+        if let Some(team_id) = chat.team_id.get_untracked() {
+            let dash = dashboard;
+            let team_text = text.clone();
+            spawn_local(async move {
+                if let Err(e) =
+                    crate::api::team_chat::TeamChatApi::send(&dash, &team_id, &team_text).await
+                {
+                    chat.set_send_error(ChatSendError::classify(e));
+                }
+                is_sending.set(false);
+            });
+            return;
+        }
+
         let api_attachments: Vec<ChatAttachment> = files
             .into_iter()
             .map(|f| ChatAttachment {

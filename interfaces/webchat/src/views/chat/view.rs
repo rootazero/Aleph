@@ -8,7 +8,9 @@ use super::composer::InputArea;
 use super::events::subscribe_run_events;
 use super::messages::MessageList;
 use super::state::{ChatState, PendingAttachment};
+use super::team_events::subscribe_team_events;
 use crate::components::session_tabs::SessionTabs;
+use crate::components::team_roster::TeamRoster;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
@@ -31,6 +33,10 @@ pub fn ChatView() -> impl IntoView {
     // Subscribe to run.* events directly (no Effect — this is a one-shot mount action)
     let sub_id = subscribe_run_events(&dashboard, chat, workspace);
 
+    // Team chat: subscribe to team.<id>.* events alongside the single-agent stream.
+    // Harmless when not in team mode (the handler short-circuits on topic prefix).
+    let team_sub_id = subscribe_team_events(&dashboard, chat);
+
     // Tell the Gateway to start forwarding stream.* events
     // (backend publishes events with method "stream.run_accepted", "stream.response_chunk", etc.)
     // Wait until connected before subscribing, since ChatView may mount before WebSocket is ready.
@@ -48,13 +54,29 @@ pub fn ChatView() -> impl IntoView {
         }
     });
 
+    // Subscribe team.* topic (backend fan-out for team chat events).
+    let dash_for_team_sub = dashboard;
+    spawn_local(async move {
+        for _ in 0..50 {
+            if dash_for_team_sub.is_connected.get_untracked() {
+                break;
+            }
+            gloo_timers::future::TimeoutFuture::new(100).await;
+        }
+        if let Err(e) = dash_for_team_sub.subscribe_topic("team.*").await {
+            web_sys::console::error_1(&format!("Failed to subscribe team events: {e}").into());
+        }
+    });
+
     let dash_for_cleanup = dashboard;
     on_cleanup(move || {
         dash_for_cleanup.unsubscribe_events(sub_id);
-        // Tell the Gateway to stop forwarding stream.* events
+        dash_for_cleanup.unsubscribe_events(team_sub_id);
+        // Tell the Gateway to stop forwarding stream.* and team.* events
         let dash = dash_for_cleanup;
         spawn_local(async move {
             let _ = dash.unsubscribe_topic("stream.*").await;
+            let _ = dash.unsubscribe_topic("team.*").await;
         });
     });
 
@@ -126,6 +148,10 @@ pub fn ChatView() -> impl IntoView {
             on:dragleave=on_dragleave
             on:drop=on_drop
         >
+            // Team roster rail — left column, only visible in team chat mode.
+            <Show when=move || chat.team_id.get().is_some()>
+                <TeamRoster />
+            </Show>
             // Chat surface — collapses to 33% when workspace pane is open.
             // `relative` anchors the workspace toggle (top-right corner
             // affordance) so it follows the chat-surface boundary: in
