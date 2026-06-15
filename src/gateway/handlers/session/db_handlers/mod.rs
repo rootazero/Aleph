@@ -15,7 +15,7 @@ pub use checkpoint::{
 pub use create::{handle_create_db, handle_new_session_db};
 pub use modify::{
     handle_compact_db, handle_delete_db, handle_delete_db_with_capture, handle_patch_db,
-    handle_reset_db, handle_set_pinned_db, handle_set_topic_db, handle_truncate_db,
+    handle_reset_db, handle_set_topic_db, handle_truncate_db,
 };
 pub use query::{handle_history_db, handle_list_db, handle_preview_db, handle_usage_db};
 pub use types::{HistoryMessage, SessionInfo};

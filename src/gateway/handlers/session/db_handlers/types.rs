@@ -52,13 +52,6 @@ pub struct SessionInfo {
     /// SessionEntry.updated_at) for time-grouping & sort; previously only the
     /// RFC3339 `last_active_at` string was sent, so Panel sort/subtitle were dead.
     pub updated_at: i64,
-    /// Whether the user pinned this session (identity_meta.custom["pinned"]).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pinned: Option<bool>,
-    /// Working directory the session's runs launched in
-    /// (identity_meta.custom["project_root"]), for Panel project grouping.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_root: Option<String>,
 }
 
 /// Session history message.

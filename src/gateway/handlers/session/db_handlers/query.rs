@@ -53,16 +53,6 @@ pub async fn handle_list_db(
                     });
                     // Derive origin channel before the struct literal moves m's fields.
                     let channel = m.origin_channel();
-                    // Derive pinned / project_root from identity metadata (mirrors topic).
-                    let pinned = m.identity_meta.as_ref().and_then(|im| {
-                        im.custom.get("pinned").and_then(serde_json::Value::as_bool)
-                    });
-                    let project_root = m.identity_meta.as_ref().and_then(|im| {
-                        im.custom
-                            .get("project_root")
-                            .and_then(|v| v.as_str())
-                            .map(String::from)
-                    });
                     let updated_at = m.last_active_at;
 
                     SessionInfo {
@@ -88,8 +78,6 @@ pub async fn handle_list_db(
                         compaction_count: m.compaction_count as u64,
                         channel,
                         updated_at,
-                        pinned,
-                        project_root,
                     }
                 })
                 .collect();
