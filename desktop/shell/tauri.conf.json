@@ -27,7 +27,12 @@
       "icons/icon.ico"
     ],
     "shortDescription": "Your resident AI assistant",
-    "longDescription": "Aleph desktop shell — a native window, system tray, and lifecycle host for the Aleph Panel, backed by the local aleph-server daemon."
+    "longDescription": "Aleph desktop shell — a native window, system tray, and lifecycle host for the Aleph Panel, backed by the local aleph-server daemon.",
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico"
+      }
+    }
   },
   "plugins": {
     "updater": {
