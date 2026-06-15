@@ -13,6 +13,7 @@ use async_trait::async_trait;
 
 use crate::error::AlephError;
 use crate::memory::dreaming::DreamContext;
+use crate::memory::notes::orientation::types::{LogAction, LogEntry};
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::{remove_wikilink, rewrite_wikilinks};
 
@@ -301,7 +302,64 @@ impl DreamStage for NoteLintStage {
             }
         }
 
+        // ---------------------------------------------------------------
+        // 3. Record the lint pass to the wiki log (log.md).
+        // ---------------------------------------------------------------
+        // The llm_wiki protocol treats log.md as a chronological record of
+        // ingests, queries, AND lint passes. The LLM reads the log tail each
+        // session (via NoteOrientation::read_snapshot), so projecting the pass
+        // here — together with the standing orphan count from the last graph
+        // recompute — is what makes wiki health visible to the model. Without
+        // it the lint runs silently and `record_lint` has no producer.
+        //
+        // Best-effort throughout: a log/insights failure must never fail the
+        // stage (mirrors the relink sweep above and the orientation philosophy
+        // elsewhere — orientation is a projection, never load-bearing).
+        if let Some(orient) = ctx.orientation.as_ref() {
+            let orphans = orphan_count(ctx.indexer.store().as_ref(), &ctx.agent_id).await;
+            let did_work =
+                format_fixed > 0 || broken_links_found > 0 || links_repaired > 0 || links_purged > 0;
+            // Skip wholly-clean passes (no fixes, no orphans) so log.md stays an
+            // event timeline rather than filling with empty "nothing to do" rows.
+            if did_work || orphans > 0 {
+                let entry = LogEntry {
+                    timestamp_utc: chrono::Utc::now().timestamp(),
+                    action: LogAction::Lint,
+                    summary: format!(
+                        "wiki lint pass: {format_fixed} frontmatter fixed, \
+                         {links_repaired} links repaired, {links_purged} purged"
+                    ),
+                    detail_lines: vec![
+                        format!("broken links found: {broken_links_found}"),
+                        format!("orphan notes (last graph pass): {orphans}"),
+                    ],
+                };
+                if let Err(e) = orient.record_lint(&ctx.agent_id, entry).await {
+                    tracing::warn!(error = %e, "NoteLint: failed to record lint pass to log.md (non-fatal)");
+                }
+            }
+        }
+
         Ok(ctx)
+    }
+}
+
+/// Count orphan notes from the last materialized graph recompute.
+///
+/// Reads the `isolated` insight row (a JSON array of note paths) written by
+/// `GraphRecomputeStage`. A cold cache (before the first recompute) or any
+/// read/parse error yields `0` — orphan reporting is purely informational and
+/// must never disrupt the lint stage.
+async fn orphan_count<S: NoteStore + ?Sized>(store: &S, agent_id: &str) -> usize {
+    match store.read_graph_insights(agent_id, Some("isolated")).await {
+        Ok(rows) => rows
+            .into_iter()
+            .find_map(|(_, payload)| serde_json::from_str::<Vec<String>>(&payload).ok())
+            .map_or(0, |paths| paths.len()),
+        Err(e) => {
+            tracing::debug!(error = %e, "NoteLint: read_graph_insights(isolated) failed; reporting 0 orphans");
+            0
+        }
     }
 }
 
@@ -638,6 +696,110 @@ category: preference
             "ambiguous bare link must not auto-resolve; got ref={:?} tut={:?}",
             inc_ref,
             inc_tut
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Lint-pass logging to log.md (llm_wiki protocol wiring)
+    // -----------------------------------------------------------------
+
+    use crate::memory::dreaming::NoteEntry;
+    use crate::memory::notes::orientation::{FsNoteOrientation, LogMdWriter, NoteOrientation};
+
+    #[tokio::test]
+    async fn orphan_count_parses_isolated_insight() {
+        let temp = std::env::temp_dir().join(format!("aleph_orphan_{}", uuid::Uuid::new_v4()));
+        let store = SqliteMemoryBackend::new(&temp).unwrap();
+
+        // Cold cache (no graph recompute yet) → 0 orphans.
+        assert_eq!(orphan_count(&store, "default").await, 0);
+
+        let payload = serde_json::to_string(&vec!["a/x".to_string(), "b/y".to_string()]).unwrap();
+        store
+            .replace_graph_insights("default", &[("isolated".to_string(), payload)])
+            .await
+            .unwrap();
+        assert_eq!(orphan_count(&store, "default").await, 2);
+    }
+
+    async fn ctx_with_orientation(temp: &std::path::Path) -> DreamContext {
+        let store = Arc::new(SqliteMemoryBackend::new(&temp.join("mem.db")).unwrap());
+        let indexer = NoteIndexer::new(temp.to_path_buf(), store.clone());
+        let orientation = Arc::new(FsNoteOrientation::new(temp.to_path_buf(), store.clone()));
+        orientation.bootstrap("default").await.unwrap();
+        let orient_dyn: Arc<dyn NoteOrientation> = orientation;
+
+        let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
+            std::sync::Arc::new(MockProvider::new(""));
+        let embedder: std::sync::Arc<dyn EmbeddingProvider> = std::sync::Arc::new(StubEmbedder);
+
+        DreamContext {
+            notes: Vec::new(),
+            note_contents: std::collections::HashMap::new(),
+            agent_id: "default".into(),
+            database: store.clone(),
+            indexer,
+            provider,
+            embedder,
+            report: crate::memory::dreaming::DreamReport::default(),
+            pipeline_type: "consolidate".into(),
+            activity_checker: std::sync::Arc::new(|| false),
+            strategy: crate::memory::dreaming::DreamStrategy::Consolidate,
+            orientation: Some(orient_dyn),
+        }
+    }
+
+    #[tokio::test]
+    async fn lint_records_pass_to_log_when_frontmatter_fixed() {
+        let temp = std::env::temp_dir().join(format!("aleph_lintlog_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(temp.join("default/preference")).unwrap();
+        // Note file missing frontmatter — the frontmatter rule will patch it,
+        // so the pass does real work and must be recorded.
+        std::fs::write(temp.join("default/preference/x.md"), "- the user prefers vim\n").unwrap();
+
+        let mut ctx = ctx_with_orientation(&temp).await;
+        ctx.notes = vec![NoteEntry {
+            path: "preference/x".into(),
+            category: "preference".into(),
+            tags: vec![],
+            created_at: 0,
+            updated_at: 0,
+            content_hash: "h".into(),
+        }];
+
+        NoteLintStage.execute(ctx).await.unwrap();
+
+        let log = LogMdWriter::new(temp.join("default"))
+            .tail(50)
+            .await
+            .unwrap();
+        assert!(
+            log.contains("lint | wiki lint pass"),
+            "log.md must record the lint pass; got:\n{log}"
+        );
+        assert!(log.contains("1 frontmatter fixed"), "got:\n{log}");
+        assert!(
+            log.contains("orphan notes (last graph pass): 0"),
+            "got:\n{log}"
+        );
+    }
+
+    #[tokio::test]
+    async fn lint_skips_log_when_nothing_to_report() {
+        // No notes, no orphans → a wholly-clean pass must not append a lint row,
+        // keeping log.md an event timeline rather than per-cycle noise.
+        let temp = std::env::temp_dir().join(format!("aleph_lintclean_{}", uuid::Uuid::new_v4()));
+        let ctx = ctx_with_orientation(&temp).await;
+
+        NoteLintStage.execute(ctx).await.unwrap();
+
+        let log = LogMdWriter::new(temp.join("default"))
+            .tail(50)
+            .await
+            .unwrap();
+        assert!(
+            !log.contains("lint |"),
+            "clean pass must not write a lint entry; got:\n{log}"
         );
     }
 }
