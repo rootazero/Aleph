@@ -156,4 +156,28 @@ so it offers product-shape parallels rather than directly portable core code.)
 | PID-reuse-resistant lock diagnostic | ✅ done | `aleph.lock` now records holder start time; `process_matches` verifies it (mapped from Codex `PidRecord`, made cross-platform via `sysinfo`) |
 | `bootstrap-runtime` parallelism | ⛔ rejected | `install()` mutates process-global `PATH` via `set_var`; parallelizing would race the env. Sequential install is the correct design. |
 | `uv` venv post-install path (Windows) | ✅ verified correct | `expand_home` rewrites `/bin/python` → `\Scripts\python.exe` and expands repair args; no fix needed |
-| `stop`/`status` for non-daemon Windows servers | ⏳ follow-up | Fall back to `instance_lock` holder PID + `sysinfo` terminate when `gateway.pid` is absent |
+| `stop`/`status` for non-daemon Windows servers | ⏳ follow-up (design refined — see below) | `gateway.pid` is written only by the Unix `daemonize`, so `stop`/`status` can't see a foreground/supervised server |
+
+### Follow-up design note: why `stop`/`status` is non-trivial on Windows
+
+The obvious fix — "when `gateway.pid` is absent, read the holder PID from
+`aleph.lock` instead" — **does not work on Windows**, and the trap is
+non-obvious:
+
+- `instance_lock` takes an exclusive whole-file lock via `fs2`, which is
+  `LockFileEx` on Windows. Unlike Unix advisory `flock`, that lock is
+  **mandatory**: while the server holds it, any *other* process's `ReadFile`
+  on the locked range fails with a lock violation. So a separate `aleph status`
+  process cannot read `aleph.lock`'s contents while the server is running —
+  exactly the case we'd want to detect. (This is already documented in
+  `instance_lock`'s `#[cfg(not(windows))]` test gates.)
+
+Therefore the correct fix is **not** a lock-file read. It is to write a
+separate, *unlocked* PID file (`gateway.pid`) on the foreground / all-platform
+`start` path — not just inside the Unix `daemonize` — so `stop`/`status` read
+it on every platform. That is a startup-path change (interacts with the
+singleton-lock PID rewrite and exit cleanup) and warrants compile + runtime
+verification, so it is deferred rather than shipped unverified. Auto-killing is
+intentionally *not* part of it: a supervised instance (the Aleph app's Tauri
+supervisor) would just relaunch, so `stop` should report the PID and the
+platform-appropriate command rather than force-terminate.
