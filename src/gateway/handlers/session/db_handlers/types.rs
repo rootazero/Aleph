@@ -48,6 +48,17 @@ pub struct SessionInfo {
     /// Panel distinguish channel-originated conversations from its own.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
+    /// Last-active time as Unix epoch seconds. The Panel expects this (its
+    /// SessionEntry.updated_at) for time-grouping & sort; previously only the
+    /// RFC3339 `last_active_at` string was sent, so Panel sort/subtitle were dead.
+    pub updated_at: i64,
+    /// Whether the user pinned this session (identity_meta.custom["pinned"]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
+    /// Working directory the session's runs launched in
+    /// (identity_meta.custom["project_root"]), for Panel project grouping.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<String>,
 }
 
 /// Session history message.
