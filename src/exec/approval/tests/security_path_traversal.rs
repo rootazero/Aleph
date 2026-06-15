@@ -245,12 +245,12 @@ fn test_case_sensitivity() {
     params.insert("file_path".to_string(), "/TMP/file.txt".to_string());
 
     let trigger = check_path_escalation(&params, &approved_paths);
-    // On case-insensitive filesystems (macOS APFS), /TMP and /tmp resolve
-    // to the same canonical path, so this is correctly allowed.
+    // On case-insensitive filesystems (macOS APFS, Windows NTFS), /TMP and /tmp
+    // resolve to the same canonical path, so this is correctly allowed.
     // On case-sensitive filesystems (Linux ext4), /TMP != /tmp so it's rejected.
     // The behavior depends on the actual filesystem, which is the correct security property.
-    if cfg!(target_os = "macos") {
-        // macOS APFS is case-insensitive by default: /TMP == /tmp
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        // macOS APFS / Windows NTFS are case-insensitive by default: /TMP == /tmp
         // Either result is acceptable depending on filesystem config
     } else {
         assert!(

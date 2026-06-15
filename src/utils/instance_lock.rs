@@ -178,6 +178,12 @@ mod tests {
         assert_eq!(parse_holder("abc\n456"), (-1, Some(456)));
     }
 
+    // POSIX-only: reading the holder record back while the lock is held relies
+    // on `flock` being advisory. On Windows `fs2` uses `LockFileEx`, whose
+    // exclusive lock blocks reads from every other handle (even same-process),
+    // so the readback fails with os error 33. Same rationale as
+    // `second_acquire_in_same_process_returns_held_by_live` below.
+    #[cfg(not(windows))]
     #[test]
     fn acquired_lock_records_a_recoverable_pid() {
         // The written holder record must round-trip through parse_holder back
