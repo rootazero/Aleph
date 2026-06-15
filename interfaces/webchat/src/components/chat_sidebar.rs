@@ -475,6 +475,22 @@ pub fn ChatSidebar() -> impl IntoView {
         });
     });
 
+    let reload_for_pin = reload_data.clone();
+    let do_pin = Arc::new(move |session_key: String, pinned: bool| {
+        let dash = dashboard;
+        let reload = reload_for_pin.clone();
+        leptos::task::spawn_local(async move {
+            match crate::api::sessions::set_pinned(&dash, &session_key, pinned).await {
+                Ok(()) => {
+                    reload(dash);
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to set pinned: {e}").into());
+                }
+            }
+        });
+    });
+
     let reload_for_delete = reload_data;
     let do_delete = Arc::new(move |session_key: String| {
         if is_saving.get_untracked() {
@@ -653,6 +669,7 @@ pub fn ChatSidebar() -> impl IntoView {
                     let on_select = on_select_session;
                     let do_rename = do_rename.clone();
                     let do_delete = do_delete.clone();
+                    let do_pin = do_pin.clone();
                     view! {
                         <div class="space-y-0.5">
                             {filtered
@@ -673,6 +690,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                     let subtitle = format_session_subtitle(&session);
                                     let do_rename = do_rename.clone();
                                     let do_delete = do_delete.clone();
+                                    let do_pin = do_pin.clone();
 
                                     // Determine which mode this session row is in
                                     let is_editing = _editing.as_deref() == Some(&key);
@@ -777,6 +795,8 @@ pub fn ChatSidebar() -> impl IntoView {
                                         let key_for_menu = key.clone();
                                         let key_for_edit = key.clone();
                                         let key_for_del_menu = key.clone();
+                                        let key_for_pin = key.clone();
+                                        let pinned_now = session.pinned;
                                         let label_for_edit = label.clone();
                                         let key_for_run = key;
                                         let is_running = move || running.with(|m| m.contains_key(&key_for_run));
@@ -837,6 +857,21 @@ pub fn ChatSidebar() -> impl IntoView {
                                                         <div class="glass absolute right-0 top-full mt-1 z-50 min-w-[120px]
                                                                     bg-surface-overlay/85 border border-border rounded-lg shadow-xl
                                                                     py-1 text-xs">
+                                                            <button
+                                                                class="w-full text-left px-3 py-1.5 text-text-secondary
+                                                                       hover:bg-surface-sunken hover:text-text-primary transition-colors"
+                                                                on:click=move |ev: web_sys::MouseEvent| {
+                                                                    ev.stop_propagation();
+                                                                    menu_open_key.set(None);
+                                                                    do_pin(key_for_pin.clone(), !pinned_now);
+                                                                }
+                                                            >
+                                                                {move || if pinned_now {
+                                                                    t_string!(i18n, chat.unpin).to_string()
+                                                                } else {
+                                                                    t_string!(i18n, chat.pin).to_string()
+                                                                }}
+                                                            </button>
                                                             <button
                                                                 class="w-full text-left px-3 py-1.5 text-text-secondary
                                                                        hover:bg-surface-sunken hover:text-text-primary transition-colors"
