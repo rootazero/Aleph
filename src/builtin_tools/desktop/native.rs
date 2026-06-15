@@ -100,9 +100,22 @@ impl super::DesktopTool {
     /// `image_base64`. Both are best-effort; an unavailable layer is simply
     /// omitted (P7). With no bridge or `want_describe == false`, the output is
     /// byte-identical to the legacy `{image_base64,width,height,format}` shape.
+    ///
+    /// When `full_screen` is set (a whole-display capture, not a region crop) a
+    /// `coordinate_space` self-description is attached. A full-resolution Retina
+    /// capture almost always exceeds the result-size budget and is silently
+    /// downscaled before the model sees it, so a model that reads a pixel off
+    /// the *served* image and replays it as a `pixel`-space click would land in
+    /// the wrong place. The guide tells the model to address points in the
+    /// served image's own pixel space via `coord_space:"normalized"` +
+    /// `coord_factors:[width,height]`; [`super::coord_resolve`] then maps those
+    /// back onto the real display at dispatch, staying correct under any
+    /// downscale or DPI scale factor. Region crops are excluded because their
+    /// pixels do not map linearly onto the full display.
     async fn screenshot_output(
         &self,
         want_describe: bool,
+        full_screen: bool,
         image_base64: String,
         width: u32,
         height: u32,
@@ -130,6 +143,24 @@ impl super::DesktopTool {
         obj.insert("width".into(), serde_json::json!(width));
         obj.insert("height".into(), serde_json::json!(height));
         obj.insert("format".into(), serde_json::json!(format));
+
+        if full_screen {
+            obj.insert(
+                "coordinate_space".into(),
+                serde_json::json!({
+                    "image_width": width,
+                    "image_height": height,
+                    "note": format!(
+                        "This image is {width}x{height}px and may be downscaled from the \
+                         real display. To click/drag a point you see here at image pixel \
+                         (px, py), send coord_space=\"normalized\" with \
+                         coord_factors=[{width}, {height}] and x=px, y=py — the runtime \
+                         maps it onto the real display (correct under downscale and Retina \
+                         scaling). Do NOT replay raw image pixels as pixel-space coords."
+                    ),
+                }),
+            );
+        }
 
         DesktopOutput {
             success: true,
@@ -265,6 +296,7 @@ impl super::DesktopTool {
                                 Ok(processed) => Ok(Some(
                                     self.screenshot_output(
                                         args.describe == Some(true),
+                                        args.region.is_none(),
                                         processed.image_base64,
                                         processed.width,
                                         processed.height,
@@ -282,6 +314,7 @@ impl super::DesktopTool {
                             Ok(Some(
                                 self.screenshot_output(
                                     args.describe == Some(true),
+                                    args.region.is_none(),
                                     s.image_base64,
                                     s.width,
                                     s.height,
@@ -1057,7 +1090,7 @@ mod tests {
     async fn screenshot_output_without_bridge_is_passthrough() {
         let tool = DesktopTool::new();
         let out = tool
-            .screenshot_output(true, "Ymd4".into(), 100, 50, "png".into())
+            .screenshot_output(true, true, "Ymd4".into(), 100, 50, "png".into())
             .await;
         assert!(out.success);
         let data = out.data.unwrap();
@@ -1067,6 +1100,24 @@ mod tests {
         // No bridge → no augmentation fields, byte-identical legacy shape.
         assert!(data.get("ocr_text").is_none());
         assert!(data.get("description").is_none());
+        // Full-screen capture carries the coordinate self-description so the
+        // model addresses clicks in the served image's pixel space.
+        let cs = &data["coordinate_space"];
+        assert_eq!(cs["image_width"], 100);
+        assert_eq!(cs["image_height"], 50);
+        assert!(cs["note"].as_str().unwrap().contains("normalized"));
+    }
+
+    #[tokio::test]
+    async fn screenshot_output_region_crop_omits_coordinate_space() {
+        let tool = DesktopTool::new();
+        // A region crop (full_screen=false): normalized coords would map onto
+        // the whole display, not the crop, so the guide must be absent.
+        let out = tool
+            .screenshot_output(false, false, "Ymd4".into(), 100, 50, "png".into())
+            .await;
+        let data = out.data.unwrap();
+        assert!(data.get("coordinate_space").is_none());
     }
 
     #[tokio::test]
@@ -1077,7 +1128,7 @@ mod tests {
         let tool = DesktopTool::new().with_vision_bridge(bridge);
 
         let out = tool
-            .screenshot_output(true, "aW1n".into(), 10, 10, "png".into())
+            .screenshot_output(true, true, "aW1n".into(), 10, 10, "png".into())
             .await;
         let data = out.data.unwrap();
         assert_eq!(data["image_base64"], "aW1n");
@@ -1095,7 +1146,7 @@ mod tests {
 
         // want_describe=false → no augmentation even though a bridge is wired.
         let out = tool
-            .screenshot_output(false, "aW1n".into(), 10, 10, "png".into())
+            .screenshot_output(false, true, "aW1n".into(), 10, 10, "png".into())
             .await;
         let data = out.data.unwrap();
         assert_eq!(data["image_base64"], "aW1n");

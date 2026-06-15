@@ -542,6 +542,8 @@ Examples:
 
 Coordinate space — by default, `x` / `y` / `start_x` / `end_x` / `region` are pixels (top-left origin). To use UI-TARS-style normalized [0, 1000] × [0, 1000] coordinates that scale to any display, set `coord_space:"normalized"` (and optionally `coord_factors:[w,h]` to override the 1000×1000 default). The runtime rescales against the primary display (or `display_id`) before dispatch.
 
+IMPORTANT — a full-screen `screenshot` is usually downscaled to fit the result budget, so the image you see is smaller than the real display. The screenshot result carries a `coordinate_space` block with the served `image_width`/`image_height`; to act on a point you saw at image pixel (px, py), send `coord_space:"normalized"` with `coord_factors:[image_width, image_height]` and `x=px, y=py`. Replaying raw image pixels as `pixel`-space coords will miss on Retina/downscaled captures.
+
 {"action":"click","coord_space":"normalized","x":500,"y":500}
 {"action":"batch","coord_space":"normalized","actions":[{"action":"click","x":300,"y":400},{"action":"type_text","text":"hi"}]}
 
