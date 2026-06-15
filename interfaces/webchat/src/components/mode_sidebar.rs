@@ -72,8 +72,11 @@ pub fn ModeSidebar() -> impl IntoView {
                 }}
             </div>
 
-            // Persistent bottom-left section switcher
+            // Persistent bottom-left section navigation grid
             <NavMenu />
+
+            // Persistent footer — agent switcher + Gateway status dot
+            <crate::components::sidebar_footer::SidebarFooter />
         </aside>
     }
 }
