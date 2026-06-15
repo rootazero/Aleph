@@ -2575,6 +2575,134 @@ pub async fn handle_workflow_import_canvas(
     )
 }
 
+// =============================================================================
+// teams.chat.send — spawn the team leader on a single harness run
+//
+// Registered in agent_init/mod.rs (needs GatewayContext + ExecutionAdapter),
+// not in register_teams_handlers (which is store-only).
+// =============================================================================
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ChatSendParams {
+    pub team_id: String,
+    pub message: String,
+}
+
+/// teams.chat.send — spawn the team's leader agent on a single harness run with
+/// an orchestration prompt. The leader uses team tools to decompose/delegate;
+/// the autonomous dispatcher runs members. The leader run emits to team.<id>.*
+/// via TeamFanoutEmitter so its narrative + final synthesis appear in the unified
+/// team chat stream. R10: resolve + spawn only, no orchestration reasoning here.
+pub async fn handle_chat_send(
+    request: JsonRpcRequest,
+    store: Arc<dyn TeamStore>,
+    context: Arc<crate::gateway::context::GatewayContext>,
+) -> JsonRpcResponse {
+    let params: ChatSendParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    debug!(team_id = %params.team_id, "Handling teams.chat.send request");
+    if params.team_id.trim().is_empty() || params.message.trim().is_empty() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "team_id and message are required".to_string(),
+        );
+    }
+
+    let team = match store.get_team(&params.team_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return JsonRpcResponse::error(
+                request.id,
+                RESOURCE_NOT_FOUND,
+                format!("Team '{}' not found", params.team_id),
+            )
+        }
+        Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("{e}")),
+    };
+
+    let members = store
+        .get_members(&params.team_id)
+        .await
+        .inspect_err(|e| tracing::warn!(team_id = %params.team_id, error = %e, "teams.chat.send: get_members failed; spawning leader with empty roster"))
+        .unwrap_or_default();
+    let roster = members
+        .iter()
+        .filter(|m| m.agent_id != team.leader_id)
+        .map(|m| format!("{} ({})", m.agent_id, m.role))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    // Resolve the leader agent from the registry.
+    let leader_agent = match context.agent_registry().get(&team.leader_id).await {
+        Some(a) => a,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Leader agent '{}' not found in registry", team.leader_id),
+            )
+        }
+    };
+
+    let prompt = crate::teams::leader_prompt::build(
+        &team.name,
+        &roster,
+        team.protocol.as_deref(),
+        &params.message,
+    );
+
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let session_key = crate::routing::session_key::SessionKey::task(
+        &team.leader_id,
+        "team_chat",
+        &params.team_id,
+    );
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert("team_id".to_string(), params.team_id.clone());
+
+    let run_request = crate::gateway::execution_engine::RunRequest {
+        run_id: run_id.clone(),
+        input: prompt,
+        session_key,
+        timeout_secs: None,
+        metadata,
+        attachments: Vec::new(),
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
+        workspace_override: None,
+        max_iterations_override: None,
+        model_override: None,
+    };
+
+    // Leader run fans out to team.<id>.* (unified stream the Panel team view
+    // subscribes to). Falls back to NoOp if no event bus was wired at boot.
+    let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
+        match crate::gateway::event_emitter::team_fanout::team_event_bus() {
+            Some(bus) => Arc::new(
+                crate::gateway::event_emitter::team_fanout::TeamFanoutEmitter::new(
+                    bus,
+                    params.team_id.clone(),
+                    team.leader_id.clone(),
+                    None,
+                ),
+            ),
+            None => Arc::new(crate::gateway::event_emitter::NoOpEventEmitter::new()),
+        };
+
+    let execution_adapter = Arc::clone(context.execution_adapter());
+    let team_id_for_log = params.team_id.clone();
+    tokio::spawn(async move {
+        if let Err(e) = execution_adapter.execute(run_request, leader_agent, emitter).await {
+            tracing::warn!(team_id = %team_id_for_log, error = %e, "team leader run failed");
+        }
+    });
+
+    JsonRpcResponse::success(request.id, serde_json::json!({ "run_id": run_id }))
+}
+
 #[cfg(test)]
 mod template_handler_tests {
     use super::*;

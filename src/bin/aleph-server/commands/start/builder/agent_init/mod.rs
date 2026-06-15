@@ -1543,6 +1543,22 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 });
             }
 
+            // teams.chat.send runs the team LEADER agent (orchestration), so unlike the
+            // store-only teams.* handlers (register_teams_handlers) it needs the execution
+            // context. Registered here where GatewayContext + team_store both exist, next
+            // to the TeamDispatcher that shares the same dep.
+            if let Some(ts) = team_store.clone() {
+                let chat_ctx = gateway_ctx.clone();
+                server.handlers_mut().register("teams.chat.send", move |req| {
+                    let store = ts.clone();
+                    let ctx = chat_ctx.clone();
+                    async move {
+                        alephcore::gateway::handlers::teams::handle_chat_send(req, store, ctx)
+                            .await
+                    }
+                });
+            }
+
             if let Err(e) = gateway_context_cell.set(gateway_ctx) {
                 tracing::warn!("Failed to set gateway context cell: {}", e);
             }

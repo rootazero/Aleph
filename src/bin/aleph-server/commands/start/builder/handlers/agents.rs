@@ -200,6 +200,7 @@ pub(in crate::commands::start) fn register_teams_handlers(
 ) {
     use alephcore::gateway::handlers::teams;
 
+    // NOTE: teams.chat.send is registered in agent_init/mod.rs (it needs the execution context, unlike these store-only handlers).
     register_handler!(server, "teams.list", teams::handle_list, store);
     register_handler!(server, "teams.get", teams::handle_get, store, coord_store);
     register_handler!(server, "teams.create", teams::handle_create, store);
