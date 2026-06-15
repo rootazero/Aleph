@@ -942,6 +942,21 @@ audits a slightly larger suspicious set; it never reasons about model intent.
   (audit-only) = `rm -rf` of an absolute system path, `curl|wget … | sh`,
   `chmod 777` of a system path, writes to `/etc/{passwd,shadow,sudoers}`,
   `/dev/tcp/` reverse shells.
+- **Windows shapes** (added 2026-06-15 — the `cmd.exe` / PowerShell command
+  surface an agent reaches via `cmd /c …` / `powershell -c …`): `Block` =
+  `format <drive:>` / `Format-Volume`, `del`/`rd`/`rmdir /s` of a *bare drive
+  root*, `Remove-Item -Recurse` of a drive/registry-hive root, shadow-copy
+  destruction (`vssadmin delete shadows` / `wmic shadowcopy delete` —
+  ransomware precursor), `bcdedit /delete`, and whole-hive `reg delete HKLM /f`.
+  `Warn` = PowerShell download-execute cradles (`IEX (…).DownloadString`,
+  `iwr … | iex`, `certutil -urlcache`, `bitsadmin /transfer`), disabling
+  Defender (`Set-MpPreference -DisableRealtimeMonitoring`), disabling the
+  firewall (`netsh advfirewall set … state off`), and `…\CurrentVersion\Run`
+  autorun persistence. Precision is preserved by a leading word-boundary and a
+  *bare-root* terminator: `git log --format=`, a recursive subdir delete, and
+  a `reg delete HKLM\Software\App` subkey delete do **not** match. The
+  normaliser also folds cmd `^` and PowerShell `` ` `` escapes (alongside the
+  POSIX `\`) so `de^l` / `` Remo`ve-Item `` cannot evade the floor.
 - **Config** (`[sandbox.command_policy]`): `enabled`, `enforcement`
   (`block` / `warn` — global observe mode that downgrades every block to an
   audit / `off`), `use_default_rules`, and `custom_rules[]` (`{name, regex,

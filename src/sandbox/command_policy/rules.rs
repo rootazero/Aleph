@@ -113,6 +113,62 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
             action: Block,
             pattern: r">\s*/dev/(sd|nvme|disk|hd|vd|mmcblk)",
         },
+        // --- Windows catastrophic shapes (cmd.exe / PowerShell) -------------
+        // The Unix floor above does not cover the native Windows command
+        // surface an agent reaches through `cmd.exe /c …` or `powershell -c …`.
+        // These are the Windows analogues — disk format, drive-root recursive
+        // delete, shadow-copy destruction (ransomware precursor), boot-config
+        // deletion, registry-hive wipe — each essentially never legitimate in a
+        // per-session workspace. A leading `(?:^|[\s;&|(])` boundary keeps the
+        // common words (`format`, `del`) from matching flag fragments such as
+        // `git log --format=` or a `--del` long-option.
+        PolicyRule {
+            name: "win_format_volume",
+            description: "Windows `format <drive:>` / `Format-Volume` — wipes an entire volume",
+            action: Block,
+            pattern: r"(?:^|[\s;&|(])(?:format\s+(?:/\S+\s+)*[a-z]:|format-volume\b)",
+        },
+        PolicyRule {
+            name: "win_recursive_root_delete",
+            description: "cmd `del`/`rd`/`rmdir /s` targeting a bare drive root (recursive wipe)",
+            action: Block,
+            // Requires the recursive `/s` switch AND a bare drive root
+            // (`C:\`, `C:`, `C:\*`) — a recursive delete of a *subdir*
+            // (`C:\Users\me\build`) does not match because the char after the
+            // drive root must be a terminator, not another path segment.
+            pattern: r"(?:^|[\s;&|(])(?:del|erase|rd|rmdir)\b[^\n]*\s/s\b[^\n]*\s[a-z]:\\?(?:\*|\s|\x22|$)",
+        },
+        PolicyRule {
+            name: "win_powershell_recursive_root_delete",
+            description: "PowerShell `Remove-Item -Recurse` of a drive root or registry hive root",
+            action: Block,
+            // No `\b` before `-r`: a `\b` between a space and `-` never matches
+            // (both non-word). The `-r(?:ecurse)?\b` flag plus a bare drive /
+            // hive root (the normaliser has already stripped path backslashes,
+            // so `\\?` is optional) is what makes this catastrophic-precise.
+            pattern: r"\bremove-item\b[^\n]*-r(?:ecurse)?\b[^\n]*\s(?:[a-z]:\\?|hk(?:lm|cu|cr|u):\\?)(?:\*|\s|\x22|\x27|$)",
+        },
+        PolicyRule {
+            name: "win_delete_shadow_copies",
+            description: "volume shadow-copy destruction (vssadmin / wmic / Win32_ShadowCopy) — ransomware precursor",
+            action: Block,
+            pattern: r"\bvssadmin\b[^\n]*\bdelete\b[^\n]*\bshadows?\b|\bwmic\b[^\n]*\bshadowcopy\b[^\n]*\bdelete\b|\bwin32_shadowcopy\b[^\n]*\bdelete\b",
+        },
+        PolicyRule {
+            name: "win_bcdedit_delete",
+            description: "`bcdedit /delete` — destroys Windows boot configuration entries",
+            action: Block,
+            pattern: r"\bbcdedit\b[^\n]*/delete",
+        },
+        PolicyRule {
+            name: "win_registry_hive_delete",
+            description: "`reg delete <HIVE> /f` of a whole root hive (HKLM / HKCU / …)",
+            action: Block,
+            // Whitespace right after the hive name = deleting the entire hive;
+            // a subkey delete (`reg delete HKLM\Software\App /f`) has a `\`
+            // there and is intentionally excluded.
+            pattern: r"\breg\b\s+delete\s+(?:hklm|hkcu|hkcr|hku|hkey_local_machine|hkey_current_user|hkey_classes_root)\s+[^\n]*/f\b",
+        },
     ]
 }
 
@@ -161,6 +217,39 @@ pub fn default_rules() -> Vec<PolicyRule> {
             description: "bash /dev/tcp reverse-shell or raw TCP socket exfiltration",
             action: Warn,
             pattern: r"/dev/tcp/\d",
+        },
+        // --- Windows high-signal shapes (cmd.exe / PowerShell) -------------
+        // Audited, not blocked: each is occasionally legitimate (an installer,
+        // a CI bootstrap) but is the Windows analogue of the Unix `curl|sh`
+        // download-cradle and the "disable my own defences" shapes worth a
+        // paper trail.
+        PolicyRule {
+            name: "win_download_cradle",
+            description:
+                "PowerShell download-and-execute cradle (IEX of DownloadString, iwr|iex, certutil -urlcache, bitsadmin /transfer)",
+            action: Warn,
+            pattern: r"\b(?:iex|invoke-expression)\b[^\n]*\b(?:downloadstring|downloaddata|invoke-webrequest|invoke-restmethod|iwr|irm|webclient)\b|\b(?:iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\n]*\|[^\n]*\b(?:iex|invoke-expression)\b|\bcertutil\b[^\n]*-urlcache\b[^\n]*\bhttp|\bbitsadmin\b[^\n]*/transfer\b",
+        },
+        PolicyRule {
+            name: "win_disable_defender",
+            description: "disabling Microsoft Defender (Set-MpPreference -DisableRealtimeMonitoring / Add-MpPreference -ExclusionPath)",
+            action: Warn,
+            pattern: r"\b(?:set-mppreference|add-mppreference)\b[^\n]*-(?:disablerealtimemonitoring|exclusionpath|exclusionprocess|exclusionextension|disableioavprotection)\b",
+        },
+        PolicyRule {
+            name: "win_disable_firewall",
+            description: "disabling the Windows firewall (netsh advfirewall set … state off / firewall set opmode disable)",
+            action: Warn,
+            pattern: r"\bnetsh\b[^\n]*\badvfirewall\b[^\n]*\bset\b[^\n]*\bstate\b[^\n]*\boff\b|\bnetsh\b[^\n]*\bfirewall\b[^\n]*\bset\b[^\n]*\bopmode\b[^\n]*\bdisable\b",
+        },
+        PolicyRule {
+            name: "win_registry_run_persistence",
+            description: "registry autorun persistence (`reg add … \\CurrentVersion\\Run`)",
+            action: Warn,
+            // Backslashes are optional: the normaliser strips path separators
+            // (`…\CurrentVersion\Run` → `…CurrentVersionRun`) before matching,
+            // so the keyword run is anchored without relying on the `\`.
+            pattern: r"\breg\b\s+add\b[^\n]*currentversion\\?run(?:once)?\b",
         },
     ]
 }
