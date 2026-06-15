@@ -64,18 +64,29 @@ pub fn process_start_time(pid: i32) -> Option<u64> {
 /// Returns `true` if `pid` is alive AND (when `expected_start` is known and the
 /// platform reports a start time) its start time matches `expected_start`.
 ///
-/// Fail-safe: when the start time cannot be compared — a legacy lock file with
-/// no recorded start time, or a platform that won't report one — this falls
-/// back to a bare liveness check, i.e. the pre-existing behaviour. So adopting
-/// it can only *tighten* a diagnostic against PID reuse, never loosen it.
+/// Fail-safe: when there is no `expected_start` to compare against (a legacy
+/// lock file written before start times were recorded), a live process is
+/// enough — the pre-existing behaviour. So adopting it can only *tighten* a
+/// diagnostic against PID reuse, never loosen it.
 #[must_use]
 pub fn process_matches(pid: i32, expected_start: Option<u64>) -> bool {
-    if !is_process_alive(pid) {
+    if pid <= 0 {
         return false;
     }
-    match (expected_start, process_start_time(pid)) {
-        (Some(expected), Some(actual)) => expected == actual,
-        _ => true,
+    let Ok(pid_u32) = u32::try_from(pid) else {
+        return false;
+    };
+    // One process lookup yields both existence and start time, so there is no
+    // separate liveness probe (the previous `is_process_alive` +
+    // `process_start_time` pair refreshed `sysinfo` twice on non-Unix).
+    match with_process(pid_u32, sysinfo::Process::start_time) {
+        None => false, // not running
+        Some(actual) => match expected_start {
+            // PID-reuse-resistant: a recycled PID has a different start time.
+            Some(expected) => expected == actual,
+            // Legacy lock file with no recorded start time -> liveness suffices.
+            None => true,
+        },
     }
 }
 
