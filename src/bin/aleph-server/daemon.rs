@@ -41,32 +41,12 @@ pub fn expand_path(path: &str) -> PathBuf {
 
 /// Check if a process with given PID is running.
 ///
-/// Uses `kill(pid, 0)` which performs error checking without sending a signal.
-/// Returns `true` if the process exists (kill succeeds or EPERM),
-/// `false` if the process does not exist (ESRCH).
-#[cfg(unix)]
+/// Delegates to the shared cross-platform liveness helper so the daemon
+/// lifecycle (`stop` / `status`) and the singleton instance lock agree on
+/// what "alive" means. A non-positive PID is rejected by the helper, so a
+/// corrupted PID file can never escalate into a broadcast signal on Unix.
 pub fn is_process_running(pid: i32) -> bool {
-    // A non-positive PID is never a real target: `kill(0, ..)` signals the
-    // caller's whole process group and `kill(-1, ..)` signals every process the
-    // user may signal. Treat it as "not running" so callers never escalate to
-    // a broadcast SIGTERM/SIGKILL off a corrupted PID file.
-    if pid <= 0 {
-        return false;
-    }
-    // SAFETY: kill(pid, 0) performs error checking without sending a signal.
-    // It is async-signal-safe and the only way to check process existence on Unix.
-    if unsafe { libc::kill(pid, 0) } == 0 {
-        true
-    } else {
-        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-        // EPERM means process exists but we lack permission; ESRCH means it does not exist.
-        errno == libc::EPERM
-    }
-}
-
-#[cfg(not(unix))]
-pub fn is_process_running(_pid: i32) -> bool {
-    false
+    alephcore::utils::process_alive::is_process_alive(pid)
 }
 
 /// Read PID from file
