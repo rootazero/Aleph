@@ -24,6 +24,7 @@ pub mod service_blocking_gate;
 pub mod session_tabs;
 pub mod settings_sidebar;
 pub mod sidebar;
+pub mod sidebar_footer;
 pub mod theme_toggle;
 pub mod tool_card;
 pub mod ui;
