@@ -30,6 +30,10 @@ struct SessionEntry {
     /// Backend sends `updated_at` as Unix epoch seconds (Option<i64>)
     #[serde(default)]
     updated_at: Option<i64>,
+    #[serde(default)]
+    pinned: bool,
+    #[serde(default)]
+    project_root: Option<String>,
 }
 
 /// An agent entry returned by the backend (agents.list).

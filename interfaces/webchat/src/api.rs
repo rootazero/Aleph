@@ -33,6 +33,7 @@ pub mod routing;
 pub mod runtimes;
 pub mod search;
 pub mod security;
+pub mod sessions;
 pub mod settings;
 pub mod system;
 pub mod tauri_bridge;
