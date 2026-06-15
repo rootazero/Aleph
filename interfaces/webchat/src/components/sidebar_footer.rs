@@ -138,7 +138,19 @@ fn StatusDot() -> impl IntoView {
         }
     };
 
-    let title = move || match phase.get() {
+    // `phase` (Memo) and `i18n` are both Copy, so a fresh closure is cheap —
+    // define two so each attribute owns its own (avoids relying on closure
+    // Copy-ness for the title + aria-label pair).
+    let status_label = move || match phase.get() {
+        ConnectionPhase::Connected => t_string!(i18n, chat.status_online).to_string(),
+        ConnectionPhase::Reconnecting { .. } | ConnectionPhase::Connecting => {
+            t_string!(i18n, chat.status_reconnecting).to_string()
+        }
+        ConnectionPhase::Failed { .. } | ConnectionPhase::Initial => {
+            t_string!(i18n, chat.status_offline).to_string()
+        }
+    };
+    let aria_label = move || match phase.get() {
         ConnectionPhase::Connected => t_string!(i18n, chat.status_online).to_string(),
         ConnectionPhase::Reconnecting { .. } | ConnectionPhase::Connecting => {
             t_string!(i18n, chat.status_reconnecting).to_string()
@@ -149,6 +161,6 @@ fn StatusDot() -> impl IntoView {
     };
 
     view! {
-        <span class=dot_class title=title aria-label=title></span>
+        <span class=dot_class title=status_label role="img" aria-label=aria_label></span>
     }
 }
