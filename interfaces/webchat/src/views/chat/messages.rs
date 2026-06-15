@@ -471,6 +471,24 @@ fn MessageBubble(
     // Reach for ChatState so the retry button can pulse the composer
     // without prop-drilling a callback through MessageList → MessageBubble.
     let chat = expect_context::<ChatState>();
+
+    // Team chat: colored agent-name label above the bubble content. None for
+    // single-agent bubbles (agent_id is None) → renders nothing (zero regression).
+    // Snapshot at bubble-mount (get_untracked); won't relabel if the roster
+    // hydrates after this bubble — fine for final team messages.
+    let attribution = message.agent_id.as_ref().map(|aid| {
+        let members = chat.team_members.get_untracked();
+        let found = members.iter().position(|m| &m.agent_id == aid);
+        let color = crate::views::chat::team_events::agent_color(found.unwrap_or(0));
+        let name = found
+            .and_then(|i| members.get(i))
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| aid.clone());
+        view! {
+            <div class="text-[11px] font-semibold mb-0.5" style=format!("color:{color}")>{name}</div>
+        }
+    });
+
     let copy_text = content.clone();
     // One-shot click feedback — flip green + checkmark, auto-revert after a beat
     // so the user gets a clear "it worked" signal on an otherwise silent action.
@@ -522,6 +540,11 @@ fn MessageBubble(
         <div class=wrapper_class>
             <div class=bubble_class_reactive id=bubble_dom_id>
                 {tool_calls_view}
+
+                // Team attribution label (colored agent name above bubble content).
+                // `attribution` is None for single-agent bubbles and user bubbles
+                // (agent_id is None) → zero regression on the non-team path.
+                {attribution}
 
                 // Message content — Markdown for assistant, plain text for user
                 {if is_user {
