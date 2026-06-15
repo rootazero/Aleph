@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
 
-use super::process_alive::is_process_alive;
+use super::process_alive::{process_matches, process_start_time};
 
 const LOCK_FILENAME: &str = "aleph.lock";
 
@@ -50,10 +50,7 @@ impl InstanceLock {
     /// a lock that is in fact held by a running process.
     pub fn rewrite_holder_pid(&mut self) -> std::io::Result<()> {
         let pid = std::process::id();
-        self.file.set_len(0)?;
-        self.file.seek(SeekFrom::Start(0))?;
-        writeln!(self.file, "{pid}")?;
-        self.file.sync_all()?;
+        write_holder(&mut self.file, pid)?;
         self.holder_pid = pid;
         Ok(())
     }
@@ -93,12 +90,9 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
 
     match file.try_lock_exclusive() {
         Ok(()) => {
-            // Got the lock — write our PID for diagnostics.
+            // Got the lock — record our PID (+ start time) for diagnostics.
             let pid = std::process::id();
-            file.set_len(0)?;
-            file.seek(SeekFrom::Start(0))?;
-            writeln!(file, "{pid}")?;
-            file.sync_all()?;
+            write_holder(&mut file, pid)?;
             Ok(AcquireOutcome::Acquired(InstanceLock {
                 file,
                 path: lock_path,
@@ -106,12 +100,12 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
             }))
         }
         Err(_) => {
-            // Lock is held by someone else. Read PID for diagnostics.
+            // Lock is held by someone else. Read the holder for diagnostics.
             let mut buf = String::new();
             file.seek(SeekFrom::Start(0))?;
             file.read_to_string(&mut buf)?;
-            let pid: i32 = buf.trim().parse().unwrap_or(-1);
-            if pid > 0 && is_process_alive(pid) {
+            let (pid, expected_start) = parse_holder(&buf);
+            if pid > 0 && process_matches(pid, expected_start) {
                 Ok(AcquireOutcome::HeldByLive { pid, lock_path })
             } else if pid > 0 {
                 Ok(AcquireOutcome::HeldByOrphaned { pid, lock_path })
@@ -130,26 +124,74 @@ pub fn diagnose_holder(data_dir: &Path) -> Option<HolderDiagnostic> {
     let mut file = std::fs::File::open(&lock_path).ok()?;
     let mut buf = String::new();
     file.read_to_string(&mut buf).ok()?;
-    let trimmed = buf.trim();
-    if trimmed.is_empty() {
+    if buf.trim().is_empty() {
         return None;
     }
-    let pid: i32 = trimmed.parse().ok()?;
+    let (pid, expected_start) = parse_holder(&buf);
     Some(HolderDiagnostic {
         pid,
-        process_alive: is_process_alive(pid),
+        process_alive: process_matches(pid, expected_start),
         lock_path,
     })
 }
 
-// Process-liveness now lives in `super::process_alive` (cross-platform).
-// Previously this file carried a `#[cfg(not(unix))]` fallback that always
-// reported "alive" on Windows, so a crashed daemon's orphaned lock was never
-// classified as `HeldByOrphaned`. The shared helper probes the real process.
+/// Write the holder record: line 1 = PID, line 2 = the holder's process start
+/// time (seconds since epoch) when the platform reports one. The start time is
+/// what makes the live/orphaned classification immune to PID reuse — a recycled
+/// PID has a different start time. When unavailable we write the PID alone,
+/// keeping the legacy single-line format.
+fn write_holder(file: &mut File, pid: u32) -> std::io::Result<()> {
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    match process_start_time(pid as i32) {
+        Some(start) => writeln!(file, "{pid}\n{start}")?,
+        None => writeln!(file, "{pid}")?,
+    }
+    file.sync_all()?;
+    Ok(())
+}
+
+/// Parse a holder record written by [`write_holder`]. Line 1 is the PID; an
+/// optional line 2 is the recorded start time. Legacy single-line files yield
+/// `start = None`, which makes [`process_matches`] fall back to a bare liveness
+/// check. A bad PID line yields `-1` (treated as "no live holder").
+fn parse_holder(buf: &str) -> (i32, Option<u64>) {
+    let mut lines = buf.lines();
+    let pid = lines
+        .next()
+        .and_then(|l| l.trim().parse().ok())
+        .unwrap_or(-1);
+    let start = lines.next().and_then(|l| l.trim().parse().ok());
+    (pid, start)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_holder_reads_pid_and_optional_start() {
+        assert_eq!(parse_holder("123\n456\n"), (123, Some(456)));
+        assert_eq!(parse_holder("123\n"), (123, None)); // legacy single-line
+        assert_eq!(parse_holder("123"), (123, None));
+        assert_eq!(parse_holder(""), (-1, None)); // empty / garbage
+        assert_eq!(parse_holder("abc\n456"), (-1, Some(456)));
+    }
+
+    #[test]
+    fn acquired_lock_records_a_recoverable_pid() {
+        // The written holder record must round-trip through parse_holder back
+        // to the current PID (the start-time line is platform-dependent).
+        let dir = tempfile::tempdir().unwrap();
+        match try_acquire(dir.path()).unwrap() {
+            AcquireOutcome::Acquired(lock) => {
+                let buf = std::fs::read_to_string(lock.lock_path()).unwrap();
+                let (pid, _start) = parse_holder(&buf);
+                assert_eq!(pid as u32, std::process::id());
+            }
+            other => panic!("first acquire should succeed, got {other:?}"),
+        }
+    }
 
     #[test]
     fn first_acquire_succeeds() {

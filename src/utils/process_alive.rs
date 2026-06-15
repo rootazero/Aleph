@@ -39,15 +39,56 @@ fn is_alive_impl(pid: i32) -> bool {
 
 #[cfg(not(unix))]
 fn is_alive_impl(pid: i32) -> bool {
-    use sysinfo::{Pid, ProcessesToUpdate, System};
     let Ok(pid_u32) = u32::try_from(pid) else {
         return false;
     };
-    let pid = Pid::from_u32(pid_u32);
+    with_process(pid_u32, |_| ()).is_some()
+}
+
+/// Wall-clock start time (seconds since the Unix epoch) of the process with
+/// `pid`, or `None` if it isn't running or the platform won't report it.
+///
+/// This is the anti-PID-reuse signal: a recycled PID points at a *different*
+/// process with a *different* start time. `sysinfo` reports it on Linux,
+/// macOS and Windows alike — no `ps` subprocess (the approach taken by some
+/// reference daemons, which is both Unix-only and a fork per check).
+#[must_use]
+pub fn process_start_time(pid: i32) -> Option<u64> {
+    if pid <= 0 {
+        return None;
+    }
+    let pid_u32 = u32::try_from(pid).ok()?;
+    with_process(pid_u32, sysinfo::Process::start_time)
+}
+
+/// Returns `true` if `pid` is alive AND (when `expected_start` is known and the
+/// platform reports a start time) its start time matches `expected_start`.
+///
+/// Fail-safe: when the start time cannot be compared — a legacy lock file with
+/// no recorded start time, or a platform that won't report one — this falls
+/// back to a bare liveness check, i.e. the pre-existing behaviour. So adopting
+/// it can only *tighten* a diagnostic against PID reuse, never loosen it.
+#[must_use]
+pub fn process_matches(pid: i32, expected_start: Option<u64>) -> bool {
+    if !is_process_alive(pid) {
+        return false;
+    }
+    match (expected_start, process_start_time(pid)) {
+        (Some(expected), Some(actual)) => expected == actual,
+        _ => true,
+    }
+}
+
+/// Refresh a single PID and project a value out of its `Process`, or `None` if
+/// it isn't running. Centralizes the `sysinfo` boilerplate (mirrors the 0.39
+/// idiom in `gateway::memory_monitor`).
+fn with_process<T>(pid: u32, f: impl FnOnce(&sysinfo::Process) -> T) -> Option<T> {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+    let pid = Pid::from_u32(pid);
     let mut sys = System::new();
     // Refresh just this PID — far cheaper than a full process scan.
     sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
-    sys.process(pid).is_some()
+    sys.process(pid).map(f)
 }
 
 #[cfg(test)]
@@ -72,5 +113,21 @@ mod tests {
         // platform. The point is that the probe returns a definite `false`
         // rather than a hardcoded fallback.
         assert!(!is_process_alive(i32::MAX - 1));
+    }
+
+    #[test]
+    fn process_matches_falls_back_and_detects_reuse() {
+        let me = i32::try_from(std::process::id()).expect("pid fits i32");
+        // No recorded start time -> bare liveness check (legacy behaviour).
+        assert!(process_matches(me, None));
+        // A dead PID never matches, regardless of the expected start time.
+        assert!(!process_matches(0, None));
+        assert!(!process_matches(i32::MAX - 1, Some(123)));
+        // When a start time is available, an exact match passes and any other
+        // value (a recycled PID's different start time) fails.
+        if let Some(start) = process_start_time(me) {
+            assert!(process_matches(me, Some(start)));
+            assert!(!process_matches(me, Some(start.wrapping_add(7))));
+        }
     }
 }
