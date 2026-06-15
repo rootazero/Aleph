@@ -2,6 +2,8 @@
 //! message bubbles + roster live status. Parallel to `events.rs::subscribe_run_events`
 //! (single-agent), kept separate for zero-regression of the single-agent path.
 
+use leptos::prelude::*;
+
 use crate::context::{DashboardState, GatewayEvent};
 use super::state::{ChatMessage, ChatState, MemberStatus};
 
