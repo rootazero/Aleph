@@ -408,6 +408,10 @@ function __wbg_get_imports() {
             const ret = arg0.ctrlKey;
             return ret;
         },
+        __wbg_currentTime_a4d3efb508480f4d: function(arg0) {
+            const ret = arg0.currentTime;
+            return ret;
+        },
         __wbg_dataTransfer_bf723904983b1674: function(arg0) {
             const ret = arg0.dataTransfer;
             return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
@@ -419,6 +423,9 @@ function __wbg_get_imports() {
         __wbg_data_bd354b70c783c66e: function(arg0) {
             const ret = arg0.data;
             return ret;
+        },
+        __wbg_debug_78b457f1effb3792: function(arg0) {
+            console.debug(arg0);
         },
         __wbg_decodeAudioData_38eeb88d1e53170c: function() { return handleError(function (arg0, arg1) {
             const ret = arg0.decodeAudioData(arg1);
@@ -1475,11 +1482,11 @@ function __wbg_get_imports() {
             getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
             getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
         },
-        __wbg_start_6ab5ffdb96fcca0b: function() { return handleError(function (arg0) {
-            arg0.start();
-        }, arguments); },
         __wbg_start_a32d0e49aeea4e1f: function() { return handleError(function (arg0) {
             arg0.start();
+        }, arguments); },
+        __wbg_start_a5912022452d83c5: function() { return handleError(function (arg0, arg1) {
+            arg0.start(arg1);
         }, arguments); },
         __wbg_static_accessor_GLOBAL_9d53f2689e622ca1: function() {
             const ret = typeof global === 'undefined' ? null : global;
