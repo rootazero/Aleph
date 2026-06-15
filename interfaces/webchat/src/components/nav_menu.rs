@@ -1,13 +1,11 @@
 //
-// Bottom-left section navigation grid.
+// Bottom-left section switcher.
 //
-// A persistent 2-column grid of nav tiles pinned to the foot of the left
-// column, one per cross-cutting management section (Dashboard / Memory /
-// Agents / Teams). Chat is the default surface (the sidebar itself) and
-// Settings is reachable via the header gear, so both are filtered out here.
-// Clicking a tile navigates the router — the left column then swaps to that
-// section's secondary menu and the main area to its content; the active
-// section's tile is highlighted.
+// A compact button pinned to the foot of the left column. Clicking it
+// opens an upward popup to jump between Chat and the management
+// sections (Dashboard / Memory / Agents / Teams / Settings). Choosing a
+// section navigates the router — the left column then swaps to that
+// section's secondary menu and the main area to its content.
 //
 use super::mode_sidebar::PanelMode;
 use crate::i18n::{t_string, Locale, use_i18n};
@@ -79,43 +77,92 @@ pub fn NavMenu() -> impl IntoView {
     let location = use_location();
     let navigate = use_navigate();
     let i18n = use_i18n();
+    let open = RwSignal::new(false);
 
     let current = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
 
     view! {
-        <nav class="grid grid-cols-2 gap-1 p-2 border-t border-border flex-shrink-0">
-            {ALL_MODES.into_iter()
-                // Chat is the default surface (the sidebar itself); Settings is
-                // reachable via the header gear. Show the cross-cutting modes.
-                .filter(|m| !matches!(m, PanelMode::Chat | PanelMode::Settings))
-                .map(|mode| {
-                    let nav = navigate.clone();
-                    let route = route_of(mode);
-                    let label = label_of(mode, i18n);
-                    let icon = icon_of(mode);
-                    let is_active = move || current.get() == mode;
-                    view! {
-                        <button
-                            on:click=move |_| nav(route, Default::default())
-                            class=move || {
-                                let base = "flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm";
-                                if is_active() {
-                                    format!("{base} nav-tile-active")
-                                } else {
-                                    format!("{base} nav-tile")
-                                }
-                            }
-                        >
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                                 stroke-linejoin="round" class="flex-shrink-0"
-                                 inner_html=icon
-                            />
-                            <span class="truncate">{label}</span>
-                        </button>
+        <div class="relative border-t border-border p-2 flex-shrink-0">
+            // Trigger
+            <button
+                on:click=move |_| open.update(|v| *v = !*v)
+                class=move || {
+                    let base = "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm";
+                    if open.get() {
+                        format!("{base} nav-tile-active")
+                    } else {
+                        format!("{base} nav-tile")
                     }
-                })
-                .collect::<Vec<_>>()}
-        </nav>
+                }
+            >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                     class="flex-shrink-0"
+                     inner_html=move || icon_of(current.get())
+                />
+                <span class="flex-1 text-left font-medium truncate">
+                    {move || label_of(current.get(), i18n)}
+                </span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+                     class=move || {
+                         if open.get() {
+                             "flex-shrink-0 text-text-tertiary rotate-180 transition-transform"
+                         } else {
+                             "flex-shrink-0 text-text-tertiary transition-transform"
+                         }
+                     }
+                >
+                    <polyline points="18 15 12 9 6 15" />
+                </svg>
+            </button>
+
+            // Click-outside catcher
+            {move || open.get().then(|| view! {
+                <div class="fixed inset-0 z-40" on:click=move |_| open.set(false) />
+            })}
+
+            // Popup — opens upward
+            <Show when=move || open.get()>
+                <div class="glass animate-pop-in absolute bottom-full left-2 right-2 mb-2 z-50
+                            rounded-xl border border-border bg-surface-overlay/85 shadow-xl p-1.5 space-y-0.5">
+                    {ALL_MODES.into_iter().map(|m| {
+                        let route = route_of(m);
+                        let nav = navigate.clone();
+                        let is_active = move || current.get() == m;
+                        view! {
+                            <button
+                                on:click=move |_| {
+                                    open.set(false);
+                                    nav(route, Default::default());
+                                }
+                                class=move || {
+                                    let base = "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm";
+                                    if is_active() {
+                                        format!("{base} nav-tile-active")
+                                    } else {
+                                        format!("{base} nav-tile")
+                                    }
+                                }
+                            >
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                     stroke-linejoin="round" class="flex-shrink-0"
+                                     inner_html=icon_of(m)
+                                />
+                                <span class="flex-1 text-left">{label_of(m, i18n)}</span>
+                                {move || is_active().then(|| view! {
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                         stroke="currentColor" stroke-width="3" stroke-linecap="round"
+                                         stroke-linejoin="round" class="flex-shrink-0">
+                                        <polyline points="20 6 9 17 4 12" />
+                                    </svg>
+                                })}
+                            </button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+            </Show>
+        </div>
     }
 }
