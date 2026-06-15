@@ -5,6 +5,7 @@
 //
 use leptos::prelude::*;
 use serde::Deserialize;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
@@ -30,6 +31,10 @@ struct SessionEntry {
     /// Backend sends `updated_at` as Unix epoch seconds (Option<i64>)
     #[serde(default)]
     updated_at: Option<i64>,
+    #[serde(default)]
+    pinned: bool,
+    #[serde(default)]
+    project_root: Option<String>,
 }
 
 /// An agent entry returned by the backend (agents.list).
@@ -167,11 +172,8 @@ pub fn ChatSidebar() -> impl IntoView {
     let workspace = use_context::<WorkspaceState>();
     let i18n = use_i18n();
 
-    let agents = RwSignal::new(Vec::<AgentEntry>::new());
     let sessions = RwSignal::new(Vec::<SessionEntry>::new());
     let is_loading = RwSignal::new(false);
-    // Which agent is selected in the dropdown (synced with chat.agent_id)
-    let selected_agent = RwSignal::new(Option::<String>::None);
 
     // Session action states (edit/delete/menu — mutually exclusive)
     let editing_key = RwSignal::new(Option::<String>::None);
@@ -184,6 +186,13 @@ pub fn ChatSidebar() -> impl IntoView {
     // Client-side session filter (R4 pure I/O — no backend search).
     let search_query = RwSignal::new(String::new());
 
+    // Collapsible-section UI state (in-memory; persisted preference out of scope).
+    // Projects defaults collapsed to avoid visual duplication with Recent —
+    // the same non-pinned sessions are shown two ways.
+    let show_pinned = RwSignal::new(true);
+    let show_recent = RwSignal::new(true);
+    let show_projects = RwSignal::new(false);
+
     // Live-only "session is running" tracking, driven by run lifecycle
     // events. `running` is a refcount per session_key (handles concurrent
     // runs); `run_to_session` maps run_id → session_key because the
@@ -191,30 +200,30 @@ pub fn ChatSidebar() -> impl IntoView {
     let running = RwSignal::new(std::collections::HashMap::<String, usize>::new());
     let run_to_session = RwSignal::new(std::collections::HashMap::<String, String>::new());
 
-    // Reusable closure: fetch both agents and sessions from the backend.
+    // Reusable closure: fetch agents (for default-agent bootstrap) and
+    // sessions from the backend. The persistent agent switcher lives in
+    // `SidebarFooter`; here we only consult `agents.list` to auto-open the
+    // default agent's tab on first connect.
     let reload_data = Arc::new(move |dash: DashboardState| {
         is_loading.set(true);
         leptos::task::spawn_local(async move {
-            // Fetch agents
+            // Fetch agents — used only to auto-select the default agent when
+            // none is active yet. Routing through SessionMap.activate opens
+            // the first tab (and stamps `chat.agent_id`); Cmd+1 focuses it.
             match dash.rpc_call("agents.list", serde_json::json!({})).await {
                 Ok(result) => {
                     if let Some(arr) = result.get("agents") {
                         if let Ok(list) = serde_json::from_value::<Vec<AgentEntry>>(arr.clone()) {
-                            // Auto-select default agent if none selected.
-                            // Routing through SessionMap.activate opens the
-                            // first tab — Cmd+1 will focus it.
-                            if selected_agent.get_untracked().is_none() {
+                            if chat.agent_id.get_untracked().is_none() {
                                 let default_id = list
                                     .iter()
                                     .find(|a| a.is_default)
                                     .or(list.first())
                                     .map(|a| a.id.clone());
                                 if let Some(id) = default_id {
-                                    selected_agent.set(Some(id.clone()));
                                     session_map.activate(chat, &id);
                                 }
                             }
-                            agents.set(list);
                         }
                     }
                 }
@@ -393,34 +402,18 @@ pub fn ChatSidebar() -> impl IntoView {
         if let Some(ws) = workspace {
             ws.reset();
         }
-        selected_agent.set(Some(agent_id));
+        // `session_map.activate` above already stamped `chat.agent_id` from
+        // the restored snapshot — no separate selection signal to update.
         chat.session_key.set(Some(key.clone()));
 
         leptos::task::spawn_local(hydrate_session_history(dash, chat, workspace, key));
-    };
-
-    // Handle agent dropdown change — opens or focuses that agent's tab.
-    // Don't clear session here: SessionMap.activate restores the tab's
-    // snapshot (including its session_key), so the user picks up where
-    // they left off in that agent's conversation.
-    let on_agent_change = move |ev: web_sys::Event| {
-        let val = event_target_value(&ev);
-        if !val.is_empty() {
-            selected_agent.set(Some(val.clone()));
-            session_map.activate(chat, &val);
-            // Switching to another agent's tab swaps the chat snapshot but
-            // the workspace pane is global — drop its stale tool-detail.
-            if let Some(ws) = workspace {
-                ws.reset();
-            }
-        }
     };
 
     // Start a new chat for the selected agent.
     // Just clear UI state — the backend will create a new epoch session
     // when the first message is sent (session_key=None triggers next epoch).
     let on_new_chat = move |_: web_sys::MouseEvent| {
-        if let Some(agent_id) = selected_agent.get_untracked() {
+        if let Some(agent_id) = chat.agent_id.get_untracked() {
             chat.clear_session();
             if let Some(ws) = workspace {
                 ws.reset();
@@ -430,13 +423,6 @@ pub fn ChatSidebar() -> impl IntoView {
     };
 
     // --- Session action helpers ---
-
-    let clear_action_states = move || {
-        editing_key.set(None);
-        deleting_key.set(None);
-        menu_open_key.set(None);
-        edit_text.set(String::new());
-    };
 
     let reload_for_rename = reload_data.clone();
     let do_rename = Arc::new(move |session_key: String, topic: String| {
@@ -468,6 +454,22 @@ pub fn ChatSidebar() -> impl IntoView {
             is_saving.set(false);
             editing_key.set(None);
             edit_text.set(String::new());
+        });
+    });
+
+    let reload_for_pin = reload_data.clone();
+    let do_pin = Arc::new(move |session_key: String, pinned: bool| {
+        let dash = dashboard;
+        let reload = reload_for_pin.clone();
+        leptos::task::spawn_local(async move {
+            match crate::api::sessions::set_pinned(&dash, &session_key, pinned).await {
+                Ok(()) => {
+                    reload(dash);
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to set pinned: {e}").into());
+                }
+            }
         });
     });
 
@@ -531,40 +533,259 @@ pub fn ChatSidebar() -> impl IntoView {
         }
     });
 
+    // Reusable single-row renderer (normal tile + edit-mode + delete-confirm +
+    // ⋯ menu incl. pin/unpin). Wrapped in `Rc` so the three sections
+    // (Pinned / Recent / Projects) can each clone and reuse it (DRY).
+    // Action-state signals are read INSIDE so every row stays reactive.
+    let on_select = on_select_session;
+    let render_session: Rc<dyn Fn(SessionEntry) -> AnyView> = Rc::new(move |session: SessionEntry| {
+        let key = session.key.clone();
+        let session_agent_id = session.agent_id.clone();
+        let is_active = {
+            let key = key.clone();
+            move || chat.session_key.get().as_deref() == Some(&key)
+        };
+        let label = session
+            .topic
+            .clone()
+            .unwrap_or_else(|| t_string!(i18n, chat.new_chat).to_string());
+        let subtitle = format_session_subtitle(&session);
+        let do_rename = do_rename.clone();
+        let do_delete = do_delete.clone();
+        let do_pin = do_pin.clone();
+
+        // Determine which mode this session row is in (read signals here so
+        // each row re-renders reactively on edit/delete/menu changes).
+        let is_editing = editing_key.get().as_deref() == Some(&key);
+        let is_deleting = deleting_key.get().as_deref() == Some(&key);
+        let is_menu_open = menu_open_key.get().as_deref() == Some(&key);
+
+        if is_editing {
+            // --- Edit mode ---
+            let key_for_save = key.clone();
+            let key_for_save2 = key;
+            let do_rename_keydown = do_rename.clone();
+            let do_rename_blur = do_rename;
+            view! {
+                <div class="w-full px-3 py-2 rounded-lg bg-surface-sunken border border-primary/40">
+                    <input
+                        node_ref=edit_input_ref
+                        class="w-full bg-transparent text-xs text-text-primary outline-none disabled:opacity-50"
+                        prop:value=move || edit_text.get()
+                        prop:disabled=move || is_saving.get()
+                        maxlength=100
+                        on:input=move |ev| {
+                            edit_text.set(event_target_value(&ev));
+                        }
+                        on:keydown=move |ev: web_sys::KeyboardEvent| {
+                            let k = ev.key();
+                            if k == "Enter" {
+                                let text = edit_text.get_untracked();
+                                if text.trim().is_empty() {
+                                    editing_key.set(None);
+                                    edit_text.set(String::new());
+                                } else {
+                                    do_rename_keydown(key_for_save.clone(), text);
+                                }
+                            } else if k == "Escape" {
+                                editing_key.set(None);
+                                edit_text.set(String::new());
+                            }
+                        }
+                        on:blur=move |_| {
+                            // Small delay to allow Enter keydown to fire first
+                            let key_c = key_for_save2.clone();
+                            let do_rename_c = do_rename_blur.clone();
+                            leptos::task::spawn_local(async move {
+                                gloo_timers::future::TimeoutFuture::new(100).await;
+                                if editing_key.get_untracked().as_deref() == Some(&key_c) {
+                                    let text = edit_text.get_untracked();
+                                    if text.trim().is_empty() {
+                                        editing_key.set(None);
+                                        edit_text.set(String::new());
+                                    } else {
+                                        do_rename_c(key_c, text);
+                                    }
+                                }
+                            });
+                        }
+                    />
+                </div>
+            }.into_any()
+        } else if is_deleting {
+            // --- Delete-confirm mode ---
+            let key_for_del = key;
+            view! {
+                <div
+                    tabindex=0
+                    class="w-full px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30
+                            flex items-center justify-between text-xs outline-none"
+                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                        if ev.key() == "Escape" {
+                            editing_key.set(None);
+                            deleting_key.set(None);
+                            menu_open_key.set(None);
+                            edit_text.set(String::new());
+                        }
+                    }
+                >
+                    <span class="text-red-400 font-medium">{move || t_string!(i18n, chat.confirm_delete).to_string()}</span>
+                    <div class="flex items-center gap-1.5">
+                        <button
+                            class="px-2 py-0.5 rounded bg-red-500 text-white text-[10px] font-medium
+                                   hover:bg-red-600 transition-colors disabled:opacity-50"
+                            prop:disabled=move || is_saving.get()
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                ev.stop_propagation();
+                                do_delete(key_for_del.clone());
+                            }
+                        >
+                            {move || t_string!(i18n, common.confirm).to_string()}
+                        </button>
+                        <button
+                            class="px-2 py-0.5 rounded bg-surface-sunken text-text-secondary text-[10px]
+                                   hover:bg-surface-raised transition-colors"
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                ev.stop_propagation();
+                                editing_key.set(None);
+                                deleting_key.set(None);
+                                menu_open_key.set(None);
+                                edit_text.set(String::new());
+                            }
+                        >
+                            {move || t_string!(i18n, common.cancel).to_string()}
+                        </button>
+                    </div>
+                </div>
+            }.into_any()
+        } else {
+            // --- Normal mode ---
+            let key_for_click = key.clone();
+            let key_for_menu = key.clone();
+            let key_for_edit = key.clone();
+            let key_for_del_menu = key.clone();
+            let key_for_pin = key.clone();
+            let pinned_now = session.pinned;
+            let label_for_edit = label.clone();
+            let key_for_run = key;
+            let is_running = move || running.with(|m| m.contains_key(&key_for_run));
+            view! {
+                <div class="relative group">
+                    <button
+                        class=move || format!(
+                            "w-full text-left px-3 py-2.5 rounded-lg text-sm flex items-center justify-between {}",
+                            if is_active() {
+                                "nav-tile-active"
+                            } else {
+                                "nav-tile"
+                            }
+                        )
+                        on:click=move |_| {
+                            editing_key.set(None);
+                            deleting_key.set(None);
+                            menu_open_key.set(None);
+                            edit_text.set(String::new());
+                            on_select(
+                                key_for_click.clone(),
+                                session_agent_id.clone(),
+                            );
+                        }
+                    >
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-1.5">
+                                <Show when=is_running>
+                                    <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse flex-shrink-0" />
+                                </Show>
+                                <div class="truncate font-medium text-xs">
+                                    {label.clone()}
+                                </div>
+                            </div>
+                            <div class="truncate text-[10px] text-text-tertiary mt-0.5">
+                                {subtitle.clone()}
+                            </div>
+                        </div>
+                        // ⋯ button (visible on hover)
+                        <button
+                            class="opacity-0 group-hover:opacity-100 ml-1 px-1.5 py-0.5
+                                   rounded text-text-tertiary hover:text-text-primary
+                                   hover:bg-surface-raised transition-all text-xs flex-shrink-0"
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                ev.stop_propagation();
+                                let current = menu_open_key.get_untracked();
+                                if current.as_deref() == Some(&key_for_menu) {
+                                    menu_open_key.set(None);
+                                } else {
+                                    editing_key.set(None);
+                                    deleting_key.set(None);
+                                    edit_text.set(String::new());
+                                    menu_open_key.set(Some(key_for_menu.clone()));
+                                }
+                            }
+                        >
+                            "⋯"
+                        </button>
+                    </button>
+                    // Dropdown menu
+                    {if is_menu_open {
+                        view! {
+                            <div class="glass absolute right-0 top-full mt-1 z-50 min-w-[120px]
+                                        bg-surface-overlay/85 border border-border rounded-lg shadow-xl
+                                        py-1 text-xs">
+                                <button
+                                    class="w-full text-left px-3 py-1.5 text-text-secondary
+                                           hover:bg-surface-sunken hover:text-text-primary transition-colors"
+                                    on:click=move |ev: web_sys::MouseEvent| {
+                                        ev.stop_propagation();
+                                        menu_open_key.set(None);
+                                        do_pin(key_for_pin.clone(), !pinned_now);
+                                    }
+                                >
+                                    {move || if pinned_now {
+                                        t_string!(i18n, chat.unpin).to_string()
+                                    } else {
+                                        t_string!(i18n, chat.pin).to_string()
+                                    }}
+                                </button>
+                                <button
+                                    class="w-full text-left px-3 py-1.5 text-text-secondary
+                                           hover:bg-surface-sunken hover:text-text-primary transition-colors"
+                                    on:click=move |ev: web_sys::MouseEvent| {
+                                        ev.stop_propagation();
+                                        menu_open_key.set(None);
+                                        edit_text.set(label_for_edit.clone());
+                                        editing_key.set(Some(key_for_edit.clone()));
+                                    }
+                                >
+                                    {move || t_string!(i18n, chat.rename).to_string()}
+                                </button>
+                                <button
+                                    class="w-full text-left px-3 py-1.5 text-red-400
+                                           hover:bg-red-500/10 transition-colors"
+                                    on:click=move |ev: web_sys::MouseEvent| {
+                                        ev.stop_propagation();
+                                        menu_open_key.set(None);
+                                        deleting_key.set(Some(key_for_del_menu.clone()));
+                                    }
+                                >
+                                    {move || t_string!(i18n, common.delete).to_string()}
+                                </button>
+                            </div>
+                        }.into_any()
+                    } else {
+                        view! { <span /> }.into_any()
+                    }}
+                </div>
+            }.into_any()
+        }
+    });
+
     view! {
         <div class="flex flex-col h-full">
-            // Agent selector + New Chat button
+            // New Chat button (the agent switcher now lives in SidebarFooter).
             <div class="p-3 space-y-2">
                 <div class="flex items-center gap-2">
-                    <select
-                        class="flex-1 min-w-0 px-3 py-1.5 rounded-lg bg-surface-sunken border border-border
-                               text-sm text-text-primary focus:outline-none focus:ring-2
-                               focus:ring-primary/30 focus:border-primary truncate"
-                        on:change=on_agent_change
-                    >
-                        {move || {
-                            let agent_list = agents.get();
-                            let sel = selected_agent.get();
-                            agent_list
-                                .into_iter()
-                                .map(|agent| {
-                                    let id = agent.id.clone();
-                                    let name = agent
-                                        .name
-                                        .clone()
-                                        .unwrap_or_else(|| agent.id.clone());
-                                    let is_selected = sel.as_deref() == Some(&id);
-                                    view! {
-                                        <option value={id} selected=is_selected>
-                                            {name}
-                                        </option>
-                                    }
-                                })
-                                .collect::<Vec<_>>()
-                        }}
-                    </select>
                     <button
-                        class="px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-medium
+                        class="flex-1 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-medium
                                hover:bg-primary/90 transition-colors whitespace-nowrap"
                         on:click=on_new_chat
                     >
@@ -602,7 +823,10 @@ pub fn ChatSidebar() -> impl IntoView {
             <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1">
                 {move || {
                     let session_list = sessions.get();
-                    let sel_agent = selected_agent.get();
+                    // Filter by the active agent — the canonical selection now
+                    // lives in `chat.agent_id` (driven by SidebarFooter's
+                    // switcher / SessionMap.activate).
+                    let sel_agent = chat.agent_id.get();
                     let _active_key = chat.session_key.get(); // track for reactivity
                     // Track action states for reactivity
                     let _editing = editing_key.get();
@@ -646,226 +870,130 @@ pub fn ChatSidebar() -> impl IntoView {
                         }.into_any();
                     }
 
-                    let on_select = on_select_session;
-                    let do_rename = do_rename.clone();
-                    let do_delete = do_delete.clone();
+                    // Partition: pinned rows appear ONLY in the Pinned section;
+                    // the rest feed Recent (time buckets) and Projects (by root).
+                    let now = (js_sys::Date::now() / 1000.0) as i64;
+                    let (pinned, rest): (Vec<SessionEntry>, Vec<SessionEntry>) =
+                        filtered.into_iter().partition(|s| s.pinned);
+
+                    // Recent: rest sorted desc by updated_at, grouped by time bucket.
+                    let mut recent = rest.clone();
+                    recent.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
+
+                    // Projects: rest grouped by project_root's last path component.
+                    let ungrouped_label = t_string!(i18n, chat.ungrouped).to_string();
+                    let mut by_project: std::collections::BTreeMap<String, Vec<SessionEntry>> =
+                        std::collections::BTreeMap::new();
+                    for s in &rest {
+                        let label = s
+                            .project_root
+                            .as_deref()
+                            .map(project_label)
+                            .unwrap_or_else(|| ungrouped_label.clone());
+                        by_project.entry(label).or_default().push(s.clone());
+                    }
+
+                    let render = render_session.clone();
+                    let render2 = render_session.clone();
+                    let render3 = render_session.clone();
+
+                    let pinned_label = t_string!(i18n, chat.pinned).to_string();
+                    let recent_label = t_string!(i18n, chat.recent).to_string();
+                    let projects_label = t_string!(i18n, chat.projects).to_string();
+
                     view! {
-                        <div class="space-y-0.5">
-                            {filtered
-                                .into_iter()
-                                .map(|session| {
-                                    let key = session.key.clone();
-                                    let session_agent_id = session.agent_id.clone();
-                                    let is_active = {
-                                        let key = key.clone();
-                                        move || {
-                                            chat.session_key.get().as_deref() == Some(&key)
-                                        }
-                                    };
-                                    let label = session
-                                        .topic
-                                        .clone()
-                                        .unwrap_or_else(|| t_string!(i18n, chat.new_chat).to_string());
-                                    let subtitle = format_session_subtitle(&session);
-                                    let do_rename = do_rename.clone();
-                                    let do_delete = do_delete.clone();
-
-                                    // Determine which mode this session row is in
-                                    let is_editing = _editing.as_deref() == Some(&key);
-                                    let is_deleting = _deleting.as_deref() == Some(&key);
-                                    let is_menu_open = _menu.as_deref() == Some(&key);
-
-                                    if is_editing {
-                                        // --- Edit mode ---
-                                        let key_for_save = key.clone();
-                                        let key_for_save2 = key;
-                                        let do_rename_keydown = do_rename.clone();
-                                        let do_rename_blur = do_rename;
-                                        view! {
-                                            <div class="w-full px-3 py-2 rounded-lg bg-surface-sunken border border-primary/40">
-                                                <input
-                                                    node_ref=edit_input_ref
-                                                    class="w-full bg-transparent text-xs text-text-primary outline-none disabled:opacity-50"
-                                                    prop:value=move || edit_text.get()
-                                                    prop:disabled=move || is_saving.get()
-                                                    maxlength=100
-                                                    on:input=move |ev| {
-                                                        edit_text.set(event_target_value(&ev));
-                                                    }
-                                                    on:keydown=move |ev: web_sys::KeyboardEvent| {
-                                                        let k = ev.key();
-                                                        if k == "Enter" {
-                                                            let text = edit_text.get_untracked();
-                                                            if text.trim().is_empty() {
-                                                                editing_key.set(None);
-                                                                edit_text.set(String::new());
-                                                            } else {
-                                                                do_rename_keydown(key_for_save.clone(), text);
-                                                            }
-                                                        } else if k == "Escape" {
-                                                            editing_key.set(None);
-                                                            edit_text.set(String::new());
+                        <div class="space-y-1">
+                            // ── Pinned ──
+                            {
+                                let has_pinned = !pinned.is_empty();
+                                view! {
+                                    <Show when=move || has_pinned>
+                                        {
+                                            let render = render.clone();
+                                            let pinned = pinned.clone();
+                                            let pinned_label = pinned_label.clone();
+                                            view! {
+                                                <SectionHeader label=pinned_label open=show_pinned />
+                                                <Show when=move || show_pinned.get()>
+                                                    <div class="space-y-0.5">
+                                                        {
+                                                            let render = render.clone();
+                                                            pinned.clone().into_iter().map(move |s| render(s)).collect_view()
                                                         }
-                                                    }
-                                                    on:blur=move |_| {
-                                                        // Small delay to allow Enter keydown to fire first
-                                                        let key_c = key_for_save2.clone();
-                                                        let do_rename_c = do_rename_blur.clone();
-                                                        leptos::task::spawn_local(async move {
-                                                            gloo_timers::future::TimeoutFuture::new(100).await;
-                                                            if editing_key.get_untracked().as_deref() == Some(&key_c) {
-                                                                let text = edit_text.get_untracked();
-                                                                if text.trim().is_empty() {
-                                                                    editing_key.set(None);
-                                                                    edit_text.set(String::new());
-                                                                } else {
-                                                                    do_rename_c(key_c, text);
-                                                                }
-                                                            }
-                                                        });
-                                                    }
-                                                />
-                                            </div>
-                                        }.into_any()
-                                    } else if is_deleting {
-                                        // --- Delete-confirm mode ---
-                                        let key_for_del = key;
-                                        view! {
-                                            <div
-                                                tabindex=0
-                                                class="w-full px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30
-                                                        flex items-center justify-between text-xs outline-none"
-                                                on:keydown=move |ev: web_sys::KeyboardEvent| {
-                                                    if ev.key() == "Escape" {
-                                                        clear_action_states();
-                                                    }
-                                                }
-                                            >
-                                                <span class="text-red-400 font-medium">{move || t_string!(i18n, chat.confirm_delete).to_string()}</span>
-                                                <div class="flex items-center gap-1.5">
-                                                    <button
-                                                        class="px-2 py-0.5 rounded bg-red-500 text-white text-[10px] font-medium
-                                                               hover:bg-red-600 transition-colors disabled:opacity-50"
-                                                        prop:disabled=move || is_saving.get()
-                                                        on:click=move |ev: web_sys::MouseEvent| {
-                                                            ev.stop_propagation();
-                                                            do_delete(key_for_del.clone());
-                                                        }
-                                                    >
-                                                        {move || t_string!(i18n, common.confirm).to_string()}
-                                                    </button>
-                                                    <button
-                                                        class="px-2 py-0.5 rounded bg-surface-sunken text-text-secondary text-[10px]
-                                                               hover:bg-surface-raised transition-colors"
-                                                        on:click=move |ev: web_sys::MouseEvent| {
-                                                            ev.stop_propagation();
-                                                            clear_action_states();
-                                                        }
-                                                    >
-                                                        {move || t_string!(i18n, common.cancel).to_string()}
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        }.into_any()
-                                    } else {
-                                        // --- Normal mode ---
-                                        let key_for_click = key.clone();
-                                        let key_for_menu = key.clone();
-                                        let key_for_edit = key.clone();
-                                        let key_for_del_menu = key.clone();
-                                        let label_for_edit = label.clone();
-                                        let key_for_run = key;
-                                        let is_running = move || running.with(|m| m.contains_key(&key_for_run));
-                                        view! {
-                                            <div class="relative group">
-                                                <button
-                                                    class=move || format!(
-                                                        "w-full text-left px-3 py-2.5 rounded-lg text-sm flex items-center justify-between {}",
-                                                        if is_active() {
-                                                            "nav-tile-active"
-                                                        } else {
-                                                            "nav-tile"
-                                                        }
-                                                    )
-                                                    on:click=move |_| {
-                                                        clear_action_states();
-                                                        on_select(
-                                                            key_for_click.clone(),
-                                                            session_agent_id.clone(),
-                                                        );
-                                                    }
-                                                >
-                                                    <div class="flex-1 min-w-0">
-                                                        <div class="flex items-center gap-1.5">
-                                                            <Show when=is_running>
-                                                                <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse flex-shrink-0" />
-                                                            </Show>
-                                                            <div class="truncate font-medium text-xs">
-                                                                {label}
-                                                            </div>
-                                                        </div>
-                                                        <div class="truncate text-[10px] text-text-tertiary mt-0.5">
-                                                            {subtitle}
-                                                        </div>
                                                     </div>
-                                                    // ⋯ button (visible on hover)
-                                                    <button
-                                                        class="opacity-0 group-hover:opacity-100 ml-1 px-1.5 py-0.5
-                                                               rounded text-text-tertiary hover:text-text-primary
-                                                               hover:bg-surface-raised transition-all text-xs flex-shrink-0"
-                                                        on:click=move |ev: web_sys::MouseEvent| {
-                                                            ev.stop_propagation();
-                                                            let current = menu_open_key.get_untracked();
-                                                            if current.as_deref() == Some(&key_for_menu) {
-                                                                menu_open_key.set(None);
-                                                            } else {
-                                                                clear_action_states();
-                                                                menu_open_key.set(Some(key_for_menu.clone()));
-                                                            }
+                                                </Show>
+                                            }
+                                        }
+                                    </Show>
+                                }
+                            }
+
+                            // ── Recent (time buckets) ──
+                            <SectionHeader label=recent_label open=show_recent />
+                            <Show when=move || show_recent.get()>
+                                {
+                                    let render2 = render2.clone();
+                                    let recent = recent.clone();
+                                    view! {
+                                        <div class="space-y-0.5">
+                                            {
+                                                [TimeBucket::Today, TimeBucket::ThisWeek, TimeBucket::Earlier]
+                                                    .into_iter()
+                                                    .map(|bucket| {
+                                                        let bucket_label = match bucket {
+                                                            TimeBucket::Today => t_string!(i18n, chat.today),
+                                                            TimeBucket::ThisWeek => t_string!(i18n, chat.this_week),
+                                                            TimeBucket::Earlier => t_string!(i18n, chat.earlier),
+                                                        }.to_string();
+                                                        let rows: Vec<SessionEntry> = recent
+                                                            .iter()
+                                                            .filter(|s| time_bucket(s.updated_at, now) == bucket)
+                                                            .cloned()
+                                                            .collect();
+                                                        let r = render2.clone();
+                                                        let has_rows = !rows.is_empty();
+                                                        view! {
+                                                            <Show when=move || has_rows>
+                                                                {
+                                                                    let r = r.clone();
+                                                                    let rows = rows.clone();
+                                                                    let bucket_label = bucket_label.clone();
+                                                                    view! {
+                                                                        <div class="px-3 pt-1 text-[10px] uppercase tracking-wider text-text-tertiary">{bucket_label}</div>
+                                                                        {rows.into_iter().map(move |s| r(s)).collect_view()}
+                                                                    }
+                                                                }
+                                                            </Show>
                                                         }
-                                                    >
-                                                        "⋯"
-                                                    </button>
-                                                </button>
-                                                // Dropdown menu
-                                                {if is_menu_open {
-                                                    view! {
-                                                        <div class="glass absolute right-0 top-full mt-1 z-50 min-w-[120px]
-                                                                    bg-surface-overlay/85 border border-border rounded-lg shadow-xl
-                                                                    py-1 text-xs">
-                                                            <button
-                                                                class="w-full text-left px-3 py-1.5 text-text-secondary
-                                                                       hover:bg-surface-sunken hover:text-text-primary transition-colors"
-                                                                on:click=move |ev: web_sys::MouseEvent| {
-                                                                    ev.stop_propagation();
-                                                                    menu_open_key.set(None);
-                                                                    edit_text.set(label_for_edit.clone());
-                                                                    editing_key.set(Some(key_for_edit.clone()));
-                                                                }
-                                                            >
-                                                                {move || t_string!(i18n, chat.rename).to_string()}
-                                                            </button>
-                                                            <button
-                                                                class="w-full text-left px-3 py-1.5 text-red-400
-                                                                       hover:bg-red-500/10 transition-colors"
-                                                                on:click=move |ev: web_sys::MouseEvent| {
-                                                                    ev.stop_propagation();
-                                                                    menu_open_key.set(None);
-                                                                    deleting_key.set(Some(key_for_del_menu.clone()));
-                                                                }
-                                                            >
-                                                                {move || t_string!(i18n, common.delete).to_string()}
-                                                            </button>
-                                                        </div>
-                                                    }.into_any()
-                                                } else {
-                                                    view! { <span /> }.into_any()
-                                                }}
-                                            </div>
-                                        }.into_any()
+                                                    })
+                                                    .collect_view()
+                                            }
+                                        </div>
                                     }
-                                })
-                                .collect::<Vec<_>>()}
+                                }
+                            </Show>
+
+                            // ── Projects ──
+                            <SectionHeader label=projects_label open=show_projects />
+                            <Show when=move || show_projects.get()>
+                                {
+                                    let render3 = render3.clone();
+                                    let by_project = by_project.clone();
+                                    view! {
+                                        <div class="space-y-0.5">
+                                            {
+                                                by_project.clone().into_iter().map(|(label, rows)| {
+                                                    let r = render3.clone();
+                                                    view! {
+                                                        <div class="px-3 pt-1 text-[10px] uppercase tracking-wider text-text-tertiary">{label}</div>
+                                                        {rows.into_iter().map(move |s| r(s)).collect_view()}
+                                                    }
+                                                }).collect_view()
+                                            }
+                                        </div>
+                                    }
+                                }
+                            </Show>
                         </div>
                     }
                     .into_any()
@@ -876,6 +1004,53 @@ pub fn ChatSidebar() -> impl IntoView {
             <crate::components::sidebar::SessionStatusBar />
         </div>
     }
+}
+
+/// Collapsible section header with a ▾/▸ toggle bound to an `RwSignal<bool>`.
+#[component]
+fn SectionHeader(label: String, open: RwSignal<bool>) -> impl IntoView {
+    view! {
+        <button
+            class="w-full flex items-center justify-between px-3 py-1 text-[10px] font-medium
+                   text-text-tertiary uppercase tracking-wider hover:text-text-secondary transition-colors"
+            on:click=move |_| open.update(|v| *v = !*v)
+        >
+            <span>{label}</span>
+            <span>{move || if open.get() { "▾" } else { "▸" }}</span>
+        </button>
+    }
+}
+
+/// Time bucket for the "Recent" section, derived from updated_at (epoch secs).
+#[derive(Clone, Copy, PartialEq)]
+enum TimeBucket {
+    Today,
+    ThisWeek,
+    Earlier,
+}
+
+/// Classify a session's updated_at into a coarse time bucket.
+/// `now` is epoch secs (from js_sys::Date::now()/1000).
+fn time_bucket(updated_at: Option<i64>, now: i64) -> TimeBucket {
+    let ts = updated_at.unwrap_or(0);
+    let age = now.saturating_sub(ts);
+    if age < 86_400 {
+        TimeBucket::Today
+    } else if age < 604_800 {
+        TimeBucket::ThisWeek
+    } else {
+        TimeBucket::Earlier
+    }
+}
+
+/// Last path component of a project_root, for a compact project label.
+fn project_label(root: &str) -> String {
+    root.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(root)
+        .to_string()
 }
 
 fn format_session_subtitle(session: &SessionEntry) -> String {

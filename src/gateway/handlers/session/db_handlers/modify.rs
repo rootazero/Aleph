@@ -404,3 +404,61 @@ pub async fn handle_set_topic_db(
         ),
     }
 }
+
+/// Handle `sessions.set_pinned` RPC request with database backend
+///
+/// Params:
+///   - `session_key` (required): session key string
+///   - `pinned` (required): bool
+pub async fn handle_set_pinned_db(
+    request: JsonRpcRequest,
+    manager: Arc<dyn SessionStore>,
+) -> JsonRpcResponse {
+    let params = match &request.params {
+        Some(Value::Object(map)) => map,
+        _ => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
+        }
+    };
+
+    let session_key_str = match params.get("session_key").and_then(|v| v.as_str()) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key");
+        }
+    };
+
+    let pinned = match params.get("pinned").and_then(serde_json::Value::as_bool) {
+        Some(p) => p,
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing pinned (bool)");
+        }
+    };
+
+    let session_key = match SessionKey::from_key_string(session_key_str) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
+        }
+    };
+
+    match manager.set_pinned(&session_key, pinned).await {
+        Ok(()) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "session_key": session_key_str,
+                "pinned": pinned,
+                "updated": true,
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to set pinned: {e}"),
+        ),
+    }
+}

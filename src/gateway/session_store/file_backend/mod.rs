@@ -778,6 +778,40 @@ impl SessionStore for FileSessionStore {
         Ok(())
     }
 
+    async fn set_pinned(&self, key: &SessionKey, pinned: bool) -> Result<(), SessionStoreError> {
+        let key_str = key.to_key_string();
+        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+            let mut identity_meta = meta
+                .identity_meta
+                .unwrap_or_else(|| SessionIdentityMeta::owner(""));
+            identity_meta
+                .custom
+                .insert("pinned".to_string(), serde_json::json!(pinned));
+            meta.identity_meta = Some(identity_meta);
+            self.write_metadata(&key_str, &meta).await?;
+        }
+        Ok(())
+    }
+
+    async fn set_project_root(
+        &self,
+        key: &SessionKey,
+        project_root: &str,
+    ) -> Result<(), SessionStoreError> {
+        let key_str = key.to_key_string();
+        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+            let mut identity_meta = meta
+                .identity_meta
+                .unwrap_or_else(|| SessionIdentityMeta::owner(""));
+            identity_meta
+                .custom
+                .insert("project_root".to_string(), serde_json::json!(project_root));
+            meta.identity_meta = Some(identity_meta);
+            self.write_metadata(&key_str, &meta).await?;
+        }
+        Ok(())
+    }
+
     async fn set_state(
         &self,
         key: &SessionKey,

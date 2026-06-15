@@ -212,7 +212,18 @@
     "copied": "已复制",
     "retry_last_prompt": "重试上一次提问",
     "retry": "重试",
-    "drop_to_attach": "拖放以添加附件"
+    "drop_to_attach": "拖放以添加附件",
+    "pinned": "置顶",
+    "recent": "最近",
+    "projects": "项目",
+    "ungrouped": "未分组",
+    "this_week": "本周",
+    "earlier": "更早",
+    "pin": "置顶",
+    "unpin": "取消置顶",
+    "status_online": "在线",
+    "status_reconnecting": "重连中",
+    "status_offline": "离线"
   },
   "memory": {
     "title": "记忆库",

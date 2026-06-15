@@ -276,6 +276,17 @@ impl AgentRunManager {
                     return Err(format!("project_root is not a directory: {raw}"));
                 }
                 metadata.insert("project_root".to_string(), path.display().to_string());
+                // Persist the working directory onto the session so the Panel can
+                // group conversations by project. Best-effort: never fail the run.
+                if let Some(store) = self.router.session_store() {
+                    let sk = session_key.clone();
+                    let root = path.display().to_string();
+                    tokio::spawn(async move {
+                        if let Err(e) = store.set_project_root(&sk, &root).await {
+                            tracing::warn!(error = %e, "failed to persist session project_root");
+                        }
+                    });
+                }
                 Some(path)
             }
             None => None,
