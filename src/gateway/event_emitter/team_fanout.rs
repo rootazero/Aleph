@@ -26,7 +26,7 @@
 
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc,
+    Arc, OnceLock, RwLock,
 };
 
 use async_trait::async_trait;
@@ -35,6 +35,32 @@ use serde_json::{json, Value};
 use super::types::{EventEmitError, StreamEvent};
 use super::EventEmitter;
 use crate::gateway::event_bus::GatewayEventBus;
+
+/// Global event-bus handle, injected once at gateway boot, so the team
+/// dispatcher's member-run path can fan run events onto `team.<id>.*` without
+/// threading the bus through `GatewayContext`/dispatcher constructors and their
+/// test sites. Mirrors `origin_fanout::CHANNEL_REGISTRY` / the
+/// `middleware::request_state` global-registry pattern.
+static TEAM_EVENT_BUS: OnceLock<RwLock<Option<Arc<GatewayEventBus>>>> = OnceLock::new();
+
+fn team_event_bus_slot() -> &'static RwLock<Option<Arc<GatewayEventBus>>> {
+    TEAM_EVENT_BUS.get_or_init(|| RwLock::new(None))
+}
+
+/// Inject the gateway's event bus. Called once during subsystem boot.
+pub fn set_team_event_bus(bus: Arc<GatewayEventBus>) {
+    let mut guard = team_event_bus_slot().write().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(bus);
+}
+
+/// Fetch the injected event bus, if boot wired one. `None` in contexts that
+/// never built a gateway (unit tests, CLI subcommands) — team fan-out is then
+/// simply skipped and the run stays silent (the prior NoOp behavior).
+#[must_use]
+pub fn team_event_bus() -> Option<Arc<GatewayEventBus>> {
+    let guard = team_event_bus_slot().read().unwrap_or_else(|e| e.into_inner());
+    guard.clone()
+}
 
 /// Decorator that republishes a team member run's events onto
 /// `team.<team_id>.*` topics, tagged with the producing `agent_id`.
@@ -302,5 +328,20 @@ mod tests {
         let s1 = emitter.next_seq();
         let s2 = emitter.next_seq();
         assert!(s1 > s0 && s2 > s1, "next_seq must be monotonically increasing");
+    }
+
+    /// Verify the global boot-injection slot: after `set_team_event_bus`, the
+    /// accessor returns `Some`. Does not assert `None` first because the
+    /// `OnceLock`-backed global is process-wide and another test in the suite
+    /// may have already set it; asserting `is_some()` after setting is stable
+    /// regardless of test execution order.
+    #[test]
+    fn global_slot_returns_some_after_set() {
+        let bus = Arc::new(GatewayEventBus::new());
+        set_team_event_bus(bus);
+        assert!(
+            team_event_bus().is_some(),
+            "team_event_bus() must return Some after set_team_event_bus()"
+        );
     }
 }
