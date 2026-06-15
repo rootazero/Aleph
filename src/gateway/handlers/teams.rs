@@ -21,7 +21,7 @@ use crate::agents::swarm::tasks::{
 use crate::resilience::{AgentUsageTotal, StateDatabase};
 use crate::sync_primitives::Arc;
 use crate::teams::snapshots::{capture_snapshot, restore_snapshot, SqliteSnapshotStore};
-use crate::teams::{NewTeamMember, TeamMemberKind, TeamStore};
+use crate::teams::{NewTeam, NewTeamMember, TeamMemberKind, TeamStore};
 
 use super::super::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
@@ -161,6 +161,115 @@ pub async fn handle_delete(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -
             format!("Failed to delete team '{}': {}", params.team_id, e),
         ),
     }
+}
+
+// =============================================================================
+// teams.create — create a persistent team with explicit leader + members
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct CreateMemberSpec {
+    pub agent_id: String,
+    #[serde(default = "default_member_role")]
+    pub role: String,
+}
+
+fn default_member_role() -> String {
+    "member".to_string()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTeamParams {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub leader_id: String,
+    #[serde(default)]
+    pub members: Vec<CreateMemberSpec>,
+}
+
+/// teams.create — create a persistent team with explicit leader_id + members.
+///
+/// Thin I/O: only wraps `TeamStore::create_team` + `add_member`, no orchestration
+/// or business logic (R4/R10). Leader is auto-enrolled with role="leader";
+/// members duplicating the leader are skipped.
+pub async fn handle_create(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -> JsonRpcResponse {
+    debug!("Handling teams.create request");
+
+    let params: CreateTeamParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    if params.name.trim().is_empty() || params.leader_id.trim().is_empty() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "name and leader_id are required".to_string(),
+        );
+    }
+
+    // Duplicate-name check intentionally omitted at this thin I/O layer; see
+    // TeamCreateTool for LLM-facing dup-name validation.
+    let team = match store
+        .create_team(NewTeam {
+            name: params.name.clone(),
+            description: params.description.clone(),
+            leader_id: params.leader_id.clone(),
+        })
+        .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to create team: {e}"),
+            )
+        }
+    };
+
+    // Auto-enroll the leader with role="leader" (mirrors team_create tool semantics).
+    if let Err(e) = store
+        .add_member(NewTeamMember {
+            team_id: team.id.clone(),
+            agent_id: params.leader_id.clone(),
+            role: "leader".to_string(),
+            ..Default::default()
+        })
+        .await
+    {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to enroll leader: {e}"),
+        );
+    }
+
+    for spec in params.members {
+        if spec.agent_id == params.leader_id {
+            continue; // leader already enrolled
+        }
+        if let Err(e) = store
+            .add_member(NewTeamMember {
+                team_id: team.id.clone(),
+                agent_id: spec.agent_id.clone(),
+                role: spec.role.clone(),
+                ..Default::default()
+            })
+            .await
+        {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to enroll member '{}': {e}", spec.agent_id),
+            );
+        }
+    }
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({ "team_id": team.id, "name": team.name, "leader_id": team.leader_id }),
+    )
 }
 
 /// Handle agents.teams — list all teams an agent belongs to (as leader or member)
@@ -865,6 +974,92 @@ mod tests {
             task["metadata"]["managed_by"], "team_delegate",
             "caller-supplied managed_by must win over auto-injection"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // handle_create tests
+    // -------------------------------------------------------------------------
+
+    async fn team_store() -> Arc<dyn crate::teams::TeamStore> {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        let store = crate::teams::store::SqliteTeamStore::new(conn);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+
+    fn create_team_req(params: serde_json::Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "teams.create".to_string(),
+            params: Some(params),
+            id: Some(json!(1)),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_create_persists_team_with_leader_and_members() {
+        let store = team_store().await;
+        let req = create_team_req(json!({
+            "name": "ResearchSquad",
+            "description": "ad-hoc",
+            "leader_id": "agent-main",
+            "members": [{"agent_id": "agent-alice", "role": "researcher"}]
+        }));
+        let resp = handle_create(req, store.clone()).await;
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+
+        let team_id = resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("team_id"))
+            .and_then(|v| v.as_str())
+            .expect("team_id in response")
+            .to_string();
+
+        let team = store.get_team(&team_id).await.unwrap().unwrap();
+        assert_eq!(team.leader_id, "agent-main");
+
+        let members = store.get_members(&team_id).await.unwrap();
+        let ids: Vec<&str> = members.iter().map(|m| m.agent_id.as_str()).collect();
+        assert!(ids.contains(&"agent-main"), "leader auto-enrolled");
+        assert!(ids.contains(&"agent-alice"), "member enrolled");
+
+        let leader_member = members.iter().find(|m| m.agent_id == "agent-main").unwrap();
+        assert_eq!(leader_member.role, "leader", "leader has role=leader");
+    }
+
+    #[tokio::test]
+    async fn handle_create_rejects_empty_name() {
+        let store = team_store().await;
+        let resp =
+            handle_create(create_team_req(json!({"name": "", "leader_id": "a"})), store).await;
+        let err = resp.error.expect("expected error");
+        assert_eq!(err.code, INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn handle_create_deduplicates_leader_in_members_list() {
+        let store = team_store().await;
+        let resp = handle_create(
+            create_team_req(json!({
+                "name": "Dup",
+                "leader_id": "bot",
+                "members": [{"agent_id": "bot", "role": "worker"}]
+            })),
+            store.clone(),
+        )
+        .await;
+        assert!(resp.error.is_none());
+        let team_id = resp
+            .result
+            .unwrap()
+            .get("team_id")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
+        let members = store.get_members(&team_id).await.unwrap();
+        let bot_entries: Vec<_> = members.iter().filter(|m| m.agent_id == "bot").collect();
+        assert_eq!(bot_entries.len(), 1, "leader enrolled exactly once");
     }
 }
 
