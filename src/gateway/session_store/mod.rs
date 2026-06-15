@@ -110,6 +110,19 @@ pub trait SessionStore: Send + Sync {
         topic: Option<&str>,
     ) -> Result<(), SessionStoreError>;
     async fn set_topic(&self, key: &SessionKey, topic: &str) -> Result<(), SessionStoreError>;
+
+    /// Persist a session's pinned flag (stored in identity_meta.custom["pinned"],
+    /// mirroring how set_topic persists the topic — no schema change required).
+    async fn set_pinned(&self, key: &SessionKey, pinned: bool) -> Result<(), SessionStoreError>;
+
+    /// Persist the working directory a run was launched in
+    /// (identity_meta.custom["project_root"]), so the Panel can group sessions
+    /// by project. Written at run start; mirrors set_topic's persistence path.
+    async fn set_project_root(
+        &self,
+        key: &SessionKey,
+        project_root: &str,
+    ) -> Result<(), SessionStoreError>;
     /// Record the originating channel of a session (e.g. "telegram", "gui:chat")
     /// onto its identity metadata, so `sessions.list` / `sessions.changed` can
     /// surface conversation origin for multi-end continuity. Idempotent: must not
