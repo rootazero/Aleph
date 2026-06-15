@@ -385,6 +385,7 @@ mod tests {
             timestamp: None,
             is_final: false,
             text_finalized: false,
+            agent_id: None,
         }
     }
 
