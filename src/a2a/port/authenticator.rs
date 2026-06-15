@@ -33,6 +33,9 @@ pub enum A2AAction {
     ListTasks,
     Subscribe,
     ManagePushConfig,
+    /// Fetch the authenticated extended agent card
+    /// (`agent/getAuthenticatedExtendedCard`).
+    GetExtendedCard,
 }
 
 /// Port for authentication and authorization of A2A requests.

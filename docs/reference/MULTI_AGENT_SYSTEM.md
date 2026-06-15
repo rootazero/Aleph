@@ -367,7 +367,11 @@ Modes 1–3 are all **in-process** — every agent runs inside the same
 over HTTP, with Agent Card discovery).
 
 Aleph has always *served* A2A — it exposes its own Agent Card at
-`/.well-known/agent-card.json` and answers `message/send` / `tasks/*` on `/a2a`.
+`/.well-known/agent-card.json` and answers `message/send` / `tasks/*` (including
+`tasks/pushNotificationConfig/*` and `agent/getAuthenticatedExtendedCard`) on
+`/a2a`. Registered push-notification webhooks now fire on every task
+status/artifact update (delivered fire-and-forget alongside the SSE stream), so
+clients that are not attached to the live stream still receive task updates.
 Mode 4 wires the **outbound** half: Aleph as an A2A *client*. (Previously the
 outbound stack — `A2AClient`, `SmartRouter`, `A2ASubAgent` — was constructed at
 startup and immediately dropped; it was unreachable until these tools.)
