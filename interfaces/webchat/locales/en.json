@@ -212,7 +212,18 @@
     "copied": "Copied",
     "retry_last_prompt": "Retry last prompt",
     "retry": "Retry",
-    "drop_to_attach": "Drop to attach"
+    "drop_to_attach": "Drop to attach",
+    "pinned": "Pinned",
+    "recent": "Recent",
+    "projects": "Projects",
+    "ungrouped": "Ungrouped",
+    "this_week": "This week",
+    "earlier": "Earlier",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "status_online": "Online",
+    "status_reconnecting": "Reconnecting",
+    "status_offline": "Offline"
   },
   "memory": {
     "title": "Memory Vault",
