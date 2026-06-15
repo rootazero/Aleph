@@ -6,8 +6,10 @@
 //!
 //! * invisible / zero-width characters spliced into a keyword
 //!   (`d<U+200B>d if=…`, RTL/BOM overrides);
-//! * backslash escapes the shell strips at parse time (`r\m -rf`,
-//!   `d\d if=…`), including line continuations (`rm -r\<newline>f`);
+//! * escape characters the shell strips at parse time — `\` (POSIX sh,
+//!   `r\m -rf` / `d\d if=…`), `^` (cmd.exe, `de^l /s C:\`), `` ` ``
+//!   (PowerShell, `` Remo`ve-Item ``) — including their line continuations
+//!   (`rm -r\<newline>f`);
 //! * empty quote tokens that collapse to nothing (`r''m`, `d""d`).
 //!
 //! None of these change what the shell runs, but each can slip a catastrophic
@@ -41,7 +43,7 @@ pub fn normalize_for_matching(text: &str) -> Cow<'_, str> {
     let has_escape_or_quote = text
         .as_bytes()
         .iter()
-        .any(|&b| matches!(b, b'\\' | b'\'' | b'"'));
+        .any(|&b| matches!(b, b'\\' | b'\'' | b'"' | b'^' | b'`'));
     let (stripped, removed) = strip_unsafe_invisible(text.as_bytes());
 
     // Fast path: no invisible sequences removed and no escape/quote tricks.
@@ -60,17 +62,22 @@ pub fn normalize_for_matching(text: &str) -> Cow<'_, str> {
     Cow::Owned(fold_escapes_and_quotes(&stripped))
 }
 
-/// Single pass that drops shell backslash escapes (and `\`-newline line
-/// continuations) and collapses empty quote pairs.
+/// Single pass that drops shell escape characters — `\` (POSIX), `^`
+/// (cmd.exe), `` ` `` (PowerShell), including their `-newline line
+/// continuations — and collapses empty quote pairs.
 fn fold_escapes_and_quotes(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            // Backslash: the shell strips it at parse time. Reveal the escaped
-            // char so `r\m`/`d\d` fold back to `rm`/`dd`; a `\`-newline line
-            // continuation drops both (the shell joins the lines).
-            '\\' => match chars.next() {
+            // Escape characters the shell strips at parse time. Reveal the
+            // escaped char so the obfuscated keyword folds back to plain text:
+            //   * `\` (POSIX sh)      — `r\m`/`d\d` → `rm`/`dd`
+            //   * `^` (cmd.exe)       — `de^l`/`fo^rmat` → `del`/`format`
+            //   * `` ` `` (PowerShell) — `` Remo`ve-Item `` → `Remove-Item`
+            // An escape immediately before a newline is a line continuation in
+            // all three shells, so both chars drop (the shell joins the lines).
+            '\\' | '^' | '`' => match chars.next() {
                 Some('\n') => {}
                 Some(next) => out.push(next),
                 None => {}
@@ -150,5 +157,25 @@ mod tests {
     #[test]
     fn trailing_backslash_is_dropped() {
         assert_eq!(norm("echo hi\\"), "echo hi");
+    }
+
+    #[test]
+    fn cmd_caret_escape_is_folded() {
+        // cmd.exe `^` escape: `de^l`/`fo^rmat` are how a caller hides the
+        // keyword from a literal matcher; the shell runs them as `del`/`format`.
+        assert_eq!(norm("de^l /s /q C:"), "del /s /q C:");
+        assert_eq!(norm("fo^rmat C:"), "format C:");
+    }
+
+    #[test]
+    fn powershell_backtick_escape_is_folded() {
+        // PowerShell `` ` `` escape: `` Remo`ve-Item `` runs as `Remove-Item`.
+        assert_eq!(norm("Remo`ve-Item -Recurse C:"), "Remove-Item -Recurse C:");
+    }
+
+    #[test]
+    fn caret_line_continuation_is_joined() {
+        // `^`-newline is a cmd.exe line continuation — both chars drop.
+        assert_eq!(norm("format^\nC:"), "formatC:");
     }
 }
