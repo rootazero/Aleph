@@ -5,6 +5,7 @@ pub mod messages;
 pub mod project_menu;
 pub mod reasoning;
 pub mod state;
+pub mod team_compose;
 pub mod team_events;
 pub mod timeline;
 pub mod transcript;

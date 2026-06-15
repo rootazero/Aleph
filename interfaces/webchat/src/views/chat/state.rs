@@ -341,6 +341,8 @@ pub struct ChatState {
     next_msg_id: RwSignal<u64>,
     /// Team chat mode marker. `Some(team_id)` → render 3-pane team view; composer
     /// routes to teams.chat.send. `None` = single-agent chat (zero regression).
+    /// NOTE (MVP): not persisted in SessionSnapshot — team mode is ephemeral and
+    /// does not survive a session-tab swap; re-enter via the 团队 compose button.
     pub team_id: RwSignal<Option<String>>,
     /// Team roster + live status (left roster rail data source). Empty = non-team.
     pub team_members: RwSignal<Vec<TeamMemberView>>,
