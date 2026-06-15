@@ -4,12 +4,21 @@
 //!   fallback (macOS 13–14).
 //! - **Linux**: `ffmpeg -f x11grab` for X11 / `XWayland` sessions, with graceful
 //!   `NotImplemented` degradation on pure Wayland.
+//! - **Windows**: `ffmpeg -f gdigrab -i desktop` — the GDI screen grabber, the
+//!   direct analog of Linux's x11grab, reusing the same `ffmpeg` binary
+//!   `media.rs` already shells out to (no new crate dependency, R3).
 
-// These are consumed only by the macOS/Linux recording paths below; on Windows
-// the whole module compiles to stubs, so the imports are unused there.
-#[cfg_attr(windows, allow(unused_imports))]
+// Consumed by every implemented recording path (macOS/Linux/Windows); only the
+// stub fallback for other OSes leaves them unused.
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux", target_os = "windows")),
+    allow(unused_imports)
+)]
 use crate::error::{DesktopError, Result};
-#[cfg_attr(windows, allow(unused_imports))]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux", target_os = "windows")),
+    allow(unused_imports)
+)]
 use tracing::debug;
 
 // SCRecordingOutput delegate — defined at module scope to avoid ObjC
@@ -106,7 +115,7 @@ pub fn screen_record(
 }
 
 /// Generate the output file path: `~/.aleph/data/_media/screen_record_{timestamp}.mp4`
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn screen_record_output_path() -> Result<std::path::PathBuf> {
     let home = dirs::home_dir()
         .ok_or_else(|| DesktopError::ScreenCapture("Cannot determine home directory".into()))?;
@@ -497,6 +506,127 @@ pub fn screen_record(
     })
 }
 
+/// Build the `ffmpeg` argument vector for a `gdigrab` screen recording (Windows).
+///
+/// Pure function (no I/O) so the argument assembly can be unit-tested without a
+/// desktop session. `audio_device` is an optional `DirectShow` audio input name;
+/// when `Some`, a second `-f dshow -i audio=<name>` input is appended.
+///
+/// `gdigrab` is the GDI screen grabber — the direct Windows analog of x11grab.
+/// Capture geometry (`-offset_x` / `-offset_y` / `-video_size`) is supplied as
+/// *input* options preceding `-i desktop`; full-screen omits them.
+#[cfg(any(target_os = "windows", test))]
+fn build_gdigrab_args(
+    config: &crate::screen_types::ScreenRecordConfig,
+    audio_device: Option<&str>,
+    output: &str,
+) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-y".into(),
+        "-f".into(),
+        "gdigrab".into(),
+        "-framerate".into(),
+        config.fps.to_string(),
+    ];
+
+    // Region capture: gdigrab wants the offset + size as input options *before*
+    // `-i desktop`. Full-screen leaves them off and grabs the whole desktop.
+    if let Some(r) = &config.region {
+        args.push("-offset_x".into());
+        args.push(r.x.to_string());
+        args.push("-offset_y".into());
+        args.push(r.y.to_string());
+        args.push("-video_size".into());
+        args.push(format!("{}x{}", r.width, r.height));
+    }
+    args.push("-i".into());
+    args.push("desktop".into());
+
+    // Optional audio via DirectShow (mirrors media.rs). DirectShow has no
+    // "default" pseudo-source like PulseAudio, so an explicit device name is
+    // required; the caller resolves it and passes `None` to skip audio.
+    if let Some(dev) = audio_device {
+        args.push("-f".into());
+        args.push("dshow".into());
+        args.push("-i".into());
+        args.push(format!("audio={dev}"));
+    }
+
+    args.push("-t".into());
+    args.push(format!("{:.3}", config.duration_secs));
+    // H.264 + yuv420p for broad MP4 player compatibility (matches x11grab path).
+    args.push("-c:v".into());
+    args.push("libx264".into());
+    args.push("-pix_fmt".into());
+    args.push("yuv420p".into());
+    args.push(output.to_string());
+    args
+}
+
+/// Record the primary desktop (or a region) to MP4 via `ffmpeg -f gdigrab`.
+///
+/// Reuses the same `ffmpeg` binary `media.rs` already depends on (R3 — no new
+/// native capture crate). System audio is opt-in and requires an explicit
+/// `DirectShow` device named via `ALEPH_AUDIO_DEVICE` (the same env the Windows
+/// `MediaCapability` honours); when audio is requested without a named device,
+/// the capture gracefully degrades to video-only (P7) rather than failing.
+#[cfg(target_os = "windows")]
+pub fn screen_record(
+    config: &crate::screen_types::ScreenRecordConfig,
+) -> Result<crate::screen_types::ScreenRecordResult> {
+    use std::process::Command;
+
+    let config = config.clone().clamped();
+
+    let audio_device = if config.with_audio {
+        match std::env::var("ALEPH_AUDIO_DEVICE") {
+            Ok(d) if !d.trim().is_empty() => Some(d),
+            _ => {
+                debug!(
+                    "screen_record: with_audio requested but ALEPH_AUDIO_DEVICE is unset; \
+                     recording video only (DirectShow has no default-source pseudo-device)"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let has_audio = audio_device.is_some();
+
+    let output_path = screen_record_output_path()?;
+    let output_str = output_path.to_string_lossy().into_owned();
+    let args = build_gdigrab_args(&config, audio_device.as_deref(), &output_str);
+
+    let output = Command::new("ffmpeg").args(&args).output().map_err(|e| {
+        DesktopError::ScreenCapture(format!("Failed to run ffmpeg (install ffmpeg): {e}"))
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(DesktopError::ScreenCapture(format!(
+            "ffmpeg gdigrab recording failed: {}",
+            stderr.trim()
+        )));
+    }
+    if !output_path.exists() {
+        return Err(DesktopError::ScreenCapture(
+            "ffmpeg completed but the output file was not created".into(),
+        ));
+    }
+
+    debug!(
+        "Screen recording (ffmpeg gdigrab) complete: {}",
+        output_path.display()
+    );
+
+    Ok(crate::screen_types::ScreenRecordResult {
+        file_path: output_str,
+        duration_secs: config.duration_secs,
+        has_audio,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,5 +683,66 @@ mod tests {
         let args = build_x11grab_args(":0", &cfg, "/tmp/a.mp4");
         assert!(args.iter().any(|a| a == "pulse"));
         assert!(args.iter().any(|a| a == "default"));
+    }
+
+    #[test]
+    fn gdigrab_fullscreen_omits_geometry() {
+        let cfg = ScreenRecordConfig {
+            duration_secs: 5.0,
+            fps: 30,
+            with_audio: false,
+            region: None,
+        };
+        let args = build_gdigrab_args(&cfg, None, "C:/tmp/out.mp4");
+        assert!(args.iter().any(|a| a == "gdigrab"));
+        assert!(!args.iter().any(|a| a == "-video_size"));
+        assert!(!args.iter().any(|a| a == "-offset_x"));
+        let i = args.iter().position(|a| a == "-i").unwrap();
+        assert_eq!(args[i + 1], "desktop");
+        assert_eq!(args.last().unwrap(), "C:/tmp/out.mp4");
+        // No audio input when no device is supplied.
+        assert!(!args.iter().any(|a| a == "dshow"));
+    }
+
+    #[test]
+    fn gdigrab_region_sets_offset_and_size() {
+        let cfg = ScreenRecordConfig {
+            duration_secs: 3.0,
+            fps: 24,
+            with_audio: false,
+            region: Some(ScreenRegion {
+                x: 100,
+                y: 50,
+                width: 640,
+                height: 480,
+            }),
+        };
+        let args = build_gdigrab_args(&cfg, None, "C:/tmp/r.mp4");
+        let ox = args.iter().position(|a| a == "-offset_x").unwrap();
+        assert_eq!(args[ox + 1], "100");
+        let oy = args.iter().position(|a| a == "-offset_y").unwrap();
+        assert_eq!(args[oy + 1], "50");
+        let vs = args.iter().position(|a| a == "-video_size").unwrap();
+        assert_eq!(args[vs + 1], "640x480");
+        let fr = args.iter().position(|a| a == "-framerate").unwrap();
+        assert_eq!(args[fr + 1], "24");
+        // Geometry must precede `-i desktop`.
+        let i = args.iter().position(|a| a == "-i").unwrap();
+        assert!(vs < i, "video_size must come before -i desktop");
+    }
+
+    #[test]
+    fn gdigrab_audio_adds_dshow_input() {
+        let cfg = ScreenRecordConfig {
+            duration_secs: 2.0,
+            fps: 30,
+            with_audio: true,
+            region: None,
+        };
+        let args = build_gdigrab_args(&cfg, Some("Microphone (Realtek Audio)"), "C:/tmp/a.mp4");
+        assert!(args.iter().any(|a| a == "dshow"));
+        assert!(args
+            .iter()
+            .any(|a| a == "audio=Microphone (Realtek Audio)"));
     }
 }
