@@ -1323,9 +1323,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             };
             use alephcore::a2a::sub_agent::A2ASubAgent;
 
-            // 1. Create server-side components
+            // 1. Create server-side components. The notification service is
+            // created first and injected into the StreamHub so every task
+            // status/artifact broadcast also fans out to push-notification
+            // webhooks (previously `notify_*` had no caller — dead code).
+            let notification = Arc::new(NotificationService::new());
             let task_store: Arc<dyn A2ATaskManager> = Arc::new(TaskStore::new());
-            let stream_hub: Arc<dyn A2AStreamingHandler> = Arc::new(StreamHub::new());
+            let stream_hub: Arc<dyn A2AStreamingHandler> =
+                Arc::new(StreamHub::with_notification(notification.clone()));
 
             // 2. Create bridge (needs execution adapter + agent registry)
             if let (Some(exec_adapter), Some(registry)) = (
@@ -1348,10 +1353,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // 4. Build agent card
                 let card = CardBuilder::build(&a2a_config.server, &format!("{addr}"));
 
-                // 5. Create notification service
-                let notification = Arc::new(NotificationService::new());
-
-                // 6. Build A2AServerState and set on server
+                // 5. Build A2AServerState and set on server (shares the same
+                // notification service the StreamHub fans out to)
                 let a2a_server_state = Arc::new(A2AServerState {
                     task_manager: task_store,
                     message_handler,

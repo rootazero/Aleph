@@ -105,7 +105,7 @@ impl A2AAuthenticator for TieredAuthenticator {
         }
         // Map actions to required permission
         let required = match action {
-            A2AAction::GetTask | A2AAction::ListTasks => "read",
+            A2AAction::GetTask | A2AAction::ListTasks | A2AAction::GetExtendedCard => "read",
             A2AAction::SendMessage | A2AAction::CancelTask | A2AAction::Subscribe => "write",
             A2AAction::ManagePushConfig => "admin",
         };

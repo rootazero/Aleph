@@ -115,6 +115,9 @@ impl A2ARequestProcessor {
             | "tasks/pushNotificationConfig/get"
             | "tasks/pushNotificationConfig/list"
             | "tasks/pushNotificationConfig/delete" => self.handle_push_config(request, auth).await,
+            "agent/getAuthenticatedExtendedCard" => {
+                self.handle_extended_card(request, auth).await
+            }
             _ => JsonRpcResponse::error(
                 request.id,
                 -32601,
@@ -392,6 +395,32 @@ impl A2ARequestProcessor {
                 }
             }
             _ => JsonRpcResponse::error(request.id, -32601, "Unknown push config method"),
+        }
+    }
+
+    /// `agent/getAuthenticatedExtendedCard` — return the agent card to an
+    /// authenticated caller.
+    ///
+    /// The public card is served unauthenticated at
+    /// `/.well-known/agent-card.json`; this method exposes the same card (which
+    /// may carry richer, authenticated-only detail) behind the standard
+    /// authorization layer, matching the A2A reference SDKs. Requires `read`
+    /// access — anonymous/`Public` callers without it are rejected.
+    async fn handle_extended_card(
+        &self,
+        request: JsonRpcRequest,
+        auth: A2AAuthPrincipal,
+    ) -> JsonRpcResponse {
+        if let Err(resp) = self
+            .authorize(&request, &auth, &A2AAction::GetExtendedCard)
+            .await
+        {
+            return resp;
+        }
+
+        match serde_json::to_value(&self.state.card) {
+            Ok(v) => JsonRpcResponse::success(request.id, v),
+            Err(e) => JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {e}")),
         }
     }
 
@@ -727,6 +756,22 @@ mod tests {
             assert!(resp.error.is_none());
             let result = resp.result.unwrap();
             assert_eq!(result["id"], "task-1");
+        }
+
+        #[tokio::test]
+        async fn extended_card_dispatches_returns_card() {
+            let processor = A2ARequestProcessor::new(make_state());
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                method: "agent/getAuthenticatedExtendedCard".to_string(),
+                params: Value::Null,
+                id: Some(Value::Number(42.into())),
+            };
+            let resp = processor.process(request, make_auth()).await;
+            assert!(resp.error.is_none());
+            let result = resp.result.unwrap();
+            assert_eq!(result["id"], "test");
+            assert_eq!(result["name"], "Test Agent");
         }
 
         #[tokio::test]
