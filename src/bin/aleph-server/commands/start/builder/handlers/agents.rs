@@ -332,6 +332,21 @@ pub(in crate::commands::start) fn register_teams_handlers(
             });
     }
 
+    // teams.chat.thread — durable team work thread hydrate (tasks + artifacts
+    // merged chronologically). Done by hand like teams.task.trace because it
+    // takes coord_store (mandatory) + artifact_store (optional Option<Arc>).
+    {
+        let cs = Arc::clone(coord_store);
+        let ar = artifact_store.cloned();
+        server
+            .handlers_mut()
+            .register("teams.chat.thread", move |req| {
+                let cs = Arc::clone(&cs);
+                let ar = ar.clone();
+                async move { teams::handle_chat_thread(req, cs, ar).await }
+            });
+    }
+
     // R3 — exit journal read surface. Write is via the
     // `task_exit_journal` builtin tool (LLM-self-called).
     register_handler!(

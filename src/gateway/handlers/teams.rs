@@ -800,6 +800,97 @@ pub async fn handle_task_trace(
 }
 
 // =============================================================================
+// teams.chat.thread — durable team work thread (tasks + artifacts)
+// =============================================================================
+
+/// A single item in the team's durable work thread (task or artifact).
+#[derive(Debug, serde::Serialize)]
+pub struct ThreadItem {
+    /// "task" or "artifact"
+    pub kind: String,
+    /// Agent that owns the task / submitted the artifact (empty string if unknown).
+    pub agent_id: String,
+    /// Human-readable title: task subject or artifact title.
+    pub title: String,
+    /// Task result (falling back to description) or artifact content body.
+    pub content: String,
+    /// Creation timestamp in milliseconds since epoch, used for chronological merge.
+    pub timestamp: i64,
+    /// Set only for kind == "artifact".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<String>,
+}
+
+/// teams.chat.thread — hydrate a team's DURABLE work thread for the Panel:
+/// coordination tasks (subject + owner + result) merged chronologically with
+/// their submitted artifacts (deliverables). Read-only, no side effects.
+///
+/// NOTE: live conversational bubbles (leader/member narrative) are streamed
+/// over `team.<id>.*` during the run and are not persisted as queryable team
+/// messages, so they are intentionally NOT part of this hydrate — on reload
+/// the Panel shows the durable record (tasks + deliverables only). The
+/// autonomous dispatcher's task `result` text carries each member's outcome.
+pub async fn handle_chat_thread(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>,
+    artifact_store: Option<Arc<dyn crate::teams::artifacts::ArtifactStore>>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.chat.thread request");
+
+    let params: TeamIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    let mut items: Vec<ThreadItem> = Vec::new();
+
+    let tasks = coord_store
+        .list_tasks(crate::agents::swarm::tasks::CoordTaskFilter {
+            team_id: Some(params.team_id.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap_or_default();
+
+    for t in &tasks {
+        // created_at is stored as seconds since epoch; multiply to millis for
+        // a common chronological sort basis with artifact DateTime::timestamp_millis().
+        let ts = (t.created_at as i64).saturating_mul(1000);
+
+        items.push(ThreadItem {
+            kind: "task".to_string(),
+            agent_id: t.owner.as_deref().unwrap_or_default().to_string(),
+            title: t.subject.clone(),
+            content: t.result.clone().unwrap_or_else(|| t.description.clone()),
+            timestamp: ts,
+            artifact_id: None,
+        });
+
+        // One artifact query per task (N+1): a team's task count is small/bounded,
+        // and this is a cold hydrate path, not a hot loop.
+        // Artifacts submitted for this task — only when the optional store exists.
+        // Failure is silently ignored (best-effort observability, mirrors task.trace).
+        if let Some(store) = artifact_store.as_ref() {
+            if let Ok(arts) = store.get_artifacts_for_task(&t.id).await {
+                for a in arts {
+                    items.push(ThreadItem {
+                        kind: "artifact".to_string(),
+                        agent_id: a.agent_id,
+                        title: a.title,
+                        content: a.content,
+                        timestamp: a.created_at.timestamp_millis(),
+                        artifact_id: Some(a.id),
+                    });
+                }
+            }
+        }
+    }
+
+    items.sort_by_key(|i| i.timestamp);
+    JsonRpcResponse::success(request.id, serde_json::json!({ "items": items }))
+}
+
+// =============================================================================
 // teams.task.journal.{get,list} — R3 T3 read surface for exit journals
 // =============================================================================
 
@@ -1060,6 +1151,171 @@ mod tests {
         let members = store.get_members(&team_id).await.unwrap();
         let bot_entries: Vec<_> = members.iter().filter(|m| m.agent_id == "bot").collect();
         assert_eq!(bot_entries.len(), 1, "leader enrolled exactly once");
+    }
+
+    // -------------------------------------------------------------------------
+    // handle_chat_thread tests
+    // -------------------------------------------------------------------------
+
+    fn chat_thread_req(team_id: &str) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "teams.chat.thread".to_string(),
+            params: Some(json!({ "team_id": team_id })),
+            id: Some(json!(1)),
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_thread_empty_store_returns_items_array() {
+        // Verifies: "returns items array structure" + "None artifact_store degrades gracefully"
+        let store = coord_store().await;
+        let resp = handle_chat_thread(
+            chat_thread_req("team-x"),
+            store,
+            None, // no artifact store — must not error
+        )
+        .await;
+
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let result = resp.result.expect("result present");
+        assert!(
+            result["items"].is_array(),
+            "response must contain an 'items' array, got: {result:?}"
+        );
+        assert_eq!(
+            result["items"].as_array().unwrap().len(),
+            0,
+            "empty store must yield empty items"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_thread_tasks_appear_as_items_sorted_by_timestamp() {
+        use crate::agents::swarm::tasks::NewCoordTask;
+
+        let store = coord_store().await;
+
+        // Create two tasks; store assigns created_at=now_epoch() (seconds).
+        // We cannot control the exact timestamp, but we can assert ordering is stable.
+        store
+            .create_task(NewCoordTask {
+                team_id: Some("team-y".to_string()),
+                subject: "First task".to_string(),
+                description: "desc-1".to_string(),
+                owner: Some("agent-a".to_string()),
+                priority: crate::agents::swarm::tasks::Priority::default(),
+                blocked_by: vec![],
+                metadata: serde_json::Value::Object(Default::default()),
+            })
+            .await
+            .expect("create first task");
+        store
+            .create_task(NewCoordTask {
+                team_id: Some("team-y".to_string()),
+                subject: "Second task".to_string(),
+                description: "desc-2".to_string(),
+                owner: None,
+                priority: crate::agents::swarm::tasks::Priority::default(),
+                blocked_by: vec![],
+                metadata: serde_json::Value::Object(Default::default()),
+            })
+            .await
+            .expect("create second task");
+
+        let resp = handle_chat_thread(chat_thread_req("team-y"), store, None).await;
+
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let items = resp.result.expect("result")["items"].clone();
+        let arr = items.as_array().expect("items is array");
+        assert_eq!(arr.len(), 2, "two tasks should produce two items");
+
+        // All are kind=task
+        for item in arr {
+            assert_eq!(item["kind"], "task");
+        }
+
+        // Items are sorted by timestamp (non-decreasing)
+        let timestamps: Vec<i64> = arr
+            .iter()
+            .map(|i| i["timestamp"].as_i64().expect("timestamp is i64"))
+            .collect();
+        let mut sorted = timestamps.clone();
+        sorted.sort();
+        assert_eq!(timestamps, sorted, "items must be sorted by timestamp");
+    }
+
+    #[tokio::test]
+    async fn chat_thread_includes_artifacts_when_store_present() {
+        use crate::agents::swarm::tasks::NewCoordTask;
+        use crate::teams::artifacts::{
+            ArtifactStore, ArtifactType, NewArtifact, SqliteArtifactStore, TaskStatus,
+        };
+
+        let coord = coord_store().await;
+        let artifacts: Arc<dyn ArtifactStore> = Arc::new(SqliteArtifactStore::new_in_memory().await);
+
+        // Create one task and capture its id so the artifact can reference it.
+        let task = coord
+            .create_task(NewCoordTask {
+                team_id: Some("team-z".to_string()),
+                subject: "Build it".to_string(),
+                description: "desc".to_string(),
+                owner: Some("agent-builder".to_string()),
+                priority: crate::agents::swarm::tasks::Priority::default(),
+                blocked_by: vec![],
+                metadata: serde_json::Value::Object(Default::default()),
+            })
+            .await
+            .expect("create task");
+
+        artifacts
+            .create_artifact(NewArtifact {
+                task_id: task.id.clone(),
+                agent_id: "agent-author".to_string(),
+                artifact_type: ArtifactType::Report,
+                title: "Deliverable".to_string(),
+                content: "# Done\n\nbody".to_string(),
+                status: TaskStatus::Completed,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
+                metadata: serde_json::Value::Object(Default::default()),
+            })
+            .await
+            .expect("create artifact");
+
+        let resp = handle_chat_thread(chat_thread_req("team-z"), coord, Some(artifacts)).await;
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let items = resp.result.expect("result")["items"].clone();
+        let arr = items.as_array().expect("items is array");
+
+        // Both a task item and an artifact item should be present.
+        let task_item = arr
+            .iter()
+            .find(|i| i["kind"] == "task")
+            .expect("a task item must be present");
+        assert_eq!(task_item["title"], "Build it");
+
+        let artifact_item = arr
+            .iter()
+            .find(|i| i["kind"] == "artifact")
+            .expect("an artifact item must be present");
+        assert_eq!(artifact_item["agent_id"], "agent-author");
+        assert_eq!(artifact_item["title"], "Deliverable");
+        assert!(
+            artifact_item["artifact_id"].is_string(),
+            "artifact item must carry a Some(artifact_id), got: {artifact_item:?}"
+        );
+
+        // The merged list is sorted by timestamp (non-decreasing).
+        let timestamps: Vec<i64> = arr
+            .iter()
+            .map(|i| i["timestamp"].as_i64().expect("timestamp is i64"))
+            .collect();
+        let mut sorted = timestamps.clone();
+        sorted.sort();
+        assert_eq!(timestamps, sorted, "merged items must be sorted by timestamp");
     }
 }
 
