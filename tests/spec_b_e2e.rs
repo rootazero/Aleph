@@ -451,6 +451,7 @@ impl TestEnv {
             project_scoped: false,
             retrieval_scoring: Default::default(),
             rerank: Default::default(),
+            expansion: Default::default(),
         };
         let assembler: Arc<dyn WorkingMemoryAssembler> = Arc::new(HybridAssembler::new(
             retrieval,
