@@ -538,7 +538,7 @@ pub fn ChatSidebar() -> impl IntoView {
     // (Pinned / Recent / Projects) can each clone and reuse it (DRY).
     // Action-state signals are read INSIDE so every row stays reactive.
     let on_select = on_select_session;
-    let render_session: Rc<dyn Fn(SessionEntry) -> AnyView> = Rc::new(move |session: SessionEntry| {
+    let render_session_fn: Rc<dyn Fn(SessionEntry) -> AnyView> = Rc::new(move |session: SessionEntry| {
         let key = session.key.clone();
         let session_agent_id = session.agent_id.clone();
         let is_active = {
@@ -778,6 +778,11 @@ pub fn ChatSidebar() -> impl IntoView {
             }.into_any()
         }
     });
+    // Wrap in a `LocalStorage`-backed `StoredValue`: the handle is `Copy +
+    // Send + Sync` (it only stores an arena index), so the section closures
+    // below — which `<Show>` requires to be `Send + Sync` — can capture it,
+    // even though the underlying `Rc<dyn Fn>` is neither.
+    let render_session = StoredValue::new_local(render_session_fn);
 
     view! {
         <div class="flex flex-col h-full">
@@ -918,7 +923,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                                     <div class="space-y-0.5">
                                                         {
                                                             let render = render.clone();
-                                                            pinned.clone().into_iter().map(move |s| render(s)).collect_view()
+                                                            pinned.clone().into_iter().map(move |s| render.with_value(move |f| (**f)(s))).collect_view()
                                                         }
                                                     </div>
                                                 </Show>
@@ -960,7 +965,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                                                     let bucket_label = bucket_label.clone();
                                                                     view! {
                                                                         <div class="px-3 pt-1 text-[10px] uppercase tracking-wider text-text-tertiary">{bucket_label}</div>
-                                                                        {rows.into_iter().map(move |s| r(s)).collect_view()}
+                                                                        {rows.into_iter().map(move |s| r.with_value(move |f| (**f)(s))).collect_view()}
                                                                     }
                                                                 }
                                                             </Show>
@@ -986,7 +991,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                                     let r = render3.clone();
                                                     view! {
                                                         <div class="px-3 pt-1 text-[10px] uppercase tracking-wider text-text-tertiary">{label}</div>
-                                                        {rows.into_iter().map(move |s| r(s)).collect_view()}
+                                                        {rows.into_iter().map(move |s| r.with_value(move |f| (**f)(s))).collect_view()}
                                                     }
                                                 }).collect_view()
                                             }
