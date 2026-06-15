@@ -27,7 +27,7 @@ use caption_state::{apply_delta, apply_formatted, lock, CaptionState, Delta};
 use machine::{on_event, Action, VoiceEvent, VoicePhase};
 use orb::VoiceOrb;
 use sentence::SentenceSplitter;
-use vad::{vad_step, VadConfig, VadEvent, VadState};
+use vad::{barge_step, vad_step, BargeConfig, BargeState, VadConfig, VadEvent, VadState};
 
 /// App-level switch for the immersive overlay. Provided in `app.rs`; the
 /// composer mini-orb (Task 8) flips `open` to enter/leave the session.
@@ -120,6 +120,11 @@ fn VoiceSession() -> impl IntoView {
     let mic: StoredValue<Option<Rc<MicSession>>, LocalStorage> = StoredValue::new_local(None);
     let vad = Rc::new(RefCell::new(VadState::default()));
     let vad_cfg = VadConfig::default();
+    // Echo-aware barge-in detector, run instead of the listening VAD while the
+    // assistant is Speaking. Reset to default on every non-Speaking frame so each
+    // reply's onset grace starts fresh.
+    let barge = Rc::new(RefCell::new(BargeState::default()));
+    let barge_cfg = BargeConfig::default();
     let splitter = Rc::new(RefCell::new(SentenceSplitter::default()));
     // Reactive run-id gate for the TTS Effect. It is a SIGNAL (not a plain
     // `RefCell`) on purpose: arming it must re-run the Effect against whatever
@@ -224,6 +229,7 @@ fn VoiceSession() -> impl IntoView {
     let tick_handle: StoredValue<Option<IntervalHandle>, LocalStorage> = StoredValue::new_local(None);
     {
         let vad = Rc::clone(&vad);
+        let barge = Rc::clone(&barge);
         let player = Rc::clone(&player);
         let splitter = Rc::clone(&splitter);
         let speak_gen = Rc::clone(&speak_gen);
@@ -252,30 +258,50 @@ fn VoiceSession() -> impl IntoView {
             let handle = set_interval_with_handle(
                 move || {
                     let rms = session.rms();
+                    let speaking = phase.get_untracked() == VoicePhase::Speaking;
                     // Orb level: amplified so ordinary speech (RMS ~0.06-0.2)
                     // produces a visible pulse, not an imperceptible ~3% nudge.
-                    // While the reply is speaking the mic hears ~nothing (system
-                    // AEC), so drive the orb from the playback analyser instead.
-                    let raw = if phase.get_untracked() == VoicePhase::Speaking {
-                        player.output_level()
-                    } else {
-                        rms
-                    };
+                    // While the reply is speaking the mic mostly hears the AI's own
+                    // playback echo, so drive the orb from the playback analyser.
+                    let out_level = if speaking { player.output_level() } else { 0.0 };
+                    let raw = if speaking { out_level } else { rms };
                     level.set(f64::from((raw * 3.5).min(1.0)));
+
+                    if speaking {
+                        // The AI's TTS plays through a separate AudioContext outside
+                        // the mic's AEC reference, so its voice leaks into `rms`. A
+                        // naive VAD would mistake that echo for the user and kill the
+                        // reply (clipped opening / sudden mid-reply silence). Use the
+                        // echo-aware, debounced, onset-graced detector instead, and
+                        // do NOT run the listening VAD here — echo must not pollute
+                        // its state. The barge-in flips the phase to Listening; the
+                        // non-Speaking branch below then resets a clean VAD + barge
+                        // state for the next utterance.
+                        let (next, fire) = barge_step(*barge.borrow(), rms, out_level, &barge_cfg);
+                        *barge.borrow_mut() = next;
+                        if fire {
+                            web_sys::console::debug_1(
+                                &format!("voice barge-in: rms={rms:.3} out={out_level:.3}").into(),
+                            );
+                            // Invalidate the old run BEFORE stopping audio: bump the
+                            // gen and clear speak_run so the Effect early-returns on
+                            // any further deltas from the abandoned run (it is
+                            // intentionally never finalized), then drain queue + audio.
+                            *speak_gen.borrow_mut() += 1;
+                            speak_run.set(None);
+                            dispatch(VoiceEvent::BargeIn);
+                            session.start_segment();
+                        }
+                        return;
+                    }
+
+                    // Not Speaking: reset the barge detector so the next reply's
+                    // onset grace starts fresh, and run the listening VAD.
+                    *barge.borrow_mut() = BargeState::default();
                     let (next, ev) = vad_step(*vad.borrow(), rms, &vad_cfg);
                     *vad.borrow_mut() = next;
                     match ev {
                         Some(VadEvent::SpeechStart) => {
-                            if phase.get_untracked() == VoicePhase::Speaking {
-                                // Invalidate the old run BEFORE stopping audio:
-                                // bump the gen and clear speak_run so the Effect
-                                // early-returns on any further deltas from the
-                                // abandoned run (it is intentionally never
-                                // finalized), then drain queue + audio.
-                                *speak_gen.borrow_mut() += 1;
-                                speak_run.set(None);
-                                dispatch(VoiceEvent::BargeIn);
-                            }
                             session.start_segment();
                         }
                         Some(VadEvent::Discarded) => {

@@ -719,7 +719,13 @@ impl TtsPlayer {
         // AudioBufferSourceNode copies are deprecated in web-sys.
         let sched: &web_sys::AudioScheduledSourceNode = node.unchecked_ref();
         sched.set_onended(Some(on_ended.unchecked_ref()));
-        if sched.start().is_err() {
+        // Start ~50ms ahead instead of "now": a context that was just resume()d
+        // can still be ramping its output, and starting a buffer at `currentTime`
+        // then drops the leading samples (WKWebView especially) — the reply loses
+        // its opening syllables. A small lead-in lets the context settle so the
+        // first words are fully audible. 50ms is imperceptible as latency.
+        let when = g.ctx.current_time() + 0.05;
+        if sched.start_with_when(when).is_err() {
             return false;
         }
         *self.current.borrow_mut() = Some(Playing::Buffer(node));
