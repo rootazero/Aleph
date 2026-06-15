@@ -69,6 +69,11 @@ impl AgentRouter {
         self.session_store = Some(sm);
     }
 
+    #[must_use]
+    pub fn session_store(&self) -> Option<Arc<dyn SessionStore>> {
+        self.session_store.clone()
+    }
+
     /// Create router from config-driven `RouteBinding` list.
     /// Extracts unique agent IDs and converts to internal `RoutingBinding` format.
     pub fn from_bindings(bindings: Vec<RouteBinding>, default_agent: impl Into<String>) -> Self {
