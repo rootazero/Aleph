@@ -121,15 +121,39 @@ PATH) and `just shell-build`.
 
 ## Gap Analysis & follow-ups (Windows runtime)
 
-Snapshot of what was reviewed and what remains. Reference-project comparison
-(openclaw/codex) is **pending share access** — the repos live behind an
-authenticated SMB share (`\\Mac-Mini-M4.local\TBU4\Github`) that this host
-cannot yet read.
+Snapshot of what was reviewed and what remains.
+
+### Reference comparison — `openai/codex` `app-server-daemon`
+
+Codex's daemon manager (`codex-rs/app-server-daemon/src/backend/pid.rs`) is the
+closest reference for Aleph's daemon-lifecycle / singleton code. Two takeaways:
+
+- **Aleph already surpasses it on portability.** Codex's entire PID backend is
+  `#[cfg(unix)]`: `start`, `try_lock_file`, `process_matches_record`,
+  `read_process_start_time` and `force_terminate_process_group` all `bail!`
+  ("unsupported on this platform") / return `false` on Windows, and liveness
+  shells out to `ps -p <pid> -o lstart=`. Aleph's `instance_lock` uses `fs2`
+  (`LockFileEx` on Windows) + `sysinfo`, so the singleton works cross-platform
+  with no subprocess.
+- **One pattern worth adopting: PID-reuse resistance.** Codex stores
+  `PidRecord { pid, process_start_time }` and re-checks the start time so a
+  *recycled* PID isn't mistaken for the original process. Aleph's lock
+  diagnostic previously used a bare liveness check. **Adopted and improved:**
+  Aleph now records the holder's start time in `aleph.lock` and matches it via
+  `sysinfo::Process::start_time()` — cross-platform (incl. Windows) and with no
+  `ps` fork, surpassing the reference. Fail-safe + backward-compatible: legacy
+  single-line lock files and platforms that don't report a start time fall back
+  to the prior liveness-only behaviour.
+
+(`openclaw/openclaw` — same product category, "Any OS. Any Platform" — was also
+surveyed; its runtime is Node/Swift/Kotlin per-platform, not a shared Rust core,
+so it offers product-shape parallels rather than directly portable core code.)
 
 | Area | Status | Notes |
 |------|--------|-------|
 | Standalone server install on Windows | ✅ done | `scripts/install.ps1` added (was referenced by `cli.rs` but missing) |
 | Cross-platform process liveness | ✅ done | `src/utils/process_alive.rs` unifies two `#[cfg]` checks that had opposite, both-wrong Windows fallbacks |
+| PID-reuse-resistant lock diagnostic | ✅ done | `aleph.lock` now records holder start time; `process_matches` verifies it (mapped from Codex `PidRecord`, made cross-platform via `sysinfo`) |
 | `bootstrap-runtime` parallelism | ⛔ rejected | `install()` mutates process-global `PATH` via `set_var`; parallelizing would race the env. Sequential install is the correct design. |
 | `uv` venv post-install path (Windows) | ✅ verified correct | `expand_home` rewrites `/bin/python` → `\Scripts\python.exe` and expands repair args; no fix needed |
 | `stop`/`status` for non-daemon Windows servers | ⏳ follow-up | Fall back to `instance_lock` holder PID + `sysinfo` terminate when `gateway.pid` is absent |
