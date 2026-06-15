@@ -23,12 +23,52 @@ pub(crate) struct SentenceSplitter {
     /// threshold — the first chunk stays small for a fast time-to-first-audio.
     emitted_any: bool,
     in_code_fence: bool,
+    /// The last `full_text` we consumed against. The bubble content is NOT always
+    /// append-only: the agent loop REPLACES it with authoritative text
+    /// (`set_step_text` on `text_emitted`, `finalize_answer` on `run_complete`).
+    /// When the new text diverges from this before `consumed`, the byte offset is
+    /// stale — [`resync`] rolls it back so the corrected tail is still spoken
+    /// instead of silently dropped (the "last sentence has no voice" bug).
+    last_full: String,
+}
+
+/// Longest shared leading run of two strings, backed off to a char boundary that
+/// is valid in BOTH — safe to use as a byte offset into either.
+fn common_prefix_len(a: &str, b: &str) -> usize {
+    let (ab, bb) = (a.as_bytes(), b.as_bytes());
+    let max = ab.len().min(bb.len());
+    let mut i = 0;
+    while i < max && ab[i] == bb[i] {
+        i += 1;
+    }
+    while i > 0 && (!a.is_char_boundary(i) || !b.is_char_boundary(i)) {
+        i -= 1;
+    }
+    i
 }
 
 impl SentenceSplitter {
+    /// Detect non-monotonic content (a replacement, not an append) and roll the
+    /// consumed offset back to the divergence point. A no-op for true append-only
+    /// growth (the new text extends the old, so the divergence point is at or past
+    /// `consumed`). On divergence within the consumed region, re-processing the
+    /// corrected tail may re-speak a small diverged fragment — ephemeral audio,
+    /// far better than dropping the final sentence entirely.
+    fn resync(&mut self, full_text: &str) {
+        let common = common_prefix_len(&self.last_full, full_text);
+        if common < self.consumed {
+            self.consumed = common;
+            self.pending.clear();
+        }
+    }
+
     /// Feed the full accumulated text; returns newly completed sentences.
     pub(crate) fn push(&mut self, full_text: &str) -> Vec<String> {
-        let Some(new) = full_text.get(self.consumed..) else { return Vec::new() };
+        self.resync(full_text);
+        let Some(new) = full_text.get(self.consumed..) else {
+            self.last_full = full_text.to_string();
+            return Vec::new();
+        };
         let mut out = Vec::new();
         let mut seg_start = 0usize; // byte offset within `new`
 
@@ -69,6 +109,7 @@ impl SentenceSplitter {
         }
         // Everything before seg_start is consumed; the tail stays for next push.
         self.consumed += seg_start;
+        self.last_full = full_text.to_string();
         out
     }
 
@@ -81,11 +122,13 @@ impl SentenceSplitter {
 
     /// Called with finish after the final full text to flush the unconsumed tail.
     pub(crate) fn finish_with(&mut self, full_text: &str) -> Option<String> {
+        self.resync(full_text);
         if let Some(rest) = full_text.get(self.consumed..) {
             if !self.in_code_fence {
                 self.pending.push_str(rest);
             }
             self.consumed = full_text.len();
+            self.last_full = full_text.to_string();
         }
         self.finish()
     }
@@ -171,6 +214,39 @@ mod tests {
         let text = "最后一句没有标点";
         assert!(sp.push(text).is_empty());
         assert_eq!(sp.finish_with(text), Some("最后一句没有标点".to_string()));
+    }
+
+    #[test]
+    fn authoritative_overwrite_shorter_still_flushes_tail() {
+        // The bubble content is NOT append-only: `set_step_text` / `finalize_answer`
+        // REPLACE the streamed preview with authoritative text that can be SHORTER
+        // than the bytes already consumed. Before the resync guard, the offset went
+        // stale and `full.get(consumed..)` returned None → the whole authoritative
+        // reply was dropped (text on screen, no voice). It must still be spoken.
+        let mut sp = SentenceSplitter::default();
+        // Preview streams in; first sentence emitted, offset advances well past the
+        // length of the shorter authoritative answer that replaces it.
+        assert_eq!(
+            sp.push("你好！我能听到你说话。有什么"),
+            vec!["你好！我能听到你说话。"]
+        );
+        // Authoritative final text replaces the preview, shorter than `consumed`.
+        assert!(sp.push("好的，没问题。").is_empty());
+        assert_eq!(sp.finish_with("好的，没问题。"), Some("好的，没问题。".to_string()));
+    }
+
+    #[test]
+    fn authoritative_overwrite_diverging_tail_not_dropped() {
+        // Preview and authoritative share a lead but diverge at the tail (common in
+        // practice — the model's final answer differs from the token preview). The
+        // diverged authoritative tail must reach TTS, not be skipped by a stale
+        // byte offset that lands mid-different-content.
+        let mut sp = SentenceSplitter::default();
+        assert_eq!(sp.push("今天的安排。还有"), vec!["今天的安排。"]);
+        // Replace with authoritative text that keeps the spoken lead but rewrites
+        // the unspoken tail with a real terminal sentence.
+        let tail = sp.finish_with("今天的安排。还有三个会议要参加。");
+        assert_eq!(tail, Some("还有三个会议要参加。".to_string()));
     }
 
     #[test]
