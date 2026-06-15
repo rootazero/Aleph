@@ -15,7 +15,7 @@ use crate::tools::runtime::{LoopTool, ToolResult};
 use tokio_util::sync::CancellationToken;
 
 use super::parse::parse_args;
-use super::types::SubagentAction;
+use super::types::{BatchTask, SubagentAction};
 use super::SubagentTool;
 
 #[async_trait]
@@ -30,7 +30,12 @@ impl LoopTool for SubagentTool {
          to launch multiple sub-agents in parallel — the system automatically runs them \
          in background and returns request_ids. Background completions are announced \
          back to you proactively as a system message — no need to poll; check_status/list \
-         remain available for on-demand inspection."
+         remain available for on-demand inspection. \
+         For Mixture-of-Agents (best-quality answers to one hard question), set \
+         'proposer_models' to a list of models and 'synthesize'=true: the same 'task' runs \
+         on every model in parallel, then one aggregator sub-agent folds the proposals into \
+         a single synthesized answer. 'synthesize' also works on an explicit 'batch_tasks' \
+         fan-out to add a reduce/aggregation step over the parallel results."
     }
 
     fn schema(&self) -> Value {
@@ -71,6 +76,24 @@ impl LoopTool for SubagentTool {
                         },
                         "required": ["task"]
                     }
+                },
+                "proposer_models": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Mixture-of-Agents shorthand: replicate the top-level 'task' across these models as parallel proposers (same prompt, different model). Pair with synthesize=true to fold their answers into one. Ignored when explicit 'batch_tasks' is provided."
+                },
+                "synthesize": {
+                    "type": "boolean",
+                    "description": "After a synchronous batch (batch_tasks or proposer_models) fans out and all proposers return, run ONE aggregator sub-agent that synthesizes the proposals into a single answer (Mixture-of-Agents reduce). Requires run_in_background=false. Returns status 'moa_completed' with a 'synthesis' field plus the raw 'results'.",
+                    "default": false
+                },
+                "aggregator_model": {
+                    "type": "string",
+                    "description": "Model for the MoA aggregator run. Defaults to the top-level 'model'. Use a strong model here for best synthesis."
+                },
+                "synthesis_instruction": {
+                    "type": "string",
+                    "description": "Optional extra guidance for the MoA aggregator, added on top of the default merge-and-reconcile instruction."
                 },
                 "agent_type": {
                     "type": "string",
@@ -367,7 +390,26 @@ impl LoopTool for SubagentTool {
             SubagentAction::Run(run_args) => run_args,
         };
 
-        if let Some(ref batch) = args.batch_tasks {
+        // MoA shorthand: `proposer_models` replicates the top-level `task`
+        // across models as parallel proposers (same prompt, different model —
+        // the classic Mixture-of-Agents shape). Explicit `batch_tasks` always
+        // wins; proposer_models is only the convenience expansion.
+        let effective_batch: Option<Vec<BatchTask>> = match args.batch_tasks {
+            Some(ref b) if !b.is_empty() => Some(b.clone()),
+            _ => args.proposer_models.as_ref().map(|models| {
+                models
+                    .iter()
+                    .map(|m| BatchTask {
+                        task: args.task.clone(),
+                        agent_type: args.agent_type.clone(),
+                        model: Some(m.clone()),
+                        timeout_secs: None,
+                    })
+                    .collect()
+            }),
+        };
+
+        if let Some(ref batch) = effective_batch {
             if !batch.is_empty() {
                 let child_chain = match self.chain.child() {
                     Some(c) => c,
@@ -472,6 +514,10 @@ impl LoopTool for SubagentTool {
                     count = prepared.len(),
                     "subagent: starting batch (sync parallel)"
                 );
+                // Captured before `prepared` is consumed so the MoA aggregator
+                // can label each proposal with the model that produced it.
+                let proposer_models_by_idx: Vec<Option<String>> =
+                    prepared.iter().map(|(_, _, m, _)| m.clone()).collect();
                 let mut handles = Vec::with_capacity(prepared.len());
                 for (idx, (agent_def, task, model, timeout)) in prepared.into_iter().enumerate() {
                     let runtime_config = AgentRuntimeConfig {
@@ -493,16 +539,28 @@ impl LoopTool for SubagentTool {
                 }
 
                 let mut results: Vec<Value> = Vec::with_capacity(handles.len());
+                // Successful proposals (index, model, text) folded by the MoA
+                // aggregator when `synthesize` is set.
+                let mut proposals: Vec<(usize, Option<String>, String)> = Vec::new();
                 for (batch_idx, h) in handles.into_iter().enumerate() {
                     let item = match h.await {
-                        Ok((idx, Ok(Ok(r)))) => json!({
-                            "index": idx,
-                            "status": "completed",
-                            "result": r.final_text.unwrap_or_else(|| "(no output)".to_string()),
-                            "iterations": r.iterations,
-                            "tool_calls_made": r.tool_calls_made,
-                            "total_tokens": r.total_tokens,
-                        }),
+                        Ok((idx, Ok(Ok(r)))) => {
+                            let text =
+                                r.final_text.unwrap_or_else(|| "(no output)".to_string());
+                            proposals.push((
+                                idx,
+                                proposer_models_by_idx.get(idx).cloned().flatten(),
+                                text.clone(),
+                            ));
+                            json!({
+                                "index": idx,
+                                "status": "completed",
+                                "result": text,
+                                "iterations": r.iterations,
+                                "tool_calls_made": r.tool_calls_made,
+                                "total_tokens": r.total_tokens,
+                            })
+                        }
                         Ok((idx, Ok(Err(e)))) => json!({
                             "index": idx,
                             "status": "failed",
@@ -520,6 +578,91 @@ impl LoopTool for SubagentTool {
                         }),
                     };
                     results.push(item);
+                }
+
+                // Mixture-of-Agents reduce: fold the proposals into one answer
+                // via a single aggregator sub-agent. The synthesis is performed
+                // by an LLM (R7/R9 — intelligence lives in the model + prompt);
+                // this tool only fans out and concatenates (R10 — harness stays
+                // dumb). Skipped when no proposal succeeded — there is nothing
+                // to fold, so the raw batch is returned untouched.
+                if args.synthesize && !proposals.is_empty() {
+                    let aggregator_def = if let Some(ref agent_type) = args.agent_type {
+                        match self.agent_registry.resolve(agent_type, project_root_ref) {
+                            Some(def) => def,
+                            None => {
+                                let available = self.agent_registry.list_ids().join(", ");
+                                return ToolResult::Error {
+                                    error: format!(
+                                        "aggregator: Unknown agent_type '{agent_type}'. Available agents: {available}"
+                                    ),
+                                    retryable: false,
+                                };
+                            }
+                        }
+                    } else {
+                        match self
+                            .agent_registry
+                            .lookup_with_overlay("default", project_root_ref)
+                        {
+                            Some(def) => def,
+                            None => {
+                                return ToolResult::Error {
+                                    error: "aggregator: No default agent registered in AgentRegistry"
+                                        .to_string(),
+                                    retryable: false,
+                                };
+                            }
+                        }
+                    };
+
+                    let goal = if args.task.trim().is_empty() {
+                        "(see the individual proposal tasks below)"
+                    } else {
+                        args.task.as_str()
+                    };
+                    let synthesis_prompt = build_synthesis_prompt(
+                        goal,
+                        args.synthesis_instruction.as_deref(),
+                        &proposals,
+                    );
+                    let proposer_count = proposals.len();
+
+                    tracing::info!(
+                        proposers = proposer_count,
+                        "subagent: running MoA aggregator over proposals"
+                    );
+
+                    let runtime_config = AgentRuntimeConfig {
+                        agent_def: aggregator_def,
+                        task: synthesis_prompt,
+                        context_summary: args.context_summary.clone(),
+                        model: args.aggregator_model.clone().or_else(|| args.model.clone()),
+                        timeout_secs: args.timeout_secs,
+                    };
+                    let runtime = self
+                        .build_runtime(child_chain.clone(), self.cancel_for_child_with(&cancel));
+
+                    return match runtime.run(runtime_config).await {
+                        Ok(r) => ToolResult::Success {
+                            output: json!({
+                                "status": "moa_completed",
+                                "synthesis": r.final_text.unwrap_or_else(|| "(no output)".to_string()),
+                                "proposer_count": proposer_count,
+                                "results": results,
+                            }),
+                        },
+                        // Synthesis failed — never discard the proposals; return
+                        // them so the parent can fold them itself.
+                        Err(e) => ToolResult::Success {
+                            output: json!({
+                                "status": "moa_synthesis_failed",
+                                "error": e,
+                                "proposer_count": proposer_count,
+                                "results": results,
+                            }),
+                        },
+                    };
                 }
 
                 return ToolResult::Success {
@@ -686,6 +829,47 @@ fn summarize_progress(progress: &[SubagentProgress]) -> Value {
         "last_activity": last.map(|p| p.kind),
         "last_tool": last.and_then(|p| p.tool_name.clone()),
     })
+}
+
+/// Build the Mixture-of-Agents aggregator prompt: the shared goal, every
+/// successful proposal labelled with the model that produced it, and an
+/// instruction to synthesize a single best answer. Mirrors the MoA paper
+/// (Wang et al. 2406.04692) — the aggregator critiques and merges rather than
+/// picking one winner. All reasoning happens in the aggregator model (R7/R9);
+/// this function only assembles text.
+fn build_synthesis_prompt(
+    goal: &str,
+    extra_instruction: Option<&str>,
+    proposals: &[(usize, Option<String>, String)],
+) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "You are the aggregator in a Mixture-of-Agents pipeline. Several agents \
+         independently produced candidate responses to the same goal. Synthesize \
+         them into a single, higher-quality answer: merge their strongest points, \
+         reconcile contradictions in favour of the best-supported claim, drop \
+         errors, and do not simply pick one response verbatim.\n\n",
+    );
+    out.push_str("## Goal\n");
+    out.push_str(goal);
+    out.push_str("\n\n## Candidate responses\n");
+    for (idx, model, text) in proposals {
+        match model {
+            Some(m) => out.push_str(&format!("\n### Proposal {idx} (model: {m})\n")),
+            None => out.push_str(&format!("\n### Proposal {idx}\n")),
+        }
+        out.push_str(text);
+        out.push('\n');
+    }
+    if let Some(extra) = extra_instruction {
+        if !extra.trim().is_empty() {
+            out.push_str("\n## Additional synthesis guidance\n");
+            out.push_str(extra);
+            out.push('\n');
+        }
+    }
+    out.push_str("\n## Your task\nReturn the single synthesized answer to the goal.");
+    out
 }
 
 /// Render a finished background sub-agent as a JSON object. `ok_status` is

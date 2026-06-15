@@ -612,6 +612,92 @@ async fn execute_batch_sync_returns_aggregated_results() {
     }
 }
 
+// -------------------------------------------------------------------------
+// Mixture-of-Agents (proposer_models + synthesize)
+// -------------------------------------------------------------------------
+
+/// `proposer_models` + `synthesize` parse into the run args verbatim.
+#[test]
+fn moa_parse_proposer_models_and_synthesize() {
+    let action = parse_args(&json!({
+        "task": "solve the hard problem",
+        "proposer_models": ["claude-opus-4-8", "gpt-5", "  ", "deepseek-v3"],
+        "synthesize": true,
+        "aggregator_model": "claude-opus-4-8",
+        "synthesis_instruction": "favour correctness over brevity"
+    }))
+    .unwrap();
+    match action {
+        SubagentAction::Run(args) => {
+            // blank entries are filtered out
+            assert_eq!(
+                args.proposer_models.as_deref(),
+                Some(&["claude-opus-4-8".to_string(), "gpt-5".to_string(), "deepseek-v3".to_string()][..])
+            );
+            assert!(args.synthesize);
+            assert_eq!(args.aggregator_model.as_deref(), Some("claude-opus-4-8"));
+            assert_eq!(
+                args.synthesis_instruction.as_deref(),
+                Some("favour correctness over brevity")
+            );
+        }
+        _ => panic!("expected SubagentAction::Run"),
+    }
+}
+
+/// `synthesize` with a fire-and-forget batch is rejected — the aggregator
+/// would have nothing to fold.
+#[test]
+fn moa_synthesize_rejects_background() {
+    let result = parse_args(&json!({
+        "task": "x",
+        "proposer_models": ["a", "b"],
+        "synthesize": true,
+        "run_in_background": true
+    }));
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("foreground"));
+}
+
+/// `proposer_models` replicates the top-level `task`, so the task is required.
+#[test]
+fn moa_proposer_models_requires_task() {
+    let result = parse_args(&json!({
+        "proposer_models": ["a", "b"]
+    }));
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("task"));
+}
+
+/// End-to-end MoA: proposers fan out, the aggregator folds them, and the
+/// response carries `moa_completed` with a `synthesis` plus the raw results.
+#[tokio::test]
+async fn execute_moa_returns_synthesis() {
+    let tool = make_tool();
+    let result = tool
+        .execute(
+            json!({
+                "task": "what is the answer",
+                "proposer_models": ["model-a", "model-b"],
+                "synthesize": true,
+                "agent_type": "explore"
+            }),
+            CancellationToken::new(),
+        )
+        .await;
+
+    match result {
+        ToolResult::Success { output } => {
+            assert_eq!(output["status"], "moa_completed");
+            assert_eq!(output["proposer_count"], 2);
+            assert!(output["synthesis"].is_string(), "synthesis must be present");
+            let results = output["results"].as_array().expect("results is array");
+            assert_eq!(results.len(), 2, "raw proposals are preserved");
+        }
+        ToolResult::Error { error, .. } => panic!("expected success, got error: {error}"),
+    }
+}
+
 /// Provider whose `process` never resolves. Only the harness's cancellation
 /// race (fed by the request's CancellationToken) can end the turn — so this
 /// proves the *parent-derived* token actually reaches the child harness.

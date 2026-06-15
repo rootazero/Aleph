@@ -30,7 +30,7 @@ pub(super) enum SubagentAction {
 }
 
 /// A single task within a batch execution.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct BatchTask {
     pub(super) task: String,
     pub(super) agent_type: Option<String>,
@@ -53,4 +53,20 @@ pub(super) struct RunArgs {
     /// Batch tasks for parallel execution. When provided, all tasks run in
     /// background automatically and a list of `request_ids` is returned.
     pub(super) batch_tasks: Option<Vec<BatchTask>>,
+    /// Mixture-of-Agents convenience: replicate the top-level `task` across
+    /// these models as parallel proposers. `["claude-opus-4-8", "gpt-5"]`
+    /// expands to one batch entry per model running the same prompt — the
+    /// classic MoA shape. Ignored when explicit `batch_tasks` is supplied.
+    pub(super) proposer_models: Option<Vec<String>>,
+    /// When true, after a synchronous batch fans out and every proposer
+    /// returns, run ONE aggregator sub-agent that synthesizes the proposals
+    /// into a single answer (Mixture-of-Agents reduce step). Requires a
+    /// foreground batch (`run_in_background = false`).
+    pub(super) synthesize: bool,
+    /// Model for the aggregator run. Falls back to the top-level `model`,
+    /// then the agent's default. Use a strong model here for best synthesis.
+    pub(super) aggregator_model: Option<String>,
+    /// Optional extra guidance handed to the aggregator on top of the default
+    /// "merge the strongest parts, resolve conflicts" instruction.
+    pub(super) synthesis_instruction: Option<String>,
 }
