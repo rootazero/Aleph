@@ -272,6 +272,38 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -
     )
 }
 
+// =============================================================================
+// teams.rename — rename a team
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct RenameTeamParams {
+    pub team_id: String,
+    pub name: String,
+}
+
+/// teams.rename — rename a team. Thin I/O: validates non-blank name, delegates
+/// to `TeamStore::rename_team`. Used by the Panel sidebar inline-edit.
+pub async fn handle_rename(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -> JsonRpcResponse {
+    debug!("Handling teams.rename request");
+    let params: RenameTeamParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let name = params.name.trim();
+    if params.team_id.trim().is_empty() || name.is_empty() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "team_id and a non-blank name are required".to_string(),
+        );
+    }
+    match store.rename_team(&params.team_id, name).await {
+        Ok(()) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
+        Err(e) => JsonRpcResponse::error(request.id, RESOURCE_NOT_FOUND, format!("{e}")),
+    }
+}
+
 /// Handle agents.teams — list all teams an agent belongs to (as leader or member).
 ///
 /// When `agent_manager` and `msg_store` are supplied, each team summary is enriched
@@ -1493,6 +1525,47 @@ mod tests {
         assert_eq!(items[1].content, "second");
         assert_eq!(items[1].msg_type, "system_notification");
         assert_eq!(items[1].created_at, t1.timestamp_millis());
+    }
+
+    // -------------------------------------------------------------------------
+    // handle_rename tests
+    // -------------------------------------------------------------------------
+
+    fn rename_req(params: serde_json::Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "teams.rename".to_string(),
+            params: Some(params),
+            id: Some(json!(1)),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_rename_updates_name() {
+        let store = team_store().await;
+        let team = store
+            .create_team(crate::teams::NewTeam {
+                name: "Old".into(),
+                description: String::new(),
+                leader_id: "main".into(),
+            })
+            .await
+            .unwrap();
+
+        let req = rename_req(json!({ "team_id": team.id, "name": "Renamed" }));
+        let resp = handle_rename(req, Arc::clone(&store)).await;
+        assert!(resp.error.is_none(), "rename should succeed: {resp:?}");
+
+        let got = store.get_team(&team.id).await.unwrap().unwrap();
+        assert_eq!(got.name, "Renamed");
+    }
+
+    #[tokio::test]
+    async fn handle_rename_rejects_blank_name() {
+        let store = team_store().await;
+        let req = rename_req(json!({ "team_id": "t", "name": "   " }));
+        let resp = handle_rename(req, store).await;
+        assert!(resp.error.is_some(), "blank name must be rejected");
     }
 }
 

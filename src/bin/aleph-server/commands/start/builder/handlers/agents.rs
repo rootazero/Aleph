@@ -206,6 +206,7 @@ pub(in crate::commands::start) fn register_teams_handlers(
     register_handler!(server, "teams.list", teams::handle_list, store);
     register_handler!(server, "teams.get", teams::handle_get, store, coord_store);
     register_handler!(server, "teams.create", teams::handle_create, store);
+    register_handler!(server, "teams.rename", teams::handle_rename, store);
     register_handler!(server, "teams.disband", teams::handle_disband, store);
     register_handler!(server, "teams.delete", teams::handle_delete, store);
 
