@@ -326,6 +326,10 @@ pub fn ChatSidebar() -> impl IntoView {
     let reload_for_event = reload_data.clone();
     let sub_dash = dashboard;
     let subscription_id = dashboard.subscribe_events(move |event| {
+        if event.topic == "team.changed" {
+            reload_for_event(sub_dash);
+            return;
+        }
         if event.topic != "run.session_updated" {
             return;
         }
@@ -426,11 +430,13 @@ pub fn ChatSidebar() -> impl IntoView {
             );
         }
 
-        // Run lifecycle topics drive the per-session running dot.
+        // Run lifecycle topics drive the per-session running dot;
+        // team.changed drives live group-chat name refresh after async auto-naming.
         for topic in [
             "stream.run_accepted",
             "stream.run_complete",
             "stream.run_error",
+            "team.changed",
         ] {
             if let Err(e) = dash_for_topic.subscribe_topic(topic).await {
                 web_sys::console::error_1(&format!("Failed to subscribe to {topic}: {e}").into());
