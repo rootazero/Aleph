@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 
 use crate::error::AlephError;
+use crate::memory::dreaming::evolution::{score_merge_candidate, MERGE_ACCEPT_THRESHOLD};
 use crate::memory::dreaming::DreamContext;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::KnowledgeNote;
@@ -333,8 +334,7 @@ Respond with exactly one word: MERGE, COEXIST, ABSORB_A, or ABSORB_B.";
             Ok(false)
         }
         "MERGE" => {
-            execute_merge(ctx, idx_a, idx_b, &content_a, &content_b, MergeMode::Merge).await?;
-            Ok(true)
+            execute_merge(ctx, idx_a, idx_b, &content_a, &content_b, MergeMode::Merge).await
         }
         "ABSORB_A" => {
             // Keep A, absorb B into A
@@ -346,8 +346,7 @@ Respond with exactly one word: MERGE, COEXIST, ABSORB_A, or ABSORB_B.";
                 &content_b,
                 MergeMode::AbsorbIntoA,
             )
-            .await?;
-            Ok(true)
+            .await
         }
         "ABSORB_B" => {
             // Keep B, absorb A into B — swap roles: keeper=B, absorbed=A
@@ -359,8 +358,7 @@ Respond with exactly one word: MERGE, COEXIST, ABSORB_A, or ABSORB_B.";
                 &content_a,
                 MergeMode::AbsorbIntoA,
             )
-            .await?;
-            Ok(true)
+            .await
         }
         other => {
             tracing::warn!(
@@ -386,6 +384,8 @@ enum MergeMode {
 ///
 /// `keeper_idx` is the note that survives; `absorbed_idx` is deleted.
 /// Both content strings are passed in to avoid re-reading.
+/// Returns `Ok(true)` when the merge was applied, `Ok(false)` when the
+/// evolution gate or edit budget skipped it (no files touched).
 async fn execute_merge(
     ctx: &mut DreamContext,
     keeper_idx: usize,
@@ -393,7 +393,7 @@ async fn execute_merge(
     keeper_content: &str,
     absorbed_content: &str,
     mode: MergeMode,
-) -> Result<(), AlephError> {
+) -> Result<bool, AlephError> {
     let keeper_path = ctx.notes[keeper_idx].path.clone();
     let absorbed_path = ctx.notes[absorbed_idx].path.clone();
 
@@ -416,6 +416,48 @@ async fn execute_merge(
         .join(absorbed_category)
         .join(format!("{absorbed_filename}.md"));
 
+    // --- Parse both notes (before any file write, so the gate can score them) ---
+    let mut keeper_note =
+        KnowledgeNote::from_markdown(keeper_filename, keeper_content).map_err(|e| {
+            AlephError::other(format!(
+                "NoteConsolidate: failed to parse keeper note {keeper_path}: {e}"
+            ))
+        })?;
+
+    let absorbed_note =
+        KnowledgeNote::from_markdown(absorbed_filename, absorbed_content).map_err(|e| {
+            AlephError::other(format!(
+                "NoteConsolidate: failed to parse absorbed note {absorbed_path}: {e}"
+            ))
+        })?;
+
+    // --- Evolution gate: skip merges that would fuse distinct knowledge ---
+    // The LLM proposed this merge, but SkillOpt discipline applies it only when
+    // a local safety score clears the threshold (R7: model proposes, gate vets).
+    let merge_score = score_merge_candidate(&keeper_note, &absorbed_note);
+    if merge_score < MERGE_ACCEPT_THRESHOLD {
+        ctx.report.merges_rejected += 1;
+        tracing::info!(
+            keeper = keeper_path,
+            absorbed = absorbed_path,
+            score = merge_score,
+            threshold = MERGE_ACCEPT_THRESHOLD,
+            "NoteConsolidate: evolution gate rejected merge (would fuse distinct knowledge)"
+        );
+        return Ok(false);
+    }
+
+    // --- Edit budget: bound how much this cycle may rewrite ---
+    let edit_bytes = (keeper_content.len() + absorbed_content.len()) as u64;
+    if !ctx.evolution_budget.try_spend(edit_bytes) {
+        tracing::info!(
+            keeper = keeper_path,
+            absorbed = absorbed_path,
+            "NoteConsolidate: edit budget exhausted — deferring merge to next cycle"
+        );
+        return Ok(false);
+    }
+
     // --- Safety: back up both files before modification ---
     let keeper_bak = keeper_file.with_extension("md.bak");
     let absorbed_bak = absorbed_file.with_extension("md.bak");
@@ -432,21 +474,6 @@ async fn execute_merge(
         .map_err(|e| {
             AlephError::other(format!(
                 "NoteConsolidate: failed to back up absorbed {absorbed_file:?}: {e}"
-            ))
-        })?;
-
-    // --- Parse both notes ---
-    let mut keeper_note =
-        KnowledgeNote::from_markdown(keeper_filename, keeper_content).map_err(|e| {
-            AlephError::other(format!(
-                "NoteConsolidate: failed to parse keeper note {keeper_path}: {e}"
-            ))
-        })?;
-
-    let absorbed_note =
-        KnowledgeNote::from_markdown(absorbed_filename, absorbed_content).map_err(|e| {
-            AlephError::other(format!(
-                "NoteConsolidate: failed to parse absorbed note {absorbed_path}: {e}"
             ))
         })?;
 
@@ -536,14 +563,21 @@ async fn execute_merge(
     ctx.note_contents.remove(&keeper_path);
     ctx.note_contents.remove(&absorbed_path);
 
+    // Record the merged pair so the post-pipeline drain can feed MutationGate's
+    // merge-cycle detector (previously starved of data — no caller existed).
+    ctx.report
+        .merged_pairs
+        .push((keeper_path.clone(), absorbed_path.clone()));
+
     tracing::info!(
         keeper = keeper_path,
         absorbed = absorbed_path,
         mode = ?mode,
+        score = merge_score,
         "NoteConsolidate: merged notes"
     );
 
-    Ok(())
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------

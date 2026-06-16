@@ -275,6 +275,7 @@ mod tests {
             activity_checker: std::sync::Arc::new(|| false),
             strategy: crate::memory::dreaming::DreamStrategy::Consolidate,
             orientation: None,
+            evolution_budget: crate::memory::dreaming::EditBudget::default(),
         };
         (ctx, store)
     }
@@ -364,6 +365,7 @@ mod tests {
             activity_checker: std::sync::Arc::new(|| false),
             strategy: crate::memory::dreaming::DreamStrategy::Consolidate,
             orientation: None,
+            evolution_budget: crate::memory::dreaming::EditBudget::default(),
         };
 
         for (cat, title) in [
@@ -448,6 +450,7 @@ mod tests {
             activity_checker: std::sync::Arc::new(|| false),
             strategy: crate::memory::dreaming::DreamStrategy::Consolidate,
             orientation: None,
+            evolution_budget: crate::memory::dreaming::EditBudget::default(),
         };
 
         // a -> learning/x, b -> learning/y : both are non-orphans to the scan.
@@ -528,6 +531,7 @@ mod tests {
             activity_checker: std::sync::Arc::new(|| false),
             strategy: crate::memory::dreaming::DreamStrategy::Consolidate,
             orientation: None,
+            evolution_budget: crate::memory::dreaming::EditBudget::default(),
         };
         store
             .index_note(
