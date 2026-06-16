@@ -1,3 +1,4 @@
+pub mod agent_identity;
 pub mod composer;
 pub mod context_gauge;
 pub mod events;
