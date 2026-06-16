@@ -698,10 +698,13 @@ pub fn ChatSidebar() -> impl IntoView {
         });
     });
 
-    // Auto-focus edit input when entering edit mode
+    // Auto-focus edit input when entering edit mode. Both the session-row and
+    // group-row edit inputs share `edit_input_ref` (only one row edits at a
+    // time), so focus/select on EITHER signal turning Some is correct.
     Effect::new(move || {
         let _key = editing_key.get();
-        if _key.is_some() {
+        let _g_key = group_editing_id.get();
+        if _key.is_some() || _g_key.is_some() {
             leptos::task::spawn_local(async move {
                 gloo_timers::future::TimeoutFuture::new(10).await;
                 if let Some(el) = edit_input_ref.get() {
@@ -721,6 +724,19 @@ pub fn ChatSidebar() -> impl IntoView {
                 gloo_timers::future::TimeoutFuture::new(5000).await;
                 if deleting_key.get_untracked().as_deref() == Some(&k) {
                     deleting_key.set(None);
+                }
+            });
+        }
+    });
+
+    // Auto-dismiss group delete confirmation after 5 seconds (session parity).
+    Effect::new(move || {
+        let key = group_deleting_id.get();
+        if let Some(k) = key {
+            leptos::task::spawn_local(async move {
+                gloo_timers::future::TimeoutFuture::new(5000).await;
+                if group_deleting_id.get_untracked().as_deref() == Some(&k) {
+                    group_deleting_id.set(None);
                 }
             });
         }
