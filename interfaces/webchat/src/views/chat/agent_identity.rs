@@ -23,6 +23,17 @@ pub fn agent_color_for_id(agent_id: &str) -> &'static str {
     PALETTE[(hash as usize) % PALETTE.len()]
 }
 
+/// Telegram-style grouping: show the avatar + name header only when this
+/// message starts a new run of the same agent. `prev` is the agent_id of the
+/// previously rendered message (None for the first, or a non-team message).
+#[must_use]
+pub fn should_show_attribution(prev: Option<&str>, this: Option<&str>) -> bool {
+    match this {
+        None => false,            // own / single-agent message: never a team header
+        Some(id) => prev != Some(id),
+    }
+}
+
 /// Resolved visual identity for one agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentIdentityView {
@@ -100,5 +111,13 @@ mod tests {
         let mut m = HashMap::new();
         m.insert("x".to_string(), sum("x", Some("alice"), None));
         assert_eq!(agent_identity("x", &m).avatar, "A");
+    }
+
+    #[test]
+    fn attribution_shows_on_agent_change_and_hides_on_repeat() {
+        assert!(should_show_attribution(None, Some("a")));
+        assert!(should_show_attribution(Some("b"), Some("a")));
+        assert!(!should_show_attribution(Some("a"), Some("a")));
+        assert!(!should_show_attribution(Some("a"), None));
     }
 }
