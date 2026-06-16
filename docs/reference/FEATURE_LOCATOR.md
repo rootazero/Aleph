@@ -31,7 +31,7 @@
 | Context | 记忆三支柱③错误沉淀教训 | Correction & Lesson Sedimentation | `src/memory/dreaming/stages/feedback_distill.rs` | ✅ |
 | Harness | harness 架构 / Think-Act 笨循环 | Harness Architecture | `src/harness/` (12 文件) | ✅ |
 | Harness | tool calling 2.0 / tool use | Tool Calling | `src/harness/agent/act.rs` + `src/tools/scoped/` | ✅ |
-| Harness | DAG 工具执行 / 智能调度 | Tool Concurrency (群分) | `src/tools/concurrency.rs` | ⚠️ |
+| Harness | 工具并发(群分) ≠ 任务 DAG | Tool Concurrency vs Task DAG | `src/tools/concurrency.rs`(工具群分) · `src/workflow/compile.rs`+`src/teams/dispatcher/`(任务 DAG) | ✅ 已澄清(G5) |
 | Harness | built-in 工具 read/write file | Builtin File Tools | `src/builtin_tools/file_ops/` | ✅ |
 | Harness | 内置命令注册机制 | Tool Registry | `src/tools/registry.rs` `runtime.rs` | ✅ |
 | Harness | 统一工具注册 / 斜杠命令 | Unified Tool / Slash Command | `src/command/` + `src/tool_metadata/` | ✅ |
@@ -162,8 +162,8 @@
 - **口语关键词**：DAG 工具执行、并行分组、智能调度、资源作用域、并发安全
 - **代码锚点**：`src/tools/concurrency.rs`（partition_parallel_groups + ConcurrencyClaim：Shared / Exclusive{Paths/Global}）、`src/tools/runtime.rs`（LoopTool::concurrency_claim）、`src/builtin_tools/file_ops/tool.rs`（按操作类型声明 claim）
 - **职责**：工具按资源作用域声明，harness 群分保证无冲突资源并行。
-- **状态**：⚠️ **"群分顺序"而非完整 DAG**——按资源作用域分群、群内并行群间串行，**没有完整依赖图解析**。"智能调度"= 资源冲突避免，不是任务 DAG。（真正的任务级 DAG 在 §4.3 Workflow / §4.4 Task。）
-- **打磨话术**：「‘DAG 工具执行’在工具层其实是 `concurrency.rs` 的群分并行（非真 DAG）。要‘多步骤依赖图’去 Workflow/Task 层，别在 `concurrency.rs` 找。」
+- **状态**：✅ **已澄清（G5，2026-06-16）**——工具层是"群分顺序"而非完整 DAG：按资源作用域分群（`Shared` / `Exclusive{Global, Paths}`）、群内并行群间串行，**没有完整依赖图解析**。`concurrency.rs` 头部自述是"a data-race guard, not an LLM judgement … this only schedules them"（守 R7/R10：不做意图推理/相关性评分/工具过滤）。"智能调度"= 资源冲突避免，**不是**任务 DAG。**真正的任务级 DAG 在**：§4.3 Workflow（`src/workflow/compile.rs`：`step.depends_on → coord_task.blocked_by`，拓扑序物化）/ §4.4 Task（`src/teams/dispatcher/` 按 `blocked_by` 边扫描 Runnable 并发调度）。
+- **打磨话术**：「‘DAG 工具执行’在工具层其实是 `concurrency.rs` 的资源群分并行（非真 DAG）。要‘多步骤依赖图’去 Workflow/Task 层（`compile.rs`+`teams/dispatcher/`），**别在 `concurrency.rs` 找、也别在工具层重造 DAG**（违 R6；该需求应上升到 Workflow 层表达）。」
 
 ### 3.4 内置文件工具 (Builtin File Tools)
 - **口语关键词**：built-in 工具、read/write file、edit、apply patch、文件操作
@@ -407,7 +407,7 @@
 | 2 | Panel 双层权限 | ⚠️❌ | LAN-trust 全员 operator，前端锁名存实亡 | **恢复/新建双层**（非微调） |
 | 3 | 配对时选 tier / devices.set_level | ❌ | device 表无 tier 字段，无 set_level API | **新功能** |
 | 4 | ~~kimi vs claude 差异化压缩阈值~~ | ✅ **G4 已实现 2026-06-16** | 窗口比例自动浮动 **+** `[[context_budget.model_thresholds]]` per-model 阈值覆盖（matcher=model id/provider key 子串，逐项回退全局，过防御闸） | **新增配置完成**，见 §2.2 |
-| 5 | DAG 工具执行 | ⚠️ | 工具层是"群分顺序"非真 DAG；真 DAG 在 Workflow/Task 层 | 描述时分清"工具并发"vs"任务 DAG" |
+| 5 | DAG 工具执行 | ✅ G5 已澄清 2026-06-16 | 工具层=资源群分并行（`concurrency.rs`，非真 DAG）；真任务 DAG 在 `workflow/compile.rs`+`teams/dispatcher/` | ~~描述时分清~~ 已在 §3.3 / §4.3 / §4.4 / 术语表四处区分；**仅澄清，无需开发** |
 | 6 | ~~错误沉淀教训(三支柱③)~~ | ✅ **G6 已查证 2026-06-16** | 端到端已连且存活（flag_user_correction→FeedbackDistill→feedback note→召回）；auto error-hook 故意不做(R7/R10) | **零代码完成**，见 §2.5③ |
 
 ## 附录 B. 高频"混称"对照（说清楚指哪个）

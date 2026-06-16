@@ -12,7 +12,7 @@
 | ~~G6~~ | ~~错误沉淀教训 wiring 复核~~ | 微调(先验证) | — | 无 | ✅ **已完成 2026-06-16（零代码）** |
 | ~~G4~~ | ~~per-model 压缩阈值~~ | 新增配置 | M | 无 | ✅ **已实现 2026-06-16（待用户统一 cargo 验证）** |
 | ~~G1~~ | ~~doctor LLM 修复 + `f` 入口~~ | 新功能 | S（实际） | 无 | ✅ **已实现 2026-06-16（待用户统一 cargo 验证）** |
-| G5 | "DAG 工具执行"命名澄清 | 仅澄清 | — | 无 | **低**（无需开发） |
+| ~~G5~~ | ~~"DAG 工具执行"命名澄清~~ | 仅澄清 | — | 无 | ✅ **已澄清 2026-06-16（零代码，四处文档区分两概念）** |
 | G2+G3 | Panel 真双层权限 | 新建子系统 | L | **架构决策（LAN-trust）** | **暂缓**（先决策再排期） |
 
 ---
@@ -83,14 +83,16 @@
 
 ---
 
-## G5 — "DAG 工具执行"命名澄清（无需开发）
+## G5 — "DAG 工具执行"命名澄清 ✅ 已澄清（2026-06-16，零代码）
 
-- **类型**：仅认知澄清
-- **现状**：工具层 `src/tools/concurrency.rs` 是**按资源作用域的群分并行**（群内并行、群间串行），**不是**任务依赖图。真正的任务级 DAG 在 `src/workflow/compile.rs` + `src/teams/dispatcher/`。
-- **目标**：无需开发。**描述时分清**："工具并发" → `tools/concurrency.rs`；"任务 DAG" → workflow/teams。
-- **工作量**：—
-- **何时才变成开发项**：仅当你确有"工具调用之间需要真正的依赖图编排"（而非群分）——但该需求通常应上升到 Workflow 层表达，**不建议**在工具层重造 DAG（违 R6 简洁性）。
-- **启动话术**：「这条不是 bug 是命名。要‘多步骤依赖编排’走 Workflow（`src/workflow/`）；`tools/concurrency.rs` 维持群分并行即可，不要在工具层造第二个 DAG。」
+- **类型**：仅认知澄清 → **交付物 = 文档区分，零代码**
+- **核实结论**：backlog 论断**代码逐字证实**——`src/tools/concurrency.rs` 头部自述 "Resource-scope-aware concurrency claims … a data-race guard, not an LLM judgement (so it stays inside R7/R10: no intent inference, no relevance scoring, no tool filtering) … this only schedules them"。即三态 claim（`Shared` / `Exclusive{Global, Paths}`）的**资源群分并行**（群内并行、群间串行），**不是**任务依赖图。
+- **真正的任务级 DAG**（已验证锚点）：
+  - `src/workflow/compile.rs`：头部 "materialised into the existing coordination-task DAG"，`step.depends_on → coord_task.blocked_by`，**拓扑序**物化。
+  - `src/teams/dispatcher/`：按 `blocked_by` 边扫描 Runnable、选最闲 owner 并发执行。
+- **澄清落点（四处，FEATURE_LOCATOR.md）**：速查表行（`工具并发(群分) ≠ 任务 DAG`，标签即教学）、§3.3（状态翻 ✅ + concurrency.rs 自述引用 + 双层锚点）、§4.3 Workflow / §4.4 Task（任务 DAG 真身）、术语表"DAG"条目。
+- **何时才变成开发项**：仅当确有"工具调用之间需要真正的依赖图编排"（而非群分）——但该需求应上升到 Workflow 层表达，**不在工具层重造 DAG**（违 R6 简洁性）。本 gap 不触发任何代码。
+- **启动话术**（留作未来描述参考）：「这条不是 bug 是命名。要‘多步骤依赖编排’走 Workflow（`src/workflow/`）；`tools/concurrency.rs` 维持群分并行即可，不要在工具层造第二个 DAG。」
 
 ---
 
@@ -119,6 +121,6 @@
 
 1. ~~**先 G6**（验证，可能零成本）~~ → ✅ **G6 已完成（零代码，链路已通）**。
 2. ~~**G4**（per-model 压缩阈值，新增配置）~~ → ✅ **G4 已实现 2026-06-16**。~~**G1**（doctor LLM 修复 + `f` 入口）~~ → ✅ **G1 已实现 2026-06-16**（纯前端 `f` 入口，doctor 后端零改动）。下一步 **G5**（命名澄清，无需开发）/ **G2+G3**（需架构决策）。
-3. **G5** 只在文档/沟通层澄清，不进开发队列。
+3. ~~**G5** 只在文档/沟通层澄清，不进开发队列。~~ → ✅ **G5 已澄清 2026-06-16**（零代码，FEATURE_LOCATOR 四处区分"工具并发群分"vs"任务 DAG"）。剩 **G2+G3**。
 4. **G2+G3** 单独拉一次架构决策会（信任模型），决策通过后再按 L 级子系统排期；否则维持现状并在 FEATURE_LOCATOR §6.2 标注"刻意不实现"。
 </content>
