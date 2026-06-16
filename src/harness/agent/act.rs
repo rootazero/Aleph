@@ -40,6 +40,21 @@
 //!
 //! Any failing precondition falls through to the existing serial loop with no
 //! observable behavior change.
+//!
+//! ## Cooperative steer checkpoint
+//!
+//! Before dispatching each serial tool call (and before each parallel
+//! group), Act re-checks `AgentHarness::has_unanswered_user_message`. If a
+//! non-synthetic user message arrived after this turn's prompt boundary
+//! (the `last_prompt_log_len` watermark) — the user changed their mind
+//! mid-batch — the remaining not-yet-started tools are skipped, each gets a
+//! synthetic "deferred" `ToolResult` (so the `tool_use`↔`tool_result`
+//! pairing the provider requires stays intact), and Act returns. The next
+//! Think surfaces the new message + deferred results; the model decides to
+//! pivot or re-issue (R7). In-flight tools are never killed (use `/stop` /
+//! `Interrupt` mode for that). When gateway-side `mid_turn_steering` is off
+//! no message is injected mid-turn, so the predicate never fires and
+//! behaviour is unchanged.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -191,6 +206,22 @@ impl AgentHarness {
         let mut executed_count: usize = 0;
         let mut remaining = tool_calls.into_iter();
         for (start, end) in groups {
+            // Cooperative steer checkpoint at the group boundary. Groups run
+            // sequentially; a parallel group's `.buffered()` wave is not
+            // interruptible mid-flight by design, so we stop *before*
+            // launching the next group when a mid-turn user message arrived,
+            // and defer everything still pending. R7/R10: mechanical.
+            if self.has_unanswered_user_message(session_id).await {
+                let deferred: Vec<NativeToolCall> = remaining.by_ref().collect();
+                if !deferred.is_empty() {
+                    self.emit_deferred_tool_results(session_id, turn_id, &deferred)
+                        .await?;
+                }
+                if let Some(ref tracker) = self.stall_tracker {
+                    tracker.record_activity().await;
+                }
+                break;
+            }
             let group: Vec<NativeToolCall> = remaining.by_ref().take(end - start).collect();
             executed_count = executed_count.saturating_add(
                 self.dispatch_group(
@@ -206,6 +237,40 @@ impl AgentHarness {
             );
         }
         Ok(executed_count)
+    }
+
+    /// Emit a synthetic "deferred" `ToolResult` for each tool call the
+    /// cooperative steer checkpoint skipped. Every `tool_use` block in the
+    /// turn's `AssistantMessage` must have a matching `tool_result` or the
+    /// provider rejects the next request, so a skipped call still gets a
+    /// result — a marker the model can re-issue from on its next turn.
+    ///
+    /// R10-safe: pure mechanical bookkeeping. Whether a deferred call is
+    /// re-run is the model's decision next Think, not the harness's.
+    pub(crate) async fn emit_deferred_tool_results(
+        &self,
+        session_id: &SessionId,
+        turn_id: TurnId,
+        calls: &[NativeToolCall],
+    ) -> Result<(), HarnessError> {
+        for call in calls {
+            let output = ToolOutput {
+                value: serde_json::json!({
+                    "deferred": true,
+                    "reason": "superseded by a new user message that arrived mid-turn; \
+                               re-issue this call if it is still needed",
+                }),
+                metadata: crate::session::events::ToolOutputMetadata::default(),
+            };
+            let event = SessionEvent::ToolResult {
+                turn_id,
+                call_id: call.id.clone(),
+                output,
+                at: now_ms(),
+            };
+            self.deps.session.emit_event(session_id, event).await?;
+        }
+        Ok(())
     }
 
     /// Dispatch a single group of tool calls: route through the opencode-parity
@@ -260,7 +325,25 @@ impl AgentHarness {
         let offered_defs = self.deps.tools.list().await;
         let offered_names: Vec<&str> = offered_defs.iter().map(|d| d.name.as_str()).collect();
 
-        for mut call in tool_calls {
+        let mut tool_iter = tool_calls.into_iter();
+        while let Some(mut call) = tool_iter.next() {
+            // Cooperative steer checkpoint. If a non-synthetic user message
+            // arrived after this turn's prompt boundary (the user changed
+            // their mind mid-batch), stop launching further tools and defer
+            // the current call + everything still pending so the model sees
+            // the message next Think and decides to pivot or resume.
+            // R7/R10: mechanical — no intent judgement here.
+            if self.has_unanswered_user_message(session_id).await {
+                let mut deferred = Vec::with_capacity(1);
+                deferred.push(call);
+                deferred.extend(tool_iter.by_ref());
+                self.emit_deferred_tool_results(session_id, turn_id, &deferred)
+                    .await?;
+                if let Some(ref tracker) = self.stall_tracker {
+                    tracker.record_activity().await;
+                }
+                break;
+            }
             // G3 (opencode-inspired): mechanical tool-name auto-repair via the
             // unified resolver (`tools::name_repair`). Models emit names that
             // miss the offered set by case (`Read`→`read`), separator
