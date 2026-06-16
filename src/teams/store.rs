@@ -112,6 +112,20 @@ pub trait TeamStore: Send + Sync {
         team_id: &str,
         protocol: Option<String>,
     ) -> crate::error::Result<()>;
+
+    /// Rename a team. Errors with `NotFound` when the team does not exist.
+    /// Used by both manual rename (`teams.rename`) and first-message auto-name.
+    async fn rename_team(&self, id: &str, name: &str) -> crate::error::Result<()>;
+
+    /// Set (or clear) the auto-name flag. Teams created with a blank name set
+    /// this to `true` so the first message can replace the provisional name.
+    async fn set_name_auto(&self, id: &str, value: bool) -> crate::error::Result<()>;
+
+    /// Atomically check-and-clear the auto-name flag. Returns `true` exactly
+    /// once (on the first call when the flag was set), `false` thereafter — so
+    /// it doubles as the "first meaningful message" gate, race-safe under
+    /// concurrent sends.
+    async fn take_auto_name_flag(&self, id: &str) -> crate::error::Result<bool>;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +194,12 @@ impl SqliteTeamStore {
         // Additive migration: per-team operating protocol (nullable). Older
         // databases backfill NULL = no protocol in effect.
         add_column_if_missing(&conn, "teams", "protocol", "TEXT")?;
+
+        // Additive migration: auto-name flag. Teams created from the Panel
+        // compose popover with a blank name carry `name_auto = 1`; the first
+        // `teams.chat.send` consumes the flag and replaces the provisional
+        // name with an LLM-generated topic. Older rows backfill 0 (no-op).
+        add_column_if_missing(&conn, "teams", "name_auto", "INTEGER NOT NULL DEFAULT 0")?;
 
         Ok(())
     }
@@ -662,6 +682,42 @@ impl TeamStore for SqliteTeamStore {
         }
         Ok(())
     }
+
+    async fn rename_team(&self, id: &str, name: &str) -> crate::error::Result<()> {
+        let conn = self.conn.lock().await;
+        let affected = conn
+            .execute("UPDATE teams SET name = ?1 WHERE id = ?2", params![name, id])
+            .map_err(db_err)?;
+        if affected == 0 {
+            return Err(not_found(format!("team not found: {id}")));
+        }
+        Ok(())
+    }
+
+    async fn set_name_auto(&self, id: &str, value: bool) -> crate::error::Result<()> {
+        let conn = self.conn.lock().await;
+        let affected = conn
+            .execute(
+                "UPDATE teams SET name_auto = ?1 WHERE id = ?2",
+                params![i64::from(value), id],
+            )
+            .map_err(db_err)?;
+        if affected == 0 {
+            return Err(not_found(format!("team not found: {id}")));
+        }
+        Ok(())
+    }
+
+    async fn take_auto_name_flag(&self, id: &str) -> crate::error::Result<bool> {
+        let conn = self.conn.lock().await;
+        let affected = conn
+            .execute(
+                "UPDATE teams SET name_auto = 0 WHERE id = ?1 AND name_auto = 1",
+                params![id],
+            )
+            .map_err(db_err)?;
+        Ok(affected > 0)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1024,5 +1080,43 @@ mod tests {
             format!("{:?}", err.unwrap_err()).contains("not a member"),
             "error should mention not a member"
         );
+    }
+
+    #[tokio::test]
+    async fn rename_team_updates_name_and_errors_when_absent() {
+        let store = setup_store().await;
+        let team = store
+            .create_team(NewTeam {
+                name: "Old".into(),
+                description: String::new(),
+                leader_id: "main".into(),
+            })
+            .await
+            .unwrap();
+
+        store.rename_team(&team.id, "New Topic").await.unwrap();
+        let got = store.get_team(&team.id).await.unwrap().unwrap();
+        assert_eq!(got.name, "New Topic");
+
+        let err = store.rename_team("nope", "X").await;
+        assert!(err.is_err(), "rename of missing team must error");
+    }
+
+    #[tokio::test]
+    async fn take_auto_name_flag_is_a_one_shot_gate() {
+        let store = setup_store().await;
+        let team = store
+            .create_team(NewTeam {
+                name: "新群聊".into(),
+                description: String::new(),
+                leader_id: "main".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!store.take_auto_name_flag(&team.id).await.unwrap());
+        store.set_name_auto(&team.id, true).await.unwrap();
+        assert!(store.take_auto_name_flag(&team.id).await.unwrap());
+        assert!(!store.take_auto_name_flag(&team.id).await.unwrap());
     }
 }
