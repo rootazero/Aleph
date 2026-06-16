@@ -6,6 +6,15 @@ use serde_json::{json, Value};
 
 // -- Types --
 
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct MemberPreview {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub emoji: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TeamSummary {
     pub id: String,
@@ -21,6 +30,10 @@ pub struct TeamSummary {
     pub task_count: usize,
     pub created_at: i64,
     pub disbanded_at: Option<i64>,
+    #[serde(default)]
+    pub members_preview: Vec<MemberPreview>,
+    #[serde(default)]
+    pub last_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
