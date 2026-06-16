@@ -22,7 +22,7 @@ const API_TIMEOUT: Duration = Duration::from_secs(60);
 ///
 /// Supports both image understanding (describe, answer questions) and OCR
 /// (text extraction). Object detection is not supported.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClaudeVisionProvider {
     client: Client,
     api_key: String,
@@ -32,15 +32,25 @@ pub struct ClaudeVisionProvider {
     default_confidence: f64,
 }
 
+impl std::fmt::Debug for ClaudeVisionProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClaudeVisionProvider")
+            .field("client", &self.client)
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("max_tokens", &self.max_tokens)
+            .field("default_confidence", &self.default_confidence)
+            .finish()
+    }
+}
+
 impl ClaudeVisionProvider {
     fn build_client() -> Client {
         Client::builder()
             .timeout(API_TIMEOUT)
             .build()
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "failed to build reqwest client with timeout, using default");
-                Client::new()
-            })
+            .expect("failed to build reqwest client with timeout")
     }
 
     /// Create a new Claude Vision provider.
@@ -85,7 +95,11 @@ impl ClaudeVisionProvider {
     /// Set the default confidence score for responses (default: 0.9).
     #[must_use]
     pub const fn with_default_confidence(mut self, confidence: f64) -> Self {
-        self.default_confidence = confidence.clamp(0.0, 1.0);
+        self.default_confidence = if confidence.is_nan() {
+            0.0
+        } else {
+            confidence.clamp(0.0, 1.0)
+        };
         self
     }
 
@@ -121,17 +135,14 @@ impl ClaudeVisionProvider {
                 })
             }
             ImageInput::FilePath { path } => {
-                let metadata = std::fs::metadata(path).map_err(|e| {
-                    VisionError::ImageError(format!("failed to read image metadata: {e}"))
-                })?;
-                if metadata.len() > MAX_IMAGE_FILE_SIZE {
+                let bytes =
+                    std::fs::read(path).map_err(|e| VisionError::ImageError(e.to_string()))?;
+                if bytes.len() as u64 > MAX_IMAGE_FILE_SIZE {
                     return Err(VisionError::ImageError(format!(
                         "image file exceeds maximum size of {} MB",
                         MAX_IMAGE_FILE_SIZE / (1024 * 1024)
                     )));
                 }
-                let bytes =
-                    std::fs::read(path).map_err(|e| VisionError::ImageError(e.to_string()))?;
                 let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("png");
                 let mime = match ext.to_lowercase().as_str() {
