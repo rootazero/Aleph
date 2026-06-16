@@ -4,11 +4,19 @@
 //!
 //! When an agent runs against a user-chosen project folder (the
 //! `workspace_override`), this loader walks up from that folder to the git root
-//! collecting instruction files and returns them as [`ExtraPromptFile`] entries.
-//! The harness bridge merges them into the `[prompt.extra_files]` set so they
-//! render through `ExtraFilesLayer` — reusing the same trust-boundary
-//! sanitization (prompt-injection patterns + invisible Unicode) that identity
-//! and extra files already get.
+//! collecting instruction files. [`discover_project_instructions`] is the single
+//! discovery source of truth; both prompt presenters consume it:
+//!   * the **orchestrator path** via [`load_project_instructions`] → the harness
+//!     bridge merges the [`ExtraPromptFile`] set into `[prompt.extra_files]` so
+//!     they render through `ExtraFilesLayer` (with the same trust-boundary
+//!     sanitization identity/extra files get); and
+//!   * the **legacy gateway path** via `collect_project_context_blocks` in the
+//!     execution engine, which formats the same files into a per-turn
+//!     `<system-reminder>` block.
+//!
+//! Keeping one discovery function means both paths see the identical file set
+//! (`CLAUDE.md`, `.aleph/CLAUDE.md`, `CLAUDE.local.md`, rules, `@import`, …) —
+//! no capability drift between execution modes.
 //!
 //! Beyond the top-level instruction files this loader also supports (Slice 2a):
 //!   * `CLAUDE.local.md` — gitignored local overrides (read after the base file).
@@ -47,12 +55,42 @@ const CANDIDATES: &[&str] = &[
     "CLAUDE.local.md",
     ".claude/CLAUDE.md",
     ".claude/CLAUDE.local.md",
+    ".aleph/CLAUDE.md",
     "AGENTS.md",
     ".aleph/AGENTS.md",
 ];
 
 /// Subdirectories globbed for supplementary `*.md` rule files at each level.
 const RULE_DIRS: &[&str] = &[".claude/rules", ".aleph/rules"];
+
+/// Belt-and-suspenders cap on ancestor traversal when the workspace is not in a
+/// git repo (so `find_git_root` returns `None` and the walk would otherwise run
+/// to the filesystem root). The git-root and `$HOME` stops normally trip first.
+const MAX_WALK_DEPTH: usize = 8;
+
+/// One discovered project instruction file: its on-disk path, a short display
+/// label (relative to the workspace when possible), and its budget-capped,
+/// `@import`-expanded content. This is the structured form both prompt
+/// presenters consume — the orchestrator path ([`load_project_instructions`] →
+/// `ExtraFilesLayer`) and the legacy gateway path
+/// (`collect_project_context_blocks` → per-turn system-reminder).
+#[derive(Debug, Clone)]
+pub struct ProjectInstructionFile {
+    /// Absolute path the content was read from.
+    pub path: PathBuf,
+    /// Display label: path relative to the workspace, or absolute for ancestors.
+    pub label: String,
+    /// `@import`-expanded, budget-capped file content.
+    pub content: String,
+}
+
+/// Label a discovered file relative to the workspace when it sits inside it
+/// (`CLAUDE.md`, `.claude/rules/a.md`), else the absolute path (ancestor files).
+fn relative_label(path: &Path, workspace: &Path) -> String {
+    path.strip_prefix(workspace)
+        .map(|rel| rel.display().to_string())
+        .unwrap_or_else(|_| path.display().to_string())
+}
 
 /// Discover project instruction files for `workspace`, walking up to the git
 /// root (or the filesystem root when not in a repo).
@@ -64,20 +102,32 @@ const RULE_DIRS: &[&str] = &[".claude/rules", ".aleph/rules"];
 ///
 /// Returns an empty vec when no instruction files exist (e.g. the default agent
 /// workspace), which the caller treats as "inject nothing".
+///
+/// This is the single discovery source of truth shared by both prompt
+/// presenters; [`load_project_instructions`] wraps it for the orchestrator path.
 #[must_use]
-pub fn load_project_instructions(workspace: &Path) -> Vec<ExtraPromptFile> {
+pub fn discover_project_instructions(workspace: &Path) -> Vec<ProjectInstructionFile> {
     let git_root = crate::utils::paths::find_git_root(workspace);
     // `@import` boundary: the git root, or the workspace itself outside a repo.
     let boundary = git_root
         .clone()
         .unwrap_or_else(|| workspace.to_path_buf());
+    let home = dirs::home_dir();
 
     // Collect directories from workspace upward to the git root (inclusive).
+    // Stop at the git root, `$HOME`, or a depth cap — whichever trips first —
+    // so a workspace outside any repo can't walk to the filesystem root.
     let mut dirs = Vec::new();
     let mut current = workspace.to_path_buf();
     loop {
         dirs.push(current.clone());
         if git_root.as_deref() == Some(current.as_path()) {
+            break;
+        }
+        if home.as_deref() == Some(current.as_path()) {
+            break;
+        }
+        if dirs.len() >= MAX_WALK_DEPTH {
             break;
         }
         if !current.pop() {
@@ -135,14 +185,28 @@ pub fn load_project_instructions(workspace: &Path) -> Vec<ExtraPromptFile> {
             };
             total += capped.chars().count();
 
-            out.push(ExtraPromptFile {
-                name: format!("Project instructions: {}", path.display()),
+            out.push(ProjectInstructionFile {
+                label: relative_label(&path, workspace),
+                path,
                 content: capped,
             });
         }
     }
 
     out
+}
+
+/// Orchestrator-path presenter: discover project instructions and wrap each as
+/// an [`ExtraPromptFile`] for `ExtraFilesLayer` injection.
+#[must_use]
+pub fn load_project_instructions(workspace: &Path) -> Vec<ExtraPromptFile> {
+    discover_project_instructions(workspace)
+        .into_iter()
+        .map(|f| ExtraPromptFile {
+            name: format!("Project instructions: {}", f.label),
+            content: f.content,
+        })
+        .collect()
 }
 
 /// List `*.md` files directly under `dir` in lexical order. Missing dir → empty.
@@ -504,5 +568,44 @@ mod tests {
         let files = load_project_instructions(tmp.path());
         // Untouched: no import marker, original text preserved.
         assert_eq!(files[0].content, "contact me@example.com for help");
+    }
+
+    // --- Path unification: .aleph/CLAUDE.md candidate + structured discovery ---
+
+    #[test]
+    fn loads_aleph_claude_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(&tmp.path().join(".aleph/CLAUDE.md"), "aleph project rules");
+        let files = load_project_instructions(tmp.path());
+        assert_eq!(files.len(), 1);
+        assert!(files[0].name.contains(".aleph/CLAUDE.md"));
+        assert_eq!(files[0].content, "aleph project rules");
+    }
+
+    #[test]
+    fn discover_yields_relative_labels_for_in_workspace_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(&tmp.path().join("CLAUDE.md"), "root");
+        write(&tmp.path().join(".claude/CLAUDE.md"), "sub");
+        let files = discover_project_instructions(tmp.path());
+        let labels: Vec<&str> = files.iter().map(|f| f.label.as_str()).collect();
+        assert!(labels.contains(&"CLAUDE.md"), "{labels:?}");
+        assert!(labels.contains(&".claude/CLAUDE.md"), "{labels:?}");
+    }
+
+    #[test]
+    fn discover_labels_ancestor_files_absolutely() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        write(&tmp.path().join("CLAUDE.md"), "root rules");
+        let sub = tmp.path().join("crates/api");
+        fs::create_dir_all(&sub).unwrap();
+        write(&sub.join("CLAUDE.md"), "api rules");
+
+        let files = discover_project_instructions(&sub);
+        // Ancestor (git root) file labelled by absolute path; workspace file relative.
+        assert_eq!(files[0].content, "root rules");
+        assert!(files[0].label.contains("CLAUDE.md") && files[0].label.starts_with('/'));
+        assert_eq!(files[1].label, "CLAUDE.md");
     }
 }
