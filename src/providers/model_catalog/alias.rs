@@ -75,6 +75,13 @@ const MODEL_VENDOR_PREFIXES: &[(&str, &str)] = &[
     ("qwq", "qwen"),
     ("glm", "zai"),
     ("llama", "meta"),
+    // Providers Aleph ships a preset for but whose model families were absent
+    // from this table — keeping the model-name path at parity with the
+    // provider-alias path ([`canonical_provider_id`]) and the preset roster.
+    ("minimax", "minimax"),
+    ("command", "cohere"),
+    ("sonar", "perplexity"),
+    ("step", "stepfun"),
 ];
 
 /// Strip a leading vendor tag and a trailing `YYYYMMDD` date stamp from a
@@ -158,6 +165,19 @@ pub fn canonical_provider_id(provider: &str) -> Option<&'static str> {
         Some("qwen")
     } else if p.contains("zhipu") || p.contains("glm") || p.contains("z-ai") || p.contains("zai") {
         Some("zai")
+    } else if p.contains("minimax") {
+        Some("minimax")
+    } else if p.contains("cohere") || p.contains("command") {
+        Some("cohere")
+    } else if p.contains("perplexity") || p.contains("sonar") {
+        Some("perplexity")
+    } else if p.contains("stepfun") || p.contains("step") {
+        Some("stepfun")
+    } else if p.contains("meta") || p.contains("llama") {
+        // Parity with [`infer_vendor`]'s `llama -> meta` row. Open-weight
+        // Llama is multi-hosted (Groq/Together/…), so the *provider* alias
+        // rarely embeds "meta"; this exists so the two paths agree.
+        Some("meta")
     } else {
         None
     }
@@ -235,6 +255,28 @@ mod tests {
         assert_eq!(canonical_provider_id("zai"), Some("zai"));
         assert_eq!(canonical_provider_id("glm"), Some("zai"));
         assert_eq!(canonical_provider_id("dashscope"), Some("qwen"));
+    }
+
+    #[test]
+    fn infer_vendor_covers_shipped_preset_families() {
+        // Newly added rows: these providers all ship a built-in preset but their
+        // model families were previously unrecognised by the model-name path.
+        assert_eq!(infer_vendor("MiniMax-M2.5"), Some("minimax"));
+        assert_eq!(infer_vendor("command-a-03-2025"), Some("cohere"));
+        assert_eq!(infer_vendor("sonar-reasoning-pro"), Some("perplexity"));
+        assert_eq!(infer_vendor("step-1-8k"), Some("stepfun"));
+    }
+
+    #[test]
+    fn canonical_provider_at_parity_with_infer_vendor() {
+        // The provider-alias path must recognise every vendor the model-name
+        // path does — the two tables previously drifted (table had llama→meta,
+        // the if/else chain did not; both lacked minimax/cohere/perplexity).
+        assert_eq!(canonical_provider_id("minimax"), Some("minimax"));
+        assert_eq!(canonical_provider_id("cohere"), Some("cohere"));
+        assert_eq!(canonical_provider_id("perplexity"), Some("perplexity"));
+        assert_eq!(canonical_provider_id("stepfun"), Some("stepfun"));
+        assert_eq!(canonical_provider_id("groq-llama"), Some("meta"));
     }
 
     #[test]

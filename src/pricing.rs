@@ -568,6 +568,22 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             },
         ],
     ),
+    // ── MiniMax ──────────────────────────────────────────────────────────
+    // M2 family flat pricing (MiniMax open-platform pricing, 2026-06). The
+    // `minimax` provider preset previously had no reachable rate, so its runs
+    // always reported `CostStatus::Unknown`; `canonical_provider_id("minimax")`
+    // now resolves, so this section is consulted.
+    (
+        "minimax",
+        &[Rates {
+            model_prefix: "minimax-m2",
+            input_per_mtok: Some(0.30),
+            output_per_mtok: Some(1.20),
+            cache_read_per_mtok: None,
+            cache_creation_per_mtok: None,
+            reasoning_per_mtok: None,
+        }],
+    ),
 ];
 
 /// Long-context pricing tiers, parallel to [`PRICE_TABLE`] and keyed the same
@@ -776,6 +792,40 @@ pub fn estimate(provider: &str, model: &str, breakdown: &TokenBreakdown) -> Cost
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Anti-drift guard: every vendor key in [`PRICE_TABLE`] / [`TIER_TABLE`]
+    /// must be reachable through [`canonical_provider`]. A price section whose
+    /// key no provider alias resolves to is dead — its rates can never be
+    /// looked up. This replaces the references' "single vendor table can't
+    /// drift" property with an explicit Rust assertion, since Aleph keeps the
+    /// vendor knowledge in several parallel tables.
+    #[test]
+    fn every_price_table_vendor_is_resolvable() {
+        for (vendor, _) in PRICE_TABLE {
+            assert_eq!(
+                canonical_provider(vendor),
+                *vendor,
+                "PRICE_TABLE vendor {vendor:?} is not a fixed point of \
+                 canonical_provider — its rates are unreachable (drift)"
+            );
+        }
+        for (vendor, _, _) in TIER_TABLE {
+            assert_eq!(
+                canonical_provider(vendor),
+                *vendor,
+                "TIER_TABLE vendor {vendor:?} is unreachable via canonical_provider"
+            );
+        }
+    }
+
+    #[test]
+    fn minimax_pricing_reachable_after_vendor_wiring() {
+        // The `minimax` preset previously priced as Unknown because
+        // canonical_provider_id had no minimax branch. Now it resolves.
+        let card = rate_card("minimax", "MiniMax-M2.5").expect("minimax rate card");
+        assert_eq!(card.input_per_mtok, Some(0.30));
+        assert_eq!(card.output_per_mtok, Some(1.20));
+    }
 
     #[test]
     fn unknown_provider_returns_zero_usd_unknown_status() {
