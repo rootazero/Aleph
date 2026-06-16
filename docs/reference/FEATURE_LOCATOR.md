@@ -62,7 +62,7 @@
 | 横切 | hook | Hook System | `src/verification/stop_hooks.rs` `src/sandbox/hooks.rs` | ✅ |
 | 横切 | CLI | Command Line Interface | `src/bin/aleph-server/commands/` | ✅ |
 | UI | 流式回显 / 工作区面板 | Streaming Echo & Workspace Panel | `interfaces/webchat/src/components/workspace_panel.rs` | ✅ |
-| UI | panel 双层权限 / 配对 tier | Panel Permission Tiers | `interfaces/webchat/src/components/permission.rs` | ⚠️❌ |
+| UI | panel 双层权限 / 配对 tier | Panel Permission Tiers | `src/gateway/panel_devices.rs`(tier store) · `src/gateway/server/handler.rs`(connect 解析+RPC门) · `src/gateway/method_authz.rs`(rpc/tool_requires_operator) · `src/gateway/handlers/devices.rs`(devices.*) · `interfaces/webchat/src/{context.rs(device_id),views/settings/security/devices.rs,components/permission.rs(ConfigGate)}` | ✅ |
 
 ---
 

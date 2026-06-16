@@ -106,6 +106,74 @@ fn derive_gateway_url() -> String {
     }
 }
 
+/// Stable per-Panel identity for device-tier pairing (G2/G3). The `device_id`
+/// is a random handle generated once and kept in `localStorage`; the
+/// `device_name` is a friendly label derived from the user agent. Sent in the
+/// `connect` handshake so the gateway can look up / assign this device's
+/// permission tier. The local (loopback) desktop App is always operator
+/// regardless of this id, so it never lands in the device store.
+#[cfg(target_arch = "wasm32")]
+fn panel_device_identity() -> (String, String) {
+    const KEY: &str = "aleph_device_id";
+    let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten());
+    let device_id = storage
+        .as_ref()
+        .and_then(|s| s.get_item(KEY).ok().flatten())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| {
+            let id = format!(
+                "panel-{:x}-{:x}",
+                js_sys::Date::now() as u64,
+                (js_sys::Math::random() * 1.0e9) as u64
+            );
+            if let Some(s) = storage.as_ref() {
+                let _ = s.set_item(KEY, &id);
+            }
+            id
+        });
+    let device_name = web_sys::window()
+        .map(|w| w.navigator())
+        .and_then(|n| n.user_agent().ok())
+        .map(|ua| friendly_device_name(&ua))
+        .unwrap_or_else(|| "Panel".to_string());
+    (device_id, device_name)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn panel_device_identity() -> (String, String) {
+    (String::new(), "Panel".to_string())
+}
+
+/// Best-effort "Browser on OS" label from a user-agent string.
+#[cfg(target_arch = "wasm32")]
+fn friendly_device_name(ua: &str) -> String {
+    let browser = if ua.contains("Edg") {
+        "Edge"
+    } else if ua.contains("Chrome") || ua.contains("CriOS") {
+        "Chrome"
+    } else if ua.contains("Firefox") {
+        "Firefox"
+    } else if ua.contains("Safari") {
+        "Safari"
+    } else {
+        "Browser"
+    };
+    let os = if ua.contains("Mac OS") {
+        "macOS"
+    } else if ua.contains("Windows") {
+        "Windows"
+    } else if ua.contains("Android") {
+        "Android"
+    } else if ua.contains("iPhone") || ua.contains("iPad") {
+        "iOS"
+    } else if ua.contains("Linux") || ua.contains("X11") {
+        "Linux"
+    } else {
+        "device"
+    };
+    format!("{browser} on {os}")
+}
+
 impl Default for DashboardState {
     fn default() -> Self {
         Self::new()
@@ -273,12 +341,21 @@ impl DashboardState {
     /// established.
     ///
     /// LAN-trust model: there is no authentication. The handshake is a single
-    /// `connect` frame; the gateway replies with the session baseline
-    /// (`role`/`state_version`/`keepalive`) and always reports `operator`.
-    /// We only read `role` so `is_operator()` can gate operator-only UI.
+    /// `connect` frame carrying this Panel's stable `device_id`; the gateway
+    /// replies with the session baseline (`role`/`state_version`/`keepalive`).
+    /// `role` reflects the device tier — `operator` for the local (loopback)
+    /// App, or this remote device's granted tier (`operator` = Config,
+    /// otherwise Chat). We read `role` so `is_operator()` gates config UI.
     async fn handshake(&self) -> Result<(), String> {
+        let (device_id, device_name) = panel_device_identity();
         let resp = self
-            .rpc_call("connect", serde_json::json!({}))
+            .rpc_call(
+                "connect",
+                serde_json::json!({
+                    "device_id": device_id,
+                    "device_name": device_name,
+                }),
+            )
             .await?;
         self.capture_role(&resp);
         Ok(())

@@ -13,7 +13,7 @@
 | ~~G4~~ | ~~per-model 压缩阈值~~ | 新增配置 | M | 无 | ✅ **已实现 2026-06-16（待用户统一 cargo 验证）** |
 | ~~G1~~ | ~~doctor LLM 修复 + `f` 入口~~ | 新功能 | S（实际） | 无 | ✅ **已实现 2026-06-16（待用户统一 cargo 验证）** |
 | ~~G5~~ | ~~"DAG 工具执行"命名澄清~~ | 仅澄清 | — | 无 | ✅ **已澄清 2026-06-16（零代码，四处文档区分两概念）** |
-| G2+G3 | Panel 真双层权限 | 新建子系统 | L | **架构决策（LAN-trust）** | **暂缓**（先决策再排期） |
+| ~~G2+G3~~ | ~~Panel 真双层权限~~ | 新建子系统 | L | 信任模型已决策（loopback=operator / remote=chat） | ✅ **已实现 2026-06-16** |
 
 ---
 
@@ -96,24 +96,21 @@
 
 ---
 
-## G2 + G3 — Panel 真双层权限（需架构决策后再排期）
+## G2 + G3 — Panel 真双层权限（✅ 已实现 2026-06-16）
 
 - **类型**：新建子系统（"恢复/新建双层"，非微调）
-- **现状**：LAN-trust 绝对化——`src/gateway/handlers/connect.rs` 给所有连接（含 Panel）硬编码 `"role":"operator"`。前端 `ConfigGate`（`interfaces/webchat/src/components/permission.rs`）有锁但后端恒放行。device 表（`src/gateway/security/store/`）**无 tier/level 字段**，**无 `set_level` API**，pairing **不能选 tier**。
-- **目标（若启用双层）**：第一层 = 对话 + 默认工作目录；第二层 = 配置权限 + 自由建工作目录。配对默认第一层，可配对时选 tier 或事后 `devices.set_level` 提权。
-- **涉及文件（预估）**：
-  - device 表 schema + `src/gateway/security/store/{types.rs,devices.rs}`（新增 `tier`/`level` 列 + `set_level`）
-  - `src/gateway/handlers/connect.rs` + `caller_identity.rs`（停止无条件 operator，按 device tier 派角色）
-  - `src/gateway/pairing_store.rs` + pairing handler（approve 带 tier 参数）
-  - dispatcher 权限检查真生效（`src/tools/scoped/dispatch.rs` 的 `tool_requires_operator` 在非 operator 时确实拦截）
-  - admin set_level API（`src/gateway/admin_api/`）
-  - 前端 pairing UI 选 tier + 设备管理页
-- **工作量**：L
-- **前置（必须先定）**：**这与现行架构决策直接冲突**——CLAUDE.md 明确"信任模型 = 网络边界，LAN 内任何设备获得对 agent 的完全控制权"。启用双层 = **改变信任模型**。需先决策：
-  1. 是否真要在 LAN-trust 之上叠设备级 tier？还是维持"LAN = 信任边界"？
-  2. 若要，tier 是"配对时选" + "事后 set_level"两条都做，还是先只做事后授权？
-- **验收**：非 operator 设备连接后，配置类工具（self_config / skill_install / agent_create 等 `OPERATOR_TOOLS`）被后端真实拦截；配对默认 Chat tier；`set_level` 能提权。
-- **启动话术**：「**先别动代码**——Panel 真双层权限与现行 LAN-trust 信任模型冲突（CLAUDE.md：LAN=信任边界，全员 operator）。先决策‘是否改变信任模型’。若确定要做，按‘新建子系统’对待：device 表加 tier 字段 + `connect.rs` 按 tier 派角色 + dispatcher 检查真生效 + pairing/admin tier 入口。当前前端 ConfigGate 锁只是 UI 投影，不要误以为后端已强制。」
+- **决策**：信任模型已拍板——**loopback（本机 App）= operator（Config）保单机零配置；remote（局域网 Panel）= Chat 默认，须显式提权**。tier 治理的是"配置变更"，不是"执行"（`bash`/PTY 仍随网络信任边界）。"配对时选 tier" + "事后 `devices.set_level`" 两条都做。
+- **实勘修正（实施时发现，与原假设有出入）**：
+  - 前端 2 层权限**早已 100% 建好**（`DashboardState.role` + `ConfigGate` 包 17 个配置页 + `LockedNotice`/`PermissionBanner`/`friendly_error` + i18n "re-pair selecting Config"），只是后端 `connect.rs` 硬编码 `"role":"operator"` 让整套**恒真失效**。
+  - 原假设的 `devices.set_level` / device 表 tier 字段 / pairing 选 tier **均不存在**（`devices` 表是 cluster 节点专用）。`ChannelPermissionLevel{Chat,Config}` 枚举已存在（→`guest`/`operator`），工具门 `tool_requires_operator` 已存在但因恒 operator 从不触发。
+- **落地（实际改动）**：
+  - **新建** `src/gateway/panel_devices.rs`（`PanelDeviceStore` + SQLite `panel_devices.db` + 进程全局 + `resolve_tier`；loopback→Config，remote→持久化 per-device tier 默认 Chat）+ `utils/paths.rs::get_panel_devices_db_path`
+  - **连线** `server/handler.rs`：`connect` 握手按 `device_id`+loopback 解析 tier → 写入 `ConnectionState.caller_role`（新字段，loopback 默认 operator）→ 改写 connect 响应 `role`（前端 ConfigGate 即激活）→ 新设备发 `panel.device.pairing` 事件；删掉 line 492 的硬编码 operator，改为按连接读取
+  - **纵深防御** `method_authz.rs::rpc_requires_operator` + `OPERATOR_RPC_METHODS`（config 类 RPC 白名单）+ handler 调度前 RPC 门（chat tier 拦配置 RPC，挡手搓 RPC 绕过隐藏 UI）；工具门复用已存在的 `tool_requires_operator`
+  - **新建** `handlers/devices.rs`（`devices.list`/`set_level`/`revoke`，operator-only）+ `start/mod.rs` 注册 + 全局 store 安装
+  - **前端** `context.rs` 生成持久 `device_id`（localStorage UUID）+ `device_name` 进握手；`views/settings/security/devices.rs` 新增 `PanelDevicesSection`（设备列表 + Grant Config / Set Chat / Revoke）
+- **验收**：remote chat 设备连接后，配置类 RPC + 工具被后端真实拦截（PERMISSION_DENIED）；前端 ConfigGate 真生效；配对默认 Chat；`devices.set_level` 能提权/降权；loopback 始终 operator。
+- **遗留**：pairing 实时 toast 未做（新设备靠 Settings→Security 列表 + Refresh 呈现，授权 = 选 tier）；i18n 用英文字面量（未进 locale 文件）；**NOT cargo-checked**（用户统一验证）。
 
 ---
 
@@ -121,6 +118,6 @@
 
 1. ~~**先 G6**（验证，可能零成本）~~ → ✅ **G6 已完成（零代码，链路已通）**。
 2. ~~**G4**（per-model 压缩阈值，新增配置）~~ → ✅ **G4 已实现 2026-06-16**。~~**G1**（doctor LLM 修复 + `f` 入口）~~ → ✅ **G1 已实现 2026-06-16**（纯前端 `f` 入口，doctor 后端零改动）。下一步 **G5**（命名澄清，无需开发）/ **G2+G3**（需架构决策）。
-3. ~~**G5** 只在文档/沟通层澄清，不进开发队列。~~ → ✅ **G5 已澄清 2026-06-16**（零代码，FEATURE_LOCATOR 四处区分"工具并发群分"vs"任务 DAG"）。剩 **G2+G3**。
-4. **G2+G3** 单独拉一次架构决策会（信任模型），决策通过后再按 L 级子系统排期；否则维持现状并在 FEATURE_LOCATOR §6.2 标注"刻意不实现"。
+3. ~~**G5** 只在文档/沟通层澄清，不进开发队列。~~ → ✅ **G5 已澄清 2026-06-16**（零代码，FEATURE_LOCATOR 四处区分"工具并发群分"vs"任务 DAG"）。
+4. ~~**G2+G3** 单独拉一次架构决策会（信任模型）。~~ → ✅ **G2+G3 已实现 2026-06-16**（信任模型决策：loopback=operator / remote=chat 默认 + 显式提权；新建 `panel_devices` 子系统 + RPC/工具双门 + 前端设备管理）。**Backlog 全部清空。**
 </content>

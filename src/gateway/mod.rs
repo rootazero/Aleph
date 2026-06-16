@@ -79,6 +79,7 @@ pub mod inbound_router;
 pub mod interfaces;
 pub mod pair_loop_guard;
 pub mod pairing_store;
+pub mod panel_devices;
 pub mod pipeline;
 pub mod presence;
 pub mod provider_factory;

@@ -21,9 +21,40 @@ Aleph's security system provides:
 ## Permission Model (LAN-trust)
 
 Aleph has no authentication step — the trust boundary is the network
-boundary (see [Trust model: LAN-trust](#auth-ux)). Every caller therefore
-resolves to a single **owner** identity, and there is no role-based access
-gate on the connection surface.
+boundary (see [Trust model: LAN-trust](#auth-ux)). The local (loopback)
+desktop App is always the implicit **operator** (single-machine zero-config).
+A **remote** Panel, however, is *not* automatically trusted to reconfigure
+Aleph: it connects at the **Chat** tier by default and must be explicitly
+raised to **Config** by an operator (see *Panel device tier* below). Raw
+execution (`bash`, PTY) still rides the network trust boundary — the device
+tier governs *configuration* mutation, not execution.
+
+### Panel device tier (Chat / Config)
+
+Each remote Panel reports a stable `device_id` (a UUID it keeps in
+`localStorage`) on the `connect` handshake. The gateway resolves a tier and
+persists it in `src/gateway/panel_devices.rs` (`panel_devices.db`):
+
+- **Chat** (default, role `"guest"`): converse + read + use tools/PTY. The
+  Panel's config pages are hidden (`ConfigGate`).
+- **Config** (role `"operator"`): the above plus Aleph's own configuration
+  surface. Granted by an operator via `devices.set_level` — after the fact
+  or the moment a new device pairs (a `panel.device.pairing` event surfaces
+  the newcomer in **Settings → Security → Panel devices**).
+
+Enforcement is **defense-in-depth**, both keyed off the connection role
+stamped onto `ConnectionState.caller_role` at the handshake:
+
+1. **RPC gate** (`server::handler` + `method_authz::rpc_requires_operator`):
+   config-mutating RPC methods (`self_config`-class, `*.install`, `cron.*`
+   writes, `identity.set`, `gateway.credentials`, `devices.*`, …) are refused
+   for a Chat-tier connection — so a hand-crafted RPC can't bypass the hidden
+   UI.
+2. **Tool gate** (`tools/scoped/dispatch.rs` + `method_authz::tool_requires_operator`):
+   config-mutating *tools* invoked through the agent loop are likewise refused.
+
+Loopback connections never touch the device store — they are operator
+unconditionally.
 
 ### What was removed
 
