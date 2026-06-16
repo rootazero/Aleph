@@ -12,7 +12,9 @@
 
 use leptos::ev::keydown;
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
+use crate::views::chat::state::ChatState;
 use crate::views::voice::VoiceMode;
 
 /// Process-wide UI hotkey state. Clone-cheap (signals are `Copy`).
@@ -25,14 +27,20 @@ pub struct HotkeyState {
     /// from a leaked, owner-less DOM-event closure). `pub(crate)` because
     /// `VoiceMode` is crate-private — only in-crate callers wire it.
     pub(crate) voice: VoiceMode,
+    /// Chat state, threaded in for the same reason as `voice`: the global
+    /// keydown closure is leaked/owner-less and cannot `expect_context`. The
+    /// `f` binding bumps `chat.repair_pulse` to trigger the doctor + LLM
+    /// repair flow (G1). `pub(crate)` since `ChatState` is crate-internal.
+    pub(crate) chat: ChatState,
 }
 
 impl HotkeyState {
     #[must_use]
-    pub(crate) fn new(voice: VoiceMode) -> Self {
+    pub(crate) fn new(voice: VoiceMode, chat: ChatState) -> Self {
         Self {
             palette_open: RwSignal::new(false),
             voice,
+            chat,
         }
     }
 
@@ -58,6 +66,8 @@ impl HotkeyState {
 /// - **⌘K / Ctrl+K** → toggle the command palette
 /// - **⌘⇧V (macOS) / Ctrl+Alt+V (Win/Linux)** → toggle immersive voice mode
 /// - **Esc** → close the voice overlay (if open), else close the palette
+/// - **f** (bare, only when no editable field is focused) → run doctor + LLM
+///   repair (G1); guarded so it never hijacks normal typing
 ///
 /// Inputs while the palette itself is open are handled inside the palette
 /// (Esc to close, ↑↓ to navigate, Enter to run) — the global listener
@@ -105,5 +115,40 @@ pub fn install(state: HotkeyState) {
             // Don't prevent_default — let other handlers still see it.
             state.close_palette();
         }
+
+        // Bare `f` → run doctor + LLM repair (G1). Unlike ⌘K / Esc above, `f`
+        // is an ordinary character a user types constantly, so it is guarded
+        // hard: ANY modifier, an open palette / voice overlay, or focus sitting
+        // in an editable field (the composer textarea, any text input) all
+        // suppress it — otherwise typing "f" anywhere would fire a diagnostic
+        // run. When clear, it bumps `repair_pulse`; the composer owns the send.
+        let bare = !ev.meta_key() && !ev.ctrl_key() && !ev.alt_key() && !ev.shift_key();
+        if bare
+            && ev.key().eq_ignore_ascii_case("f")
+            && !state.palette_open.get_untracked()
+            && !state.voice.open.get_untracked()
+            && !focus_is_editable()
+        {
+            ev.prevent_default();
+            state.chat.request_repair();
+        }
     });
+}
+
+/// True when keyboard focus sits in a field that accepts text — a text
+/// `<input>`, a `<textarea>`, or any contenteditable host. Bare-letter
+/// hotkeys must defer to these so they don't hijack a user's keystrokes.
+fn focus_is_editable() -> bool {
+    let Some(el) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.active_element())
+    else {
+        return false;
+    };
+    let tag = el.tag_name();
+    if tag.eq_ignore_ascii_case("input") || tag.eq_ignore_ascii_case("textarea") {
+        return true;
+    }
+    el.dyn_ref::<web_sys::HtmlElement>()
+        .is_some_and(web_sys::HtmlElement::is_content_editable)
 }

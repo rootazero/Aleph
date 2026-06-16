@@ -58,7 +58,7 @@
 | 横切 | channel 与 webchat 多端同步 | Channel Sync | `src/gateway/channel_registry.rs` | ✅ |
 | 横切 | 打字机模式 / 即时输出全局开关 | Output Mode | `src/config/types/general.rs` + `event_emitter/instant_buffer.rs` | ✅ |
 | 横切 | self 自我管理 | Self-Config / Self-Manage | `src/builtin_tools/self_config.rs` `self_manage.rs` | ✅ |
-| 横切 | doctor / doctor+f | Doctor & Auto-Fix | `src/builtin_tools/doctor.rs` | ⚠️ (无 "+f") |
+| 横切 | doctor / doctor+f | Doctor & Auto-Fix | `src/builtin_tools/doctor.rs` + `interfaces/webchat/src/state/hotkey.rs`(`f`) | ✅ (G1 已实现 2026-06-16) |
 | 横切 | hook | Hook System | `src/verification/stop_hooks.rs` `src/sandbox/hooks.rs` | ✅ |
 | 横切 | CLI | Command Line Interface | `src/bin/aleph-server/commands/` | ✅ |
 | UI | 流式回显 / 工作区面板 | Streaming Echo & Workspace Panel | `interfaces/webchat/src/components/workspace_panel.rs` | ✅ |
@@ -350,10 +350,10 @@
 
 ### 5.9 Doctor 诊断与修复 (Doctor & Auto-Fix)
 - **口语关键词**：doctor、诊断、自动修复、doctor+f、机械修复
-- **代码锚点**：`src/builtin_tools/doctor.rs`（DoctorArgs{ fix: bool }）、`src/bin/aleph-server/commands/doctor.rs`（`aleph doctor --fix`）、`src/diagnostics/`（engine.rs / checks/）
-- **职责**：fix=false 只读检查（路径/配置/锁/vault/shell-hook 同意/浏览器前置/provider 连通），fix=true 机械修复（建缺目录、清 stale lock）。
-- **状态**：⚠️ **与描述不符**：**没有 "+f 按键启动 LLM 完成修复"**。doctor 是工具/CLI，修复是 `fix:bool` 的**机械修复**（非 LLM 推理修复），无按键绑定。
-- **打磨话术**：「想要‘按 f 让 LLM 自动修’——**这个功能目前不存在**。现状是 `doctor(fix=true)` 机械修复 + LLM 自己再调 self_config/self_manage。若你想做‘LLM 修复’这是**新功能**，描述时按‘新增’对待。」
+- **代码锚点**：`src/builtin_tools/doctor.rs`（DoctorArgs{ fix: bool }）、`src/bin/aleph-server/commands/doctor.rs`（`aleph doctor --fix`）、`src/diagnostics/`（engine.rs / finding.rs `Finding{repairable, fix_hint, repair_outcome}`）；**Panel `f` 入口**：`interfaces/webchat/src/state/hotkey.rs`（裸 `f` + `focus_is_editable()` 护栏 → `chat.request_repair()`）、`views/chat/state.rs`（`repair_pulse`/`request_repair`）、`views/chat/composer/mod.rs`（`DOCTOR_REPAIR_PROMPT` + 监听 Effect）。
+- **职责**：fix=false 只读检查（路径/配置/锁/vault/shell-hook 同意/浏览器前置/provider 连通），fix=true 机械修复（建缺目录、清 stale lock）。不可机械修复项带 `fix_hint` 引导 LLM 走 self_config/vault_store。
+- **状态**：✅ **G1 已实现 2026-06-16**。doctor 工具/diagnostics 后端**早已结构化**（`repairable`+`fix_hint`+`repair_outcome` 直接喂 LLM）；新增 **Panel `f` 入口**：焦点不在输入框时按 `f` → 注入一句诊断-修复 prompt（R9）走现有 send 管线 → agent loop 的 LLM 读 findings 并按 repairable/fix_hint 路由修复。**未在 doctor 内写修复分支**（守 R7/R10）。
+- **打磨话术**：「`f` 入口已通（`hotkey.rs` 裸 `f`，带编辑焦点护栏）。'让 LLM 修复'= 注入 `DOCTOR_REPAIR_PROMPT` 走现有 loop+工具，不是 doctor 内的确定性修复——要调修复行为改 `composer/mod.rs` 的 prompt 常量（R9），别动 doctor 工具。」
 
 ### 5.10 Hook 系统 (Hook System)
 - **口语关键词**：hook、stop hook、sandbox hook、extension hook、shell-hook consent、veto
@@ -403,7 +403,7 @@
 
 | # | 功能 | 状态 | 现状 vs 直觉的差距 | 若要"做成描述的样子"的性质 |
 |---|------|------|---------------------|----------------------------|
-| 1 | doctor+f LLM 修复 | ❌ | 无按键、无 LLM 修复；只有 `fix:bool` 机械修复 | **新功能** |
+| 1 | doctor+f LLM 修复 | ✅ G1 已实现 2026-06-16 | Panel `f` 入口已加（带编辑焦点护栏）；「LLM 修复」= 注入 prompt 走现有 loop+工具（doctor 后端零改动，结构化 findings 早已喂 LLM） | ~~新功能~~ 已完成 |
 | 2 | Panel 双层权限 | ⚠️❌ | LAN-trust 全员 operator，前端锁名存实亡 | **恢复/新建双层**（非微调） |
 | 3 | 配对时选 tier / devices.set_level | ❌ | device 表无 tier 字段，无 set_level API | **新功能** |
 | 4 | ~~kimi vs claude 差异化压缩阈值~~ | ✅ **G4 已实现 2026-06-16** | 窗口比例自动浮动 **+** `[[context_budget.model_thresholds]]` per-model 阈值覆盖（matcher=model id/provider key 子串，逐项回退全局，过防御闸） | **新增配置完成**，见 §2.2 |

@@ -34,6 +34,17 @@ use shared_ui_logic::state::should_auto_drain_on_settle;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
+/// Instruction seeded by the `f` hotkey (G1). The doctor tool only diagnoses
+/// and applies safe mechanical repairs; the *reasoning* repair lives entirely
+/// in this prompt (R7/R9), not in any deterministic branch. It tells the LLM
+/// to read the structured findings and route each one: mechanical issues via
+/// `doctor(fix=true)`, everything else through the tool named in the finding's
+/// `fix_hint` (`self_config` / `vault_store` / …), then re-verify.
+const DOCTOR_REPAIR_PROMPT: &str = "运行 doctor 工具诊断系统健康状况。\
+对可机械修复的问题（repairable=true）调用 doctor(fix=true) 修复；\
+对不可机械修复的问题，按其 fix_hint 用 self_config / vault_store 等对应工具修复；\
+全部处理后再次运行 doctor 验证，并简要报告修复结果。";
+
 /// Textarea + side buttons + palette popup + injection-guard banner.
 /// Mounted by [`super::view::ChatView`] at the viewport bottom.
 #[component]
@@ -227,6 +238,27 @@ pub(super) fn InputArea() -> impl IntoView {
             if prev_pulse.is_some() && Some(pulse) != prev_pulse {
                 if let Some(last) = chat.last_user_text() {
                     input_text.set(last);
+                    send_message();
+                }
+            }
+            pulse
+        });
+    }
+
+    // G1 `f`-hotkey repair flow — the global keydown listener bumps
+    // `repair_pulse` (it can't reach the send pipeline directly). We seed the
+    // doctor-and-fix instruction and route it through the same send pipeline as
+    // a typed message, so prompt-guard + error classification apply identically.
+    // While a run is active we queue it instead, matching the Enter-key
+    // semantics. Mirrors the retry plumbing above.
+    {
+        Effect::new(move |prev_pulse: Option<u32>| {
+            let pulse = chat.repair_pulse.get();
+            if prev_pulse.is_some() && Some(pulse) != prev_pulse {
+                input_text.set(DOCTOR_REPAIR_PROMPT.to_string());
+                if chat.active_run_id.get_untracked().is_some() {
+                    enqueue_message();
+                } else {
                     send_message();
                 }
             }

@@ -309,6 +309,12 @@ pub struct ChatState {
     /// the composer (which owns the send pipeline) actually fires the send
     /// without prop drilling a callback through every bubble.
     pub retry_pulse: RwSignal<u32>,
+    /// Pulse signal that asks the composer to run the doctor + LLM-repair
+    /// flow (G1, `f` hotkey): each bump increments by 1. Bumped by the global
+    /// keydown listener via [`HotkeyState`]; the composer seeds a diagnostic
+    /// instruction and routes it through the normal send pipeline. Ephemeral,
+    /// like `retry_pulse` — excluded from [`SessionSnapshot`].
+    pub repair_pulse: RwSignal<u32>,
     /// Active project workspace root (absolute path). When `Some`, the
     /// chat composer attaches it to `chat.send` as `project_root`, and the
     /// daemon swaps the agent's working directory for the duration of the
@@ -374,6 +380,7 @@ impl ChatState {
             context_usage: RwSignal::new(None),
             prompt_queue: RwSignal::new(Vec::new()),
             retry_pulse: RwSignal::new(0),
+            repair_pulse: RwSignal::new(0),
             active_project_root: RwSignal::new(None),
             active_project_name: RwSignal::new(None),
             selected_model: RwSignal::new(None),
@@ -737,6 +744,13 @@ impl ChatState {
     /// downstream Effects see a change even when content is identical.
     pub fn request_retry(&self) {
         self.retry_pulse.update(|n| *n = n.wrapping_add(1));
+    }
+
+    /// Ask the composer to run the doctor + LLM-repair flow (G1 `f` hotkey).
+    /// Bumps the pulse so the composer's Effect seeds the diagnostic prompt
+    /// and fires it through the normal send pipeline.
+    pub fn request_repair(&self) {
+        self.repair_pulse.update(|n| *n = n.wrapping_add(1));
     }
 
     /// Return the content of the most recent user message, if any. Used by

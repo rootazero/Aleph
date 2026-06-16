@@ -55,7 +55,10 @@ fn AppContent() -> impl IntoView {
 
     // Chat state lives above both the chat sidebar (left column) and the
     // chat view (main area) so they share one session / agent selection.
-    provide_context(ChatState::new());
+    // Bound (not inlined) so it can also be threaded into `HotkeyState` below
+    // for the `f` repair hotkey — `ChatState` is `Copy`, so this is free.
+    let chat_state = ChatState::new();
+    provide_context(chat_state);
 
     // Immersive voice mode switch. Provided at the shell root so the composer
     // mini-orb (which flips it on) and the full-screen overlay (mounted at the
@@ -78,7 +81,7 @@ fn AppContent() -> impl IntoView {
     // Hotkey state — owns the ⌘K command-palette open signal and carries the
     // VoiceMode switch for the ⌘⇧V / Esc bindings. Installed *before* the
     // keydown listener below so the listener can read it.
-    let hk = HotkeyState::new(voice_mode);
+    let hk = HotkeyState::new(voice_mode, chat_state);
     provide_context(hk);
     hotkey::install(hk);
 

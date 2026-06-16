@@ -11,7 +11,7 @@
 |---|------|------|--------|----------|-----------|
 | ~~G6~~ | ~~错误沉淀教训 wiring 复核~~ | 微调(先验证) | — | 无 | ✅ **已完成 2026-06-16（零代码）** |
 | ~~G4~~ | ~~per-model 压缩阈值~~ | 新增配置 | M | 无 | ✅ **已实现 2026-06-16（待用户统一 cargo 验证）** |
-| G1 | doctor LLM 修复 + `f` 入口 | 新功能 | M | 无 | **中** |
+| ~~G1~~ | ~~doctor LLM 修复 + `f` 入口~~ | 新功能 | S（实际） | 无 | ✅ **已实现 2026-06-16（待用户统一 cargo 验证）** |
 | G5 | "DAG 工具执行"命名澄清 | 仅澄清 | — | 无 | **低**（无需开发） |
 | G2+G3 | Panel 真双层权限 | 新建子系统 | L | **架构决策（LAN-trust）** | **暂缓**（先决策再排期） |
 
@@ -62,16 +62,24 @@
 
 ---
 
-## G1 — Doctor 的 LLM 推理修复 + `f` 触发入口
+## G1 — Doctor 的 LLM 推理修复 + `f` 触发入口 ✅ 已实现（2026-06-16）
 
-- **类型**：新功能
-- **现状**：`doctor` 只有 `fix:bool` 的**机械修复**（建缺目录、清 stale lock）。**没有**"按 `f` 启动 LLM 完成修复"的入口，也没有 LLM 推理式修复层。
-- **涉及文件**：`src/builtin_tools/doctor.rs`、`src/diagnostics/`（findings 结构化输出）、若要 `f` 键入口 → 前端 `interfaces/webchat/`（Panel doctor 视图 + keybinding）
-- **目标**：doctor 把无法机械修复的 findings 结构化交给 agent loop，由 LLM 推理修复（符合 R7 LLM 主权，而非在 doctor 内写确定性修复逻辑）；可选 Panel `f` 快捷键触发这一流程。
-- **工作量**：M（核心 = findings → agent loop 的工具/事件桥接；`f` 键是额外前端小项）
-- **前置**：无（但需明确：LLM 修复走主循环工具，不在 doctor 内堆修复逻辑——守 R10）
-- **验收**：制造一个非机械可修问题（如配置语义错误），触发后 LLM 读取 finding 并提出/执行修复；Panel `f` 能拉起该流程。
-- **启动话术**：「给 doctor 加‘LLM 修复’：doctor 仍只做诊断 + 机械修复，把**剩余 findings 结构化**喂给主 agent loop 让 LLM 推理修复（R7，别在 doctor 内写修复分支）。可选给 Panel doctor 视图加 `f` 快捷键触发。注意这是新功能——‘doctor+f’当前不存在。」
+- **类型**：新功能（Panel `f` 入口）
+- **核实纠正 backlog 原设想**：精读后发现「LLM 推理修复层」**大部分已存在、且按 R7/R10 不应再建**——
+  - `src/builtin_tools/doctor.rs` 的 `DoctorOutput`/`src/diagnostics/finding.rs` 的 `Finding` **早已结构化**：`repairable: bool`（机械可修 vs 不可修的区分已有）+ `fix_hint: Option<String>`（不可修时引导走 `vault_store`/`self_config`）+ `repair_outcome`（Repaired/Failed/Skipped），整个 `DiagnosticReport` 已 `Serialize`，作为 JSON `tool_result` 自然流回 LLM。
+  - LLM 现在就能：`doctor(fix=false)` → 读 findings → 机械项 `doctor(fix=true)`、配置/凭据项 `self_config`/`vault_store`。CLI 侧（`interfaces/cli/src/commands/doctor.rs:262-351` 的 `prompt_for_repair()`）甚至已有完整 AI 修复回路。
+  - **不应加 harness 错误 hook**（违 R10「不做错误恢复策略选择」）——续跑只在 goal/loop 的 execution-engine hook，不在工具返回值里。
+- **真实缺口仅一个**：Panel 没有 `f` 入口。「让 LLM 修复」= 用一句修复 prompt 把现有 loop + 现有工具串起来（R9 智慧在 prompt），**不在 doctor 里写修复分支**。故工作量从 M 收敛为 S，**doctor 工具/diagnostics 后端零改动**。
+- **设计（用户裁定：内联 prompt 注入，最小/R10 纯）**：`f` 键注入一句诊断-修复指令到 composer 并走现有 send 管线 → 现有 agent loop 接管。
+- **改动文件（5，纯前端）**：
+  1. `interfaces/webchat/src/views/chat/state.rs` — 加 `repair_pulse: RwSignal<u32>` + `request_repair()`（1:1 镜像 `retry_pulse`/`request_retry`，同样排除出 `SessionSnapshot`）。
+  2. `interfaces/webchat/src/views/chat/composer/mod.rs` — `DOCTOR_REPAIR_PROMPT` 常量（R9 的「智慧」载体）+ 监听 `repair_pulse` 的 Effect：注入 prompt → run 空闲时 `send_message()`、活跃时 `enqueue_message()`（与 Enter 同语义）。
+  3. `interfaces/webchat/src/state/hotkey.rs` — `HotkeyState` thread 进 `ChatState`；裸 `f` 绑定 + `focus_is_editable()` 护栏。
+  4. `interfaces/webchat/src/app.rs` — `ChatState::new()` 绑定后传入 `HotkeyState::new(voice_mode, chat_state)`。
+- **关键正确性点（backlog 漏判）**：裸 `f` 会与「在输入框打字打到 f」冲突。护栏：**任何修饰符**（meta/ctrl/alt/shift）、palette/voice overlay 开启、或焦点在 `<input>`/`<textarea>`/contenteditable 时一律不触发；仅在全清时 `prevent_default` + `request_repair()`。Esc/⌘K 免护栏因其非用户会打入正文的字符。
+- **修复 prompt（R9）**：「运行 doctor 工具诊断系统健康状况。对可机械修复的问题（repairable=true）调用 doctor(fix=true) 修复；对不可机械修复的问题，按其 fix_hint 用 self_config / vault_store 等对应工具修复；全部处理后再次运行 doctor 验证，并简要报告修复结果。」
+- **验收**：Panel 焦点不在输入框时按 `f` → 注入并发送上述指令 → LLM 调 doctor 读 findings 并按 repairable/fix_hint 路由修复 → 再 doctor 验证。在输入框打字打到 `f` 不触发。
+- **遗留**：**NOT cargo-checked**（用户统一 cargo）。静态已核：`HotkeyState::new` 唯一 caller（app.rs）已改；`ChatState` 路径 `crate::views::chat::state` 三级 pub 链通；`repair_pulse` 非 snapshot 字段无需改 `capture_snapshot`；`send_message`/`enqueue_message` 闭包全 Copy 捕获可被第二个 Effect 复用；`focus_is_editable` 用 `JsCast`（已 import）。
 
 ---
 
@@ -110,7 +118,7 @@
 ## 建议执行顺序
 
 1. ~~**先 G6**（验证，可能零成本）~~ → ✅ **G6 已完成（零代码，链路已通）**。
-2. ~~**G4**（per-model 压缩阈值，新增配置）~~ → ✅ **G4 已实现 2026-06-16**（待用户统一 cargo 验证）。下一步 **G1**（doctor LLM 修复 + `f` 入口，独立新功能）。
+2. ~~**G4**（per-model 压缩阈值，新增配置）~~ → ✅ **G4 已实现 2026-06-16**。~~**G1**（doctor LLM 修复 + `f` 入口）~~ → ✅ **G1 已实现 2026-06-16**（纯前端 `f` 入口，doctor 后端零改动）。下一步 **G5**（命名澄清，无需开发）/ **G2+G3**（需架构决策）。
 3. **G5** 只在文档/沟通层澄清，不进开发队列。
 4. **G2+G3** 单独拉一次架构决策会（信任模型），决策通过后再按 L 级子系统排期；否则维持现状并在 FEATURE_LOCATOR §6.2 标注"刻意不实现"。
 </content>
