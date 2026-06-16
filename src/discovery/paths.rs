@@ -213,7 +213,7 @@ pub fn find_file_upward(
 ) -> DiscoveryResult<Vec<PathBuf>> {
     validate_path_component(filename)?;
     Ok(
-        find_upward(start, stop, max_depth, |dir| dir.join(filename).exists())
+        find_upward(start, stop, max_depth, |dir| dir.join(filename).is_file())
             .into_iter()
             .map(|dir| dir.join(filename))
             .collect(),
