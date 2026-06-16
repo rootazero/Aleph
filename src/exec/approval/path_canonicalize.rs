@@ -22,11 +22,13 @@ pub fn validate_path_in_scope(
     if path.is_empty() {
         return Err(PathSecurityError::EmptyPath);
     }
-    if path.contains('\0') {
+
+    let decoded = percent_decode(path);
+
+    if decoded.contains('\0') {
         return Err(PathSecurityError::NullByte);
     }
 
-    let decoded = percent_decode(path);
     let canonical = safe_canonicalize(&decoded);
 
     for scope in allowed_scopes {
