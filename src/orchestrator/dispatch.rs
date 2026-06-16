@@ -14,6 +14,7 @@ use crate::orchestrator::flow_registry::FlowRegistry;
 use crate::orchestrator::flow_spec::{AgentId, FlowId, FlowInput, FlowSpec};
 use crate::orchestrator::resolver::{
     depth_guard, resolve_flow_id, resolve_session, RoutingOverrides, SessionResolveInput,
+    DEFAULT_AGENT_FLOW_ID,
 };
 use crate::orchestrator::sandbox_factory::SandboxFactory;
 
@@ -542,20 +543,48 @@ impl Orchestrator {
 
     /// Seven-step dispatch. See design §6.
     pub async fn dispatch(&self, req: FlowRequest) -> Result<FlowHandle, FlowError> {
-        // Step 1: resolve flow_id → FlowSpec.
-        let flow_id = match &req.flow_id {
-            Some(id) => id.clone(),
-            None => resolve_flow_id(
+        // Step 1: resolve flow_id → FlowSpec. An explicit flow_id wins; otherwise
+        // route by agent_id. An agent absent from the routing table is NOT an
+        // error: the gateway already resolved its AgentInstance before dispatch,
+        // so the orchestrator trusts that and routes the run through the canonical
+        // default-agent flow — overriding `spec.agent` with the requested id so the
+        // harness loads *that* agent's identity from `~/.aleph/agents/<id>/` (the
+        // default-agent preset hardcodes `agent = "main"`). This is what lets every
+        // registered agent execute — config `[[agents.list]]` and team-created ones
+        // live only in the gateway registry, not the orchestrator's builtins.
+        let spec = match &req.flow_id {
+            Some(id) => self
+                .flow_registry
+                .resolve(id)
+                .ok_or_else(|| FlowError::UnknownFlow(id.clone()))?,
+            None => match resolve_flow_id(
                 &req.agent_id,
                 req.channel.as_deref(),
                 &self.routing_overrides,
                 &self.default_routing,
-            )?,
+            ) {
+                Ok(flow_id) => self
+                    .flow_registry
+                    .resolve(&flow_id)
+                    .ok_or_else(|| FlowError::UnknownFlow(flow_id.clone()))?,
+                Err(FlowError::UnknownAgent(_)) => {
+                    let base = self
+                        .flow_registry
+                        .resolve(DEFAULT_AGENT_FLOW_ID)
+                        .ok_or_else(|| {
+                            FlowError::UnknownFlow(DEFAULT_AGENT_FLOW_ID.to_string())
+                        })?;
+                    if base.agent == req.agent_id {
+                        base
+                    } else {
+                        let mut s = (*base).clone();
+                        s.agent = req.agent_id.clone();
+                        Arc::new(s)
+                    }
+                }
+                Err(e) => return Err(e),
+            },
         };
-        let spec = self
-            .flow_registry
-            .resolve(&flow_id)
-            .ok_or_else(|| FlowError::UnknownFlow(flow_id.clone()))?;
 
         // Step 2: depth guard.
         depth_guard(req.depth)?;

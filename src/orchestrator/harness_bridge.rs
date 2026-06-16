@@ -229,10 +229,14 @@ impl HarnessRunner for AgentHarnessRunner {
             return Err(FlowError::Cancelled);
         }
 
-        // Step 2: verify the agent exists. AgentDef itself is not threaded
-        // into HarnessDeps at this phase.
-        // PHASE-6 FOLLOW-UP: thread AgentDef + FlowOverrides into HarnessDeps.
-        if self.agent_registry.get(&spec.agent).is_none() {
+        // Step 2: verify the agent exists. A directory-form agent registered only
+        // in the gateway registry (config `[[agents.list]]` / team-created) has no
+        // AgentDef here, but its identity loads from disk by agent_id (see
+        // `build_system_prompt`). Trust the gateway: reject only when neither an
+        // AgentDef nor an on-disk `~/.aleph/agents/<id>/` identity directory exists.
+        if self.agent_registry.get(&spec.agent).is_none()
+            && !agent_identity_dir_exists(&spec.agent)
+        {
             return Err(FlowError::UnknownAgent(spec.agent.clone()));
         }
 
@@ -1323,6 +1327,17 @@ fn last_user_query(input: &FlowInput) -> String {
         FlowInput::History { prompt, .. } => prompt.clone(),
         FlowInput::Resume => String::new(),
     }
+}
+
+/// True when `~/.aleph/agents/<agent_id>/` exists on disk. Directory-form agents
+/// (config `[[agents.list]]` / team-created) live only in the gateway registry,
+/// not the orchestrator's `AgentRegistry`; their identity still loads by agent_id
+/// from this directory, so an on-disk dir is sufficient proof the agent is real —
+/// the orchestrator trusts the gateway's prior `AgentInstance` resolution.
+fn agent_identity_dir_exists(agent_id: &str) -> bool {
+    crate::discovery::aleph_agents_dir()
+        .map(|dir| dir.join(agent_id).is_dir())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

@@ -9,6 +9,12 @@ use crate::orchestrator::flow_spec::{AgentId, FlowId, SessionStrategy};
 /// Hardcoded maximum depth for `flow_run` recursion. See design §7.
 pub const MAX_FLOW_DEPTH: u8 = 4;
 
+/// Canonical generic-agent flow id. Any registered agent that has no explicit
+/// per-agent flow routes through this. The harness loads the agent's identity
+/// from `~/.aleph/agents/<id>/` by `agent_id`, so a single flow serves every
+/// agent — the orchestrator routing table never needs a per-agent entry.
+pub const DEFAULT_AGENT_FLOW_ID: &str = "default-agent";
+
 /// Allows `depth ∈ [0, MAX_FLOW_DEPTH]`; rejects strictly greater.
 /// Called at every dispatch + `flow_run` invocation (see design §7).
 pub const fn depth_guard(depth: u8) -> Result<(), FlowError> {
