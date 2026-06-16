@@ -241,7 +241,16 @@ pub async fn handle_create(
 
     let clock = SystemClock;
     let service = service.lock().await;
-    let task_id = service.add_task(task, &clock).await;
+    let task_id = match service.add_task(task, &clock).await {
+        Ok(id) => id,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                &format!("Failed to create heartbeat task: {e}"),
+            );
+        }
+    };
     match service.get_task(&task_id).await {
         Some(view) => {
             JsonRpcResponse::success(request.id, json!({ "task": task_view_to_json(&view) }))

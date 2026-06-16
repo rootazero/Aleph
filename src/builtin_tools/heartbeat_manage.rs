@@ -188,7 +188,7 @@ impl AlephTool for HeartbeatCreateTool {
         let clock = SystemClock;
         let id = {
             let service = self.service.lock().await;
-            service.add_task(task, &clock).await
+            service.add_task(task, &clock).await?
         };
 
         info!(task_id = %id, name = %args.name, "Heartbeat task created via tool");
