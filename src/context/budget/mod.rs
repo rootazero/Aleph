@@ -543,6 +543,7 @@ impl ContextBudget {
     /// to `FinalReply`.
     pub const fn record_split(&mut self) {
         self.split_count = self.split_count.saturating_add(1);
+        self.circuit_breaker.reset();
     }
 
     /// Record post-turn metrics and return a directive if diminishing returns detected.
