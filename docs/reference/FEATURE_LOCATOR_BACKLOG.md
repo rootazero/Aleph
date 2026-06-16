@@ -10,7 +10,7 @@
 | # | 项目 | 类型 | 工作量 | 前置决策 | 建议优先级 |
 |---|------|------|--------|----------|-----------|
 | ~~G6~~ | ~~错误沉淀教训 wiring 复核~~ | 微调(先验证) | — | 无 | ✅ **已完成 2026-06-16（零代码）** |
-| G4 | per-model 压缩阈值 | 新增配置 | M | 无 | **中**（独立、收益清晰） |
+| ~~G4~~ | ~~per-model 压缩阈值~~ | 新增配置 | M | 无 | ✅ **已实现 2026-06-16（待用户统一 cargo 验证）** |
 | G1 | doctor LLM 修复 + `f` 入口 | 新功能 | M | 无 | **中** |
 | G5 | "DAG 工具执行"命名澄清 | 仅澄清 | — | 无 | **低**（无需开发） |
 | G2+G3 | Panel 真双层权限 | 新建子系统 | L | **架构决策（LAN-trust）** | **暂缓**（先决策再排期） |
@@ -31,16 +31,34 @@
 
 ---
 
-## G4 — 按模型窗口的差异化压缩阈值（kimi 20w vs claude 100w）
+## G4 — 按模型窗口的差异化压缩阈值（kimi 20w vs claude 100w）✅ 已实现（2026-06-16）
 
 - **类型**：新增 per-model 配置
-- **现状**：压缩触发按当前模型 `token_budget` **自动按比例浮动**（warning≈0.70 / critical≈0.85），但**没有 per-model 专属阈值**——无法"给 kimi 单独设更激进的触发点"。
-- **涉及文件**：`src/context/budget/pressure.rs`、`src/context/budget/mod.rs`、`src/providers/model_catalog/`（读 per-model 配置）、config types（新增 per-model 阈值字段）
-- **目标**：允许按 provider/model 覆盖 warning/critical 阈值；无覆盖时回退现有比例逻辑（向后兼容）。
-- **工作量**：M
-- **前置**：无（与现有逻辑正交，缺省 = 当前行为）
-- **验收**：为某模型配置自定义阈值后，该模型在自定义点触发压缩；未配置模型行为不变。
-- **启动话术**：「给压缩触发加 per-model 阈值覆盖：在 `src/context/budget/pressure.rs` 的 ratio 阈值上叠一层‘按当前 model 查 model_catalog 的可选 override’，无 override 走现有比例逻辑（向后兼容）。改 config types 加 per-model warning/critical 字段。这是‘新增配置’不是重写压缩策略。」
+- **实现结论**：阈值现可按模型覆盖，**纯新增配置、向后兼容、零行为漂移**。
+- **设计要点（为何这样接）**：
+  - 阈值 **key 在决定预算的"链上最小窗口模型"**（`derive_chain_min_budget`），与 `token_budget` 的尺寸来源同源——若 key 在别的模型上会出现"按 A 定预算、按 B 定阈值"的不自洽。
+  - **不动 `pressure.rs` / `ContextBudget`**：阈值是 `ContextBudgetConfig` 的入参，连线点只在 `build_context_budget_config`（config→config）。压缩策略本身一行未改（守 R6/R10）。
+  - **不加 `token_budget` per-model 覆盖**：预算已经 model-aware（按窗口派生），重复（YAGNI）。
+- **改动文件（4）**：
+  1. `src/config/types/phase6_wiring.rs` — `ContextBudgetToml` 加 `model_thresholds: Vec<ModelThresholdToml>`；新 `ModelThresholdToml{model, warning_threshold?, critical_threshold?}`；`threshold_override_for(model, provider)` 首匹配子串。
+  2. `src/orchestrator/deps_builder.rs::build_context_budget_config` — 无条件 `derive_chain_min_budget` 取模型身份；override 逐项 `.or(global).unwrap_or(内置)`；解析后过同一 `0<warning<critical≤1.0` 防御闸。
+  3. `src/lib.rs` — re-export `ModelThresholdToml`。
+  4. `docs/reference/AGENT_LOOP_CONTEXT_BUDGET.md` — 配置文档 + TOML 示例。
+- **匹配规则**：`model` 字段是大小写不敏感**子串**，先匹配 resolved model id，再匹配 provider key；声明顺序首匹配胜；空串永不匹配。
+- **配置示例**：
+  ```toml
+  [context_budget]
+  enabled = true
+  warning_threshold = 0.70
+  critical_threshold = 0.85
+
+  [[context_budget.model_thresholds]]
+  model = "kimi"            # 窄窗口模型更早压缩
+  warning_threshold = 0.60
+  critical_threshold = 0.78
+  ```
+- **测试**：phase6_wiring 5 个（解析 + 匹配/回退/首匹配/空串/无匹配）+ deps_builder 5 个（覆盖应用 / 逐项回退 / 非匹配字节等同 / 显式 token_budget 下仍生效 / 反转阈值禁用）。
+- **遗留**：**NOT cargo-checked**（用户统一 cargo）。静态已核：所有 `ContextBudgetToml` 穷举字面量补 `model_thresholds`/`..default`，re-export 链通，`Option<&T>` Copy + `&String` 实现 Pattern 无误。
 
 ---
 
@@ -91,7 +109,8 @@
 
 ## 建议执行顺序
 
-1. ~~**先 G6**（验证，可能零成本）~~ → ✅ **G6 已完成（零代码，链路已通）**。下一步 **G4 / G1**（独立新功能，收益清晰，互不依赖，可并行排期）。
-2. **G5** 只在文档/沟通层澄清，不进开发队列。
-3. **G2+G3** 单独拉一次架构决策会（信任模型），决策通过后再按 L 级子系统排期；否则维持现状并在 FEATURE_LOCATOR §6.2 标注"刻意不实现"。
+1. ~~**先 G6**（验证，可能零成本）~~ → ✅ **G6 已完成（零代码，链路已通）**。
+2. ~~**G4**（per-model 压缩阈值，新增配置）~~ → ✅ **G4 已实现 2026-06-16**（待用户统一 cargo 验证）。下一步 **G1**（doctor LLM 修复 + `f` 入口，独立新功能）。
+3. **G5** 只在文档/沟通层澄清，不进开发队列。
+4. **G2+G3** 单独拉一次架构决策会（信任模型），决策通过后再按 L 级子系统排期；否则维持现状并在 FEATURE_LOCATOR §6.2 标注"刻意不实现"。
 </content>

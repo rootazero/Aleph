@@ -578,14 +578,17 @@ pub fn build_context_budget_config(
     if !cb.enabled {
         return None;
     }
+    // Resolve the chain-minimum model once: its window sizes the budget (unless
+    // overridden) AND its identity keys the per-model threshold override below,
+    // so the trigger fractions always match the model the budget is sized for.
+    let derived = derive_chain_min_budget(config, primary_provider_key);
     // An explicit `token_budget` is an operator override — honored verbatim
-    // (back-compat). Otherwise derive a model-aware budget sized for the
+    // (back-compat). Otherwise use the model-aware budget sized for the
     // *smallest* window on the resolved failover chain, so an in-request model
     // migration to a narrower sibling can never overflow the compaction budget.
     let token_budget = match cb.token_budget {
         Some(explicit) => explicit,
         None => {
-            let derived = derive_chain_min_budget(config, primary_provider_key);
             tracing::info!(
                 provider = %derived.provider,
                 model = derived.model.as_deref().unwrap_or("<unknown>"),
@@ -599,8 +602,26 @@ pub fn build_context_budget_config(
             derived.budget.usable
         }
     };
-    let warning_threshold = cb.warning_threshold.unwrap_or(0.70);
-    let critical_threshold = cb.critical_threshold.unwrap_or(0.85);
+    // Per-model trigger-point override, keyed off the resolved chain-min model.
+    // Each field falls back to the global threshold, then the built-in default,
+    // so an absent or non-matching override is byte-identical to before.
+    let model_override = cb.threshold_override_for(derived.model.as_deref(), &derived.provider);
+    if let Some(o) = model_override {
+        tracing::info!(
+            matcher = %o.model,
+            model = derived.model.as_deref().unwrap_or("<unknown>"),
+            provider = %derived.provider,
+            "context budget: applying per-model threshold override"
+        );
+    }
+    let warning_threshold = model_override
+        .and_then(|o| o.warning_threshold)
+        .or(cb.warning_threshold)
+        .unwrap_or(0.70);
+    let critical_threshold = model_override
+        .and_then(|o| o.critical_threshold)
+        .or(cb.critical_threshold)
+        .unwrap_or(0.85);
 
     // Defensive validation (P7): a misconfigured budget silently cuts off
     // every run — e.g. inverted thresholds make `CompactAndContinue`
@@ -690,6 +711,7 @@ mod tests {
             token_budget: Some(64_000),
             warning_threshold: Some(0.6),
             critical_threshold: Some(0.9),
+            ..ContextBudgetToml::default()
         }));
         let bc = build_context_budget_config(&cfg, "primary").expect("enabled → Some");
         assert_eq!(bc.token_budget, 64_000);
@@ -825,6 +847,112 @@ mod tests {
         let cfg = cfg_with_primary("c", pc, cb);
         let bc = build_context_budget_config(&cfg, "c").expect("enabled → Some");
         assert_eq!(bc.token_budget, 50_000);
+    }
+
+    // ── per-model threshold overrides (G4) ───────────────────────────────
+
+    #[test]
+    fn build_applies_per_model_threshold_override() {
+        // The resolved chain-min model id is "kimi-k2"; a "kimi" override must
+        // tighten the trigger points away from the global 0.70/0.85 defaults.
+        let cb = ContextBudgetToml {
+            enabled: true,
+            model_thresholds: vec![crate::ModelThresholdToml {
+                model: "kimi".to_string(),
+                warning_threshold: Some(0.60),
+                critical_threshold: Some(0.78),
+            }],
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
+        let bc = build_context_budget_config(&cfg, "moonshot").expect("enabled → Some");
+        assert_eq!(bc.warning_threshold, 0.60);
+        assert_eq!(bc.critical_threshold, 0.78);
+        // Budget itself still derives from the model window (override is thresholds-only).
+        assert_eq!(bc.token_budget, 262_144 - 32_768);
+    }
+
+    #[test]
+    fn build_per_model_override_falls_back_per_field_to_global() {
+        // Override sets only `warning_threshold`; `critical_threshold` must fall
+        // back to the top-level global (0.80 here), not the built-in 0.85.
+        let cb = ContextBudgetToml {
+            enabled: true,
+            warning_threshold: Some(0.72),
+            critical_threshold: Some(0.80),
+            model_thresholds: vec![crate::ModelThresholdToml {
+                model: "kimi".to_string(),
+                warning_threshold: Some(0.60),
+                critical_threshold: None,
+            }],
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
+        let bc = build_context_budget_config(&cfg, "moonshot").expect("enabled → Some");
+        assert_eq!(bc.warning_threshold, 0.60, "override wins for the set field");
+        assert_eq!(
+            bc.critical_threshold, 0.80,
+            "unset override field inherits the global, not the built-in default"
+        );
+    }
+
+    #[test]
+    fn build_non_matching_override_is_byte_identical_to_global() {
+        // A "claude" override must NOT touch a kimi run — behaviour stays the
+        // global default, proving overrides are additive/back-compat.
+        let cb = ContextBudgetToml {
+            enabled: true,
+            model_thresholds: vec![crate::ModelThresholdToml {
+                model: "claude".to_string(),
+                warning_threshold: Some(0.50),
+                critical_threshold: Some(0.60),
+            }],
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
+        let bc = build_context_budget_config(&cfg, "moonshot").expect("enabled → Some");
+        assert_eq!(bc.warning_threshold, 0.70);
+        assert_eq!(bc.critical_threshold, 0.85);
+    }
+
+    #[test]
+    fn build_per_model_override_applies_with_explicit_token_budget() {
+        // Even when the operator pins token_budget, the model is still resolved
+        // so a per-model threshold override still applies (matched on provider key).
+        let cb = ContextBudgetToml {
+            enabled: true,
+            token_budget: Some(50_000),
+            model_thresholds: vec![crate::ModelThresholdToml {
+                model: "moonshot".to_string(),
+                warning_threshold: Some(0.55),
+                ..crate::ModelThresholdToml::default()
+            }],
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
+        let bc = build_context_budget_config(&cfg, "moonshot").expect("enabled → Some");
+        assert_eq!(bc.token_budget, 50_000);
+        assert_eq!(bc.warning_threshold, 0.55);
+    }
+
+    #[test]
+    fn build_rejects_override_that_inverts_thresholds() {
+        // A per-model override that produces warning >= critical must trip the
+        // same defensive gate as a bad global config: disable rather than degrade.
+        let cb = ContextBudgetToml {
+            enabled: true,
+            model_thresholds: vec![crate::ModelThresholdToml {
+                model: "kimi".to_string(),
+                warning_threshold: Some(0.90),
+                critical_threshold: Some(0.70),
+            }],
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
+        assert!(
+            build_context_budget_config(&cfg, "moonshot").is_none(),
+            "inverted per-model thresholds disable the budget (P7 defensive)"
+        );
     }
 
     // ── min-over-chain budgeting (failover-safe window) ──────────────────

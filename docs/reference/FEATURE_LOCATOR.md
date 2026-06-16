@@ -23,7 +23,7 @@
 | Prompt | prompt 预算 / token 控制 / prompt 大小 | Prompt Budget | `src/thinker/prompt_budget.rs` | ✅ |
 | Prompt | 人格 / soul / 语气 | Identity & Soul | `src/thinker/soul.rs` `identity.rs` `layers/soul.rs` | ✅ |
 | Context | 对话历史压缩 / token 控制 | History Compaction | `src/context/compact/compactor.rs` | ✅ |
-| Context | kimi 20w vs claude 100w 压缩时机 | Model-Aware Compaction Timing | `src/context/budget/pressure.rs` | ⚠️ |
+| Context | kimi 20w vs claude 100w 压缩时机 + per-model 阈值 | Model-Aware Compaction Timing | `src/context/budget/pressure.rs` · `deps_builder.rs::build_context_budget_config` | ✅ |
 | Context | context-mode / codex 上下文模式 | Context Mode | `src/thinker/context.rs` + `layers/execution_plan.rs` | ✅ |
 | Context | voice 作为 context 层 | Voice-as-Context | `src/thinker/layers/voice_mode.rs` | ✅ |
 | Context | 记忆三支柱①关键词链接 | Note Keyword Linking | `src/memory/notes/graph/relevance.rs` | ✅ |
@@ -101,11 +101,11 @@
 - **打磨话术**：「‘记忆有效传递又控 token’的核心在 `compactor.rs` 的三策略降级；‘何时触发’在 `budget/pressure.rs` 的阈值。」
 
 ### 2.2 按模型窗口的压缩时机 (Model-Aware Compaction Timing)
-- **口语关键词**：kimi 20 万 vs claude 100 万、不同模型不同压缩时机、模型窗口差异、压缩阈值
-- **代码锚点**：`src/context/budget/mod.rs`（ContextPressure.compute 按 `token_budget` 参数化）、`src/context/budget/pressure.rs`（按 ratio 动态调整）；think 阶段从 `AiProvider` 读 model token_budget。
-- **职责**：按当前模型的 token_budget 计算压力比，warning(≈0.70)/critical(≈0.85) 阈值**相对该预算**触发，从而 100 万窗口比 20 万窗口更晚触发。
-- **状态**：⚠️ **部分**——差异化是"按窗口比例自动浮动"，**没有 per-model 专门阈值映射**。若你想"为 kimi 单独调更激进的阈值"，目前需新增 per-model 配置，现在没有。
-- **打磨话术**：「触发时机按 model token_budget 自动浮动（`pressure.rs`）；要做‘某模型专属阈值’得新增 per-model 映射——现状没有，别假设已存在。」
+- **口语关键词**：kimi 20 万 vs claude 100 万、不同模型不同压缩时机、模型窗口差异、压缩阈值、per-model 阈值
+- **代码锚点**：`src/context/budget/mod.rs`（ContextPressure.compute 按 `token_budget` 参数化）、`src/context/budget/pressure.rs`（按 ratio 动态调整）；预算尺寸 + per-model 阈值在 `src/orchestrator/deps_builder.rs::build_context_budget_config`（`derive_chain_min_budget` 取链上最小窗口模型）；config 类型 `src/config/types/phase6_wiring.rs`（`ContextBudgetToml.model_thresholds` + `ModelThresholdToml` + `threshold_override_for`）。
+- **职责**：按当前模型的 token_budget 计算压力比，warning/critical 阈值**相对该预算**触发，100 万窗口比 20 万窗口更晚触发；**且**可按模型覆盖 warning/critical 触发分数。
+- **状态**：✅ **已实现（G4，2026-06-16）**——窗口尺寸自动浮动 **+** per-model 专属阈值映射。`[[context_budget.model_thresholds]]` 按"模型 id 或 provider key 的大小写不敏感子串"首匹配覆盖，未匹配/未配置字段逐项回退全局再回退内置 0.70/0.85（向后兼容）；解析后的阈值过同一 `0 < warning < critical ≤ 1.0` 防御闸（坏配置禁用而非降级）。阈值 key 在决定预算的链上最小窗口模型，二者自洽。
+- **打磨话术**：「触发时机按 model token_budget 自动浮动（`pressure.rs`）；**要给某模型单独调阈值**用 `[[context_budget.model_thresholds]]`（matcher = model id / provider key 子串），连线在 `build_context_budget_config`。这是配置项不是代码改动。」
 
 ### 2.3 Context 模式 (Context Mode / codex 风格)
 - **口语关键词**：context-mode、codex 上下文、环境感知、执行计划注入
@@ -406,7 +406,7 @@
 | 1 | doctor+f LLM 修复 | ❌ | 无按键、无 LLM 修复；只有 `fix:bool` 机械修复 | **新功能** |
 | 2 | Panel 双层权限 | ⚠️❌ | LAN-trust 全员 operator，前端锁名存实亡 | **恢复/新建双层**（非微调） |
 | 3 | 配对时选 tier / devices.set_level | ❌ | device 表无 tier 字段，无 set_level API | **新功能** |
-| 4 | kimi vs claude 差异化压缩阈值 | ⚠️ | 按窗口比例自动浮动，无 per-model 专属阈值 | **新增 per-model 配置** |
+| 4 | ~~kimi vs claude 差异化压缩阈值~~ | ✅ **G4 已实现 2026-06-16** | 窗口比例自动浮动 **+** `[[context_budget.model_thresholds]]` per-model 阈值覆盖（matcher=model id/provider key 子串，逐项回退全局，过防御闸） | **新增配置完成**，见 §2.2 |
 | 5 | DAG 工具执行 | ⚠️ | 工具层是"群分顺序"非真 DAG；真 DAG 在 Workflow/Task 层 | 描述时分清"工具并发"vs"任务 DAG" |
 | 6 | ~~错误沉淀教训(三支柱③)~~ | ✅ **G6 已查证 2026-06-16** | 端到端已连且存活（flag_user_correction→FeedbackDistill→feedback note→召回）；auto error-hook 故意不做(R7/R10) | **零代码完成**，见 §2.5③ |
 

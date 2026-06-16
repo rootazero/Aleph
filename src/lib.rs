@@ -151,7 +151,7 @@ pub use crate::config::{
     types::generation::GenerationConfig,
     types::memory::{DreamingConfig, MemoryDecayPolicy},
     types::phase6_wiring::{
-        ContextBudgetToml, FallbackProviderToml, GuardrailsToml, StabilityToml,
+        ContextBudgetToml, FallbackProviderToml, GuardrailsToml, ModelThresholdToml, StabilityToml,
     },
     types::resume::ResumeConfig,
     types::security::ShellSecurityConfig,
