@@ -34,6 +34,22 @@ pub fn should_show_attribution(prev: Option<&str>, this: Option<&str>) -> bool {
     }
 }
 
+/// Precompute, in one forward pass, whether each message starts a new run of
+/// its agent (Telegram grouping). `messages` is `(message_id, agent_id)` in
+/// render order; the returned map is `message_id → show_header`. Lets the bubble
+/// look up its grouping decision in O(1) instead of reverse-walking the list.
+#[must_use]
+pub fn attribution_map(messages: &[(String, Option<String>)]) -> HashMap<String, bool> {
+    let mut map = HashMap::with_capacity(messages.len());
+    let mut prev: Option<&str> = None;
+    for (id, agent_id) in messages {
+        let this = agent_id.as_deref();
+        map.insert(id.clone(), should_show_attribution(prev, this));
+        prev = this;
+    }
+    map
+}
+
 /// Resolved visual identity for one agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentIdentityView {
@@ -119,5 +135,22 @@ mod tests {
         assert!(should_show_attribution(Some("b"), Some("a")));
         assert!(!should_show_attribution(Some("a"), Some("a")));
         assert!(!should_show_attribution(Some("a"), None));
+    }
+
+    #[test]
+    fn attribution_map_matches_per_message_grouping() {
+        let msgs = vec![
+            ("m0".to_string(), Some("a".to_string())), // first of a → header
+            ("m1".to_string(), Some("a".to_string())), // repeat a → no header
+            ("m2".to_string(), Some("b".to_string())), // switch to b → header
+            ("m3".to_string(), None),                  // user message → no header
+            ("m4".to_string(), Some("b".to_string())), // b again after gap → header
+        ];
+        let map = attribution_map(&msgs);
+        assert_eq!(map["m0"], true);
+        assert_eq!(map["m1"], false);
+        assert_eq!(map["m2"], true);
+        assert_eq!(map["m3"], false);
+        assert_eq!(map["m4"], true);
     }
 }

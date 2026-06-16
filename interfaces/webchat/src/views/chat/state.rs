@@ -229,6 +229,8 @@ pub struct ToolCallEntry {
 pub struct TeamMemberView {
     pub agent_id: String,
     pub name: String,
+    /// Agent emoji (avatar glyph); `None` falls back to a name monogram.
+    pub emoji: Option<String>,
     pub role: String, // backend role, e.g. "leader" | "member" | "researcher"
     pub is_leader: bool,
     pub status: MemberStatus,

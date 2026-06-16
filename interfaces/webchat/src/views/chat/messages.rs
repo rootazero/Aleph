@@ -13,6 +13,13 @@ use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
 use leptos::prelude::*;
+use std::collections::HashMap;
+
+/// Context carrier for the per-message attribution-grouping map
+/// (message_id → show_header). Newtype so the context lookup is unambiguous.
+/// `MessageList` computes it once per messages-change; `MessageBubble` reads it.
+#[derive(Clone, Copy)]
+struct AttributionMap(Memo<HashMap<String, bool>>);
 
 /// Welcome hero — shown in the message area while a conversation is empty.
 /// A breathing ℵ orb above a shimmering greeting, with a staggered reveal.
@@ -111,6 +118,21 @@ pub(super) fn MessageList() -> impl IntoView {
         let yesterday = t_string!(i18n, chat.yesterday).to_string();
         timeline::derive_timeline(&msgs, &today, &yesterday)
     });
+
+    // Telegram-style attribution grouping computed in one forward pass per
+    // messages-change (id → show_header), so each team bubble looks up its
+    // header decision in O(1) instead of reverse-walking the whole list.
+    // Provided via context for `MessageBubble` to read.
+    let attribution = Memo::new(move |_| {
+        let pairs: Vec<(String, Option<String>)> = chat
+            .messages
+            .get()
+            .iter()
+            .map(|m| (m.id.clone(), m.agent_id.clone()))
+            .collect();
+        crate::views::chat::agent_identity::attribution_map(&pairs)
+    });
+    provide_context(AttributionMap(attribution));
 
     // True iff the viewport bottom is within 64px of scroll_height.
     let stuck_to_bottom = RwSignal::new(true);
@@ -476,32 +498,25 @@ fn MessageBubble(
     // Only when message.agent_id is Some (team message). Zero regression on the
     // single-agent path (agent_id is None → layout_a is None).
     //
-    // `prev_agent_id` is resolved from the message list snapshot at mount so
-    // consecutive same-agent messages collapse (Telegram-style grouping).
+    // `show_header` is read from the precomputed attribution map (O(1)); the
+    // map is folded once per messages-change in `MessageList`. Falls back to
+    // showing the header if the context is absent (e.g. storybook mount).
     let layout_a = message.agent_id.as_ref().map(|aid| {
         let members = chat.team_members.get_untracked();
-        let name = members
-            .iter()
-            .find(|m| &m.agent_id == aid)
+        let member = members.iter().find(|m| &m.agent_id == aid);
+        let name = member
             .map(|m| m.name.clone())
             .unwrap_or_else(|| aid.clone());
+        // Avatar glyph: the member's emoji if present and non-empty, else a
+        // monogram derived from the name (computed at render below).
+        let emoji = member
+            .and_then(|m| m.emoji.clone())
+            .filter(|e| !e.is_empty());
         let color = crate::views::chat::agent_identity::agent_color_for_id(aid);
 
-        // Resolve prev_agent_id: walk the snapshot backward from this message
-        // to find the immediately preceding entry's agent_id (or None).
-        let msgs_snapshot = chat.messages.get_untracked();
-        let prev_agent_id: Option<String> = msgs_snapshot
-            .iter()
-            .rev()
-            .skip_while(|m| m.id != message.id)
-            .nth(1) // item just before the current message
-            .and_then(|m| m.agent_id.clone());
-
-        let show_header = crate::views::chat::agent_identity::should_show_attribution(
-            prev_agent_id.as_deref(),
-            Some(aid),
-        );
-        (name, color, show_header)
+        let show_header = use_context::<AttributionMap>()
+            .map_or(true, |m| m.0.get_untracked().get(&message.id).copied().unwrap_or(true));
+        (name, emoji, color, show_header)
     });
 
     let copy_text = content.clone();
@@ -554,14 +569,18 @@ fn MessageBubble(
     // Decompose layout_a so values can be used in a single view! without double-move.
     let is_team_msg = layout_a.is_some();
     let team_name = layout_a.as_ref().map(|(n, ..)| n.clone()).unwrap_or_default();
-    let team_color = layout_a.as_ref().map(|(_, c, _)| *c).unwrap_or("#7c9cff");
-    let team_show_header = layout_a.map(|(_, _, s)| s).unwrap_or(false);
-    // Monogram: first char of team_name uppercased (no emoji from roster).
-    let team_avatar = team_name
-        .chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_else(|| "?".to_string());
+    let team_emoji = layout_a.as_ref().and_then(|(_, e, _, _)| e.clone());
+    let team_color = layout_a.as_ref().map(|(_, _, c, _)| *c).unwrap_or("#7c9cff");
+    let team_show_header = layout_a.map(|(_, _, _, s)| s).unwrap_or(false);
+    // Avatar glyph: agent emoji if present, else a name monogram (first char
+    // uppercased). Mirrors `agent_identity`'s emoji → monogram fallback.
+    let team_avatar = team_emoji.unwrap_or_else(|| {
+        team_name
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_else(|| "?".to_string())
+    });
 
     view! {
         <div class=wrapper_class>
