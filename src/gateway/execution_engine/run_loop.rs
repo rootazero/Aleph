@@ -1184,32 +1184,6 @@ fn lifecycle_hook_context(session_id: &str, run_id: &str, agent: &AgentInstance)
         .with_env("AGENT_ID", agent.id())
 }
 
-/// Per-directory project context filenames. `AGENTS.md` is Aleph's native
-/// operating manual, `CLAUDE.md` is recognised for Claude Code parity, and
-/// the `.claude/CLAUDE.md` / `.aleph/CLAUDE.md` subdir variants let a repo
-/// keep its assistant config out of the project root README slot.
-const PROJECT_CONTEXT_FILES: &[&str] = &[
-    "AGENTS.md",
-    "CLAUDE.md",
-    ".claude/CLAUDE.md",
-    ".aleph/CLAUDE.md",
-];
-
-/// Per-file byte cap for project context injection. Project READMEs and
-/// long contributor guides can be huge — bound the prompt impact so a
-/// 200 KB CLAUDE.md cannot crowd out the rest of the system prompt.
-const PROJECT_CONTEXT_MAX_BYTES: usize = 32 * 1024;
-
-/// Aggregate cap across all walked files + rules combined. Without this a
-/// deep monorepo with eight ancestors × four files × 32 KB could push
-/// ~1 MB into a single user turn.
-const PROJECT_CONTEXT_TOTAL_MAX_BYTES: usize = 128 * 1024;
-
-/// Maximum number of ancestor directories to traverse before stopping.
-/// Belt-and-suspenders against pathological filesystem layouts; the `.git`
-/// boundary and `$HOME` stops normally trip first.
-const PROJECT_CONTEXT_MAX_DEPTH: usize = 8;
-
 /// Upper bound on how many project-local skills are advertised in the
 /// `<project_skills>` reminder. A folder with hundreds of skills would
 /// otherwise crowd out the prompt; the model can still enumerate the full
@@ -1240,25 +1214,24 @@ fn workspace_directive(workspace: &std::path::Path) -> String {
     )
 }
 
-/// Read project context files from the active workspace root, walking
-/// upward like Claude Code's `claudemd.ts`: each ancestor's `AGENTS.md`,
-/// `CLAUDE.md`, `.claude/CLAUDE.md` and `.aleph/CLAUDE.md` are loaded,
-/// plus `<project_root>/.claude/rules/*.md` (rules are project-scoped, not
-/// walked).
-///
-/// Order is ancestor-first → project-last so files closer to the project
-/// root override the parent's guidance (last-wins for the LLM). Missing
-/// or unreadable files are silently skipped.
-///
-/// Walk stops at the first of:
-/// - A directory containing `.git/` (the repo root)
-/// - The user's `$HOME` directory (don't walk above it)
-/// - The filesystem root
-/// - [`PROJECT_CONTEXT_MAX_DEPTH`] hops, whichever comes first
+/// Legacy gateway-path presenter for project context. Delegates discovery to
+/// `thinker::project_instructions::discover_project_instructions` (the single
+/// source of truth — ancestor walk to git root, `CLAUDE.md` / `AGENTS.md` /
+/// `.aleph/CLAUDE.md` / `CLAUDE.local.md` / rules / `@import`, with the shared
+/// budget) and formats the result as one ancestor-first → project-last block
+/// for per-turn `<system-reminder>` injection. Empty when no files exist.
 fn collect_project_context_blocks(workspace: &std::path::Path) -> Vec<String> {
-    let chain = ancestor_chain(workspace);
-    let mut body = String::new();
-    let mut total_bytes: usize = 0;
+    // Single discovery source of truth shared with the orchestrator path
+    // (`thinker::project_instructions`): same file set, `@import` expansion,
+    // `CLAUDE.local.md` / `.aleph` rules, ancestor walk, and budget — so the
+    // legacy gateway path and the orchestrator path never drift in what project
+    // context they surface. This presenter only differs in *formatting*: a
+    // per-turn `<system-reminder>` block instead of a cached `ExtraFilesLayer`.
+    let files = crate::thinker::project_instructions::discover_project_instructions(workspace);
+    if files.is_empty() {
+        return Vec::new();
+    }
+
     let header = format!(
         "Active project: `{}`. The following project files describe \
         local conventions, scope, and constraints — treat them as \
@@ -1268,57 +1241,16 @@ fn collect_project_context_blocks(workspace: &std::path::Path) -> Vec<String> {
         workspace.display()
     );
 
-    // Pass 1 — ancestor → project root. Label is the relative-to-workspace
-    // name when the file is in the project root, the full absolute path
-    // otherwise — keeps the system-reminder readable for the common case
-    // while still attributing inherited files to their source dir.
-    for dir in &chain {
-        let is_project_root = dir == workspace;
-        for name in PROJECT_CONTEXT_FILES {
-            let candidate = dir.join(name);
-            let Some(content) = read_capped_text(&candidate) else {
-                continue;
-            };
-            let label = if is_project_root {
-                name.to_string()
-            } else {
-                candidate.display().to_string()
-            };
-            append_block(&mut body, &mut total_bytes, &header, &label, &content);
-        }
+    let mut body = String::new();
+    body.push_str(&header);
+    body.push_str("\n\n");
+    for file in &files {
+        body.push_str(&format!("### {}\n\n", file.label));
+        body.push_str(file.content.trim_end());
+        body.push_str("\n\n");
     }
 
-    // Pass 2 — `.claude/rules/*.md` is project-scoped (not walked up).
-    // Skip on read errors so a missing rules dir is a no-op.
-    let rules_dir = workspace.join(".claude").join("rules");
-    if let Ok(entries) = std::fs::read_dir(&rules_dir) {
-        let mut rule_files: Vec<std::path::PathBuf> = entries
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| {
-                p.is_file()
-                    && p.extension()
-                        .and_then(|ext| ext.to_str())
-                        .is_some_and(|s| s.eq_ignore_ascii_case("md"))
-            })
-            .collect();
-        rule_files.sort();
-        for path in rule_files {
-            let Some(content) = read_capped_text(&path) else {
-                continue;
-            };
-            let label = format!(
-                ".claude/rules/{}",
-                path.file_name().unwrap().to_string_lossy()
-            );
-            append_block(&mut body, &mut total_bytes, &header, &label, &content);
-        }
-    }
-
-    if body.is_empty() {
-        Vec::new()
-    } else {
-        vec![body]
-    }
+    vec![body]
 }
 
 /// Advertise the project's own skills to the model (round 3).
@@ -1406,93 +1338,13 @@ fn collect_project_skill_block(workspace: &std::path::Path) -> Option<String> {
     ))
 }
 
-/// Walk from `start` upward, returning the chain in **ancestor → start**
-/// order. Stops at `.git`, `$HOME`, filesystem root, or after
-/// [`PROJECT_CONTEXT_MAX_DEPTH`] hops.
-fn ancestor_chain(start: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let home = dirs::home_dir();
-    let home_ref = home.as_deref();
-    let mut up = Vec::new();
-    let mut cur = start.to_path_buf();
-    up.push(cur.clone());
-    let mut steps = 0;
-    while steps < PROJECT_CONTEXT_MAX_DEPTH {
-        // Stop conditions checked AFTER recording the current dir so the
-        // boundary dir itself contributes its CLAUDE.md.
-        if cur.join(".git").exists() {
-            break;
-        }
-        if home_ref.is_some_and(|h| h == cur.as_path()) {
-            break;
-        }
-        let Some(parent) = cur.parent() else { break };
-        if parent == cur {
-            break;
-        }
-        cur = parent.to_path_buf();
-        up.push(cur.clone());
-        steps += 1;
-    }
-    // Reverse to ancestor-first ordering.
-    up.reverse();
-    up
-}
-
-/// Read a file with UTF-8 truncation at [`PROJECT_CONTEXT_MAX_BYTES`].
-/// Returns `None` when the file is missing, unreadable, empty, or
-/// whitespace-only — all four are normal "no project context" cases.
-fn read_capped_text(path: &std::path::Path) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    if content.trim().is_empty() {
-        return None;
-    }
-    if content.len() <= PROJECT_CONTEXT_MAX_BYTES {
-        return Some(content);
-    }
-    // Find a char boundary at-or-before the cap to avoid splitting a
-    // codepoint mid-bytes. Falls back to 0 in the unreachable case where
-    // no boundary exists (every char-boundary at 0 satisfies this).
-    let mut end = PROJECT_CONTEXT_MAX_BYTES;
-    while end > 0 && !content.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut shortened = content[..end].to_string();
-    shortened.push_str("\n\n... [project file truncated for prompt budget]");
-    Some(shortened)
-}
-
-/// Append `(label, content)` to the in-progress system-reminder body,
-/// respecting [`PROJECT_CONTEXT_TOTAL_MAX_BYTES`]. The header is added
-/// lazily on the first appended block so an empty project produces an
-/// empty block list.
-fn append_block(
-    body: &mut String,
-    total_bytes: &mut usize,
-    header: &str,
-    label: &str,
-    content: &str,
-) {
-    if *total_bytes >= PROJECT_CONTEXT_TOTAL_MAX_BYTES {
-        return;
-    }
-    if body.is_empty() {
-        body.push_str(header);
-        body.push_str("\n\n");
-        *total_bytes += header.len() + 2;
-    }
-    let prefix = format!("### {label}\n\n");
-    body.push_str(&prefix);
-    body.push_str(content.trim_end());
-    body.push_str("\n\n");
-    *total_bytes += prefix.len() + content.len() + 2;
-}
 
 #[cfg(test)]
 mod project_context_tests {
     use super::*;
     use tempfile::tempdir;
 
-    /// Mark `dir` as a `.git` boundary so [`ancestor_chain`] halts there.
+    /// Mark `dir` as a `.git` boundary so the discovery walk halts there.
     /// Tests build their workspaces inside a tempdir and would otherwise
     /// walk up to whichever directory holds the test runner — sometimes a
     /// user's real `~/.aleph/...` layout — and pick up files that pollute
@@ -1567,11 +1419,13 @@ mod project_context_tests {
     fn truncates_oversized_files() {
         let dir = tempdir().unwrap();
         anchor(dir.path());
-        let big = "x".repeat(PROJECT_CONTEXT_MAX_BYTES + 4096);
+        // Larger than the shared per-file char cap (20k) so discovery truncates.
+        let big = "x".repeat(40_000);
         std::fs::write(dir.path().join("AGENTS.md"), &big).unwrap();
         let blocks = collect_project_context_blocks(dir.path());
-        assert!(blocks[0].contains("[project file truncated for prompt budget]"));
-        assert!(blocks[0].len() < big.len() + 4096);
+        // Unified truncation marker from `truncate_with_head_tail`.
+        assert!(blocks[0].contains("truncated"));
+        assert!(blocks[0].len() < big.len());
     }
 
     #[test]
@@ -1660,8 +1514,7 @@ mod project_context_tests {
     }
 
     /// Aggregate-size cap: a deep tree with many ancestors and big files
-    /// cannot exceed [`PROJECT_CONTEXT_TOTAL_MAX_BYTES`] by more than a
-    /// single last-block worth of overshoot.
+    /// stays within the shared discovery budget plus block overhead.
     #[test]
     fn enforces_total_context_cap() {
         let outer = tempdir().unwrap();
@@ -1672,11 +1525,11 @@ mod project_context_tests {
         for i in 0..7 {
             cur = cur.join(format!("lvl{i}"));
             std::fs::create_dir_all(&cur).unwrap();
-            std::fs::write(cur.join("CLAUDE.md"), "x".repeat(PROJECT_CONTEXT_MAX_BYTES)).unwrap();
+            std::fs::write(cur.join("CLAUDE.md"), "x".repeat(40_000)).unwrap();
         }
         let blocks = collect_project_context_blocks(&cur);
-        // Overshoot is bounded by one block (~32 KB) + a small header.
-        let allowed = PROJECT_CONTEXT_TOTAL_MAX_BYTES + PROJECT_CONTEXT_MAX_BYTES + 1024;
+        // Shared discovery budget is 32k chars; allow header + block overhead.
+        let allowed = 64 * 1024;
         assert!(
             blocks[0].len() <= allowed,
             "context body {} exceeds allowed budget {}",
