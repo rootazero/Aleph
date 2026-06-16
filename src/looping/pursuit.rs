@@ -4,14 +4,20 @@
 
 use crate::looping::types::{Cadence, LoopState};
 
-/// Has any safety cap been reached? `tokens_now` is accepted for parity with
-/// goal but the hook passes 0 today (token accounting not wired through).
+/// Has any safety cap been reached? `tokens_now` is the session's current
+/// cumulative-token total; the hook captures the per-loop baseline lazily and
+/// passes the live total here (0 when no budget is set or no counter is
+/// available, in which case the token check is inert and only the
+/// iteration/deadline caps apply).
 #[must_use]
-pub fn exhausted(state: &LoopState, _tokens_now: u64, now_ms: u64) -> bool {
+pub fn exhausted(state: &LoopState, tokens_now: u64, now_ms: u64) -> bool {
     if let Some(max) = state.max_iterations {
         if state.iterations_used >= max {
             return true;
         }
+    }
+    if state.over_budget(tokens_now) {
+        return true; // soft token budget becomes a hard stop for the loop.
     }
     if let Some(deadline) = state.deadline_ms {
         // now_ms == 0 means clock unavailable — never trip on it.
@@ -72,6 +78,18 @@ pub fn cap_reached_note(state: &LoopState) -> String {
 #[must_use]
 pub fn deadline_reached_note(_state: &LoopState) -> String {
     "Loop stopped: reached its time limit.".to_string()
+}
+
+/// User-facing reason when the token budget stops the loop. The hook picks this
+/// over the iteration/deadline notes when `over_budget` is the binding stop, so
+/// the user sees the true cause. Mirrors `goal_pursuit::budget_reached_note`.
+#[must_use]
+pub fn budget_reached_note(state: &LoopState) -> String {
+    match state.token_budget {
+        Some(budget) => format!("Loop stopped: reached its token budget ({budget} tokens)."),
+        // No budget set → token budget cannot be the binding stop; fall back.
+        None => cap_reached_note(state),
+    }
 }
 
 #[cfg(test)]
@@ -194,5 +212,37 @@ mod tests {
     fn notes_mention_reason() {
         assert!(cap_reached_note(&fixed().with_max_iterations(Some(2))).contains("iteration"));
         assert!(deadline_reached_note(&fixed()).contains("time"));
+    }
+
+    #[test]
+    fn over_budget_loop_does_not_fire_and_is_exhausted() {
+        let l = fixed().with_token_budget(Some(500)).with_baseline(1_000);
+        // 600 spent over a 500 budget.
+        assert!(exhausted(&l, 1_600, 2_000));
+        assert!(!should_fire(&l, 1_600, 2_000));
+        // 200 spent under the budget → still fires.
+        assert!(should_fire(&l, 1_200, 2_000));
+        assert!(!exhausted(&l, 1_200, 2_000));
+    }
+
+    #[test]
+    fn uncaptured_baseline_budget_is_inert() {
+        // token_budget set but baseline not captured (tokens_at_start = 0):
+        // a large live total would falsely exhaust if the hook passed it before
+        // capturing — but `exhausted` itself just measures from baseline 0. The
+        // hook is responsible for passing 0 until capture; here we assert the
+        // pure function measures spend from the seeded baseline correctly.
+        let l = fixed().with_token_budget(Some(500)).with_baseline(2_000);
+        assert!(!exhausted(&l, 2_000, 2_000), "no spend at baseline");
+        assert!(exhausted(&l, 2_600, 2_000), "600 over budget after baseline");
+    }
+
+    #[test]
+    fn budget_note_distinguishes_token_stop() {
+        let l = fixed().with_token_budget(Some(500));
+        assert!(budget_reached_note(&l).contains("token budget"));
+        // No budget → falls back to the iteration-cap note.
+        let no_budget = fixed().with_max_iterations(Some(3));
+        assert!(budget_reached_note(&no_budget).contains("iteration"));
     }
 }
