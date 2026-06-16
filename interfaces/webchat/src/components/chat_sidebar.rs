@@ -224,6 +224,13 @@ pub fn ChatSidebar() -> impl IntoView {
     let is_saving = RwSignal::new(false);
     let edit_input_ref = NodeRef::<leptos::html::Input>::new();
 
+    // Group-chat row action state — SEPARATE from session-row signals so the
+    // single-chat state machine stays untouched. Keyed by team id.
+    let group_editing_id = RwSignal::new(Option::<String>::None);
+    let group_deleting_id = RwSignal::new(Option::<String>::None);
+    let group_edit_text = RwSignal::new(String::new());
+    let group_menu_id = RwSignal::new(Option::<String>::None);
+
     // Client-side session filter (R4 pure I/O — no backend search).
     let search_query = RwSignal::new(String::new());
 
@@ -611,7 +618,7 @@ pub fn ChatSidebar() -> impl IntoView {
         });
     });
 
-    let reload_for_delete = reload_data;
+    let reload_for_delete = reload_data.clone();
     let do_delete = Arc::new(move |session_key: String| {
         if is_saving.get_untracked() {
             return;
@@ -640,6 +647,54 @@ pub fn ChatSidebar() -> impl IntoView {
             }
             is_saving.set(false);
             deleting_key.set(None);
+        });
+    });
+
+    let reload_for_grename = reload_data.clone();
+    let do_rename_group = Arc::new(move |team_id: String, name: String| {
+        if is_saving.get_untracked() {
+            return;
+        }
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            group_editing_id.set(None);
+            group_edit_text.set(String::new());
+            return;
+        }
+        is_saving.set(true);
+        let dash = dashboard;
+        let reload = reload_for_grename.clone();
+        leptos::task::spawn_local(async move {
+            if let Err(e) = TeamsApi::rename(&dash, &team_id, &name).await {
+                web_sys::console::error_1(&format!("Failed to rename team: {e}").into());
+            } else {
+                reload(dash);
+            }
+            is_saving.set(false);
+            group_editing_id.set(None);
+            group_edit_text.set(String::new());
+        });
+    });
+
+    let reload_for_gdelete = reload_data.clone();
+    let do_delete_group = Arc::new(move |team_id: String| {
+        if is_saving.get_untracked() {
+            return;
+        }
+        is_saving.set(true);
+        let dash = dashboard;
+        let reload = reload_for_gdelete.clone();
+        leptos::task::spawn_local(async move {
+            if let Err(e) = TeamsApi::disband(&dash, &team_id).await {
+                web_sys::console::error_1(&format!("Failed to delete team: {e}").into());
+            } else {
+                if chat.team_id.get_untracked().as_deref() == Some(&team_id) {
+                    chat.clear_session();
+                }
+                reload(dash);
+            }
+            is_saving.set(false);
+            group_deleting_id.set(None);
         });
     });
 
@@ -789,10 +844,19 @@ pub fn ChatSidebar() -> impl IntoView {
                 </div>
             </div>
 
-            // Click-outside overlay for dropdown menu
+            // Click-outside overlay for session dropdown menu
             {move || {
                 if menu_open_key.get().is_some() {
                     view! { <div class="fixed inset-0 z-40" on:click=move |_| menu_open_key.set(None) /> }.into_any()
+                } else {
+                    view! { <span /> }.into_any()
+                }
+            }}
+
+            // Click-outside overlay for group dropdown menu
+            {move || {
+                if group_menu_id.get().is_some() {
+                    view! { <div class="fixed inset-0 z-40" on:click=move |_| group_menu_id.set(None) /> }.into_any()
                 } else {
                     view! { <span /> }.into_any()
                 }
@@ -803,11 +867,19 @@ pub fn ChatSidebar() -> impl IntoView {
 
                 // ── 群聊 (Group Chat) collapsible section ─────────────────
                 {move || {
-                    let group_list = groups.get();
+                    // Only show active teams; disbanded ones disappear immediately.
+                    let group_list: Vec<_> = groups.get().into_iter().filter(|g| g.status == "active").collect();
                     if group_list.is_empty() {
                         return view! { <span /> }.into_any();
                     }
                     let count = group_list.len();
+                    // Read action states here to track reactivity for the whole section.
+                    let _g_editing = group_editing_id.get();
+                    let _g_deleting = group_deleting_id.get();
+                    let _g_menu = group_menu_id.get();
+                    let do_rename_group = do_rename_group.clone();
+                    let do_delete_group = do_delete_group.clone();
+                    let is_expanded = groups_expanded.get();
                     view! {
                         <div class="mb-1">
                             // Section header with chevron toggle
@@ -824,62 +896,205 @@ pub fn ChatSidebar() -> impl IntoView {
                                 </span>
                                 {format!("群聊 {count}")}
                             </button>
-                            // Group rows (shown only when expanded)
-                            <Show when=move || groups_expanded.get()>
-                                <div class="space-y-0.5">
-                                    {group_list.clone().into_iter().map(|group| {
-                                        let group_id = group.id.clone();
-                                        let group_name = group.name.clone();
-                                        let last_msg = group.last_message.clone();
-                                        let previews = group.members_preview.clone();
+                            // Group rows (shown only when expanded) — plain if/else, no <Show>,
+                            // so the inner iterator closure stays in the outer reactive block.
+                            {if is_expanded {
+                                let rows = group_list.into_iter().map(move |group| {
+                                    let group_id = group.id.clone();
+                                    let group_name = group.name.clone();
+                                    let last_msg = group.last_message.clone();
+                                    let previews = group.members_preview.clone();
+                                    let is_g_editing = _g_editing.as_deref() == Some(&group_id);
+                                    let is_g_deleting = _g_deleting.as_deref() == Some(&group_id);
+                                    let is_g_menu = _g_menu.as_deref() == Some(&group_id);
+                                    let do_rename_group = do_rename_group.clone();
+                                    let do_delete_group = do_delete_group.clone();
+
+                                    if is_g_editing {
+                                        let id_save = group_id.clone();
+                                        let id_blur = group_id.clone();
+                                        let r_key = do_rename_group.clone();
+                                        let r_blur = do_rename_group;
                                         view! {
-                                            <button
-                                                class="w-full text-left px-2 py-2 rounded-lg text-sm nav-tile flex items-center gap-2"
-                                                on:click=move |_| on_open_group(group_id.clone())
-                                            >
-                                                // Avatar cluster (overlapping discs, up to 3)
-                                                <div class="flex items-center flex-shrink-0">
-                                                    {previews.iter().take(3).enumerate().map(|(i, mp)| {
-                                                        let color = agent_color_for_id(&mp.id);
-                                                        let glyph = mp.emoji.clone()
-                                                            .filter(|e| !e.is_empty())
-                                                            .or_else(|| mp.name.as_ref()
-                                                                .and_then(|n| n.chars().next())
-                                                                .map(|c| c.to_uppercase().to_string()))
-                                                            .or_else(|| mp.id.chars().next()
-                                                                .map(|c| c.to_uppercase().to_string()))
-                                                            .unwrap_or_else(|| "?".to_string());
-                                                        let margin = if i == 0 { "" } else { "-ml-2" };
-                                                        view! {
-                                                            <span
-                                                                class=format!(
-                                                                    "{margin} w-6 h-6 rounded-full flex items-center justify-center \
-                                                                     text-[10px] font-bold text-white \
-                                                                     ring-2 ring-surface-sunken"
-                                                                )
-                                                                style=format!("background-color: {color};")
-                                                            >
-                                                                {glyph}
-                                                            </span>
+                                            <div class="w-full px-3 py-2 rounded-lg bg-surface-sunken border border-primary/40">
+                                                <input
+                                                    node_ref=edit_input_ref
+                                                    class="w-full bg-transparent text-xs text-text-primary outline-none disabled:opacity-50"
+                                                    prop:value=move || group_edit_text.get()
+                                                    prop:disabled=move || is_saving.get()
+                                                    maxlength=100
+                                                    on:input=move |ev| group_edit_text.set(event_target_value(&ev))
+                                                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                                        match ev.key().as_str() {
+                                                            "Enter" => {
+                                                                let t = group_edit_text.get_untracked();
+                                                                if t.trim().is_empty() {
+                                                                    group_editing_id.set(None);
+                                                                    group_edit_text.set(String::new());
+                                                                } else {
+                                                                    r_key(id_save.clone(), t);
+                                                                }
+                                                            }
+                                                            "Escape" => {
+                                                                group_editing_id.set(None);
+                                                                group_edit_text.set(String::new());
+                                                            }
+                                                            _ => {}
                                                         }
-                                                    }).collect::<Vec<_>>()}
+                                                    }
+                                                    on:blur=move |_| {
+                                                        let id = id_blur.clone();
+                                                        let r = r_blur.clone();
+                                                        leptos::task::spawn_local(async move {
+                                                            gloo_timers::future::TimeoutFuture::new(100).await;
+                                                            if group_editing_id.get_untracked().as_deref() == Some(&id) {
+                                                                let t = group_edit_text.get_untracked();
+                                                                if t.trim().is_empty() {
+                                                                    group_editing_id.set(None);
+                                                                    group_edit_text.set(String::new());
+                                                                } else {
+                                                                    r(id, t);
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                />
+                                            </div>
+                                        }.into_any()
+                                    } else if is_g_deleting {
+                                        let id_del = group_id.clone();
+                                        view! {
+                                            <div class="w-full px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 flex items-center justify-between text-xs">
+                                                <span class="text-red-400 font-medium">{move || t_string!(i18n, chat.confirm_delete).to_string()}</span>
+                                                <div class="flex items-center gap-1.5">
+                                                    <button
+                                                        class="px-2 py-0.5 rounded bg-red-500 text-white text-[10px] font-medium hover:bg-red-600 transition-colors disabled:opacity-50"
+                                                        prop:disabled=move || is_saving.get()
+                                                        on:click=move |ev: web_sys::MouseEvent| {
+                                                            ev.stop_propagation();
+                                                            do_delete_group(id_del.clone());
+                                                        }
+                                                    >
+                                                        {move || t_string!(i18n, common.confirm).to_string()}
+                                                    </button>
+                                                    <button
+                                                        class="px-2 py-0.5 rounded bg-surface-sunken text-text-secondary text-[10px] hover:bg-surface-raised transition-colors"
+                                                        on:click=move |ev: web_sys::MouseEvent| {
+                                                            ev.stop_propagation();
+                                                            group_deleting_id.set(None);
+                                                        }
+                                                    >
+                                                        {move || t_string!(i18n, common.cancel).to_string()}
+                                                    </button>
                                                 </div>
-                                                // Group name + last message
-                                                <div class="flex-1 min-w-0">
-                                                    <div class="truncate text-xs font-medium text-text-primary">
-                                                        {group_name}
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        // Normal mode: avatar cluster + name + last_message + hover ⋯ menu
+                                        let id_click = group_id.clone();
+                                        let id_menu = group_id.clone();
+                                        let id_edit = group_id.clone();
+                                        let id_del_menu = group_id.clone();
+                                        let name_for_edit = group_name.clone();
+                                        view! {
+                                            <div class="relative group">
+                                                <button
+                                                    class="w-full text-left px-2 py-2 rounded-lg text-sm nav-tile flex items-center gap-2"
+                                                    on:click=move |_| on_open_group(id_click.clone())
+                                                >
+                                                    // Avatar cluster (overlapping discs, up to 3)
+                                                    <div class="flex items-center flex-shrink-0">
+                                                        {previews.iter().take(3).enumerate().map(|(i, mp)| {
+                                                            let color = agent_color_for_id(&mp.id);
+                                                            let glyph = mp.emoji.clone()
+                                                                .filter(|e| !e.is_empty())
+                                                                .or_else(|| mp.name.as_ref()
+                                                                    .and_then(|n| n.chars().next())
+                                                                    .map(|c| c.to_uppercase().to_string()))
+                                                                .or_else(|| mp.id.chars().next()
+                                                                    .map(|c| c.to_uppercase().to_string()))
+                                                                .unwrap_or_else(|| "?".to_string());
+                                                            let margin = if i == 0 { "" } else { "-ml-2" };
+                                                            view! {
+                                                                <span
+                                                                    class=format!(
+                                                                        "{margin} w-6 h-6 rounded-full flex items-center justify-center \
+                                                                         text-[10px] font-bold text-white \
+                                                                         ring-2 ring-surface-sunken"
+                                                                    )
+                                                                    style=format!("background-color: {color};")
+                                                                >
+                                                                    {glyph}
+                                                                </span>
+                                                            }
+                                                        }).collect::<Vec<_>>()}
                                                     </div>
-                                                    {last_msg.map(|m| view! {
-                                                        <div class="truncate text-[10px] text-text-tertiary mt-0.5">
-                                                            {m}
+                                                    // Group name + last message
+                                                    <div class="flex-1 min-w-0">
+                                                        <div class="truncate text-xs font-medium text-text-primary">
+                                                            {group_name.clone()}
                                                         </div>
-                                                    })}
-                                                </div>
-                                            </button>
-                                        }
-                                    }).collect::<Vec<_>>()}
-                                </div>
-                            </Show>
+                                                        {last_msg.clone().map(|m| view! {
+                                                            <div class="truncate text-[10px] text-text-tertiary mt-0.5">
+                                                                {m}
+                                                            </div>
+                                                        })}
+                                                    </div>
+                                                    // ⋯ button (visible on hover)
+                                                    <button
+                                                        class="opacity-0 group-hover:opacity-100 ml-1 px-1.5 py-0.5
+                                                               rounded text-text-tertiary hover:text-text-primary
+                                                               hover:bg-surface-raised transition-all text-xs flex-shrink-0"
+                                                        on:click=move |ev: web_sys::MouseEvent| {
+                                                            ev.stop_propagation();
+                                                            let cur = group_menu_id.get_untracked();
+                                                            if cur.as_deref() == Some(&id_menu) {
+                                                                group_menu_id.set(None);
+                                                            } else {
+                                                                group_menu_id.set(Some(id_menu.clone()));
+                                                            }
+                                                        }
+                                                    >"⋯"</button>
+                                                </button>
+                                                // Dropdown menu
+                                                {if is_g_menu {
+                                                    let name_e = name_for_edit.clone();
+                                                    view! {
+                                                        <div class="glass absolute right-0 top-full mt-1 z-50 min-w-[120px]
+                                                                    bg-surface-overlay/85 border border-border rounded-lg shadow-xl
+                                                                    py-1 text-xs">
+                                                            <button
+                                                                class="w-full text-left px-3 py-1.5 text-text-secondary
+                                                                       hover:bg-surface-sunken hover:text-text-primary transition-colors"
+                                                                on:click=move |ev: web_sys::MouseEvent| {
+                                                                    ev.stop_propagation();
+                                                                    group_menu_id.set(None);
+                                                                    group_edit_text.set(name_e.clone());
+                                                                    group_editing_id.set(Some(id_edit.clone()));
+                                                                }
+                                                            >{move || t_string!(i18n, chat.rename).to_string()}</button>
+                                                            <button
+                                                                class="w-full text-left px-3 py-1.5 text-red-400
+                                                                       hover:bg-red-500/10 transition-colors"
+                                                                on:click=move |ev: web_sys::MouseEvent| {
+                                                                    ev.stop_propagation();
+                                                                    group_menu_id.set(None);
+                                                                    group_deleting_id.set(Some(id_del_menu.clone()));
+                                                                }
+                                                            >{move || t_string!(i18n, common.delete).to_string()}</button>
+                                                        </div>
+                                                    }.into_any()
+                                                } else {
+                                                    view! { <span /> }.into_any()
+                                                }}
+                                            </div>
+                                        }.into_any()
+                                    }
+                                }).collect::<Vec<_>>();
+                                view! { <div class="space-y-0.5">{rows}</div> }.into_any()
+                            } else {
+                                view! { <span /> }.into_any()
+                            }}
                         </div>
                     }.into_any()
                 }}
