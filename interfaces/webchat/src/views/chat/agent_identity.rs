@@ -76,7 +76,9 @@ pub fn agent_identity(agent_id: &str, agents: &HashMap<String, AgentSummary>) ->
 }
 
 /// First character of `source`, uppercased, as a monogram avatar. Empty → "?".
-fn monogram(source: &str) -> String {
+/// `pub` so sibling surfaces (team participants cluster) can reuse the same
+/// emoji→monogram fallback without re-implementing it.
+pub fn monogram(source: &str) -> String {
     source
         .chars()
         .next()
