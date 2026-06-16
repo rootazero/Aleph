@@ -8,11 +8,14 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
+use crate::api::team_chat::TeamChatApi;
+use crate::api::teams::{TeamSummary, TeamsApi};
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
-use crate::views::chat::state::ChatState;
+use crate::views::chat::agent_identity::agent_color_for_id;
+use crate::views::chat::state::{ChatMessage, ChatState, MemberStatus, TeamMemberView};
 
 use web_sys::HtmlInputElement;
 
@@ -44,6 +47,8 @@ struct AgentEntry {
     id: String,
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    emoji: Option<String>,
     #[serde(default)]
     is_default: bool,
 }
@@ -199,6 +204,11 @@ pub fn ChatSidebar() -> impl IntoView {
     let running = RwSignal::new(std::collections::HashMap::<String, usize>::new());
     let run_to_session = RwSignal::new(std::collections::HashMap::<String, String>::new());
 
+    // Groups (teams) the selected agent belongs to — drives the 群聊 section.
+    let groups: RwSignal<Vec<TeamSummary>> = RwSignal::new(Vec::new());
+    // Collapsible state for the group section (default: expanded).
+    let groups_expanded = RwSignal::new(true);
+
     // Reusable closure: fetch both agents and sessions from the backend.
     let reload_data = Arc::new(move |dash: DashboardState| {
         is_loading.set(true);
@@ -242,6 +252,18 @@ pub fn ChatSidebar() -> impl IntoView {
                 }
                 Err(e) => {
                     web_sys::console::error_1(&format!("Failed to list sessions: {e}").into());
+                }
+            }
+
+            // Fetch teams for the selected agent (drives the 群聊 section).
+            if let Some(agent_id) = selected_agent.get_untracked() {
+                match TeamsApi::agent_teams(&dash, &agent_id).await {
+                    Ok(team_list) => groups.set(team_list),
+                    Err(e) => {
+                        web_sys::console::warn_1(
+                            &format!("Failed to list agent teams: {e}").into(),
+                        );
+                    }
                 }
             }
 
@@ -438,6 +460,84 @@ pub fn ChatSidebar() -> impl IntoView {
                 ws.reset();
             }
         }
+    };
+
+    // Enter team chat mode: fetch detail, build roster, replay history.
+    // The team.* subscription and its Gateway topic are already established
+    // permanently in ChatView (view.rs) — no double-subscribe needed here.
+    let on_open_group = move |team_id: String| {
+        let dash = dashboard;
+        leptos::task::spawn_local(async move {
+            // 1. Fetch team detail (members list).
+            let detail = match TeamsApi::get(&dash, &team_id).await {
+                Ok(d) => d,
+                Err(e) => {
+                    web_sys::console::error_1(
+                        &format!("teams.get failed: {e}").into(),
+                    );
+                    return;
+                }
+            };
+            // 2. Build id→AgentEntry map from current agents signal for name/emoji resolution.
+            let agent_map: std::collections::HashMap<String, AgentEntry> = agents
+                .get_untracked()
+                .into_iter()
+                .map(|a| (a.id.clone(), a))
+                .collect();
+            let roster: Vec<TeamMemberView> = detail
+                .members
+                .iter()
+                .map(|m| {
+                    let entry = agent_map.get(&m.agent_id);
+                    let name = entry
+                        .and_then(|a| a.name.clone())
+                        .unwrap_or_else(|| m.agent_id.clone());
+                    let emoji = entry.and_then(|a| a.emoji.clone());
+                    TeamMemberView {
+                        agent_id: m.agent_id.clone(),
+                        name,
+                        emoji,
+                        role: m.role.clone(),
+                        is_leader: m.role == "leader",
+                        status: MemberStatus::Idle,
+                    }
+                })
+                .collect();
+            // 3. Enter team mode.
+            chat.clear_session();
+            chat.team_id.set(Some(team_id.clone()));
+            chat.team_members.set(roster);
+            // 4. Replay durable chat history as bubbles.
+            match TeamChatApi::history(&dash, &team_id).await {
+                Ok(items) => {
+                    let messages: Vec<ChatMessage> = items
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, it)| ChatMessage {
+                            id: format!("team-hist-{i}"),
+                            role: "assistant".to_string(),
+                            content: it.content,
+                            tool_calls: Vec::new(),
+                            is_streaming: false,
+                            is_intermediate: false,
+                            error: None,
+                            model_info: None,
+                            timestamp: Some(it.created_at),
+                            iteration: None,
+                            is_final: true,
+                            text_finalized: true,
+                            agent_id: Some(it.from_agent),
+                        })
+                        .collect();
+                    chat.messages.set(messages);
+                }
+                Err(e) => {
+                    web_sys::console::warn_1(
+                        &format!("teams.chat.history failed: {e}").into(),
+                    );
+                }
+            }
+        });
     };
 
     // Start a new chat for the selected agent.
@@ -644,11 +744,15 @@ pub fn ChatSidebar() -> impl IntoView {
                         }}
                     </select>
                     <button
-                        class="px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-medium
-                               hover:bg-primary/90 transition-colors whitespace-nowrap"
+                        class="w-9 h-9 shrink-0 flex items-center justify-center rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
+                        title=move || t_string!(i18n, chat.new).to_string()
+                        aria-label=move || t_string!(i18n, chat.new).to_string()
                         on:click=on_new_chat
                     >
-                        {move || t_string!(i18n, chat.new).to_string()}
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
                     </button>
                 </div>
 
@@ -678,8 +782,93 @@ pub fn ChatSidebar() -> impl IntoView {
                 }
             }}
 
-            // Session list (filtered by selected agent)
+            // Session list + group section (single scroll container)
             <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+
+                // ── 群聊 (Group Chat) collapsible section ─────────────────
+                {move || {
+                    let group_list = groups.get();
+                    if group_list.is_empty() {
+                        return view! { <span /> }.into_any();
+                    }
+                    let count = group_list.len();
+                    view! {
+                        <div class="mb-1">
+                            // Section header with chevron toggle
+                            <button
+                                class="w-full flex items-center gap-1 px-1 py-1 text-[11px]
+                                       font-semibold text-text-tertiary hover:text-text-primary
+                                       transition-colors select-none"
+                                on:click=move |_| groups_expanded.update(|e| *e = !*e)
+                            >
+                                <span class="transition-transform"
+                                    style=move || if groups_expanded.get() { "" } else { "transform: rotate(-90deg); display: inline-block;" }
+                                >
+                                    "▾"
+                                </span>
+                                {format!("群聊 {count}")}
+                            </button>
+                            // Group rows (shown only when expanded)
+                            <Show when=move || groups_expanded.get()>
+                                <div class="space-y-0.5">
+                                    {group_list.clone().into_iter().map(|group| {
+                                        let group_id = group.id.clone();
+                                        let group_name = group.name.clone();
+                                        let last_msg = group.last_message.clone();
+                                        let previews = group.members_preview.clone();
+                                        view! {
+                                            <button
+                                                class="w-full text-left px-2 py-2 rounded-lg text-sm nav-tile flex items-center gap-2"
+                                                on:click=move |_| on_open_group(group_id.clone())
+                                            >
+                                                // Avatar cluster (overlapping discs, up to 3)
+                                                <div class="flex items-center flex-shrink-0">
+                                                    {previews.iter().take(3).enumerate().map(|(i, mp)| {
+                                                        let color = agent_color_for_id(&mp.id);
+                                                        let glyph = mp.emoji.clone()
+                                                            .filter(|e| !e.is_empty())
+                                                            .or_else(|| mp.name.as_ref()
+                                                                .and_then(|n| n.chars().next())
+                                                                .map(|c| c.to_uppercase().to_string()))
+                                                            .or_else(|| mp.id.chars().next()
+                                                                .map(|c| c.to_uppercase().to_string()))
+                                                            .unwrap_or_else(|| "?".to_string());
+                                                        let margin = if i == 0 { "" } else { "-ml-2" };
+                                                        view! {
+                                                            <span
+                                                                class=format!(
+                                                                    "{margin} w-6 h-6 rounded-full flex items-center justify-center \
+                                                                     text-[10px] font-bold text-white \
+                                                                     ring-2 ring-surface-sunken"
+                                                                )
+                                                                style=format!("background-color: {color};")
+                                                            >
+                                                                {glyph}
+                                                            </span>
+                                                        }
+                                                    }).collect::<Vec<_>>()}
+                                                </div>
+                                                // Group name + last message
+                                                <div class="flex-1 min-w-0">
+                                                    <div class="truncate text-xs font-medium text-text-primary">
+                                                        {group_name}
+                                                    </div>
+                                                    {last_msg.map(|m| view! {
+                                                        <div class="truncate text-[10px] text-text-tertiary mt-0.5">
+                                                            {m}
+                                                        </div>
+                                                    })}
+                                                </div>
+                                            </button>
+                                        }
+                                    }).collect::<Vec<_>>()}
+                                </div>
+                            </Show>
+                        </div>
+                    }.into_any()
+                }}
+
+                // ── 单聊 (Single-agent sessions) ──────────────────────────
                 {move || {
                     let session_list = sessions.get();
                     let sel_agent = selected_agent.get();
