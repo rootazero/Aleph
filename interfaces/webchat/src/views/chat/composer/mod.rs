@@ -18,9 +18,10 @@ use palette::{
     SlashPaletteView,
 };
 use queue_bar::QueuedPromptBar;
+use super::mention_palette::{update_mention_palette, MentionPaletteView};
 
 use super::project_menu::ProjectMenu;
-use super::state::{ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt};
+use super::state::{ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt, TeamMemberView};
 use crate::api::chat::{ChatApi, ChatAttachment};
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
@@ -59,6 +60,13 @@ pub(super) fn InputArea() -> impl IntoView {
     let selected_index = RwSignal::new(0usize);
     let commands_loaded = RwSignal::new(false);
     let current_namespace: RwSignal<Option<String>> = RwSignal::new(None);
+
+    // @-mention palette state — team mode only.
+    let show_mention = RwSignal::new(false);
+    let mention_members: RwSignal<Vec<TeamMemberView>> = RwSignal::new(Vec::new());
+    let mention_selected = RwSignal::new(0usize);
+    // Byte offset of the active `@` in `input_text` (None when palette hidden).
+    let mention_at: RwSignal<Option<usize>> = RwSignal::new(None);
 
     let file_input_ref = NodeRef::<leptos::html::Input>::new();
     let stack_ref = NodeRef::<leptos::html::Div>::new();
@@ -402,8 +410,72 @@ pub(super) fn InputArea() -> impl IntoView {
         }
     };
 
+    // Commit a mention selection: splice the `@<query>` span with `token`.
+    // Captures signals by copy — safe to call from multiple closures.
+    let do_commit_mention = move |token: String| {
+        let text = input_text.get_untracked();
+        if let Some(at) = mention_at.get_untracked() {
+            let before = text.get(..at).unwrap_or("");
+            let query_start = at + 1;
+            let query_end = text[query_start..]
+                .find(|c: char| c.is_whitespace())
+                .map(|rel| query_start + rel)
+                .unwrap_or(text.len());
+            let after = text.get(query_end..).unwrap_or("");
+            input_text.set(format!("{before}{token}{after}"));
+        } else {
+            input_text.set(format!("{text}{token}"));
+        }
+        show_mention.set(false);
+        mention_at.set(None);
+        mention_members.set(Vec::new());
+        mention_selected.set(0);
+    };
+
     let on_keydown = {
         move |ev: web_sys::KeyboardEvent| {
+            // @-mention palette takes priority over slash palette.
+            if show_mention.get_untracked() {
+                let count = mention_members.get_untracked().len() + 1; // +1 for "@all"
+                match ev.key().as_str() {
+                    "ArrowDown" => {
+                        ev.prevent_default();
+                        if count > 0 {
+                            mention_selected
+                                .set((mention_selected.get_untracked() + 1) % count);
+                        }
+                    }
+                    "ArrowUp" => {
+                        ev.prevent_default();
+                        if count > 0 {
+                            let cur = mention_selected.get_untracked();
+                            mention_selected.set(if cur == 0 { count - 1 } else { cur - 1 });
+                        }
+                    }
+                    "Tab" | "Enter" => {
+                        ev.prevent_default();
+                        let idx = mention_selected.get_untracked();
+                        let token = if idx == 0 {
+                            "@all ".to_string()
+                        } else {
+                            mention_members
+                                .get_untracked()
+                                .get(idx - 1)
+                                .map(|m| format!("@{} ", m.agent_id))
+                                .unwrap_or_default()
+                        };
+                        do_commit_mention(token);
+                    }
+                    "Escape" => {
+                        ev.prevent_default();
+                        show_mention.set(false);
+                        mention_at.set(None);
+                    }
+                    _ => {}
+                }
+                return;
+            }
+
             if show_palette.get_untracked() {
                 let entries = palette_entries.get_untracked();
                 let count = entries.len();
@@ -523,6 +595,28 @@ pub(super) fn InputArea() -> impl IntoView {
     let on_palette_select: Callback<PaletteEntry> =
         Callback::new(move |entry: PaletteEntry| select_for_callback(entry));
 
+    // @-mention selection callback — splices the token into `input_text`.
+    // A second independent closure capturing the same Copy signals.
+    let on_mention_select: Callback<String> = Callback::new(move |token: String| {
+        let text = input_text.get_untracked();
+        if let Some(at) = mention_at.get_untracked() {
+            let before = text.get(..at).unwrap_or("");
+            let query_start = at + 1;
+            let query_end = text[query_start..]
+                .find(|c: char| c.is_whitespace())
+                .map(|rel| query_start + rel)
+                .unwrap_or(text.len());
+            let after = text.get(query_end..).unwrap_or("");
+            input_text.set(format!("{before}{token}{after}"));
+        } else {
+            input_text.set(format!("{text}{token}"));
+        }
+        show_mention.set(false);
+        mention_at.set(None);
+        mention_members.set(Vec::new());
+        mention_selected.set(0);
+    });
+
     view! {
         <div class="absolute inset-x-0 bottom-0 z-10 px-4 pb-4 pt-2 pointer-events-none">
             <div class="max-w-3xl mx-auto pointer-events-auto" node_ref=stack_ref>
@@ -537,6 +631,17 @@ pub(super) fn InputArea() -> impl IntoView {
                     current_namespace=current_namespace
                     on_select=on_palette_select
                 />
+
+                // @-mention palette — visible only in team mode when the user
+                // types `@` followed by a valid mention token prefix.
+                <Show when=move || chat.team_id.get().is_some()>
+                    <MentionPaletteView
+                        show=show_mention
+                        members=mention_members
+                        selected_index=mention_selected
+                        on_select=on_mention_select
+                    />
+                </Show>
 
                 // Live prompt-injection guard banner (G1). Server-side
                 // remains the final authority; this is just a hint so
@@ -645,6 +750,22 @@ pub(super) fn InputArea() -> impl IntoView {
                             let val = event_target_value(&ev);
                             input_text.set(val.clone());
                             update_palette(&val);
+                            // Read the caret from the underlying textarea DOM node.
+                            let caret = ev
+                                .target()
+                                .and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
+                                .and_then(|ta| ta.selection_start().ok().flatten())
+                                .unwrap_or(val.len() as u32) as usize;
+                            let at = update_mention_palette(
+                                &val,
+                                caret,
+                                chat.team_id.get_untracked(),
+                                &chat.team_members.get_untracked(),
+                                show_mention,
+                                mention_members,
+                                mention_selected,
+                            );
+                            mention_at.set(at);
                         }
                         on:keydown=on_keydown
                     />
@@ -662,6 +783,8 @@ pub(super) fn InputArea() -> impl IntoView {
                                 input_text.set(String::new());
                                 show_palette.set(false);
                                 current_namespace.set(None);
+                                show_mention.set(false);
+                                mention_at.set(None);
                             }
                         >
                             <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5"
