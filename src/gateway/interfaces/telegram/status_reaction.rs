@@ -32,14 +32,14 @@ impl StatusReactionController {
             chat_id,
             message_id,
             state: Arc::new(Mutex::new(ReactionState::Idle)),
-            last_changed: Arc::new(Mutex::new(Instant::now() - Duration::from_secs(10))),
+            last_changed: Arc::new(Mutex::new(Instant::now().saturating_sub(Duration::from_secs(10)))),
             min_interval: Duration::from_secs(1),
         }
     }
 
     async fn can_change(&self) -> bool {
         let last = *self.last_changed.lock().await;
-        Instant::now().duration_since(last) >= self.min_interval
+        Instant::now().saturating_duration_since(last) >= self.min_interval
     }
 
     async fn set_state(&self, new_state: ReactionState) {

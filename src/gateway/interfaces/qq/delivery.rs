@@ -39,7 +39,7 @@ impl ReplyTracker {
     pub fn can_reply_passively(&self, msg_id: &str) -> (bool, bool) {
         if let Some(entry) = self.inner.get(msg_id) {
             let record = entry.value();
-            let elapsed = Instant::now().duration_since(record.first_reply_at);
+            let elapsed = Instant::now().saturating_duration_since(record.first_reply_at);
             if elapsed > PASSIVE_REPLY_TTL {
                 return (false, true);
             }
@@ -63,7 +63,7 @@ impl ReplyTracker {
         if self.inner.len() > 10000 {
             let now = Instant::now();
             self.inner
-                .retain(|_, v| now.duration_since(v.first_reply_at) <= PASSIVE_REPLY_TTL);
+                .retain(|_, v| now.saturating_duration_since(v.first_reply_at) <= PASSIVE_REPLY_TTL);
         }
     }
 }

@@ -46,10 +46,10 @@ pub enum WeChatApiError {
 pub type ApiResult<T> = Result<T, WeChatApiError>;
 
 fn random_wechat_uin() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
     let value = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or(Duration::ZERO)
         .as_nanos() as u32;
     let bytes = value.to_be_bytes();
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

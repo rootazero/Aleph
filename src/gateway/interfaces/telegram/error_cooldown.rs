@@ -128,7 +128,7 @@ impl ErrorCooldown {
 
         let before = self.error_policy_cooldowns.len();
         self.error_policy_cooldowns
-            .retain(|_k, last| Instant::now().duration_since(*last) < Duration::from_secs(60));
+            .retain(|_k, last| Instant::now().saturating_duration_since(*last) < Duration::from_secs(60));
         // saturating_sub: concurrent inserts during retain can grow the map.
         let removed = before.saturating_sub(self.error_policy_cooldowns.len());
         if removed > 0 {
@@ -234,7 +234,7 @@ impl ErrorCooldown {
             ErrorPolicyMode::Once => {
                 let now = Instant::now();
                 if let Some(last) = self.error_policy_cooldowns.get(scope_key) {
-                    if now.duration_since(*last) < Duration::from_secs(60) {
+                    if now.saturating_duration_since(*last) < Duration::from_secs(60) {
                         return false;
                     }
                 }
@@ -247,7 +247,7 @@ impl ErrorCooldown {
                 // (caller should check admin status before calling this)
                 let now = Instant::now();
                 if let Some(last) = self.error_policy_cooldowns.get(scope_key) {
-                    if now.duration_since(*last) < Duration::from_secs(60) {
+                    if now.saturating_duration_since(*last) < Duration::from_secs(60) {
                         return false;
                     }
                 }
