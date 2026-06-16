@@ -26,9 +26,10 @@ mod tests {
         let file_path = dir.join(name);
         File::create(&file_path)?;
 
+        let seconds = days_old.saturating_mul(24 * 60 * 60);
         let old_time = SystemTime::now()
-            .checked_sub(Duration::from_secs(days_old * 24 * 60 * 60))
-            .unwrap();
+            .checked_sub(Duration::from_secs(seconds))
+            .unwrap_or(UNIX_EPOCH);
         let duration_since_epoch = old_time.duration_since(UNIX_EPOCH).unwrap_or_default();
         let filetime = filetime::FileTime::from_unix_time(
             duration_since_epoch.as_secs() as i64,
