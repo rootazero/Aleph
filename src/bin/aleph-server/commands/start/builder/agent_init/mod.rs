@@ -86,6 +86,9 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub artifact_store: Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
     /// Message router for the `TeamNotifier` event handler
     pub message_router: Option<Arc<alephcore::teams::messages::MessageRouter>>,
+    /// Raw message store, exposed for `register_teams_handlers` so
+    /// `teams.chat.history` and `agents.teams` enrichment can be wired.
+    pub message_store: Option<Arc<dyn alephcore::teams::messages::MessageStore>>,
     /// `OnceLock` handle shared with the real `ExecutionEngine`. Boot code calls
     /// `.set(orchestrator)` on this after `initialize_orchestrator` returns so
     /// that `dispatch_via_orchestrator` can resolve the orchestrator from the
@@ -2224,6 +2227,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             .clone()
             .map(|s| s as Arc<dyn alephcore::teams::artifacts::ArtifactStore>),
         message_router: message_router.clone(),
+        message_store: message_store.clone(),
         orchestrator_cell: orch_cell_out,
         memory_context_provider: mcp_for_orchestrator,
         memory_backend: Some(memory_db.clone()),

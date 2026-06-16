@@ -1263,6 +1263,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             agent_result.snapshot_store.as_ref(),
             agent_result.state_db.as_ref(),
             agent_result.artifact_store.as_ref(),
+            agent_result.message_store.clone(),
+            Some(Arc::clone(&agent_manager)),
         );
     }
 

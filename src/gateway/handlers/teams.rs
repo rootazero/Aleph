@@ -276,6 +276,8 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -
 pub async fn handle_agent_teams(
     request: JsonRpcRequest,
     store: Arc<dyn TeamStore>,
+    _agent_manager: Option<Arc<crate::config::agent_manager::AgentManager>>,
+    _msg_store: Option<Arc<dyn crate::teams::messages::MessageStore>>,
 ) -> JsonRpcResponse {
     debug!("Handling agents.teams request");
 
@@ -891,6 +893,62 @@ pub async fn handle_chat_thread(
 }
 
 // =============================================================================
+// teams.chat.history — durable team message transcript as attribution bubbles
+// =============================================================================
+
+/// A single bubble item from the team's durable message transcript.
+#[derive(serde::Serialize)]
+struct ChatHistoryItem {
+    from_agent: String,
+    content: String,
+    msg_type: String,
+    /// Milliseconds since Unix epoch — Panel uses this for chronological order.
+    created_at: i64,
+}
+
+/// Map a flat list of [`TeamMessage`] values to [`ChatHistoryItem`] values,
+/// sorted chronologically. Extracted as a free function so it is unit-testable
+/// without any async store.
+fn map_history(msgs: Vec<crate::teams::messages::TeamMessage>) -> Vec<ChatHistoryItem> {
+    let mut items: Vec<ChatHistoryItem> = msgs
+        .into_iter()
+        .map(|m| ChatHistoryItem {
+            from_agent: m.from_agent,
+            content: m.content,
+            msg_type: m.msg_type.as_str().to_string(),
+            created_at: m.created_at.timestamp_millis(),
+        })
+        .collect();
+    items.sort_by_key(|i| i.created_at);
+    items
+}
+
+/// teams.chat.history — replay the durable group-chat transcript as attribution
+/// bubbles. Returns `{ "items": [...] }` chronologically. Unknown or empty teams
+/// return an empty items array rather than an error (idempotent cold-open).
+pub async fn handle_chat_history(
+    request: JsonRpcRequest,
+    msg_store: Arc<dyn crate::teams::messages::MessageStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.chat.history request");
+
+    let params: TeamIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    // 200 messages is ample for the Panel's initial hydrate; store query is
+    // oldest-first after internal DESC→reverse, so .take(200) is the tail.
+    let msgs = msg_store
+        .list_team_messages(&params.team_id, 200)
+        .await
+        .unwrap_or_default();
+
+    let items = map_history(msgs);
+    JsonRpcResponse::success(request.id, serde_json::json!({ "items": items }))
+}
+
+// =============================================================================
 // teams.task.journal.{get,list} — R3 T3 read surface for exit journals
 // =============================================================================
 
@@ -1316,6 +1374,65 @@ mod tests {
         let mut sorted = timestamps.clone();
         sorted.sort();
         assert_eq!(timestamps, sorted, "merged items must be sorted by timestamp");
+    }
+
+    // -------------------------------------------------------------------------
+    // map_history tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn map_history_sorts_chronologically_and_carries_fields() {
+        use crate::teams::messages::types::{MessageType, TeamMessage};
+        use chrono::{TimeZone, Utc};
+
+        let t0 = Utc.timestamp_millis_opt(1_000_000).unwrap();
+        let t1 = Utc.timestamp_millis_opt(2_000_000).unwrap();
+
+        // Insert in reverse order to verify sort.
+        let msgs = vec![
+            TeamMessage {
+                id: "m2".to_string(),
+                team_id: "t1".to_string(),
+                from_agent: "agent-b".to_string(),
+                msg_type: MessageType::SystemNotification,
+                subject: String::new(),
+                content: "second".to_string(),
+                recipients: vec![],
+                reply_to: None,
+                thread_id: None,
+                attachments: vec![],
+                created_at: t1,
+                expires_at: None,
+            },
+            TeamMessage {
+                id: "m1".to_string(),
+                team_id: "t1".to_string(),
+                from_agent: "agent-a".to_string(),
+                msg_type: MessageType::Message,
+                subject: String::new(),
+                content: "first".to_string(),
+                recipients: vec![],
+                reply_to: None,
+                thread_id: None,
+                attachments: vec![],
+                created_at: t0,
+                expires_at: None,
+            },
+        ];
+
+        let items = map_history(msgs);
+        assert_eq!(items.len(), 2);
+
+        // Chronological after sort: t0 first.
+        assert_eq!(items[0].from_agent, "agent-a");
+        assert_eq!(items[0].content, "first");
+        assert_eq!(items[0].msg_type, "message");
+        assert_eq!(items[0].created_at, t0.timestamp_millis());
+
+        assert_eq!(items[1].from_agent, "agent-b");
+        assert_eq!(items[1].content, "second");
+        assert_eq!(items[1].msg_type, "system_notification");
+        assert_eq!(items[1].created_at, t1.timestamp_millis());
     }
 }
 
