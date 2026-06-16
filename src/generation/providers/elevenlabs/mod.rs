@@ -54,7 +54,7 @@ pub struct ElevenLabsProvider {
     /// HTTP client for making requests
     client: Client,
     /// `ElevenLabs` API key
-    pub api_key: String,
+    pub(crate) api_key: String,
     /// API endpoint (e.g., "<https://api.elevenlabs.io>")
     pub endpoint: String,
     /// Model to use (e.g., "`eleven_monolingual_v1`")

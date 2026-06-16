@@ -83,7 +83,7 @@ pub struct OpenAiTtsProvider {
     /// HTTP client for making requests
     client: Client,
     /// `OpenAI` API key
-    pub api_key: String,
+    pub(crate) api_key: String,
     /// API endpoint — fully resolved speech URL
     pub endpoint: String,
     /// Model to use (e.g., "tts-1", "tts-1-hd")
