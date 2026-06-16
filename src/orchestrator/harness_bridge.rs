@@ -822,7 +822,10 @@ pub fn compute_runtime_state_blocks(
             tools.sort_unstable();
             let label = match tools.as_slice() {
                 [single] => (*single).to_string(),
-                many => format!("{} (+{} more)", many[0], many.len() - 1),
+                many if !many.is_empty() => {
+                    format!("{} (+{} more)", many[0], many.len() - 1)
+                },
+                [] => String::new(),
             };
             crate::tools::runtime_state::RuntimeStateFragment::unavailable(label, reason)
         })

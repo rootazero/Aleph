@@ -96,7 +96,10 @@ impl OrchestratorMetrics {
         let failed = self.flows_failed.load(Ordering::Relaxed);
         let cancelled = self.flows_cancelled.load(Ordering::Relaxed);
         let stalled = self.flows_stalled.load(Ordering::Relaxed);
-        let total = completed + failed + cancelled + stalled;
+        let total = completed
+            .saturating_add(failed)
+            .saturating_add(cancelled)
+            .saturating_add(stalled);
         if total == 0 {
             0.0
         } else {

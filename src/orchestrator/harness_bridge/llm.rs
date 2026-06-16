@@ -82,7 +82,7 @@ mod tests {
             payload: RequestPayload<'a>,
         ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
         {
-            *self.seen.lock().unwrap() = payload.model.clone();
+            *self.seen.lock().unwrap_or_else(|e| e.into_inner()) = payload.model.clone();
             Box::pin(async move { Ok(ProviderResponse::text_only("ok".to_string())) })
         }
         fn name(&self) -> &str {
@@ -113,7 +113,7 @@ mod tests {
         let llm = pick_llm(&brain, &default_handle(), &named(rec.clone())).unwrap();
         let msgs = [UnifiedMessage::user("hi")];
         let _ = llm.process(RequestPayload::new(&msgs)).await.unwrap();
-        assert_eq!(rec.seen.lock().unwrap().as_deref(), Some("gpt-5"));
+        assert_eq!(rec.seen.lock().unwrap_or_else(|e| e.into_inner()).as_deref(), Some("gpt-5"));
     }
 
     #[tokio::test]
@@ -126,7 +126,7 @@ mod tests {
         let llm = pick_llm(&brain, &default_handle(), &named(rec.clone())).unwrap();
         let msgs = [UnifiedMessage::user("hi")];
         let _ = llm.process(RequestPayload::new(&msgs)).await.unwrap();
-        assert_eq!(rec.seen.lock().unwrap().as_deref(), None);
+        assert_eq!(rec.seen.lock().unwrap_or_else(|e| e.into_inner()).as_deref(), None);
     }
 
     #[test]
