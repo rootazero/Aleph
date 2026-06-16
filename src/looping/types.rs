@@ -45,11 +45,24 @@ pub struct LoopState {
     /// Optional safety cap: absolute epoch-ms wall-clock deadline.
     #[serde(default)]
     pub deadline_ms: Option<u64>,
-    /// Optional soft token budget (carried for parity with goal; the
-    /// continuation hook passes 0 tokens today, same as goal, so this is
-    /// advisory until token accounting is wired through the hook).
+    /// Optional soft token budget: stop the loop once it has consumed more than
+    /// this many session tokens since the baseline was captured. Enforced by the
+    /// continuation hook via [`Self::over_budget`] (codex `tokenStartFresh`
+    /// parity, mirroring `goal::Goal`).
     #[serde(default)]
     pub token_budget: Option<u64>,
+    /// Session cumulative-token baseline at the moment budget enforcement began.
+    /// Seeded lazily by the continuation hook on the first tick that sees a
+    /// budget set (the `loop` tool has no live token counter at creation). Until
+    /// `baseline_captured`, the token budget is not enforced. `#[serde(default)]`
+    /// → old payloads read 0.
+    #[serde(default)]
+    pub tokens_at_start: u64,
+    /// Whether `tokens_at_start` holds a real session-token baseline yet. Mirrors
+    /// `goal::Goal::baseline_captured`. `#[serde(default)]` → old payloads read
+    /// `false`.
+    #[serde(default)]
+    pub baseline_captured: bool,
     pub status: LoopStatus,
     pub created_at_ms: u64,
 }
@@ -66,6 +79,8 @@ impl LoopState {
             max_iterations: None,
             deadline_ms: None,
             token_budget: None,
+            tokens_at_start: 0,
+            baseline_captured: false,
             status: LoopStatus::Active,
             created_at_ms: now_ms,
         }
@@ -99,6 +114,32 @@ impl LoopState {
     pub const fn with_token_budget(mut self, budget: Option<u64>) -> Self {
         self.token_budget = budget;
         self
+    }
+
+    /// Seed the real session-token baseline and mark it captured. Called once by
+    /// the continuation hook on the first tick that sees a budget set. Mirrors
+    /// `goal::Goal::with_baseline` (loop has no `updated_at` to bump).
+    #[must_use]
+    pub const fn with_baseline(mut self, tokens_at_start: u64) -> Self {
+        self.tokens_at_start = tokens_at_start;
+        self.baseline_captured = true;
+        self
+    }
+
+    /// Tokens consumed since the baseline. Saturates on a counter reset so a
+    /// backwards-moving total never reports phantom spend (mirrors `goal`).
+    #[must_use]
+    pub const fn tokens_used(&self, now_total_tokens: u64) -> u64 {
+        now_total_tokens.saturating_sub(self.tokens_at_start)
+    }
+
+    /// True only when a budget is set and spend since baseline exceeds it.
+    #[must_use]
+    pub fn over_budget(&self, now_total_tokens: u64) -> bool {
+        match self.token_budget {
+            Some(b) => self.tokens_used(now_total_tokens) > b,
+            None => false,
+        }
     }
 
     #[must_use]
@@ -235,10 +276,63 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_preserves_state() {
-        let l = sample().with_max_iterations(Some(5));
+        let l = sample()
+            .with_max_iterations(Some(5))
+            .with_token_budget(Some(2_000))
+            .with_baseline(1_000);
         let json = serde_json::to_string(&l).unwrap();
         let back: LoopState = serde_json::from_str(&json).unwrap();
         assert_eq!(back.iterations_used, l.iterations_used);
         assert_eq!(back.max_iterations, Some(5));
+        assert_eq!(back.token_budget, Some(2_000));
+        assert_eq!(back.tokens_at_start, 1_000);
+        assert!(back.baseline_captured);
+    }
+
+    #[test]
+    fn new_loop_has_no_baseline() {
+        let l = sample();
+        assert_eq!(l.tokens_at_start, 0);
+        assert!(!l.baseline_captured);
+        assert!(l.token_budget.is_none());
+    }
+
+    #[test]
+    fn with_baseline_seeds_tokens_and_marks_captured() {
+        let l = sample().with_baseline(12_345);
+        assert_eq!(l.tokens_at_start, 12_345);
+        assert!(l.baseline_captured);
+        // original unchanged (§不可变性)
+        assert_eq!(sample().tokens_at_start, 0);
+    }
+
+    #[test]
+    fn tokens_used_saturates_on_counter_reset() {
+        let l = sample().with_baseline(1_000);
+        assert_eq!(l.tokens_used(1_750), 750);
+        assert_eq!(l.tokens_used(500), 0, "counter going backwards saturates");
+    }
+
+    #[test]
+    fn over_budget_only_when_budget_set_and_exceeded() {
+        let l = sample().with_token_budget(Some(500)).with_baseline(1_000);
+        assert!(!l.over_budget(1_200), "200 spent under a 500 budget");
+        assert!(l.over_budget(1_600), "600 spent over a 500 budget");
+        // No budget → never over budget, even at u64::MAX.
+        assert!(!sample().with_baseline(1_000).over_budget(u64::MAX));
+    }
+
+    #[test]
+    fn old_payload_without_baseline_fields_deserializes_defaults() {
+        // JSON persisted before these fields existed (no tokens_at_start /
+        // baseline_captured keys). Loop is never persisted today, but parity
+        // with goal keeps the forward-compat guarantee.
+        let json = r#"{"session_id":"s","prompt":"p",
+            "cadence":{"kind":"fixed","interval_ms":300000},
+            "iterations_used":0,"status":"active","created_at_ms":1}"#;
+        let l: LoopState = serde_json::from_str(json).expect("deserialize old payload");
+        assert_eq!(l.tokens_at_start, 0);
+        assert!(!l.baseline_captured);
+        assert!(l.token_budget.is_none());
     }
 }

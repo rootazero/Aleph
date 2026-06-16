@@ -862,7 +862,49 @@ where
                             let now_ms = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map_or(0, |d| d.as_millis() as u64);
-                            if crate::looping::pursuit::should_fire(&state, 0, now_ms) {
+
+                            // Token-budget accounting — mirrors the goal hook
+                            // above. ONLY runs when the loop carries a
+                            // token_budget; the common no-budget path reads no
+                            // session state and stays behavior-identical. On the
+                            // first tick that sees a budget, capture the real
+                            // baseline (the session's cumulative total now) and
+                            // re-register it; thereafter pass the live total so
+                            // `should_fire`/`exhausted` enforce the budget.
+                            // Previously these calls hardcoded 0, so `over_budget`
+                            // could never fire — the budget was advertised but dead.
+                            let (state, tokens_now) = if state.token_budget.is_some() {
+                                match self.session_manager.as_ref() {
+                                    Some(sm) => {
+                                        match sm.get_total_tokens(&request.session_key).await {
+                                            Ok(Some(total)) if state.baseline_captured => {
+                                                (state, total)
+                                            }
+                                            Ok(Some(total)) => {
+                                                // Seed baseline lazily. The
+                                                // downstream put (bumped / stopped)
+                                                // persists it; just-captured → 0
+                                                // spent, never a false over-budget.
+                                                (state.with_baseline(total), total)
+                                            }
+                                            // No row yet / read error / no manager →
+                                            // skip budget enforcement this tick
+                                            // (iteration + deadline caps still apply).
+                                            Ok(None) => (state, 0),
+                                            Err(e) => {
+                                                warn!(error = %e, session = %session_key_str,
+                                                    "loop: session token read failed; budget unenforced this tick");
+                                                (state, 0)
+                                            }
+                                        }
+                                    }
+                                    None => (state, 0),
+                                }
+                            } else {
+                                (state, 0)
+                            };
+
+                            if crate::looping::pursuit::should_fire(&state, tokens_now, now_ms) {
                                 let bumped = state.clone().spent_iteration();
                                 let delay = crate::looping::pursuit::tick_delay_ms(&state, now_ms);
                                 let prompt = crate::looping::pursuit::tick_prompt(&state);
@@ -880,14 +922,18 @@ where
                                 info!(session = %session_key_str, delay_ms = delay,
                                     ticks = state.iterations_used.saturating_add(1),
                                     "loop: enqueued next tick");
-                            } else if crate::looping::pursuit::exhausted(&state, 0, now_ms) {
-                                let note =
-                                    if state.deadline_ms.is_some_and(|d| now_ms != 0 && now_ms > d)
-                                    {
-                                        crate::looping::pursuit::deadline_reached_note(&state)
-                                    } else {
-                                        crate::looping::pursuit::cap_reached_note(&state)
-                                    };
+                            } else if crate::looping::pursuit::exhausted(&state, tokens_now, now_ms) {
+                                // Distinguish token-budget / wall-clock exhaustion
+                                // from the iteration cap so the user sees the real
+                                // stop reason (mirrors the goal hook).
+                                let note = if state.over_budget(tokens_now) {
+                                    crate::looping::pursuit::budget_reached_note(&state)
+                                } else if state.deadline_ms.is_some_and(|d| now_ms != 0 && now_ms > d)
+                                {
+                                    crate::looping::pursuit::deadline_reached_note(&state)
+                                } else {
+                                    crate::looping::pursuit::cap_reached_note(&state)
+                                };
                                 loop_reg
                                     .put(state.with_status(crate::looping::LoopStatus::Stopped));
                                 info!(session = %session_key_str, note = %note,
