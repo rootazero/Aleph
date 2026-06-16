@@ -179,7 +179,7 @@ impl DefaultQueryFiler {
 
         // Determine filename
         let raw_title = if gate.proposed_title.is_empty() {
-            hash[..12].to_string()
+            hash.get(..12).unwrap_or(hash).to_string()
         } else {
             gate.proposed_title.clone()
         };
