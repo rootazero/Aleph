@@ -1548,3 +1548,199 @@ async fn deferred_results_emit_one_tool_result_per_skipped_call() {
         "second result carries the deferred marker",
     );
 }
+
+// -- Cooperative steer checkpoint (serial loop) ------------------------------
+
+/// Assistant message event for steer-checkpoint seeding (mirrors the
+/// `agent.rs` follow-up tests' field set).
+fn assistant_message_event(text: &str) -> SessionEvent {
+    SessionEvent::AssistantMessage {
+        turn_id: uuid::Uuid::new_v4(),
+        content: MessageContent {
+            text: text.to_string(),
+            blocks: Vec::new(),
+            thinking: None,
+            thinking_signature: None,
+        },
+        at: now_ms(),
+    }
+}
+
+/// Seed a session that, in order, holds: a non-synthetic user request, an
+/// assistant "working on it" turn (so `has_unanswered_user_message`'s
+/// assistant-turn guard is satisfied), and a non-synthetic mid-turn steer.
+fn steer_seed() -> Vec<SessionEvent> {
+    vec![
+        user_message_event("original request"),
+        assistant_message_event("working on it"),
+        user_message_event("actually, stop and do X instead"),
+    ]
+}
+
+fn read_call(id: &str, path: &str) -> NativeToolCall {
+    NativeToolCall {
+        thought_signature: None,
+        id: id.into(),
+        name: "read_file".into(),
+        arguments: serde_json::json!({ "path": path }),
+    }
+}
+
+#[tokio::test]
+async fn serial_batch_defers_all_when_steer_present_before_first_call() {
+    let session = MockSession::new(steer_seed());
+    // No tools should run: a steer is already pending before the first call.
+    let tools = ScriptedTools::new(vec![]);
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: tools.clone(),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: CapturingProvider::text_only("idle"),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+
+    // Watermark = 2 events before the steer; the steer lands at index 2, at or
+    // beyond the boundary, so `has_unanswered_user_message` fires.
+    harness
+        .last_prompt_log_len
+        .store(2, std::sync::atomic::Ordering::Relaxed);
+
+    let sid = sample_session_id();
+    let turn = uuid::Uuid::new_v4();
+    let calls = vec![
+        read_call("c1", "a"),
+        read_call("c2", "b"),
+        read_call("c3", "c"),
+    ];
+
+    let executed = harness
+        .act(
+            &sid,
+            turn,
+            calls,
+            &mut NoopHarnessCallback,
+            0,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("act should succeed");
+
+    assert_eq!(executed, 0, "no tool runs when a steer precedes the batch");
+    assert_eq!(tools.calls().await.len(), 0, "no tool was executed");
+
+    let deferred = session
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|r| {
+            matches!(
+                &r.event,
+                SessionEvent::ToolResult { output, .. } if output.value["deferred"] == serde_json::json!(true)
+            )
+        })
+        .count();
+    assert_eq!(deferred, 3, "every call gets a deferred ToolResult");
+}
+
+#[tokio::test]
+async fn serial_batch_runs_full_when_no_midturn_steer() {
+    // Seed only the original request + assistant turn — no mid-turn steer.
+    let session = MockSession::new(vec![
+        user_message_event("original request"),
+        assistant_message_event("working on it"),
+    ]);
+    let tools = ScriptedTools::new(vec![
+        Ok(ToolOutput {
+            value: serde_json::json!("ok1"),
+            metadata: Default::default(),
+        }),
+        Ok(ToolOutput {
+            value: serde_json::json!("ok2"),
+            metadata: Default::default(),
+        }),
+    ]);
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: tools.clone(),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: CapturingProvider::text_only("idle"),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+
+    harness
+        .last_prompt_log_len
+        .store(2, std::sync::atomic::Ordering::Relaxed);
+
+    let sid = sample_session_id();
+    let turn = uuid::Uuid::new_v4();
+    let calls = vec![read_call("c1", "a"), read_call("c2", "b")];
+
+    let executed = harness
+        .act(
+            &sid,
+            turn,
+            calls,
+            &mut NoopHarnessCallback,
+            0,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("act should succeed");
+
+    assert_eq!(executed, 2, "both tools run when no steer is pending");
+
+    let deferred = session
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|r| {
+            matches!(
+                &r.event,
+                SessionEvent::ToolResult { output, .. } if output.value["deferred"] == serde_json::json!(true)
+            )
+        })
+        .count();
+    assert_eq!(deferred, 0, "no deferred results without a mid-turn steer");
+}

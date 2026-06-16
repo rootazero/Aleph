@@ -294,7 +294,25 @@ impl AgentHarness {
         let offered_defs = self.deps.tools.list().await;
         let offered_names: Vec<&str> = offered_defs.iter().map(|d| d.name.as_str()).collect();
 
-        for mut call in tool_calls {
+        let mut tool_iter = tool_calls.into_iter();
+        while let Some(mut call) = tool_iter.next() {
+            // Cooperative steer checkpoint. If a non-synthetic user message
+            // arrived after this turn's prompt boundary (the user changed
+            // their mind mid-batch), stop launching further tools and defer
+            // the current call + everything still pending so the model sees
+            // the message next Think and decides to pivot or resume.
+            // R7/R10: mechanical — no intent judgement here.
+            if self.has_unanswered_user_message(session_id).await {
+                let mut deferred = Vec::with_capacity(1);
+                deferred.push(call);
+                deferred.extend(tool_iter.by_ref());
+                self.emit_deferred_tool_results(session_id, turn_id, &deferred)
+                    .await?;
+                if let Some(ref tracker) = self.stall_tracker {
+                    tracker.record_activity().await;
+                }
+                break;
+            }
             // G3 (opencode-inspired): mechanical tool-name auto-repair via the
             // unified resolver (`tools::name_repair`). Models emit names that
             // miss the offered set by case (`Read`→`read`), separator
