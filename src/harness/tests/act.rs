@@ -920,7 +920,7 @@ async fn tool_error_trace_carries_retryable_flag() {
         .await
         .expect("run_turn should succeed");
 
-    let events = traced.lock().unwrap();
+    let events = traced.lock().unwrap_or_else(|e| e.into_inner());
     let retryable = events.iter().find_map(|e| match e {
         crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
             result: crate::tools::runtime::ToolResult::Error { retryable, .. },

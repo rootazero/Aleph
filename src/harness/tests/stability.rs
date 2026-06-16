@@ -36,7 +36,7 @@ impl RecordingTraceSink {
 
 impl TraceSink for RecordingTraceSink {
     fn on_trace(&self, event: &LoopTraceEvent) {
-        self.events.lock().unwrap().push(event.clone());
+        self.events.lock().unwrap_or_else(|e| e.into_inner()).push(event.clone());
     }
     fn flush(&self) {}
 }
@@ -295,7 +295,7 @@ async fn recording_sink_captures_full_lifecycle() {
     let cancel = tokio_util::sync::CancellationToken::new();
     harness.run(&sid, &mut cb, &cancel).await.expect("run ok");
 
-    let captured = events.lock().unwrap().clone();
+    let captured = events.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let names: Vec<&str> = captured
         .iter()
         .map(|e| match e {
@@ -688,7 +688,7 @@ async fn outcome_mapping_for_stalled_turn() {
     .await
     .expect("must return within 2s");
 
-    let captured = events.lock().unwrap().clone();
+    let captured = events.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let session_completed = captured
         .iter()
         .rev()
@@ -888,7 +888,7 @@ async fn session_completed_and_turn_metrics_carry_total_tokens() {
     let cancel = tokio_util::sync::CancellationToken::new();
     harness.run(&sid, &mut cb, &cancel).await.expect("run ok");
 
-    let captured = events.lock().unwrap().clone();
+    let captured = events.lock().unwrap_or_else(|e| e.into_inner()).clone();
     // Single text-only turn: 8 + 14 + 2 = 24.
     let session_completed = captured.iter().find_map(|e| match e {
         LoopTraceEvent::SessionCompleted { total_tokens, .. } => Some(*total_tokens),
