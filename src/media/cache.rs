@@ -85,7 +85,7 @@ impl MediaCache {
             if size > MAX_FILE_SIZE {
                 return Err(CacheError::TooLarge { size });
             }
-            let dir = ensure_session_dir(session_id)?;
+            let dir = ensure_session_dir(session_id).await?;
             let filename =
                 sanitize_filename(attachment.filename.as_deref().unwrap_or(&attachment.id));
             let path = dir.join(filename);
@@ -101,7 +101,7 @@ impl MediaCache {
         // Priority 2: local path — use directly
         if let Some(ref p) = attachment.path {
             let path = expand_tilde(p);
-            let meta = std::fs::metadata(&path)?;
+            let meta = tokio::fs::metadata(&path).await?;
             let size = meta.len();
             if size > MAX_FILE_SIZE {
                 return Err(CacheError::TooLarge { size });
@@ -115,7 +115,7 @@ impl MediaCache {
 
         // Priority 3: URL download
         if let Some(ref url) = attachment.url {
-            let dir = ensure_session_dir(session_id)?;
+            let dir = ensure_session_dir(session_id).await?;
 
             let resp = self
                 .client
@@ -154,7 +154,7 @@ impl MediaCache {
                 if total_size > MAX_FILE_SIZE {
                     // Clean up partially-written file
                     drop(file);
-                    let _ = std::fs::remove_file(&path);
+                    let _ = tokio::fs::remove_file(&path).await;
                     return Err(CacheError::TooLarge { size: total_size });
                 }
                 file.write_all(&chunk).await?;
@@ -391,14 +391,14 @@ fn session_dir(session_id: &str) -> PathBuf {
 
 /// Ensure session directory exists and write a `.created_at` marker
 /// (only on first creation) so `cleanup_stale` can use a stable timestamp.
-fn ensure_session_dir(session_id: &str) -> Result<PathBuf, std::io::Error> {
+async fn ensure_session_dir(session_id: &str) -> Result<PathBuf, std::io::Error> {
     let dir = session_dir(session_id);
     let marker = dir.join(".created_at");
     // create_dir_all is idempotent — avoids TOCTOU between exists() check and creation.
-    std::fs::create_dir_all(&dir)?;
+    tokio::fs::create_dir_all(&dir).await?;
     if !marker.exists() {
         // Best-effort marker — if it fails, cleanup_stale falls back to mtime
-        let _ = std::fs::write(&marker, "");
+        let _ = tokio::fs::write(&marker, "").await;
     }
     Ok(dir)
 }
@@ -417,6 +417,12 @@ fn sanitize_filename(name: &str) -> String {
 /// Expand a leading `~/` (or bare `~`) into the user's home directory.
 fn expand_tilde(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
+        if Path::new(rest)
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return PathBuf::from(path);
+        }
         if let Some(home) = dirs::home_dir() {
             return home.join(rest);
         }
