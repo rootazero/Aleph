@@ -528,52 +528,11 @@ where
                             "Auto-topic: spawning generation for first message"
                         );
                         tokio::spawn(async move {
-                            use crate::providers::adapter::RequestPayload;
-                            use crate::providers::message::UnifiedMessage;
-
-                            let prompt = format!(
-                                "Generate a concise topic title (5-10 characters, same language as the message) \
-                                 for a conversation that starts with: {topic_message}"
-                            );
-                            let messages = vec![UnifiedMessage::user(&prompt)];
-                            let payload = RequestPayload {
-                                messages: &messages,
-                                system_prompt: Some("You are a title generator. Output ONLY the title, nothing else."),
-                                system_blocks: None,
-                                tools: None,
-                                think_level: None,
-                                temperature: Some(0.3),
-                                max_tokens: None,
-                                tool_choice: None,
-                                model: None,
-                                metadata: None,
-                            };
-
-                            let topic_text = match topic_provider.process(payload).await {
-                                Ok(resp) => {
-                                    let text = resp.text_content().trim().to_string();
-                                    if text.is_empty() {
-                                        None
-                                    } else {
-                                        Some(text)
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!(error = %e, "Auto-topic: LLM call failed, using fallback");
-                                    None
-                                }
-                            };
-
-                            // Fallback: use truncated first message as topic
-                            let topic_text = topic_text.unwrap_or_else(|| {
-                                let msg = topic_message.trim();
-                                let truncated: String = msg.chars().take(20).collect();
-                                if msg.chars().count() > 20 {
-                                    format!("{truncated}…")
-                                } else {
-                                    truncated
-                                }
-                            });
+                            let topic_text = super::topic::generate_conversation_topic(
+                                &topic_provider,
+                                &topic_message,
+                            )
+                            .await;
 
                             if let Err(e) = sm.set_topic(&topic_session_key, &topic_text).await {
                                 warn!(error = %e, "Auto-topic: failed to persist topic");
