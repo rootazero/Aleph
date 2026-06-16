@@ -13,7 +13,7 @@
 
 use serde::Deserialize;
 use serde_json::json;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::agents::swarm::tasks::{
     CoordTaskFilter, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, ReviewVerdict, ReviewerKind,
@@ -3151,6 +3151,8 @@ pub async fn handle_chat_send(
     store: Arc<dyn TeamStore>,
     msg_store: Option<Arc<dyn crate::teams::messages::MessageStore>>,
     context: Arc<crate::gateway::context::GatewayContext>,
+    topic_provider: Option<Arc<dyn crate::providers::AiProvider>>,
+    event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 ) -> JsonRpcResponse {
     let params: ChatSendParams = match parse_params(&request) {
         Ok(p) => p,
@@ -3206,6 +3208,38 @@ pub async fn handle_chat_send(
             chrono::Duration::days(3650),
         )
         .await;
+
+    // First-message auto-name: if this team was created with a blank name
+    // (auto_name flag set), generate an LLM topic now that we have content.
+    // The flag is a one-shot gate (atomic take-and-clear), so this fires
+    // exactly once — on the first send — and never overrides explicit names.
+    if let (Some(provider), Some(bus)) = (topic_provider.as_ref(), event_bus.as_ref()) {
+        if store.take_auto_name_flag(&params.team_id).await.unwrap_or(false) {
+            let provider = Arc::clone(provider);
+            let bus = Arc::clone(bus);
+            let store = Arc::clone(&store);
+            let team_id = params.team_id.clone();
+            let first_message = params.message.clone();
+            tokio::spawn(async move {
+                let topic = crate::gateway::execution_engine::topic::generate_conversation_topic(
+                    &provider,
+                    &first_message,
+                )
+                .await;
+                match store.rename_team(&team_id, &topic).await {
+                    Ok(()) => {
+                        let _ = bus.publish_frame(
+                            &crate::gateway::events::GatewayEventFrame::TeamChanged {
+                                team_id: team_id.clone(),
+                                change: crate::gateway::events::ChangeKind::Updated,
+                            },
+                        );
+                    }
+                    Err(e) => warn!(team_id = %team_id, error = %e, "team auto-name: rename failed"),
+                }
+            });
+        }
+    }
 
     // Equal broadcast: fan out by @mention (no @ → leader fallback); agents may
     // @ each other to continue the thread, bounded by the chain_depth guard.

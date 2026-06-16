@@ -1553,13 +1553,22 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             if let Some(ts) = team_store.clone() {
                 let chat_ctx = gateway_ctx.clone();
                 let chat_msg_store = message_store.clone();
+                // Resolve a cheap provider (haiku → default) for first-message
+                // team auto-naming, mirroring single chat's auto-topic provider.
+                let chat_topic_provider: Option<Arc<dyn alephcore::providers::AiProvider>> =
+                    topic_provider_registry
+                        .get("haiku")
+                        .or_else(|| Some(topic_provider_registry.default_provider()));
+                let chat_event_bus = event_bus.clone();
                 server.handlers_mut().register("teams.chat.send", move |req| {
                     let store = ts.clone();
                     let ctx = chat_ctx.clone();
                     let msg_store = chat_msg_store.clone();
+                    let provider = chat_topic_provider.clone();
+                    let bus = chat_event_bus.clone();
                     async move {
                         alephcore::gateway::handlers::teams::handle_chat_send(
-                            req, store, msg_store, ctx,
+                            req, store, msg_store, ctx, provider, Some(bus),
                         )
                         .await
                     }
