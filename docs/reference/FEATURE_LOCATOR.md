@@ -28,7 +28,7 @@
 | Context | voice 作为 context 层 | Voice-as-Context | `src/thinker/layers/voice_mode.rs` | ✅ |
 | Context | 记忆三支柱①关键词链接 | Note Keyword Linking | `src/memory/notes/graph/relevance.rs` | ✅ |
 | Context | 记忆三支柱②会话结束 flush | Session-End Flush | `src/memory/flush/mod.rs` | ✅ |
-| Context | 记忆三支柱③错误沉淀教训 | Error Sedimentation | `src/memory/dreaming/distill_action.rs` | ⚠️ |
+| Context | 记忆三支柱③错误沉淀教训 | Correction & Lesson Sedimentation | `src/memory/dreaming/stages/feedback_distill.rs` | ✅ |
 | Harness | harness 架构 / Think-Act 笨循环 | Harness Architecture | `src/harness/` (12 文件) | ✅ |
 | Harness | tool calling 2.0 / tool use | Tool Calling | `src/harness/agent/act.rs` + `src/tools/scoped/` | ✅ |
 | Harness | DAG 工具执行 / 智能调度 | Tool Concurrency (群分) | `src/tools/concurrency.rs` | ⚠️ |
@@ -132,10 +132,13 @@
 - 锚点：`src/memory/flush/mod.rs`（非阻塞 spawn `session_end_flush`）、`src/memory/flush/registry.rs`（FlushRegistry + await_ready）、`src/memory/compression/mod.rs`（compress_to_notes）
 - 话术：「会话结束 flush = 非阻塞 spawn + FlushRegistry，让后续 session 可 await_ready，不阻塞当前 session end。」
 
-**③ 错误即时沉淀教训 (Error Sedimentation)** ⚠️
-- 锚点：`src/memory/notes/indexer.rs`（feedback/lesson 分类目录）、`src/memory/dreaming/distill_action.rs`（DistillAction::FeedbackDistill）、`src/memory/dreaming/mod.rs`（dream daemon 执行）
-- 状态：⚠️ feedback/lesson 分类与 DistillAction 已定义，但"错误捕获 → 记录 → distill"的端到端生产 wiring 需复核。
-- 话术：「错误沉淀的‘分类 + distill action’已有，但端到端是否每次错误都触发 distill 要先验证再动。」
+**③ 纠正/教训即时沉淀 (Correction & Lesson Sedimentation)** ✅（G6 已查证 2026-06-16）
+- **写入**：`src/builtin_tools/flag_user_correction.rs`（LLM 调的工具，写 `RawMemorySource::Correction` 到 `aleph://correction/{id}`）；构造于 `src/executor/builtin_registry/builder/constructor.rs:1793`（**有 `memory_db` 即注册，非死代码**），prompt 引导在 `src/thinker/layers/special_actions.rs`。
+- **蒸馏**：`src/memory/dreaming/stages/feedback_distill.rs`（按 `aleph://correction/` 前缀 + watermark 幂等读 → LLM 蒸馏成 `feedback/` note），调度于 `src/memory/dreaming/mod.rs:172,218`（**Consolidate 每日 + Synthesize 两条 dream path 都挂**）。
+- **召回**：`feedback/` note 由 assembler 表面化（`src/memory/assembler/gather.rs:284` / `envelope.rs:34`）；goal 教训另有 `GoalLessonsPromoteStage` → `lesson/` note。
+- **状态**：✅ 端到端已连且生产存活（写入工具注册 + distill 双路调度 + 召回消费者，逐跳有单测）。
+- **设计边界（重要）**：沉淀是 **LLM/工具驱动**（R8 工具即一切 / R7 LLM 主权）——LLM 判断"这值得记"才调 `flag_user_correction`。**没有也不应有**"每次工具失败自动写 raw memory"的 harness 错误 hook（违 R10「不做错误恢复」+ R7，且会用瞬时报错噪声淹没记忆）。
+- 话术：「‘错误/纠正沉淀’走 `flag_user_correction` + `FeedbackDistill`，已全连且存活。想要‘自动捕获工具失败 → 教训’——**这是故意不做的设计边界**（R7/R10），别加 harness 错误 hook；要让 LLM 多记教训就强化 prompt 引导它调工具。」
 
 ---
 
@@ -405,7 +408,7 @@
 | 3 | 配对时选 tier / devices.set_level | ❌ | device 表无 tier 字段，无 set_level API | **新功能** |
 | 4 | kimi vs claude 差异化压缩阈值 | ⚠️ | 按窗口比例自动浮动，无 per-model 专属阈值 | **新增 per-model 配置** |
 | 5 | DAG 工具执行 | ⚠️ | 工具层是"群分顺序"非真 DAG；真 DAG 在 Workflow/Task 层 | 描述时分清"工具并发"vs"任务 DAG" |
-| 6 | 错误沉淀教训(三支柱③) | ⚠️ | 分类+distill action 已有，端到端 wiring 待复核 | 先验证后动 |
+| 6 | ~~错误沉淀教训(三支柱③)~~ | ✅ **G6 已查证 2026-06-16** | 端到端已连且存活（flag_user_correction→FeedbackDistill→feedback note→召回）；auto error-hook 故意不做(R7/R10) | **零代码完成**，见 §2.5③ |
 
 ## 附录 B. 高频"混称"对照（说清楚指哪个）
 

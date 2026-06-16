@@ -9,7 +9,7 @@
 
 | # | 项目 | 类型 | 工作量 | 前置决策 | 建议优先级 |
 |---|------|------|--------|----------|-----------|
-| G6 | 错误沉淀教训 wiring 复核 | 微调(先验证) | S | 无 | **高**（先验证，可能零成本或小补） |
+| ~~G6~~ | ~~错误沉淀教训 wiring 复核~~ | 微调(先验证) | — | 无 | ✅ **已完成 2026-06-16（零代码）** |
 | G4 | per-model 压缩阈值 | 新增配置 | M | 无 | **中**（独立、收益清晰） |
 | G1 | doctor LLM 修复 + `f` 入口 | 新功能 | M | 无 | **中** |
 | G5 | "DAG 工具执行"命名澄清 | 仅澄清 | — | 无 | **低**（无需开发） |
@@ -17,15 +17,17 @@
 
 ---
 
-## G6 — 错误即时沉淀教训：端到端 wiring 复核
+## G6 — 错误即时沉淀教训：端到端 wiring 复核 ✅ 已完成（2026-06-16，零代码）
 
-- **类型**：微调（先验证，再决定是否补 wiring）
-- **现状**：`feedback`/`lesson` 分类目录与 `DistillAction::FeedbackDistill` 已定义（`src/memory/dreaming/distill_action.rs`），但"错误捕获 → 记录 raw memory → dream daemon distill 成 lesson"的端到端是否每次错误都触发，未确认。
-- **涉及文件**：`src/memory/dreaming/distill_action.rs`、`src/memory/dreaming/mod.rs`、`src/memory/notes/indexer.rs`、错误捕获侧（harness 失败路径 / tool error → raw memory 写入点）
-- **目标**：确认或补齐"工具失败 / LLM 拒绝 → 错误事实落 raw memory → dream 周期 distill"链路。
-- **工作量**：S（验证为主；若链路已通则零开发，若断则补 1-2 处写入点）
-- **验收**：构造一次工具失败，确认 raw memory 出现错误事实，且 dream 周期后生成对应 `lesson/feedback` note。
-- **启动话术**：「验证‘错误即时沉淀教训’三支柱③的端到端链路：从工具失败/LLM 拒绝到 raw memory 写入，再到 dream daemon 的 FeedbackDistill。先只读追踪 `src/memory/dreaming/` + 错误捕获侧，确认哪一环没接，再决定是否补 wiring——别先改代码。」
+- **类型**：微调（先验证，再决定是否补 wiring）→ **验证结论：链路已通，零开发**
+- **查证结论**：纠正/教训沉淀**端到端已连且生产存活**，分三跳逐一证实——
+  1. **写入** ✅ `src/builtin_tools/flag_user_correction.rs` 工具，构造于 `src/executor/builtin_registry/builder/constructor.rs:1793`（有 `memory_db` 即注册，**非死代码**），写 `aleph://correction/{id}`。
+  2. **蒸馏** ✅ `src/memory/dreaming/stages/feedback_distill.rs` 按前缀 + watermark 幂等读 → LLM 蒸馏 `feedback/` note，调度于 `src/memory/dreaming/mod.rs:172,218`（Consolidate + Synthesize 双 dream path）。
+  3. **召回** ✅ assembler `gather.rs:284`/`envelope.rs:34` 表面化 `feedback/` note；goal 教训另有 `GoalLessonsPromoteStage`→`lesson/`。
+- **关键判断（为何不补 wiring）**：backlog 原设想的"工具失败/LLM 拒绝 → 自动写 raw memory"的 **harness 错误 hook 故意不存在，也不应加**——违 R10「不做错误恢复」+ R7 LLM 主权，且会用瞬时报错噪声淹没记忆。沉淀**刻意做成 LLM/工具驱动**（R8）：LLM 判断"值得记"才调 `flag_user_correction`。因此"链路断"的前提不成立。
+- **若将来仍想强化**（非本 gap 范畴）：唯一正当方向是**强化 prompt 引导**（`special_actions.rs`）让 LLM 更主动调工具记教训，或加一个 LLM 可调的 `flag_lesson` 工具——**仍是工具驱动，不是 harness 自动 hook**。
+- **遗留可选项**：逐跳单测已有，但缺一个**端到端集成测试**（correction 工具写 → dream distill → feedback note 落地）作回归锁（防 `constructor.rs` 注册被悄悄摘除，类比历史 mutation_gate 死代码 bug）。**非必须**，列为可选加固。
+- **详见**：[FEATURE_LOCATOR.md §2.5③](FEATURE_LOCATOR.md)。
 
 ---
 
@@ -89,7 +91,7 @@
 
 ## 建议执行顺序
 
-1. **先 G6**（验证，可能零成本）→ **G4 / G1**（独立新功能，收益清晰，互不依赖，可并行排期）。
+1. ~~**先 G6**（验证，可能零成本）~~ → ✅ **G6 已完成（零代码，链路已通）**。下一步 **G4 / G1**（独立新功能，收益清晰，互不依赖，可并行排期）。
 2. **G5** 只在文档/沟通层澄清，不进开发队列。
 3. **G2+G3** 单独拉一次架构决策会（信任模型），决策通过后再按 L 级子系统排期；否则维持现状并在 FEATURE_LOCATOR §6.2 标注"刻意不实现"。
 </content>
