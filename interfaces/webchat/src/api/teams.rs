@@ -79,6 +79,13 @@ impl TeamsApi {
         Ok(())
     }
 
+    pub async fn rename(state: &DashboardState, team_id: &str, name: &str) -> Result<(), String> {
+        state
+            .rpc_call("teams.rename", json!({ "team_id": team_id, "name": name }))
+            .await?;
+        Ok(())
+    }
+
     pub async fn delete(state: &DashboardState, team_id: &str) -> Result<(), String> {
         state
             .rpc_call("teams.delete", json!({"team_id": team_id}))
@@ -116,6 +123,7 @@ impl TeamsApi {
         description: &str,
         leader_id: &str,
         members: &[(String, String)], // (agent_id, role)
+        auto_name: bool,
     ) -> Result<String, String> {
         let members_json: Vec<Value> = members
             .iter()
@@ -129,6 +137,7 @@ impl TeamsApi {
                     "description": description,
                     "leader_id": leader_id,
                     "members": members_json,
+                    "auto_name": auto_name,
                 }),
             )
             .await?;

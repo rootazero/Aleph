@@ -87,26 +87,26 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
             .into_iter()
             .map(|id| (id, "member".to_string()))
             .collect();
-        // Validate + resolve the name; surface any problem inline instead of
-        // silently returning (the original "Start button does nothing" bug).
-        // A blank name (Ok(None)) auto-generates "<leader><suffix>" via i18n.
-        let name = match resolve_team_compose(&leader, &team_name.get_untracked(), members.len()) {
-            Ok(Some(n)) => n,
-            Ok(None) => format!("{leader}{}", t_string!(i18n, chat.team_default_suffix)),
-            Err(e) => {
-                let msg = match e {
-                    TeamComposeError::EmptyLeader => t_string!(i18n, chat.team_err_no_leader),
-                    TeamComposeError::NoMembers => t_string!(i18n, chat.team_err_no_member),
-                };
-                error.set(Some(msg.to_string()));
-                return;
-            }
-        };
+        // Blank → provisional "新群聊" + auto_name=true so the backend replaces
+        // it with an LLM topic on the first message (mirrors single chat).
+        let (name, auto_name) =
+            match resolve_team_compose(&leader, &team_name.get_untracked(), members.len()) {
+                Ok(Some(n)) => (n, false),
+                Ok(None) => (t_string!(i18n, chat.new_group_chat).to_string(), true),
+                Err(e) => {
+                    let msg = match e {
+                        TeamComposeError::EmptyLeader => t_string!(i18n, chat.team_err_no_leader),
+                        TeamComposeError::NoMembers => t_string!(i18n, chat.team_err_no_member),
+                    };
+                    error.set(Some(msg.to_string()));
+                    return;
+                }
+            };
         error.set(None);
 
         let dash = dashboard;
         spawn_local(async move {
-            match TeamsApi::create(&dash, &name, "", &leader, &members).await {
+            match TeamsApi::create(&dash, &name, "", &leader, &members, auto_name).await {
                 Ok(team_id) => {
                     chat.clear_session();
                     chat.team_id.set(Some(team_id));
