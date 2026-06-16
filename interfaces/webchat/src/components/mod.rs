@@ -25,7 +25,6 @@ pub mod session_tabs;
 pub mod settings_sidebar;
 pub mod sidebar;
 pub mod team_participants;
-pub mod team_roster;
 pub mod theme_toggle;
 pub mod tool_card;
 pub mod ui;

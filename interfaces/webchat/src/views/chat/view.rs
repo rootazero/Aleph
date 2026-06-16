@@ -10,7 +10,7 @@ use super::messages::MessageList;
 use super::state::{ChatState, PendingAttachment};
 use super::team_events::subscribe_team_events;
 use crate::components::session_tabs::SessionTabs;
-use crate::components::team_roster::TeamRoster;
+use crate::components::team_participants::TeamParticipants;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
@@ -148,10 +148,6 @@ pub fn ChatView() -> impl IntoView {
             on:dragleave=on_dragleave
             on:drop=on_drop
         >
-            // Team roster rail — left column, only visible in team chat mode.
-            <Show when=move || chat.team_id.get().is_some()>
-                <TeamRoster />
-            </Show>
             // Chat surface — collapses to 33% when workspace pane is open.
             // `relative` anchors the workspace toggle (top-right corner
             // affordance) so it follows the chat-surface boundary: in
@@ -176,6 +172,11 @@ pub fn ChatView() -> impl IntoView {
                     // Session tab strip overlay — frosted band pinned to the top,
                     // renders only when ≥2 agents are open.
                     <div class="absolute inset-x-0 top-0 z-10"><SessionTabs /></div>
+                    // Team participants — top-right avatar cluster + popover
+                    // (replaces the old left roster rail). Team mode only.
+                    <Show when=move || chat.team_id.get().is_some()>
+                        <div class="absolute top-2 right-2 z-20"><TeamParticipants /></div>
+                    </Show>
                     // Input area (floating glass bar pinned over the flow)
                     <InputArea />
                 </div>
