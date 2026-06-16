@@ -4,8 +4,11 @@ use super::error::InitError;
 use crate::config::Config;
 use crate::sync_primitives::Arc;
 use crate::utils::paths::{get_config_dir, get_runtimes_dir};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use tracing::{info, warn};
+
+const CONFIG_SUBDIRS: &[&str] = &["logs", "cache", "output", "skills", "models"];
 
 /// Initialization phase identifier
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +60,7 @@ struct PreExistingState {
     database: bool,
     runtimes_dir: bool,
     skills_dir: bool,
+    subdirs: BTreeSet<String>,
 }
 
 /// Progress callback trait for UI updates
@@ -126,10 +130,17 @@ impl InitializationCoordinator {
         // triggered by a single missing marker (e.g. config.toml) on an
         // otherwise populated install, and rollback must not delete
         // pre-existing user data.
+        let mut pre_existing_subdirs = BTreeSet::new();
+        for subdir in CONFIG_SUBDIRS {
+            if self.config_dir.join(subdir).exists() {
+                pre_existing_subdirs.insert(subdir.to_string());
+            }
+        }
         let pre_existing = PreExistingState {
             database: self.config_dir.join("memory.db").exists(),
             runtimes_dir: get_runtimes_dir().is_ok_and(|d| d.exists()),
             skills_dir: self.config_dir.join("skills").exists(),
+            subdirs: pre_existing_subdirs,
         };
 
         for (i, phase) in phases.iter().enumerate() {
@@ -228,14 +239,19 @@ impl InitializationCoordinator {
                     }
                 }
                 InitPhase::Runtimes => {
-                    let runtimes_dir = get_runtimes_dir().map_err(|e| {
-                        InitError::new("rollback", format!("Failed to get runtimes dir: {e}"))
-                    })?;
-                    if pre_existing.runtimes_dir {
-                        warn!(dir = ?runtimes_dir, "Runtimes directory pre-existed; skipping rollback to preserve installed runtimes");
-                    } else if runtimes_dir.exists() {
-                        if let Err(e) = tokio::fs::remove_dir_all(&runtimes_dir).await {
-                            warn!(error = %e, dir = ?runtimes_dir, "Failed to remove runtimes directory during rollback");
+                    match get_runtimes_dir() {
+                        Ok(runtimes_dir) => {
+                            if pre_existing.runtimes_dir {
+                                warn!(dir = ?runtimes_dir, "Runtimes directory pre-existed; skipping rollback to preserve installed runtimes");
+                            } else if runtimes_dir.exists() {
+                                if let Err(e) = tokio::fs::remove_dir_all(&runtimes_dir).await {
+                                    warn!(error = %e, dir = ?runtimes_dir, "Failed to remove runtimes directory during rollback");
+                                    errors.push(format!("runtimes dir: {e}"));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to get runtimes dir during rollback");
                             errors.push(format!("runtimes dir: {e}"));
                         }
                     }
@@ -264,8 +280,11 @@ impl InitializationCoordinator {
                     warn!("Skipping config rollback to avoid deleting pre-existing user configuration");
                 }
                 InitPhase::Directories => {
-                    for subdir in ["logs", "cache", "output", "skills", "models"] {
+                    for subdir in CONFIG_SUBDIRS {
                         let path = self.config_dir.join(subdir);
+                        if pre_existing.subdirs.contains(*subdir) {
+                            continue;
+                        }
                         if path.exists() {
                             match tokio::fs::read_dir(&path).await {
                                 Ok(mut entries) => match entries.next_entry().await {
