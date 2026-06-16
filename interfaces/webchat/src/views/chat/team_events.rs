@@ -7,10 +7,10 @@ use leptos::prelude::*;
 use crate::context::{DashboardState, GatewayEvent};
 use super::state::{ChatMessage, ChatState, MemberStatus};
 
-/// Stable per-agent color by roster slot index. Used by the roster rail
-/// (`team_roster.rs`) and the workspace deliverables panel (`workspace_panel.rs`)
-/// where only the roster position is available. Attribution bubbles in
-/// `messages.rs` now use `agent_color_for_id` (id-hashed, session-stable).
+/// Stable per-agent color by roster slot index. Used by the workspace
+/// deliverables panel (`workspace_panel.rs`) where only the roster position is
+/// available. Attribution bubbles in `messages.rs` now use `agent_color_for_id`
+/// (id-hashed, session-stable).
 #[must_use]
 pub fn agent_color(index: usize) -> &'static str {
     const PALETTE: [&str; 6] = ["#7c9cff", "#4ec9b0", "#e0a458", "#c586c0", "#4fc1ff", "#d16969"];
