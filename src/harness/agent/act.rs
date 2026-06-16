@@ -40,6 +40,21 @@
 //!
 //! Any failing precondition falls through to the existing serial loop with no
 //! observable behavior change.
+//!
+//! ## Cooperative steer checkpoint
+//!
+//! Before dispatching each serial tool call (and before each parallel
+//! group), Act re-checks `AgentHarness::has_unanswered_user_message`. If a
+//! non-synthetic user message arrived after this turn's prompt boundary
+//! (the `last_prompt_log_len` watermark) — the user changed their mind
+//! mid-batch — the remaining not-yet-started tools are skipped, each gets a
+//! synthetic "deferred" `ToolResult` (so the `tool_use`↔`tool_result`
+//! pairing the provider requires stays intact), and Act returns. The next
+//! Think surfaces the new message + deferred results; the model decides to
+//! pivot or re-issue (R7). In-flight tools are never killed (use `/stop` /
+//! `Interrupt` mode for that). When gateway-side `mid_turn_steering` is off
+//! no message is injected mid-turn, so the predicate never fires and
+//! behaviour is unchanged.
 
 use std::collections::HashMap;
 use std::time::Instant;
