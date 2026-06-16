@@ -186,6 +186,11 @@ pub struct CreateTeamParams {
     pub leader_id: String,
     #[serde(default)]
     pub members: Vec<CreateMemberSpec>,
+    /// When true, the team was created with a blank name from the Panel; the
+    /// first `teams.chat.send` will replace the provisional name with an
+    /// LLM-generated topic. Defaults false (explicit names are respected).
+    #[serde(default)]
+    pub auto_name: bool,
 }
 
 /// teams.create — create a persistent team with explicit leader_id + members.
@@ -263,6 +268,14 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -
                 INTERNAL_ERROR,
                 format!("Failed to enroll member '{}': {e}", spec.agent_id),
             );
+        }
+    }
+
+    // Blank-name teams from the Panel carry the auto-name flag so the first
+    // message can replace the provisional name with an LLM topic.
+    if params.auto_name {
+        if let Err(e) = store.set_name_auto(&team.id, true).await {
+            tracing::warn!(team_id = %team.id, error = %e, "failed to set name_auto flag");
         }
     }
 
@@ -1301,6 +1314,38 @@ mod tests {
         let members = store.get_members(&team_id).await.unwrap();
         let bot_entries: Vec<_> = members.iter().filter(|m| m.agent_id == "bot").collect();
         assert_eq!(bot_entries.len(), 1, "leader enrolled exactly once");
+    }
+
+    #[tokio::test]
+    async fn handle_create_with_auto_name_sets_flag() {
+        let store = team_store().await;
+        let req = create_team_req(json!({ "name": "新群聊", "leader_id": "main", "auto_name": true }));
+        let resp = handle_create(req, Arc::clone(&store)).await;
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let team_id = resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("team_id"))
+            .and_then(|v| v.as_str())
+            .expect("team_id in response")
+            .to_string();
+        assert!(store.take_auto_name_flag(&team_id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn handle_create_without_auto_name_leaves_flag_off() {
+        let store = team_store().await;
+        let req = create_team_req(json!({ "name": "My Team", "leader_id": "main" }));
+        let resp = handle_create(req, Arc::clone(&store)).await;
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let team_id = resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("team_id"))
+            .and_then(|v| v.as_str())
+            .expect("team_id in response")
+            .to_string();
+        assert!(!store.take_auto_name_flag(&team_id).await.unwrap());
     }
 
     // -------------------------------------------------------------------------
