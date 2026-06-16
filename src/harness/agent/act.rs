@@ -208,6 +208,40 @@ impl AgentHarness {
         Ok(executed_count)
     }
 
+    /// Emit a synthetic "deferred" `ToolResult` for each tool call the
+    /// cooperative steer checkpoint skipped. Every `tool_use` block in the
+    /// turn's `AssistantMessage` must have a matching `tool_result` or the
+    /// provider rejects the next request, so a skipped call still gets a
+    /// result — a marker the model can re-issue from on its next turn.
+    ///
+    /// R10-safe: pure mechanical bookkeeping. Whether a deferred call is
+    /// re-run is the model's decision next Think, not the harness's.
+    pub(crate) async fn emit_deferred_tool_results(
+        &self,
+        session_id: &SessionId,
+        turn_id: TurnId,
+        calls: &[NativeToolCall],
+    ) -> Result<(), HarnessError> {
+        for call in calls {
+            let output = ToolOutput {
+                value: serde_json::json!({
+                    "deferred": true,
+                    "reason": "superseded by a new user message that arrived mid-turn; \
+                               re-issue this call if it is still needed",
+                }),
+                metadata: crate::session::events::ToolOutputMetadata::default(),
+            };
+            let event = SessionEvent::ToolResult {
+                turn_id,
+                call_id: call.id.clone(),
+                output,
+                at: now_ms(),
+            };
+            self.deps.session.emit_event(session_id, event).await?;
+        }
+        Ok(())
+    }
+
     /// Dispatch a single group of tool calls: route through the opencode-parity
     /// parallel fast path when [`Self::can_parallel_dispatch`] admits the group,
     /// else fall to the serial loop. This is the former body of `act` minus the

@@ -1458,3 +1458,93 @@ async fn act_falls_back_to_serial_when_any_call_is_unsafe() {
         elapsed,
     );
 }
+
+// =============================================================================
+// Cooperative steer checkpoint — deferred tool results
+// =============================================================================
+
+/// `emit_deferred_tool_results` must emit exactly one synthetic
+/// `SessionEvent::ToolResult` per skipped call, in input order, carrying the
+/// `"deferred": true` marker so the provider sees a result for every prior
+/// `tool_use` block (otherwise the next request is rejected).
+#[tokio::test]
+async fn deferred_results_emit_one_tool_result_per_skipped_call() {
+    let calls = vec![
+        NativeToolCall {
+            thought_signature: None,
+            id: "call_a".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "a"}),
+        },
+        NativeToolCall {
+            thought_signature: None,
+            id: "call_b".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "b"}),
+        },
+    ];
+
+    let session = MockSession::new(vec![]);
+    let tools = ScriptedTools::new(vec![]);
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools,
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: CapturingProvider::text_only("idle"),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+
+    let sid = sample_session_id();
+    let turn = uuid::Uuid::new_v4();
+
+    harness
+        .emit_deferred_tool_results(&sid, turn, &calls)
+        .await
+        .expect("emit_deferred_tool_results should succeed");
+
+    let events = session.snapshot().await;
+    let deferred: Vec<(String, serde_json::Value)> = events
+        .iter()
+        .filter_map(|r| match &r.event {
+            SessionEvent::ToolResult {
+                call_id, output, ..
+            } => Some((call_id.clone(), output.value.clone())),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(deferred.len(), 2, "one ToolResult per skipped call");
+    assert_eq!(deferred[0].0, "call_a", "first result is call_a");
+    assert_eq!(deferred[1].0, "call_b", "second result is call_b");
+    assert_eq!(
+        deferred[0].1["deferred"],
+        serde_json::json!(true),
+        "first result carries the deferred marker",
+    );
+    assert_eq!(
+        deferred[1].1["deferred"],
+        serde_json::json!(true),
+        "second result carries the deferred marker",
+    );
+}
