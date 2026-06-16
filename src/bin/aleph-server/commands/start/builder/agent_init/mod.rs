@@ -1549,12 +1549,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // to the TeamDispatcher that shares the same dep.
             if let Some(ts) = team_store.clone() {
                 let chat_ctx = gateway_ctx.clone();
+                let chat_msg_store = message_store.clone();
                 server.handlers_mut().register("teams.chat.send", move |req| {
                     let store = ts.clone();
                     let ctx = chat_ctx.clone();
+                    let msg_store = chat_msg_store.clone();
                     async move {
-                        alephcore::gateway::handlers::teams::handle_chat_send(req, store, ctx)
-                            .await
+                        alephcore::gateway::handlers::teams::handle_chat_send(
+                            req, store, msg_store, ctx,
+                        )
+                        .await
                     }
                 });
             }

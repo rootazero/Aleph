@@ -2844,14 +2844,17 @@ pub struct ChatSendParams {
     pub message: String,
 }
 
-/// teams.chat.send — spawn the team's leader agent on a single harness run with
-/// an orchestration prompt. The leader uses team tools to decompose/delegate;
-/// the autonomous dispatcher runs members. The leader run emits to team.<id>.*
-/// via TeamFanoutEmitter so its narrative + final synthesis appear in the unified
-/// team chat stream. R10: resolve + spawn only, no orchestration reasoning here.
+/// teams.chat.send — equal-broadcast group chat (telegram-style multiagent).
+/// Stores the user message into the shared transcript, then fans out to each
+/// @mentioned agent (no @ → leader fallback) via the `GroupChatBroadcaster`.
+/// Agents reply into the same transcript and may @ each other to continue,
+/// bounded by chain_depth + fan-out width guards. R10: routing/fan-out is
+/// deterministic scaffolding; all "what to say / whether to reply" reasoning
+/// lives in each agent's own LLM loop.
 pub async fn handle_chat_send(
     request: JsonRpcRequest,
     store: Arc<dyn TeamStore>,
+    msg_store: Option<Arc<dyn crate::teams::messages::MessageStore>>,
     context: Arc<crate::gateway::context::GatewayContext>,
 ) -> JsonRpcResponse {
     let params: ChatSendParams = match parse_params(&request) {
@@ -2867,8 +2870,10 @@ pub async fn handle_chat_send(
         );
     }
 
-    let team = match store.get_team(&params.team_id).await {
-        Ok(Some(t)) => t,
+    // Team must exist (404 for an unknown id). We don't bind it here — the
+    // broadcaster re-reads team + roster per dispatch round.
+    match store.get_team(&params.team_id).await {
+        Ok(Some(_)) => {}
         Ok(None) => {
             return JsonRpcResponse::error(
                 request.id,
@@ -2879,81 +2884,46 @@ pub async fn handle_chat_send(
         Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("{e}")),
     };
 
-    let members = store
-        .get_members(&params.team_id)
-        .await
-        .inspect_err(|e| tracing::warn!(team_id = %params.team_id, error = %e, "teams.chat.send: get_members failed; spawning leader with empty roster"))
-        .unwrap_or_default();
-    let roster = members
-        .iter()
-        .filter(|m| m.agent_id != team.leader_id)
-        .map(|m| format!("{} ({})", m.agent_id, m.role))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    // Resolve the leader agent from the registry.
-    let leader_agent = match context.agent_registry().get(&team.leader_id).await {
-        Some(a) => a,
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Leader agent '{}' not found in registry", team.leader_id),
-            )
-        }
+    // Group-chat broadcast needs the message store for the shared transcript.
+    let Some(msg_store) = msg_store else {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            "team message store unavailable; group chat cannot persist transcript".to_string(),
+        );
     };
 
-    let prompt = crate::teams::leader_prompt::build(
-        &team.name,
-        &roster,
-        team.protocol.as_deref(),
-        &params.message,
-    );
+    // Persist the user message into the shared transcript (single source of
+    // truth). Long TTL: the transcript is a durable record, not short-lived
+    // inbox traffic (recipient-less messages would otherwise expire in 30 min).
+    let _ = msg_store
+        .send_message_with_ttl(
+            crate::teams::messages::NewMessage {
+                team_id: params.team_id.clone(),
+                from_agent: crate::teams::broadcast::RESERVED_USER_HANDLE.to_string(),
+                msg_type: crate::teams::messages::MessageType::Message,
+                subject: String::new(),
+                content: params.message.clone(),
+                recipients: Vec::new(),
+                reply_to: None,
+                attachments: Vec::new(),
+            },
+            chrono::Duration::days(3650),
+        )
+        .await;
 
+    // Equal broadcast: fan out by @mention (no @ → leader fallback); agents may
+    // @ each other to continue the thread, bounded by the chain_depth guard.
+    let broadcaster = crate::teams::broadcast::GroupChatBroadcaster::new(
+        Arc::clone(&context),
+        Arc::clone(&store),
+        Arc::clone(&msg_store),
+    );
     let run_id = uuid::Uuid::new_v4().to_string();
-    let session_key = crate::routing::session_key::SessionKey::task(
-        &team.leader_id,
-        "team_chat",
-        &params.team_id,
-    );
-    let mut metadata = std::collections::HashMap::new();
-    metadata.insert("team_id".to_string(), params.team_id.clone());
-
-    let run_request = crate::gateway::execution_engine::RunRequest {
-        run_id: run_id.clone(),
-        input: prompt,
-        session_key,
-        timeout_secs: None,
-        metadata,
-        attachments: Vec::new(),
-        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override: None,
-        workspace_override: None,
-        max_iterations_override: None,
-        model_override: None,
-    };
-
-    // Leader run fans out to team.<id>.* (unified stream the Panel team view
-    // subscribes to). Falls back to NoOp if no event bus was wired at boot.
-    let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
-        match crate::gateway::event_emitter::team_fanout::team_event_bus() {
-            Some(bus) => Arc::new(
-                crate::gateway::event_emitter::team_fanout::TeamFanoutEmitter::new(
-                    bus,
-                    params.team_id.clone(),
-                    team.leader_id.clone(),
-                    None,
-                ),
-            ),
-            None => Arc::new(crate::gateway::event_emitter::NoOpEventEmitter::new()),
-        };
-
-    let execution_adapter = Arc::clone(context.execution_adapter());
-    let team_id_for_log = params.team_id.clone();
+    let team_id = params.team_id.clone();
+    let message = params.message.clone();
     tokio::spawn(async move {
-        if let Err(e) = execution_adapter.execute(run_request, leader_agent, emitter).await {
-            tracing::warn!(team_id = %team_id_for_log, error = %e, "team leader run failed");
-        }
+        broadcaster.dispatch_user(team_id, message).await;
     });
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "run_id": run_id }))

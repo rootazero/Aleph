@@ -557,8 +557,64 @@ pub fn ChatSidebar() -> impl IntoView {
 
     view! {
         <div class="flex flex-col h-full">
-            // Agent selector + New Chat button
+            // Top action area
             <div class="p-3 space-y-2">
+                // ── Advanced features zone ──────────────────────────────
+                // Team chat + Project management (placeholder). Each entry is
+                // a full-width row, stacked vertically; future advanced entries
+                // (e.g. workflows) keep getting appended into this block.
+                <div class="flex flex-col gap-1.5">
+                    <button
+                        class="w-full inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                               bg-surface-sunken border border-border text-sm
+                               hover:border-primary transition-colors"
+                        title=move || t_string!(i18n, chat.team_chat).to_string()
+                        on:click=move |_| show_compose.set(true)
+                    >
+                        {move || format!("👥 {}", t_string!(i18n, chat.team_chat))}
+                    </button>
+                    // Project management — placeholder entry, not wired up yet:
+                    // dimmed + disabled + "coming soon" badge, so it reads as
+                    // "slot reserved but not usable" rather than a silent no-op
+                    // button.
+                    <button
+                        class="w-full inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                               bg-surface-sunken border border-border text-sm
+                               opacity-70 cursor-not-allowed"
+                        title=move || t_string!(i18n, chat.project_management).to_string()
+                        disabled=true
+                    >
+                        {move || format!("📁 {}", t_string!(i18n, chat.project_management))}
+                        <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded
+                                     bg-surface-raised text-text-tertiary">
+                            {move || t_string!(i18n, chat.coming_soon).to_string()}
+                        </span>
+                    </button>
+                </div>
+
+                // Click-outside catcher: while the team compose popover is open,
+                // this transparent full-screen layer (z-40) collapses it on any
+                // click elsewhere — including the trigger button above, which
+                // gives toggle-to-close for free. The popover sits at z-50, above
+                // this catcher, so it stays interactive. Mirrors the session ⋯
+                // menu dismiss pattern below.
+                <Show when=move || show_compose.get()>
+                    <div
+                        class="fixed inset-0 z-40"
+                        on:click=move |_| show_compose.set(false)
+                    />
+                </Show>
+                // Team compose popover — pops up right below the advanced zone
+                <Show when=move || show_compose.get()>
+                    <crate::views::chat::team_compose::TeamCompose
+                        on_close=Callback::new(move |()| show_compose.set(false))
+                    />
+                </Show>
+
+                // Faint divider: advanced features zone ↔ normal chat
+                <div class="border-t border-border/50"></div>
+
+                // ── Normal chat: agent picker + new chat ────────────────
                 <div class="flex items-center gap-2">
                     <select
                         class="flex-1 min-w-0 px-3 py-1.5 rounded-lg bg-surface-sunken border border-border
@@ -594,22 +650,7 @@ pub fn ChatSidebar() -> impl IntoView {
                     >
                         {move || t_string!(i18n, chat.new).to_string()}
                     </button>
-                    <button
-                        class="px-3 py-1.5 rounded-lg bg-surface-sunken border border-border text-sm
-                               whitespace-nowrap hover:border-primary transition-colors"
-                        title="团队群聊"
-                        on:click=move |_| show_compose.set(true)
-                    >
-                        "👥 团队"
-                    </button>
                 </div>
-
-                // Team compose popover
-                <Show when=move || show_compose.get()>
-                    <crate::views::chat::team_compose::TeamCompose
-                        on_close=Callback::new(move |()| show_compose.set(false))
-                    />
-                </Show>
 
                 // Search — client-side filter over the session list.
                 <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-sunken border border-border text-sm focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/30">

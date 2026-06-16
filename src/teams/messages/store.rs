@@ -115,6 +115,19 @@ pub trait MessageStore: Send + Sync {
 
     /// Expire all pending messages for a team (used on disband).
     async fn expire_all_for_team(&self, team_id: &str) -> crate::error::Result<usize>;
+
+    /// List the most recent `limit` messages for a team, oldest-first.
+    ///
+    /// Powers the group-chat broadcast transcript. Unlike `read_inbox` /
+    /// `read_thread`, this is a flat per-team history and intentionally does NOT
+    /// filter on `expires_at` — the transcript is a durable record, not TTL'd
+    /// inbox traffic, so "reopen the group and the history is still there" holds
+    /// even past a message's TTL.
+    async fn list_team_messages(
+        &self,
+        team_id: &str,
+        limit: usize,
+    ) -> crate::error::Result<Vec<TeamMessage>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -705,6 +718,64 @@ impl MessageStore for SqliteMessageStore {
 
         Ok(affected)
     }
+
+    async fn list_team_messages(
+        &self,
+        team_id: &str,
+        limit: usize,
+    ) -> crate::error::Result<Vec<TeamMessage>> {
+        let conn = self.conn.lock().await;
+
+        // Most-recent `limit` rows (DESC), reversed to oldest-first below. No
+        // `expires_at` filter: the group transcript is a durable record (the
+        // 30-min default TTL for recipient-less messages must not erase it).
+        let mut raws: Vec<RawMessage> = {
+            let mut stmt = conn
+                .prepare_cached(
+                    r#"
+                    SELECT id, team_id, from_agent, msg_type, subject, content,
+                           reply_to, thread_id, created_at, expires_at
+                    FROM team_messages
+                    WHERE team_id = ?1
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?2
+                    "#,
+                )
+                .map_err(db_err)?;
+            let result = stmt
+                .query_map(params![team_id, limit as i64], Self::read_message_row)
+                .map_err(db_err)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(db_err)?;
+            result
+        };
+        raws.reverse(); // DESC -> oldest-first
+
+        let ids: Vec<String> = raws.iter().map(|r| r.id.clone()).collect();
+        let recipients_map = Self::batch_fetch_recipients(&conn, &ids)?;
+        let attachments_map = Self::batch_fetch_attachments(&conn, &ids)?;
+
+        let mut messages = Vec::with_capacity(raws.len());
+        for raw in raws {
+            let recipients = recipients_map.get(&raw.id).cloned().unwrap_or_default();
+            let attachments = attachments_map.get(&raw.id).cloned().unwrap_or_default();
+            messages.push(TeamMessage {
+                id: raw.id,
+                team_id: raw.team_id,
+                from_agent: raw.from_agent,
+                msg_type: MessageType::from_stored(&raw.msg_type_str),
+                subject: raw.subject,
+                content: raw.content,
+                recipients,
+                reply_to: raw.reply_to,
+                thread_id: raw.thread_id,
+                attachments,
+                created_at: parse_rfc3339(&raw.created_at_str)?,
+                expires_at: parse_rfc3339_opt(&raw.expires_at_str)?,
+            });
+        }
+        Ok(messages)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1053,5 +1124,78 @@ mod tests {
         assert_eq!(inbox[0].attachments.len(), 2);
         assert!(inbox[0].attachments.contains(&"artifact-1".to_string()));
         assert!(inbox[0].attachments.contains(&"artifact-2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn list_team_messages_returns_only_that_team() {
+        let store = SqliteMessageStore::new_in_memory().await;
+        for (team, body) in [("team-A", "first"), ("team-B", "other"), ("team-A", "second")] {
+            store
+                .send_message(NewMessage {
+                    team_id: team.to_string(),
+                    from_agent: "alice".to_string(),
+                    msg_type: MessageType::Message,
+                    subject: String::new(),
+                    content: body.to_string(),
+                    recipients: vec![],
+                    reply_to: None,
+                    attachments: vec![],
+                })
+                .await
+                .expect("send");
+        }
+        let got = store.list_team_messages("team-A", 100).await.expect("list");
+        assert_eq!(got.len(), 2, "only team-A messages");
+        let bodies: Vec<String> = got.iter().map(|m| m.content.clone()).collect();
+        assert!(bodies.contains(&"first".to_string()));
+        assert!(bodies.contains(&"second".to_string()));
+        assert!(!bodies.contains(&"other".to_string()), "team-B excluded");
+    }
+
+    #[tokio::test]
+    async fn list_team_messages_survives_ttl_for_durable_transcript() {
+        // Group transcript must NOT be filtered by expires_at — the 30-min
+        // default TTL for recipient-less messages would otherwise erase
+        // reopened history. Regression for the broadcast "reopen unforgotten" req.
+        let store = SqliteMessageStore::new_in_memory().await;
+        store
+            .send_message(NewMessage {
+                team_id: "t".to_string(),
+                from_agent: "user".to_string(),
+                msg_type: MessageType::Message,
+                subject: String::new(),
+                content: "remembered".to_string(),
+                recipients: vec![],
+                reply_to: None,
+                attachments: vec![],
+            })
+            .await
+            .expect("send");
+        store.expire_all_for_team("t").await.expect("expire");
+        let got = store.list_team_messages("t", 100).await.expect("list");
+        assert_eq!(got.len(), 1, "expired messages still in durable transcript");
+        assert_eq!(got[0].content, "remembered");
+    }
+
+    #[tokio::test]
+    async fn list_team_messages_respects_limit() {
+        let store = SqliteMessageStore::new_in_memory().await;
+        for body in ["m1", "m2", "m3"] {
+            store
+                .send_message(NewMessage {
+                    team_id: "t".to_string(),
+                    from_agent: "a".to_string(),
+                    msg_type: MessageType::Message,
+                    subject: String::new(),
+                    content: body.to_string(),
+                    recipients: vec![],
+                    reply_to: None,
+                    attachments: vec![],
+                })
+                .await
+                .expect("send");
+        }
+        let got = store.list_team_messages("t", 2).await.expect("list");
+        assert_eq!(got.len(), 2, "limit caps result count");
     }
 }

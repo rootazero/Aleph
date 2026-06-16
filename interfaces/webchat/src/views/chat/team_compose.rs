@@ -1,22 +1,63 @@
 //! Team compose popover: leader = current active agent, multi-select members
-//! from existing agents, "开始" → TeamsApi::create → enter team chat mode.
+//! from existing agents, "Start" → TeamsApi::create → enter team chat mode.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::api::agents::AgentsApi;
 use crate::api::teams::TeamsApi;
 use crate::context::DashboardState;
+use crate::i18n::{t_string, use_i18n};
 use super::state::{ChatState, MemberStatus, TeamMemberView};
+
+/// Validation outcome for the team-compose form. Modeled as semantic variants
+/// (not localized strings) so this pure check stays host-testable while the
+/// view layer owns i18n rendering.
+#[derive(Debug, PartialEq, Eq)]
+enum TeamComposeError {
+    /// No active agent could act as leader.
+    EmptyLeader,
+    /// No members were selected.
+    NoMembers,
+}
+
+/// Validate the team-compose form and resolve the chosen team name.
+///
+/// Pure + host-testable so the "Start button does nothing" silent-failure
+/// class cannot regress: a blank team name used to trip an `is_empty()` guard
+/// that returned with no feedback. Returns `Ok(Some(name))` for an explicit
+/// (trimmed) name, `Ok(None)` when the name is blank and the caller should
+/// auto-generate a default, or `Err` for a validation failure to surface.
+fn resolve_team_compose(
+    leader: &str,
+    raw_name: &str,
+    member_count: usize,
+) -> Result<Option<String>, TeamComposeError> {
+    if leader.trim().is_empty() {
+        return Err(TeamComposeError::EmptyLeader);
+    }
+    if member_count == 0 {
+        return Err(TeamComposeError::NoMembers);
+    }
+    let name = raw_name.trim();
+    if name.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(name.to_string()))
+    }
+}
 
 #[component]
 #[must_use]
 pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
     let team_name = RwSignal::new(String::new());
     let selected: RwSignal<Vec<String>> = RwSignal::new(Vec::new());
     // Vec<(id, display_name)> — loaded from agents.list on mount
     let agents: RwSignal<Vec<(String, String)>> = RwSignal::new(Vec::new());
+    // Inline validation / failure message (replaces the old silent `return`).
+    let error = RwSignal::new(None::<String>);
 
     // Load selectable agents on mount (wait until connected)
     let dash = dashboard;
@@ -41,15 +82,27 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
 
     let start = move |_| {
         let leader = chat.agent_id.get_untracked().unwrap_or_default();
-        let name = team_name.get_untracked();
-        if leader.is_empty() || name.trim().is_empty() {
-            return;
-        }
         let members: Vec<(String, String)> = selected
             .get_untracked()
             .into_iter()
             .map(|id| (id, "member".to_string()))
             .collect();
+        // Validate + resolve the name; surface any problem inline instead of
+        // silently returning (the original "Start button does nothing" bug).
+        // A blank name (Ok(None)) auto-generates "<leader><suffix>" via i18n.
+        let name = match resolve_team_compose(&leader, &team_name.get_untracked(), members.len()) {
+            Ok(Some(n)) => n,
+            Ok(None) => format!("{leader}{}", t_string!(i18n, chat.team_default_suffix)),
+            Err(e) => {
+                let msg = match e {
+                    TeamComposeError::EmptyLeader => t_string!(i18n, chat.team_err_no_leader),
+                    TeamComposeError::NoMembers => t_string!(i18n, chat.team_err_no_member),
+                };
+                error.set(Some(msg.to_string()));
+                return;
+            }
+        };
+        error.set(None);
 
         let dash = dashboard;
         spawn_local(async move {
@@ -78,6 +131,10 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
                     on_close.run(());
                 }
                 Err(e) => {
+                    error.set(Some(format!(
+                        "{}{e}",
+                        t_string!(i18n, chat.team_create_failed)
+                    )));
                     web_sys::console::error_1(
                         &format!("teams.create failed: {e}").into(),
                     );
@@ -87,15 +144,20 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
     };
 
     view! {
-        <div class="aleph-team-compose p-3 space-y-2">
-            <h3 class="text-sm font-semibold">"新建团队群聊"</h3>
+        <div class="aleph-team-compose relative z-50 p-3 space-y-2">
+            <h3 class="text-sm font-semibold">
+                {move || t_string!(i18n, chat.team_new_title).to_string()}
+            </h3>
             <p class="text-xs text-text-tertiary">
-                "Leader（当前 agent）= "
-                {move || chat.agent_id.get().unwrap_or_default()}
+                {move || format!(
+                    "{} = {}",
+                    t_string!(i18n, chat.team_leader_label),
+                    chat.agent_id.get().unwrap_or_default(),
+                )}
             </p>
             <input
                 class="w-full px-2 py-1 rounded bg-surface-sunken border border-border text-sm"
-                placeholder="团队名称"
+                placeholder=move || t_string!(i18n, chat.team_name_placeholder).to_string()
                 on:input=move |e| team_name.set(event_target_value(&e))
             />
             // Member checklist — excludes the leader (already pre-filled above)
@@ -132,12 +194,62 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
                         .collect::<Vec<_>>()
                 }}
             </div>
-            <button
-                class="w-full px-3 py-1.5 rounded bg-primary text-white text-sm hover:bg-primary/90 transition-colors"
-                on:click=start
-            >
-                "开始"
-            </button>
+            <div class="flex items-center gap-2">
+                <button
+                    class="px-3 py-1.5 rounded bg-surface-sunken text-text-secondary text-sm
+                           hover:bg-surface-raised transition-colors"
+                    on:click=move |_| on_close.run(())
+                >
+                    {move || t_string!(i18n, common.cancel).to_string()}
+                </button>
+                <button
+                    class="flex-1 px-3 py-1.5 rounded bg-primary text-white text-sm
+                           hover:bg-primary/90 transition-colors"
+                    on:click=start
+                >
+                    {move || t_string!(i18n, chat.team_start).to_string()}
+                </button>
+            </div>
+            {move || error.get().map(|msg| view! {
+                <p class="text-xs text-red-400">{msg}</p>
+            })}
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_team_compose, TeamComposeError};
+
+    #[test]
+    fn blank_name_defers_to_caller_default_instead_of_silently_blocking() {
+        // Regression for "select agents, click Start, nothing happens": a blank
+        // team name used to trip an is_empty() guard and return with no
+        // feedback. Now it yields Ok(None) so the caller auto-generates a name.
+        assert_eq!(resolve_team_compose("default", "   ", 2), Ok(None));
+    }
+
+    #[test]
+    fn explicit_name_is_trimmed_and_kept() {
+        assert_eq!(
+            resolve_team_compose("default", "  研究小组 ", 1),
+            Ok(Some("研究小组".to_string()))
+        );
+    }
+
+    #[test]
+    fn empty_leader_returns_error() {
+        assert_eq!(
+            resolve_team_compose("", "x", 1),
+            Err(TeamComposeError::EmptyLeader)
+        );
+    }
+
+    #[test]
+    fn zero_members_returns_error() {
+        assert_eq!(
+            resolve_team_compose("default", "x", 0),
+            Err(TeamComposeError::NoMembers)
+        );
     }
 }
