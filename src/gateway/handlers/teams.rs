@@ -272,12 +272,17 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -
     )
 }
 
-/// Handle agents.teams — list all teams an agent belongs to (as leader or member)
+/// Handle agents.teams — list all teams an agent belongs to (as leader or member).
+///
+/// When `agent_manager` and `msg_store` are supplied, each team summary is enriched
+/// with `members_preview` (up to 4 members with name + emoji) and `last_message`
+/// (most recent transcript content, truncated to 60 chars). Both are best-effort:
+/// per-team failures degrade to empty/null rather than failing the whole list.
 pub async fn handle_agent_teams(
     request: JsonRpcRequest,
     store: Arc<dyn TeamStore>,
-    _agent_manager: Option<Arc<crate::config::agent_manager::AgentManager>>,
-    _msg_store: Option<Arc<dyn crate::teams::messages::MessageStore>>,
+    agent_manager: Option<Arc<crate::config::agent_manager::AgentManager>>,
+    msg_store: Option<Arc<dyn crate::teams::messages::MessageStore>>,
 ) -> JsonRpcResponse {
     debug!("Handling agents.teams request");
 
@@ -286,14 +291,69 @@ pub async fn handle_agent_teams(
         Err(resp) => return resp,
     };
 
-    match store.get_agent_teams(&params.agent_id).await {
-        Ok(teams) => JsonRpcResponse::success(request.id, json!({ "teams": teams })),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to get teams for agent '{}': {}", params.agent_id, e),
-        ),
+    let summaries = match store.get_agent_teams(&params.agent_id).await {
+        Ok(s) => s,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to get teams for agent '{}': {}", params.agent_id, e),
+            )
+        }
+    };
+
+    // Fast path: no enrichment stores available — return raw summaries as before.
+    if agent_manager.is_none() && msg_store.is_none() {
+        return JsonRpcResponse::success(request.id, json!({ "teams": summaries }));
     }
+
+    let mgr = agent_manager.as_deref();
+
+    let mut enriched: Vec<serde_json::Value> = Vec::with_capacity(summaries.len());
+    for summary in summaries {
+        let team_id = &summary.id;
+
+        // members_preview: up to 4 members with name + emoji (best-effort).
+        let members_preview: Vec<serde_json::Value> = match store.get_members(team_id).await {
+            Ok(members) => members
+                .into_iter()
+                .take(4)
+                .map(|mem| {
+                    let def = mgr.and_then(|m| m.get(&mem.agent_id).ok());
+                    let name = def
+                        .as_ref()
+                        .and_then(|d| d.name.clone())
+                        .unwrap_or_else(|| mem.agent_id.clone());
+                    let emoji = def.as_ref().and_then(|d| {
+                        d.identity.as_ref().and_then(|i| i.emoji.clone())
+                    });
+                    json!({ "id": mem.agent_id, "name": name, "emoji": emoji })
+                })
+                .collect(),
+            Err(_) => vec![],
+        };
+
+        // last_message: most recent transcript entry, truncated to 60 chars (best-effort).
+        // list_team_messages returns oldest-first; .pop() gives the newest.
+        let last_message: Option<String> = match msg_store.as_deref() {
+            Some(ms) => ms
+                .list_team_messages(team_id, 100)
+                .await
+                .ok()
+                .and_then(|mut v| v.pop())
+                .map(|m| m.content.chars().take(60).collect::<String>()),
+            None => None,
+        };
+
+        let mut obj = serde_json::to_value(&summary).unwrap_or_else(|_| json!({}));
+        if let Some(map) = obj.as_object_mut() {
+            map.insert("members_preview".to_string(), json!(members_preview));
+            map.insert("last_message".to_string(), json!(last_message));
+        }
+        enriched.push(obj);
+    }
+
+    JsonRpcResponse::success(request.id, json!({ "teams": enriched }))
 }
 
 // =============================================================================
