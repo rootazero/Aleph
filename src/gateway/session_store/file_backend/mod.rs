@@ -778,6 +778,37 @@ impl SessionStore for FileSessionStore {
         Ok(())
     }
 
+    async fn set_project_root(
+        &self,
+        key: &SessionKey,
+        project_root: Option<&str>,
+    ) -> Result<(), SessionStoreError> {
+        let key_str = key.to_key_string();
+        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+            // Mutate identity_meta.custom["project_root"] on the persisted
+            // SessionMetadata so `list_sessions` (which deserializes the full
+            // on-disk meta) surfaces it for the Panel to restore. `None` clears
+            // the key (revert to the default agent workspace).
+            let mut identity_meta = meta
+                .identity_meta
+                .take()
+                .unwrap_or_else(|| SessionIdentityMeta::from_json_str(None));
+            match project_root.map(str::trim).filter(|p| !p.is_empty()) {
+                Some(path) => {
+                    identity_meta
+                        .custom
+                        .insert("project_root".to_string(), serde_json::json!(path));
+                }
+                None => {
+                    identity_meta.custom.remove("project_root");
+                }
+            }
+            meta.identity_meta = Some(identity_meta);
+            self.write_metadata(&key_str, &meta).await?;
+        }
+        Ok(())
+    }
+
     async fn set_state(
         &self,
         key: &SessionKey,
