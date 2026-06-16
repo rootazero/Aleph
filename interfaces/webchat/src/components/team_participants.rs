@@ -1,5 +1,5 @@
 //! Team chat participants affordance: a collapsed avatar-cluster button in the
-//! chat surface top-right that expands into a popover listing leader + members
+//! chat surface top-left that expands into a popover listing leader + members
 //! with live status. Replaces the always-on left roster rail (removed from
 //! `view.rs`) so the conversation occupies the full width, like single chat.
 //!
@@ -45,7 +45,7 @@ pub fn status_color(s: MemberStatus) -> &'static str {
     }
 }
 
-/// Top-right participants affordance for team chat. Collapsed: overlapping
+/// Top-left participants affordance for team chat. Collapsed: overlapping
 /// avatar discs + chevron. Expanded: a popover card (leader + members with
 /// status dots), dismissed by clicking the transparent backdrop.
 #[component]
@@ -117,7 +117,7 @@ pub fn TeamParticipants() -> impl IntoView {
                     class="fixed inset-0 z-10"
                     on:click=move |_| open.set(false)
                 ></div>
-                <div class="absolute right-0 top-full mt-1 z-20 min-w-[180px] \
+                <div class="absolute left-0 top-full mt-1 z-20 min-w-[180px] \
                             rounded-lg border border-border bg-surface-raised/95 \
                             backdrop-blur shadow-lg p-1.5 space-y-0.5">
                     {move || {

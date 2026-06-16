@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
-use crate::api::team_chat::TeamChatApi;
+use crate::api::team_chat::{TeamChatApi, TeamMessageItem};
 use crate::api::teams::{TeamSummary, TeamsApi};
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
@@ -51,6 +51,36 @@ struct AgentEntry {
     emoji: Option<String>,
     #[serde(default)]
     is_default: bool,
+}
+
+/// The server stores the user's own group-chat messages under this reserved
+/// `from_agent` handle (mirror of `teams::broadcast::RESERVED_USER_HANDLE`). On
+/// history replay they must render as right-aligned user bubbles, not as
+/// attributed agent bubbles.
+const RESERVED_USER_HANDLE: &str = "user";
+
+/// Map one replayed `teams.chat.history` item to a chat bubble. The user's own
+/// messages (`from_agent == RESERVED_USER_HANDLE`) become right-aligned user
+/// bubbles (role `"user"`, no `agent_id`) — identical to single chat; every
+/// other author renders as an attributed agent bubble (Layout A). `index` only
+/// seeds a stable dom id.
+fn team_history_item_to_message(index: usize, item: TeamMessageItem) -> ChatMessage {
+    let is_user = item.from_agent == RESERVED_USER_HANDLE;
+    ChatMessage {
+        id: format!("team-hist-{index}"),
+        role: if is_user { "user" } else { "assistant" }.to_string(),
+        content: item.content,
+        tool_calls: Vec::new(),
+        is_streaming: false,
+        is_intermediate: false,
+        error: None,
+        model_info: None,
+        timestamp: Some(item.created_at),
+        iteration: None,
+        is_final: true,
+        text_finalized: true,
+        agent_id: if is_user { None } else { Some(item.from_agent) },
+    }
 }
 
 /// Fetch a session's history (+ persisted run traces) and rebuild the
@@ -513,21 +543,7 @@ pub fn ChatSidebar() -> impl IntoView {
                     let messages: Vec<ChatMessage> = items
                         .into_iter()
                         .enumerate()
-                        .map(|(i, it)| ChatMessage {
-                            id: format!("team-hist-{i}"),
-                            role: "assistant".to_string(),
-                            content: it.content,
-                            tool_calls: Vec::new(),
-                            is_streaming: false,
-                            is_intermediate: false,
-                            error: None,
-                            model_info: None,
-                            timestamp: Some(it.created_at),
-                            iteration: None,
-                            is_final: true,
-                            text_finalized: true,
-                            agent_id: Some(it.from_agent),
-                        })
+                        .map(|(i, it)| team_history_item_to_message(i, it))
                         .collect();
                     chat.messages.set(messages);
                 }
@@ -1158,5 +1174,39 @@ fn format_session_subtitle(session: &SessionEntry) -> String {
             format!("{msg_count} msgs - {month:02}-{day:02}")
         }
         None => format!("{msg_count} messages"),
+    }
+}
+
+#[cfg(test)]
+mod team_history_tests {
+    use super::{team_history_item_to_message, RESERVED_USER_HANDLE};
+    use crate::api::team_chat::TeamMessageItem;
+
+    fn item(from_agent: &str) -> TeamMessageItem {
+        TeamMessageItem {
+            from_agent: from_agent.to_string(),
+            content: "hello".to_string(),
+            msg_type: "message".to_string(),
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn user_handle_replays_as_right_aligned_user_bubble() {
+        // Regression: the user's own group-chat messages were replayed as
+        // left-aligned agent bubbles (role "assistant" + agent_id Some("user")).
+        // They must mirror single chat: role "user", no agent_id → right-aligned
+        // accent bubble.
+        let m = team_history_item_to_message(0, item(RESERVED_USER_HANDLE));
+        assert_eq!(m.role, "user");
+        assert_eq!(m.agent_id, None);
+    }
+
+    #[test]
+    fn agent_handle_replays_as_attributed_agent_bubble() {
+        let m = team_history_item_to_message(3, item("risk_analyst"));
+        assert_eq!(m.role, "assistant");
+        assert_eq!(m.agent_id.as_deref(), Some("risk_analyst"));
+        assert_eq!(m.id, "team-hist-3");
     }
 }

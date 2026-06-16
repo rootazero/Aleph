@@ -172,10 +172,12 @@ pub fn ChatView() -> impl IntoView {
                     // Session tab strip overlay — frosted band pinned to the top,
                     // renders only when ≥2 agents are open.
                     <div class="absolute inset-x-0 top-0 z-10"><SessionTabs /></div>
-                    // Team participants — top-right avatar cluster + popover
-                    // (replaces the old left roster rail). Team mode only.
+                    // Team participants — top-left avatar cluster + popover
+                    // (replaces the old left roster rail). Top-left keeps it
+                    // clear of the band's workspace toggle + notification bell,
+                    // which live top-right. Team mode only.
                     <Show when=move || chat.team_id.get().is_some()>
-                        <div class="absolute top-2 right-2 z-20"><TeamParticipants /></div>
+                        <div class="absolute top-2 left-2 z-20"><TeamParticipants /></div>
                     </Show>
                     // Input area (floating glass bar pinned over the flow)
                     <InputArea />
