@@ -1744,3 +1744,99 @@ async fn serial_batch_runs_full_when_no_midturn_steer() {
         .count();
     assert_eq!(deferred, 0, "no deferred results without a mid-turn steer");
 }
+
+// -- Cooperative steer checkpoint (multi-group boundary) ---------------------
+
+/// A steer present before the batch defers *every* call regardless of how the
+/// batch partitions: the group-boundary checkpoint fires before launching the
+/// first group, so `executed == 0` and all calls get a deferred ToolResult.
+///
+// NOTE: `ScriptedTools` does not override `call_concurrency_claim`, so with
+// `concurrent_safe: true` every call yields a `ConcurrencyClaim::Shared`.
+// `Shared` claims never conflict, so `partition_parallel_groups` collapses the
+// batch into a *single* parallel group `[(0, 3)]`. That single group still has
+// `end - start >= 2`, so `act` enters the multi-group loop (it does not route
+// to the serial fast-path), exercising the new group-boundary branch — but it
+// is NOT a real >= 2-group partition. The mocks cannot produce one: a
+// per-call mix of `Shared`/`Global` would require an override of
+// `call_concurrency_claim`, and `ScriptedTools` reports a uniform
+// `concurrent_safe` for all calls. The group-boundary branch shares its
+// predicate (`has_unanswered_user_message`) and helper
+// (`emit_deferred_tool_results`) with the serial loop, so the multi-group
+// defer behaviour for >= 2 groups is covered by code inspection.
+#[tokio::test]
+async fn group_boundary_defers_remaining_groups_when_steer_present() {
+    let session = MockSession::new(steer_seed());
+    // No tools should run: a steer is already pending before the first group.
+    let tools = ScriptedTools::new_concurrent(vec![], std::time::Duration::ZERO);
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: tools.clone(),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: CapturingProvider::text_only("idle"),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: Some(2),
+    };
+    let harness = AgentHarness::new(deps);
+
+    // Watermark = 2 events before the steer; the steer lands at index 2, at or
+    // beyond the boundary, so `has_unanswered_user_message` fires.
+    harness
+        .last_prompt_log_len
+        .store(2, std::sync::atomic::Ordering::Relaxed);
+
+    let sid = sample_session_id();
+    let turn = uuid::Uuid::new_v4();
+    let calls = vec![
+        read_call("c1", "a"),
+        read_call("c2", "b"),
+        read_call("c3", "c"),
+    ];
+
+    let executed = harness
+        .act(
+            &sid,
+            turn,
+            calls,
+            &mut NoopHarnessCallback,
+            0,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("act should succeed");
+
+    assert_eq!(executed, 0, "no group runs when a steer precedes the batch");
+    assert_eq!(tools.calls().await.len(), 0, "no tool was executed");
+
+    let deferred = session
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|r| {
+            matches!(
+                &r.event,
+                SessionEvent::ToolResult { output, .. } if output.value["deferred"] == serde_json::json!(true)
+            )
+        })
+        .count();
+    assert_eq!(deferred, 3, "every call gets a deferred ToolResult");
+}

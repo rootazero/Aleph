@@ -191,6 +191,22 @@ impl AgentHarness {
         let mut executed_count: usize = 0;
         let mut remaining = tool_calls.into_iter();
         for (start, end) in groups {
+            // Cooperative steer checkpoint at the group boundary. Groups run
+            // sequentially; a parallel group's `.buffered()` wave is not
+            // interruptible mid-flight by design, so we stop *before*
+            // launching the next group when a mid-turn user message arrived,
+            // and defer everything still pending. R7/R10: mechanical.
+            if self.has_unanswered_user_message(session_id).await {
+                let deferred: Vec<NativeToolCall> = remaining.by_ref().collect();
+                if !deferred.is_empty() {
+                    self.emit_deferred_tool_results(session_id, turn_id, &deferred)
+                        .await?;
+                }
+                if let Some(ref tracker) = self.stall_tracker {
+                    tracker.record_activity().await;
+                }
+                break;
+            }
             let group: Vec<NativeToolCall> = remaining.by_ref().take(end - start).collect();
             executed_count = executed_count.saturating_add(
                 self.dispatch_group(
