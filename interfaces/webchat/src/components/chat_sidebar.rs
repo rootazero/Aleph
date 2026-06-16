@@ -30,6 +30,11 @@ struct SessionEntry {
     /// Backend sends `updated_at` as Unix epoch seconds (Option<i64>)
     #[serde(default)]
     updated_at: Option<i64>,
+    /// User-chosen project working directory persisted on the session. `None`
+    /// ⇒ the default `~/.aleph/workspaces/{agent_id}` workspace. Restored into
+    /// `chat.active_project_root` when the session is reselected after a reload.
+    #[serde(default)]
+    project_root: Option<String>,
 }
 
 /// An agent entry returned by the backend (agents.list).
@@ -398,6 +403,22 @@ pub fn ChatSidebar() -> impl IntoView {
         }
         selected_agent.set(Some(agent_id));
         chat.session_key.set(Some(key.clone()));
+
+        // Restore the session's persisted project folder (G3) so the composer
+        // keeps running inside it and the project pill reflects it. Set the
+        // signals directly rather than via `set_active_project`, which would
+        // clear the session we're about to load. `None` reverts to the default
+        // workspace.
+        let restored_root = sessions
+            .get_untracked()
+            .iter()
+            .find(|s| s.key == key)
+            .and_then(|s| s.project_root.clone());
+        let restored_name = restored_root
+            .as_deref()
+            .map(|p| p.trim_end_matches('/').rsplit('/').next().unwrap_or(p).to_string());
+        chat.active_project_root.set(restored_root);
+        chat.active_project_name.set(restored_name);
 
         leptos::task::spawn_local(hydrate_session_history(dash, chat, workspace, key));
     };

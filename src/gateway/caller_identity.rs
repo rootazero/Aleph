@@ -21,6 +21,14 @@ task_local! {
     /// `Some("operator")` inside a dispatch, or `None` for non-gateway callers
     /// (cron, internal) — the gate treats absent role as trusted.
     pub static CALLER_ROLE: Option<String>;
+
+    /// Whether the originating gateway connection's peer is a loopback address
+    /// (`127.0.0.0/8`, `::1`). Scoped alongside [`CALLER_ROLE`] in the WS
+    /// dispatch loop from the connection's peer IP. `false` outside a scope
+    /// (non-gateway / internal runs). The desktop App's local Panel is always
+    /// loopback, so this is the signal the project-folder gate keys on to allow
+    /// a working-directory override without weakening the LAN trust boundary.
+    pub static CALLER_IS_LOOPBACK: bool;
 }
 
 /// The originating connection's role for the current task, or `None` outside a
@@ -28,6 +36,13 @@ task_local! {
 #[must_use]
 pub fn current_caller_role() -> Option<String> {
     CALLER_ROLE.try_with(|r| r.clone()).ok().flatten()
+}
+
+/// Whether the current task originated from a loopback (local-machine)
+/// connection. `false` outside a `CALLER_IS_LOOPBACK` scope.
+#[must_use]
+pub fn current_caller_is_loopback() -> bool {
+    CALLER_IS_LOOPBACK.try_with(|b| *b).unwrap_or(false)
 }
 
 #[cfg(test)]

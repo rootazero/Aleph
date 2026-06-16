@@ -1038,7 +1038,20 @@ impl AgentHarnessRunner {
         // Load `[prompt.extra_files]` content (size-capped). `None` when the
         // section is absent / disabled / yields no readable content, so the
         // default config keeps the assembled prompt byte-identical.
-        let extra_files = self.load_prompt_extra_files(workspace);
+        //
+        // Then append project-scoped instruction files (`CLAUDE.md` / `AGENTS.md`
+        // discovered from the active project folder, walking up to the git
+        // root). These only exist when the run targets a user-chosen
+        // `workspace_override`; the default agent workspace has none, so the
+        // assembled prompt stays byte-identical for the no-project case. Both
+        // sets render through `ExtraFilesLayer` (same sanitization boundary).
+        let extra_files = {
+            let mut files = self.load_prompt_extra_files(workspace).unwrap_or_default();
+            if let Some(ws) = workspace {
+                files.extend(crate::thinker::project_instructions::load_project_instructions(ws));
+            }
+            (!files.is_empty()).then_some(files)
+        };
 
         // Aggregate connected MCP servers' advertised `instructions`. One actor
         // round-trip per prompt build (negligible next to the file/skill IO

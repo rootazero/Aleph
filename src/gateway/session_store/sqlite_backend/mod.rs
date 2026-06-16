@@ -412,6 +412,16 @@ impl SessionStore for SessionManager {
         self.set_topic(key, topic).await.map_err(map_err)
     }
 
+    async fn set_project_root(
+        &self,
+        key: &SessionKey,
+        project_root: Option<&str>,
+    ) -> Result<(), SessionStoreError> {
+        self.set_project_root(key, project_root)
+            .await
+            .map_err(map_err)
+    }
+
     async fn set_source_channel(
         &self,
         key: &SessionKey,

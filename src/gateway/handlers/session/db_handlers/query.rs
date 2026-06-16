@@ -54,6 +54,14 @@ pub async fn handle_list_db(
                     // Derive origin channel before the struct literal moves m's fields.
                     let channel = m.origin_channel();
                     let updated_at = m.last_active_at;
+                    // User-chosen project working directory, persisted via
+                    // `sessions.set_project_root` into identity_meta.custom.
+                    let project_root = m.identity_meta.as_ref().and_then(|im| {
+                        im.custom
+                            .get("project_root")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    });
 
                     SessionInfo {
                         key: m.key,
@@ -78,6 +86,7 @@ pub async fn handle_list_db(
                         compaction_count: m.compaction_count as u64,
                         channel,
                         updated_at,
+                        project_root,
                     }
                 })
                 .collect();

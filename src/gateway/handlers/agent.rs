@@ -260,12 +260,21 @@ impl AgentRunManager {
                 // arbitrary project_root. Absent role (trusted local/internal
                 // run) and "operator" pass — mirrors
                 // `TurnContext::caller_is_operator`.
+                //
+                // Desktop App: the local Panel runs over loopback. Allow a
+                // project_root override from any loopback connection regardless
+                // of pairing tier — on the desktop the local operator IS the
+                // user. Remote LAN connections (non-loopback, chat-tier) stay
+                // gated, so opening `[gateway] host = "0.0.0.0"` does not hand
+                // arbitrary working-directory selection to every LAN device.
                 let role = crate::gateway::caller_identity::current_caller_role();
                 let is_config_tier = !matches!(role.as_deref(), Some(r) if r != "operator");
-                if !is_config_tier {
+                let is_loopback = crate::gateway::caller_identity::current_caller_is_loopback();
+                if !is_config_tier && !is_loopback {
                     return Err(format!(
-                        "choosing a working directory requires config-tier authorization; \
-                         this connection is paired at chat level (project_root: {raw})"
+                        "choosing a working directory requires config-tier authorization \
+                         or a local (loopback) connection; this connection is paired at \
+                         chat level from a remote address (project_root: {raw})"
                     ));
                 }
                 let path = std::path::PathBuf::from(raw);
@@ -872,6 +881,44 @@ mod tests {
         assert!(
             result.is_ok(),
             "operator project_root override must succeed: {result:?}"
+        );
+    }
+
+    /// Desktop App: a chat-tier ("guest") connection over loopback may choose a
+    /// project_root — the local Panel is the operator. This is the additive
+    /// loopback allowance on top of the config-tier gate.
+    #[tokio::test]
+    async fn loopback_chat_tier_caller_may_choose_project_root() {
+        let router = Arc::new(AgentRouter::new());
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let (agent_registry, _tmp) = registry_with_main_agent().await;
+        let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
+        let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
+
+        let params = AgentRunParams {
+            input: "work over here".to_string(),
+            session_key: None,
+            channel: None,
+            peer_id: None,
+            stream: false,
+            thinking: None,
+            attachments: vec![],
+            agent_id: None,
+            project_root: Some(std::env::temp_dir().display().to_string()),
+            model_override: None,
+        };
+
+        // chat-tier role but loopback connection → allowed.
+        let result = crate::gateway::caller_identity::CALLER_ROLE
+            .scope(
+                Some("guest".to_string()),
+                crate::gateway::caller_identity::CALLER_IS_LOOPBACK
+                    .scope(true, manager.start_run(params)),
+            )
+            .await;
+        assert!(
+            result.is_ok(),
+            "loopback chat-tier project_root override must succeed: {result:?}"
         );
     }
 

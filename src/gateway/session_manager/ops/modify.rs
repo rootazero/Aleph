@@ -181,6 +181,60 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Persist (or clear) the user-chosen project working directory for a
+    /// session onto its identity metadata (`custom["project_root"]`). Mirrors
+    /// [`Self::set_topic`]'s metadata-merge pattern so no schema column is added.
+    ///
+    /// `Some(path)` stores the absolute project folder; `None` removes the key
+    /// (revert to the default `~/.aleph/workspaces/{agent_id}` workspace). The
+    /// value is surfaced through `sessions.list` (`SessionInfo.project_root`) so
+    /// the Panel can restore the active project after a reload.
+    pub async fn set_project_root(
+        &self,
+        key: &SessionKey,
+        project_root: Option<&str>,
+    ) -> Result<(), SessionManagerError> {
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+
+        let existing_json: Option<String> = conn
+            .query_row(
+                "SELECT metadata FROM sessions WHERE key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+            .flatten();
+
+        let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
+        match project_root.map(str::trim).filter(|p| !p.is_empty()) {
+            Some(path) => {
+                identity_meta
+                    .custom
+                    .insert("project_root".to_string(), serde_json::json!(path));
+            }
+            None => {
+                identity_meta.custom.remove("project_root");
+            }
+        }
+
+        let meta_json = identity_meta
+            .to_json_string()
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        conn.execute(
+            "UPDATE sessions SET metadata = ? WHERE key = ?",
+            params![&meta_json, &key_str],
+        )
+        .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        Ok(())
+    }
+
     /// Record the originating channel of a session onto its identity metadata.
     ///
     /// Idempotent: only writes when the current `source_channel` is unset (empty

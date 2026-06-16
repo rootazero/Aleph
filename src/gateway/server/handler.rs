@@ -545,11 +545,12 @@ async fn handle_connection(
                                         }
 
                                         // Helper closure: standard lane dispatch (no idempotency)
-                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, caller_role: Option<String>| async move {
+                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, caller_role: Option<String>, caller_is_loopback: bool| async move {
                                             let lane_result = lm.acquire(&method, class).await;
                                             match lane_result {
                                                 Ok(_permit) => crate::gateway::caller_identity::CALLER_ROLE
-                                                    .scope(caller_role, process_request(&text, &mc))
+                                                    .scope(caller_role, crate::gateway::caller_identity::CALLER_IS_LOOPBACK
+                                                        .scope(caller_is_loopback, process_request(&text, &mc)))
                                                     .await,
                                                 Err(_) => serde_json::to_string(&JsonRpcResponse::error(
                                                     req_id,
@@ -598,7 +599,8 @@ async fn handle_connection(
                                                         match lane_result {
                                                             Ok(_permit) => {
                                                                 let resp = crate::gateway::caller_identity::CALLER_ROLE
-                                                                    .scope(caller_role.clone(), process_request(&text, &ctx.middleware_chain))
+                                                                    .scope(caller_role.clone(), crate::gateway::caller_identity::CALLER_IS_LOOPBACK
+                                                                        .scope(ctx.client_ip.is_loopback(), process_request(&text, &ctx.middleware_chain)))
                                                                     .await;
                                                                 if let Ok(parsed) = serde_json::from_str::<JsonRpcResponse>(&resp) {
                                                                     if parsed.is_success() {
@@ -628,11 +630,11 @@ async fn handle_connection(
                                                 }
                                             } else {
                                                 // Query lane — skip idempotency
-                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone()).await
+                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), ctx.client_ip.is_loopback()).await
                                             }
                                         } else {
                                             // No idempotency key — standard lane dispatch
-                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone()).await
+                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), ctx.client_ip.is_loopback()).await
                                         };
                                         // --- End idempotency + lane block ---
 

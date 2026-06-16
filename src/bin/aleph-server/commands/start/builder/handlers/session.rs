@@ -81,6 +81,12 @@ pub(in crate::commands::start) fn register_session_handlers(
     );
     register_handler!(
         server,
+        "sessions.set_project_root",
+        session_handlers::handle_set_project_root_db,
+        session_store
+    );
+    register_handler!(
+        server,
         "sessions.patch",
         session_handlers::handle_patch_db,
         session_store

@@ -52,6 +52,12 @@ pub struct SessionInfo {
     /// SessionEntry.updated_at) for time-grouping & sort; previously only the
     /// RFC3339 `last_active_at` string was sent, so Panel sort/subtitle were dead.
     pub updated_at: i64,
+    /// User-chosen project working directory persisted on the session
+    /// (`identity_meta.custom["project_root"]`). `None` ⇒ the default
+    /// `~/.aleph/workspaces/{agent_id}` workspace. The Panel restores this into
+    /// `active_project_root` when the session is reselected after a reload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<String>,
 }
 
 /// Session history message.

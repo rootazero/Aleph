@@ -488,6 +488,30 @@ where
                     request.metadata.get("channel_id").map(String::as_str),
                 );
 
+                // Persist the user-chosen project folder onto the session so the
+                // Panel can restore it after a reload (project workspaces G3).
+                // Stamped on the first message, mirroring source-channel/topic
+                // stamping; the project↔session binding is fixed at session
+                // creation, so a later switch starts a fresh session and
+                // re-stamps. Best-effort: a metadata write failure never blocks
+                // the turn.
+                if is_first_message {
+                    if let (Some(sm), Some(root)) = (
+                        self.session_manager.clone(),
+                        request
+                            .workspace_override
+                            .as_ref()
+                            .map(|p| p.display().to_string()),
+                    ) {
+                        let key = request.session_key.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = sm.set_project_root(&key, Some(&root)).await {
+                                warn!(error = %e, "failed to persist session project_root");
+                            }
+                        });
+                    }
+                }
+
                 // Auto-generate session topic on first real message
                 if is_first_message {
                     if let (Some(sm), Some(eb)) =

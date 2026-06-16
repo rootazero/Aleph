@@ -404,3 +404,68 @@ pub async fn handle_set_topic_db(
         ),
     }
 }
+
+/// Handle `sessions.set_project_root` RPC request with database backend.
+///
+/// Params:
+///   - `session_key` (required): session key string
+///   - `project_root` (optional): absolute project folder; `null` / absent
+///     clears the override (revert to the default agent workspace).
+///
+/// Persists the user-chosen working directory onto the session's identity
+/// metadata so the Panel can restore it after a reload. Validation of the path
+/// (absolute / exists / directory) happens at run time in the `agent.run`
+/// handler — this RPC only records the preference, so a not-yet-existing folder
+/// can be remembered without failing the call.
+pub async fn handle_set_project_root_db(
+    request: JsonRpcRequest,
+    manager: Arc<dyn SessionStore>,
+) -> JsonRpcResponse {
+    let params = match &request.params {
+        Some(Value::Object(map)) => map,
+        _ => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
+        }
+    };
+
+    let session_key_str = match params.get("session_key").and_then(|v| v.as_str()) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key");
+        }
+    };
+
+    // `project_root` is optional: a missing key or JSON null clears the override.
+    let project_root = params
+        .get("project_root")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+
+    let session_key = match SessionKey::from_key_string(session_key_str) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
+        }
+    };
+
+    match manager.set_project_root(&session_key, project_root).await {
+        Ok(()) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "session_key": session_key_str,
+                "project_root": project_root,
+                "updated": true,
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to set project_root: {e}"),
+        ),
+    }
+}
