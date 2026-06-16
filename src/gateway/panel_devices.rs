@@ -25,7 +25,7 @@ use std::sync::OnceLock;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
-use crate::gateway::inbound_router::types::ChannelPermissionLevel;
+use crate::gateway::inbound_router::ChannelPermissionLevel;
 
 /// Error type for panel-device storage operations.
 #[derive(Debug, thiserror::Error)]

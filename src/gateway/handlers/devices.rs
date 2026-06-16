@@ -7,7 +7,7 @@
 use crate::sync_primitives::Arc;
 use serde_json::json;
 
-use crate::gateway::inbound_router::types::ChannelPermissionLevel;
+use crate::gateway::inbound_router::ChannelPermissionLevel;
 use crate::gateway::panel_devices::{tier_label, PanelDeviceStore};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 
