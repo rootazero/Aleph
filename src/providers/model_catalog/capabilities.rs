@@ -433,6 +433,45 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: false,
         },
     ),
+    // ── MiniMax ──────────────────────────────────────────────────────────
+    // Aleph ships a `minimax` preset (default MiniMax-M2.5) but carried no
+    // per-model metadata, so panel picker / list_models / context budgeting
+    // saw a blank entry. M2.x is a 204K-window reasoning model; image
+    // understanding is routed to the separate MiniMax-VL line (openclaw keeps
+    // M2.x chat vision off), so the chat family is text-only here. M3 widens
+    // the window. Figures are conservative vendor-doc references (2026-06).
+    (
+        "minimax-m3",
+        ModelCapabilities {
+            context_window: 1_000_000,
+            max_output_tokens: 32_768,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        // M2 / M2.1 / M2.5 / M2.7 chat family — 204K context, tool-calling,
+        // interleaved thinking. Broad `minimax` fallback follows.
+        "minimax-m2",
+        ModelCapabilities {
+            context_window: 204_800,
+            max_output_tokens: 16_384,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "minimax",
+        ModelCapabilities {
+            context_window: 204_800,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
     // ── Moonshot / Kimi ──────────────────────────────────────────────────
     // K2 family (k2.5 / k2.6 / k2-* previews): 256K window, multimodal.
     (
@@ -755,6 +794,19 @@ mod tests {
             capabilities_for("glm-5.1").unwrap().max_output_tokens,
             128_000
         );
+    }
+
+    #[test]
+    fn minimax_family_resolves() {
+        // Shipped `minimax` preset now has metadata so context budgeting can
+        // size its window without per-provider config. M2.x chat is text-only
+        // (vision lives in the separate VL line); the specific m2/m3 prefixes
+        // must precede the broad `minimax` fallback.
+        let m25 = capabilities_for("MiniMax-M2.5").unwrap();
+        assert_eq!(m25.context_window, 204_800);
+        assert!(m25.supports_reasoning);
+        assert!(!m25.supports_vision);
+        assert_eq!(capabilities_for("MiniMax-M3").unwrap().context_window, 1_000_000);
     }
 
     #[test]
