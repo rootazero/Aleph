@@ -123,11 +123,22 @@ const fn limit_within(child: Option<u64>, baseline: Option<u64>) -> bool {
 }
 
 /// Normalize a path and check if `child` is within `baseline`.
-/// Resolves `.` and `..` segments to prevent path traversal bypasses.
+/// Resolves `.` and `..` segments to prevent path traversal bypasses, and
+/// attempts to resolve symlinks so an approved parent cannot be escaped via
+/// a symlink placed under it.
 fn path_starts_with_normalized(child: &std::path::Path, baseline: &std::path::Path) -> bool {
     let child_norm = normalize_path_components(child);
     let baseline_norm = normalize_path_components(baseline);
-    child_norm.starts_with(&baseline_norm)
+
+    // Best-effort symlink resolution: if the path exists, canonicalize it.
+    // For non-existent targets (e.g., a write to a new file), fall back to the
+    // lexical normalization, which still blocks `..` traversal.
+    let child_canon = std::fs::canonicalize(&child_norm)
+        .unwrap_or_else(|_| child_norm.clone());
+    let baseline_canon = std::fs::canonicalize(&baseline_norm)
+        .unwrap_or_else(|_| baseline_norm.clone());
+
+    child_canon.starts_with(&baseline_canon)
 }
 
 fn normalize_path_components(path: &std::path::Path) -> std::path::PathBuf {
