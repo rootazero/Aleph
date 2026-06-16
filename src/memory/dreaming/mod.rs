@@ -6,6 +6,7 @@
 
 pub mod distill_action;
 pub mod event_log;
+pub mod evolution;
 pub mod gate;
 pub mod mutation_gate;
 pub mod report;
@@ -48,6 +49,10 @@ pub use report::{DreamReport, DreamReportStatus};
 
 // Re-export stage trait and shared types
 pub use event_log::{DreamEvent, EventLog};
+pub use evolution::{
+    evaluate_gate, memory_health_score, score_merge_candidate, EditBudget, EvolutionOutcome,
+    GateOutcome, MemoryScore,
+};
 pub use mutation_gate::MutationGate;
 pub use selector::{GateDecision, SelectionDecision, StrategySelector};
 pub use signals::{DreamSignal, RawMetrics, SignalSnapshot, SignalType};
@@ -110,6 +115,9 @@ pub struct DreamContext {
     pub strategy: DreamStrategy,
     /// Optional wiki orientation — used by `IndexRefresherStage`.
     pub orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
+    /// Per-cycle edit budget ("textual learning rate") bounding how much memory
+    /// destructive stages may rewrite this cycle. Consumed by `NoteConsolidate`.
+    pub evolution_budget: EditBudget,
 }
 
 impl DreamContext {
@@ -506,6 +514,10 @@ pub struct DreamDaemon {
     selector: crate::sync_primitives::Mutex<StrategySelector>,
     /// Mutation gate tracking evolution pathologies.
     mutation_gate: crate::sync_primitives::Mutex<MutationGate>,
+    /// Best-ever memory-health score, tracked across cycles for the evolution
+    /// gate (SkillOpt's best-checkpoint). In-memory: resets on restart, which
+    /// is safe — the gate simply re-establishes the best from the next cycle.
+    best_health: crate::sync_primitives::Mutex<f64>,
     /// Whether per-project memory namespacing is enabled (mirrors
     /// `MemoryConfig.project_scoped`). When on, the daemon additionally fans
     /// the note-maintenance stages over each `{base}__proj-*` namespace so
@@ -532,6 +544,7 @@ impl DreamDaemon {
             orientation: None,
             selector: crate::sync_primitives::Mutex::new(StrategySelector::new()),
             mutation_gate: crate::sync_primitives::Mutex::new(MutationGate::new()),
+            best_health: crate::sync_primitives::Mutex::new(0.0),
             project_scoped: config.project_scoped,
         })
     }
@@ -891,7 +904,7 @@ impl DreamDaemon {
 
         // --- Phase 4: Build and run the consolidation pipeline ---
         let pipeline = DreamPipeline::from_strategy(strategy, &self.config, &self.decay_policy);
-        let (report, run_status) = match (self.provider.clone(), self.embedder.clone()) {
+        let (mut report, run_status) = match (self.provider.clone(), self.embedder.clone()) {
             (Some(provider), Some(embedder)) => {
                 let mut indexer = NoteIndexer::new(memory_dir.clone(), self.database.clone());
                 if let Some(orientation) = &self.orientation {
@@ -924,6 +937,7 @@ impl DreamDaemon {
                     activity_checker: activity_checker.clone(),
                     strategy,
                     orientation: self.orientation.clone(),
+                    evolution_budget: EditBudget::default(),
                 };
                 let mut report = pipeline.run(ctx).await?;
 
@@ -972,6 +986,7 @@ impl DreamDaemon {
                                 activity_checker: activity_checker.clone(),
                                 strategy,
                                 orientation: self.orientation.clone(),
+                                evolution_budget: EditBudget::default(),
                             };
                             match project_pipeline.run(ns_ctx).await {
                                 Ok(r) => info!(
@@ -1036,6 +1051,51 @@ impl DreamDaemon {
             l4_retrospective: None,
         };
 
+        // --- Phase 5.5: Evolution gate (memory-health before/after) ---
+        // SkillOpt discipline at cycle granularity: score the corpus before and
+        // after this cycle's edits, accept-track the best, and conserve (rather
+        // than compound) when a cycle degrades health.
+        let baseline_health = memory_health_score(&signal_snapshot);
+        let post_index = self
+            .database
+            .list_notes(DEFAULT_AGENT_ID)
+            .await
+            .unwrap_or_default();
+        let post_metrics =
+            compute_raw_metrics(&post_index, self.database.as_ref(), DEFAULT_AGENT_ID).await;
+        report.distill_recalled = post_metrics.skill_notes_recalled;
+        let candidate_health =
+            memory_health_score(&SignalSnapshot::from_metrics(&post_metrics));
+        let best_before = *self.best_health.lock().unwrap_or_else(|e| e.into_inner());
+        let gate_outcome = evaluate_gate(
+            candidate_health,
+            baseline_health,
+            best_before,
+            evolution::HEALTH_GATE_EPSILON,
+        );
+        let new_best = if gate_outcome == GateOutcome::AcceptNewBest {
+            candidate_health
+        } else {
+            best_before
+        };
+        *self.best_health.lock().unwrap_or_else(|e| e.into_inner()) = new_best;
+        report.evolution = Some(EvolutionOutcome {
+            baseline: baseline_health,
+            candidate: candidate_health,
+            best: new_best,
+            outcome: gate_outcome,
+            merges_rejected: report.merges_rejected,
+        });
+        if gate_outcome == GateOutcome::Reject && candidate_health < baseline_health {
+            let mut gate = self.mutation_gate.lock().unwrap_or_else(|e| e.into_inner());
+            gate.activate_cooldown(2);
+            warn!(
+                baseline = baseline_health,
+                candidate = candidate_health,
+                "Dream cycle degraded memory health — activating conserve cooldown"
+            );
+        }
+
         // --- Phase 6: Solidify (event log) ---
         let agent_dir = memory_dir.join(DEFAULT_AGENT_ID);
         let event_log = EventLog::new(&agent_dir);
@@ -1068,6 +1128,19 @@ impl DreamDaemon {
         }
         {
             let mut gate = self.mutation_gate.lock().unwrap_or_else(|e| e.into_inner());
+            // Drain this cycle's mutations into the churn detector. Previously
+            // the recorders had NO callers, so the merge-cycle / oscillation /
+            // wasted-distillation detectors were structurally dead (always saw
+            // empty sets → always returned Allow). This is the missing wire.
+            for (a, b) in &report.merged_pairs {
+                gate.record_merge_pair(a, b);
+            }
+            for assertion in &report.synthesis_assertions {
+                gate.record_synthesis_assertion(assertion);
+            }
+            if report.distill_produced > 0 || report.distill_recalled > 0 {
+                gate.record_skill_distill_output(report.distill_produced, report.distill_recalled);
+            }
             gate.advance_cycle();
             gate.tick_cooldown();
         }

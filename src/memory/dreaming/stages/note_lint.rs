@@ -569,6 +569,7 @@ category: preference
             activity_checker: std::sync::Arc::new(|| false),
             strategy: crate::memory::dreaming::DreamStrategy::Consolidate,
             orientation: None,
+            evolution_budget: crate::memory::dreaming::EditBudget::default(),
         };
         (ctx, store)
     }
@@ -746,6 +747,7 @@ category: preference
             activity_checker: std::sync::Arc::new(|| false),
             strategy: crate::memory::dreaming::DreamStrategy::Consolidate,
             orientation: Some(orient_dyn),
+            evolution_budget: crate::memory::dreaming::EditBudget::default(),
         }
     }
 

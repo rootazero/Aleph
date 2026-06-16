@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::memory::dreaming::distill_action::DistillActionRecord;
+use crate::memory::dreaming::evolution::EvolutionOutcome;
 
 /// Status of a completed dream pipeline run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +49,30 @@ pub struct DreamReport {
     /// pre-dates this field) deserializable without a migration.
     #[serde(default)]
     pub distill_actions: Vec<DistillActionRecord>,
+    /// Note pairs merged this cycle (keeper, absorbed). Drained into
+    /// `MutationGate::record_merge_pair` after the pipeline runs so the
+    /// churn-detection subsystem actually receives data (it previously never
+    /// did — the recorders had no callers).
+    #[serde(default)]
+    pub merged_pairs: Vec<(String, String)>,
+    /// Synthesis assertions written this cycle. Drained into
+    /// `MutationGate::record_synthesis_assertion` for oscillation detection.
+    #[serde(default)]
+    pub synthesis_assertions: Vec<String>,
+    /// Skill-distill notes produced this cycle (for wasted-distillation detection).
+    #[serde(default)]
+    pub distill_produced: u32,
+    /// Skill notes recalled (used) — the recall side of the distill ratio.
+    #[serde(default)]
+    pub distill_recalled: u32,
+    /// Merges the evolution gate rejected this cycle (would fuse distinct
+    /// knowledge). Surfaced via the `note_manage(action="evolution")` tool.
+    #[serde(default)]
+    pub merges_rejected: u32,
+    /// Cycle-level evolution-gate outcome (memory-health before/after). `None`
+    /// when the gate did not run (e.g. conserve cycles, missing provider).
+    #[serde(default)]
+    pub evolution: Option<EvolutionOutcome>,
     /// Stages that were executed during this run.
     #[serde(skip)]
     pub stages_executed: Vec<String>,
