@@ -37,6 +37,11 @@ pub struct ShellStopHook {
     pub hook_name: String,
     pub command: String,
     pub timeout: Duration,
+    /// When true, the command string is checked for shell metacharacters before
+    /// being passed to `sh -c`. Per-goal gates (sourced from LLM tool args) set
+    /// this to true so that injection payloads such as `;`, `|`, `$()`, etc.
+    /// are rejected rather than executed.
+    require_shell_safe: bool,
 }
 
 impl ShellStopHook {
@@ -45,12 +50,21 @@ impl ShellStopHook {
             hook_name: name.into(),
             command: command.into(),
             timeout: Duration::from_secs(30),
+            require_shell_safe: false,
         }
     }
 
     #[must_use]
     pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Mark this hook as requiring a shell-safe command string. Used for
+    /// per-goal gates that originate from untrusted tool arguments.
+    #[must_use]
+    pub const fn shell_safe(mut self) -> Self {
+        self.require_shell_safe = true;
         self
     }
 }
@@ -113,7 +127,10 @@ pub fn effective_gate(
         (g, Some(cmd)) => {
             let mut hooks: Vec<Arc<dyn StopHookHandler>> =
                 g.map(|v| v.as_ref().clone()).unwrap_or_default();
-            hooks.push(Arc::new(ShellStopHook::new("goal_gate", cmd)) as Arc<dyn StopHookHandler>);
+            hooks.push(
+                Arc::new(ShellStopHook::new("goal_gate", cmd).shell_safe())
+                    as Arc<dyn StopHookHandler>,
+            );
             Some(Arc::new(hooks))
         }
     }
@@ -248,6 +265,16 @@ pub async fn execute_stop_hooks_arc(
 // Shell execution helper
 // ---------------------------------------------------------------------------
 
+const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
+
+/// Reject command strings that contain shell metacharacters which could be used
+/// to inject additional commands when passed to `sh -c`. Alphanumeric ASCII,
+/// whitespace, and common safe path/punctuation characters are allowed.
+fn is_shell_safe(command: &str) -> bool {
+    const SAFE: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /._-:\"'=";
+    command.chars().all(|c| SAFE.contains(c) && c != '\n' && c != '\r')
+}
+
 async fn execute_shell_hook(
     hook: &ShellStopHook,
     context_json: &str,
@@ -255,6 +282,16 @@ async fn execute_shell_hook(
 ) -> StopHookVerdict {
     use tokio::io::AsyncWriteExt;
     use tokio::process::Command;
+
+    if hook.require_shell_safe && !is_shell_safe(&hook.command) {
+        return StopHookVerdict::Error {
+            hook_name: hook.hook_name.clone(),
+            message: format!(
+                "goal gate command contains shell metacharacters: {}",
+                hook.command
+            ),
+        };
+    }
 
     let mut child = match Command::new("sh")
         .arg("-c")
@@ -291,14 +328,20 @@ async fn execute_shell_hook(
                 async {
                     let mut buf = Vec::new();
                     if let Some(ref mut h) = stdout_handle {
-                        let _ = h.read_to_end(&mut buf).await;
+                        let _ = h
+                            .take(MAX_OUTPUT_BYTES)
+                            .read_to_end(&mut buf)
+                            .await;
                     }
                     buf
                 },
                 async {
                     let mut buf = Vec::new();
                     if let Some(ref mut h) = stderr_handle {
-                        let _ = h.read_to_end(&mut buf).await;
+                        let _ = h
+                            .take(MAX_OUTPUT_BYTES)
+                            .read_to_end(&mut buf)
+                            .await;
                     }
                     buf
                 }
