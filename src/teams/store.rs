@@ -685,10 +685,24 @@ impl TeamStore for SqliteTeamStore {
 
     async fn rename_team(&self, id: &str, name: &str) -> crate::error::Result<()> {
         let conn = self.conn.lock().await;
+        // Only rename active teams — mirrors disband_team / add_member status guard
         let affected = conn
-            .execute("UPDATE teams SET name = ?1 WHERE id = ?2", params![name, id])
+            .execute(
+                "UPDATE teams SET name = ?1 WHERE id = ?2 AND status = 'active'",
+                params![name, id],
+            )
             .map_err(db_err)?;
         if affected == 0 {
+            let exists: bool = conn
+                .prepare_cached("SELECT 1 FROM teams WHERE id = ?1")
+                .map_err(db_err)?
+                .query_row(params![id], |_| Ok(true))
+                .optional()
+                .map_err(db_err)?
+                .unwrap_or(false);
+            if exists {
+                return Err(domain_err(format!("team already disbanded: {id}")));
+            }
             return Err(not_found(format!("team not found: {id}")));
         }
         Ok(())
@@ -1100,6 +1114,28 @@ mod tests {
 
         let err = store.rename_team("nope", "X").await;
         assert!(err.is_err(), "rename of missing team must error");
+    }
+
+    #[tokio::test]
+    async fn rename_team_rejects_disbanded_team() {
+        let store = setup_store().await;
+        let team = store
+            .create_team(NewTeam {
+                name: "Old".into(),
+                description: String::new(),
+                leader_id: "main".into(),
+            })
+            .await
+            .unwrap();
+
+        store.disband_team(&team.id).await.unwrap();
+
+        let err = store.rename_team(&team.id, "New Topic").await;
+        assert!(err.is_err(), "rename of disbanded team must error");
+
+        // Name must remain unchanged after a rejected rename.
+        let got = store.get_team(&team.id).await.unwrap().unwrap();
+        assert_eq!(got.name, "Old");
     }
 
     #[tokio::test]
