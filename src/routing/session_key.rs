@@ -165,15 +165,21 @@ impl SessionKey {
         }
     }
 
-    /// Create a task session key
+    /// Create a task session key. `task_type` is normalized and must not be a
+    /// reserved routing marker (`peer`, `dm`, `ephemeral`) to avoid serializing
+    /// an ambiguous key that would parse as a DM/Ephemeral instead.
     pub fn task(
         agent_id: impl Into<String>,
         task_type: impl Into<String>,
         task_id: impl Into<String>,
     ) -> Self {
+        let task_type = normalize_agent_id(&task_type.into());
+        if matches!(task_type.as_str(), "peer" | "dm" | "ephemeral") {
+            panic!("reserved task_type `{task_type}` would produce an ambiguous session key");
+        }
         Self::Task {
             agent_id: normalize_agent_id(&agent_id.into()),
-            task_type: normalize_agent_id(&task_type.into()),
+            task_type,
             task_id: normalize_agent_id(&task_id.into()),
         }
     }
@@ -462,6 +468,16 @@ impl SessionKey {
         // parsed as Main with epoch 0 rather than falling through to
         // the [task_type, task_id] catch-all and becoming a Task.
         if rest.len() > 1 {
+            // Only treat a trailing `:sN` as an epoch when the stripped rest
+            // is a known epoch-bearing shape. For 2-segment rests, the first
+            // segment must be `main` (Main) or a DM marker; otherwise a Task
+            // whose `task_id` happens to match `s[0-9]+` (e.g. `cron:s7`)
+            // would round-trip as Main and break routing.
+            if rest.len() == 2
+                && !matches!(rest[0], "main" | "peer" | "dm")
+            {
+                return None;
+            }
             Some((&rest[..rest.len() - 1], n))
         } else {
             None
@@ -599,7 +615,7 @@ impl SessionKey {
             return None;
         }
 
-        let agent_id = parts[1].to_string();
+        let agent_id = normalize_agent_id(parts[1]);
 
         match parts.get(2..) {
             Some(&["peer", ref rest @ ..]) if !rest.is_empty() => Some(Self::DirectMessage {
