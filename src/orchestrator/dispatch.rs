@@ -653,8 +653,18 @@ impl Orchestrator {
                 active,
                 key: session_for_release,
             };
-            let outcome = harness
-                .run(
+            // Re-establish the project-root task-local inside the spawned
+            // harness task. `tokio::spawn` does NOT inherit task-locals, so the
+            // `with_project_root` scope set on the gateway side (run_loop) is
+            // lost across this boundary. The harness receives `workspace_override`
+            // explicitly for CWD + prompt context, but the per-project memory
+            // seams (`note_manage`, the retrieval assembler, session compaction)
+            // read the ambient `current_project_root()` — without this they see
+            // `None` and `memory.project_scoped` silently no-ops to the base
+            // namespace, leaking notes across projects.
+            let outcome = crate::projects::with_project_root(
+                workspace_override.clone(),
+                harness.run(
                     session_key,
                     spec_clone,
                     input_clone,
@@ -666,8 +676,9 @@ impl Orchestrator {
                     interaction_manifest,
                     workspace_override,
                     max_iterations_override,
-                )
-                .await;
+                ),
+            )
+            .await;
             // `done_tx.send` returns Err only when `done_rx` was dropped by the
             // caller — meaning the handle was abandoned and no one is waiting for
             // the result. Dropping the result is intentional; a `return` or `?`
