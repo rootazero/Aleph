@@ -302,11 +302,15 @@ impl PluginLoader {
     }
 
     /// Execute a hook handler on a loaded plugin.
+    ///
+    /// A WASM hook is an exported function invoked with the event payload, so
+    /// it routes through the same runtime path as tool/command calls — no
+    /// separate hook ABI is needed.
     pub fn execute_hook(
         &self,
         plugin_id: &str,
-        _handler: &str,
-        _event_data: serde_json::Value,
+        handler: &str,
+        event_data: serde_json::Value,
     ) -> ExtensionResult<serde_json::Value> {
         let kind = self
             .loaded_plugins
@@ -314,9 +318,25 @@ impl PluginLoader {
             .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
 
         match kind {
-            PluginKind::Wasm => Err(ExtensionError::Runtime(
-                "WASM hooks not yet implemented".to_string(),
-            )),
+            PluginKind::Wasm => {
+                let runtime = self.wasm_runtime.as_ref().ok_or_else(|| {
+                    ExtensionError::Runtime("WASM runtime not initialized".to_string())
+                })?;
+                let input = crate::extension::runtime::WasmToolInput {
+                    name: handler.to_string(),
+                    arguments: event_data,
+                };
+                let output = runtime.call_tool(plugin_id, handler, input)?;
+                if output.success {
+                    Ok(output.result.unwrap_or(serde_json::Value::Null))
+                } else {
+                    Err(ExtensionError::Runtime(
+                        output
+                            .error
+                            .unwrap_or_else(|| "Unknown WASM error".to_string()),
+                    ))
+                }
+            }
             PluginKind::Mcp => Err(ExtensionError::Runtime(
                 "MCP plugins do not support hooks via PluginLoader".to_string(),
             )),
