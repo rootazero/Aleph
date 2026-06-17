@@ -28,18 +28,41 @@ in the original text — do not shorten, paraphrase, or reconstruct them:\n\
 If an identifier is not relevant to the summary's core meaning, omit it entirely \
 rather than abbreviating it.";
 
-// ASSUMPTION: LLM output contains at most one <analysis>...</analysis> block with no nesting.
-/// Strip the `<analysis>...</analysis>` scratchpad from LLM summary output.
+// ASSUMPTION: LLM output contains at most one <analysis>...</analysis> and one
+// <summary>...</summary> block, neither nested.
+/// Reduce raw LLM summarizer output to the clean summary text that enters the
+/// context window, removing the prompt scaffolding the model was told to emit.
 ///
-/// The analysis block gives the LLM reasoning space but should not enter
-/// the context window. If no analysis block is found, returns input unchanged.
+/// Two scaffolds are stripped (see [`build_window_summary_prompt`]):
+/// - the `<analysis>…</analysis>` scratchpad — reasoning space that must never
+///   enter context — is removed, keeping any surrounding text;
+/// - the `<summary>…</summary>` wrapper — the model is instructed to place its
+///   deliverable *inside* it — is unwrapped to its inner content, so stray
+///   `<summary>` XML tags do not leak verbatim into every `[Context Summary]`.
+///
+/// When the output carries no `<summary>` block (e.g. a model that emits bare
+/// prose, or a degenerate analysis-only response), the analysis-stripped text is
+/// returned unchanged. That preserves the load-bearing contract that an
+/// analysis-only response strips to an empty string and routes to deterministic
+/// truncation rather than draining the window into an empty summary.
 #[must_use]
 pub fn strip_analysis_block(text: &str) -> String {
-    if let Some(start) = text.find("<analysis>") {
-        if let Some(end) = text.find("</analysis>") {
+    let without_analysis = strip_tagged_block(text, "analysis");
+    unwrap_tagged_block(&without_analysis, "summary").unwrap_or(without_analysis)
+}
+
+/// Remove the first `<tag>…</tag>` block, keeping (and trimming) the text on
+/// either side. Returns the input unchanged when the block is absent or its
+/// closing tag does not follow its opening tag. Tags are ASCII, so every byte
+/// offset from `find` lands on a UTF-8 boundary.
+fn strip_tagged_block(text: &str, tag: &str) -> String {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    if let Some(start) = text.find(open.as_str()) {
+        if let Some(end) = text.find(close.as_str()) {
             // Only strip when the closing tag appears after the opening tag.
             if end > start {
-                let after_end = end + "</analysis>".len();
+                let after_end = end + close.len();
                 let mut result = String::new();
                 result.push_str(text[..start].trim());
                 if after_end < text.len() {
@@ -53,6 +76,22 @@ pub fn strip_analysis_block(text: &str) -> String {
         }
     }
     text.to_string()
+}
+
+/// Return the trimmed inner content of the first well-formed `<tag>…</tag>`
+/// block, or `None` when no such block exists (so the caller keeps the
+/// unwrapped text). An empty block yields `Some("")` — a degenerate summary the
+/// caller's emptiness check routes to the truncation fallback.
+fn unwrap_tagged_block(text: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = text.find(open.as_str())?;
+    let inner_start = start + open.len();
+    let end = text.find(close.as_str())?;
+    if end < inner_start {
+        return None;
+    }
+    Some(text[inner_start..end].trim().to_string())
 }
 
 /// Build the summarization prompt shared by in-place compaction
@@ -172,6 +211,38 @@ mod tests {
         assert!(!stripped.contains("<analysis>"));
         assert!(!stripped.contains("Detailed reasoning"));
         assert!(stripped.contains("The actual summary"));
+        // Both scaffolds are gone: the analysis scratchpad AND the <summary>
+        // wrapper tags. Only the deliverable content survives.
+        assert!(!stripped.contains("<summary>"));
+        assert!(!stripped.contains("</summary>"));
+        assert_eq!(stripped, "The actual summary");
+    }
+
+    #[test]
+    fn unwraps_summary_block_without_analysis() {
+        // A model that wraps its deliverable but emits no analysis block: the
+        // <summary> tags must still be stripped so they never leak into context.
+        let input = "<summary>\n## Primary Request\nmigrate the store\n</summary>";
+        let stripped = strip_analysis_block(input);
+        assert_eq!(stripped, "## Primary Request\nmigrate the store");
+        assert!(!stripped.contains("summary>"));
+    }
+
+    #[test]
+    fn analysis_only_response_strips_to_empty() {
+        // The load-bearing fallback contract: an analysis-only response (no
+        // <summary> block) collapses to an empty string so the caller routes to
+        // deterministic truncation instead of draining the window into "".
+        let input = "<analysis>\nreasoning only, no summary block\n</analysis>";
+        assert!(strip_analysis_block(input).trim().is_empty());
+    }
+
+    #[test]
+    fn bare_prose_without_summary_block_is_kept() {
+        // No <summary> wrapper → analysis-stripped text passes through unchanged,
+        // so models that emit plain prose are unaffected.
+        let input = "## Primary Request\njust prose, no wrapper";
+        assert_eq!(strip_analysis_block(input), input);
     }
 
     #[test]
