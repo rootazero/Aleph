@@ -165,6 +165,43 @@ pub const fn backoff_secs(failed_attempts: u32, base_secs: u64, cap_secs: u64) -
     }
 }
 
+/// [`backoff_secs`] with deterministic **equal jitter** applied.
+///
+/// Returns a value in `[delay/2, delay]`, where `delay` is the un-jittered
+/// exponential backoff and the offset within that band is chosen from `seed`.
+///
+/// ## Why jitter
+///
+/// A whole team's tasks routinely fail *together* — one provider outage or
+/// rate-limit ceiling takes them all down in the same tick. With pure
+/// exponential backoff every one of them becomes eligible again at the
+/// identical `now + delay`, so they stampede the just-recovered provider in
+/// lockstep and re-trip the same limit — a thundering herd. Spreading each
+/// task's actual delay across a band de-synchronises the retries. This is
+/// AWS's "exponential backoff **and** jitter" recipe, which the bare backoff
+/// most task queues ship omits.
+///
+/// `seed` is supplied by the caller (a hash of the task id) rather than drawn
+/// from an RNG: the jitter is then reproducible in tests, stable across a
+/// process restart, and free of any randomness dependency — while still
+/// differing task-to-task, which is all the de-synchronisation needs. Keeping
+/// `seed` a parameter also leaves this function pure and `const`.
+#[must_use]
+pub const fn jittered_backoff_secs(
+    failed_attempts: u32,
+    base_secs: u64,
+    cap_secs: u64,
+    seed: u64,
+) -> u64 {
+    let delay = backoff_secs(failed_attempts, base_secs, cap_secs);
+    if delay == 0 {
+        return 0;
+    }
+    let floor = delay / 2;
+    let span = delay - floor; // ceil(delay/2) — the width of the jitter band
+    floor + seed % (span + 1)
+}
+
 /// Read a task's pending retry-backoff deadline (epoch seconds) from its
 /// `metadata`, if any. Tolerant: a missing key or non-integer value reads as
 /// `None` (eligible now).
@@ -287,6 +324,37 @@ mod tests {
     fn backoff_saturates_without_overflow_at_extreme_shift() {
         // A hand-edited huge attempt count must not panic on shift overflow.
         assert_eq!(backoff_secs(u32::MAX, 5, 120), 120);
+    }
+
+    #[test]
+    fn jitter_stays_within_the_equal_jitter_band() {
+        // delay for attempt 3, base 5 = 20 → band [10, 20] for every seed.
+        let delay = backoff_secs(3, 5, 120);
+        assert_eq!(delay, 20);
+        for seed in 0..1000u64 {
+            let j = jittered_backoff_secs(3, 5, 120, seed);
+            assert!((delay / 2..=delay).contains(&j), "seed {seed} → {j} out of band");
+        }
+    }
+
+    #[test]
+    fn jitter_is_deterministic_and_desynchronises_seeds() {
+        // Same seed → same value (reproducible).
+        assert_eq!(
+            jittered_backoff_secs(4, 5, 120, 42),
+            jittered_backoff_secs(4, 5, 120, 42)
+        );
+        // Different seeds spread across the band (not all identical) — the
+        // whole point of jitter. Sample a handful and confirm >1 distinct value.
+        let distinct: std::collections::HashSet<u64> =
+            (0..50u64).map(|s| jittered_backoff_secs(4, 5, 120, s)).collect();
+        assert!(distinct.len() > 1, "jitter collapsed to a single value");
+    }
+
+    #[test]
+    fn jitter_disabled_when_backoff_is_zero() {
+        assert_eq!(jittered_backoff_secs(3, 0, 120, 999), 0);
+        assert_eq!(jittered_backoff_secs(0, 5, 120, 999), 0);
     }
 
     #[test]

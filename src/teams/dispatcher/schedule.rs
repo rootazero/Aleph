@@ -15,8 +15,8 @@ use super::runner::{execute_member_task, MemberDispatchTarget, MemberRunStatus};
 use super::TeamDispatcher;
 use crate::agents::swarm::tasks::acceptance::lead_review_required;
 use crate::agents::swarm::tasks::retry::{
-    backoff_secs, is_retry_eligible, read_max_retries, retry_decision, with_retry_not_before,
-    RetryDecision,
+    is_retry_eligible, jittered_backoff_secs, read_max_retries, retry_decision,
+    with_retry_not_before, RetryDecision,
 };
 use crate::agents::swarm::tasks::{
     CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate, TaskRunStatus,
@@ -662,14 +662,25 @@ impl TeamDispatcher {
 
         match retry_decision(failed_attempts, max_retries) {
             RetryDecision::Retry => {
-                // Exponential backoff: stamp the earliest epoch this task may be
-                // re-claimed into metadata, so the scheduler's eligibility gate
-                // spaces the next attempt out instead of re-claiming on the next
-                // tick. `0` backoff → immediate (the pre-enhancement behaviour).
-                let backoff = backoff_secs(
+                // Exponential backoff (with jitter): stamp the earliest epoch
+                // this task may be re-claimed into metadata, so the scheduler's
+                // eligibility gate spaces the next attempt out instead of
+                // re-claiming on the next tick. `0` backoff → immediate (the
+                // pre-enhancement behaviour). The jitter seed is a hash of the
+                // task id — deterministic and RNG-free, but distinct per task so
+                // a team whose tasks failed together don't all retry in lockstep
+                // and re-stampede the recovering provider (thundering herd).
+                let seed = {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    task.id.hash(&mut h);
+                    h.finish()
+                };
+                let backoff = jittered_backoff_secs(
                     failed_attempts,
                     self.config.retry_backoff_base_secs,
                     self.config.retry_backoff_cap_secs,
+                    seed,
                 );
                 let not_before = Self::now_epoch().saturating_add(backoff);
                 let metadata = with_retry_not_before(task.metadata.clone(), not_before);
