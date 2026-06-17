@@ -144,15 +144,83 @@ pub async fn handle_disband(request: JsonRpcRequest, store: Arc<dyn TeamStore>) 
     }
 }
 
-/// Handle teams.delete — permanently delete a disbanded team
-pub async fn handle_delete(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -> JsonRpcResponse {
-    debug!("Handling teams.delete request");
-
+/// Handle teams.delete — permanently delete a disbanded team with cascade cleanup.
+///
+/// Deletes the team row first (authoritative gate; disbanded check lives inside
+/// `delete_team`). On success, best-effort orphan cleanup runs across all five
+/// subordinate stores; individual failures emit a `warn!` but do not fail the
+/// overall response. Use `handle_delete_basic` as a fallback when the subordinate
+/// stores are not configured.
+pub async fn handle_delete(
+    request: JsonRpcRequest,
+    store: Arc<dyn TeamStore>,
+    coord_store: Arc<dyn CoordTaskStore>,
+    msg_store: Arc<dyn crate::teams::messages::MessageStore>,
+    event_store: Arc<dyn crate::teams::events::EventLogStore>,
+    artifact_store: Arc<dyn crate::teams::artifacts::ArtifactStore>,
+    snapshot_store: Arc<crate::teams::SqliteSnapshotStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.delete request (cascade)");
     let params: TeamIdParams = match parse_params(&request) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    let team_id = params.team_id;
 
+    // 1) Authoritative gate + remove team row (disbanded check inside delete_team).
+    //    Fail immediately on error — do not cascade to subordinate stores.
+    if let Err(e) = store.delete_team(&team_id).await {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to delete team '{team_id}': {e}"),
+        );
+    }
+
+    // 2) Best-effort cleanup of orphaned data in subordinate stores.
+    //    Each failure is logged with warn! but does not affect the success response.
+    let task_ids: Vec<String> = match coord_store
+        .list_tasks(CoordTaskFilter {
+            team_id: Some(team_id.clone()),
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(tasks) => tasks.into_iter().map(|t| t.id).collect(),
+        Err(e) => {
+            warn!("teams.delete: list tasks for artifact cleanup failed: {e}");
+            Vec::new()
+        }
+    };
+    if let Err(e) = artifact_store.delete_artifacts_for_tasks(&task_ids).await {
+        warn!("teams.delete: artifact cleanup failed for {team_id}: {e}");
+    }
+    if let Err(e) = coord_store.delete_team_tasks(&team_id).await {
+        warn!("teams.delete: task cleanup failed for {team_id}: {e}");
+    }
+    if let Err(e) = snapshot_store.delete_team_snapshots(&team_id).await {
+        warn!("teams.delete: snapshot cleanup failed for {team_id}: {e}");
+    }
+    if let Err(e) = msg_store.delete_team_messages(&team_id).await {
+        warn!("teams.delete: message cleanup failed for {team_id}: {e}");
+    }
+    if let Err(e) = event_store.delete_team_events(&team_id).await {
+        warn!("teams.delete: event cleanup failed for {team_id}: {e}");
+    }
+
+    JsonRpcResponse::success(request.id, json!({ "success": true }))
+}
+
+/// Fallback used when subordinate stores are not all configured: removes the
+/// team row only (legacy behavior). Cascade cleanup is skipped.
+pub async fn handle_delete_basic(
+    request: JsonRpcRequest,
+    store: Arc<dyn TeamStore>,
+) -> JsonRpcResponse {
+    let params: TeamIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
     match store.delete_team(&params.team_id).await {
         Ok(()) => JsonRpcResponse::success(request.id, json!({ "success": true })),
         Err(e) => JsonRpcResponse::error(

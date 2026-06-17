@@ -208,7 +208,34 @@ pub(in crate::commands::start) fn register_teams_handlers(
     register_handler!(server, "teams.create", teams::handle_create, store);
     register_handler!(server, "teams.rename", teams::handle_rename, store);
     register_handler!(server, "teams.disband", teams::handle_disband, store);
-    register_handler!(server, "teams.delete", teams::handle_delete, store);
+    // teams.delete — cascade when all four subordinate stores are configured;
+    // fall back to single-store delete (legacy behavior) otherwise.
+    match (event_store, snapshot_store, artifact_store, msg_store.clone()) {
+        (Some(ev), Some(snap), Some(art), Some(msg)) => {
+            let store_c = Arc::clone(store);
+            let coord_c = Arc::clone(coord_store);
+            let ev_c = Arc::clone(ev);
+            let snap_c = Arc::clone(snap);
+            let art_c = Arc::clone(art);
+            let msg_c = Arc::clone(&msg);
+            server.handlers_mut().register("teams.delete", move |req| {
+                let store_c = Arc::clone(&store_c);
+                let coord_c = Arc::clone(&coord_c);
+                let ev_c = Arc::clone(&ev_c);
+                let snap_c = Arc::clone(&snap_c);
+                let art_c = Arc::clone(&art_c);
+                let msg_c = Arc::clone(&msg_c);
+                async move {
+                    teams::handle_delete(req, store_c, coord_c, msg_c, ev_c, art_c, snap_c).await
+                }
+            });
+        }
+        _ => {
+            // Fallback: TeamStore-only delete (old behavior); subordinate store
+            // absence is acceptable in simulated / test configurations.
+            register_handler!(server, "teams.delete", teams::handle_delete_basic, store);
+        }
+    }
 
     // agents.teams — enriched with members_preview + last_message when the
     // optional agent_manager and msg_store are wired at boot.
