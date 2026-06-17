@@ -81,6 +81,14 @@ impl ClarificationManager {
         request: ClarificationRequest,
         timeout: Duration,
     ) -> oneshot::Receiver<ClarificationResult> {
+        // Opportunistic sweep: an `ask_user` whose future was dropped (aborted
+        // agent run) never reaches its own `cancel`, so its entry would linger
+        // forever — `cleanup_expired` has no scheduled caller. Each new
+        // registration reaps anything already past its deadline, mirroring
+        // [`ExecApprovalManager::register_pending`]. Bounded work, no background
+        // task (R10).
+        self.cleanup_expired().await;
+
         let (tx, rx) = oneshot::channel();
         let entry = PendingEntry {
             request,
@@ -343,6 +351,33 @@ mod tests {
         assert_eq!(
             result.result_type,
             crate::clarification::ClarificationResultType::Timeout
+        );
+    }
+
+    #[tokio::test]
+    async fn register_sweeps_orphaned_expired_entries() {
+        // An `ask_user` future dropped before its timeout (aborted run) leaves
+        // an entry that `cancel`/its own timeout never reap. The next
+        // registration — even for a DIFFERENT session — must sweep it, so
+        // orphans don't accumulate without a scheduled cleanup pass.
+        let mgr = ClarificationManager::new();
+        let rx_orphan = mgr
+            .register("orphan-sess", text_request(), Duration::from_millis(1))
+            .await;
+        drop(rx_orphan); // waiter abandoned — simulates an aborted agent run
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Registering a live clarification for another session sweeps the orphan.
+        let _rx_live = mgr
+            .register("live-sess", text_request(), DEFAULT_CLARIFY_TIMEOUT)
+            .await;
+        assert!(
+            !mgr.has_pending("orphan-sess").await,
+            "expired orphan must be swept on the next registration"
+        );
+        assert!(
+            mgr.has_pending("live-sess").await,
+            "the live entry must be kept"
         );
     }
 
