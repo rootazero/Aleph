@@ -123,7 +123,8 @@ pub fn cap_reached_note(goal: &Goal) -> String {
         PursuitMode::Active { max_iterations } => format!(
             "Autonomous pursuit reached its iteration cap ({max_iterations} \
              iterations) without completing. Blocked for your guidance — review \
-             progress, then clear or re-set the goal to continue."
+             progress, then resume in place by updating status='active' with a \
+             higher pursuit_max_iterations, or clear/re-set the goal."
         ),
         PursuitMode::Passive => "Autonomous pursuit ended.".to_string(),
     }
@@ -135,8 +136,8 @@ pub fn cap_reached_note(goal: &Goal) -> String {
 #[must_use]
 pub fn deadline_reached_note(_goal: &Goal) -> String {
     "Autonomous pursuit reached its wall-clock budget without completing. \
-     Blocked for your guidance — review progress, then clear or re-set the \
-     goal to continue."
+     Blocked for your guidance — review progress, then resume by updating \
+     status='active' with a fresh timeout_minutes, or clear/re-set the goal."
         .to_string()
 }
 
@@ -151,7 +152,8 @@ pub fn budget_reached_note(goal: &Goal) -> String {
         Some(budget) => format!(
             "Autonomous pursuit reached its token budget ({budget} tokens) \
              without completing. Blocked for your guidance — review progress, \
-             then clear or re-set the goal to continue."
+             then resume by updating status='active' with a higher token_budget, \
+             or clear/re-set the goal."
         ),
         // No budget set → token budget cannot be the binding stop; fall back.
         None => cap_reached_note(goal),
@@ -253,6 +255,21 @@ mod tests {
         let mut g = active_goal(3);
         g.continuations_used = 3;
         assert!(!should_continue(&g, 0, 0));
+    }
+
+    #[test]
+    fn higher_cap_re_enables_continuation() {
+        // The resume mechanism behind goal(update, pursuit_max_iterations=…):
+        // a goal exhausted at its cap regains runway the instant the cap is
+        // raised above the used count — no clear+set, no lost lessons.
+        let mut g = active_goal(3);
+        g.continuations_used = 3;
+        assert!(!should_continue(&g, 0, 0), "exhausted at cap");
+        let resumed = g.with_pursuit(PursuitMode::Active { max_iterations: 8 });
+        assert!(
+            should_continue(&resumed, 0, 0),
+            "raising the cap above the used count resumes pursuit"
+        );
     }
 
     #[test]
