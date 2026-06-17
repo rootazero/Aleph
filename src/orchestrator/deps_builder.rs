@@ -39,6 +39,28 @@ const DEFAULT_OUTPUT_RESERVE: u64 = 8_192;
 /// would force compaction or a final reply on the very first turn.
 const MIN_USABLE_BUDGET: u64 = 16_384;
 
+/// Fraction below which an auto-sized chain-minimum budget is considered to
+/// *materially* undercut the primary's own window: a narrow fallback sibling
+/// dragging the budget under 60% of the primary's usable budget means the
+/// primary model compacts >40% earlier than its real window would require.
+/// Purely an observability threshold — it changes no budget value.
+const CHAIN_MIN_UNDERCUT_WARN_FRACTION: f64 = 0.60;
+
+/// Whether an auto-sized chain-minimum budget materially undercuts the
+/// primary's own usable window (see [`CHAIN_MIN_UNDERCUT_WARN_FRACTION`]).
+///
+/// The chain-min design is deliberately conservative — it sizes compaction for
+/// the *smallest* window any in-request failover migration could land on — but
+/// that makes a single narrow fallback sibling silently shrink the effective
+/// context of a wide primary, the one genuinely surprising consequence of the
+/// design. This predicate gates the one-line startup advisory that explains it.
+/// Returns `false` when the primary budget is unknown (`0`), so an undeterminable
+/// comparison never produces a spurious warning.
+fn chain_min_materially_undercuts_primary(chain_min_usable: u64, primary_usable: u64) -> bool {
+    primary_usable > 0
+        && (chain_min_usable as f64) < (primary_usable as f64) * CHAIN_MIN_UNDERCUT_WARN_FRACTION
+}
+
 /// Stability triple — three independent Optionals derived from `[stability]`.
 ///
 /// Returned as a struct (not tuple) so consumers can name fields and future
@@ -599,6 +621,31 @@ pub fn build_context_budget_config(
                 chain_len = derived.chain_len,
                 "context budget derived from chain-minimum model context window"
             );
+            // Advisory (P7/observability): when a *narrower* fallback sibling
+            // wins the chain-minimum, the compaction budget is capped well
+            // below the primary's own window, so the primary model compacts far
+            // earlier than its real context would require. This is the single
+            // most confusing consequence of the conservative chain-min design;
+            // surface it with an actionable line. Log-only — the safe (smaller)
+            // budget stands; the operator can reorder/trim the chain or pin an
+            // explicit `token_budget` if the early compaction is unwanted.
+            let primary = config.providers.get(primary_provider_key);
+            let primary_model = primary.and_then(|p| p.models.first().map(String::as_str));
+            let primary_usable = derive_token_budget(primary, primary_model).usable;
+            if !derived.provider.eq_ignore_ascii_case(primary_provider_key)
+                && chain_min_materially_undercuts_primary(derived.budget.usable, primary_usable)
+            {
+                tracing::warn!(
+                    primary = %primary_provider_key,
+                    primary_usable,
+                    chain_min_provider = %derived.provider,
+                    chain_min_usable = derived.budget.usable,
+                    "context budget: a narrower fallback sibling caps the compaction budget well \
+                     below the primary's window — the primary will compact early. Reorder/trim \
+                     [fallback_provider].chain or set an explicit [context_budget] token_budget \
+                     to override."
+                );
+            }
             derived.budget.usable
         }
     };
@@ -1466,5 +1513,36 @@ mod tests {
             build_cheap_summary_provider(&cfg, "primary").is_some(),
             "enabled + distinct buildable summary model must yield a cheap provider"
         );
+    }
+
+    // --- chain-min undercut advisory (observability predicate) ---
+
+    #[test]
+    fn undercut_fires_when_chain_min_well_below_primary() {
+        // A 200k-usable fallback sibling against a 1M-usable primary is far
+        // under the 60% line → the primary will compact early → advise.
+        assert!(chain_min_materially_undercuts_primary(200_000, 1_000_000));
+    }
+
+    #[test]
+    fn undercut_silent_when_chain_min_close_to_primary() {
+        // A sibling within the 60% band is not surprising enough to warn about:
+        // 700k of a 1M primary keeps most of the window.
+        assert!(!chain_min_materially_undercuts_primary(700_000, 1_000_000));
+    }
+
+    #[test]
+    fn undercut_silent_when_chain_min_equals_primary() {
+        // Single-provider / uniform-window chain: chain-min IS the primary, so
+        // there is nothing to advise.
+        assert!(!chain_min_materially_undercuts_primary(1_000_000, 1_000_000));
+    }
+
+    #[test]
+    fn undercut_silent_when_primary_unknown() {
+        // An undeterminable primary budget (0) must never produce a spurious
+        // warning — the predicate guards the division-by-intent.
+        assert!(!chain_min_materially_undercuts_primary(0, 0));
+        assert!(!chain_min_materially_undercuts_primary(50_000, 0));
     }
 }
