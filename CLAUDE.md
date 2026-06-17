@@ -145,6 +145,19 @@
 
 ---
 
+## 🛠 技术栈与禁用清单 (Tech Stack & Do NOT introduce)
+
+**核心栈**: Rust Core (tokio + serde) · 记忆层 SQLite + sqlite-vec · 接口 JSON Schema (schemars) · Panel Leptos/WASM · 桌面壳 Tauri。
+
+**Do NOT introduce unless explicitly requested**（基于 R1/R3/R7 推导，违者不得合入）:
+
+- **独立向量数据库 client 进 core**（qdrant / lancedb / milvus 等）—— 记忆层已锁 sqlite + sqlite-vec
+- **`src` 中直接依赖平台 API crate**（windows-rs / core-graphics / cocoa / objc / winapi）—— 违 R1，必须走原生 Bridge IPC
+- **正则 / 规则引擎做意图识别或路由**—— 违 R7/P8，语义判断交 LLM
+- **非 serde 的序列化栈**—— 全栈 serde
+
+---
+
 ## 🔧 开发指南
 
 ### 构建命令
