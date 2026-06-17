@@ -12,13 +12,16 @@
 
 use crate::sync_primitives::Arc;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::code_exec::{CodeExecArgs, CodeExecOutput, CodeExecTool, Language};
-use super::process_registry::{process_registry, KillOutcome, PollOutcome};
+use super::process_registry::{
+    process_registry, KillOutcome, PollOutcome, RegisterOutcome, WaitOutcome,
+};
 use crate::error::Result;
 use crate::sandbox::context::SESSION_ID;
 use crate::sandbox::{current_session, Sandbox};
@@ -35,6 +38,18 @@ use crate::tools::AlephTool;
 /// background jobs a generous one-hour ceiling instead; an explicit `timeout`
 /// still wins, and the job stays killable via `process_action: "kill"`.
 const BACKGROUND_DEFAULT_TIMEOUT_SECS: u64 = 3600;
+
+/// Default wait window (seconds) for `process_action: "wait"` when the caller
+/// passes no `timeout`. A `wait` blocks the *foreground* tool call, so it lives
+/// under the same 180s tool budget — we keep the default modest and cap it
+/// below the ceiling so the wait returns a clean `running`/`done` verdict
+/// rather than being SIGKILLed by the budget wrapper mid-wait.
+const WAIT_DEFAULT_TIMEOUT_SECS: u64 = 60;
+
+/// Hard ceiling for a `wait` window. Stays under the 180s foreground tool
+/// budget so an over-eager `timeout` can't push the blocking wait past the
+/// point where the budget wrapper kills the whole call.
+const WAIT_MAX_TIMEOUT_SECS: u64 = 170;
 
 /// Arguments for bash execution tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -63,12 +78,13 @@ pub struct BashExecArgs {
     #[serde(default)]
     pub background: bool,
     /// Manage a background process instead of running a command:
-    /// `"poll"` (fetch status/output), `"kill"` (terminate), or `"list"`
-    /// (enumerate this session's background processes). When set, `cmd` is
-    /// ignored; `poll`/`kill` require `process_id`.
+    /// `"poll"` (fetch status/output once), `"wait"` (block until it finishes,
+    /// up to `timeout`), `"kill"` (terminate), or `"list"` (enumerate this
+    /// session's background processes). When set, `cmd` is ignored;
+    /// `poll`/`wait`/`kill` require `process_id`.
     #[serde(default)]
     pub process_action: Option<String>,
-    /// Target background process id for `process_action` = `poll` | `kill`.
+    /// Target background process id for `process_action` = `poll` | `wait` | `kill`.
     #[serde(default)]
     pub process_id: Option<u64>,
     /// Optional natural-language reason for *why* an escalation
@@ -165,11 +181,17 @@ ceiling: with no explicit `timeout` they get a generous 1-hour default (pass
 - `{"process_action": "poll", "process_id": N}` → status while running, or the
   full {exit_code, stdout, stderr} once finished (output is captured, not
   streamed mid-run — poll again until done).
+- `{"process_action": "wait", "process_id": N}` → block until it finishes and
+  return its full output, or a `running` status if it is still going after the
+  wait window (default 60s, set `timeout` to extend up to 170s). Prefer `wait`
+  over a tight `poll` loop — it costs no round-trips while the job runs.
 - `{"process_action": "kill", "process_id": N}` → terminate it (SIGKILL).
 - `{"process_action": "list"}` → enumerate this session's background processes.
 Background processes are scoped to your session; you cannot see or kill another
-session's processes. Prefer foreground (blocking) execution for anything that
-finishes quickly — backgrounding is only worth it past ~the timeout ceiling.
+session's processes, and each session may have at most 8 running at once — if
+you hit that cap, poll/kill an existing one before starting another. Prefer
+foreground (blocking) execution for anything that finishes quickly —
+backgrounding is only worth it past ~the timeout ceiling.
 
 Examples:
 - One-liner: {"cmd": "ls -la /tmp"}
@@ -201,7 +223,7 @@ Examples:
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Background-process management never runs a command — handle first.
         if let Some(action) = args.process_action.as_deref() {
-            return Ok(handle_process_action(action, args.process_id));
+            return Ok(handle_process_action(action, args.process_id, args.timeout).await);
         }
 
         if args.cmd.is_empty() {
@@ -271,17 +293,33 @@ impl BashExecTool {
             reg.complete(id, output);
         });
 
-        let id = registry.register_running(preview.clone(), caller, join.abort_handle());
-        let _ = id_tx.send(id);
-
-        info_output(serde_json::json!({
-            "process_id": id,
-            "status": "running",
-            "background": true,
-            "message": format!(
-                "Started background process {id}. Poll with {{\"process_action\":\"poll\",\"process_id\":{id}}}."
-            ),
-        }))
+        match registry.register_running(preview, caller, join.abort_handle()) {
+            RegisterOutcome::Registered(id) => {
+                let _ = id_tx.send(id);
+                info_output(serde_json::json!({
+                    "process_id": id,
+                    "status": "running",
+                    "background": true,
+                    "message": format!(
+                        "Started background process {id}. Poll with {{\"process_action\":\"poll\",\"process_id\":{id}}}."
+                    ),
+                }))
+            }
+            RegisterOutcome::TooManyRunning { limit } => {
+                // Refuse without a slot. Dropping `id_tx` makes the gated task
+                // exit on its `id_rx.await` error without ever touching the
+                // sandbox; abort it too so the detached task is reaped promptly
+                // rather than lingering until the channel drop is observed.
+                drop(id_tx);
+                join.abort();
+                error_output(format!(
+                    "bash: this session already has {limit} background processes running (the per-session cap). \
+                     Poll or kill an existing one before starting another — \
+                     {{\"process_action\":\"list\"}} to see them, then \
+                     {{\"process_action\":\"kill\",\"process_id\":N}} to free a slot."
+                ))
+            }
+        }
     }
 }
 
@@ -291,9 +329,15 @@ fn session_label() -> Option<String> {
     current_session().map(|sid| serde_json::to_string(&sid).unwrap_or_else(|_| format!("{sid:?}")))
 }
 
-/// Dispatch a `poll` / `kill` / `list` management action against the registry,
-/// scoped to the caller's session.
-fn handle_process_action(action: &str, process_id: Option<u64>) -> CodeExecOutput {
+/// Dispatch a `poll` / `wait` / `kill` / `list` management action against the
+/// registry, scoped to the caller's session. `wait` is the only async branch
+/// (it parks on the registry's completion notifier); the rest are synchronous
+/// table reads.
+async fn handle_process_action(
+    action: &str,
+    process_id: Option<u64>,
+    timeout: Option<u64>,
+) -> CodeExecOutput {
     let registry = process_registry();
     let caller = session_label();
     match action {
@@ -322,6 +366,39 @@ fn handle_process_action(action: &str, process_id: Option<u64>) -> CodeExecOutpu
                 )),
             }
         }
+        "wait" => {
+            let Some(id) = process_id else {
+                return error_output("bash: process_action=wait requires `process_id`");
+            };
+            // Clamp the wait window under the foreground tool budget so the
+            // blocking wait always returns a verdict instead of being killed.
+            let secs = timeout
+                .unwrap_or(WAIT_DEFAULT_TIMEOUT_SECS)
+                .clamp(1, WAIT_MAX_TIMEOUT_SECS);
+            match registry
+                .wait(id, caller.as_deref(), Duration::from_secs(secs))
+                .await
+            {
+                // Finished within the window — surface the captured output.
+                WaitOutcome::Done(out) => *out,
+                WaitOutcome::Killed => info_output(serde_json::json!({
+                    "process_id": id,
+                    "status": "killed",
+                })),
+                WaitOutcome::TimedOut { elapsed_ms } => info_output(serde_json::json!({
+                    "process_id": id,
+                    "status": "running",
+                    "elapsed_ms": elapsed_ms,
+                    "message": format!(
+                        "Still running after waiting {secs}s. Wait again or poll later with \
+                         {{\"process_action\":\"poll\",\"process_id\":{id}}}."
+                    ),
+                })),
+                WaitOutcome::NotFound => error_output(format!(
+                    "bash: no background process #{id} for this session"
+                )),
+            }
+        }
         "kill" => {
             let Some(id) = process_id else {
                 return error_output("bash: process_action=kill requires `process_id`");
@@ -341,7 +418,7 @@ fn handle_process_action(action: &str, process_id: Option<u64>) -> CodeExecOutpu
             }
         }
         other => error_output(format!(
-            "bash: unknown process_action '{other}' (expected poll|kill|list)"
+            "bash: unknown process_action '{other}' (expected poll|wait|kill|list)"
         )),
     }
 }
@@ -437,12 +514,19 @@ mod tests {
             "should mention management verbs"
         );
         assert!(
-            d.contains("\"poll\"") && d.contains("\"kill\"") && d.contains("\"list\""),
-            "should enumerate poll/kill/list"
+            d.contains("\"poll\"")
+                && d.contains("\"wait\"")
+                && d.contains("\"kill\"")
+                && d.contains("\"list\""),
+            "should enumerate poll/wait/kill/list"
         );
         assert!(
             d.contains("1-hour"),
             "should teach the generous background timeout default"
+        );
+        assert!(
+            d.contains("at most 8 running"),
+            "should teach the per-session running cap"
         );
     }
 
@@ -502,6 +586,30 @@ mod tests {
     #[tokio::test]
     async fn poll_unknown_id_reports_not_found() {
         let out = bash(args_action("poll", Some(u64::MAX))).await;
+        assert!(!out.success);
+        assert!(
+            out.stderr.contains("no background process"),
+            "{}",
+            out.stderr
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_without_id_is_a_clear_error() {
+        let out = bash(args_action("wait", None)).await;
+        assert!(!out.success);
+        assert!(
+            out.stderr.contains("requires `process_id`"),
+            "{}",
+            out.stderr
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_unknown_id_reports_not_found() {
+        // A bounded wait on an unknown id resolves immediately to NotFound
+        // (no busy spin) — proves the wait branch is wired through `call`.
+        let out = bash(args_action("wait", Some(u64::MAX))).await;
         assert!(!out.success);
         assert!(
             out.stderr.contains("no background process"),

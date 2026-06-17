@@ -21,9 +21,10 @@
 //! session cannot observe or terminate another's processes.
 
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
+use tokio::sync::Notify;
 use tokio::task::AbortHandle;
 
 use crate::builtin_tools::code_exec::CodeExecOutput;
@@ -33,6 +34,16 @@ use crate::sync_primitives::{Arc, AtomicU64, Mutex, MutexGuard, Ordering};
 /// *finished* entry (running ones are never dropped). Keeps the table from
 /// growing without bound across a long-lived daemon.
 const MAX_ENTRIES: usize = 64;
+
+/// Per-session ceiling on *running* background processes. `evict_if_needed`
+/// only ever drops finished entries, so without this gate a single session
+/// could spawn unbounded never-ending background jobs (`sleep 9999 &` in a
+/// loop), pushing the table past `MAX_ENTRIES` without bound and leaking one
+/// real OS process + one detached `tokio::task` apiece. We refuse to register a
+/// new background job once a session already has this many running, telling the
+/// model to `poll`/`kill` its existing jobs first (R7: the model decides which
+/// to reap, the registry just enforces the resource floor).
+const MAX_RUNNING_PER_SESSION: usize = 8;
 
 /// Longest command preview we keep for `list` display.
 const COMMAND_PREVIEW_MAX: usize = 120;
@@ -73,6 +84,27 @@ pub enum KillOutcome {
     NotFound,
 }
 
+/// Outcome of [`ProcessRegistry::register_running`].
+pub enum RegisterOutcome {
+    /// Slot allocated; carries the new process id.
+    Registered(u64),
+    /// This session already has [`MAX_RUNNING_PER_SESSION`] running jobs.
+    /// The caller must not spawn — it should poll/kill an existing one first.
+    TooManyRunning { limit: usize },
+}
+
+/// Outcome of an [`ProcessRegistry::wait`] call — like [`PollOutcome`] but with
+/// `TimedOut` instead of `Running`, since `wait` only returns `Running` shape
+/// when the bounded wait window elapsed before the job finished.
+pub enum WaitOutcome {
+    /// Job finished within the wait window; carries the captured output.
+    Done(Box<CodeExecOutput>),
+    Killed,
+    /// Wait window elapsed and the job is still running.
+    TimedOut { elapsed_ms: u64 },
+    NotFound,
+}
+
 /// One row of [`ProcessRegistry::list`].
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProcSummary {
@@ -90,6 +122,13 @@ pub struct ProcSummary {
 pub struct ProcessRegistry {
     next_id: AtomicU64,
     procs: Mutex<HashMap<u64, ProcEntry>>,
+    /// Fires on every state transition out of `Running` (complete / kill) so
+    /// [`wait`](Self::wait) can sleep until *something* finishes instead of
+    /// busy-polling. Coarse-grained on purpose: every waiter wakes and
+    /// re-checks its own id (the running set is tiny — capped at
+    /// [`MAX_RUNNING_PER_SESSION`] per session), so a shared notifier is
+    /// cheaper than one channel per entry.
+    completion: Notify,
 }
 
 impl ProcessRegistry {
@@ -97,6 +136,7 @@ impl ProcessRegistry {
         Self {
             next_id: AtomicU64::new(1),
             procs: Mutex::new(HashMap::new()),
+            completion: Notify::new(),
         }
     }
 
@@ -106,17 +146,35 @@ impl ProcessRegistry {
         self.procs.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Register a freshly-spawned background task and return its id. Must be
-    /// called *before* the task can finish so a fast-completing task always
-    /// finds its slot in [`complete`](Self::complete).
+    /// Register a freshly-spawned background task. Must be called *before* the
+    /// task can finish so a fast-completing task always finds its slot in
+    /// [`complete`](Self::complete).
+    ///
+    /// Enforces the per-session running cap atomically under the table lock: a
+    /// session already at [`MAX_RUNNING_PER_SESSION`] running jobs gets
+    /// [`RegisterOutcome::TooManyRunning`] and no slot — the count and the
+    /// insert happen under one lock acquisition so concurrent spawns in the same
+    /// session can't both slip past the gate.
     pub fn register_running(
         &self,
         command: impl Into<String>,
         session_label: Option<String>,
         abort: AbortHandle,
-    ) -> u64 {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+    ) -> RegisterOutcome {
         let mut procs = self.lock();
+        let running = procs
+            .values()
+            .filter(|e| {
+                e.session_label.as_deref() == session_label.as_deref()
+                    && matches!(e.state, ProcState::Running)
+            })
+            .count();
+        if running >= MAX_RUNNING_PER_SESSION {
+            return RegisterOutcome::TooManyRunning {
+                limit: MAX_RUNNING_PER_SESSION,
+            };
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         evict_if_needed(&mut procs);
         procs.insert(
             id,
@@ -128,18 +186,22 @@ impl ProcessRegistry {
                 state: ProcState::Running,
             },
         );
-        id
+        RegisterOutcome::Registered(id)
     }
 
     /// Record a task's final output. No-op if the entry was already killed or
     /// evicted — a `Killed` verdict wins over a late natural completion.
     pub fn complete(&self, id: u64, output: CodeExecOutput) {
-        let mut procs = self.lock();
-        if let Some(entry) = procs.get_mut(&id) {
-            if matches!(entry.state, ProcState::Running) {
-                entry.state = ProcState::Done(Box::new(output));
+        {
+            let mut procs = self.lock();
+            if let Some(entry) = procs.get_mut(&id) {
+                if matches!(entry.state, ProcState::Running) {
+                    entry.state = ProcState::Done(Box::new(output));
+                }
             }
         }
+        // Wake any `wait`ers so they re-check (and free a per-session slot).
+        self.completion.notify_waiters();
     }
 
     /// Fetch a process's status / output. Only succeeds for entries owned by
@@ -162,17 +224,70 @@ impl ProcessRegistry {
     /// Abort a running process. Dropping the task fires `kill_on_drop` on the
     /// underlying child, so the real OS process is `SIGKILL`ed.
     pub fn kill(&self, id: u64, caller: Option<&str>) -> KillOutcome {
-        let mut procs = self.lock();
-        match procs.get_mut(&id) {
-            Some(entry) if owns(entry, caller) => match entry.state {
-                ProcState::Running => {
-                    entry.abort.abort();
-                    entry.state = ProcState::Killed;
-                    KillOutcome::Killed
+        let outcome = {
+            let mut procs = self.lock();
+            match procs.get_mut(&id) {
+                Some(entry) if owns(entry, caller) => match entry.state {
+                    ProcState::Running => {
+                        entry.abort.abort();
+                        entry.state = ProcState::Killed;
+                        KillOutcome::Killed
+                    }
+                    _ => KillOutcome::AlreadyFinished,
+                },
+                _ => KillOutcome::NotFound,
+            }
+        };
+        // A kill transitions out of `Running`, so unblock any `wait`ers and
+        // free the per-session slot the killed job was holding.
+        if matches!(outcome, KillOutcome::Killed) {
+            self.completion.notify_waiters();
+        }
+        outcome
+    }
+
+    /// Block until process `id` (owned by `caller`) finishes, or until
+    /// `timeout` elapses — whichever comes first. Unlike a `poll` loop this
+    /// parks on the [`completion`](Self::completion) notifier and only re-checks
+    /// when *some* job finishes, so it costs no CPU while waiting and returns
+    /// the captured output the instant the job is done.
+    ///
+    /// Returns [`WaitOutcome::TimedOut`] (carrying elapsed time) when the window
+    /// closes with the job still running — the caller can `wait` again or move
+    /// on. `NotFound` semantics match [`poll`](Self::poll): another session's id
+    /// is indistinguishable from an unknown one.
+    pub async fn wait(&self, id: u64, caller: Option<&str>, timeout: Duration) -> WaitOutcome {
+        let deadline = Instant::now() + timeout;
+        loop {
+            // Arm the notifier BEFORE inspecting state: `Notified::enable`
+            // registers this waiter so a `complete`/`kill` racing between our
+            // state read and our await still wakes us (no lost wakeup).
+            let notified = self.completion.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            match self.poll(id, caller) {
+                PollOutcome::Done(out) => return WaitOutcome::Done(out),
+                PollOutcome::Killed => return WaitOutcome::Killed,
+                PollOutcome::NotFound => return WaitOutcome::NotFound,
+                PollOutcome::Running { elapsed_ms } => {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        return WaitOutcome::TimedOut { elapsed_ms };
+                    }
+                    let remaining = deadline - now;
+                    tokio::select! {
+                        () = &mut notified => { /* something finished — re-check */ }
+                        () = tokio::time::sleep(remaining) => {
+                            return WaitOutcome::TimedOut {
+                                elapsed_ms: elapsed_ms.saturating_add(
+                                    remaining.as_millis().try_into().unwrap_or(u64::MAX),
+                                ),
+                            };
+                        }
+                    }
                 }
-                _ => KillOutcome::AlreadyFinished,
-            },
-            _ => KillOutcome::NotFound,
+            }
         }
     }
 
@@ -280,10 +395,21 @@ mod tests {
         h
     }
 
+    /// Unwrap a successful registration to its id, panicking if the per-session
+    /// cap unexpectedly tripped. Keeps the existing tests terse.
+    fn unwrap_id(outcome: RegisterOutcome) -> u64 {
+        match outcome {
+            RegisterOutcome::Registered(id) => id,
+            RegisterOutcome::TooManyRunning { limit } => {
+                panic!("unexpected per-session cap hit (limit {limit})")
+            }
+        }
+    }
+
     #[tokio::test]
     async fn register_then_complete_then_poll_returns_output() {
         let reg = ProcessRegistry::new();
-        let id = reg.register_running("echo hi", Some("s1".into()), live_handle().await);
+        let id = unwrap_id(reg.register_running("echo hi", Some("s1".into()), live_handle().await));
         // Before completion → Running.
         assert!(matches!(
             reg.poll(id, Some("s1")),
@@ -302,7 +428,7 @@ mod tests {
     #[tokio::test]
     async fn cross_session_poll_and_kill_are_not_found() {
         let reg = ProcessRegistry::new();
-        let id = reg.register_running("sleep 1", Some("owner".into()), live_handle().await);
+        let id = unwrap_id(reg.register_running("sleep 1", Some("owner".into()), live_handle().await));
         // A different session must not see it.
         assert!(matches!(
             reg.poll(id, Some("intruder")),
@@ -319,7 +445,7 @@ mod tests {
     #[tokio::test]
     async fn kill_marks_killed_and_blocks_late_completion() {
         let reg = ProcessRegistry::new();
-        let id = reg.register_running("sleep 9", None, live_handle().await);
+        let id = unwrap_id(reg.register_running("sleep 9", None, live_handle().await));
         assert!(matches!(reg.kill(id, None), KillOutcome::Killed));
         // A late natural completion must NOT overwrite the Killed verdict.
         reg.complete(id, dummy_output(0, "late"));
@@ -331,9 +457,10 @@ mod tests {
     #[tokio::test]
     async fn list_is_session_scoped_and_newest_first() {
         let reg = ProcessRegistry::new();
-        let a = reg.register_running("first", Some("s".into()), live_handle().await);
-        let b = reg.register_running("second", Some("s".into()), live_handle().await);
-        let _other = reg.register_running("hidden", Some("other".into()), live_handle().await);
+        let a = unwrap_id(reg.register_running("first", Some("s".into()), live_handle().await));
+        let b = unwrap_id(reg.register_running("second", Some("s".into()), live_handle().await));
+        let _other =
+            unwrap_id(reg.register_running("hidden", Some("other".into()), live_handle().await));
         let rows = reg.list(Some("s"));
         assert_eq!(rows.len(), 2, "only this session's procs");
         // Newest (b) first.
@@ -347,14 +474,14 @@ mod tests {
         // Fill to capacity with finished entries.
         let mut first_done = None;
         for i in 0..MAX_ENTRIES {
-            let id = reg.register_running(format!("c{i}"), None, live_handle().await);
+            let id = unwrap_id(reg.register_running(format!("c{i}"), None, live_handle().await));
             reg.complete(id, dummy_output(0, ""));
             if i == 0 {
                 first_done = Some(id);
             }
         }
         // One more registration triggers eviction of the oldest finished.
-        let newest = reg.register_running("newest", None, live_handle().await);
+        let newest = unwrap_id(reg.register_running("newest", None, live_handle().await));
         assert!(matches!(
             reg.poll(first_done.unwrap(), None),
             PollOutcome::NotFound
@@ -372,5 +499,89 @@ mod tests {
         let p = truncate_preview(long);
         assert!(p.chars().count() <= COMMAND_PREVIEW_MAX + 1);
         assert!(p.ends_with('…'));
+    }
+
+    #[tokio::test]
+    async fn per_session_running_cap_refuses_excess_then_recovers() {
+        let reg = ProcessRegistry::new();
+        let sess = Some("capper".to_string());
+        // Fill the session's running quota.
+        let mut ids = Vec::new();
+        for _ in 0..MAX_RUNNING_PER_SESSION {
+            ids.push(unwrap_id(reg.register_running(
+                "sleep 9",
+                sess.clone(),
+                live_handle().await,
+            )));
+        }
+        // One past the cap is refused — no slot allocated.
+        assert!(matches!(
+            reg.register_running("sleep 9", sess.clone(), live_handle().await),
+            RegisterOutcome::TooManyRunning {
+                limit: MAX_RUNNING_PER_SESSION
+            }
+        ));
+        // A *different* session is unaffected (cap is per-session).
+        assert!(matches!(
+            reg.register_running("sleep 9", Some("other".into()), live_handle().await),
+            RegisterOutcome::Registered(_)
+        ));
+        // Finishing one frees a slot for this session.
+        reg.complete(ids[0], dummy_output(0, "done\n"));
+        assert!(matches!(
+            reg.register_running("sleep 9", sess, live_handle().await),
+            RegisterOutcome::Registered(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn wait_returns_output_once_complete() {
+        let reg = Arc::new(ProcessRegistry::new());
+        let id = unwrap_id(reg.register_running("echo hi", Some("w".into()), live_handle().await));
+        // Complete it shortly after a waiter parks.
+        let reg2 = reg.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            reg2.complete(id, dummy_output(0, "hi\n"));
+        });
+        match reg.wait(id, Some("w"), Duration::from_secs(5)).await {
+            WaitOutcome::Done(out) => assert_eq!(out.stdout, "hi\n"),
+            _ => panic!("expected Done"),
+        }
+    }
+
+    #[tokio::test]
+    async fn wait_times_out_while_still_running() {
+        let reg = ProcessRegistry::new();
+        let id = unwrap_id(reg.register_running("sleep 9", Some("w".into()), live_handle().await));
+        match reg.wait(id, Some("w"), Duration::from_millis(30)).await {
+            WaitOutcome::TimedOut { .. } => {}
+            _ => panic!("expected TimedOut for a still-running job"),
+        }
+    }
+
+    #[tokio::test]
+    async fn wait_is_session_scoped_not_found() {
+        let reg = ProcessRegistry::new();
+        let id = unwrap_id(reg.register_running("sleep 9", Some("owner".into()), live_handle().await));
+        assert!(matches!(
+            reg.wait(id, Some("intruder"), Duration::from_millis(10)).await,
+            WaitOutcome::NotFound
+        ));
+    }
+
+    #[tokio::test]
+    async fn wait_observes_kill() {
+        let reg = Arc::new(ProcessRegistry::new());
+        let id = unwrap_id(reg.register_running("sleep 9", None, live_handle().await));
+        let reg2 = reg.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            reg2.kill(id, None);
+        });
+        assert!(matches!(
+            reg.wait(id, None, Duration::from_secs(5)).await,
+            WaitOutcome::Killed
+        ));
     }
 }
