@@ -100,6 +100,7 @@ pub fn ModelPicker() -> impl IntoView {
                 }
                 class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-mono
                        text-text-secondary border border-border
+                       bg-surface-raised backdrop-blur-[var(--glass-blur-chrome)]
                        hover:bg-surface-sunken hover:text-text-primary transition-colors"
                 title=move || t_string!(i18n, model_picker.pick_model_title).to_string()
             >

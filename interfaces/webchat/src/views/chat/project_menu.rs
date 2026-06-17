@@ -107,7 +107,7 @@ pub fn ProjectMenu() -> impl IntoView {
     // Visible-project chip body (shown when project mode is active).
     let chip_body = move || {
         view! {
-            <div class="inline-flex items-center gap-2 px-2 py-1 rounded-md bg-surface-sunken border border-border-subtle">
+            <div class="inline-flex items-center gap-2 px-2 py-1 rounded-md bg-surface-sunken border border-border-subtle backdrop-blur-[var(--glass-blur-chrome)]">
                 <svg viewBox="0 0 16 16" class="w-3.5 h-3.5 text-primary" fill="none" stroke="currentColor" stroke-width="1.5">
                     <path d="M2 5a1.5 1.5 0 0 1 1.5-1.5h2.379a1.5 1.5 0 0 1 1.06.44L8.5 5h4A1.5 1.5 0 0 1 14 6.5v5A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5v-6.5z" />
                 </svg>
@@ -133,7 +133,7 @@ pub fn ProjectMenu() -> impl IntoView {
         view! {
             <button
                 type="button"
-                class="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border-subtle text-text-secondary hover:bg-surface-sunken transition-colors"
+                class="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border-subtle bg-surface-raised backdrop-blur-[var(--glass-blur-chrome)] text-text-secondary hover:bg-surface-sunken transition-colors"
                 on:click=move |_| menu_open.update(|v| *v = !*v)
             >
                 <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.5">
