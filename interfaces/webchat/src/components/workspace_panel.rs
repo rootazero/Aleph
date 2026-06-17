@@ -457,23 +457,53 @@ fn TeamDeliverablesView() -> impl IntoView {
 ///
 /// Re-fetches whenever `chat.team_members` changes. The Effect only writes
 /// `tasks`, which is not in its tracked-dep set, so it cannot self-retrigger.
+/// Also subscribes to `team.*.task.*` topic events so the tab live-refreshes
+/// when the leader creates or updates tasks (mirrors the global KanbanView).
 #[component]
 fn TeamTasksView() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let dash = expect_context::<DashboardState>();
     let tasks = RwSignal::new(Vec::new());
-    // TODO(perf): refetches on every team_members change (each .activity event).
-    // MVP-acceptable (localhost, idempotent set); future: gate on Done/Error
-    // transitions or debounce.
-    Effect::new(move |_| {
-        let Some(team_id) = chat.team_id.get() else { return; };
-        let _ = chat.team_members.get();
+
+    // Extracted fetch closure — reused by the team_members Effect and the
+    // topic-event handler so the fetch logic stays DRY.
+    let refetch_tasks = move || {
+        let Some(team_id) = chat.team_id.get_untracked() else { return; };
         spawn_local(async move {
             if let Ok(detail) = crate::api::teams::TeamsApi::get(&dash, &team_id).await {
                 tasks.set(detail.tasks);
             }
         });
+    };
+
+    // TODO(perf): refetches on every team_members change (each .activity event).
+    // MVP-acceptable (localhost, idempotent set); future: gate on Done/Error
+    // transitions or debounce.
+    Effect::new(move |_| {
+        let Some(_team_id) = chat.team_id.get() else { return; };
+        let _ = chat.team_members.get();
+        refetch_tasks();
     });
+
+    // Ask the gateway to push us `team.*.task.*` events (mirrors kanban.rs:46-55).
+    Effect::new(move |_| {
+        if !dash.is_connected.get() {
+            return;
+        }
+        let dash2 = dash;
+        spawn_local(async move {
+            let _ = dash2.subscribe_topic("team.*.task.*").await;
+        });
+    });
+
+    // React to task topic events for the current chat team (mirrors kanban.rs:57-70).
+    let sub_id = dash.subscribe_events(move |evt| {
+        let topic = evt.topic.as_str();
+        if topic.starts_with("team.") && topic.contains(".task.") {
+            refetch_tasks();
+        }
+    });
+    on_cleanup(move || dash.unsubscribe_events(sub_id));
     view! {
         {move || {
             let data = tasks.get();
