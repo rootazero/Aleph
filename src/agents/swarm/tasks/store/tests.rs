@@ -579,6 +579,36 @@ async fn update_task_completed_broadcasts_team_task_completed_with_summary() {
 }
 
 #[tokio::test]
+async fn delete_team_tasks_removes_tasks_and_children() {
+    let store = setup_store().await;
+    let t = store
+        .create_task(NewCoordTask {
+            team_id: Some("team-A".into()),
+            subject: "s".into(),
+            description: String::new(),
+            owner: None,
+            priority: Priority::Normal,
+            blocked_by: Vec::new(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    // Add an observable child row (comment)
+    store
+        .add_task_comment(&t.id, "author", "body")
+        .await
+        .unwrap();
+
+    let n = store.delete_team_tasks("team-A").await.unwrap();
+    assert_eq!(n, 1);
+    assert!(store.get_task(&t.id).await.unwrap().is_none(), "task should be gone");
+    assert!(
+        store.list_task_comments(&t.id).await.unwrap().is_empty(),
+        "child comments should be deleted"
+    );
+}
+
+#[tokio::test]
 async fn list_tasks_orders_by_priority_then_created() {
     let store = setup_store().await;
 

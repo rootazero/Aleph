@@ -548,4 +548,8 @@ pub trait CoordTaskStore: Send + Sync {
     ) -> crate::error::Result<Vec<TaskExitJournal>> {
         Ok(Vec::new())
     }
+
+    /// Hard-delete all tasks for a team and their child rows
+    /// (runs/comments/journals/dependencies). Returns coord_tasks rows deleted.
+    async fn delete_team_tasks(&self, team_id: &str) -> crate::error::Result<usize>;
 }
