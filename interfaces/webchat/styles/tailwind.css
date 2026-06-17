@@ -10,11 +10,14 @@
    ============================================================ */
 
 @theme {
-  /* === Surface Hierarchy === */
-  --color-surface:          oklch(0.97 0.005 220);
+  /* === Surface Hierarchy ===
+     Spread widened (raised 1.00 → sunken 0.92) so raised cards, the base
+     canvas, and sunken input wells read as distinct materials rather than
+     one near-flat tone. Borders + the tiered shadows do the rest. */
+  --color-surface:          oklch(0.96 0.005 220);
   --color-surface-raised:   oklch(1.00 0.000 0);
-  --color-surface-sunken:   oklch(0.94 0.008 220);
-  --color-surface-overlay:  oklch(0.98 0.004 220);
+  --color-surface-sunken:   oklch(0.905 0.010 220);
+  --color-surface-overlay:  oklch(0.985 0.004 220);
 
   /* === Sidebar — Slightly cooler than raised === */
   --color-sidebar:          oklch(0.99 0.003 220);
@@ -23,14 +26,14 @@
 
   /* === Text Hierarchy === */
   --color-text-primary:     oklch(0.20 0.015 310);
-  --color-text-secondary:   oklch(0.45 0.010 220);
-  --color-text-tertiary:    oklch(0.60 0.008 220);
+  --color-text-secondary:   oklch(0.40 0.010 220);
+  --color-text-tertiary:    oklch(0.48 0.008 220);
   --color-text-inverse:     oklch(0.97 0.005 220);
 
   /* === Borders === */
-  --color-border:           oklch(0.88 0.008 220);
-  --color-border-subtle:    oklch(0.92 0.006 220);
-  --color-border-strong:    oklch(0.78 0.010 220);
+  --color-border:           oklch(0.86 0.009 220);
+  --color-border-subtle:    oklch(0.91 0.006 220);
+  --color-border-strong:    oklch(0.75 0.012 220);
 
   /* === Focus Ring === */
   --color-ring:             oklch(0.55 0.120 310 / 0.35);
@@ -163,6 +166,14 @@
   --glass-blur-subtle: 8px;
   --scrim-blur: 2px;
 
+  /* Focused form-control border — a restrained, accent-tinted edge. The soft
+     focus ring is the real signal, so a focused field only warms TOWARD the
+     accent instead of snapping to full --color-primary (which read as too
+     loud). Lives here (not @theme) so Tailwind emits no utility for it. Both
+     source tokens are root-level, so this re-resolves automatically in dark
+     and under every accent palette — no mirror copy needed. */
+  --color-border-focus: color-mix(in oklch, var(--color-primary) 42%, var(--color-border-strong));
+
   /* ── Voice orb ── flow colors derive from accent (relative OKLCH), level driven by JS */
   --voice-flow-a: var(--color-primary);
   --voice-flow-b: oklch(from var(--color-primary) calc(l + 0.08) calc(c * 1.15) calc(h + 60));
@@ -230,26 +241,41 @@ h1, h2, h3, h4, h5, h6 {
   box-shadow: var(--focus-ring);
 }
 
+/* Restrained focus border for form controls. The accent-aware ring above is
+   the focus signal; the border only warms toward the accent via
+   --color-border-focus instead of snapping to full --color-primary. Unlayered,
+   so it overrides the scattered `focus:border-primary` utilities across ~160
+   inputs from one place — zero component edits. Uses `:focus` (not
+   `:focus-visible`) to also calm pointer-driven focus, matching the utilities
+   it supersedes. */
+input:focus,
+textarea:focus,
+select:focus,
+[contenteditable="true"]:focus {
+  border-color: var(--color-border-focus);
+}
+
 /* ============================================================
    Dark Mode Overrides
    ============================================================ */
 
 .dark {
   --color-surface:          oklch(0.15 0.020 310);
-  --color-surface-sunken:   oklch(0.12 0.015 310);
-  --color-surface-overlay:  oklch(0.18 0.020 310);
+  --color-surface-raised:   oklch(0.225 0.022 310);
+  --color-surface-sunken:   oklch(0.095 0.016 310);
+  --color-surface-overlay:  oklch(0.205 0.020 310);
 
   --color-sidebar:          oklch(0.13 0.025 310);
   --color-sidebar-active:   oklch(0.22 0.035 310);
   --color-sidebar-accent:   oklch(0.65 0.120 310);
 
   --color-text-primary:     oklch(0.97 0.005 220);
-  --color-text-secondary:   oklch(0.65 0.008 220);
-  --color-text-tertiary:    oklch(0.50 0.006 220);
+  --color-text-secondary:   oklch(0.68 0.008 220);
+  --color-text-tertiary:    oklch(0.62 0.006 220);
 
-  --color-border:           oklch(0.28 0.020 310);
+  --color-border:           oklch(0.31 0.020 310);
   --color-border-subtle:    oklch(0.22 0.018 310);
-  --color-border-strong:    oklch(0.35 0.022 310);
+  --color-border-strong:    oklch(0.38 0.022 310);
 
   --color-ring:             oklch(0.65 0.120 310 / 0.35);
 
@@ -274,20 +300,21 @@ h1, h2, h3, h4, h5, h6 {
 @media (prefers-color-scheme: dark) {
   :root:not(.light) {
     --color-surface:          oklch(0.15 0.020 310);
-    --color-surface-sunken:   oklch(0.12 0.015 310);
-    --color-surface-overlay:  oklch(0.18 0.020 310);
+    --color-surface-raised:   oklch(0.225 0.022 310);
+    --color-surface-sunken:   oklch(0.095 0.016 310);
+    --color-surface-overlay:  oklch(0.205 0.020 310);
 
     --color-sidebar:          oklch(0.13 0.025 310);
     --color-sidebar-active:   oklch(0.22 0.035 310);
     --color-sidebar-accent:   oklch(0.65 0.120 310);
 
     --color-text-primary:     oklch(0.97 0.005 220);
-    --color-text-secondary:   oklch(0.65 0.008 220);
-    --color-text-tertiary:    oklch(0.50 0.006 220);
+    --color-text-secondary:   oklch(0.68 0.008 220);
+    --color-text-tertiary:    oklch(0.62 0.006 220);
 
-    --color-border:           oklch(0.28 0.020 310);
+    --color-border:           oklch(0.31 0.020 310);
     --color-border-subtle:    oklch(0.22 0.018 310);
-    --color-border-strong:    oklch(0.35 0.022 310);
+    --color-border-strong:    oklch(0.38 0.022 310);
 
     --color-ring:             oklch(0.65 0.120 310 / 0.35);
 
@@ -1529,7 +1556,7 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
   transform: translateY(-1px);
 }
 .aleph-composer:focus-within {
-  border-color: var(--color-primary);
+  border-color: var(--color-border-focus);
   box-shadow: var(--shadow-lg),
               0 0 0 4px var(--color-ring),
               inset 0 1px 0 var(--aleph-sheen);
