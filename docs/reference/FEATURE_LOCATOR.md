@@ -380,22 +380,19 @@
 - **状态**：✅ 已实现。
 - **打磨话术**：「‘流式回显气泡’在 `views/chat/messages.rs`；‘右侧工作区时间线’在 `components/workspace_panel.rs`。这是前端 Leptos/WASM，改完要重编 binary（rust_embed，见 CLAUDE.md Panel↔Daemon 嵌入链）。」
 
-### 6.2 Panel 双层权限 (Panel Permission Tiers) ⚠️❌
-- **口语关键词**：panel 双层权限、对话权限/配置权限、配对 tier、远程连接权限、devices.set_level
-- **代码锚点**：前端 `interfaces/webchat/src/components/permission.rs`（ConfigGate / PermissionBanner）、`interfaces/webchat/src/context.rs`（role_is_operator，只认 "operator" 字面量）；后端 `src/gateway/handlers/connect.rs`（LAN-trust 硬编码 `"role":"operator"`）、`src/gateway/method_authz.rs`（OPERATOR_TOOLS 列表）、`src/gateway/caller_identity.rs`、`src/gateway/security/store/devices.rs`、`src/gateway/pairing_store.rs`
-- **职责（设计意图）**：Panel 远程 = channel 身份，复用 2 层权限（第一层 = 对话 + 默认工作目录；第二层 = 配置权限 + 自由建工作目录）。
-- **状态**：⚠️❌ **现状与设计意图严重偏离——核心结论：LAN-trust 下 2 层权限名存实亡**。逐条核对你的 4 条对齐项：
-
-| 对齐项 | 你的判断 | 查证结论 | 证据 |
-|--------|---------|---------|------|
-| ① Panel 远程 = channel 身份复用 2 层 | ✅后端已落地 | ⚠️**已变更**：不是分配 tier，而是 LAN-trust 给**所有连接（含 Panel）硬编码 operator** | `handlers/connect.rs` 报 `"role":"operator"`；CALLER_ROLE 默认 Some("operator") |
-| ② 第二层 = Panel 全部配置页（含 LLM 配置），前端按 tier 适配 | 后端闸口已通，前端存疑 | ⚠️**前端真有适配，后端名存实亡**：ConfigGate 前端按 is_operator() 锁页，但后端 LAN-trust 下所有 caller 都是 operator → 闸门恒通过 | 前端 `permission.rs:12` ConfigGate；后端 `scoped/dispatch.rs` tool_requires_operator 检查在 LAN-trust 下恒真 |
-| ③ 配对后默认只给第一层 (Chat tier) | ✅远程默认 Chat | ❌**不存在默认 tier 机制**：pairing 无 tier 选择，device 表只有 role+scopes，**无 tier/level 字段** | `security/store/types.rs` DeviceRow 无 tier 列；`handlers/connect.rs` 默认即 operator |
-| ④ 第二层可配对时选 / 事后 devices.set_level 授权 | 事后有 set_level，配对选 tier 存疑 | ❌**两者都不存在**：SecurityStore 有 upsert/revoke 但**无 set_level/set_tier**；pairing approve 只取 channel+code **无 tier 参数** | `security/store/devices.rs` 无 set_level；`pairing_store.rs` approve 无 tier |
-
-- **打磨话术**：「**重要：你描述的 2 层权限模型在后端基本未实现（LAN-trust 绝对化，全员 operator）。** 前端 ConfigGate 锁是‘诚实投影’但后端不强制。device 表没有 tier 字段、没有 `set_level`、配对不能选 tier。所以——
-  - 若你想‘打磨现有 2 层权限’：**先认清现状是 1 层（LAN-trust 全 operator）**，前端锁只是 UI。
-  - 若你想‘真正启用 2 层权限’：这是**新功能**，成本 = device_tier 字段 + pairing UI 选 tier + dispatcher 权限检查真生效 + admin set_level API（架构现状刻意按 LAN=信任边界简化，优先级为零）。描述时按‘恢复/新建双层权限’对待，别按‘微调已有’。」
+### 6.2 Panel 远程连接与 Gateway Token 授权 (Remote Panel Connect & Gateway-Token Auth) 🚧
+- **口语关键词**：panel 远程连接、局域网连 core、Gateway token、token 授权框、二维码授权、QR 配对、壳连远程 core、授权后权限同本地、网页式登录
+- **代码锚点**：
+  - 传输/握手：`src/gateway/server/handler.rs`（WS `/ws` 升级与 connect 握手）、`src/gateway/handlers/connect.rs`（**目标：校验 token；现状 `connect.rs:23` 忽略 token 硬返 operator**）
+  - Token（已存在，复用）：`src/gateway/security/shared_token.rs`（`SharedTokenManager`：`generate_token` / `validate` / `try_load_token_from_db`，token 形如 `aleph-<uuid>`）、`src/gateway/security/store/tokens.rs`（`validate_shared_token_hash`）、boot 生成于 `commands/start/builder/subsystems.rs:86-120`
+  - 前端：`interfaces/webchat/src/context.rs`（device_id 生成 + connect 握手 + role 捕获）、**token 输入框 + QR 授权页（待建）**
+- **职责（目标模型，单一真相）**：Panel 远程 = **纯 HTTP/WS 直连，不走 channel 通道**。壳 App 远程连 LAN core 的行为逻辑与「浏览器打开 core IP 网址」**完全一致**——同一条 Gateway-token 授权路径，壳无任何特权捷径。
+  - **本机 (loopback)**：自动授权 = operator，**零配置**（壳内置 server / 浏览器 `127.0.0.1`）。信任边界 = 同机。
+  - **远程 (LAN)**：首连未授权 → 弹 **Gateway token 输入框**，或扫 core 展示的 **二维码**（编码 `http://<ip>:<port>/?token=<gateway-token>`，扫码即带 token 打开）→ `SharedTokenManager::validate` 通过 → 授权成功，**权限与本地完全一致（单层，无 Chat/Config 之分）**。客户端把 token 持久化（`localStorage`）供后续自动重连。
+  - **撤销**：轮换 Gateway token（旧 token 全部失效，所有远程端须重新输入）。无 per-device 会话（YAGNI）。
+  - 前置：`[gateway] host = "0.0.0.0"` 才开放局域网到达；token 授权是到达之后的第二道闸（**在执行之前**，比旧模型「Chat tier 可未授权跑 bash」更强）。
+- **状态**：🚧 **目标模型已定义，当前代码尚未对齐**。现状是 `ebf5027a9` 引入的「两层 device tier」（远程默认 Chat，operator 经 `devices.set_level` 提权）+ connect **忽略 token**（`connect.rs:23`）。Gateway token 已在 boot 生成但**无人校验**。需对齐项见本仓 `docs/superpowers/specs/2026-06-17-panel-remote-token-auth-design.md`（含代码审计清单 + 修复 prompt）。
+- **打磨话术**：「Panel 远程不是 channel，是**网页式 token 登录**。本机零配置 operator；远程输 Gateway token（或扫 QR）后**权限同本地，单层**。token 已在 boot 由 `SharedTokenManager` 生成，缺的是 ① connect 校验 token ② 前端 token 框/QR ③ 把两层 tier 收敛成单层 ④ 复活 `bootstrap-token` CLI。注意 `ChannelPermissionLevel` 是 channel 系统共用，不能删，只能让 panel 解耦。」
 
 ---
 
@@ -404,8 +401,8 @@
 | # | 功能 | 状态 | 现状 vs 直觉的差距 | 若要"做成描述的样子"的性质 |
 |---|------|------|---------------------|----------------------------|
 | 1 | doctor+f LLM 修复 | ✅ G1 已实现 2026-06-16 | Panel `f` 入口已加（带编辑焦点护栏）；「LLM 修复」= 注入 prompt 走现有 loop+工具（doctor 后端零改动，结构化 findings 早已喂 LLM） | ~~新功能~~ 已完成 |
-| 2 | Panel 双层权限 | ⚠️❌ | LAN-trust 全员 operator，前端锁名存实亡 | **恢复/新建双层**（非微调） |
-| 3 | 配对时选 tier / devices.set_level | ❌ | device 表无 tier 字段，无 set_level API | **新功能** |
+| 2 | Panel 远程 token 授权（单层） | 🚧 目标 | 现状=两层 device tier（`ebf5027a9`，远程默认 Chat 经 `set_level` 提权），与「授权后权限同本地」相悖 | **收敛为单层**：删两层 tier 闸（见 §6.2 + 修复 prompt） |
+| 3 | Gateway token 输入框 / QR 授权 | 🚧 目标 | token 已 boot 生成（`SharedTokenManager`）但 `connect.rs:23` 忽略；无 token UI / QR | **接 token 校验 + 前端 token 框/QR + 复活 `bootstrap-token`** |
 | 4 | ~~kimi vs claude 差异化压缩阈值~~ | ✅ **G4 已实现 2026-06-16** | 窗口比例自动浮动 **+** `[[context_budget.model_thresholds]]` per-model 阈值覆盖（matcher=model id/provider key 子串，逐项回退全局，过防御闸） | **新增配置完成**，见 §2.2 |
 | 5 | DAG 工具执行 | ✅ G5 已澄清 2026-06-16 | 工具层=资源群分并行（`concurrency.rs`，非真 DAG）；真任务 DAG 在 `workflow/compile.rs`+`teams/dispatcher/` | ~~描述时分清~~ 已在 §3.3 / §4.3 / §4.4 / 术语表四处区分；**仅澄清，无需开发** |
 | 6 | ~~错误沉淀教训(三支柱③)~~ | ✅ **G6 已查证 2026-06-16** | 端到端已连且存活（flag_user_correction→FeedbackDistill→feedback note→召回）；auto error-hook 故意不做(R7/R10) | **零代码完成**，见 §2.5③ |
@@ -414,7 +411,7 @@
 
 - **"语音"**：context 注入侧（`thinker/layers/voice_mode.rs`）≠ 运行时 ASR/TTS（`gateway/voice/`）。
 - **"DAG"**：工具并发群分（`tools/concurrency.rs`）≠ 任务依赖图（`workflow/compile.rs` + `teams/dispatcher/`）。
-- **"权限"**：approval 三级引擎（`src/approval/`）≠ Panel 的 operator tier（`gateway` LAN-trust，§6.2）≠ sandbox 命令策略（`src/sandbox/command_policy/`）。
+- **"权限"**：approval 三级引擎（`src/approval/`）≠ Panel 的 Gateway-token 授权（授权后单层＝同本地，§6.2）≠ sandbox 命令策略（`src/sandbox/command_policy/`）。
 - **"hook"**：stop hook ≠ sandbox hook ≠ extension shell-hook consent（§5.10 三套）。
 - **"命令/工具/斜杠命令"**：同一套 ToolCatalog（§3.5），不是三套。
 - **"插件"**：plugins ⊂ extension（`src/extension/`），不是独立目录。
