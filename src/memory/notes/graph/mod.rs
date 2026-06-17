@@ -37,6 +37,12 @@ pub struct GraphIndex<'a> {
     pub adj: Vec<HashSet<usize>>,
     /// Source-set per node index (from `source_notes`).
     pub sources: Vec<HashSet<&'a str>>,
+    /// Inverted index `source_ref -> node indices citing it`. Two uses in the
+    /// relevance pass: (1) gather source-sharing candidates in O(postings)
+    /// instead of an O(N) per-seed scan, turning `all_related` from O(N²) into
+    /// O(E); (2) supply each source's document frequency for IDF-damped
+    /// source-overlap weighting (rare sources connect more strongly).
+    source_postings: HashMap<&'a str, Vec<usize>>,
 }
 
 impl<'a> GraphIndex<'a> {
@@ -55,16 +61,25 @@ impl<'a> GraphIndex<'a> {
                 }
             }
         }
-        let sources = snap
+        let sources: Vec<HashSet<&str>> = snap
             .nodes
             .iter()
             .map(|n| n.sources.iter().map(String::as_str).collect::<HashSet<_>>())
             .collect();
+        // Invert the note→source map once so the relevance pass never rescans
+        // all nodes to find source-sharers.
+        let mut source_postings: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, set) in sources.iter().enumerate() {
+            for &s in set {
+                source_postings.entry(s).or_default().push(i);
+            }
+        }
         Self {
             nodes: &snap.nodes,
             idx_of,
             adj,
             sources,
+            source_postings,
         }
     }
 
@@ -83,5 +98,30 @@ impl<'a> GraphIndex<'a> {
     #[must_use]
     pub fn index_of(&self, path: &str) -> Option<usize> {
         self.idx_of.get(path).copied()
+    }
+
+    /// Document frequency of a source: how many notes cite it. Used to damp the
+    /// source-overlap signal — a source shared by many notes is a weak link.
+    #[must_use]
+    pub fn source_df(&self, source: &str) -> usize {
+        self.source_postings.get(source).map_or(0, Vec::len)
+    }
+
+    /// Node indices sharing ≥1 source with `seed` (excluding `seed` itself),
+    /// gathered from the inverted index. O(sum of posting lengths over the
+    /// seed's sources), not O(N).
+    #[must_use]
+    pub fn source_sharers(&self, seed: usize) -> HashSet<usize> {
+        let mut out = HashSet::new();
+        for &s in &self.sources[seed] {
+            if let Some(posting) = self.source_postings.get(s) {
+                for &i in posting {
+                    if i != seed {
+                        out.insert(i);
+                    }
+                }
+            }
+        }
+        out
     }
 }
