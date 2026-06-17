@@ -1878,6 +1878,22 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
     pointer-events: none;
 }
 
+/* Workspace chrome (LayoutToggle + "WORKSPACE · …" label) glides in
+   lockstep with the pane — same 200ms ease-out — so the toggle's right
+   edge and the label's left edge slide with the boundary instead of
+   snapping. The label additionally fades + parks off the right edge when
+   collapsed (it's always mounted now so it can animate out). */
+.aleph-ws-toggle {
+    transition: right 200ms ease-out;
+}
+.aleph-ws-label {
+    transition: left 200ms ease-out, opacity 200ms ease-out;
+}
+.aleph-ws-label.workspace-collapsed {
+    left: calc(100% + 16px);
+    opacity: 0;
+}
+
 /* === Title-row layout tokens ====================================
    `--aleph-chrome-y` is the y-coordinate (from the window's top edge)
    where every chrome glyph centers its vertical midline:
