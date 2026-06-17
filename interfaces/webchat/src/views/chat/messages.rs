@@ -13,6 +13,13 @@ use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
 use leptos::prelude::*;
+use std::collections::HashMap;
+
+/// Context carrier for the per-message attribution-grouping map
+/// (message_id → show_header). Newtype so the context lookup is unambiguous.
+/// `MessageList` computes it once per messages-change; `MessageBubble` reads it.
+#[derive(Clone, Copy)]
+struct AttributionMap(Memo<HashMap<String, bool>>);
 
 /// Welcome hero — shown in the message area while a conversation is empty.
 /// A breathing ℵ orb above a shimmering greeting, with a staggered reveal.
@@ -111,6 +118,21 @@ pub(super) fn MessageList() -> impl IntoView {
         let yesterday = t_string!(i18n, chat.yesterday).to_string();
         timeline::derive_timeline(&msgs, &today, &yesterday)
     });
+
+    // Telegram-style attribution grouping computed in one forward pass per
+    // messages-change (id → show_header), so each team bubble looks up its
+    // header decision in O(1) instead of reverse-walking the whole list.
+    // Provided via context for `MessageBubble` to read.
+    let attribution = Memo::new(move |_| {
+        let pairs: Vec<(String, Option<String>)> = chat
+            .messages
+            .get()
+            .iter()
+            .map(|m| (m.id.clone(), m.agent_id.clone()))
+            .collect();
+        crate::views::chat::agent_identity::attribution_map(&pairs)
+    });
+    provide_context(AttributionMap(attribution));
 
     // True iff the viewport bottom is within 64px of scroll_height.
     let stuck_to_bottom = RwSignal::new(true);
@@ -472,21 +494,29 @@ fn MessageBubble(
     // without prop-drilling a callback through MessageList → MessageBubble.
     let chat = expect_context::<ChatState>();
 
-    // Team chat: colored agent-name label above the bubble content. None for
-    // single-agent bubbles (agent_id is None) → renders nothing (zero regression).
-    // Snapshot at bubble-mount (get_untracked); won't relabel if the roster
-    // hydrates after this bubble — fine for final team messages.
-    let attribution = message.agent_id.as_ref().map(|aid| {
+    // Team chat: Layout A — avatar disc outside the bubble + agent name above.
+    // Only when message.agent_id is Some (team message). Zero regression on the
+    // single-agent path (agent_id is None → layout_a is None).
+    //
+    // `show_header` is read from the precomputed attribution map (O(1)); the
+    // map is folded once per messages-change in `MessageList`. Falls back to
+    // showing the header if the context is absent (e.g. storybook mount).
+    let layout_a = message.agent_id.as_ref().map(|aid| {
         let members = chat.team_members.get_untracked();
-        let found = members.iter().position(|m| &m.agent_id == aid);
-        let color = crate::views::chat::team_events::agent_color(found.unwrap_or(0));
-        let name = found
-            .and_then(|i| members.get(i))
+        let member = members.iter().find(|m| &m.agent_id == aid);
+        let name = member
             .map(|m| m.name.clone())
             .unwrap_or_else(|| aid.clone());
-        view! {
-            <div class="text-[11px] font-semibold mb-0.5" style=format!("color:{color}")>{name}</div>
-        }
+        // Avatar glyph: the member's emoji if present and non-empty, else a
+        // monogram derived from the name (computed at render below).
+        let emoji = member
+            .and_then(|m| m.emoji.clone())
+            .filter(|e| !e.is_empty());
+        let color = crate::views::chat::agent_identity::agent_color_for_id(aid);
+
+        let show_header = use_context::<AttributionMap>()
+            .is_none_or(|m| m.0.get_untracked().get(&message.id).copied().unwrap_or(true));
+        (name, emoji, color, show_header)
     });
 
     let copy_text = content.clone();
@@ -536,42 +566,82 @@ fn MessageBubble(
         format!("{bubble_align} group relative aleph-msg-in")
     };
 
+    // Decompose layout_a so values can be used in a single view! without double-move.
+    let is_team_msg = layout_a.is_some();
+    let team_name = layout_a.as_ref().map(|(n, ..)| n.clone()).unwrap_or_default();
+    let team_emoji = layout_a.as_ref().and_then(|(_, e, _, _)| e.clone());
+    let team_color = layout_a.as_ref().map(|(_, _, c, _)| *c).unwrap_or("#7c9cff");
+    let team_show_header = layout_a.map(|(_, _, _, s)| s).unwrap_or(false);
+    // Avatar glyph: agent emoji if present, else a name monogram (first char
+    // uppercased). Mirrors `agent_identity`'s emoji → monogram fallback.
+    let team_avatar = team_emoji.unwrap_or_else(|| {
+        team_name
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_else(|| "?".to_string())
+    });
+
     view! {
         <div class=wrapper_class>
-            <div class=bubble_class_reactive id=bubble_dom_id>
-                {tool_calls_view}
-
-                // Team attribution label (colored agent name above bubble content).
-                // `attribution` is None for single-agent bubbles and user bubbles
-                // (agent_id is None) → zero regression on the non-team path.
-                {attribution}
-
-                // Message content — Markdown for assistant, plain text for user
-                {if is_user {
-                    view! {
-                        <div class="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                            {content}
+            {if is_team_msg {
+                // Layout A: avatar disc outside bubble + name above (Telegram-style).
+                view! {
+                    <div class="flex gap-2 items-start">
+                        // Avatar disc on first message of a run; spacer on repeat.
+                        {if team_show_header {
+                            view! {
+                                <div class="w-7 h-7 rounded-full flex items-center justify-center text-sm shrink-0"
+                                     style=format!("background:{}1f;color:{}", team_color, team_color)>
+                                    {team_avatar}
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! { <div class="w-7 shrink-0"></div> }.into_any()
+                        }}
+                        <div class="flex flex-col min-w-0">
+                            {team_show_header.then(|| view! {
+                                <div class="text-[11px] font-semibold mb-0.5 ml-0.5"
+                                     style=format!("color:{}", team_color)>
+                                    {team_name}
+                                </div>
+                            })}
+                            <div class=bubble_class_reactive id=bubble_dom_id>
+                                {tool_calls_view}
+                                {if is_streaming {
+                                    view! { <StreamingRenderer content=content /> }.into_any()
+                                } else {
+                                    view! { <MarkdownRenderer content=content /> }.into_any()
+                                }}
+                                {streaming_cursor}
+                                {error_view}
+                                {model_view}
+                            </div>
                         </div>
-                    }.into_any()
-                } else if is_streaming {
-                    view! {
-                        <StreamingRenderer content=content />
-                    }.into_any()
-                } else {
-                    view! {
-                        <MarkdownRenderer content=content />
-                    }.into_any()
-                }}
-
-                // Streaming cursor
-                {streaming_cursor}
-
-                // Error message
-                {error_view}
-
-                // Model info (with fallback indicator)
-                {model_view}
-            </div>
+                    </div>
+                }.into_any()
+            } else {
+                // Original layout for user and single-agent assistant messages.
+                view! {
+                    <div class=bubble_class_reactive id=bubble_dom_id>
+                        {tool_calls_view}
+                        {if is_user {
+                            view! {
+                                <div class="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                                    {content}
+                                </div>
+                            }.into_any()
+                        } else if is_streaming {
+                            view! { <StreamingRenderer content=content /> }.into_any()
+                        } else {
+                            view! { <MarkdownRenderer content=content /> }.into_any()
+                        }}
+                        {streaming_cursor}
+                        {error_view}
+                        {model_view}
+                    </div>
+                }.into_any()
+            }}
             // Hover action bar — timestamp + Copy (all bubbles) + Retry (final assistant).
             <div class=action_class>
                 {(!clock.is_empty()).then(move || view! {

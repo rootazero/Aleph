@@ -160,10 +160,15 @@ async fn dispatch_unknown_flow_id_returns_error() {
     assert!(matches!(err, FlowError::UnknownFlow(ref id) if id == "does-not-exist"));
 }
 
+/// An agent absent from the orchestrator routing table is NOT an error: the
+/// gateway already resolved its `AgentInstance` before dispatch, so the run is
+/// routed through the canonical `default-agent` flow (see `dispatch()` step 1).
+/// This is what lets config- and team-created agents — which live only in the
+/// gateway registry, not the orchestrator builtins — execute.
 #[tokio::test]
-async fn dispatch_unknown_agent_returns_error() {
-    let (orch, _) = fixture_orchestrator();
-    let err = orch
+async fn dispatch_unregistered_agent_routes_through_default_flow() {
+    let (orch, invocations) = fixture_orchestrator();
+    let handle = orch
         .dispatch(FlowRequest {
             flow_id: None,
             agent_id: "ghost".into(),
@@ -180,8 +185,11 @@ async fn dispatch_unknown_agent_returns_error() {
             max_iterations_override: None,
         })
         .await
-        .unwrap_err();
-    assert!(matches!(err, FlowError::UnknownAgent(ref id) if id == "ghost"));
+        .expect("unregistered agent routes through default-agent flow");
+
+    let outcome = handle.completion.await.unwrap().unwrap();
+    assert_eq!(outcome.final_text, "ok");
+    assert_eq!(invocations.lock().unwrap().len(), 1);
 }
 
 use crate::orchestrator::resolver::MAX_FLOW_DEPTH;

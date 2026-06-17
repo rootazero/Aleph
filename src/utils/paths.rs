@@ -184,6 +184,13 @@ pub fn get_pairing_db_path() -> Result<PathBuf> {
     Ok(get_data_dir()?.join("pairing.db"))
 }
 
+/// Get the path for the Panel device-tier database
+///
+/// Returns: `<data_dir>/panel_devices.db`
+pub fn get_panel_devices_db_path() -> Result<PathBuf> {
+    Ok(get_data_dir()?.join("panel_devices.db"))
+}
+
 /// Get the path for the sessions database
 ///
 /// Returns: `<data_dir>/sessions.db`

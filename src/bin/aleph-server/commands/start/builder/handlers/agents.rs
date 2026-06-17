@@ -197,6 +197,8 @@ pub(in crate::commands::start) fn register_teams_handlers(
     snapshot_store: Option<&Arc<alephcore::teams::SqliteSnapshotStore>>,
     state_db: Option<&Arc<alephcore::resilience::StateDatabase>>,
     artifact_store: Option<&Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
+    msg_store: Option<Arc<dyn alephcore::teams::messages::MessageStore>>,
+    agent_manager: Option<Arc<alephcore::AgentManager>>,
 ) {
     use alephcore::gateway::handlers::teams;
 
@@ -204,9 +206,25 @@ pub(in crate::commands::start) fn register_teams_handlers(
     register_handler!(server, "teams.list", teams::handle_list, store);
     register_handler!(server, "teams.get", teams::handle_get, store, coord_store);
     register_handler!(server, "teams.create", teams::handle_create, store);
+    register_handler!(server, "teams.rename", teams::handle_rename, store);
     register_handler!(server, "teams.disband", teams::handle_disband, store);
     register_handler!(server, "teams.delete", teams::handle_delete, store);
-    register_handler!(server, "agents.teams", teams::handle_agent_teams, store);
+
+    // agents.teams — enriched with members_preview + last_message when the
+    // optional agent_manager and msg_store are wired at boot.
+    {
+        let ts = Arc::clone(store);
+        let am = agent_manager.clone();
+        let ms = msg_store.clone();
+        server
+            .handlers_mut()
+            .register("agents.teams", move |req| {
+                let ts = Arc::clone(&ts);
+                let am = am.clone();
+                let ms = ms.clone();
+                async move { teams::handle_agent_teams(req, ts, am, ms).await }
+            });
+    }
     // Templates RPC is stateless — the handler discovers builtins +
     // ~/.aleph/teams/templates on every call. Materialization itself runs
     // through the `team_from_template` builtin tool (R8) so we don't
@@ -344,6 +362,17 @@ pub(in crate::commands::start) fn register_teams_handlers(
                 let cs = Arc::clone(&cs);
                 let ar = ar.clone();
                 async move { teams::handle_chat_thread(req, cs, ar).await }
+            });
+    }
+
+    // teams.chat.history — replay durable group-chat transcript as attribution
+    // bubbles. Only registered when the message store is wired at boot.
+    if let Some(ms) = msg_store.clone() {
+        server
+            .handlers_mut()
+            .register("teams.chat.history", move |req| {
+                let ms = Arc::clone(&ms);
+                async move { teams::handle_chat_history(req, ms).await }
             });
     }
 

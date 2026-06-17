@@ -24,6 +24,15 @@ pub struct ThreadItem {
     pub artifact_id: Option<String>,
 }
 
+/// One replayed group-chat bubble from `teams.chat.history`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TeamMessageItem {
+    pub from_agent: String,
+    pub content: String,
+    pub msg_type: String,
+    pub created_at: i64,
+}
+
 pub struct TeamChatApi;
 
 impl TeamChatApi {
@@ -39,6 +48,15 @@ impl TeamChatApi {
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
+    /// Replay the durable group-chat transcript as bubbles, chronologically.
+    pub async fn history(state: &DashboardState, team_id: &str) -> Result<Vec<TeamMessageItem>, String> {
+        let result = state
+            .rpc_call("teams.chat.history", json!({ "team_id": team_id }))
+            .await?;
+        let items = result.get("items").cloned().unwrap_or(Value::Array(vec![]));
+        serde_json::from_value(items).map_err(|e| e.to_string())
+    }
+
     /// Hydrate the team's durable thread (tasks + artifacts), chronologically.
     pub async fn thread(state: &DashboardState, team_id: &str) -> Result<Vec<ThreadItem>, String> {
         let result = state
@@ -52,6 +70,14 @@ impl TeamChatApi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deserializes_history_item() {
+        let j = r#"{"from_agent":"risk_analyst","content":"hi","msg_type":"message","created_at":123}"#;
+        let it: TeamMessageItem = serde_json::from_str(j).unwrap();
+        assert_eq!(it.from_agent, "risk_analyst");
+        assert_eq!(it.created_at, 123);
+    }
 
     #[test]
     fn deserializes_thread_item_with_artifact_id() {

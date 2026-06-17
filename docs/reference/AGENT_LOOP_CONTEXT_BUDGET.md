@@ -203,6 +203,35 @@ pub struct Budget {
 }
 ```
 
+### Per-model threshold overrides (`[[context_budget.model_thresholds]]`)
+
+`token_budget` is already model-aware — it is sized for the *smallest* context
+window on the resolved failover chain (`derive_chain_min_budget`,
+`src/orchestrator/deps_builder.rs`). The **trigger fractions** can also vary per
+model: a narrow 200k-window model often wants to compact earlier than a 1M model
+(less absolute headroom above the warning line). Declare overrides keyed off the
+same chain-min model that sizes the budget:
+
+```toml
+[context_budget]
+enabled = true
+warning_threshold = 0.70   # global defaults
+critical_threshold = 0.85
+
+[[context_budget.model_thresholds]]
+model = "kimi"             # case-insensitive substring of the model id OR provider key
+warning_threshold = 0.60   # compact this narrow model sooner
+critical_threshold = 0.78
+```
+
+Matching is first-wins in declaration order; the matcher is a case-insensitive
+substring tested against the resolved model id and then the provider key. Each
+field falls back independently to the top-level threshold, then the built-in
+`0.70 / 0.85` — so an absent or non-matching override is byte-identical to the
+prior behaviour. Resolved thresholds pass the same `0 < warning < critical ≤ 1.0`
+defensive gate as the global config (`build_context_budget_config`), so a
+mis-configured override disables the budget rather than silently degrading it.
+
 ## Related Documents
 
 - [AGENT_LOOP_TOOL_EXECUTION.md](./AGENT_LOOP_TOOL_EXECUTION.md) - Tool execution context and pipeline

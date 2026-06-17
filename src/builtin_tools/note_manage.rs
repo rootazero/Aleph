@@ -65,6 +65,11 @@ pub enum NoteManageAction {
     /// Read materialized graph-health insights (knowledge gaps, bridges,
     /// surprising connections). Read-only.
     Insights,
+    /// Read the memory-evolution gate state: recent dream cycles' health
+    /// score (before/after), best-ever score, accepted/rejected verdict,
+    /// merges the gate rejected, and any churn-pathology cooldown. Lets the
+    /// model explain *why* memory changed (or didn't) last night. Read-only.
+    Evolution,
 }
 
 /// Arguments for the `note_manage` tool.
@@ -255,7 +260,10 @@ impl NoteManageTool {
                     )
                     .await
             }
-            NoteManageAction::Query | NoteManageAction::List | NoteManageAction::Insights => return,
+            NoteManageAction::Query
+            | NoteManageAction::List
+            | NoteManageAction::Insights
+            | NoteManageAction::Evolution => return,
         };
         if let Err(e) = outcome {
             warn!(path = %note_path, error = %e, "note_manage: failed to record lifecycle event");
@@ -792,6 +800,86 @@ impl NoteManageTool {
             notes: None,
         })
     }
+
+    /// Read-only: summarize the memory-evolution gate from the last few dream
+    /// cycles' event log. Surfaces the health score trend, best-ever score, the
+    /// gate verdict, rejected merges, and any churn-pathology cooldown.
+    async fn handle_evolution(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
+        use crate::memory::dreaming::evolution::GateOutcome;
+        use crate::memory::dreaming::{EventLog, GateDecision};
+
+        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id = agent_id_owned.as_str();
+        let agent_dir = self.indexer.memory_dir().join(agent_id);
+        let events = EventLog::new(&agent_dir).read_last(5).await.unwrap_or_default();
+
+        let mut content = String::from("# Memory Evolution Gate\n\n");
+        if events.is_empty() {
+            content.push_str("_No dream cycles recorded yet — the evolution gate runs nightly during memory consolidation._\n");
+            return Ok(NoteManageResult {
+                related_notes: None,
+                success: true,
+                message: "No dream cycles recorded yet".to_string(),
+                note_path: None,
+                content: Some(content),
+                notes: None,
+            });
+        }
+
+        for ev in events.iter().rev() {
+            content.push_str(&format!(
+                "## Cycle {} · strategy `{}`\n",
+                ev.cycle, ev.strategy
+            ));
+            match &ev.report.evolution {
+                Some(e) => {
+                    let verdict = match e.outcome {
+                        GateOutcome::AcceptNewBest => "✅ accepted (new best)",
+                        GateOutcome::Accept => "✅ accepted",
+                        GateOutcome::Reject => "⛔ rejected (no improvement)",
+                    };
+                    content.push_str(&format!(
+                        "- health: {:.3} → {:.3} (best {:.3}) — {verdict}\n",
+                        e.baseline, e.candidate, e.best
+                    ));
+                    if e.merges_rejected > 0 {
+                        content.push_str(&format!(
+                            "- {} proposed merge(s) rejected by the gate (would fuse distinct knowledge)\n",
+                            e.merges_rejected
+                        ));
+                    }
+                }
+                None => content.push_str("- (no evolution score for this cycle)\n"),
+            }
+            if let GateDecision::Conserve {
+                reason,
+                cooldown_remaining,
+            } = &ev.gate_decision
+            {
+                content.push_str(&format!(
+                    "- ⚠️ churn pathology: {reason} (cooldown {cooldown_remaining})\n"
+                ));
+            }
+            content.push('\n');
+        }
+
+        let latest = events.last();
+        let msg = latest
+            .and_then(|e| e.report.evolution.as_ref())
+            .map_or_else(
+                || "Evolution gate state (no score)".to_string(),
+                |e| format!("Evolution gate: health {:.3} (best {:.3})", e.candidate, e.best),
+            );
+
+        Ok(NoteManageResult {
+            related_notes: None,
+            success: true,
+            message: msg,
+            note_path: None,
+            content: Some(content),
+            notes: None,
+        })
+    }
 }
 
 // =============================================================================
@@ -838,6 +926,7 @@ impl AlephTool for NoteManageTool {
             NoteManageAction::List => self.handle_list(&args).await,
             NoteManageAction::Delete => self.handle_delete(&args).await,
             NoteManageAction::Insights => self.handle_insights(&args).await,
+            NoteManageAction::Evolution => self.handle_evolution(&args).await,
         }?;
         // Best-effort audit trail for the memory_timeline tool.
         self.record_lifecycle_event(&args, &result).await;

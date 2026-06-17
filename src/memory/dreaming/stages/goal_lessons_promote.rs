@@ -165,6 +165,7 @@ mod tests {
             activity_checker: std::sync::Arc::new(|| false),
             strategy: DreamStrategy::Consolidate,
             orientation: None,
+            evolution_budget: crate::memory::dreaming::EditBudget::default(),
         };
         (ctx, temp)
     }

@@ -8,11 +8,14 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
+use crate::api::team_chat::{TeamChatApi, TeamMessageItem};
+use crate::api::teams::{TeamSummary, TeamsApi};
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
-use crate::views::chat::state::ChatState;
+use crate::views::chat::agent_identity::agent_color_for_id;
+use crate::views::chat::state::{ChatMessage, ChatState, MemberStatus, TeamMemberView};
 
 use web_sys::HtmlInputElement;
 
@@ -45,7 +48,39 @@ struct AgentEntry {
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
+    emoji: Option<String>,
+    #[serde(default)]
     is_default: bool,
+}
+
+/// The server stores the user's own group-chat messages under this reserved
+/// `from_agent` handle (mirror of `teams::broadcast::RESERVED_USER_HANDLE`). On
+/// history replay they must render as right-aligned user bubbles, not as
+/// attributed agent bubbles.
+const RESERVED_USER_HANDLE: &str = "user";
+
+/// Map one replayed `teams.chat.history` item to a chat bubble. The user's own
+/// messages (`from_agent == RESERVED_USER_HANDLE`) become right-aligned user
+/// bubbles (role `"user"`, no `agent_id`) — identical to single chat; every
+/// other author renders as an attributed agent bubble (Layout A). `index` only
+/// seeds a stable dom id.
+fn team_history_item_to_message(index: usize, item: TeamMessageItem) -> ChatMessage {
+    let is_user = item.from_agent == RESERVED_USER_HANDLE;
+    ChatMessage {
+        id: format!("team-hist-{index}"),
+        role: if is_user { "user" } else { "assistant" }.to_string(),
+        content: item.content,
+        tool_calls: Vec::new(),
+        is_streaming: false,
+        is_intermediate: false,
+        error: None,
+        model_info: None,
+        timestamp: Some(item.created_at),
+        iteration: None,
+        is_final: true,
+        text_finalized: true,
+        agent_id: if is_user { None } else { Some(item.from_agent) },
+    }
 }
 
 /// Fetch a session's history (+ persisted run traces) and rebuild the
@@ -189,6 +224,13 @@ pub fn ChatSidebar() -> impl IntoView {
     let is_saving = RwSignal::new(false);
     let edit_input_ref = NodeRef::<leptos::html::Input>::new();
 
+    // Group-chat row action state — SEPARATE from session-row signals so the
+    // single-chat state machine stays untouched. Keyed by team id.
+    let group_editing_id = RwSignal::new(Option::<String>::None);
+    let group_deleting_id = RwSignal::new(Option::<String>::None);
+    let group_edit_text = RwSignal::new(String::new());
+    let group_menu_id = RwSignal::new(Option::<String>::None);
+
     // Client-side session filter (R4 pure I/O — no backend search).
     let search_query = RwSignal::new(String::new());
 
@@ -198,6 +240,11 @@ pub fn ChatSidebar() -> impl IntoView {
     // run_complete / run_error frames carry only run_id.
     let running = RwSignal::new(std::collections::HashMap::<String, usize>::new());
     let run_to_session = RwSignal::new(std::collections::HashMap::<String, String>::new());
+
+    // Groups (teams) the selected agent belongs to — drives the 群聊 section.
+    let groups: RwSignal<Vec<TeamSummary>> = RwSignal::new(Vec::new());
+    // Collapsible state for the group section (default: expanded).
+    let groups_expanded = RwSignal::new(true);
 
     // Reusable closure: fetch both agents and sessions from the backend.
     let reload_data = Arc::new(move |dash: DashboardState| {
@@ -245,6 +292,18 @@ pub fn ChatSidebar() -> impl IntoView {
                 }
             }
 
+            // Fetch teams for the selected agent (drives the 群聊 section).
+            if let Some(agent_id) = selected_agent.get_untracked() {
+                match TeamsApi::agent_teams(&dash, &agent_id).await {
+                    Ok(team_list) => groups.set(team_list),
+                    Err(e) => {
+                        web_sys::console::warn_1(
+                            &format!("Failed to list agent teams: {e}").into(),
+                        );
+                    }
+                }
+            }
+
             is_loading.set(false);
         });
     });
@@ -267,6 +326,10 @@ pub fn ChatSidebar() -> impl IntoView {
     let reload_for_event = reload_data.clone();
     let sub_dash = dashboard;
     let subscription_id = dashboard.subscribe_events(move |event| {
+        if event.topic == "team.changed" {
+            reload_for_event(sub_dash);
+            return;
+        }
         if event.topic != "run.session_updated" {
             return;
         }
@@ -367,11 +430,13 @@ pub fn ChatSidebar() -> impl IntoView {
             );
         }
 
-        // Run lifecycle topics drive the per-session running dot.
+        // Run lifecycle topics drive the per-session running dot;
+        // team.changed drives live group-chat name refresh after async auto-naming.
         for topic in [
             "stream.run_accepted",
             "stream.run_complete",
             "stream.run_error",
+            "team.changed",
         ] {
             if let Err(e) = dash_for_topic.subscribe_topic(topic).await {
                 web_sys::console::error_1(&format!("Failed to subscribe to {topic}: {e}").into());
@@ -440,6 +505,70 @@ pub fn ChatSidebar() -> impl IntoView {
         }
     };
 
+    // Enter team chat mode: fetch detail, build roster, replay history.
+    // The team.* subscription and its Gateway topic are already established
+    // permanently in ChatView (view.rs) — no double-subscribe needed here.
+    let on_open_group = move |team_id: String| {
+        let dash = dashboard;
+        leptos::task::spawn_local(async move {
+            // 1. Fetch team detail (members list).
+            let detail = match TeamsApi::get(&dash, &team_id).await {
+                Ok(d) => d,
+                Err(e) => {
+                    web_sys::console::error_1(
+                        &format!("teams.get failed: {e}").into(),
+                    );
+                    return;
+                }
+            };
+            // 2. Build id→AgentEntry map from current agents signal for name/emoji resolution.
+            let agent_map: std::collections::HashMap<String, AgentEntry> = agents
+                .get_untracked()
+                .into_iter()
+                .map(|a| (a.id.clone(), a))
+                .collect();
+            let roster: Vec<TeamMemberView> = detail
+                .members
+                .iter()
+                .map(|m| {
+                    let entry = agent_map.get(&m.agent_id);
+                    let name = entry
+                        .and_then(|a| a.name.clone())
+                        .unwrap_or_else(|| m.agent_id.clone());
+                    let emoji = entry.and_then(|a| a.emoji.clone());
+                    TeamMemberView {
+                        agent_id: m.agent_id.clone(),
+                        name,
+                        emoji,
+                        role: m.role.clone(),
+                        is_leader: m.role == "leader",
+                        status: MemberStatus::Idle,
+                    }
+                })
+                .collect();
+            // 3. Enter team mode.
+            chat.clear_session();
+            chat.team_id.set(Some(team_id.clone()));
+            chat.team_members.set(roster);
+            // 4. Replay durable chat history as bubbles.
+            match TeamChatApi::history(&dash, &team_id).await {
+                Ok(items) => {
+                    let messages: Vec<ChatMessage> = items
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, it)| team_history_item_to_message(i, it))
+                        .collect();
+                    chat.messages.set(messages);
+                }
+                Err(e) => {
+                    web_sys::console::warn_1(
+                        &format!("teams.chat.history failed: {e}").into(),
+                    );
+                }
+            }
+        });
+    };
+
     // Start a new chat for the selected agent.
     // Just clear UI state — the backend will create a new epoch session
     // when the first message is sent (session_key=None triggers next epoch).
@@ -495,7 +624,7 @@ pub fn ChatSidebar() -> impl IntoView {
         });
     });
 
-    let reload_for_delete = reload_data;
+    let reload_for_delete = reload_data.clone();
     let do_delete = Arc::new(move |session_key: String| {
         if is_saving.get_untracked() {
             return;
@@ -527,10 +656,61 @@ pub fn ChatSidebar() -> impl IntoView {
         });
     });
 
-    // Auto-focus edit input when entering edit mode
+    let reload_for_grename = reload_data.clone();
+    let do_rename_group = Arc::new(move |team_id: String, name: String| {
+        if is_saving.get_untracked() {
+            return;
+        }
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            group_editing_id.set(None);
+            group_edit_text.set(String::new());
+            return;
+        }
+        is_saving.set(true);
+        let dash = dashboard;
+        let reload = reload_for_grename.clone();
+        leptos::task::spawn_local(async move {
+            if let Err(e) = TeamsApi::rename(&dash, &team_id, &name).await {
+                web_sys::console::error_1(&format!("Failed to rename team: {e}").into());
+            } else {
+                reload(dash);
+            }
+            is_saving.set(false);
+            group_editing_id.set(None);
+            group_edit_text.set(String::new());
+        });
+    });
+
+    let reload_for_gdelete = reload_data.clone();
+    let do_delete_group = Arc::new(move |team_id: String| {
+        if is_saving.get_untracked() {
+            return;
+        }
+        is_saving.set(true);
+        let dash = dashboard;
+        let reload = reload_for_gdelete.clone();
+        leptos::task::spawn_local(async move {
+            if let Err(e) = TeamsApi::disband(&dash, &team_id).await {
+                web_sys::console::error_1(&format!("Failed to delete team: {e}").into());
+            } else {
+                if chat.team_id.get_untracked().as_deref() == Some(&team_id) {
+                    chat.clear_session();
+                }
+                reload(dash);
+            }
+            is_saving.set(false);
+            group_deleting_id.set(None);
+        });
+    });
+
+    // Auto-focus edit input when entering edit mode. Both the session-row and
+    // group-row edit inputs share `edit_input_ref` (only one row edits at a
+    // time), so focus/select on EITHER signal turning Some is correct.
     Effect::new(move || {
         let _key = editing_key.get();
-        if _key.is_some() {
+        let _g_key = group_editing_id.get();
+        if _key.is_some() || _g_key.is_some() {
             leptos::task::spawn_local(async move {
                 gloo_timers::future::TimeoutFuture::new(10).await;
                 if let Some(el) = edit_input_ref.get() {
@@ -550,6 +730,19 @@ pub fn ChatSidebar() -> impl IntoView {
                 gloo_timers::future::TimeoutFuture::new(5000).await;
                 if deleting_key.get_untracked().as_deref() == Some(&k) {
                     deleting_key.set(None);
+                }
+            });
+        }
+    });
+
+    // Auto-dismiss group delete confirmation after 5 seconds (session parity).
+    Effect::new(move || {
+        let key = group_deleting_id.get();
+        if let Some(k) = key {
+            leptos::task::spawn_local(async move {
+                gloo_timers::future::TimeoutFuture::new(5000).await;
+                if group_deleting_id.get_untracked().as_deref() == Some(&k) {
+                    group_deleting_id.set(None);
                 }
             });
         }
@@ -644,11 +837,15 @@ pub fn ChatSidebar() -> impl IntoView {
                         }}
                     </select>
                     <button
-                        class="px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-medium
-                               hover:bg-primary/90 transition-colors whitespace-nowrap"
+                        class="w-9 h-9 shrink-0 flex items-center justify-center rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
+                        title=move || t_string!(i18n, chat.new).to_string()
+                        aria-label=move || t_string!(i18n, chat.new).to_string()
                         on:click=on_new_chat
                     >
-                        {move || t_string!(i18n, chat.new).to_string()}
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
                     </button>
                 </div>
 
@@ -669,7 +866,7 @@ pub fn ChatSidebar() -> impl IntoView {
                 </div>
             </div>
 
-            // Click-outside overlay for dropdown menu
+            // Click-outside overlay for session dropdown menu
             {move || {
                 if menu_open_key.get().is_some() {
                     view! { <div class="fixed inset-0 z-40" on:click=move |_| menu_open_key.set(None) /> }.into_any()
@@ -678,8 +875,256 @@ pub fn ChatSidebar() -> impl IntoView {
                 }
             }}
 
-            // Session list (filtered by selected agent)
+            // Click-outside overlay for group dropdown menu
+            {move || {
+                if group_menu_id.get().is_some() {
+                    view! { <div class="fixed inset-0 z-40" on:click=move |_| group_menu_id.set(None) /> }.into_any()
+                } else {
+                    view! { <span /> }.into_any()
+                }
+            }}
+
+            // Session list + group section (single scroll container)
             <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+
+                // ── 群聊 (Group Chat) collapsible section ─────────────────
+                {move || {
+                    // Only show active teams; disbanded ones disappear immediately.
+                    // Newest activity first: most recent message timestamp, falling
+                    // back to team creation time when the team has no transcript yet.
+                    let mut group_list: Vec<_> = groups.get().into_iter().filter(|g| g.status == "active").collect();
+                    group_list.sort_by_key(|g| std::cmp::Reverse(g.last_message_at.unwrap_or(g.created_at)));
+                    if group_list.is_empty() {
+                        return view! { <span /> }.into_any();
+                    }
+                    let count = group_list.len();
+                    // Read action states here to track reactivity for the whole section.
+                    let _g_editing = group_editing_id.get();
+                    let _g_deleting = group_deleting_id.get();
+                    let _g_menu = group_menu_id.get();
+                    let do_rename_group = do_rename_group.clone();
+                    let do_delete_group = do_delete_group.clone();
+                    let is_expanded = groups_expanded.get();
+                    view! {
+                        <div class="mb-1">
+                            // Section header with chevron toggle
+                            <button
+                                class="w-full flex items-center gap-1 px-1 py-1 text-[11px]
+                                       font-semibold text-text-tertiary hover:text-text-primary
+                                       transition-colors select-none"
+                                on:click=move |_| groups_expanded.update(|e| *e = !*e)
+                            >
+                                <span class="transition-transform"
+                                    style=move || if groups_expanded.get() { "" } else { "transform: rotate(-90deg); display: inline-block;" }
+                                >
+                                    "▾"
+                                </span>
+                                {format!("群聊 {count}")}
+                            </button>
+                            // Group rows (shown only when expanded) — plain if/else, no <Show>,
+                            // so the inner iterator closure stays in the outer reactive block.
+                            {if is_expanded {
+                                let rows = group_list.into_iter().map(move |group| {
+                                    let group_id = group.id.clone();
+                                    let group_name = group.name.clone();
+                                    let last_msg = group.last_message.clone();
+                                    let previews = group.members_preview.clone();
+                                    let is_g_editing = _g_editing.as_deref() == Some(&group_id);
+                                    let is_g_deleting = _g_deleting.as_deref() == Some(&group_id);
+                                    let is_g_menu = _g_menu.as_deref() == Some(&group_id);
+                                    let do_rename_group = do_rename_group.clone();
+                                    let do_delete_group = do_delete_group.clone();
+
+                                    if is_g_editing {
+                                        let id_save = group_id.clone();
+                                        let id_blur = group_id.clone();
+                                        let r_key = do_rename_group.clone();
+                                        let r_blur = do_rename_group;
+                                        view! {
+                                            <div class="w-full px-3 py-2 rounded-lg bg-surface-sunken border border-primary/40">
+                                                <input
+                                                    node_ref=edit_input_ref
+                                                    class="w-full bg-transparent text-xs text-text-primary outline-none disabled:opacity-50"
+                                                    prop:value=move || group_edit_text.get()
+                                                    prop:disabled=move || is_saving.get()
+                                                    maxlength=100
+                                                    on:input=move |ev| group_edit_text.set(event_target_value(&ev))
+                                                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                                        match ev.key().as_str() {
+                                                            "Enter" => {
+                                                                let t = group_edit_text.get_untracked();
+                                                                if t.trim().is_empty() {
+                                                                    group_editing_id.set(None);
+                                                                    group_edit_text.set(String::new());
+                                                                } else {
+                                                                    r_key(id_save.clone(), t);
+                                                                }
+                                                            }
+                                                            "Escape" => {
+                                                                group_editing_id.set(None);
+                                                                group_edit_text.set(String::new());
+                                                            }
+                                                            _ => {}
+                                                        }
+                                                    }
+                                                    on:blur=move |_| {
+                                                        let id = id_blur.clone();
+                                                        let r = r_blur.clone();
+                                                        leptos::task::spawn_local(async move {
+                                                            gloo_timers::future::TimeoutFuture::new(100).await;
+                                                            if group_editing_id.get_untracked().as_deref() == Some(&id) {
+                                                                let t = group_edit_text.get_untracked();
+                                                                if t.trim().is_empty() {
+                                                                    group_editing_id.set(None);
+                                                                    group_edit_text.set(String::new());
+                                                                } else {
+                                                                    r(id, t);
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                />
+                                            </div>
+                                        }.into_any()
+                                    } else if is_g_deleting {
+                                        let id_del = group_id.clone();
+                                        view! {
+                                            <div class="w-full px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 flex items-center justify-between text-xs">
+                                                <span class="text-red-400 font-medium">{move || t_string!(i18n, chat.confirm_delete).to_string()}</span>
+                                                <div class="flex items-center gap-1.5">
+                                                    <button
+                                                        class="px-2 py-0.5 rounded bg-red-500 text-white text-[10px] font-medium hover:bg-red-600 transition-colors disabled:opacity-50"
+                                                        prop:disabled=move || is_saving.get()
+                                                        on:click=move |ev: web_sys::MouseEvent| {
+                                                            ev.stop_propagation();
+                                                            do_delete_group(id_del.clone());
+                                                        }
+                                                    >
+                                                        {move || t_string!(i18n, common.confirm).to_string()}
+                                                    </button>
+                                                    <button
+                                                        class="px-2 py-0.5 rounded bg-surface-sunken text-text-secondary text-[10px] hover:bg-surface-raised transition-colors"
+                                                        on:click=move |ev: web_sys::MouseEvent| {
+                                                            ev.stop_propagation();
+                                                            group_deleting_id.set(None);
+                                                        }
+                                                    >
+                                                        {move || t_string!(i18n, common.cancel).to_string()}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        // Normal mode: avatar cluster + name + last_message + hover ⋯ menu
+                                        let id_click = group_id.clone();
+                                        let id_menu = group_id.clone();
+                                        let id_edit = group_id.clone();
+                                        let id_del_menu = group_id.clone();
+                                        let name_for_edit = group_name.clone();
+                                        view! {
+                                            <div class="relative group">
+                                                <button
+                                                    class="w-full text-left px-2 py-2 rounded-lg text-sm nav-tile flex items-center gap-2"
+                                                    on:click=move |_| on_open_group(id_click.clone())
+                                                >
+                                                    // Avatar cluster (overlapping discs, up to 3)
+                                                    <div class="flex items-center flex-shrink-0">
+                                                        {previews.iter().take(3).enumerate().map(|(i, mp)| {
+                                                            let color = agent_color_for_id(&mp.id);
+                                                            let glyph = mp.emoji.clone()
+                                                                .filter(|e| !e.is_empty())
+                                                                .or_else(|| mp.name.as_ref()
+                                                                    .and_then(|n| n.chars().next())
+                                                                    .map(|c| c.to_uppercase().to_string()))
+                                                                .or_else(|| mp.id.chars().next()
+                                                                    .map(|c| c.to_uppercase().to_string()))
+                                                                .unwrap_or_else(|| "?".to_string());
+                                                            let margin = if i == 0 { "" } else { "-ml-2" };
+                                                            view! {
+                                                                <span
+                                                                    class=format!(
+                                                                        "{margin} w-6 h-6 rounded-full flex items-center justify-center \
+                                                                         text-[10px] font-bold text-white \
+                                                                         ring-2 ring-surface-sunken"
+                                                                    )
+                                                                    style=format!("background-color: {color};")
+                                                                >
+                                                                    {glyph}
+                                                                </span>
+                                                            }
+                                                        }).collect::<Vec<_>>()}
+                                                    </div>
+                                                    // Group name + last message
+                                                    <div class="flex-1 min-w-0">
+                                                        <div class="truncate text-xs font-medium text-text-primary">
+                                                            {group_name.clone()}
+                                                        </div>
+                                                        {last_msg.clone().map(|m| view! {
+                                                            <div class="truncate text-[10px] text-text-tertiary mt-0.5">
+                                                                {m}
+                                                            </div>
+                                                        })}
+                                                    </div>
+                                                    // ⋯ button (visible on hover)
+                                                    <button
+                                                        class="opacity-0 group-hover:opacity-100 ml-1 px-1.5 py-0.5
+                                                               rounded text-text-tertiary hover:text-text-primary
+                                                               hover:bg-surface-raised transition-all text-xs flex-shrink-0"
+                                                        on:click=move |ev: web_sys::MouseEvent| {
+                                                            ev.stop_propagation();
+                                                            let cur = group_menu_id.get_untracked();
+                                                            if cur.as_deref() == Some(&id_menu) {
+                                                                group_menu_id.set(None);
+                                                            } else {
+                                                                group_menu_id.set(Some(id_menu.clone()));
+                                                            }
+                                                        }
+                                                    >"⋯"</button>
+                                                </button>
+                                                // Dropdown menu
+                                                {if is_g_menu {
+                                                    let name_e = name_for_edit.clone();
+                                                    view! {
+                                                        <div class="glass absolute right-0 top-full mt-1 z-50 min-w-[120px]
+                                                                    bg-surface-overlay/85 border border-border rounded-lg shadow-xl
+                                                                    py-1 text-xs">
+                                                            <button
+                                                                class="w-full text-left px-3 py-1.5 text-text-secondary
+                                                                       hover:bg-surface-sunken hover:text-text-primary transition-colors"
+                                                                on:click=move |ev: web_sys::MouseEvent| {
+                                                                    ev.stop_propagation();
+                                                                    group_menu_id.set(None);
+                                                                    group_edit_text.set(name_e.clone());
+                                                                    group_editing_id.set(Some(id_edit.clone()));
+                                                                }
+                                                            >{move || t_string!(i18n, chat.rename).to_string()}</button>
+                                                            <button
+                                                                class="w-full text-left px-3 py-1.5 text-red-400
+                                                                       hover:bg-red-500/10 transition-colors"
+                                                                on:click=move |ev: web_sys::MouseEvent| {
+                                                                    ev.stop_propagation();
+                                                                    group_menu_id.set(None);
+                                                                    group_deleting_id.set(Some(id_del_menu.clone()));
+                                                                }
+                                                            >{move || t_string!(i18n, common.delete).to_string()}</button>
+                                                        </div>
+                                                    }.into_any()
+                                                } else {
+                                                    view! { <span /> }.into_any()
+                                                }}
+                                            </div>
+                                        }.into_any()
+                                    }
+                                }).collect::<Vec<_>>();
+                                view! { <div class="space-y-0.5">{rows}</div> }.into_any()
+                            } else {
+                                view! { <span /> }.into_any()
+                            }}
+                        </div>
+                    }.into_any()
+                }}
+
+                // ── 单聊 (Single-agent sessions) ──────────────────────────
                 {move || {
                     let session_list = sessions.get();
                     let sel_agent = selected_agent.get();
@@ -969,5 +1414,39 @@ fn format_session_subtitle(session: &SessionEntry) -> String {
             format!("{msg_count} msgs - {month:02}-{day:02}")
         }
         None => format!("{msg_count} messages"),
+    }
+}
+
+#[cfg(test)]
+mod team_history_tests {
+    use super::{team_history_item_to_message, RESERVED_USER_HANDLE};
+    use crate::api::team_chat::TeamMessageItem;
+
+    fn item(from_agent: &str) -> TeamMessageItem {
+        TeamMessageItem {
+            from_agent: from_agent.to_string(),
+            content: "hello".to_string(),
+            msg_type: "message".to_string(),
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn user_handle_replays_as_right_aligned_user_bubble() {
+        // Regression: the user's own group-chat messages were replayed as
+        // left-aligned agent bubbles (role "assistant" + agent_id Some("user")).
+        // They must mirror single chat: role "user", no agent_id → right-aligned
+        // accent bubble.
+        let m = team_history_item_to_message(0, item(RESERVED_USER_HANDLE));
+        assert_eq!(m.role, "user");
+        assert_eq!(m.agent_id, None);
+    }
+
+    #[test]
+    fn agent_handle_replays_as_attributed_agent_bubble() {
+        let m = team_history_item_to_message(3, item("risk_analyst"));
+        assert_eq!(m.role, "assistant");
+        assert_eq!(m.agent_id.as_deref(), Some("risk_analyst"));
+        assert_eq!(m.id, "team-hist-3");
     }
 }

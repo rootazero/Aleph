@@ -99,7 +99,7 @@ impl DreamStage for NoteSynthesisStage {
                 title: format!("{category} Synthesis"),
                 category: "synthesis".to_string(),
                 tags: vec![category.clone(), "synthesis".to_string()],
-                facts: vec![synthesis_text],
+                facts: vec![synthesis_text.clone()],
                 links: source_links,
                 created_at: chrono::Utc::now().timestamp(),
                 updated_at: chrono::Utc::now().timestamp(),
@@ -129,6 +129,9 @@ impl DreamStage for NoteSynthesisStage {
             {
                 Ok(_) => {
                     synthesis_count += 1;
+                    // Record the assertion so the post-pipeline drain feeds
+                    // MutationGate's oscillation detector (was never fed before).
+                    ctx.report.synthesis_assertions.push(synthesis_text);
                     tracing::info!(
                         category,
                         notes = note_count,

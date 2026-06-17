@@ -43,7 +43,7 @@ pub enum RoutingError {
 /// untrusted by default, raised explicitly by an operator. This is what closes
 /// the prior over-permission where an external channel stamped no role and was
 /// therefore treated as operator by `TurnContext::caller_is_operator`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelPermissionLevel {
     /// Layer 1: conversation + read, locked workspace. Safe default.

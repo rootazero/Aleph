@@ -40,6 +40,27 @@ fn extract_final_response(events: &[StreamEvent]) -> Option<String> {
     })
 }
 
+/// 组装被唤醒成员 run 的 metadata。
+///
+/// **关键**:必须带 `platform = "webchat"`。群聊是 Panel 上实时、面向用户的对话,
+/// 不是后台任务。少了 platform,harness 会回退到 `Background` paradigm
+/// (`run_loop` 用 `metadata.get("platform")` 推导 manifest,None → Background),
+/// 而 `Background` 默认带 `SilentReply` capability → `ProtocolTokensLayer` 教模型用
+/// `ALEPH_SILENT_COMPLETE` 表示"不发言"。成员于是把这个字面 token 当整条回复发出,
+/// 泄漏进 Panel 气泡和 transcript。`webchat` → `WebRich`(不含 `SilentReply`)从
+/// 源头杜绝。与所有 channel 路径 `metadata["platform"] = channel.channel_type()` 一致。
+#[must_use]
+fn member_run_metadata(
+    team_id: &str,
+    chain_depth: u32,
+) -> std::collections::HashMap<String, String> {
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert("team_id".to_string(), team_id.to_string());
+    metadata.insert("chain_depth".to_string(), chain_depth.to_string());
+    metadata.insert("platform".to_string(), "webchat".to_string());
+    metadata
+}
+
 /// 群聊广播编排器。无状态:每次 dispatch 现场拉 team/roster/transcript。
 #[derive(Clone)]
 pub struct GroupChatBroadcaster {
@@ -185,9 +206,7 @@ impl GroupChatBroadcaster {
         };
 
         let run_id = uuid::Uuid::new_v4().to_string();
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert("team_id".to_string(), team_id.clone());
-        metadata.insert("chain_depth".to_string(), chain_depth.to_string());
+        let metadata = member_run_metadata(&team_id, chain_depth);
         let req = RunRequest {
             run_id,
             input,
@@ -271,5 +290,30 @@ mod tests {
         assert!(over_depth(MAX_CHAIN_DEPTH + 1), "超上限应阻断");
         assert!(!over_depth(MAX_CHAIN_DEPTH - 1), "未到上限放行");
         assert!(!over_depth(0), "初始放行");
+    }
+
+    #[test]
+    fn member_metadata_tags_webchat_platform() {
+        // 群聊成员必须以 webchat(→ WebRich)paradigm 运行。少了 platform
+        // 会回退 Background → 教模型 ALEPH_SILENT_COMPLETE → 泄漏进气泡/transcript。
+        let m = member_run_metadata("team-x", 2);
+        assert_eq!(m.get("platform").map(String::as_str), Some("webchat"));
+        assert_eq!(m.get("team_id").map(String::as_str), Some("team-x"));
+        assert_eq!(m.get("chain_depth").map(String::as_str), Some("2"));
+    }
+
+    #[test]
+    fn webchat_paradigm_never_teaches_silent_token() {
+        // 守住修复依赖的不变量:webchat 解析出的 paradigm 不含 SilentReply,
+        // 因此 ProtocolTokensLayer 永不教 ALEPH_SILENT_COMPLETE。
+        use crate::gateway::channel::paradigm_for_channel_type;
+        use crate::thinker::interaction::Capability;
+        let paradigm = paradigm_for_channel_type("webchat");
+        assert!(
+            !paradigm
+                .default_capabilities()
+                .contains(&Capability::SilentReply),
+            "WebRich 不得含 SilentReply,否则成员会被教 ALEPH_SILENT_COMPLETE"
+        );
     }
 }

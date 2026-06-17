@@ -115,6 +115,60 @@ pub struct ContextBudgetToml {
     /// without further tool calls. Default 0.85.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub critical_threshold: Option<f64>,
+    /// Per-model trigger-point overrides. The compaction budget is sized for
+    /// the *smallest* context window on the failover chain, so the warning /
+    /// critical fractions are keyed off that same model. These let a narrow
+    /// model compact more aggressively than a wide one — e.g. a tighter
+    /// `0.60 / 0.78` for a 200k-window model while a 1M-window model keeps the
+    /// default `0.70 / 0.85`. The first entry whose `model` matches the
+    /// resolved model id (or the provider key) wins; unset fields fall back to
+    /// the top-level thresholds, then the built-in `0.70 / 0.85`. Empty by
+    /// default (every model inherits the global thresholds).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_thresholds: Vec<ModelThresholdToml>,
+}
+
+/// One `[[context_budget.model_thresholds]]` entry: a per-model override of the
+/// compaction trigger fractions, selected by a case-insensitive substring match
+/// against the resolved model id or provider key.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct ModelThresholdToml {
+    /// Case-insensitive substring matched against the resolved model id and the
+    /// provider key (e.g. `"kimi"`, `"claude"`, `"moonshot"`). The first
+    /// matching entry in declaration order wins.
+    pub model: String,
+    /// Fraction of `token_budget` at which compaction begins for this model.
+    /// Unset → inherit the top-level `warning_threshold` (then `0.70`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning_threshold: Option<f64>,
+    /// Fraction of `token_budget` at which this model is forced to a final
+    /// reply. Unset → inherit the top-level `critical_threshold` (then `0.85`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub critical_threshold: Option<f64>,
+}
+
+impl ContextBudgetToml {
+    /// First per-model threshold override matching the resolved `model` id or
+    /// `provider` key (case-insensitive substring). Returns `None` when the
+    /// list is empty or nothing matches — callers then use the global
+    /// thresholds, so behaviour is byte-identical without any override.
+    #[must_use]
+    pub fn threshold_override_for(
+        &self,
+        model: Option<&str>,
+        provider: &str,
+    ) -> Option<&ModelThresholdToml> {
+        let provider_lc = provider.to_lowercase();
+        let model_lc = model.map(str::to_lowercase);
+        self.model_thresholds.iter().find(|o| {
+            let needle = o.model.trim().to_lowercase();
+            if needle.is_empty() {
+                return false;
+            }
+            model_lc.as_deref().is_some_and(|m| m.contains(&needle))
+                || provider_lc.contains(&needle)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -193,6 +247,7 @@ critical_threshold = 0.85
                 token_budget: Some(128_000),
                 warning_threshold: Some(0.7),
                 critical_threshold: Some(0.85),
+                model_thresholds: Vec::new(),
             })
         );
     }
@@ -244,5 +299,115 @@ critical_threshold = 0.85
         let cb = p.context_budget.expect("section present");
         assert!(!cb.enabled);
         assert!(cb.token_budget.is_none());
+        // Per-model overrides default to empty → every model inherits globals.
+        assert!(cb.model_thresholds.is_empty());
+    }
+
+    #[test]
+    fn model_thresholds_parse_as_array_of_tables() {
+        let toml_str = r#"
+[context_budget]
+enabled = true
+warning_threshold = 0.70
+critical_threshold = 0.85
+
+[[context_budget.model_thresholds]]
+model = "kimi"
+warning_threshold = 0.60
+critical_threshold = 0.78
+
+[[context_budget.model_thresholds]]
+model = "claude"
+"#;
+        let p: Probe = toml::from_str(toml_str).expect("toml parses");
+        let cb = p.context_budget.expect("section present");
+        assert_eq!(cb.model_thresholds.len(), 2);
+        assert_eq!(cb.model_thresholds[0].model, "kimi");
+        assert_eq!(cb.model_thresholds[0].warning_threshold, Some(0.60));
+        assert_eq!(cb.model_thresholds[0].critical_threshold, Some(0.78));
+        // Second entry overrides nothing — a placeholder that inherits globals.
+        assert_eq!(cb.model_thresholds[1].model, "claude");
+        assert_eq!(cb.model_thresholds[1].warning_threshold, None);
+    }
+
+    fn cb_with_overrides(entries: Vec<ModelThresholdToml>) -> ContextBudgetToml {
+        ContextBudgetToml {
+            enabled: true,
+            model_thresholds: entries,
+            ..ContextBudgetToml::default()
+        }
+    }
+
+    #[test]
+    fn threshold_override_matches_model_id_substring() {
+        let cb = cb_with_overrides(vec![ModelThresholdToml {
+            model: "kimi".to_string(),
+            warning_threshold: Some(0.60),
+            critical_threshold: Some(0.78),
+        }]);
+        // Case-insensitive substring of the full model id matches.
+        let hit = cb
+            .threshold_override_for(Some("Kimi-K2-0905-preview"), "moonshot")
+            .expect("kimi substring matches model id");
+        assert_eq!(hit.warning_threshold, Some(0.60));
+    }
+
+    #[test]
+    fn threshold_override_matches_provider_key() {
+        let cb = cb_with_overrides(vec![ModelThresholdToml {
+            model: "kimi".to_string(),
+            warning_threshold: Some(0.60),
+            ..ModelThresholdToml::default()
+        }]);
+        // No model id, but the provider key carries the family name.
+        let hit = cb
+            .threshold_override_for(None, "kimi-cn")
+            .expect("provider key matches");
+        assert_eq!(hit.warning_threshold, Some(0.60));
+    }
+
+    #[test]
+    fn threshold_override_first_match_wins() {
+        let cb = cb_with_overrides(vec![
+            ModelThresholdToml {
+                model: "claude".to_string(),
+                warning_threshold: Some(0.72),
+                ..ModelThresholdToml::default()
+            },
+            ModelThresholdToml {
+                model: "sonnet".to_string(),
+                warning_threshold: Some(0.65),
+                ..ModelThresholdToml::default()
+            },
+        ]);
+        // Both entries match "claude-sonnet-4-6"; declaration order wins.
+        let hit = cb
+            .threshold_override_for(Some("claude-sonnet-4-6"), "anthropic")
+            .expect("first matching entry wins");
+        assert_eq!(hit.warning_threshold, Some(0.72));
+    }
+
+    #[test]
+    fn threshold_override_none_when_no_match_or_empty() {
+        let cb = cb_with_overrides(vec![ModelThresholdToml {
+            model: "kimi".to_string(),
+            warning_threshold: Some(0.60),
+            ..ModelThresholdToml::default()
+        }]);
+        assert!(
+            cb.threshold_override_for(Some("claude-sonnet-4-6"), "anthropic")
+                .is_none(),
+            "non-matching model → None (global thresholds apply)"
+        );
+        // Empty matcher string never matches (guards a blank `model = ""`).
+        let blank = cb_with_overrides(vec![ModelThresholdToml {
+            model: "  ".to_string(),
+            warning_threshold: Some(0.5),
+            ..ModelThresholdToml::default()
+        }]);
+        assert!(blank.threshold_override_for(Some("anything"), "p").is_none());
+        // No overrides at all → None.
+        let none = cb_with_overrides(vec![]);
+        assert!(none.threshold_override_for(Some("kimi-k2"), "moonshot").is_none());
     }
 }

@@ -86,6 +86,9 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub artifact_store: Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
     /// Message router for the `TeamNotifier` event handler
     pub message_router: Option<Arc<alephcore::teams::messages::MessageRouter>>,
+    /// Raw message store, exposed for `register_teams_handlers` so
+    /// `teams.chat.history` and `agents.teams` enrichment can be wired.
+    pub message_store: Option<Arc<dyn alephcore::teams::messages::MessageStore>>,
     /// `OnceLock` handle shared with the real `ExecutionEngine`. Boot code calls
     /// `.set(orchestrator)` on this after `initialize_orchestrator` returns so
     /// that `dispatch_via_orchestrator` can resolve the orchestrator from the
@@ -1524,13 +1527,22 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             if let Some(ts) = team_store.clone() {
                 let chat_ctx = gateway_ctx.clone();
                 let chat_msg_store = message_store.clone();
+                // Resolve a cheap provider (haiku → default) for first-message
+                // team auto-naming, mirroring single chat's auto-topic provider.
+                let chat_topic_provider: Option<Arc<dyn alephcore::providers::AiProvider>> =
+                    topic_provider_registry
+                        .get("haiku")
+                        .or_else(|| Some(topic_provider_registry.default_provider()));
+                let chat_event_bus = event_bus.clone();
                 server.handlers_mut().register("teams.chat.send", move |req| {
                     let store = ts.clone();
                     let ctx = chat_ctx.clone();
                     let msg_store = chat_msg_store.clone();
+                    let provider = chat_topic_provider.clone();
+                    let bus = chat_event_bus.clone();
                     async move {
                         alephcore::gateway::handlers::teams::handle_chat_send(
-                            req, store, msg_store, ctx,
+                            req, store, msg_store, ctx, provider, Some(bus),
                         )
                         .await
                     }
@@ -2198,6 +2210,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             .clone()
             .map(|s| s as Arc<dyn alephcore::teams::artifacts::ArtifactStore>),
         message_router: message_router.clone(),
+        message_store: message_store.clone(),
         orchestrator_cell: orch_cell_out,
         memory_context_provider: mcp_for_orchestrator,
         memory_backend: Some(memory_db.clone()),

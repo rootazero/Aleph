@@ -30,7 +30,7 @@ use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::presence::{PresenceEntry, PresenceTracker};
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR,
-    PARSE_ERROR, RATE_LIMITED,
+    PARSE_ERROR, PERMISSION_DENIED, RATE_LIMITED,
 };
 use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
 use crate::gateway::state_version::StateVersionTracker;
@@ -486,10 +486,55 @@ async fn handle_connection(
                                     } // end loopback exemption
 
                                     // Originating-connection role for the
-                                    // config-tier tool gate. LAN-trust: every
-                                    // connection is an implicit operator, so the
-                                    // config-tier gate always passes.
-                                    let caller_role: Option<String> = Some("operator".to_string());
+                                    // config-tier gates. Resolved at the
+                                    // `connect` handshake (loopback ⇒ operator;
+                                    // remote ⇒ persisted per-device tier,
+                                    // default chat) and stamped onto
+                                    // ConnectionState; every later request reads
+                                    // it here. Absent state (pre-handshake /
+                                    // probe) ⇒ operator, preserving
+                                    // single-machine zero-config.
+                                    let caller_role: Option<String> = {
+                                        let conns = ctx.connections.read().await;
+                                        conns.get(&conn_id).map(|s| s.caller_role.clone())
+                                    }
+                                    .or_else(|| Some("operator".to_string()));
+
+                                    // Defense-in-depth RPC gate (G2/G3): a
+                                    // chat-tier connection may converse and
+                                    // read, but config-mutating RPC methods are
+                                    // refused here — mirroring the tool-dispatch
+                                    // gate so the Panel's config surface is
+                                    // closed even to a hand-crafted RPC, not just
+                                    // hidden in the UI.
+                                    if caller_role.as_deref() != Some("operator")
+                                        && crate::gateway::method_authz::rpc_requires_operator(
+                                            &req.method,
+                                        )
+                                    {
+                                        let resp = JsonRpcResponse::error(
+                                            req.id.clone(),
+                                            PERMISSION_DENIED,
+                                            format!(
+                                                "Permission denied: `{}` changes Aleph's \
+                                                 configuration and requires Config-tier \
+                                                 (operator). This device is paired at chat level.",
+                                                req.method
+                                            ),
+                                        );
+                                        let resp_str =
+                                            serde_json::to_string(&resp).unwrap_or_default();
+                                        if let Err(e) =
+                                            write.send(WsMessage::Text(resp_str.into())).await
+                                        {
+                                            error!(
+                                                "Failed to send permission-denied response to {}: {}",
+                                                conn_id, e
+                                            );
+                                            break;
+                                        }
+                                        continue;
+                                    }
 
                                     // Handle events.* methods specially (they need conn_id)
                                     if req.method == "events.subscribe" {
@@ -561,7 +606,7 @@ async fn handle_connection(
                                         };
 
                                         // Check idempotency guard (only for non-Query lanes with a key)
-                                        let response = if let Some(ref key) = idempotency_key {
+                                        let mut response = if let Some(ref key) = idempotency_key {
                                             if lane.needs_idempotency() {
                                                 use crate::gateway::idempotency::AcquireResult;
                                                 match ctx.idempotency_guard.try_acquire(key) {
@@ -643,8 +688,37 @@ async fn handle_connection(
                                         // still records surface kind, clears first_message,
                                         // and tracks presence.
                                         if req.method == "connect" {
-                                            if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
+                                            if let Ok(mut resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
                                                 if resp.is_success() {
+                                                    // Panel device tier (G2/G3). Resolve once at
+                                                    // the handshake: loopback ⇒ Config (operator);
+                                                    // a remote Panel ⇒ its persisted per-device
+                                                    // tier (default Chat, raised explicitly by an
+                                                    // operator). Stamped onto ConnectionState for
+                                                    // the per-request gate and echoed in the
+                                                    // connect response so the Panel gates its own
+                                                    // config UI.
+                                                    let panel_device_id = req
+                                                        .params
+                                                        .as_ref()
+                                                        .and_then(|p| p.get("device_id"))
+                                                        .and_then(|v| v.as_str())
+                                                        .map(str::to_string);
+                                                    let panel_device_name = req
+                                                        .params
+                                                        .as_ref()
+                                                        .and_then(|p| p.get("device_name"))
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("")
+                                                        .to_string();
+                                                    let (panel_tier, panel_is_new) =
+                                                        crate::gateway::panel_devices::resolve_tier(
+                                                            ctx.client_ip.is_loopback(),
+                                                            panel_device_id.as_deref(),
+                                                            &panel_device_name,
+                                                        )
+                                                        .await;
+                                                    let panel_role = panel_tier.caller_role_str();
                                                     {
                                                         let mut conns = ctx.connections.write().await;
                                                         if let Some(state) = conns.get_mut(&conn_id) {
@@ -669,7 +743,43 @@ async fn handle_connection(
                                                             // delivers guarded topics (approval banners,
                                                             // config.changed) to this client.
                                                             state.permissions = vec!["*".to_string()];
+                                                            // Per-device authorization tier (G2/G3) for the
+                                                            // config-tier RPC/tool gates.
+                                                            state.caller_role = panel_role.to_string();
                                                         }
+                                                    }
+                                                    // Echo the resolved role back so the Panel's
+                                                    // ConfigGate reflects this device's tier.
+                                                    if let Some(obj) = resp
+                                                        .result
+                                                        .as_mut()
+                                                        .and_then(serde_json::Value::as_object_mut)
+                                                    {
+                                                        obj.insert(
+                                                            "role".to_string(),
+                                                            serde_json::Value::String(
+                                                                panel_role.to_string(),
+                                                            ),
+                                                        );
+                                                    }
+                                                    response =
+                                                        serde_json::to_string(&resp).unwrap_or(response);
+                                                    // A never-before-seen remote device just attached
+                                                    // at chat tier: surface it so an operator can grant
+                                                    // Config (pairing-time tier selection).
+                                                    if panel_is_new {
+                                                        let _ = ctx.event_bus.publish_json(
+                                                            &TopicEvent::new(
+                                                                "panel.device.pairing",
+                                                                serde_json::json!({
+                                                                    "device_id": panel_device_id,
+                                                                    "device_name": panel_device_name,
+                                                                }),
+                                                            )
+                                                            .with_state_version(
+                                                                ctx.state_versions.snapshot(),
+                                                            ),
+                                                        );
                                                     }
 
                                                     // Track presence for no-auth connect

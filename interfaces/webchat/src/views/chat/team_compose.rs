@@ -54,8 +54,8 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
     let i18n = use_i18n();
     let team_name = RwSignal::new(String::new());
     let selected: RwSignal<Vec<String>> = RwSignal::new(Vec::new());
-    // Vec<(id, display_name)> — loaded from agents.list on mount
-    let agents: RwSignal<Vec<(String, String)>> = RwSignal::new(Vec::new());
+    // Vec<(id, display_name, emoji)> — loaded from agents.list on mount
+    let agents: RwSignal<Vec<(String, String, Option<String>)>> = RwSignal::new(Vec::new());
     // Inline validation / failure message (replaces the old silent `return`).
     let error = RwSignal::new(None::<String>);
 
@@ -72,7 +72,7 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
                     .into_iter()
                     .map(|a| {
                         let display = a.name.clone().unwrap_or_else(|| a.id.clone());
-                        (a.id, display)
+                        (a.id, display, a.emoji)
                     })
                     .collect::<Vec<_>>();
                 agents.set(list);
@@ -87,33 +87,43 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
             .into_iter()
             .map(|id| (id, "member".to_string()))
             .collect();
-        // Validate + resolve the name; surface any problem inline instead of
-        // silently returning (the original "Start button does nothing" bug).
-        // A blank name (Ok(None)) auto-generates "<leader><suffix>" via i18n.
-        let name = match resolve_team_compose(&leader, &team_name.get_untracked(), members.len()) {
-            Ok(Some(n)) => n,
-            Ok(None) => format!("{leader}{}", t_string!(i18n, chat.team_default_suffix)),
-            Err(e) => {
-                let msg = match e {
-                    TeamComposeError::EmptyLeader => t_string!(i18n, chat.team_err_no_leader),
-                    TeamComposeError::NoMembers => t_string!(i18n, chat.team_err_no_member),
-                };
-                error.set(Some(msg.to_string()));
-                return;
-            }
-        };
+        // Blank → provisional "新群聊" + auto_name=true so the backend replaces
+        // it with an LLM topic on the first message (mirrors single chat).
+        let (name, auto_name) =
+            match resolve_team_compose(&leader, &team_name.get_untracked(), members.len()) {
+                Ok(Some(n)) => (n, false),
+                Ok(None) => (t_string!(i18n, chat.new_group_chat).to_string(), true),
+                Err(e) => {
+                    let msg = match e {
+                        TeamComposeError::EmptyLeader => t_string!(i18n, chat.team_err_no_leader),
+                        TeamComposeError::NoMembers => t_string!(i18n, chat.team_err_no_member),
+                    };
+                    error.set(Some(msg.to_string()));
+                    return;
+                }
+            };
         error.set(None);
 
         let dash = dashboard;
         spawn_local(async move {
-            match TeamsApi::create(&dash, &name, "", &leader, &members).await {
+            match TeamsApi::create(&dash, &name, "", &leader, &members, auto_name).await {
                 Ok(team_id) => {
                     chat.clear_session();
                     chat.team_id.set(Some(team_id));
+                    // Resolve each agent's emoji from the fetched agents list
+                    // (id → emoji) so roster avatars match the agent's glyph.
+                    let agent_emoji = agents.get_untracked();
+                    let emoji_of = |id: &str| -> Option<String> {
+                        agent_emoji
+                            .iter()
+                            .find(|(aid, _, _)| aid == id)
+                            .and_then(|(_, _, e)| e.clone())
+                    };
                     // Seed the roster with leader + selected members
                     let mut roster = vec![TeamMemberView {
                         agent_id: leader.clone(),
                         name: leader.clone(),
+                        emoji: emoji_of(&leader),
                         role: "leader".into(),
                         is_leader: true,
                         status: MemberStatus::Idle,
@@ -122,6 +132,7 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
                         roster.push(TeamMemberView {
                             agent_id: id.clone(),
                             name: id.clone(),
+                            emoji: emoji_of(id),
                             role: role.clone(),
                             is_leader: false,
                             status: MemberStatus::Idle,
@@ -169,8 +180,8 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
                     agents
                         .get()
                         .into_iter()
-                        .filter(|(id, _)| *id != leader)
-                        .map(|(id, label)| {
+                        .filter(|(id, _, _)| *id != leader)
+                        .map(|(id, label, _)| {
                             let id_for_toggle = id.clone();
                             let id_for_change = id.clone();
                             let checked = move || selected.get().contains(&id_for_toggle);

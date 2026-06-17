@@ -13,7 +13,7 @@
 
 use serde::Deserialize;
 use serde_json::json;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::agents::swarm::tasks::{
     CoordTaskFilter, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, ReviewVerdict, ReviewerKind,
@@ -186,6 +186,11 @@ pub struct CreateTeamParams {
     pub leader_id: String,
     #[serde(default)]
     pub members: Vec<CreateMemberSpec>,
+    /// When true, the team was created with a blank name from the Panel; the
+    /// first `teams.chat.send` will replace the provisional name with an
+    /// LLM-generated topic. Defaults false (explicit names are respected).
+    #[serde(default)]
+    pub auto_name: bool,
 }
 
 /// teams.create — create a persistent team with explicit leader_id + members.
@@ -266,16 +271,63 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -
         }
     }
 
+    // Blank-name teams from the Panel carry the auto-name flag so the first
+    // message can replace the provisional name with an LLM topic.
+    if params.auto_name {
+        if let Err(e) = store.set_name_auto(&team.id, true).await {
+            tracing::warn!(team_id = %team.id, error = %e, "failed to set name_auto flag");
+        }
+    }
+
     JsonRpcResponse::success(
         request.id,
         json!({ "team_id": team.id, "name": team.name, "leader_id": team.leader_id }),
     )
 }
 
-/// Handle agents.teams — list all teams an agent belongs to (as leader or member)
+// =============================================================================
+// teams.rename — rename a team
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct RenameTeamParams {
+    pub team_id: String,
+    pub name: String,
+}
+
+/// teams.rename — rename a team. Thin I/O: validates non-blank name, delegates
+/// to `TeamStore::rename_team`. Used by the Panel sidebar inline-edit.
+pub async fn handle_rename(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -> JsonRpcResponse {
+    debug!("Handling teams.rename request");
+    let params: RenameTeamParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let name = params.name.trim();
+    if params.team_id.trim().is_empty() || name.is_empty() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "team_id and a non-blank name are required".to_string(),
+        );
+    }
+    match store.rename_team(&params.team_id, name).await {
+        Ok(()) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
+        Err(e) => JsonRpcResponse::error(request.id, RESOURCE_NOT_FOUND, format!("{e}")),
+    }
+}
+
+/// Handle agents.teams — list all teams an agent belongs to (as leader or member).
+///
+/// When `agent_manager` and `msg_store` are supplied, each team summary is enriched
+/// with `members_preview` (up to 4 members with name + emoji) and `last_message`
+/// (most recent transcript content, truncated to 60 chars). Both are best-effort:
+/// per-team failures degrade to empty/null rather than failing the whole list.
 pub async fn handle_agent_teams(
     request: JsonRpcRequest,
     store: Arc<dyn TeamStore>,
+    agent_manager: Option<Arc<crate::config::agent_manager::AgentManager>>,
+    msg_store: Option<Arc<dyn crate::teams::messages::MessageStore>>,
 ) -> JsonRpcResponse {
     debug!("Handling agents.teams request");
 
@@ -284,14 +336,80 @@ pub async fn handle_agent_teams(
         Err(resp) => return resp,
     };
 
-    match store.get_agent_teams(&params.agent_id).await {
-        Ok(teams) => JsonRpcResponse::success(request.id, json!({ "teams": teams })),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to get teams for agent '{}': {}", params.agent_id, e),
-        ),
+    let summaries = match store.get_agent_teams(&params.agent_id).await {
+        Ok(s) => s,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to get teams for agent '{}': {}", params.agent_id, e),
+            )
+        }
+    };
+
+    // Fast path: no enrichment stores available — return raw summaries as before.
+    if agent_manager.is_none() && msg_store.is_none() {
+        return JsonRpcResponse::success(request.id, json!({ "teams": summaries }));
     }
+
+    let mgr = agent_manager.as_deref();
+
+    let mut enriched: Vec<serde_json::Value> = Vec::with_capacity(summaries.len());
+    for summary in summaries {
+        let team_id = &summary.id;
+
+        // members_preview: up to 4 members with name + emoji (best-effort).
+        let members_preview: Vec<serde_json::Value> = match store.get_members(team_id).await {
+            Ok(members) => members
+                .into_iter()
+                .take(4)
+                .map(|mem| {
+                    let def = mgr.and_then(|m| m.get(&mem.agent_id).ok());
+                    let name = def
+                        .as_ref()
+                        .and_then(|d| d.name.clone())
+                        .unwrap_or_else(|| mem.agent_id.clone());
+                    let emoji = def.as_ref().and_then(|d| {
+                        d.identity.as_ref().and_then(|i| i.emoji.clone())
+                    });
+                    json!({ "id": mem.agent_id, "name": name, "emoji": emoji })
+                })
+                .collect(),
+            Err(_) => vec![],
+        };
+
+        // last_message + last_message_at: most recent transcript entry (content
+        // truncated to 60 chars) and its Unix-epoch-seconds timestamp. The panel
+        // sorts group chats newest-first on last_message_at (falling back to
+        // created_at). Both best-effort: null on per-team failure.
+        // list_team_messages returns oldest-first; .pop() gives the newest.
+        let (last_message, last_message_at): (Option<String>, Option<i64>) =
+            match msg_store.as_deref() {
+                Some(ms) => ms
+                    .list_team_messages(team_id, 100)
+                    .await
+                    .ok()
+                    .and_then(|mut v| v.pop())
+                    .map(|m| {
+                        (
+                            Some(m.content.chars().take(60).collect::<String>()),
+                            Some(m.created_at.timestamp()),
+                        )
+                    })
+                    .unwrap_or((None, None)),
+                None => (None, None),
+            };
+
+        let mut obj = serde_json::to_value(&summary).unwrap_or_else(|_| json!({}));
+        if let Some(map) = obj.as_object_mut() {
+            map.insert("members_preview".to_string(), json!(members_preview));
+            map.insert("last_message".to_string(), json!(last_message));
+            map.insert("last_message_at".to_string(), json!(last_message_at));
+        }
+        enriched.push(obj);
+    }
+
+    JsonRpcResponse::success(request.id, json!({ "teams": enriched }))
 }
 
 // =============================================================================
@@ -891,6 +1009,62 @@ pub async fn handle_chat_thread(
 }
 
 // =============================================================================
+// teams.chat.history — durable team message transcript as attribution bubbles
+// =============================================================================
+
+/// A single bubble item from the team's durable message transcript.
+#[derive(serde::Serialize)]
+struct ChatHistoryItem {
+    from_agent: String,
+    content: String,
+    msg_type: String,
+    /// Milliseconds since Unix epoch — Panel uses this for chronological order.
+    created_at: i64,
+}
+
+/// Map a flat list of [`TeamMessage`] values to [`ChatHistoryItem`] values,
+/// sorted chronologically. Extracted as a free function so it is unit-testable
+/// without any async store.
+fn map_history(msgs: Vec<crate::teams::messages::TeamMessage>) -> Vec<ChatHistoryItem> {
+    let mut items: Vec<ChatHistoryItem> = msgs
+        .into_iter()
+        .map(|m| ChatHistoryItem {
+            from_agent: m.from_agent,
+            content: m.content,
+            msg_type: m.msg_type.as_str().to_string(),
+            created_at: m.created_at.timestamp_millis(),
+        })
+        .collect();
+    items.sort_by_key(|i| i.created_at);
+    items
+}
+
+/// teams.chat.history — replay the durable group-chat transcript as attribution
+/// bubbles. Returns `{ "items": [...] }` chronologically. Unknown or empty teams
+/// return an empty items array rather than an error (idempotent cold-open).
+pub async fn handle_chat_history(
+    request: JsonRpcRequest,
+    msg_store: Arc<dyn crate::teams::messages::MessageStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.chat.history request");
+
+    let params: TeamIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    // 200 messages is ample for the Panel's initial hydrate; store query is
+    // oldest-first after internal DESC→reverse, so .take(200) is the tail.
+    let msgs = msg_store
+        .list_team_messages(&params.team_id, 200)
+        .await
+        .unwrap_or_default();
+
+    let items = map_history(msgs);
+    JsonRpcResponse::success(request.id, serde_json::json!({ "items": items }))
+}
+
+// =============================================================================
 // teams.task.journal.{get,list} — R3 T3 read surface for exit journals
 // =============================================================================
 
@@ -1153,6 +1327,38 @@ mod tests {
         assert_eq!(bot_entries.len(), 1, "leader enrolled exactly once");
     }
 
+    #[tokio::test]
+    async fn handle_create_with_auto_name_sets_flag() {
+        let store = team_store().await;
+        let req = create_team_req(json!({ "name": "新群聊", "leader_id": "main", "auto_name": true }));
+        let resp = handle_create(req, Arc::clone(&store)).await;
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let team_id = resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("team_id"))
+            .and_then(|v| v.as_str())
+            .expect("team_id in response")
+            .to_string();
+        assert!(store.take_auto_name_flag(&team_id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn handle_create_without_auto_name_leaves_flag_off() {
+        let store = team_store().await;
+        let req = create_team_req(json!({ "name": "My Team", "leader_id": "main" }));
+        let resp = handle_create(req, Arc::clone(&store)).await;
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let team_id = resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("team_id"))
+            .and_then(|v| v.as_str())
+            .expect("team_id in response")
+            .to_string();
+        assert!(!store.take_auto_name_flag(&team_id).await.unwrap());
+    }
+
     // -------------------------------------------------------------------------
     // handle_chat_thread tests
     // -------------------------------------------------------------------------
@@ -1316,6 +1522,106 @@ mod tests {
         let mut sorted = timestamps.clone();
         sorted.sort();
         assert_eq!(timestamps, sorted, "merged items must be sorted by timestamp");
+    }
+
+    // -------------------------------------------------------------------------
+    // map_history tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn map_history_sorts_chronologically_and_carries_fields() {
+        use crate::teams::messages::types::{MessageType, TeamMessage};
+        use chrono::{TimeZone, Utc};
+
+        let t0 = Utc.timestamp_millis_opt(1_000_000).unwrap();
+        let t1 = Utc.timestamp_millis_opt(2_000_000).unwrap();
+
+        // Insert in reverse order to verify sort.
+        let msgs = vec![
+            TeamMessage {
+                id: "m2".to_string(),
+                team_id: "t1".to_string(),
+                from_agent: "agent-b".to_string(),
+                msg_type: MessageType::SystemNotification,
+                subject: String::new(),
+                content: "second".to_string(),
+                recipients: vec![],
+                reply_to: None,
+                thread_id: None,
+                attachments: vec![],
+                created_at: t1,
+                expires_at: None,
+            },
+            TeamMessage {
+                id: "m1".to_string(),
+                team_id: "t1".to_string(),
+                from_agent: "agent-a".to_string(),
+                msg_type: MessageType::Message,
+                subject: String::new(),
+                content: "first".to_string(),
+                recipients: vec![],
+                reply_to: None,
+                thread_id: None,
+                attachments: vec![],
+                created_at: t0,
+                expires_at: None,
+            },
+        ];
+
+        let items = map_history(msgs);
+        assert_eq!(items.len(), 2);
+
+        // Chronological after sort: t0 first.
+        assert_eq!(items[0].from_agent, "agent-a");
+        assert_eq!(items[0].content, "first");
+        assert_eq!(items[0].msg_type, "message");
+        assert_eq!(items[0].created_at, t0.timestamp_millis());
+
+        assert_eq!(items[1].from_agent, "agent-b");
+        assert_eq!(items[1].content, "second");
+        assert_eq!(items[1].msg_type, "system_notification");
+        assert_eq!(items[1].created_at, t1.timestamp_millis());
+    }
+
+    // -------------------------------------------------------------------------
+    // handle_rename tests
+    // -------------------------------------------------------------------------
+
+    fn rename_req(params: serde_json::Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "teams.rename".to_string(),
+            params: Some(params),
+            id: Some(json!(1)),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_rename_updates_name() {
+        let store = team_store().await;
+        let team = store
+            .create_team(crate::teams::NewTeam {
+                name: "Old".into(),
+                description: String::new(),
+                leader_id: "main".into(),
+            })
+            .await
+            .unwrap();
+
+        let req = rename_req(json!({ "team_id": team.id, "name": "Renamed" }));
+        let resp = handle_rename(req, Arc::clone(&store)).await;
+        assert!(resp.error.is_none(), "rename should succeed: {resp:?}");
+
+        let got = store.get_team(&team.id).await.unwrap().unwrap();
+        assert_eq!(got.name, "Renamed");
+    }
+
+    #[tokio::test]
+    async fn handle_rename_rejects_blank_name() {
+        let store = team_store().await;
+        let req = rename_req(json!({ "team_id": "t", "name": "   " }));
+        let resp = handle_rename(req, store).await;
+        assert!(resp.error.is_some(), "blank name must be rejected");
     }
 }
 
@@ -2856,6 +3162,8 @@ pub async fn handle_chat_send(
     store: Arc<dyn TeamStore>,
     msg_store: Option<Arc<dyn crate::teams::messages::MessageStore>>,
     context: Arc<crate::gateway::context::GatewayContext>,
+    topic_provider: Option<Arc<dyn crate::providers::AiProvider>>,
+    event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 ) -> JsonRpcResponse {
     let params: ChatSendParams = match parse_params(&request) {
         Ok(p) => p,
@@ -2911,6 +3219,38 @@ pub async fn handle_chat_send(
             chrono::Duration::days(3650),
         )
         .await;
+
+    // First-message auto-name: if this team was created with a blank name
+    // (auto_name flag set), generate an LLM topic now that we have content.
+    // The flag is a one-shot gate (atomic take-and-clear), so this fires
+    // exactly once — on the first send — and never overrides explicit names.
+    if let (Some(provider), Some(bus)) = (topic_provider.as_ref(), event_bus.as_ref()) {
+        if store.take_auto_name_flag(&params.team_id).await.unwrap_or(false) {
+            let provider = Arc::clone(provider);
+            let bus = Arc::clone(bus);
+            let store = Arc::clone(&store);
+            let team_id = params.team_id.clone();
+            let first_message = params.message.clone();
+            tokio::spawn(async move {
+                let topic = crate::gateway::execution_engine::topic::generate_conversation_topic(
+                    &provider,
+                    &first_message,
+                )
+                .await;
+                match store.rename_team(&team_id, &topic).await {
+                    Ok(()) => {
+                        let _ = bus.publish_frame(
+                            &crate::gateway::events::GatewayEventFrame::TeamChanged {
+                                team_id: team_id.clone(),
+                                change: crate::gateway::events::ChangeKind::Updated,
+                            },
+                        );
+                    }
+                    Err(e) => warn!(team_id = %team_id, error = %e, "team auto-name: rename failed"),
+                }
+            });
+        }
+    }
 
     // Equal broadcast: fan out by @mention (no @ → leader fallback); agents may
     // @ each other to continue the thread, bounded by the chain_depth guard.

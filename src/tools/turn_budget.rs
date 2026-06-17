@@ -227,8 +227,8 @@ mod tests {
         let b = TurnResultBudget::new(100);
         let id = tid(1);
         b.begin_turn(id);
-        b.record(&id, result("c1", 40));
-        b.record(&id, result("c2", 40));
+        let _ = b.record(&id, result("c1", 40));
+        let _ = b.record(&id, result("c2", 40));
         let instr = b.record(&id, result("c3", 40));
         // Cumulative reaches 120; spilling newest (c3) credits 36
         // tokens back, reducing to 84 — under budget. Exactly one spill.
@@ -255,8 +255,8 @@ mod tests {
         let b = TurnResultBudget::new(40);
         let id = tid(1);
         b.begin_turn(id);
-        b.record(&id, result("c1", 30));
-        b.record(&id, result("c2", 30));
+        let _ = b.record(&id, result("c1", 30));
+        let _ = b.record(&id, result("c2", 30));
         // After c2: cumulative = 60 > 40 → spill c2 (credit 27) → 33 → under.
         // After c3: cumulative = 33 + 30 = 63 > 40 → spill c3 (credit 27) → 36 → under.
         let instr_c3 = b.record(&id, result("c3", 30));

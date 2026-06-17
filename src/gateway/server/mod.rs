@@ -55,6 +55,13 @@ pub struct ConnectionState {
     /// Distinct from `ChannelClass` (lane priority). `None` before connect or
     /// for legacy clients that declared nothing.
     pub channel_kind: Option<crate::gateway::surface::SurfaceKind>,
+    /// Originating connection's authorization role for the config-tier gates
+    /// (`"operator"` / `"guest"`). Resolved at the `connect` handshake from the
+    /// device tier (loopback ⇒ operator; remote ⇒ persisted per-device tier,
+    /// default chat) and read per-request by the WS dispatch gate. Defaulted by
+    /// loopback in [`ConnectionState::new`] so the pre-handshake `connect` frame
+    /// and any probe path behave safely.
+    pub caller_role: String,
 }
 
 impl ConnectionState {
@@ -68,6 +75,13 @@ impl ConnectionState {
             permissions: vec![],
             client_ip,
             channel_kind: None,
+            // Loopback (local desktop App) is the implicit operator; remote
+            // connections start at chat tier until an operator elevates them.
+            caller_role: if client_ip.is_loopback() {
+                "operator".to_string()
+            } else {
+                "guest".to_string()
+            },
         }
     }
 }

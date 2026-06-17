@@ -180,7 +180,7 @@ mod tests {
         reg.register("e".into(), fake("e")).unwrap();
         let evt = rx.try_recv().expect("event");
         assert!(matches!(evt, RegistryChange::Registered { .. }));
-        reg.unregister("e");
+        let _ = reg.unregister("e");
         let evt = rx.try_recv().expect("event");
         assert!(matches!(evt, RegistryChange::Unregistered { .. }));
     }

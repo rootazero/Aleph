@@ -190,6 +190,14 @@ pub enum GatewayEventFrame {
         task_id: String,
         change: ChangeKind,
     },
+    /// Emitted when a team's sidebar-visible metadata changes (LLM
+    /// auto-name on first message, manual rename, or disband). Topic:
+    /// `team.changed`. Mirrors `CronJobChanged` — payload-minimal; the
+    /// Panel re-fetches `agents.teams` to refresh the group-chat list.
+    TeamChanged {
+        team_id: String,
+        change: ChangeKind,
+    },
     /// Core-decided R5 interrupt addressed to one or more delivery surfaces.
     /// Unlike the raw agent-lifecycle frames, the "is this worth interrupting
     /// the user" policy has already been applied by the core R5 router; the
@@ -429,6 +437,7 @@ impl GatewayEventFrame {
             Self::AcpSessionsChanged => "acp.sessions.changed",
             Self::CronJobChanged { .. } => "cron.job.changed",
             Self::HeartbeatTaskChanged { .. } => "heartbeat.task.changed",
+            Self::TeamChanged { .. } => "team.changed",
             Self::SurfaceNotify { .. } => "surface.notify",
             Self::SurfaceApproval { .. } => "surface.approval",
         }
@@ -547,5 +556,22 @@ mod surface_notify_tests {
         assert_eq!(v["approval_id"], "a1");
         assert_eq!(v["title"], "Aleph needs your approval");
         assert_eq!(v["body"], "A tool call is waiting for you.");
+    }
+
+    #[test]
+    fn team_changed_topic_and_wire_shape() {
+        let f = GatewayEventFrame::TeamChanged {
+            team_id: "t1".to_string(),
+            change: ChangeKind::Updated,
+        };
+        // Non-streaming → TopicEvent wire shape (topic + data), no stream method.
+        assert_eq!(f.topic_name(), "team.changed");
+        assert!(f.stream_method().is_none());
+
+        // serde(tag = "type", rename_all = "snake_case")
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["type"], "team_changed");
+        assert_eq!(v["team_id"], "t1");
+        assert_eq!(v["change"], "updated");
     }
 }

@@ -196,6 +196,9 @@ impl DreamStage for SkillDistillStage {
         ctx.report
             .extra
             .insert("skill_distill_count".into(), applied.to_string());
+        // Produced count for MutationGate's wasted-distillation detector
+        // (drained post-pipeline; the recall side comes from raw metrics).
+        ctx.report.distill_produced = applied as u32;
         tracing::info!(applied, "SkillDistill completed");
         Ok(ctx)
     }

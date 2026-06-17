@@ -10,7 +10,7 @@ use super::messages::MessageList;
 use super::state::{ChatState, PendingAttachment};
 use super::team_events::subscribe_team_events;
 use crate::components::session_tabs::SessionTabs;
-use crate::components::team_roster::TeamRoster;
+use crate::components::team_participants::TeamParticipants;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
@@ -148,10 +148,6 @@ pub fn ChatView() -> impl IntoView {
             on:dragleave=on_dragleave
             on:drop=on_drop
         >
-            // Team roster rail — left column, only visible in team chat mode.
-            <Show when=move || chat.team_id.get().is_some()>
-                <TeamRoster />
-            </Show>
             // Chat surface — collapses to 33% when workspace pane is open.
             // `relative` anchors the workspace toggle (top-right corner
             // affordance) so it follows the chat-surface boundary: in
@@ -176,6 +172,29 @@ pub fn ChatView() -> impl IntoView {
                     // Session tab strip overlay — frosted band pinned to the top,
                     // renders only when ≥2 agents are open.
                     <div class="absolute inset-x-0 top-0 z-10"><SessionTabs /></div>
+                    // Team participants — top-left avatar cluster + popover
+                    // (replaces the old left roster rail). Top-left keeps it
+                    // clear of the band's workspace toggle + notification bell,
+                    // which live top-right. Team mode only.
+                    //
+                    // The macOS `aleph-main-drag-band` (app.rs, z-50,
+                    // `-webkit-app-region: drag`) floats over the top 30px of
+                    // `<main>` and would otherwise swallow this button's
+                    // clicks. Mirror the band's chrome chips (LayoutToggle):
+                    // sit ABOVE the band (`z-[60]`, matching
+                    // `.aleph-sidebar-toggle`) and opt the button's own
+                    // footprint out of the drag region (`aleph-no-drag` +
+                    // `data-tauri-drag-region="false"`). Because this whole
+                    // affordance only renders in team mode, single chat keeps a
+                    // fully-draggable band with no dead "can't-drag-here" zone.
+                    <Show when=move || chat.team_id.get().is_some()>
+                        <div
+                            class="absolute top-2 left-2 z-[60] aleph-no-drag"
+                            data-tauri-drag-region="false"
+                        >
+                            <TeamParticipants />
+                        </div>
+                    </Show>
                     // Input area (floating glass bar pinned over the flow)
                     <InputArea />
                 </div>
