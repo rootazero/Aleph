@@ -364,10 +364,10 @@
 
 ### 5.11 CLI (Command Line Interface)
 - **口语关键词**：CLI、命令行、start/stop/status、子命令
-- **代码锚点**：`src/bin/aleph-server/cli.rs`（Clap 定义）、`src/bin/aleph-server/commands/`（mod.rs 分发 + doctor/plugins/audit/hooks/secret/node/sandbox_debug/prompt_size/start）、`src/cli/ipc_client.rs`
+- **代码锚点**：`src/bin/aleph-server/cli.rs`（Clap 定义）、`src/bin/aleph-server/commands/`（mod.rs 分发 + doctor/plugins/audit/hooks/secret/node/sandbox_debug/prompt_size/start）、`src/bin/aleph-server/daemon.rs`（start/stop/**status** 生命周期 + 单例锁交互）、`src/cli/ipc_client.rs`、`src/cli/endpoint.rs`（`.ipc-endpoint.json` 发现文件）
 - **职责**：Clap 驱动入口，覆盖 daemon 生命周期 + 插件/审计/hook 同意/沙箱调试/集群节点，支持 JSON 输出与 IPC 客户端。
-- **状态**：✅ 已实现。
-- **打磨话术**：「加 CLI 子命令在 `src/bin/aleph-server/commands/`；‘CLI 写操作如何不与 daemon 抢锁’走 with_policy（见 CLAUDE.md 进程管理）。」
+- **状态**：✅ 已实现。**status 连线强化（2026-06-17）**：① **修缺陷**——PID 文件**只在 `daemonize()`（Unix daemon 路径）写入**，前台 `aleph start`（无 `-d`）与 **Windows** 均不写 → 旧 `status` 对正在运行的前台/Windows server **误报"未运行"**；现 `handle_status` 连线 `.ipc-endpoint.json`（所有启动路径都写，持 live PID+URL+started_at），对 endpoint PID 做存活探测后合并 PID 文件信号，前台/Windows 可见。② **增强表面化**——`status` 现输出 **URL / Uptime / Version**（Uptime 复用 `looping::types::fmt_duration_ms` 渲染，与 loop status 同词汇）；`--json` 增 `url/started_at/uptime_seconds/version` 字段（向后兼容超集，`running/pid` 键保留）。③ **纯函数 `resolve_status`**（注入存活探测 + `now`，可单测）：**live endpoint 胜过陈旧 PID 文件**；陈旧 endpoint（server 崩溃未清理）经存活探测**不**广告死 URL。④ **`stop` 清理 endpoint 文件**——`cleanup_endpoint_file()` 在停止确认/陈旧分支 best-effort `remove_endpoint`，消除前台/Windows 残留。
+- **打磨话术**：「加 CLI 子命令在 `src/bin/aleph-server/commands/`；‘CLI 写操作如何不与 daemon 抢锁’走 with_policy（见 CLAUDE.md 进程管理）。‘status 为何对前台/Windows server 失明’= 旧版只读 `gateway.pid`（仅 daemon 写）；现 `daemon.rs::resolve_status` 已连线 endpoint 发现文件。要调‘status 显示什么’改 `StatusReport` + `print_status_human`；uptime 渲染走 `fmt_duration_ms`。」
 
 ---
 
