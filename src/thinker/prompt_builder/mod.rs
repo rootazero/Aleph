@@ -95,6 +95,10 @@ pub struct PromptConfig {
     pub native_tools_enabled: bool,
     /// Eligible skills from `SkillSystem` v2 snapshot for scope-aware filtering.
     pub eligible_skills: Option<Vec<crate::domain::skill::SkillManifest>>,
+    /// Budget bounding the injected `<available_skills>` index, sourced from
+    /// `SkillsConfig.prompt_budget` via the snapshot. `None` → the layer falls
+    /// back to the built-in default budget.
+    pub skill_prompt_budget: Option<crate::skill::prompt::SkillPromptBudget>,
     /// Available agent catalog entries for `AgentCatalogLayer`.
     pub available_agents: Option<Vec<crate::thinker::prompt_layer::AgentCatalogEntry>>,
     /// MCP server instructions for prompt injection.
@@ -118,6 +122,7 @@ impl Default for PromptConfig {
             token_budget: TokenBudget::default(),
             native_tools_enabled: false,
             eligible_skills: None,
+            skill_prompt_budget: None,
             available_agents: None,
             mcp_instructions: None,
         }

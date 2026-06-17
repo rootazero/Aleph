@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use crate::domain::skill::{SkillId, SkillManifest};
 use crate::skill::config::SkillEntryConfig;
 use crate::skill::eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
-use crate::skill::prompt::build_skills_prompt_xml;
+use crate::skill::prompt::{build_skills_prompt_xml, SkillPromptBudget};
 use crate::skill::registry::SkillRegistry;
 
 /// A point-in-time snapshot of skill eligibility and the pre-rendered prompt XML.
@@ -29,6 +29,13 @@ pub struct SkillSnapshot {
     pub eligible_manifests: Vec<SkillManifest>,
     /// When this snapshot was built.
     pub built_at: DateTime<Utc>,
+    /// Budget the **live** prompt render applies. The authoritative
+    /// `<available_skills>` index is rendered by `SkillInstructionsLayer`
+    /// (it alone knows the active tool set for `Tool`-scope filtering); this
+    /// field carries the user's `[prompt_budget]` config to that layer via
+    /// `PromptConfig`. The `prompt_xml` field above is a convenience preview
+    /// rendered with the **default** budget and is not the injected text.
+    pub prompt_budget: SkillPromptBudget,
 }
 
 impl SkillSnapshot {
@@ -42,6 +49,7 @@ impl SkillSnapshot {
             ineligible: HashMap::new(),
             eligible_manifests: Vec::new(),
             built_at: Utc::now(),
+            prompt_budget: SkillPromptBudget::default(),
         }
     }
 
@@ -133,6 +141,7 @@ impl SkillSnapshot {
             ineligible,
             eligible_manifests,
             built_at: Utc::now(),
+            prompt_budget: SkillPromptBudget::default(),
         }
     }
 }
