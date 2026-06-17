@@ -1150,7 +1150,11 @@ mod tests {
     #[tokio::test]
     async fn list_team_messages_returns_only_that_team() {
         let store = SqliteMessageStore::new_in_memory().await;
-        for (team, body) in [("team-A", "first"), ("team-B", "other"), ("team-A", "second")] {
+        for (team, body) in [
+            ("team-A", "first"),
+            ("team-B", "other"),
+            ("team-A", "second"),
+        ] {
             store
                 .send_message(NewMessage {
                     team_id: team.to_string(),
@@ -1243,11 +1247,7 @@ mod tests {
             "team-A messages should be gone"
         );
         assert_eq!(
-            store
-                .list_team_messages("team-B", 100)
-                .await
-                .unwrap()
-                .len(),
+            store.list_team_messages("team-B", 100).await.unwrap().len(),
             1,
             "team-B message must not be deleted"
         );

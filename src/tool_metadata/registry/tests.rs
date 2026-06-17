@@ -979,10 +979,7 @@ async fn test_resolve_command_dot_separator_unknown_is_none() {
     let registry = ToolCatalog::new();
     register_tool(&registry, "builtin:session_new", "session_new").await;
 
-    assert!(registry
-        .resolve_command("/session.unknown")
-        .await
-        .is_none());
+    assert!(registry.resolve_command("/session.unknown").await.is_none());
 }
 
 #[tokio::test]

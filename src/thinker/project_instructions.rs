@@ -109,9 +109,7 @@ fn relative_label(path: &Path, workspace: &Path) -> String {
 pub fn discover_project_instructions(workspace: &Path) -> Vec<ProjectInstructionFile> {
     let git_root = crate::utils::paths::find_git_root(workspace);
     // `@import` boundary: the git root, or the workspace itself outside a repo.
-    let boundary = git_root
-        .clone()
-        .unwrap_or_else(|| workspace.to_path_buf());
+    let boundary = git_root.clone().unwrap_or_else(|| workspace.to_path_buf());
     let home = dirs::home_dir();
 
     // Collect directories from workspace upward to the git root (inclusive).
@@ -299,7 +297,9 @@ fn expand_line(
             }
             let token: String = chars[i + 1..j].iter().collect();
             if looks_like_path(&token) {
-                result.push_str(&resolve_import_token(&token, file_dir, boundary, visited, depth));
+                result.push_str(&resolve_import_token(
+                    &token, file_dir, boundary, visited, depth,
+                ));
                 prev_alnum = false;
                 i = j;
                 continue;
@@ -481,7 +481,11 @@ mod tests {
         write(&tmp.path().join("extra.md"), "imported body");
         let files = load_project_instructions(tmp.path());
         assert_eq!(files.len(), 1);
-        assert!(files[0].content.contains("imported body"), "{}", files[0].content);
+        assert!(
+            files[0].content.contains("imported body"),
+            "{}",
+            files[0].content
+        );
         assert!(files[0].content.contains("head"));
         assert!(files[0].content.contains("tail"));
         assert!(!files[0].content.contains("@./extra.md"));
@@ -493,7 +497,11 @@ mod tests {
         write(&tmp.path().join("CLAUDE.md"), "see @./extra.md now");
         write(&tmp.path().join("extra.md"), "BODY");
         let files = load_project_instructions(tmp.path());
-        assert!(files[0].content.contains("see BODY now"), "{}", files[0].content);
+        assert!(
+            files[0].content.contains("see BODY now"),
+            "{}",
+            files[0].content
+        );
     }
 
     #[test]
@@ -516,7 +524,11 @@ mod tests {
         let files = load_project_instructions(tmp.path());
         assert!(files[0].content.contains("A"));
         assert!(files[0].content.contains("B"));
-        assert!(files[0].content.contains("import skipped (cycle)"), "{}", files[0].content);
+        assert!(
+            files[0].content.contains("import skipped (cycle)"),
+            "{}",
+            files[0].content
+        );
     }
 
     #[test]
@@ -527,10 +539,19 @@ mod tests {
 
         let tmp = isolated_ws();
         // boundary is the git root (== workspace); the absolute path escapes it.
-        write(&tmp.path().join("CLAUDE.md"), &format!("@{}", abs.display()));
+        write(
+            &tmp.path().join("CLAUDE.md"),
+            &format!("@{}", abs.display()),
+        );
         let files = load_project_instructions(tmp.path());
-        assert!(!files[0].content.contains("TOP SECRET"), "{}", files[0].content);
-        assert!(files[0].content.contains("import skipped (outside workspace)"));
+        assert!(
+            !files[0].content.contains("TOP SECRET"),
+            "{}",
+            files[0].content
+        );
+        assert!(files[0]
+            .content
+            .contains("import skipped (outside workspace)"));
     }
 
     #[test]
@@ -538,7 +559,9 @@ mod tests {
         let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "@~/.ssh/id_rsa");
         let files = load_project_instructions(tmp.path());
-        assert!(files[0].content.contains("import skipped (outside workspace)"));
+        assert!(files[0]
+            .content
+            .contains("import skipped (outside workspace)"));
     }
 
     #[test]
@@ -546,7 +569,11 @@ mod tests {
         let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "@./nope.md");
         let files = load_project_instructions(tmp.path());
-        assert!(files[0].content.contains("import not found"), "{}", files[0].content);
+        assert!(
+            files[0].content.contains("import not found"),
+            "{}",
+            files[0].content
+        );
     }
 
     #[test]
@@ -558,7 +585,11 @@ mod tests {
         );
         write(&tmp.path().join("extra.md"), "imported body");
         let files = load_project_instructions(tmp.path());
-        assert!(files[0].content.contains("@./extra.md"), "{}", files[0].content);
+        assert!(
+            files[0].content.contains("@./extra.md"),
+            "{}",
+            files[0].content
+        );
         assert!(!files[0].content.contains("imported body"));
     }
 
@@ -568,14 +599,21 @@ mod tests {
         write(&tmp.path().join("CLAUDE.md"), "use `@./extra.md` literally");
         write(&tmp.path().join("extra.md"), "imported body");
         let files = load_project_instructions(tmp.path());
-        assert!(files[0].content.contains("`@./extra.md`"), "{}", files[0].content);
+        assert!(
+            files[0].content.contains("`@./extra.md`"),
+            "{}",
+            files[0].content
+        );
         assert!(!files[0].content.contains("imported body"));
     }
 
     #[test]
     fn email_is_not_treated_as_import() {
         let tmp = isolated_ws();
-        write(&tmp.path().join("CLAUDE.md"), "contact me@example.com for help");
+        write(
+            &tmp.path().join("CLAUDE.md"),
+            "contact me@example.com for help",
+        );
         let files = load_project_instructions(tmp.path());
         // Untouched: no import marker, original text preserved.
         assert_eq!(files[0].content, "contact me@example.com for help");

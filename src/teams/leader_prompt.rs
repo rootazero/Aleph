@@ -72,12 +72,21 @@ mod tests {
         // "Team '<name>' not found" — members were never reached and the leader
         // flailed with generic subagents. The exact team_id must appear verbatim
         // so the leader can fill it into every team-tool call.
-        let out = build("team-abc123", "main的群聊", "alice (researcher)", None, "做个调研");
+        let out = build(
+            "team-abc123",
+            "main的群聊",
+            "alice (researcher)",
+            None,
+            "做个调研",
+        );
         assert!(
             out.contains("team-abc123"),
             "team_id must be in the prompt so team-tool calls resolve the real team; got: {out}"
         );
         // The name alone is not a usable tool argument, but should still label the team.
-        assert!(out.contains("main的群聊"), "team name should still appear as a label");
+        assert!(
+            out.contains("main的群聊"),
+            "team name should still appear as a label"
+        );
     }
 }

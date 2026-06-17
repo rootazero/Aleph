@@ -6,8 +6,7 @@ use crate::builtin_tools::skill_reader::{
 use crate::builtin_tools::{
     AutomationTool, CodeExecTool, CtxSearchTool, DesktopTool, FileEditTool, FileOpsTool,
     FileReadTool, FileWriteTool, MediaTool, PdfGenerateTool, PermissionTool, PimTool,
-    ReadConfigGuideTool,
-    RecallEventsTool, ScratchpadTool, SearchTool, SelfManageTool, SystemTool,
+    ReadConfigGuideTool, RecallEventsTool, ScratchpadTool, SearchTool, SelfManageTool, SystemTool,
 };
 use crate::tool_metadata::{ToolSource, UnifiedTool};
 use crate::tools::AlephTool;

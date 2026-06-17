@@ -356,9 +356,9 @@ impl BrowserBackend for ChromeMcpBackend {
             // other transport error is a real failure and must propagate — do NOT
             // fold it into Ok(false). Note the previous broad `contains("not found")`
             // collided with the "Tab not found" message and silently swallowed it.
-            Err(BrowserError::TabNotFound(_)) => Err(BrowserError::TabNotFound(
-                format!("tab '{tab_id}' disappeared while waiting for text"),
-            )),
+            Err(BrowserError::TabNotFound(_)) => Err(BrowserError::TabNotFound(format!(
+                "tab '{tab_id}' disappeared while waiting for text"
+            ))),
             Err(e) => {
                 let msg = e.to_string().to_lowercase();
                 if msg.contains("timeout")

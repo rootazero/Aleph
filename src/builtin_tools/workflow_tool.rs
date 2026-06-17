@@ -745,8 +745,10 @@ impl AlephTool for WorkflowTool {
                 } else {
                     def.description.clone()
                 };
-                let message =
-                    format!("proposal '{name}': {} step(s) — {provenance}", def.steps.len());
+                let message = format!(
+                    "proposal '{name}': {} step(s) — {provenance}",
+                    def.steps.len()
+                );
                 Ok(WorkflowToolOutput {
                     definition: Some(def),
                     ..WorkflowToolOutput::msg("describe_proposal", message)
@@ -1803,11 +1805,9 @@ mod tests {
                 std::env::set_var("ALEPH_HOME", tmp.path());
             }
             // Draft a proposal exactly as the dream pipeline would.
-            let draft = workflow::proposal::skeleton_from_chain(
-                &["research".into(), "write".into()],
-                3,
-            )
-            .expect("two-skill chain drafts a skeleton");
+            let draft =
+                workflow::proposal::skeleton_from_chain(&["research".into(), "write".into()], 3)
+                    .expect("two-skill chain drafts a skeleton");
             let name = draft.name.clone();
             workflow::proposal::save_proposal(&draft).expect("persist gated draft");
 

@@ -101,7 +101,9 @@ pub enum WaitOutcome {
     Done(Box<CodeExecOutput>),
     Killed,
     /// Wait window elapsed and the job is still running.
-    TimedOut { elapsed_ms: u64 },
+    TimedOut {
+        elapsed_ms: u64,
+    },
     NotFound,
 }
 
@@ -428,7 +430,8 @@ mod tests {
     #[tokio::test]
     async fn cross_session_poll_and_kill_are_not_found() {
         let reg = ProcessRegistry::new();
-        let id = unwrap_id(reg.register_running("sleep 1", Some("owner".into()), live_handle().await));
+        let id =
+            unwrap_id(reg.register_running("sleep 1", Some("owner".into()), live_handle().await));
         // A different session must not see it.
         assert!(matches!(
             reg.poll(id, Some("intruder")),
@@ -563,9 +566,11 @@ mod tests {
     #[tokio::test]
     async fn wait_is_session_scoped_not_found() {
         let reg = ProcessRegistry::new();
-        let id = unwrap_id(reg.register_running("sleep 9", Some("owner".into()), live_handle().await));
+        let id =
+            unwrap_id(reg.register_running("sleep 9", Some("owner".into()), live_handle().await));
         assert!(matches!(
-            reg.wait(id, Some("intruder"), Duration::from_millis(10)).await,
+            reg.wait(id, Some("intruder"), Duration::from_millis(10))
+                .await,
             WaitOutcome::NotFound
         ));
     }

@@ -811,7 +811,10 @@ impl NoteManageTool {
         let agent_id_owned = self.resolve_agent_id(args);
         let agent_id = agent_id_owned.as_str();
         let agent_dir = self.indexer.memory_dir().join(agent_id);
-        let events = EventLog::new(&agent_dir).read_last(5).await.unwrap_or_default();
+        let events = EventLog::new(&agent_dir)
+            .read_last(5)
+            .await
+            .unwrap_or_default();
 
         let mut content = String::from("# Memory Evolution Gate\n\n");
         if events.is_empty() {
@@ -868,7 +871,12 @@ impl NoteManageTool {
             .and_then(|e| e.report.evolution.as_ref())
             .map_or_else(
                 || "Evolution gate state (no score)".to_string(),
-                |e| format!("Evolution gate: health {:.3} (best {:.3})", e.candidate, e.best),
+                |e| {
+                    format!(
+                        "Evolution gate: health {:.3} (best {:.3})",
+                        e.candidate, e.best
+                    )
+                },
             );
 
         Ok(NoteManageResult {

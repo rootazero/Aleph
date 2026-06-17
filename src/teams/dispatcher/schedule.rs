@@ -653,9 +653,7 @@ impl TeamDispatcher {
             .await
             .map(|runs| {
                 runs.iter()
-                    .filter(|r| {
-                        matches!(r.status, TaskRunStatus::Failed | TaskRunStatus::Timeout)
-                    })
+                    .filter(|r| matches!(r.status, TaskRunStatus::Failed | TaskRunStatus::Timeout))
                     .count() as u32
             })
             .unwrap_or(0);

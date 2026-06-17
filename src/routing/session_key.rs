@@ -473,9 +473,7 @@ impl SessionKey {
             // segment must be `main` (Main) or a DM marker; otherwise a Task
             // whose `task_id` happens to match `s[0-9]+` (e.g. `cron:s7`)
             // would round-trip as Main and break routing.
-            if rest.len() == 2
-                && !matches!(rest[0], "main" | "peer" | "dm")
-            {
+            if rest.len() == 2 && !matches!(rest[0], "main" | "peer" | "dm") {
                 return None;
             }
             Some((&rest[..rest.len() - 1], n))

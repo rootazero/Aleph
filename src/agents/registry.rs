@@ -275,11 +275,7 @@ pub fn builtin_agents() -> Vec<AgentDef> {
                 "When you need to analyze requirements, design architecture, or create plans",
             )
             .with_prompt_sections(vec!["plan_protocol".into()])
-            .with_allowed_tools(vec![
-                "file_ops".into(),
-                "file_read".into(),
-                "bash".into(),
-            ])
+            .with_allowed_tools(vec!["file_ops".into(), "file_read".into(), "bash".into()])
             .with_denied_tools(vec!["file_write".into(), "file_edit".into()])
             .with_max_iterations(20)
             .with_context_mode(ContextMode::Summary),

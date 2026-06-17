@@ -648,7 +648,10 @@ impl Harness for AgentHarness {
                         }
                     }
                 }
-                Ok(TurnStep { state: TurnState::Done, .. }) => {
+                Ok(TurnStep {
+                    state: TurnState::Done,
+                    ..
+                }) => {
                     // Pi `getFollowUpMessages` parity. A steering message that
                     // landed during this run's final turn was not in that turn's
                     // prompt (the boundary race in

@@ -131,10 +131,8 @@ pub fn effective_gate(
         (g, Some(cmd)) => {
             let mut hooks: Vec<Arc<dyn StopHookHandler>> =
                 g.map(|v| v.as_ref().clone()).unwrap_or_default();
-            hooks.push(
-                Arc::new(ShellStopHook::new("goal_gate", cmd).shell_safe())
-                    as Arc<dyn StopHookHandler>,
-            );
+            hooks.push(Arc::new(ShellStopHook::new("goal_gate", cmd).shell_safe())
+                as Arc<dyn StopHookHandler>);
             Some(Arc::new(hooks))
         }
     }
@@ -276,7 +274,9 @@ const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
 /// whitespace, and common safe path/punctuation characters are allowed.
 fn is_shell_safe(command: &str) -> bool {
     const SAFE: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /._-:\"'=";
-    command.chars().all(|c| SAFE.contains(c) && c != '\n' && c != '\r')
+    command
+        .chars()
+        .all(|c| SAFE.contains(c) && c != '\n' && c != '\r')
 }
 
 /// Build a platform-appropriate shell invocation for `command`.

@@ -524,7 +524,10 @@ impl IndexIdTracker {
     /// Buffer an argument fragment for an index whose id has not arrived yet.
     /// Appends so multiple pre-id fragments accumulate in stream order.
     pub fn buffer_pending(&mut self, index: u64, fragment: &str) {
-        self.pending_args.entry(index).or_default().push_str(fragment);
+        self.pending_args
+            .entry(index)
+            .or_default()
+            .push_str(fragment);
     }
 
     /// Remove and return any buffered pre-id argument fragments for an index.

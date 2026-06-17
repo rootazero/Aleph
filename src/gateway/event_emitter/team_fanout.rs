@@ -49,7 +49,9 @@ fn team_event_bus_slot() -> &'static RwLock<Option<Arc<GatewayEventBus>>> {
 
 /// Inject the gateway's event bus. Called once during subsystem boot.
 pub fn set_team_event_bus(bus: Arc<GatewayEventBus>) {
-    let mut guard = team_event_bus_slot().write().unwrap_or_else(|e| e.into_inner());
+    let mut guard = team_event_bus_slot()
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
     *guard = Some(bus);
 }
 
@@ -58,7 +60,9 @@ pub fn set_team_event_bus(bus: Arc<GatewayEventBus>) {
 /// simply skipped and the run stays silent (the prior NoOp behavior).
 #[must_use]
 pub fn team_event_bus() -> Option<Arc<GatewayEventBus>> {
-    let guard = team_event_bus_slot().read().unwrap_or_else(|e| e.into_inner());
+    let guard = team_event_bus_slot()
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
     guard.clone()
 }
 
@@ -132,7 +136,9 @@ impl EventEmitter for TeamFanoutEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
         // Fan out normalized payloads to team topics.
         match &event {
-            StreamEvent::RunComplete { run_id, summary, .. } => {
+            StreamEvent::RunComplete {
+                run_id, summary, ..
+            } => {
                 if let Some(text) = summary.final_response.as_ref() {
                     self.publish(
                         "message",
@@ -147,7 +153,9 @@ impl EventEmitter for TeamFanoutEmitter {
                     json!({ "run_id": run_id, "status": "error", "error": error }),
                 );
             }
-            StreamEvent::ToolStart { run_id, tool_name, .. } => {
+            StreamEvent::ToolStart {
+                run_id, tool_name, ..
+            } => {
                 self.publish(
                     "activity",
                     json!({ "run_id": run_id, "status": "working", "tool": tool_name }),
@@ -217,7 +225,10 @@ mod tests {
                 saw_message = true;
             }
         }
-        assert!(saw_message, "RunComplete should fan out a team.<id>.message with agent_id+text");
+        assert!(
+            saw_message,
+            "RunComplete should fan out a team.<id>.message with agent_id+text"
+        );
     }
 
     #[tokio::test]
@@ -232,7 +243,10 @@ mod tests {
             .emit(StreamEvent::RunComplete {
                 run_id: "run-5".into(),
                 seq: 0,
-                summary: RunSummary { final_response: None, ..Default::default() },
+                summary: RunSummary {
+                    final_response: None,
+                    ..Default::default()
+                },
                 total_duration_ms: 0,
             })
             .await
@@ -248,8 +262,14 @@ mod tests {
                 _ => {}
             }
         }
-        assert!(!saw_message, "RunComplete with no final_response must not publish a message frame");
-        assert!(saw_activity, "RunComplete must still publish a team.<id>.activity status=done frame");
+        assert!(
+            !saw_message,
+            "RunComplete with no final_response must not publish a message frame"
+        );
+        assert!(
+            saw_activity,
+            "RunComplete must still publish a team.<id>.activity status=done frame"
+        );
     }
 
     #[tokio::test]
@@ -262,7 +282,10 @@ mod tests {
             .emit(StreamEvent::RunComplete {
                 run_id: "run-2".into(),
                 seq: 0,
-                summary: RunSummary { final_response: Some("done".into()), ..Default::default() },
+                summary: RunSummary {
+                    final_response: Some("done".into()),
+                    ..Default::default()
+                },
                 total_duration_ms: 42,
             })
             .await
@@ -283,7 +306,10 @@ mod tests {
                 saw_activity = true;
             }
         }
-        assert!(saw_activity, "RunComplete should also fan out a team.<id>.activity status=done");
+        assert!(
+            saw_activity,
+            "RunComplete should also fan out a team.<id>.activity status=done"
+        );
     }
 
     #[tokio::test]
@@ -316,7 +342,10 @@ mod tests {
                 saw_working = true;
             }
         }
-        assert!(saw_working, "ToolStart should publish activity status=working with tool name");
+        assert!(
+            saw_working,
+            "ToolStart should publish activity status=working with tool name"
+        );
     }
 
     #[tokio::test]
@@ -327,7 +356,10 @@ mod tests {
         let s0 = emitter.next_seq();
         let s1 = emitter.next_seq();
         let s2 = emitter.next_seq();
-        assert!(s1 > s0 && s2 > s1, "next_seq must be monotonically increasing");
+        assert!(
+            s1 > s0 && s2 > s1,
+            "next_seq must be monotonically increasing"
+        );
     }
 
     /// Verify the global boot-injection slot: after `set_team_event_bus`, the

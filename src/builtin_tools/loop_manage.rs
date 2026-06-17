@@ -252,8 +252,9 @@ impl LoopTool {
                         "Loop is stopped ({r}); update only re-paces a running loop. \
                          Call loop(action='start') to begin a new one."
                     ),
-                    None => "Loop is stopped; call loop(action='start') to begin a new one."
-                        .to_string(),
+                    None => {
+                        "Loop is stopped; call loop(action='start') to begin a new one.".to_string()
+                    }
                 },
             });
         }
@@ -606,7 +607,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(!out.success, "updating a stopped loop must not claim success");
+        assert!(
+            !out.success,
+            "updating a stopped loop must not claim success"
+        );
         assert!(out.message.contains("start"), "{}", out.message);
         // The loop must be untouched: still stopped, prompt unchanged.
         let st = reg.get("s").unwrap();

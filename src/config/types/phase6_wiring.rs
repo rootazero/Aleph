@@ -443,9 +443,13 @@ model = "claude"
             warning_threshold: Some(0.5),
             ..ModelThresholdToml::default()
         }]);
-        assert!(blank.threshold_override_for(Some("anything"), "p").is_none());
+        assert!(blank
+            .threshold_override_for(Some("anything"), "p")
+            .is_none());
         // No overrides at all → None.
         let none = cb_with_overrides(vec![]);
-        assert!(none.threshold_override_for(Some("kimi-k2"), "moonshot").is_none());
+        assert!(none
+            .threshold_override_for(Some("kimi-k2"), "moonshot")
+            .is_none());
     }
 }

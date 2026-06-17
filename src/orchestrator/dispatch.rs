@@ -571,9 +571,7 @@ impl Orchestrator {
                     let base = self
                         .flow_registry
                         .resolve(DEFAULT_AGENT_FLOW_ID)
-                        .ok_or_else(|| {
-                            FlowError::UnknownFlow(DEFAULT_AGENT_FLOW_ID.to_string())
-                        })?;
+                        .ok_or_else(|| FlowError::UnknownFlow(DEFAULT_AGENT_FLOW_ID.to_string()))?;
                     if base.agent == req.agent_id {
                         base
                     } else {

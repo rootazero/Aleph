@@ -545,8 +545,7 @@ impl LoopTool for SubagentTool {
                 for (batch_idx, h) in handles.into_iter().enumerate() {
                     let item = match h.await {
                         Ok((idx, Ok(Ok(r)))) => {
-                            let text =
-                                r.final_text.unwrap_or_else(|| "(no output)".to_string());
+                            let text = r.final_text.unwrap_or_else(|| "(no output)".to_string());
                             proposals.push((
                                 idx,
                                 proposer_models_by_idx.get(idx).cloned().flatten(),
@@ -608,8 +607,9 @@ impl LoopTool for SubagentTool {
                             Some(def) => def,
                             None => {
                                 return ToolResult::Error {
-                                    error: "aggregator: No default agent registered in AgentRegistry"
-                                        .to_string(),
+                                    error:
+                                        "aggregator: No default agent registered in AgentRegistry"
+                                            .to_string(),
                                     retryable: false,
                                 };
                             }

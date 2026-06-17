@@ -1817,7 +1817,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // Gateway event bus. No-op when the platform has no SystemCapability
         // (headless CI, etc.).
         if desktop_cfg.presence.enabled {
-            let platform = platform.clone().expect("platform built when presence enabled");
+            let platform = platform
+                .clone()
+                .expect("platform built when presence enabled");
             if platform.system().is_some() {
                 let reporter = alephcore::tasks::presence::PresenceReporter::new(
                     platform,
@@ -1843,7 +1845,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // `MediaCapability::mic_level()` and publishes a categorical
         // (Active/Quiet/Unavailable) snapshot on the Gateway event bus.
         if desktop_cfg.mic_level.enabled {
-            let platform = platform.clone().expect("platform built when mic_level enabled");
+            let platform = platform
+                .clone()
+                .expect("platform built when mic_level enabled");
             if platform.media().is_some() {
                 let reporter = alephcore::tasks::mic_level::MicLevelReporter::new(
                     platform,

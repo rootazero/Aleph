@@ -142,10 +142,7 @@ impl ConfigPatcher {
     /// Non-breaking: callers without a vault keep the no-arg `new` and get
     /// `Skipped` health results.
     #[must_use]
-    pub fn with_vault(
-        mut self,
-        vault: Arc<crate::gateway::security::SharedTokenManager>,
-    ) -> Self {
+    pub fn with_vault(mut self, vault: Arc<crate::gateway::security::SharedTokenManager>) -> Self {
         self.vault = Some(vault);
         self
     }

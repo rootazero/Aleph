@@ -188,7 +188,11 @@ pub struct ToolsListResult {
     /// Opaque pagination cursor (MCP spec). When present, more tools remain
     /// and the client must re-issue `tools/list` with `params.cursor` set to
     /// this value. Absent on the final (or only) page.
-    #[serde(default, rename = "nextCursor", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "nextCursor",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next_cursor: Option<String>,
 }
 
@@ -299,7 +303,11 @@ pub struct ResourcesListResult {
     /// Opaque pagination cursor (MCP spec). When present, more resources
     /// remain and the client must re-issue `resources/list` with
     /// `params.cursor` set to this value. Absent on the final (or only) page.
-    #[serde(default, rename = "nextCursor", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "nextCursor",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next_cursor: Option<String>,
 }
 
@@ -377,7 +385,11 @@ pub struct PromptsListResult {
     /// Opaque pagination cursor (MCP spec). When present, more prompts remain
     /// and the client must re-issue `prompts/list` with `params.cursor` set to
     /// this value. Absent on the final (or only) page.
-    #[serde(default, rename = "nextCursor", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "nextCursor",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next_cursor: Option<String>,
 }
 

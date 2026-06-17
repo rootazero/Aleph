@@ -806,7 +806,10 @@ mod tests {
         assert_eq!(m25.context_window, 204_800);
         assert!(m25.supports_reasoning);
         assert!(!m25.supports_vision);
-        assert_eq!(capabilities_for("MiniMax-M3").unwrap().context_window, 1_000_000);
+        assert_eq!(
+            capabilities_for("MiniMax-M3").unwrap().context_window,
+            1_000_000
+        );
     }
 
     #[test]

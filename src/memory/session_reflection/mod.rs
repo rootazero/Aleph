@@ -293,9 +293,7 @@ fn normalize_section(s: &str) -> String {
 fn open_loops_path(agent_id: &str) -> Option<PathBuf> {
     let base = crate::discovery::aleph_home_dir().ok()?;
     // Sanitize the agent id so it cannot traverse out of the agents directory.
-    let safe_id = agent_id
-        .replace(['/', '\\', '\0'], "_")
-        .replace("..", "__");
+    let safe_id = agent_id.replace(['/', '\\', '\0'], "_").replace("..", "__");
     Some(base.join("agents").join(safe_id).join("OPEN_LOOPS.md"))
 }
 

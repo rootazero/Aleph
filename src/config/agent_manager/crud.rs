@@ -482,7 +482,9 @@ impl AgentManager {
     /// Validate filename: no path separators, traversal, or non-normal components.
     pub(super) fn validate_filename(&self, filename: &str) -> Result<()> {
         if filename.is_empty() {
-            return Err(AlephError::invalid_config("Filename must not be empty".to_string()));
+            return Err(AlephError::invalid_config(
+                "Filename must not be empty".to_string(),
+            ));
         }
 
         let path = std::path::Path::new(filename);
@@ -534,9 +536,11 @@ impl AgentManager {
                 let later = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default();
-                path = self
-                    .trash_root
-                    .join(format!("{base}_{}_{:09}", later.as_secs(), later.subsec_nanos()));
+                path = self.trash_root.join(format!(
+                    "{base}_{}_{:09}",
+                    later.as_secs(),
+                    later.subsec_nanos()
+                ));
                 return path;
             }
         }

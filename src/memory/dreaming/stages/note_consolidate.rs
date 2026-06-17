@@ -333,9 +333,7 @@ Respond with exactly one word: MERGE, COEXIST, ABSORB_A, or ABSORB_B.";
             tracing::debug!(path_a, path_b, "NoteConsolidate: COEXIST");
             Ok(false)
         }
-        "MERGE" => {
-            execute_merge(ctx, idx_a, idx_b, &content_a, &content_b, MergeMode::Merge).await
-        }
+        "MERGE" => execute_merge(ctx, idx_a, idx_b, &content_a, &content_b, MergeMode::Merge).await,
         "ABSORB_A" => {
             // Keep A, absorb B into A
             execute_merge(

@@ -14,9 +14,9 @@ use github_source::sync_github_marketplace;
 use local_source::resolve_local_marketplace;
 use manifest::parse_marketplace_manifest;
 pub use types::{
-    MarketplaceConfig, MarketplaceSourceType, PluginSearchResult, BUILTIN_MARKETPLACE_NAME,
-    BUILTIN_MARKETPLACE_SOURCE, default_install_dir, marketplace_cache_dir, MarketplaceManifest,
-    MarketplacePluginEntry,
+    default_install_dir, marketplace_cache_dir, MarketplaceConfig, MarketplaceManifest,
+    MarketplacePluginEntry, MarketplaceSourceType, PluginSearchResult, BUILTIN_MARKETPLACE_NAME,
+    BUILTIN_MARKETPLACE_SOURCE,
 };
 
 // =============================================================================

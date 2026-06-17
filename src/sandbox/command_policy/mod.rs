@@ -438,7 +438,13 @@ mod tests {
         // device class the original floor did not cover — `dd of=/dev/xvda`
         // wiped the root disk undetected. The extended class must catch it.
         let p = policy(EnforcementMode::Block);
-        for dev in ["/dev/xvda", "/dev/dm-0", "/dev/md0", "/dev/pmem0", "/dev/sr0"] {
+        for dev in [
+            "/dev/xvda",
+            "/dev/dm-0",
+            "/dev/md0",
+            "/dev/pmem0",
+            "/dev/sr0",
+        ] {
             let e = p.evaluate(&format!("dd if=/dev/zero of={dev} bs=1M"));
             assert!(
                 e.blocked.contains(&"dd_to_block_device".to_string()),

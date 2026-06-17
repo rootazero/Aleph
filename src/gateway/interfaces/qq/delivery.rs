@@ -62,8 +62,9 @@ impl ReplyTracker {
 
         if self.inner.len() > 10000 {
             let now = Instant::now();
-            self.inner
-                .retain(|_, v| now.saturating_duration_since(v.first_reply_at) <= PASSIVE_REPLY_TTL);
+            self.inner.retain(|_, v| {
+                now.saturating_duration_since(v.first_reply_at) <= PASSIVE_REPLY_TTL
+            });
         }
     }
 }

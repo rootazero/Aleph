@@ -75,7 +75,11 @@ impl WhisperLiveStream {
 #[async_trait]
 impl StreamingTranscriber for WhisperLiveStream {
     async fn open(&self, cfg: StreamConfig) -> anyhow::Result<StreamHandles> {
-        let url = self.target.base_url.replace("https://", "wss://").replace("http://", "ws://");
+        let url = self
+            .target
+            .base_url
+            .replace("https://", "wss://")
+            .replace("http://", "ws://");
         let (ws, _) = tokio_tungstenite::connect_async(url).await?;
         let (mut sink, mut stream) = ws.split();
         // WhisperLive config handshake (first message). audio_format=int16 so we
@@ -89,7 +93,8 @@ impl StreamingTranscriber for WhisperLiveStream {
             "send_last_n_segments": 10,
             "audio_format": "int16"
         });
-        sink.send(Message::Text(handshake.to_string().into())).await?;
+        sink.send(Message::Text(handshake.to_string().into()))
+            .await?;
 
         let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<u8>>(64);
         let (delta_tx, delta_rx) = mpsc::channel::<TranscriptDelta>(64);
@@ -144,7 +149,11 @@ mod tests {
         let mut dec = WhisperLiveDecoder::default();
         // two completed + one trailing interim
         let d = dec
-            .push(&msg(vec![seg("你好", true), seg("世界", true), seg("现", false)]))
+            .push(&msg(vec![
+                seg("你好", true),
+                seg("世界", true),
+                seg("现", false),
+            ]))
             .unwrap();
         assert_eq!(d.committed, "你好世界");
         assert_eq!(d.interim, "现");
@@ -155,7 +164,13 @@ mod tests {
         let mut dec = WhisperLiveDecoder::default();
         let _ = dec.push(&msg(vec![seg("你好", true), seg("在", false)]));
         // next message re-sends the same completed segment (send_last_n_segments window)
-        let d = dec.push(&msg(vec![seg("你好", true), seg("世界", true), seg("吗", false)])).unwrap();
+        let d = dec
+            .push(&msg(vec![
+                seg("你好", true),
+                seg("世界", true),
+                seg("吗", false),
+            ]))
+            .unwrap();
         assert_eq!(d.committed, "你好世界");
         assert_eq!(d.interim, "吗");
     }
@@ -170,7 +185,9 @@ mod tests {
     #[test]
     fn all_completed_no_interim_still_emits() {
         let mut dec = WhisperLiveDecoder::default();
-        let d = dec.push(&msg(vec![seg("你好", true), seg("世界", true)])).unwrap();
+        let d = dec
+            .push(&msg(vec![seg("你好", true), seg("世界", true)]))
+            .unwrap();
         assert_eq!(d.committed, "你好世界");
         assert_eq!(d.interim, "");
         assert!(!d.utterance_end);

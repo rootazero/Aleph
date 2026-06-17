@@ -601,7 +601,10 @@ async fn delete_team_tasks_removes_tasks_and_children() {
 
     let n = store.delete_team_tasks("team-A").await.unwrap();
     assert_eq!(n, 1);
-    assert!(store.get_task(&t.id).await.unwrap().is_none(), "task should be gone");
+    assert!(
+        store.get_task(&t.id).await.unwrap().is_none(),
+        "task should be gone"
+    );
     assert!(
         store.list_task_comments(&t.id).await.unwrap().is_empty(),
         "child comments should be deleted"

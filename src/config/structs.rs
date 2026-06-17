@@ -10,8 +10,8 @@ use crate::config::types::{
     PromptSectionConfig, ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, SearchConfig,
     SearchConfigInternal, SecretMapping, SecretProviderConfig, SecretsConfig, ShellSecurityConfig,
     SkillsConfig, SmartFlowConfig, SmartMatchingConfig, StabilityToml, StopHookConfig,
-    SubAgentConfig, ToolServiceConfig, ToolsConfig, UnifiedToolsConfig,
-    VoiceLocalConfig, VoiceSection,
+    SubAgentConfig, ToolServiceConfig, ToolsConfig, UnifiedToolsConfig, VoiceLocalConfig,
+    VoiceSection,
 };
 use crate::tasks::cron::CronConfig;
 use crate::tasks::heartbeat::config::HeartbeatConfig;

@@ -36,7 +36,10 @@ impl RecordingTraceSink {
 
 impl TraceSink for RecordingTraceSink {
     fn on_trace(&self, event: &LoopTraceEvent) {
-        self.events.lock().unwrap_or_else(|e| e.into_inner()).push(event.clone());
+        self.events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(event.clone());
     }
     fn flush(&self) {}
 }

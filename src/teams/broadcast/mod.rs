@@ -116,78 +116,79 @@ impl GroupChatBroadcaster {
         budget: Arc<AtomicUsize>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async move {
-        if over_depth(chain_depth) {
-            self.post_system(&team_id, "讨论已达深度上限,等你接话。").await;
-            return;
-        }
-        let Some(team) = self.team_store.get_team(&team_id).await.ok().flatten() else {
-            return;
-        };
-        let members = self
-            .team_store
-            .get_members(&team_id)
-            .await
-            .unwrap_or_default();
-        let roster_ids: Vec<String> = members.iter().map(|m| m.agent_id.clone()).collect();
-
-        let targets = targets::resolve_targets(
-            &content,
-            &sender,
-            &team.leader_id,
-            &roster_ids,
-            user_triggered,
-        );
-        if targets.is_empty() {
-            return; // 链自然停
-        }
-
-        let roster_label = members
-            .iter()
-            .map(|m| format!("{} ({})", m.agent_id, m.role))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        // 并发跑本轮每个目标 agent;各自完成后递归回流。
-        let mut handles = Vec::new();
-        for agent_id in targets {
-            // 防风暴第三闸:整棵树累计唤醒封顶。`fetch_add` 原子领取一个槽位,
-            // 越界即跳过本成员;恰好跨越上限的那一次(且仅那一次)发一句系统提示
-            // —— `claimed == MAX` 在所有并发分支里只会被命中一次,天然去重不刷屏。
-            let claimed = budget.fetch_add(1, Ordering::Relaxed);
-            if claimed >= MAX_TOTAL_ACTIVATIONS {
-                if claimed == MAX_TOTAL_ACTIVATIONS {
-                    self.post_system(&team_id, "群聊活动已达单轮上限,等你接话。")
-                        .await;
-                }
-                continue;
+            if over_depth(chain_depth) {
+                self.post_system(&team_id, "讨论已达深度上限,等你接话。")
+                    .await;
+                return;
             }
-            let role = members
+            let Some(team) = self.team_store.get_team(&team_id).await.ok().flatten() else {
+                return;
+            };
+            let members = self
+                .team_store
+                .get_members(&team_id)
+                .await
+                .unwrap_or_default();
+            let roster_ids: Vec<String> = members.iter().map(|m| m.agent_id.clone()).collect();
+
+            let targets = targets::resolve_targets(
+                &content,
+                &sender,
+                &team.leader_id,
+                &roster_ids,
+                user_triggered,
+            );
+            if targets.is_empty() {
+                return; // 链自然停
+            }
+
+            let roster_label = members
                 .iter()
-                .find(|m| m.agent_id == agent_id)
-                .map(|m| m.role.clone())
-                .unwrap_or_else(|| "member".to_string());
-            let this = self.clone();
-            let team_id_spawn = team_id.clone();
-            let leader_id = team.leader_id.clone();
-            let roster_label = roster_label.clone();
-            handles.push(tokio::spawn(this.run_member(
-                team_id_spawn,
-                agent_id,
-                role,
-                leader_id,
-                roster_label,
-                chain_depth,
-                budget.clone(),
-            )));
-        }
-        for h in handles {
-            // JoinError 只在成员任务 panic 或被取消时出现。吞掉会让群聊里"某个
-            // agent 静默消失"无迹可循,这里降级为 warn 让 panic 可观测(不上抛,
-            // 一个成员崩溃不该拖垮整轮广播)。
-            if let Err(e) = h.await {
-                tracing::warn!(team_id = %team_id, error = %e, "group-chat member task panicked");
+                .map(|m| format!("{} ({})", m.agent_id, m.role))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            // 并发跑本轮每个目标 agent;各自完成后递归回流。
+            let mut handles = Vec::new();
+            for agent_id in targets {
+                // 防风暴第三闸:整棵树累计唤醒封顶。`fetch_add` 原子领取一个槽位,
+                // 越界即跳过本成员;恰好跨越上限的那一次(且仅那一次)发一句系统提示
+                // —— `claimed == MAX` 在所有并发分支里只会被命中一次,天然去重不刷屏。
+                let claimed = budget.fetch_add(1, Ordering::Relaxed);
+                if claimed >= MAX_TOTAL_ACTIVATIONS {
+                    if claimed == MAX_TOTAL_ACTIVATIONS {
+                        self.post_system(&team_id, "群聊活动已达单轮上限,等你接话。")
+                            .await;
+                    }
+                    continue;
+                }
+                let role = members
+                    .iter()
+                    .find(|m| m.agent_id == agent_id)
+                    .map(|m| m.role.clone())
+                    .unwrap_or_else(|| "member".to_string());
+                let this = self.clone();
+                let team_id_spawn = team_id.clone();
+                let leader_id = team.leader_id.clone();
+                let roster_label = roster_label.clone();
+                handles.push(tokio::spawn(this.run_member(
+                    team_id_spawn,
+                    agent_id,
+                    role,
+                    leader_id,
+                    roster_label,
+                    chain_depth,
+                    budget.clone(),
+                )));
             }
-        }
+            for h in handles {
+                // JoinError 只在成员任务 panic 或被取消时出现。吞掉会让群聊里"某个
+                // agent 静默消失"无迹可循,这里降级为 warn 让 panic 可观测(不上抛,
+                // 一个成员崩溃不该拖垮整轮广播)。
+                if let Err(e) = h.await {
+                    tracing::warn!(team_id = %team_id, error = %e, "group-chat member task panicked");
+                }
+            }
         })
     }
 

@@ -76,7 +76,11 @@ mod tests {
     #[test]
     fn user_no_mention_falls_back_to_leader() {
         let t = resolve_targets("随便聊聊", "user", "leader", &roster(), true);
-        assert_eq!(t, vec!["leader".to_string()], "没@人时 leader 兜底(仅 user 触发)");
+        assert_eq!(
+            t,
+            vec!["leader".to_string()],
+            "没@人时 leader 兜底(仅 user 触发)"
+        );
     }
 
     #[test]

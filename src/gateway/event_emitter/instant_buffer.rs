@@ -123,11 +123,7 @@ pub(super) fn plan_instant(
                     let buffered = std::mem::take(buffer);
                     format!("{buffered}{delta}")
                 };
-                InstantOutcome::Replace(vec![final_chunk(
-                    run_id.clone(),
-                    next_seq(),
-                    full_content,
-                )])
+                InstantOutcome::Replace(vec![final_chunk(run_id.clone(), next_seq(), full_content)])
             }
         }
 

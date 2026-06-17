@@ -119,11 +119,7 @@ impl AgentManager {
     /// Ensure `candidate` resolves inside `base` using lexical normalization.
     /// Catches traversal that survives string-level validation (e.g. symlinks
     /// resolved by the OS, or crafted relative paths).
-    fn require_contained(
-        &self,
-        base: &std::path::Path,
-        candidate: &std::path::Path,
-    ) -> Result<()> {
+    fn require_contained(&self, base: &std::path::Path, candidate: &std::path::Path) -> Result<()> {
         let normalized = normalize_path_lexically(candidate);
         let base_normalized = normalize_path_lexically(base);
         if !normalized.starts_with(&base_normalized) {

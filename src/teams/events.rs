@@ -679,7 +679,14 @@ mod tests {
 
         let n = store.delete_team_events("team-A").await.unwrap();
         assert_eq!(n, 1);
-        assert!(store.get_events("team-A", None, None).await.unwrap().is_empty());
-        assert_eq!(store.get_events("team-B", None, None).await.unwrap().len(), 1);
+        assert!(store
+            .get_events("team-A", None, None)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store.get_events("team-B", None, None).await.unwrap().len(),
+            1
+        );
     }
 }

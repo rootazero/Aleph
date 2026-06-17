@@ -138,11 +138,7 @@ impl HeartbeatService {
     }
 
     /// Toggle a task's enabled state. Returns the new enabled state.
-    pub async fn toggle_task<C: Clock>(
-        &self,
-        id: &str,
-        clock: &C,
-    ) -> Result<bool, String> {
+    pub async fn toggle_task<C: Clock>(&self, id: &str, clock: &C) -> Result<bool, String> {
         let enabled = {
             let mut store = self.state.store.lock().await;
             let enabled = ops::toggle_task(&mut store, id, clock)?;

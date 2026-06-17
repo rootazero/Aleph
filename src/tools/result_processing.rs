@@ -400,7 +400,10 @@ mod tests {
         // bash/web_fetch no longer carry a name-table budget — they declare it
         // via `AlephTool::max_result_tokens`, which reaches this fn as the
         // `explicit` argument (verified end-to-end by the adapter test).
-        assert_eq!(resolve_result_budget("web_fetch", Some(10_000)), Some(10_000));
+        assert_eq!(
+            resolve_result_budget("web_fetch", Some(10_000)),
+            Some(10_000)
+        );
         assert_eq!(resolve_result_budget("bash", Some(8_000)), Some(8_000));
         // With no explicit budget they now fall to the global default rather
         // than the removed name-table arms.

@@ -170,7 +170,9 @@ impl A2AStreamingHandler for StreamHub {
             let task_id_owned = task_id.to_string();
             let event = update.clone();
             tokio::spawn(async move {
-                notification.notify_status_update(&task_id_owned, &event).await;
+                notification
+                    .notify_status_update(&task_id_owned, &event)
+                    .await;
             });
         }
         let sender = self.get_or_create_sender(task_id).await;

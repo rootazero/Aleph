@@ -250,7 +250,10 @@ mod tests {
         // pure function measures spend from the seeded baseline correctly.
         let l = fixed().with_token_budget(Some(500)).with_baseline(2_000);
         assert!(!exhausted(&l, 2_000, 2_000), "no spend at baseline");
-        assert!(exhausted(&l, 2_600, 2_000), "600 over budget after baseline");
+        assert!(
+            exhausted(&l, 2_600, 2_000),
+            "600 over budget after baseline"
+        );
     }
 
     #[test]
@@ -263,7 +266,9 @@ mod tests {
             .with_max_iterations(Some(2));
         assert!(stop_reason_note(&budgeted, 1_600, 6_000).contains("token budget"));
         // No budget overrun → deadline binds next.
-        let timed = fixed().with_deadline_ms(Some(5_000)).with_max_iterations(Some(2));
+        let timed = fixed()
+            .with_deadline_ms(Some(5_000))
+            .with_max_iterations(Some(2));
         assert!(stop_reason_note(&timed, 0, 6_000).contains("time"));
         // Neither → iteration cap.
         let capped = fixed().with_max_iterations(Some(2));

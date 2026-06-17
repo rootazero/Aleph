@@ -33,7 +33,9 @@ impl StatusReactionController {
             message_id,
             state: Arc::new(Mutex::new(ReactionState::Idle)),
             last_changed: Arc::new(Mutex::new(
-                Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or_else(Instant::now),
+                Instant::now()
+                    .checked_sub(Duration::from_secs(10))
+                    .unwrap_or_else(Instant::now),
             )),
             min_interval: Duration::from_secs(1),
         }

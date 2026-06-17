@@ -317,8 +317,10 @@ impl DreamStage for NoteLintStage {
         // elsewhere — orientation is a projection, never load-bearing).
         if let Some(orient) = ctx.orientation.as_ref() {
             let orphans = orphan_count(ctx.indexer.store().as_ref(), &ctx.agent_id).await;
-            let did_work =
-                format_fixed > 0 || broken_links_found > 0 || links_repaired > 0 || links_purged > 0;
+            let did_work = format_fixed > 0
+                || broken_links_found > 0
+                || links_repaired > 0
+                || links_purged > 0;
             // Skip wholly-clean passes (no fixes, no orphans) so log.md stays an
             // event timeline rather than filling with empty "nothing to do" rows.
             if did_work || orphans > 0 {
@@ -757,7 +759,11 @@ category: preference
         std::fs::create_dir_all(temp.join("default/preference")).unwrap();
         // Note file missing frontmatter — the frontmatter rule will patch it,
         // so the pass does real work and must be recorded.
-        std::fs::write(temp.join("default/preference/x.md"), "- the user prefers vim\n").unwrap();
+        std::fs::write(
+            temp.join("default/preference/x.md"),
+            "- the user prefers vim\n",
+        )
+        .unwrap();
 
         let mut ctx = ctx_with_orientation(&temp).await;
         ctx.notes = vec![NoteEntry {

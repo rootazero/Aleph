@@ -115,9 +115,7 @@ impl A2ARequestProcessor {
             | "tasks/pushNotificationConfig/get"
             | "tasks/pushNotificationConfig/list"
             | "tasks/pushNotificationConfig/delete" => self.handle_push_config(request, auth).await,
-            "agent/getAuthenticatedExtendedCard" => {
-                self.handle_extended_card(request, auth).await
-            }
+            "agent/getAuthenticatedExtendedCard" => self.handle_extended_card(request, auth).await,
             _ => JsonRpcResponse::error(
                 request.id,
                 -32601,

@@ -825,11 +825,19 @@ pub fn build_cheap_summary_provider(
 
     // No-op when the resolved summary model is the primary's own default model —
     // the rebuilt provider would be byte-identical, so reuse the main LLM.
-    if base.models.first().is_some_and(|m| m.as_str() == summary_model) {
+    if base
+        .models
+        .first()
+        .is_some_and(|m| m.as_str() == summary_model)
+    {
         return None;
     }
 
-    let source = if explicit.is_some() { "summary_model" } else { "preset aux_model" };
+    let source = if explicit.is_some() {
+        "summary_model"
+    } else {
+        "preset aux_model"
+    };
     let mut cheap_cfg = base.clone();
     cheap_cfg.models = vec![summary_model.clone()];
     match create_provider(primary_provider_key, cheap_cfg) {
@@ -1094,7 +1102,10 @@ mod tests {
         };
         let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
         let bc = build_context_budget_config(&cfg, "moonshot").expect("enabled → Some");
-        assert_eq!(bc.warning_threshold, 0.60, "override wins for the set field");
+        assert_eq!(
+            bc.warning_threshold, 0.60,
+            "override wins for the set field"
+        );
         assert_eq!(
             bc.critical_threshold, 0.80,
             "unset override field inherits the global, not the built-in default"
@@ -1207,8 +1218,7 @@ mod tests {
         // configured critical lifts the auto warning with it.
         let usable = 262_144u64 - 32_768;
         assert!(
-            window_aware_warning_default(usable, 0.90)
-                > window_aware_warning_default(usable, 0.85)
+            window_aware_warning_default(usable, 0.90) > window_aware_warning_default(usable, 0.85)
         );
     }
 
@@ -1686,7 +1696,9 @@ mod tests {
     fn undercut_silent_when_chain_min_equals_primary() {
         // Single-provider / uniform-window chain: chain-min IS the primary, so
         // there is nothing to advise.
-        assert!(!chain_min_materially_undercuts_primary(1_000_000, 1_000_000));
+        assert!(!chain_min_materially_undercuts_primary(
+            1_000_000, 1_000_000
+        ));
     }
 
     #[test]

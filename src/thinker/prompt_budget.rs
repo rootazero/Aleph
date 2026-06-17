@@ -135,7 +135,12 @@ pub fn truncate_with_head_tail(
     let head_end = char_byte_offset(content, head_chars);
     let tail_start = char_byte_offset(content, total_chars.saturating_sub(tail_chars));
 
-    let result = format!("{}{}{}", &content[..head_end], marker, &content[tail_start..]);
+    let result = format!(
+        "{}{}{}",
+        &content[..head_end],
+        marker,
+        &content[tail_start..]
+    );
 
     // Safety net in *characters* (the marker can nudge the total over budget).
     if result.chars().count() > max_chars {
@@ -399,7 +404,10 @@ mod tests {
         assert!(notice.contains("4096"));
         assert!(notice.contains("trimmed"));
         // Reports the approximate token cost too (4096 / 4 = 1024).
-        assert!(notice.contains("1024"), "notice should report ~tokens: {notice}");
+        assert!(
+            notice.contains("1024"),
+            "notice should report ~tokens: {notice}"
+        );
     }
 
     #[test]

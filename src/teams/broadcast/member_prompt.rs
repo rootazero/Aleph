@@ -51,7 +51,10 @@ mod tests {
         assert!(out.contains("team-xyz"), "含 team_id(调团队工具必需)");
         assert!(out.contains("[user]: @alice 查下 X"), "含群 transcript");
         assert!(out.contains("bob (writer)"), "含名册");
-        assert!(!out.contains("你还是这个群的 leader"), "成员无 leader 身份段");
+        assert!(
+            !out.contains("你还是这个群的 leader"),
+            "成员无 leader 身份段"
+        );
     }
 
     #[test]

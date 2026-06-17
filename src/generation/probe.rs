@@ -124,7 +124,12 @@ pub async fn probe_generation_provider(
         Err(e) => return interpret(None, Some(&e.to_string())),
     };
 
-    match client.get(&url).header(header_name, header_value).send().await {
+    match client
+        .get(&url)
+        .header(header_name, header_value)
+        .send()
+        .await
+    {
         Ok(resp) => interpret(Some(resp.status().as_u16()), None),
         Err(e) => interpret(None, Some(&e.to_string())),
     }
@@ -136,7 +141,14 @@ mod tests {
 
     #[test]
     fn openai_family_uses_bearer() {
-        for pt in ["openai", "openai_image", "dalle", "openai_compat", "stability", "replicate"] {
+        for pt in [
+            "openai",
+            "openai_image",
+            "dalle",
+            "openai_compat",
+            "stability",
+            "replicate",
+        ] {
             let (name, value) = auth_header_for(pt, "k");
             assert_eq!(name, "Authorization", "{pt}");
             assert_eq!(value, "Bearer k", "{pt}");
@@ -152,17 +164,35 @@ mod tests {
 
     #[test]
     fn non_bearer_providers_use_their_own_scheme() {
-        assert_eq!(auth_header_for("deepgram", "k"), ("Authorization", "Token k".to_string()));
+        assert_eq!(
+            auth_header_for("deepgram", "k"),
+            ("Authorization", "Token k".to_string())
+        );
         assert_eq!(
             auth_header_for("azure_speech", "k"),
             ("Ocp-Apim-Subscription-Key", "k".to_string())
         );
         assert_eq!(auth_header_for("bfl", "k"), ("x-key", "k".to_string()));
-        assert_eq!(auth_header_for("cartesia", "k"), ("X-API-Key", "k".to_string()));
-        assert_eq!(auth_header_for("google", "k"), ("x-goog-api-key", "k".to_string()));
-        assert_eq!(auth_header_for("google_veo", "k"), ("x-goog-api-key", "k".to_string()));
-        assert_eq!(auth_header_for("elevenlabs", "k"), ("xi-api-key", "k".to_string()));
-        assert_eq!(auth_header_for("fal", "k"), ("Authorization", "Key k".to_string()));
+        assert_eq!(
+            auth_header_for("cartesia", "k"),
+            ("X-API-Key", "k".to_string())
+        );
+        assert_eq!(
+            auth_header_for("google", "k"),
+            ("x-goog-api-key", "k".to_string())
+        );
+        assert_eq!(
+            auth_header_for("google_veo", "k"),
+            ("x-goog-api-key", "k".to_string())
+        );
+        assert_eq!(
+            auth_header_for("elevenlabs", "k"),
+            ("xi-api-key", "k".to_string())
+        );
+        assert_eq!(
+            auth_header_for("fal", "k"),
+            ("Authorization", "Key k".to_string())
+        );
         assert_eq!(
             auth_header_for("volcengine_tts", "k"),
             ("Authorization", "Bearer;k".to_string())
@@ -184,7 +214,10 @@ mod tests {
     #[test]
     fn probe_url_custom_full_url_used_as_is() {
         assert_eq!(
-            probe_url(Some("https://api.example.com/custom/endpoint"), "openai_compat"),
+            probe_url(
+                Some("https://api.example.com/custom/endpoint"),
+                "openai_compat"
+            ),
             Some("https://api.example.com/custom/endpoint".to_string())
         );
     }

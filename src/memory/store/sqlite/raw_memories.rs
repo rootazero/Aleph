@@ -159,8 +159,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
         let mut total = 0usize;
 
         for chunk in ids.chunks(CHUNK_SIZE) {
-            let placeholders: Vec<String> =
-                (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
             let sql = format!(
                 "UPDATE raw_memories SET is_processed = 1 WHERE id IN ({})",
                 placeholders.join(", ")

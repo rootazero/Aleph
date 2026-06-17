@@ -128,8 +128,7 @@ async fn validate_url_full(
     // which waived all IP checks and was a DNS-rebinding SSRF bypass.)
     if is_allowlisted(host, &policy.allowed_hosts) {
         let port = url.port_or_known_default().unwrap_or(80);
-        let pinned =
-            resolve_and_validate(host, port, &SsrfPolicy::for_allowlisted_host()).await?;
+        let pinned = resolve_and_validate(host, port, &SsrfPolicy::for_allowlisted_host()).await?;
         return Ok((url, pinned));
     }
 

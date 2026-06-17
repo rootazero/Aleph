@@ -741,8 +741,6 @@ mod tests {
         };
         let args = build_gdigrab_args(&cfg, Some("Microphone (Realtek Audio)"), "C:/tmp/a.mp4");
         assert!(args.iter().any(|a| a == "dshow"));
-        assert!(args
-            .iter()
-            .any(|a| a == "audio=Microphone (Realtek Audio)"));
+        assert!(args.iter().any(|a| a == "audio=Microphone (Realtek Audio)"));
     }
 }

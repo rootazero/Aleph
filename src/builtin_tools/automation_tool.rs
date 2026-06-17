@@ -243,10 +243,7 @@ Examples:
                 };
                 let input = args.input.as_deref();
                 if let Some(out) = self
-                    .check_approval(
-                        format!("shortcut: {name}"),
-                        format!("run_shortcut: {name}"),
-                    )
+                    .check_approval(format!("shortcut: {name}"), format!("run_shortcut: {name}"))
                     .await
                 {
                     return Ok(out);

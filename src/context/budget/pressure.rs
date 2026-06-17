@@ -309,7 +309,10 @@ mod tests {
         // Pure CJK (no Latin) must still collapse to the CJK ratio exactly — the
         // blend is byte-identical at the pure-content extremes.
         let ratio = detect_content_ratio("这是一段没有任何拉丁字符的纯中文文本内容");
-        assert!((ratio - 1.5).abs() < 0.01, "pure CJK must be 1.5, got {ratio}");
+        assert!(
+            (ratio - 1.5).abs() < 0.01,
+            "pure CJK must be 1.5, got {ratio}"
+        );
     }
 
     #[test]

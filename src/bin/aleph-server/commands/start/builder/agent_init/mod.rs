@@ -730,8 +730,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         dedup_noop_threshold: cfg.dedup_noop_threshold,
                     };
                     if let Some(ref note_dir) = note_dir {
-                        let indexer =
-                            std::sync::Arc::new(NoteIndexer::new(note_dir.clone(), memory_db.clone()));
+                        let indexer = std::sync::Arc::new(NoteIndexer::new(
+                            note_dir.clone(),
+                            memory_db.clone(),
+                        ));
                         Some(std::sync::Arc::new(DefaultCompoundIngestor {
                             store: memory_db.clone(),
                             indexer,
@@ -1356,19 +1358,26 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         .get("haiku")
                         .or_else(|| Some(topic_provider_registry.default_provider()));
                 let chat_event_bus = event_bus.clone();
-                server.handlers_mut().register("teams.chat.send", move |req| {
-                    let store = ts.clone();
-                    let ctx = chat_ctx.clone();
-                    let msg_store = chat_msg_store.clone();
-                    let provider = chat_topic_provider.clone();
-                    let bus = chat_event_bus.clone();
-                    async move {
-                        alephcore::gateway::handlers::teams::handle_chat_send(
-                            req, store, msg_store, ctx, provider, Some(bus),
-                        )
-                        .await
-                    }
-                });
+                server
+                    .handlers_mut()
+                    .register("teams.chat.send", move |req| {
+                        let store = ts.clone();
+                        let ctx = chat_ctx.clone();
+                        let msg_store = chat_msg_store.clone();
+                        let provider = chat_topic_provider.clone();
+                        let bus = chat_event_bus.clone();
+                        async move {
+                            alephcore::gateway::handlers::teams::handle_chat_send(
+                                req,
+                                store,
+                                msg_store,
+                                ctx,
+                                provider,
+                                Some(bus),
+                            )
+                            .await
+                        }
+                    });
             }
 
             if let Err(e) = gateway_context_cell.set(gateway_ctx) {

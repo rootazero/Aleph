@@ -210,7 +210,12 @@ pub(in crate::commands::start) fn register_teams_handlers(
     register_handler!(server, "teams.disband", teams::handle_disband, store);
     // teams.delete — cascade when all four subordinate stores are configured;
     // fall back to single-store delete (legacy behavior) otherwise.
-    match (event_store, snapshot_store, artifact_store, msg_store.clone()) {
+    match (
+        event_store,
+        snapshot_store,
+        artifact_store,
+        msg_store.clone(),
+    ) {
         (Some(ev), Some(snap), Some(art), Some(msg)) => {
             let store_c = Arc::clone(store);
             let coord_c = Arc::clone(coord_store);
@@ -243,14 +248,12 @@ pub(in crate::commands::start) fn register_teams_handlers(
         let ts = Arc::clone(store);
         let am = agent_manager.clone();
         let ms = msg_store.clone();
-        server
-            .handlers_mut()
-            .register("agents.teams", move |req| {
-                let ts = Arc::clone(&ts);
-                let am = am.clone();
-                let ms = ms.clone();
-                async move { teams::handle_agent_teams(req, ts, am, ms).await }
-            });
+        server.handlers_mut().register("agents.teams", move |req| {
+            let ts = Arc::clone(&ts);
+            let am = am.clone();
+            let ms = ms.clone();
+            async move { teams::handle_agent_teams(req, ts, am, ms).await }
+        });
     }
     // Templates RPC is stateless — the handler discovers builtins +
     // ~/.aleph/teams/templates on every call. Materialization itself runs

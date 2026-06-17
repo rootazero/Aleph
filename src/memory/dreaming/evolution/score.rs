@@ -145,7 +145,10 @@ mod tests {
         let keeper = note("Rust async", &["uses tokio", "await syntax"]);
         let absorbed = note("Rust async patterns", &["uses tokio"]);
         let s = score_merge_candidate(&keeper, &absorbed);
-        assert!(s > 0.7, "redundant same-topic merge should be safe, got {s}");
+        assert!(
+            s > 0.7,
+            "redundant same-topic merge should be safe, got {s}"
+        );
     }
 
     #[test]

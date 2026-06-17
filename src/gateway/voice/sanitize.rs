@@ -50,9 +50,7 @@ fn strip_inline_markers(line: &str) -> String {
 /// "dash" / "vertical bar".
 fn is_table_separator(line: &str) -> bool {
     let t = line.trim();
-    !t.is_empty()
-        && t.contains('-')
-        && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
+    !t.is_empty() && t.contains('-') && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
 }
 
 /// Flatten a pipe-delimited table row (`| Name | Age |`) into a spoken comma
@@ -217,7 +215,10 @@ mod tests {
 
     #[test]
     fn prose_without_pipe_is_untouched() {
-        assert_eq!(sanitize_for_tts("just a plain sentence"), "just a plain sentence");
+        assert_eq!(
+            sanitize_for_tts("just a plain sentence"),
+            "just a plain sentence"
+        );
     }
 
     #[test]

@@ -221,7 +221,11 @@ mod tests {
         let mut gate = SpawnGate::new(5, Duration::from_secs(600));
         gate.record_failure();
         gate.record_success();
-        assert_eq!(gate.poll(), SpawnDecision::Go, "success must clear the gate");
+        assert_eq!(
+            gate.poll(),
+            SpawnDecision::Go,
+            "success must clear the gate"
+        );
     }
 
     #[test]

@@ -77,7 +77,11 @@ pub fn read_max_retries(metadata: &Value) -> Option<u32> {
     metadata
         .get(MAX_RETRIES_METADATA_KEY)
         .and_then(Value::as_u64)
-        .map(|n| u32::try_from(n).unwrap_or(MAX_RETRIES_CEILING).min(MAX_RETRIES_CEILING))
+        .map(|n| {
+            u32::try_from(n)
+                .unwrap_or(MAX_RETRIES_CEILING)
+                .min(MAX_RETRIES_CEILING)
+        })
 }
 
 /// Return a new metadata value with `max_retries` merged in under
@@ -207,7 +211,9 @@ pub const fn jittered_backoff_secs(
 /// `None` (eligible now).
 #[must_use]
 pub fn read_retry_not_before(metadata: &Value) -> Option<u64> {
-    metadata.get(RETRY_NOT_BEFORE_METADATA_KEY).and_then(Value::as_u64)
+    metadata
+        .get(RETRY_NOT_BEFORE_METADATA_KEY)
+        .and_then(Value::as_u64)
 }
 
 /// Return a new metadata value with [`RETRY_NOT_BEFORE_METADATA_KEY`] set to
@@ -248,15 +254,27 @@ mod tests {
     #[test]
     fn reads_none_when_absent_or_wrong_shape() {
         assert_eq!(read_max_retries(&json!({})), None);
-        assert_eq!(read_max_retries(&json!({ MAX_RETRIES_METADATA_KEY: "3" })), None);
-        assert_eq!(read_max_retries(&json!({ MAX_RETRIES_METADATA_KEY: -1 })), None);
+        assert_eq!(
+            read_max_retries(&json!({ MAX_RETRIES_METADATA_KEY: "3" })),
+            None
+        );
+        assert_eq!(
+            read_max_retries(&json!({ MAX_RETRIES_METADATA_KEY: -1 })),
+            None
+        );
         assert_eq!(read_max_retries(&json!(42)), None);
     }
 
     #[test]
     fn reads_and_clamps_value() {
-        assert_eq!(read_max_retries(&json!({ MAX_RETRIES_METADATA_KEY: 0 })), Some(0));
-        assert_eq!(read_max_retries(&json!({ MAX_RETRIES_METADATA_KEY: 3 })), Some(3));
+        assert_eq!(
+            read_max_retries(&json!({ MAX_RETRIES_METADATA_KEY: 0 })),
+            Some(0)
+        );
+        assert_eq!(
+            read_max_retries(&json!({ MAX_RETRIES_METADATA_KEY: 3 })),
+            Some(3)
+        );
         assert_eq!(
             read_max_retries(&json!({ MAX_RETRIES_METADATA_KEY: 9_999 })),
             Some(MAX_RETRIES_CEILING)
@@ -333,7 +351,10 @@ mod tests {
         assert_eq!(delay, 20);
         for seed in 0..1000u64 {
             let j = jittered_backoff_secs(3, 5, 120, seed);
-            assert!((delay / 2..=delay).contains(&j), "seed {seed} → {j} out of band");
+            assert!(
+                (delay / 2..=delay).contains(&j),
+                "seed {seed} → {j} out of band"
+            );
         }
     }
 
@@ -346,8 +367,9 @@ mod tests {
         );
         // Different seeds spread across the band (not all identical) — the
         // whole point of jitter. Sample a handful and confirm >1 distinct value.
-        let distinct: std::collections::HashSet<u64> =
-            (0..50u64).map(|s| jittered_backoff_secs(4, 5, 120, s)).collect();
+        let distinct: std::collections::HashSet<u64> = (0..50u64)
+            .map(|s| jittered_backoff_secs(4, 5, 120, s))
+            .collect();
         assert!(distinct.len() > 1, "jitter collapsed to a single value");
     }
 

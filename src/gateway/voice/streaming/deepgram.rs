@@ -79,8 +79,13 @@ impl StreamingTranscriber for DeepgramStream {
         // /v1/listen with linear16/16k/interim_results/utterance_end so the
         // server emits BOTH interim and final + UtteranceEnd.
         let base = self.target.base_url.trim_end_matches('/');
-        let host = base.replace("https://", "wss://").replace("http://", "ws://");
-        let lang = cfg.language.or_else(|| self.target.language.clone()).unwrap_or_default();
+        let host = base
+            .replace("https://", "wss://")
+            .replace("http://", "ws://");
+        let lang = cfg
+            .language
+            .or_else(|| self.target.language.clone())
+            .unwrap_or_default();
         let mut url = format!(
             "{host}/v1/listen?encoding=linear16&sample_rate={}&channels=1&interim_results=true&utterance_end_ms=1000",
             cfg.sample_rate
@@ -91,8 +96,10 @@ impl StreamingTranscriber for DeepgramStream {
 
         let mut req = url.into_client_request()?;
         if !self.target.api_key.is_empty() {
-            req.headers_mut()
-                .insert("Authorization", format!("Token {}", self.target.api_key).parse()?);
+            req.headers_mut().insert(
+                "Authorization",
+                format!("Token {}", self.target.api_key).parse()?,
+            );
         }
         let (ws, _) = tokio_tungstenite::connect_async(req).await?;
         let (mut sink, mut stream) = ws.split();

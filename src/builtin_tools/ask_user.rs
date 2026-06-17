@@ -148,7 +148,11 @@ impl AskUserTool {
                 .collect();
             let mut menu = String::new();
             for (i, choice) in choices.iter().enumerate() {
-                match choice.description().map(str::trim).filter(|d| !d.is_empty()) {
+                match choice
+                    .description()
+                    .map(str::trim)
+                    .filter(|d| !d.is_empty())
+                {
                     Some(desc) => {
                         menu.push_str(&format!("{}. {} — {desc}\n", i + 1, choice.label()));
                     }

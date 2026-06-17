@@ -238,24 +238,22 @@ impl InitializationCoordinator {
                         }
                     }
                 }
-                InitPhase::Runtimes => {
-                    match get_runtimes_dir() {
-                        Ok(runtimes_dir) => {
-                            if pre_existing.runtimes_dir {
-                                warn!(dir = ?runtimes_dir, "Runtimes directory pre-existed; skipping rollback to preserve installed runtimes");
-                            } else if runtimes_dir.exists() {
-                                if let Err(e) = tokio::fs::remove_dir_all(&runtimes_dir).await {
-                                    warn!(error = %e, dir = ?runtimes_dir, "Failed to remove runtimes directory during rollback");
-                                    errors.push(format!("runtimes dir: {e}"));
-                                }
+                InitPhase::Runtimes => match get_runtimes_dir() {
+                    Ok(runtimes_dir) => {
+                        if pre_existing.runtimes_dir {
+                            warn!(dir = ?runtimes_dir, "Runtimes directory pre-existed; skipping rollback to preserve installed runtimes");
+                        } else if runtimes_dir.exists() {
+                            if let Err(e) = tokio::fs::remove_dir_all(&runtimes_dir).await {
+                                warn!(error = %e, dir = ?runtimes_dir, "Failed to remove runtimes directory during rollback");
+                                errors.push(format!("runtimes dir: {e}"));
                             }
                         }
-                        Err(e) => {
-                            warn!(error = %e, "Failed to get runtimes dir during rollback");
-                            errors.push(format!("runtimes dir: {e}"));
-                        }
                     }
-                }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to get runtimes dir during rollback");
+                        errors.push(format!("runtimes dir: {e}"));
+                    }
+                },
                 InitPhase::Database => {
                     // Don't delete memory.db (may pre-exist), but clean up WAL files
                     // that were created during this initialization. If the database

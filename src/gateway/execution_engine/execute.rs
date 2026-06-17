@@ -881,7 +881,8 @@ where
                                 info!(session = %session_key_str, delay_ms = delay,
                                     ticks = state.iterations_used.saturating_add(1),
                                     "loop: enqueued next tick");
-                            } else if crate::looping::pursuit::exhausted(&state, tokens_now, now_ms) {
+                            } else if crate::looping::pursuit::exhausted(&state, tokens_now, now_ms)
+                            {
                                 // Distinguish token-budget / wall-clock exhaustion
                                 // from the iteration cap so the user sees the real
                                 // stop reason (mirrors the goal hook). The note is

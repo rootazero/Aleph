@@ -156,9 +156,7 @@ Examples:
                         return Ok(SystemOutput {
                             success: false,
                             data: None,
-                            message: Some(
-                                "restart_app requires 'app_name' parameter.".to_string(),
-                            ),
+                            message: Some("restart_app requires 'app_name' parameter.".to_string()),
                         });
                     }
                 };

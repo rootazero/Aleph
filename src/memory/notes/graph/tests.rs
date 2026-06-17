@@ -72,7 +72,7 @@ fn rare_shared_source_outscores_ubiquitous_one() {
     let w = relevance::SignalWeights::default();
     let s_rare = relevance::score_pair(&g, &w, 0, 1); // a—b via "rare"
     let s_common = relevance::score_pair(&g, &w, 0, 2); // a—c via "common"
-    // df=2 → 4.0 * ln2/ln2 = 4.0 ; df=3 → 4.0 * ln2/ln3 ≈ 2.524
+                                                        // df=2 → 4.0 * ln2/ln2 = 4.0 ; df=3 → 4.0 * ln2/ln3 ≈ 2.524
     assert!((s_rare - 4.0).abs() < 1e-4);
     assert!((s_common - 4.0 * (2.0_f32).ln() / (3.0_f32).ln()).abs() < 1e-4);
     assert!(

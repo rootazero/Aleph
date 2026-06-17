@@ -293,7 +293,11 @@ token_budget. \
                 }
                 if let Some(cmd) = args.gate_command.clone() {
                     // Empty string clears the per-goal gate; anything else sets it.
-                    let next = if cmd.trim().is_empty() { None } else { Some(cmd) };
+                    let next = if cmd.trim().is_empty() {
+                        None
+                    } else {
+                        Some(cmd)
+                    };
                     goal = goal.with_gate_command(next);
                 }
                 if args.note.is_some() {

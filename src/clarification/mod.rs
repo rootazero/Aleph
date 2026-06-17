@@ -226,7 +226,8 @@ mod tests {
 
     #[test]
     fn test_clarification_option_with_description() {
-        let option = ClarificationOption::new("pro", "Professional").with_description("formal tone");
+        let option =
+            ClarificationOption::new("pro", "Professional").with_description("formal tone");
         assert_eq!(option.description.as_deref(), Some("formal tone"));
         // Blank/whitespace descriptions are ignored, keeping the field None.
         let blank = ClarificationOption::new("pro", "Professional").with_description("   ");

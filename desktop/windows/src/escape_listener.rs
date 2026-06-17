@@ -73,10 +73,7 @@ impl EscapeAbort for WindowsEscapeListener {
                 return Ok(());
             }
             let state = Box::new(ListenerState::new());
-            LISTENER_PTR.store(
-                std::ptr::addr_of!(*state) as usize,
-                Ordering::SeqCst,
-            );
+            LISTENER_PTR.store(std::ptr::addr_of!(*state) as usize, Ordering::SeqCst);
             *state_guard = Some(state);
             drop(state_guard);
 
@@ -172,17 +169,17 @@ extern "system" fn keyboard_hook_proc(
         // SAFETY: for `WH_KEYBOARD_LL` with `code >= 0`, `lparam` points to a
         // `KBDLLHOOKSTRUCT` owned by the OS for the duration of this callback.
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
-            if kb.vkCode == VK_ESCAPE.0 as u32 {
-                let addr = LISTENER_PTR.load(Ordering::SeqCst);
-                if addr != 0 {
-                    // SAFETY: `addr` points to a live `ListenerState` owned by
-                    // the started listener; its `Drop` runs via `stop`, which
-                    // clears `LISTENER_PTR` before the heap allocation is freed.
-                    let state = unsafe { &*(addr as *const ListenerState) };
-                    state.aborted.store(true, Ordering::SeqCst);
-                    return LRESULT(1);
-                }
+        if kb.vkCode == VK_ESCAPE.0 as u32 {
+            let addr = LISTENER_PTR.load(Ordering::SeqCst);
+            if addr != 0 {
+                // SAFETY: `addr` points to a live `ListenerState` owned by
+                // the started listener; its `Drop` runs via `stop`, which
+                // clears `LISTENER_PTR` before the heap allocation is freed.
+                let state = unsafe { &*(addr as *const ListenerState) };
+                state.aborted.store(true, Ordering::SeqCst);
+                return LRESULT(1);
             }
+        }
     }
 
     // SAFETY: documented Win32 hook-chaining call.

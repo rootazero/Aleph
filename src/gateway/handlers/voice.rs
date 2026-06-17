@@ -149,11 +149,12 @@ pub async fn handle_format(
         _ => format,
     };
 
-    let formatted = crate::gateway::voice::format::format_text(&params.text, &effective, &config, &vault)
-        .await
-        // `format_text` degrades to the raw text on any failure, so this is
-        // belt-and-suspenders: never surface an error for display polish.
-        .unwrap_or(params.text);
+    let formatted =
+        crate::gateway::voice::format::format_text(&params.text, &effective, &config, &vault)
+            .await
+            // `format_text` degrades to the raw text on any failure, so this is
+            // belt-and-suspenders: never surface an error for display polish.
+            .unwrap_or(params.text);
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "formatted": formatted }))
 }
@@ -421,10 +422,7 @@ pub async fn handle_stream_start(
         let cfg = config.read().await;
         let s = &cfg.voice_local.streaming;
         if !s.enabled {
-            return JsonRpcResponse::success(
-                request.id,
-                serde_json::json!({ "stream_id": null }),
-            );
+            return JsonRpcResponse::success(request.id, serde_json::json!({ "stream_id": null }));
         }
         StreamingTarget {
             provider: s.provider.clone(),

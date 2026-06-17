@@ -422,12 +422,7 @@ mod status_tests {
     #[test]
     fn live_endpoint_reports_url_and_uptime() {
         let ep = endpoint(4321, "2026-06-17T00:00:00Z");
-        let report = resolve_status(
-            None,
-            Some(&ep),
-            at("2026-06-17T01:01:01Z"),
-            |p| p == 4321,
-        );
+        let report = resolve_status(None, Some(&ep), at("2026-06-17T01:01:01Z"), |p| p == 4321);
         assert!(report.running);
         assert_eq!(report.pid, Some(4321));
         assert_eq!(report.url.as_deref(), Some("http://127.0.0.1:18790"));

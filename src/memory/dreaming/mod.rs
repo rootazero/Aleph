@@ -1064,8 +1064,7 @@ impl DreamDaemon {
         let post_metrics =
             compute_raw_metrics(&post_index, self.database.as_ref(), DEFAULT_AGENT_ID).await;
         report.distill_recalled = post_metrics.skill_notes_recalled;
-        let candidate_health =
-            memory_health_score(&SignalSnapshot::from_metrics(&post_metrics));
+        let candidate_health = memory_health_score(&SignalSnapshot::from_metrics(&post_metrics));
         let best_before = *self.best_health.lock().unwrap_or_else(|e| e.into_inner());
         let gate_outcome = evaluate_gate(
             candidate_health,

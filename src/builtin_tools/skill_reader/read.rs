@@ -271,9 +271,8 @@ impl ReadSkillTool {
         }
 
         // Check file size
-        let metadata = fs::metadata(&file_path).map_err(|e| {
-            ToolError::Execution(format!("Failed to read file metadata: {e}"))
-        })?;
+        let metadata = fs::metadata(&file_path)
+            .map_err(|e| ToolError::Execution(format!("Failed to read file metadata: {e}")))?;
 
         if metadata.len() > self.max_file_size {
             let error_msg = format!(

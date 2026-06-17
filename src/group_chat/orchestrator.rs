@@ -179,10 +179,9 @@ impl GroupChatOrchestrator {
 
         // Persist status change to database
         if let Some(db) = &self.db {
-            if let Err(e) = db.update_group_chat_session_status(
-                session_id,
-                GroupChatStatus::Ended.as_str(),
-            ) {
+            if let Err(e) =
+                db.update_group_chat_session_status(session_id, GroupChatStatus::Ended.as_str())
+            {
                 tracing::warn!(
                     subsystem = "group_chat",
                     error = %e,

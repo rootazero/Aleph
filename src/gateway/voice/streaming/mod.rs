@@ -38,7 +38,10 @@ pub struct StreamConfig {
 impl StreamConfig {
     #[must_use]
     pub fn new(language: Option<String>) -> Self {
-        Self { sample_rate: 16_000, language }
+        Self {
+            sample_rate: 16_000,
+            language,
+        }
     }
 }
 
@@ -102,7 +105,11 @@ mod tests {
 
     #[test]
     fn transcript_delta_committed_only_serializes_snake_case() {
-        let d = TranscriptDelta { committed: "你好".into(), interim: String::new(), utterance_end: false };
+        let d = TranscriptDelta {
+            committed: "你好".into(),
+            interim: String::new(),
+            utterance_end: false,
+        };
         let j = serde_json::to_value(&d).unwrap();
         assert_eq!(j["committed"], "你好");
         assert_eq!(j["interim"], "");
@@ -124,16 +131,25 @@ mod tests {
             api_key: String::new(),
             language: None,
         };
-        assert!(matches!(classify_provider(&cfg.provider), StreamingProvider::WhisperLive));
+        assert!(matches!(
+            classify_provider(&cfg.provider),
+            StreamingProvider::WhisperLive
+        ));
         let cfg2 = StreamingTarget {
             provider: "deepgram".into(),
             base_url: "wss://api.deepgram.com".into(),
             api_key: "k".into(),
             language: None,
         };
-        assert!(matches!(classify_provider(&cfg2.provider), StreamingProvider::Deepgram));
+        assert!(matches!(
+            classify_provider(&cfg2.provider),
+            StreamingProvider::Deepgram
+        ));
         // unknown defaults to deepgram (the lingua-franca protocol)
-        assert!(matches!(classify_provider("mystery"), StreamingProvider::Deepgram));
+        assert!(matches!(
+            classify_provider("mystery"),
+            StreamingProvider::Deepgram
+        ));
     }
 
     #[tokio::test]

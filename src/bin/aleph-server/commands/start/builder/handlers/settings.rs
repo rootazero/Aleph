@@ -537,8 +537,7 @@ pub(in crate::commands::start) fn register_config_handlers(
 
     // Streaming STT: Panel frames → backend WS → voice.transcribe.delta events.
     // One shared registry tracks all active streams (Arc for the macro's clone).
-    let stream_registry =
-        Arc::new(alephcore::gateway::voice::streaming::StreamRegistry::default());
+    let stream_registry = Arc::new(alephcore::gateway::voice::streaming::StreamRegistry::default());
     register_handler!(
         server,
         "voice.stream.start",

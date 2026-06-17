@@ -260,7 +260,10 @@ impl McpServerConnection {
             };
             let response = self.transport.send_request(&request).await?;
             let result = response.into_result().map_err(|e| {
-                AlephError::IoError(format!("MCP server '{}' {} failed: {}", self.name, method, e))
+                AlephError::IoError(format!(
+                    "MCP server '{}' {} failed: {}",
+                    self.name, method, e
+                ))
             })?;
 
             let (page, next) = extract(result)?;

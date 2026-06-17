@@ -102,7 +102,9 @@ mod tests {
         let path = writer.write(&snap).unwrap();
 
         assert!(path.exists());
-        assert!(path.ends_with("session-abc\\resume.json") || path.ends_with("session-abc/resume.json"));
+        assert!(
+            path.ends_with("session-abc\\resume.json") || path.ends_with("session-abc/resume.json")
+        );
 
         let content = std::fs::read_to_string(&path).unwrap();
         let restored: SessionSnapshot = serde_json::from_str(&content).unwrap();

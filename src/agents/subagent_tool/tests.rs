@@ -632,7 +632,13 @@ fn moa_parse_proposer_models_and_synthesize() {
             // blank entries are filtered out
             assert_eq!(
                 args.proposer_models.as_deref(),
-                Some(&["claude-opus-4-8".to_string(), "gpt-5".to_string(), "deepseek-v3".to_string()][..])
+                Some(
+                    &[
+                        "claude-opus-4-8".to_string(),
+                        "gpt-5".to_string(),
+                        "deepseek-v3".to_string()
+                    ][..]
+                )
             );
             assert!(args.synthesize);
             assert_eq!(args.aggregator_model.as_deref(), Some("claude-opus-4-8"));

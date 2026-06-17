@@ -34,7 +34,11 @@ mod tests {
 
     #[test]
     fn formats_with_sender_prefix_oldest_first() {
-        let msgs = vec![line("user", "大家好"), line("alice", "你好"), line("bob", "我也在")];
+        let msgs = vec![
+            line("user", "大家好"),
+            line("alice", "你好"),
+            line("bob", "我也在"),
+        ];
         let out = format_transcript(&msgs, 10_000);
         assert_eq!(out, "[user]: 大家好\n[alice]: 你好\n[bob]: 我也在");
     }

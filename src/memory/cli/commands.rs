@@ -4,10 +4,10 @@
 //! knowledge notes.  Migrated from `MemoryFact` (`MemoryStore`) to `NoteStore` CRUD.
 
 use crate::error::AlephError;
+use crate::memory::notes::sanitize_title;
 use crate::memory::notes::store::note_md_filename;
 use crate::memory::notes::store::NoteIndexEntry;
 use crate::memory::notes::store::NoteStore;
-use crate::memory::notes::sanitize_title;
 use crate::memory::store::MemoryBackend;
 
 /// Filter options for listing notes
