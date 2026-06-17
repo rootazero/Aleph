@@ -15,12 +15,12 @@ use crate::a2a::service::notification::NotificationService;
 /// Holds references to all port implementations and the agent card.
 /// Passed as axum state to all route handlers.
 pub struct A2AServerState {
-    pub(crate) task_manager: Arc<dyn A2ATaskManager>,
-    pub(crate) message_handler: Arc<dyn A2AMessageHandler>,
-    pub(crate) streaming: Arc<dyn A2AStreamingHandler>,
-    pub(crate) authenticator: Arc<dyn A2AAuthenticator>,
-    pub(crate) notification: Arc<NotificationService>,
-    pub(crate) card: AgentCard,
+    pub task_manager: Arc<dyn A2ATaskManager>,
+    pub message_handler: Arc<dyn A2AMessageHandler>,
+    pub streaming: Arc<dyn A2AStreamingHandler>,
+    pub authenticator: Arc<dyn A2AAuthenticator>,
+    pub notification: Arc<NotificationService>,
+    pub card: AgentCard,
 }
 
 // --- JSON-RPC 2.0 structures ---
