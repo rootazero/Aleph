@@ -33,6 +33,21 @@ pub(super) fn is_binary(bytes: &[u8]) -> bool {
     window.contains(&0)
 }
 
+/// Clamp a single line to [`MAX_LINE_CHARS`] characters (char-boundary safe),
+/// appending a truncation marker when it overflows.
+///
+/// Shared by `file_read`'s window renderer and `file_edit`'s result snippet so
+/// the (identical) guard against minified single-line files — and the marker
+/// text — live in exactly one place.
+pub(super) fn clamp_line(line: &str) -> String {
+    let char_count = line.chars().count();
+    if char_count <= MAX_LINE_CHARS {
+        return line.to_string();
+    }
+    let head: String = line.chars().take(MAX_LINE_CHARS).collect();
+    format!("{head}… [line truncated — {char_count} chars total]")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

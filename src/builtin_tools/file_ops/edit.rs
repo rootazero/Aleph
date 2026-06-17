@@ -16,7 +16,7 @@ use tracing::info;
 
 use super::edit_match::{apply_ranges, locate, LocateResult};
 use super::path_utils::{check_and_resolve_path, get_denied_paths};
-use super::text::is_binary;
+use super::text::{clamp_line, is_binary};
 use crate::builtin_tools::error::ToolError;
 use crate::error::Result;
 use crate::tools::AlephTool;
@@ -68,17 +68,8 @@ fn render_edit_snippet(new_content: &str, first_start: usize, replacement: &str)
     let width = end.to_string().len();
 
     let push = |out: &mut String, idx: usize| {
-        let line = lines[idx];
         let lineno = idx + 1;
-        let char_count = line.chars().count();
-        if char_count <= super::text::MAX_LINE_CHARS {
-            out.push_str(&format!("{lineno:>width$}\t{line}\n"));
-        } else {
-            let head: String = line.chars().take(super::text::MAX_LINE_CHARS).collect();
-            out.push_str(&format!(
-                "{lineno:>width$}\t{head}… [line truncated — {char_count} chars total]\n"
-            ));
-        }
+        out.push_str(&format!("{lineno:>width$}\t{}\n", clamp_line(lines[idx])));
     };
 
     let mut out = String::new();

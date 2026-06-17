@@ -75,29 +75,35 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Fetch and read content from a URL",
         requires_config: false,
     },
+    // File-tool descriptions are the canonical `AlephTool::DESCRIPTION` consts —
+    // the same rich usage guidance the tools document themselves. This is the
+    // LLM-facing list (agent_init maps `BUILTIN_TOOL_DEFINITIONS` straight into
+    // the model's tool list), so referencing the consts both delivers that
+    // guidance to the model (R9 — intelligence lives in the prompt) and keeps a
+    // single source of truth instead of a terse literal that silently drifts.
     BuiltinToolDefinition {
         name: "file_ops",
-        description: "File system operations - list, move, copy, delete, mkdir, search, batch_move, organize",
+        description: <FileOpsTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "file_read",
-        description: "Read the contents of a file with optional offset/limit for partial reads",
+        description: <FileReadTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "file_write",
-        description: "Write content to a file (content is a required parameter)",
+        description: <FileWriteTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "file_edit",
-        description: "Perform exact string replacement in a file",
+        description: <FileEditTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "apply_patch",
-        description: "Apply a V4A-format multi-file structured patch (Add/Update/Delete/Move) in one call",
+        description: <ApplyPatchTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {

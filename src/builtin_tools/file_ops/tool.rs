@@ -27,25 +27,6 @@ impl FileOpsTool {
     /// Tool identifier
     pub const NAME: &'static str = "file_ops";
 
-    /// Tool description for AI prompt
-    pub const DESCRIPTION: &'static str = r#"Perform file system operations (excluding read/write — use file_read / file_write instead). Operations:
-- list: List directory contents with file types and sizes
-- move: Move/rename single file or directory
-- copy: Copy single file or directory
-- delete: Delete file or directory
-- mkdir: Create directory
-- search: Search files by glob pattern (e.g., "*.pdf", "**/*.jpg")
-- stats: Recursive line/byte counts. Returns per-file FileInfo {size, lines} plus an aggregate {total_files, total_lines, total_bytes}. Use this to answer "how many lines / files / bytes are in this directory" — DO NOT loop over file_read for that.
-- batch_move: Move ALL files matching a pattern to destination (e.g., pattern="*.jpg" moves all JPGs)
-- organize: Auto-organize files by type into categorized folders (Images, Documents, Videos, Audio, Archives, Code, Others)
-
-PATH RESOLUTION:
-- Relative paths (e.g., "output.pdf", "images/photo.jpg") → resolved to ~/.aleph/output/
-- Home paths (e.g., "~/Desktop/file.txt") → expanded to user's home directory
-- Absolute paths (e.g., "/Users/name/file.txt") → used as-is
-
-IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead of multiple 'move' calls!"#;
-
     /// Create a new `FileOpsTool` with default settings
     pub fn new() -> Self {
         let denied_paths = get_denied_paths();
@@ -236,10 +217,17 @@ impl AlephTool for FileOpsTool {
 - copy: Copy single file or directory
 - delete: Delete file or directory
 - mkdir: Create directory
-- search: Search files by glob pattern
-- stats: Recursive line/byte counts (per-file FileInfo + aggregate summary). Use this for "count lines / files" instead of looping over file_read.
-- batch_move: Move ALL files matching a pattern to destination
-- organize: Auto-organize files by type into categorized folders"#;
+- search: Search files by glob pattern (e.g., "*.pdf", "**/*.jpg")
+- stats: Recursive line/byte counts. Returns per-file FileInfo {size, lines} plus an aggregate {total_files, total_lines, total_bytes}. Use this to answer "how many lines / files / bytes are in this directory" — DO NOT loop over file_read for that.
+- batch_move: Move ALL files matching a pattern to destination (e.g., pattern="*.jpg" moves all JPGs)
+- organize: Auto-organize files by type into categorized folders (Images, Documents, Videos, Audio, Archives, Code, Others)
+
+PATH RESOLUTION:
+- Relative paths (e.g., "output.pdf", "images/photo.jpg") → resolved to ~/.aleph/output/
+- Home paths (e.g., "~/Desktop/file.txt") → expanded to user's home directory
+- Absolute paths (e.g., "/Users/name/file.txt") → used as-is
+
+IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead of multiple 'move' calls!"#;
 
     type Args = FileOpsArgs;
     type Output = FileOpsOutput;
