@@ -73,6 +73,51 @@ impl Default for SendRetryPolicy {
     }
 }
 
+/// TOML-facing tuning for the outbound rate-limit retry policy
+/// (`[gateway.send_retry]`).
+///
+/// Mirrors [`SendRetryPolicy`] but uses plain seconds so it round-trips through
+/// TOML (the runtime struct stores a [`Duration`]). An empty `[gateway.send_retry]`
+/// table — or none at all — is byte-identical to [`SendRetryPolicy::default`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SendRetryTomlConfig {
+    /// Maximum retry-after waits before giving up. `0` restores the historical
+    /// fire-once behavior (the `RateLimited` error propagates immediately).
+    pub max_rate_limit_retries: u32,
+    /// Upper bound (seconds) on a single honored `retry_after`, so a hostile or
+    /// buggy upstream value cannot wedge the send path indefinitely.
+    pub max_retry_after_secs: u64,
+}
+
+impl Default for SendRetryTomlConfig {
+    fn default() -> Self {
+        let p = SendRetryPolicy::default();
+        Self {
+            max_rate_limit_retries: p.max_rate_limit_retries,
+            max_retry_after_secs: p.max_retry_after.as_secs(),
+        }
+    }
+}
+
+impl SendRetryTomlConfig {
+    /// Build the runtime [`SendRetryPolicy`]. `max_retry_after_secs` is floored
+    /// to 1s when non-zero is intended but `0` is supplied with a non-zero retry
+    /// budget, so a configured retry never collapses into a tight no-wait loop.
+    #[must_use]
+    pub fn to_policy(&self) -> SendRetryPolicy {
+        let secs = if self.max_rate_limit_retries > 0 {
+            self.max_retry_after_secs.max(1)
+        } else {
+            self.max_retry_after_secs
+        };
+        SendRetryPolicy {
+            max_rate_limit_retries: self.max_rate_limit_retries,
+            max_retry_after: Duration::from_secs(secs),
+        }
+    }
+}
+
 /// Central registry for all channel instances
 pub struct ChannelRegistry {
     /// Registered channel instances
@@ -872,6 +917,43 @@ mod tests {
         assert!(matches!(result, Err(ChannelError::SendFailed(_))));
         // SendFailed is ambiguous (may already be delivered) → exactly one attempt.
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn send_retry_toml_default_matches_runtime_default() {
+        let from_toml = SendRetryTomlConfig::default().to_policy();
+        let native = SendRetryPolicy::default();
+        assert_eq!(
+            from_toml.max_rate_limit_retries,
+            native.max_rate_limit_retries
+        );
+        assert_eq!(from_toml.max_retry_after, native.max_retry_after);
+    }
+
+    #[test]
+    fn send_retry_toml_floors_wait_when_retries_enabled() {
+        // A non-zero retry budget with a 0s cap would collapse into a tight
+        // no-wait loop — floored to 1s.
+        let cfg = SendRetryTomlConfig {
+            max_rate_limit_retries: 3,
+            max_retry_after_secs: 0,
+        };
+        let policy = cfg.to_policy();
+        assert_eq!(policy.max_rate_limit_retries, 3);
+        assert_eq!(policy.max_retry_after, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn send_retry_toml_zero_retries_keeps_zero_wait() {
+        // With retries disabled the wait is irrelevant and left untouched —
+        // no spurious floor.
+        let cfg = SendRetryTomlConfig {
+            max_rate_limit_retries: 0,
+            max_retry_after_secs: 0,
+        };
+        let policy = cfg.to_policy();
+        assert_eq!(policy.max_rate_limit_retries, 0);
+        assert_eq!(policy.max_retry_after, Duration::from_secs(0));
     }
 
     #[tokio::test]

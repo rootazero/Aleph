@@ -154,6 +154,18 @@ pub struct GatewayServerConfig {
     /// [`crate::gateway::channel_health_monitor`].
     #[serde(default)]
     pub channel_health: crate::gateway::channel_health_monitor::ChannelHealthConfig,
+    /// Durable outbound delivery queue tuning (attempts, backoff, drain
+    /// cadence, bounded length). Missing keys fall back to the historic
+    /// hardcoded defaults, so old TOML files keep loading. See
+    /// [`crate::gateway::delivery_queue`].
+    #[serde(default)]
+    pub delivery_queue: crate::gateway::delivery_queue::DeliveryQueueTomlConfig,
+    /// Outbound rate-limit retry policy (how many `retry_after` waits to honor
+    /// and their per-wait cap). `max_rate_limit_retries = 0` restores the
+    /// legacy fire-once behavior. See
+    /// [`crate::gateway::channel_registry::SendRetryPolicy`].
+    #[serde(default)]
+    pub send_retry: crate::gateway::channel_registry::SendRetryTomlConfig,
 }
 
 const fn default_memory_monitor_secs() -> u64 {
@@ -185,6 +197,8 @@ impl Default for GatewayServerConfig {
             memory_monitor_secs: default_memory_monitor_secs(),
             runtime_footer: crate::gateway::runtime_footer::RuntimeFooterConfig::default(),
             channel_health: crate::gateway::channel_health_monitor::ChannelHealthConfig::default(),
+            delivery_queue: crate::gateway::delivery_queue::DeliveryQueueTomlConfig::default(),
+            send_retry: crate::gateway::channel_registry::SendRetryTomlConfig::default(),
         }
     }
 }
@@ -653,6 +667,56 @@ model = "test"
         // it to the gateway root themselves (documented in the release note).
         assert!(config.gateway.allowed_origins.is_empty());
         assert!(!config.gateway.allow_any_origin);
+    }
+
+    #[test]
+    fn delivery_queue_and_send_retry_parse_from_gateway() {
+        let toml = r#"
+[agents.main]
+model = "test"
+
+[gateway.delivery_queue]
+max_attempts = 5
+initial_backoff_secs = 10
+max_backoff_secs = 600
+tick_secs = 15
+
+[gateway.send_retry]
+max_rate_limit_retries = 4
+max_retry_after_secs = 45
+"#;
+        let config = GatewayConfig::from_toml(toml).expect("parse resilience knobs");
+        let dq = config.gateway.delivery_queue.to_runtime();
+        assert_eq!(dq.max_attempts, 5);
+        assert_eq!(dq.initial_backoff.as_secs(), 10);
+        assert_eq!(dq.max_backoff.as_secs(), 600);
+        assert_eq!(dq.tick.as_secs(), 15);
+        // Unspecified keys fall back to the runtime defaults.
+        assert_eq!(dq.batch, 32);
+
+        let sr = config.gateway.send_retry.to_policy();
+        assert_eq!(sr.max_rate_limit_retries, 4);
+        assert_eq!(sr.max_retry_after.as_secs(), 45);
+    }
+
+    #[test]
+    fn resilience_knobs_default_when_absent() {
+        // Old TOML files with no delivery/retry blocks keep the historic
+        // hardcoded behavior byte-for-byte.
+        let toml = r#"
+[agents.main]
+model = "test"
+
+[gateway]
+port = 18790
+"#;
+        let config = GatewayConfig::from_toml(toml).expect("legacy still loads");
+        let dq = config.gateway.delivery_queue.to_runtime();
+        assert_eq!(dq.max_attempts, 10);
+        assert_eq!(dq.max_queue_len, 10_000);
+        let sr = config.gateway.send_retry.to_policy();
+        assert_eq!(sr.max_rate_limit_retries, 2);
+        assert_eq!(sr.max_retry_after.as_secs(), 30);
     }
 
     #[test]

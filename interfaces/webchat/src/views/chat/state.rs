@@ -354,6 +354,14 @@ pub struct ChatState {
     pub team_id: RwSignal<Option<String>>,
     /// Team roster + live status (left roster rail data source). Empty = non-team.
     pub team_members: RwSignal<Vec<TeamMemberView>>,
+    /// Per-run step-strip expand/collapse override, keyed by `run_id`.
+    /// Absent = use the default (running strips open, completed collapsed);
+    /// present = the user's explicit toggle. Lives here — not as a strip-local
+    /// signal — because `timeline::row_key` folds in content length, so the
+    /// strip row remounts on every streamed token and a component-local `open`
+    /// would reset each time (re-opening a strip the user just collapsed mid-run).
+    /// Ephemeral, like `retry_pulse` — excluded from [`SessionSnapshot`].
+    pub strip_open: RwSignal<std::collections::HashMap<String, bool>>,
 }
 
 impl Default for ChatState {
@@ -389,7 +397,28 @@ impl ChatState {
             next_msg_id: RwSignal::new(0),
             team_id: RwSignal::new(None),
             team_members: RwSignal::new(Vec::new()),
+            strip_open: RwSignal::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// Whether run `run_id`'s step strip is expanded. `default_open` is the
+    /// state to use when the user hasn't toggled it (running strips default
+    /// open, completed strips default collapsed).
+    #[must_use]
+    pub fn strip_is_open(&self, run_id: &str, default_open: bool) -> bool {
+        self.strip_open
+            .with(|m| m.get(run_id).copied())
+            .unwrap_or(default_open)
+    }
+
+    /// Toggle run `run_id`'s step-strip expand state, seeding from
+    /// `default_open` when the user hasn't toggled it before. The stored
+    /// override survives the strip row's per-token remount.
+    pub fn toggle_strip(&self, run_id: &str, default_open: bool) {
+        let next = !self.strip_is_open(run_id, default_open);
+        self.strip_open.update(|m| {
+            m.insert(run_id.to_string(), next);
+        });
     }
 
     /// Record a provider-retry status (`stream.run_retrying`).
@@ -776,6 +805,7 @@ impl ChatState {
         self.error_message.set(None);
         self.send_error.set(None);
         self.prompt_queue.set(Vec::new());
+        self.strip_open.set(std::collections::HashMap::new());
     }
 
     /// Clear session state but keep `agent_id` (for new chat within same agent).
@@ -790,6 +820,7 @@ impl ChatState {
         self.prompt_queue.set(Vec::new());
         self.team_id.set(None);
         self.team_members.set(Vec::new());
+        self.strip_open.set(std::collections::HashMap::new());
         // agent_id is intentionally preserved
     }
 
@@ -838,6 +869,9 @@ impl ChatState {
         self.active_project_name.set(snap.active_project_name);
         self.selected_model.set(snap.selected_model);
         self.next_msg_id.set(snap.next_msg_id);
+        // Ephemeral (not in the snapshot): reset so the outgoing tab's
+        // collapse choices don't leak into the restored session.
+        self.strip_open.set(std::collections::HashMap::new());
     }
 }
 

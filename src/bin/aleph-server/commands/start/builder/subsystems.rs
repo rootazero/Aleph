@@ -157,6 +157,8 @@ pub(in crate::commands::start) async fn initialize_channels(
     tool_catalog: Option<Arc<alephcore::tool_metadata::ToolCatalog>>,
     daemon: bool,
     vault: Arc<alephcore::gateway::security::SharedTokenManager>,
+    delivery_cfg: alephcore::gateway::delivery_queue::DeliveryQueueConfig,
+    send_retry: alephcore::gateway::channel_registry::SendRetryPolicy,
 ) -> Arc<ChannelRegistry> {
     use alephcore::gateway::handlers::channel::{
         create_channel_from_config, inject_channel_secrets,
@@ -173,13 +175,13 @@ pub(in crate::commands::start) async fn initialize_channels(
     // restart (redline R5: AI comes to you). On open failure we fall back to
     // the historic in-memory-only behavior.
     let delivery_store: Option<std::sync::Arc<alephcore::gateway::delivery_queue::DeliveryStore>> = {
-        use alephcore::gateway::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
+        use alephcore::gateway::delivery_queue::DeliveryStore;
         use alephcore::utils::paths::get_data_dir;
 
         match get_data_dir() {
             Ok(dir) => {
                 let db_path = dir.join("delivery.db");
-                match DeliveryStore::open(&db_path, DeliveryQueueConfig::default()) {
+                match DeliveryStore::open(&db_path, delivery_cfg) {
                     Ok(store) => Some(std::sync::Arc::new(store)),
                     Err(e) => {
                         tracing::warn!(
@@ -200,9 +202,17 @@ pub(in crate::commands::start) async fn initialize_channels(
         }
     };
 
-    let channel_registry = match &delivery_store {
-        Some(store) => Arc::new(ChannelRegistry::new().with_delivery_store(store.clone())),
-        None => Arc::new(ChannelRegistry::new()),
+    // Apply the configured rate-limit retry policy to every registry, then
+    // optionally attach the durable store. `with_send_retry_policy` was a
+    // production-dead seam (only tests called it) until this wiring — the
+    // `[gateway.send_retry]` TOML block now drives it.
+    let channel_registry = {
+        let registry = ChannelRegistry::new().with_send_retry_policy(send_retry);
+        let registry = match &delivery_store {
+            Some(store) => registry.with_delivery_store(store.clone()),
+            None => registry,
+        };
+        Arc::new(registry)
     };
 
     // Wire the channel registry into the global slot read by the gateway/Panel
