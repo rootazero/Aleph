@@ -274,7 +274,13 @@ impl AgentDefinitionResolver {
 
         // 2c. Lazy migration: move sessions/ from workspace to agent_dir if needed
         let old_sessions = workspace_path.join("sessions");
-        if old_sessions.is_dir() && !agent_dir.join("sessions").join(".migrated").exists() {
+        if old_sessions.is_symlink() {
+            tracing::warn!(
+                agent_id = %agent.id,
+                path = %old_sessions.display(),
+                "Skipping session migration: sessions/ is a symlink"
+            );
+        } else if old_sessions.is_dir() && !agent_dir.join("sessions").join(".migrated").exists() {
             // Check if there are actual session files to migrate
             let has_files =
                 fs::read_dir(&old_sessions).is_ok_and(|mut entries| entries.next().is_some());

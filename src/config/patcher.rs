@@ -270,6 +270,12 @@ impl ConfigPatcher {
         // concurrent changes to other sections.
         {
             let mut config = self.config.write().await;
+
+            // Re-check mtime now that we hold the write lock. The earlier
+            // check happened before acquiring the lock, leaving a window for
+            // an external edit to land in between.
+            self.check_conflict().await?;
+
             let latest_json = serde_json::to_value(&*config).map_err(|e| {
                 AlephError::invalid_config(format!(
                     "Failed to serialize latest config to JSON: {e}"

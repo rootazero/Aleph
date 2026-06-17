@@ -42,8 +42,17 @@ struct NodeIdentity {
     center: String,
 }
 
-/// `~/.aleph/node/<name>.json`. `None` only if the home dir is unresolvable.
+/// `~/.aleph/node/<name>.json`. `None` only if the home dir is unresolvable
+/// or if `name` contains path separators or traversal components.
 fn identity_path(name: &str) -> Option<PathBuf> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+    {
+        return None;
+    }
     dirs::home_dir().map(|h| h.join(".aleph").join("node").join(format!("{name}.json")))
 }
 
@@ -92,17 +101,18 @@ pub async fn handle_node(
     let table = Arc::new(table);
     let declared = table.descriptors();
     let url = format!("{}/ws", center.trim_end_matches('/'));
-    let id_path = identity_path(&name);
+    let id_path = identity_path(&name)
+        .ok_or_else(|| format!("Invalid node name (path traversal not allowed): {name}"))?;
 
     // Resolve the node identity: persisted enrollment > enroll now.
-    let node_id = match id_path.as_deref().and_then(read_identity) {
+    let node_id = match read_identity(&id_path) {
         Some(id) => {
             tracing::info!("node '{name}' using persisted identity {}", id.node_id);
             id.node_id
         }
         None => {
             let id = enroll_node(&url, &center, &name).await?;
-            persist_identity(id_path.as_deref(), &id);
+            persist_identity(Some(&id_path), &id);
             id.node_id
         }
     };

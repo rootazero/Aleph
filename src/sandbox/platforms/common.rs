@@ -253,7 +253,7 @@ pub async fn run_child_with_drain(
 
     let stdout_task = tokio::spawn(async move {
         let mut buf = Vec::new();
-        if let Some(mut pipe) = stdout {
+        if let Some(pipe) = stdout {
             let _ = pipe
                 .take(max_output_bytes as u64)
                 .read_to_end(&mut buf)
@@ -263,7 +263,7 @@ pub async fn run_child_with_drain(
     });
     let stderr_task = tokio::spawn(async move {
         let mut buf = Vec::new();
-        if let Some(mut pipe) = stderr {
+        if let Some(pipe) = stderr {
             let _ = pipe
                 .take(max_output_bytes as u64)
                 .read_to_end(&mut buf)

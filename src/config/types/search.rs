@@ -23,6 +23,7 @@ pub struct SearchConfigInternal {
     pub enabled: bool,
 
     /// Default search provider
+    #[serde(default)]
     pub default_provider: String,
 
     /// Fallback providers (tried in order if default fails)

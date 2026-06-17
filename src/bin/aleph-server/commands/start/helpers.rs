@@ -14,9 +14,7 @@ use alephcore::gateway::{GatewayConfig as FullGatewayConfig, SessionManager};
 
 /// Validate that the bind address is available, or return an error if not.
 pub(super) fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    let addr: SocketAddr = format!("{}:{}", args.bind, args.port)
-        .parse()
-        .map_err(|e| format!("Invalid address: {e}"))?;
+    let addr = resolve_socket_addr(args)?;
     if !args.force {
         if let Err(e) = std::net::TcpListener::bind(addr) {
             return Err(format!(
@@ -25,6 +23,14 @@ pub(super) fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::erro
         }
     }
     Ok(())
+}
+
+fn resolve_socket_addr(args: &Args) -> Result<SocketAddr, Box<dyn std::error::Error>> {
+    let ip: std::net::IpAddr = args
+        .bind
+        .parse()
+        .map_err(|e| format!("Invalid bind address '{}': {e}", args.bind))?;
+    Ok(SocketAddr::new(ip, args.port))
 }
 
 /// Print the startup banner and available method list to stdout.

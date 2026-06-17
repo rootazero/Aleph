@@ -527,7 +527,7 @@ impl WebFetchTool {
     // Part A: Pre-cleaning and safety gates
     // -----------------------------------------------------------------------
 
-    /// Reject HTML that exceeds 1,000,000 characters to prevent `DoS`.
+    /// Reject HTML that exceeds the 10 MB response budget to prevent `DoS`.
     pub(crate) fn validate_html_safety(html: &str) -> std::result::Result<(), ToolError> {
         // The 10 MB response-byte gate already bounds anything reaching here;
         // this is the matching upper bound on the decoded HTML string. The
@@ -536,7 +536,7 @@ impl WebFetchTool {
         // clean, length-capped text — defeating the whole point of fetching.
         if html.len() > Self::MAX_RESPONSE_BYTES {
             return Err(ToolError::Execution(format!(
-                "HTML too large: {} chars (max {} chars)",
+                "HTML too large: {} bytes (max {} bytes)",
                 html.len(),
                 Self::MAX_RESPONSE_BYTES,
             )));

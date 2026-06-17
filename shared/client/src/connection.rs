@@ -278,6 +278,8 @@ impl AlephClient {
         // Send request. Hold the write lock only for the send, then release it
         // before touching `pending` so we never nest `write` -> `pending` and
         // invert the lock order used by `handle_message` (`pending` -> `write`).
+        let json = serde_json::to_string(&request)?;
+        debug!("Sending: {}", json);
         let send_result = {
             let mut write = self.write.lock().await;
             write.send(Message::Text(json.into())).await

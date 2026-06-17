@@ -150,9 +150,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let (full_config, final_bind, final_port, final_max_connections) = load_gateway_config(args)?;
 
-    let addr: SocketAddr = format!("{final_bind}:{final_port}")
-        .parse()
-        .map_err(|e| format!("Invalid address: {e}"))?;
+    let addr = {
+        let ip: std::net::IpAddr = final_bind
+            .parse()
+            .map_err(|e| format!("Invalid bind address '{final_bind}': {e}"))?;
+        SocketAddr::new(ip, final_port)
+    };
 
     alephcore::pii::PiiEngine::init(full_config.privacy.clone());
     if !args.daemon {
@@ -1657,13 +1660,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             use alephcore::tasks::heartbeat::probe::DefaultProbeExecutor;
             use alephcore::tasks::heartbeat::service::timer::{run_heartbeat_loop, TickContext};
 
-            let hb_state = {
+            let (hb_state, hb_wake) = {
                 let guard = hb_svc.lock().await;
-                guard.state().clone()
-            };
-            let hb_wake = {
-                let guard = hb_svc.lock().await;
-                guard.wake_queue().clone()
+                (guard.state().clone(), guard.wake_queue().clone())
             };
 
             // Open a dedicated connection for the DedupEngine (separate from the HeartbeatStore

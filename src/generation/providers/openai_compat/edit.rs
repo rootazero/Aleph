@@ -83,7 +83,7 @@ pub(crate) async fn edit_image_impl(
         let base64_data = if let Some(idx) = reference_image.find(",") {
             if reference_image
                 .get(..idx)
-                .map_or(false, |s| s.to_lowercase().starts_with("data:"))
+                .is_some_and(|s| s.to_lowercase().starts_with("data:"))
             {
                 reference_image.get(idx + 1..).unwrap_or(reference_image)
             } else {

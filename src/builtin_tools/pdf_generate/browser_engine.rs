@@ -42,11 +42,11 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// Cheap synchronous check: is the playwright-cli toolchain (via fnm) likely
-/// available on this system? Callers use this to short-circuit before invoking
-/// the async `generate()` path.
+/// Cheap synchronous check: is the playwright-cli toolchain likely available
+/// on this system? Callers use this to short-circuit before invoking the
+/// async `generate()` path.
 pub fn is_chrome_available() -> bool {
-    which::which("fnm").is_ok()
+    which::which("playwright-cli").is_ok()
 }
 
 /// Generate a PDF using playwright-cli.

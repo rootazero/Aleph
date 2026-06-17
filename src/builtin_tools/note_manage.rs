@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 
 use crate::error::{AlephError, Result};
@@ -358,14 +359,11 @@ impl NoteManageTool {
 
         // Atomic write — open with create_new to avoid TOCTOU race
         let md = note.to_markdown();
-        std::fs::OpenOptions::new()
+        let mut file = tokio::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&file_path)
-            .and_then(|mut f| {
-                use std::io::Write;
-                f.write_all(md.as_bytes())
-            })
+            .await
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::AlreadyExists {
                     AlephError::tool(format!(
@@ -375,6 +373,9 @@ impl NoteManageTool {
                     AlephError::tool(format!("Failed to write note: {e}"))
                 }
             })?;
+        file.write_all(md.as_bytes())
+            .await
+            .map_err(|e| AlephError::tool(format!("Failed to write note: {e}")))?;
 
         // Index the new file
         self.indexer

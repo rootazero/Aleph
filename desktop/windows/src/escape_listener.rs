@@ -136,7 +136,7 @@ impl EscapeAbort for WindowsEscapeListener {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state
             .as_ref()
-            .map_or(false, |s| s.aborted.load(Ordering::SeqCst))
+            .is_some_and(|s| s.aborted.load(Ordering::SeqCst))
     }
 
     fn reset(&self) {

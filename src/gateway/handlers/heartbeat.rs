@@ -247,7 +247,7 @@ pub async fn handle_create(
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                &format!("Failed to create heartbeat task: {e}"),
+                format!("Failed to create heartbeat task: {e}"),
             );
         }
     };
