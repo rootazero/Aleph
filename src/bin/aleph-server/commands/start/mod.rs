@@ -1824,21 +1824,35 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // Spawn the PresenceReporter — periodic broadcast of this host's
-    // (hostname / username / idle) snapshot on the Gateway event bus.
-    // The "brain" lives in `alephcore::tasks::presence`; the "limb"
-    // (idle probe, system_info) stays behind `SystemCapability` in the
-    // platform-specific `desktop/*` crates. Falls back to a no-op when
-    // the platform has no `SystemCapability` (headless CI, etc.).
+    // Spawn the desktop daemon-consumer reporters (FEATURE_LOCATOR §7.6).
+    // Both read their policy from `[desktop]` in config.toml — previously they
+    // ran on hardcoded `::default()` settings, so the presence cadence could
+    // not be tuned and the opt-in mic-level meter had no config path to enable
+    // it at all. The "brain" (cadence / publish format) lives in
+    // `alephcore::tasks::{presence,mic_level}`; the "limb" (idle probe,
+    // system_info, mic tap) stays behind the capability traits in the
+    // platform-specific `desktop/*` crates.
     {
-        let presence_cfg = alephcore::tasks::presence::PresenceConfig::default();
-        if presence_cfg.enabled {
-            let platform = build_desktop_platform();
+        let desktop_cfg = {
+            let guard = app_config.read().await;
+            guard.desktop.clone()
+        };
+        // Build the per-OS platform at most once and share the Arc across both
+        // reporters — only when at least one is enabled, so a fully-disabled
+        // `[desktop]` never touches the platform layer (no Swift helper spawn).
+        let platform = (desktop_cfg.presence.enabled || desktop_cfg.mic_level.enabled)
+            .then(build_desktop_platform);
+
+        // Presence — periodic broadcast of (hostname / username / idle) on the
+        // Gateway event bus. No-op when the platform has no SystemCapability
+        // (headless CI, etc.).
+        if desktop_cfg.presence.enabled {
+            let platform = platform.clone().expect("platform built when presence enabled");
             if platform.system().is_some() {
                 let reporter = alephcore::tasks::presence::PresenceReporter::new(
                     platform,
                     event_bus.as_ref().clone(),
-                    presence_cfg,
+                    desktop_cfg.presence,
                 );
                 // Detached background task: the JoinHandle is intentionally
                 // dropped (dropping it does not cancel the spawned task).
@@ -1853,21 +1867,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         } else if !args.daemon {
             println!("Presence reporter: disabled");
         }
-    }
 
-    // Spawn the MicLevelReporter — opt-in (default OFF, since the meter keeps
-    // the system "mic in use" indicator on continuously). When enabled, polls
-    // `MediaCapability::mic_level()` on a cadence and publishes a categorical
-    // (Active/Quiet/Unavailable) snapshot on the Gateway event bus.
-    {
-        let mic_cfg = alephcore::tasks::mic_level::MicLevelConfig::default();
-        if mic_cfg.enabled {
-            let platform = build_desktop_platform();
+        // Mic-level — opt-in (default OFF, since the live meter keeps the OS
+        // "mic in use" indicator on continuously). When enabled, polls
+        // `MediaCapability::mic_level()` and publishes a categorical
+        // (Active/Quiet/Unavailable) snapshot on the Gateway event bus.
+        if desktop_cfg.mic_level.enabled {
+            let platform = platform.clone().expect("platform built when mic_level enabled");
             if platform.media().is_some() {
                 let reporter = alephcore::tasks::mic_level::MicLevelReporter::new(
                     platform,
                     event_bus.as_ref().clone(),
-                    mic_cfg,
+                    desktop_cfg.mic_level,
                 );
                 // Detached background task: the JoinHandle is intentionally
                 // dropped (dropping it does not cancel the spawned task).
