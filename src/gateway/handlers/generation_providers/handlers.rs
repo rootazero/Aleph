@@ -563,9 +563,7 @@ pub async fn handle_test_connection(
         name: Option<String>,
         provider_type: String,
         api_key: Option<String>,
-        #[allow(dead_code)] // Deserialized from RPC params; reserved for actual connection test
         base_url: Option<String>,
-        model: Option<String>,
     }
 
     let params: Params = match parse_params(&request) {
@@ -583,40 +581,42 @@ pub async fn handle_test_connection(
             .and_then(|name| resolve_api_key(name, &vault)),
     };
 
-    // TODO: Implement actual connection testing
-    // For now, just validate that required fields are present
-    let result = if api_key.is_none() {
-        TestConnectionResult {
+    // Real connectivity probe: an authenticated `GET` against the provider's
+    // endpoint (no media generated, so it costs nothing). An API key is
+    // required because the probe validates credential acceptance.
+    let result = match api_key {
+        None => TestConnectionResult {
             success: false,
             message: "API key is required".to_string(),
-        }
-    } else if params.model.is_none() {
-        TestConnectionResult {
-            success: false,
-            message: "Model is required".to_string(),
-        }
-    } else {
-        // Persist verified=true if provider name was given
-        if let Some(ref name) = provider_name {
-            let mut cfg = config.write().await;
-            if let Some(type_str) = find_provider_type(&cfg.generation, name) {
-                if let Some(p) =
-                    get_typed_provider_map_mut(&mut cfg.generation, &type_str).get_mut(name)
-                {
-                    p.verified = true;
-                    if let Err(e) = save_config(&cfg) {
-                        tracing::error!(error = %e, "Failed to save config after generation test");
+        },
+        Some(key) => {
+            let outcome = crate::generation::probe_generation_provider(
+                &params.provider_type,
+                &key,
+                params.base_url.as_deref(),
+            )
+            .await;
+
+            // Reflect the real verdict in persisted `verified` so the UI badge
+            // never claims a provider is verified when the test actually failed.
+            if let Some(ref name) = provider_name {
+                let mut cfg = config.write().await;
+                if let Some(type_str) = find_provider_type(&cfg.generation, name) {
+                    if let Some(p) =
+                        get_typed_provider_map_mut(&mut cfg.generation, &type_str).get_mut(name)
+                    {
+                        p.verified = outcome.success;
+                        if let Err(e) = save_config(&cfg) {
+                            tracing::error!(error = %e, "Failed to save config after generation test");
+                        }
                     }
                 }
             }
-        }
 
-        TestConnectionResult {
-            success: true,
-            message: format!(
-                "Connection test passed for {} provider",
-                params.provider_type
-            ),
+            TestConnectionResult {
+                success: outcome.success,
+                message: outcome.message,
+            }
         }
     };
 

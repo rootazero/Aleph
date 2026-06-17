@@ -37,6 +37,7 @@ use std::pin::Pin;
 
 // Sub-modules
 pub mod error;
+pub mod probe;
 pub mod providers;
 pub mod registry;
 pub mod response_parser;
@@ -44,6 +45,7 @@ pub mod types;
 
 // Re-exports
 pub use error::{GenerationError, GenerationResult};
+pub use probe::{probe_generation_provider, GenerationProbeOutcome};
 pub use registry::GenerationProviderRegistry;
 
 /// Information about a voice supported by a generation provider
