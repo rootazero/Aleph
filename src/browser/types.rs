@@ -15,6 +15,11 @@ pub enum ActionTarget {
 }
 
 /// Direction for scrolling.
+/// Lateral/vertical scroll step in CSS pixels, used when a backend has no
+/// page-key primitive and must fall back to a wheel/`scrollBy` delta.
+/// Single source of truth shared by both backends.
+pub const SCROLL_STEP_PX: i32 = 400;
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ScrollDirection {
@@ -22,6 +27,20 @@ pub enum ScrollDirection {
     Down,
     Left,
     Right,
+}
+
+impl ScrollDirection {
+    /// `(dx, dy)` wheel delta in CSS pixels for this direction, using
+    /// [`SCROLL_STEP_PX`] as the step. Down/Right are positive, Up/Left
+    /// negative — matching wheel/`scrollBy` axis conventions.
+    pub const fn wheel_delta(self) -> (i32, i32) {
+        match self {
+            ScrollDirection::Up => (0, -SCROLL_STEP_PX),
+            ScrollDirection::Down => (0, SCROLL_STEP_PX),
+            ScrollDirection::Left => (-SCROLL_STEP_PX, 0),
+            ScrollDirection::Right => (SCROLL_STEP_PX, 0),
+        }
+    }
 }
 
 /// History-style navigation on the current tab (back / forward / refresh).

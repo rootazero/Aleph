@@ -237,18 +237,17 @@ impl BrowserBackend for ChromeMcpBackend {
     ) -> Result<(), BrowserError> {
         // Vertical scrolling: PageUp/PageDown are reliable across pages.
         // Horizontal scrolling: Home/End would jump to start/end-of-document, which
-        // is NOT lateral scroll — fall back to window.scrollBy(±400, 0) via JS.
+        // is NOT lateral scroll — fall back to window.scrollBy(±SCROLL_STEP_PX, 0) via JS.
         let (tool, args) = match direction {
             ScrollDirection::Up => ("press_key", json!({ "key": "PageUp" })),
             ScrollDirection::Down => ("press_key", json!({ "key": "PageDown" })),
-            ScrollDirection::Left => (
-                "evaluate_script",
-                json!({ "function": "() => window.scrollBy(-400, 0)" }),
-            ),
-            ScrollDirection::Right => (
-                "evaluate_script",
-                json!({ "function": "() => window.scrollBy(400, 0)" }),
-            ),
+            ScrollDirection::Left | ScrollDirection::Right => {
+                let (dx, _) = direction.wheel_delta();
+                (
+                    "evaluate_script",
+                    json!({ "function": format!("() => window.scrollBy({dx}, 0)") }),
+                )
+            }
         };
         self.select_and_call(tab_id, tool, args).await?;
         Ok(())
@@ -352,11 +351,20 @@ impl BrowserBackend for ChromeMcpBackend {
             .await
         {
             Ok(_) => Ok(true),
+            // A genuine wait *timeout* means "text did not appear" → Ok(false).
+            // A structured TabNotFound (tab closed/navigated away mid-wait) or any
+            // other transport error is a real failure and must propagate — do NOT
+            // fold it into Ok(false). Note the previous broad `contains("not found")`
+            // collided with the "Tab not found" message and silently swallowed it.
+            Err(BrowserError::TabNotFound(_)) => Err(BrowserError::TabNotFound(
+                format!("tab '{tab_id}' disappeared while waiting for text"),
+            )),
             Err(e) => {
                 let msg = e.to_string().to_lowercase();
                 if msg.contains("timeout")
-                    || msg.contains("not found")
+                    || msg.contains("timed out")
                     || msg.contains("did not appear")
+                    || msg.contains("exceeded")
                 {
                     Ok(false)
                 } else {
