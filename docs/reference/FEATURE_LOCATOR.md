@@ -187,11 +187,11 @@
 - **打磨话术**：「‘动态路由’= LLM 看全量工具自选（`prompt.rs` 注入）。**不要加规则引擎式意图分类**（违 R7）。`gateway_route` 只是建议不是强制。」
 
 ### 3.7 Shell/Bash 工具 (Shell Execution)
-- **口语关键词**：bash、shell、脚本执行、后台进程
-- **代码锚点**：`src/builtin_tools/bash_exec.rs`（BashExecTool + process_registry 后台进程）、`src/builtin_tools/code_exec.rs`（通用执行器）、`src/sandbox/workspace.rs`（执行环境）
-- **职责**：沙箱隔离的 shell 执行，支持多行脚本、后台进程（poll/kill/list）、超时。
-- **状态**：✅ 已实现。
-- **打磨话术**：「bash 工具本体在 `bash_exec.rs`；‘命令安不安全’是另一回事，见 §3.8 沙箱策略。」
+- **口语关键词**：bash、shell、脚本执行、后台进程、wait/poll/kill、后台进程上限
+- **代码锚点**：`src/builtin_tools/bash_exec.rs`（BashExecTool + spawn_background + handle_process_action）、`src/builtin_tools/process_registry.rs`（后台进程表：register/poll/**wait**/kill/list + 每会话运行上限 + 完成 Notify）、`src/builtin_tools/code_exec.rs`（通用执行器）、`src/sandbox/workspace.rs`（执行环境）
+- **职责**：沙箱隔离的 shell 执行，支持多行脚本、后台进程（poll/**wait**/kill/list）、超时；后台进程**每会话至多 8 个运行中**（`MAX_RUNNING_PER_SESSION`），超限拒绝并引导 poll/kill。
+- **状态**：✅ 已实现。**后台增强（2026-06-17）**：① `process_action:"wait"` 用 Tokio `Notify` 阻塞等待完成（非忙轮询，默认 60s 上限 170s，回到前台 180s 预算内）；② 每会话运行中进程上限（修复 `evict_if_needed` 只淘汰已完成条目 → 运行态可无界增长的资源泄漏）。
+- **打磨话术**：「bash 工具本体在 `bash_exec.rs`；后台进程生命周期/上限/wait 在 `process_registry.rs`；‘命令安不安全’是另一回事，见 §3.8 沙箱策略。要调后台并发上限改 `MAX_RUNNING_PER_SESSION`；要调 wait 窗口改 `WAIT_DEFAULT/MAX_TIMEOUT_SECS`。」
 
 ### 3.8 沙箱命令策略 (Sandbox Command Policy)
 - **口语关键词**：sandbox shell 安全、命令过滤、危险命令、hardline、反混淆、policy
