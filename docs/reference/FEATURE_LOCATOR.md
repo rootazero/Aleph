@@ -263,10 +263,10 @@
 
 ### 4.5 多代理 / 团队 (Teams / Multi-Agent)
 - **口语关键词**：multi-agent、teams、多线程多任务多代理、leader、群聊广播、roster
-- **代码锚点**：`src/teams/`——`dispatcher/`、`messages/`（路由）、`broadcast/mod.rs`（GroupChatBroadcaster::dispatch，MAX_CHAIN_DEPTH=6 / MAX_FANOUT_WIDTH=5）、`store.rs`、`leader_prompt.rs`、`workflow_canvas.rs`；`src/agents/`（registry/runtime/subagent_spawner/swarm）
-- **职责**：leader 创建团队并分解任务（建 coord_tasks），成员并发执行，消息经 Aggregator 合并后 MessageRouter 投递，群聊可自主链式接话（深度+宽度限制）。
-- **状态**：✅ 已实现。
-- **打磨话术**：「‘多代理协作/群聊’在 `src/teams/`；‘单个 agent 怎么跑/怎么 spawn 子代理’在 `src/agents/`。两者配合。」
+- **代码锚点**：`src/teams/`——`dispatcher/`、`messages/`（路由）、`broadcast/mod.rs`（GroupChatBroadcaster::dispatch，防风暴三道闸 MAX_CHAIN_DEPTH=6 / MAX_FANOUT_WIDTH=5 / **MAX_TOTAL_ACTIVATIONS=32**）、`store.rs`、`leader_prompt.rs`、`workflow_canvas.rs`；`src/agents/`（registry/runtime/subagent_spawner/swarm）
+- **职责**：leader 创建团队并分解任务（建 coord_tasks），成员并发执行，消息经 Aggregator 合并后 MessageRouter 投递，群聊可自主链式接话（深度 + 单轮宽度 + 整树累计唤醒三重封顶）。
+- **状态**：✅ 已实现。**强化（2026-06-17）**：① 群聊防风暴补齐**全局唤醒闸** `MAX_TOTAL_ACTIVATIONS`——此前仅 depth×width 是局部约束，最坏 `5^6≈1.5万` 次成员 run 可炸开；现整棵 fan-out 树共享一个累计计数器（`Arc<AtomicUsize>` 随 `dispatch_user` 新建、随递归下传），越界跳过且**恰好跨界一次**发系统提示（原子天然去重，不刷屏）；② fan-out join 不再静默吞 `JoinError`——成员任务 panic 降级为 `warn` 可观测；③ 熵减：删除 `dispatcher/acp_bridge.rs` 中从未被调用的 `execute_acp_member_task`（活体执行在 `runner.rs::execute_member_task`，桥接模块现仅保留 `AcpMemberRef` 命名约定解析）。
+- **打磨话术**：「‘多代理协作/群聊’在 `src/teams/`；‘单个 agent 怎么跑/怎么 spawn 子代理’在 `src/agents/`。两者配合。‘群聊会不会被模型乱 @ 炸开’= 三道闸：深度 `MAX_CHAIN_DEPTH`、单轮宽度 `MAX_FANOUT_WIDTH`、整树累计 `MAX_TOTAL_ACTIVATIONS`（全在 `broadcast/mod.rs`）。ACP 成员执行不在 `acp_bridge.rs`（那只管 `acp:` 命名解析）而在 `runner.rs`。」
 
 ### 4.6 Agent 切换 (Agent Switching)
 - **口语关键词**：agent 切换、创建/删除/列出、绑定 channel、项目覆盖、agent 配置
