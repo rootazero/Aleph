@@ -306,8 +306,7 @@ impl RuntimeSecurityGuard {
         // 4. Content Sanitization
         // Wrap-and-scrub external content, then emit audit events when the
         // sanitizer detected either prompt-injection patterns or LLM
-        // special-token markers. Lights up `AuditEventType::InjectionPatternDetected`
-        // which was previously a dead variant.
+        // special-token markers (`AuditEventType::InjectionPatternDetected`).
         if self.config.content_sanitization && context.has_external_content {
             if let Some(source) = context.external_source.clone() {
                 let report = wrap_external_content_with_report(&current_text, source);

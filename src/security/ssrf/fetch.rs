@@ -120,10 +120,16 @@ async fn validate_url_full(
         ));
     }
 
-    // Allowlist check — bypass further hostname/IP validation
+    // Allowlist check — bypass the hostname blocklists, but still classify the
+    // resolved IP. An allowlist entry trusts the *name*, not "any address that
+    // name happens to resolve to": loopback and cloud metadata remain blocked so
+    // a rebinding attacker controlling the allowlisted name cannot reach
+    // 127.0.0.1 / 169.254.169.254. (Previously this used `SsrfPolicy::disabled()`,
+    // which waived all IP checks and was a DNS-rebinding SSRF bypass.)
     if is_allowlisted(host, &policy.allowed_hosts) {
         let port = url.port_or_known_default().unwrap_or(80);
-        let pinned = resolve_and_validate(host, port, &SsrfPolicy::disabled()).await?;
+        let pinned =
+            resolve_and_validate(host, port, &SsrfPolicy::for_allowlisted_host()).await?;
         return Ok((url, pinned));
     }
 
@@ -146,11 +152,31 @@ async fn validate_url_full(
     Ok((url, pinned))
 }
 
+/// Authentication/credential request headers stripped on cross-origin redirects.
+///
+/// Covers the standard `Authorization`/`Cookie` pair plus the de-facto API-key
+/// and session-token header names that real services use, so a redirect to a
+/// different origin cannot harvest credentials meant for the original host.
+/// Header names are matched case-insensitively by `HeaderMap`.
+const CROSS_ORIGIN_STRIPPED_HEADERS: &[&str] = &[
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "x-api-key",
+    "api-key",
+    "x-auth-token",
+    "x-access-token",
+    "x-amz-security-token",
+    "x-goog-api-key",
+    "x-functions-key",
+    "x-csrf-token",
+];
+
 /// Strips sensitive authentication headers from a `HeaderMap`.
 fn strip_auth_headers(headers: &mut HeaderMap) {
-    headers.remove("authorization");
-    headers.remove("cookie");
-    headers.remove("proxy-authorization");
+    for name in CROSS_ORIGIN_STRIPPED_HEADERS {
+        headers.remove(*name);
+    }
 }
 
 /// Fetches a URL with full SSRF protection.
@@ -450,6 +476,13 @@ mod tests {
         headers.insert("authorization", HeaderValue::from_static("Bearer token"));
         headers.insert("cookie", HeaderValue::from_static("session=abc"));
         headers.insert("proxy-authorization", HeaderValue::from_static("Basic xyz"));
+        // API-key / session-token style headers that real services use.
+        headers.insert("x-api-key", HeaderValue::from_static("k-123"));
+        headers.insert("x-auth-token", HeaderValue::from_static("t-456"));
+        headers.insert(
+            "x-amz-security-token",
+            HeaderValue::from_static("aws-session"),
+        );
         headers.insert("content-type", HeaderValue::from_static("text/html"));
 
         strip_auth_headers(&mut headers);
@@ -457,6 +490,10 @@ mod tests {
         assert!(!headers.contains_key("authorization"));
         assert!(!headers.contains_key("cookie"));
         assert!(!headers.contains_key("proxy-authorization"));
+        assert!(!headers.contains_key("x-api-key"));
+        assert!(!headers.contains_key("x-auth-token"));
+        assert!(!headers.contains_key("x-amz-security-token"));
+        // Non-credential headers are preserved.
         assert!(headers.contains_key("content-type"));
     }
 

@@ -67,6 +67,25 @@ impl SsrfPolicy {
             ..Default::default()
         }
     }
+
+    /// Returns the IP-level policy applied to a host that matched the
+    /// operator allowlist.
+    ///
+    /// An allowlist entry expresses "I trust this *name*", so private/internal
+    /// ranges are permitted (the operator deliberately pointed at an internal
+    /// service). It does **not** waive the non-negotiable floor: loopback and
+    /// cloud-metadata endpoints stay blocked so a DNS-rebinding attacker who
+    /// controls the allowlisted name cannot pivot to `127.0.0.1` or
+    /// `169.254.169.254`. Validation stays enabled — never disabled — so the
+    /// pinned address is still classified.
+    #[must_use]
+    pub fn for_allowlisted_host() -> Self {
+        Self {
+            enabled: true,
+            allow_private_network: true,
+            ..Default::default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -91,6 +110,15 @@ mod tests {
         // Other fields should still have defaults
         assert!(!policy.allow_private_network);
         assert_eq!(policy.max_redirects, 5);
+    }
+
+    #[test]
+    fn allowlisted_host_policy_keeps_floor() {
+        let policy = SsrfPolicy::for_allowlisted_host();
+        // Validation must stay on — disabling it is the rebinding bypass we fixed.
+        assert!(policy.enabled);
+        // Private ranges are intentionally reachable for trusted internal hosts.
+        assert!(policy.allow_private_network);
     }
 
     #[test]

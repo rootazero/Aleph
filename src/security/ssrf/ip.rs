@@ -174,33 +174,68 @@ pub(crate) fn is_blocked_ip(ip: IpAddr) -> bool {
     }
 }
 
+/// IPv4 cloud instance-metadata endpoint (AWS/Azure/GCP/OpenStack all share it).
+const METADATA_IPV4: Ipv4Addr = Ipv4Addr::new(169, 254, 169, 254);
+
+/// AWS IMDS over IPv6 (`fd00:ec2::254`, RFC 4193 unique-local). Reachable when
+/// `allow_private_network` opens `fc00::/7`, so it needs an explicit floor.
+const METADATA_IPV6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254);
+
+/// Returns true for cloud instance-metadata service addresses — the classic
+/// SSRF pivot. These stay blocked even when private networks are permitted,
+/// including when the metadata IPv4 is smuggled inside an IPv6 transition form.
+pub(crate) fn is_cloud_metadata(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4 == METADATA_IPV4,
+        IpAddr::V6(v6) => {
+            if v6 == METADATA_IPV6 {
+                return true;
+            }
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return mapped == METADATA_IPV4;
+            }
+            if let Some(embedded) = extract_embedded_ipv4(&v6) {
+                return embedded == METADATA_IPV4;
+            }
+            false
+        }
+    }
+}
+
+/// Returns true if the IP resolves (directly or via an IPv6 transition form) to
+/// the loopback range.
+fn is_policy_loopback(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback(),
+        IpAddr::V6(v6) => {
+            if v6.is_loopback() {
+                return true;
+            }
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return mapped.is_loopback();
+            }
+            if let Some(embedded) = extract_embedded_ipv4(&v6) {
+                return embedded.is_loopback();
+            }
+            false
+        }
+    }
+}
+
 /// Returns true if the IP should be blocked under the given policy.
 ///
 /// When `allow_private_network` is true, only loopback and cloud metadata
-/// (169.254.169.254) are blocked. Otherwise the full blocklist applies.
-/// When the policy is disabled (`enabled == false`), all IPs are allowed.
+/// (169.254.169.254 / `fd00:ec2::254`) are blocked — the non-negotiable floor.
+/// Otherwise the full blocklist applies. When the policy is disabled
+/// (`enabled == false`), all IPs are allowed.
 pub(crate) fn is_ip_blocked_by_policy(ip: IpAddr, policy: &SsrfPolicy) -> bool {
     if !policy.enabled {
         return false;
     }
     if policy.allow_private_network {
-        match ip {
-            IpAddr::V4(v4) => v4.is_loopback() || v4 == Ipv4Addr::new(169, 254, 169, 254),
-            IpAddr::V6(v6) => {
-                if v6.is_loopback() {
-                    return true;
-                }
-                // Check IPv4-mapped for loopback or metadata
-                if let Some(mapped) = v6.to_ipv4_mapped() {
-                    return mapped.is_loopback() || mapped == Ipv4Addr::new(169, 254, 169, 254);
-                }
-                // Check other embedded IPv4 for loopback/metadata
-                if let Some(embedded) = extract_embedded_ipv4(&v6) {
-                    return embedded.is_loopback() || embedded == Ipv4Addr::new(169, 254, 169, 254);
-                }
-                false
-            }
-        }
+        // Floor that holds even for trusted internal hosts: never reach the
+        // loopback interface or a cloud metadata endpoint.
+        is_policy_loopback(ip) || is_cloud_metadata(ip)
     } else {
         is_blocked_ip(ip)
     }
@@ -447,5 +482,35 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)),
             &policy
         ));
+    }
+
+    #[test]
+    fn policy_allow_private_still_blocks_ipv6_metadata() {
+        // fc00::/7 (unique-local) is permitted under allow_private_network, but
+        // the AWS IMDS IPv6 endpoint inside it must stay blocked.
+        let policy = SsrfPolicy {
+            allow_private_network: true,
+            ..Default::default()
+        };
+        assert!(is_ip_blocked_by_policy(
+            IpAddr::V6(Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254)),
+            &policy
+        ));
+        // A sibling ULA address (not metadata) remains reachable.
+        assert!(!is_ip_blocked_by_policy(
+            IpAddr::V6(Ipv6Addr::new(0xfd00, 0x1234, 0, 0, 0, 0, 0, 0x0001)),
+            &policy
+        ));
+    }
+
+    #[test]
+    fn policy_allow_private_blocks_metadata_via_ipv4_mapped() {
+        // 169.254.169.254 smuggled as an IPv4-mapped IPv6 address.
+        let policy = SsrfPolicy {
+            allow_private_network: true,
+            ..Default::default()
+        };
+        let mapped = Ipv4Addr::new(169, 254, 169, 254).to_ipv6_mapped();
+        assert!(is_ip_blocked_by_policy(IpAddr::V6(mapped), &policy));
     }
 }

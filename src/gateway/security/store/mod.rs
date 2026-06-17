@@ -226,6 +226,17 @@ impl SecurityStore {
         )?;
         Ok(())
     }
+
+    /// Delete audit entries older than `retention_secs`. Returns the number of
+    /// rows removed. Called periodically by the audit drain task so the
+    /// `security_audit_log` table does not grow without bound.
+    pub fn purge_audit_entries(&self, retention_secs: i64) -> rusqlite::Result<usize> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            crate::security::audit::AUDIT_CLEANUP_SQL,
+            rusqlite::params![retention_secs],
+        )
+    }
 }
 
 /// Get current timestamp in milliseconds
