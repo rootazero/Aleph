@@ -30,7 +30,7 @@ use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::presence::{PresenceEntry, PresenceTracker};
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR,
-    PARSE_ERROR, PERMISSION_DENIED, RATE_LIMITED,
+    PARSE_ERROR, RATE_LIMITED,
 };
 use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
 use crate::gateway::state_version::StateVersionTracker;
@@ -485,42 +485,48 @@ async fn handle_connection(
                                     }
                                     } // end loopback exemption
 
-                                    // Originating-connection role for the
-                                    // config-tier gates. Resolved at the
-                                    // `connect` handshake (loopback ⇒ operator;
-                                    // remote ⇒ persisted per-device tier,
-                                    // default chat) and stamped onto
-                                    // ConnectionState; every later request reads
-                                    // it here. Absent state (pre-handshake /
-                                    // probe) ⇒ operator, preserving
-                                    // single-machine zero-config.
+                                    // Originating-connection role for the login
+                                    // wall. Resolved at the `connect` handshake
+                                    // (loopback ⇒ operator; remote ⇒ operator iff
+                                    // a valid Gateway token was presented, else
+                                    // guest) and stamped onto ConnectionState;
+                                    // every later request reads it here. Absent
+                                    // state (pre-handshake / probe) defaults by
+                                    // network position — loopback operator,
+                                    // remote guest (fail closed).
                                     let caller_role: Option<String> = {
                                         let conns = ctx.connections.read().await;
                                         conns.get(&conn_id).map(|s| s.caller_role.clone())
                                     }
-                                    .or_else(|| Some("operator".to_string()));
-
-                                    // Defense-in-depth RPC gate (G2/G3): a
-                                    // chat-tier connection may converse and
-                                    // read, but config-mutating RPC methods are
-                                    // refused here — mirroring the tool-dispatch
-                                    // gate so the Panel's config surface is
-                                    // closed even to a hand-crafted RPC, not just
-                                    // hidden in the UI.
-                                    if caller_role.as_deref() != Some("operator")
-                                        && crate::gateway::method_authz::rpc_requires_operator(
-                                            &req.method,
+                                    .or_else(|| {
+                                        Some(
+                                            if ctx.client_ip.is_loopback() {
+                                                "operator"
+                                            } else {
+                                                "guest"
+                                            }
+                                            .to_string(),
                                         )
+                                    });
+
+                                    // Login wall (Gateway-token model): an
+                                    // unauthorized connection — a remote Panel
+                                    // that has not presented a valid Gateway
+                                    // token — may only (re)issue `connect` to
+                                    // authorize. Every other method is refused
+                                    // until a valid token is presented. Loopback
+                                    // and token-authorized connections are
+                                    // operator and pass freely; once authorized,
+                                    // authority equals local (single tier).
+                                    if caller_role.as_deref() != Some("operator")
+                                        && req.method != "connect"
                                     {
                                         let resp = JsonRpcResponse::error(
                                             req.id.clone(),
-                                            PERMISSION_DENIED,
-                                            format!(
-                                                "Permission denied: `{}` changes Aleph's \
-                                                 configuration and requires Config-tier \
-                                                 (operator). This device is paired at chat level.",
-                                                req.method
-                                            ),
+                                            AUTH_REQUIRED,
+                                            "Not authorized: present a valid Gateway token via \
+                                             `connect` to access this core."
+                                                .to_string(),
                                         );
                                         let resp_str =
                                             serde_json::to_string(&resp).unwrap_or_default();
@@ -528,7 +534,7 @@ async fn handle_connection(
                                             write.send(WsMessage::Text(resp_str.into())).await
                                         {
                                             error!(
-                                                "Failed to send permission-denied response to {}: {}",
+                                                "Failed to send auth-required response to {}: {}",
                                                 conn_id, e
                                             );
                                             break;
@@ -690,35 +696,31 @@ async fn handle_connection(
                                         if req.method == "connect" {
                                             if let Ok(mut resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
                                                 if resp.is_success() {
-                                                    // Panel device tier (G2/G3). Resolve once at
-                                                    // the handshake: loopback ⇒ Config (operator);
-                                                    // a remote Panel ⇒ its persisted per-device
-                                                    // tier (default Chat, raised explicitly by an
-                                                    // operator). Stamped onto ConnectionState for
-                                                    // the per-request gate and echoed in the
-                                                    // connect response so the Panel gates its own
-                                                    // config UI.
-                                                    let panel_device_id = req
+                                                    // Gateway-token authorization. Loopback ⇒
+                                                    // operator (zero-config, no token). Remote ⇒
+                                                    // validate the shared Gateway token presented in
+                                                    // `connect` params: valid ⇒ operator (same
+                                                    // authority as local, single tier), missing /
+                                                    // invalid ⇒ unauthorized (login wall; the Panel
+                                                    // renders a token box). The decision lives in the
+                                                    // tested pure `connect::connect_authorized`.
+                                                    let presented_token = req
                                                         .params
                                                         .as_ref()
-                                                        .and_then(|p| p.get("device_id"))
-                                                        .and_then(|v| v.as_str())
-                                                        .map(str::to_string);
-                                                    let panel_device_name = req
-                                                        .params
-                                                        .as_ref()
-                                                        .and_then(|p| p.get("device_name"))
-                                                        .and_then(|v| v.as_str())
-                                                        .unwrap_or("")
-                                                        .to_string();
-                                                    let (panel_tier, panel_is_new) =
-                                                        crate::gateway::panel_devices::resolve_tier(
+                                                        .and_then(|p| p.get("token"))
+                                                        .and_then(|v| v.as_str());
+                                                    let authorized =
+                                                        crate::gateway::handlers::connect::connect_authorized(
                                                             ctx.client_ip.is_loopback(),
-                                                            panel_device_id.as_deref(),
-                                                            &panel_device_name,
-                                                        )
-                                                        .await;
-                                                    let panel_role = panel_tier.caller_role_str();
+                                                            presented_token,
+                                                            |t| {
+                                                                crate::gateway::security::SharedTokenManager::global()
+                                                                    .map(|m| m.validate(t).unwrap_or(false))
+                                                                    .unwrap_or(false)
+                                                            },
+                                                        );
+                                                    let panel_role =
+                                                        if authorized { "operator" } else { "guest" };
                                                     {
                                                         let mut conns = ctx.connections.write().await;
                                                         if let Some(state) = conns.get_mut(&conn_id) {
@@ -738,18 +740,23 @@ async fn handle_connection(
                                                             };
                                                             state.channel_kind = Some(kind);
                                                             state.first_message = false;
-                                                            // LAN-trust: every connection is the implicit
-                                                            // operator. Stamp the wildcard so EventScopeGuard
-                                                            // delivers guarded topics (approval banners,
-                                                            // config.changed) to this client.
-                                                            state.permissions = vec!["*".to_string()];
-                                                            // Per-device authorization tier (G2/G3) for the
-                                                            // config-tier RPC/tool gates.
+                                                            // Authorized ⇒ wildcard scope so
+                                                            // EventScopeGuard delivers guarded topics
+                                                            // (approval banners, config.changed).
+                                                            // Unauthorized ⇒ no scopes (walled).
+                                                            state.permissions = if authorized {
+                                                                vec!["*".to_string()]
+                                                            } else {
+                                                                Vec::new()
+                                                            };
+                                                            // Single-tier role for the login-wall gate:
+                                                            // operator (authorized) or guest (walled).
                                                             state.caller_role = panel_role.to_string();
                                                         }
                                                     }
-                                                    // Echo the resolved role back so the Panel's
-                                                    // ConfigGate reflects this device's tier.
+                                                    // Echo the verdict so the Panel renders the login
+                                                    // wall / token box when unauthorized, and unlocks
+                                                    // the full app (same as local) when authorized.
                                                     if let Some(obj) = resp
                                                         .result
                                                         .as_mut()
@@ -761,26 +768,17 @@ async fn handle_connection(
                                                                 panel_role.to_string(),
                                                             ),
                                                         );
+                                                        obj.insert(
+                                                            "authorized".to_string(),
+                                                            serde_json::Value::Bool(authorized),
+                                                        );
+                                                        obj.insert(
+                                                            "needs_token".to_string(),
+                                                            serde_json::Value::Bool(!authorized),
+                                                        );
                                                     }
                                                     response =
                                                         serde_json::to_string(&resp).unwrap_or(response);
-                                                    // A never-before-seen remote device just attached
-                                                    // at chat tier: surface it so an operator can grant
-                                                    // Config (pairing-time tier selection).
-                                                    if panel_is_new {
-                                                        let _ = ctx.event_bus.publish_json(
-                                                            &TopicEvent::new(
-                                                                "panel.device.pairing",
-                                                                serde_json::json!({
-                                                                    "device_id": panel_device_id,
-                                                                    "device_name": panel_device_name,
-                                                                }),
-                                                            )
-                                                            .with_state_version(
-                                                                ctx.state_versions.snapshot(),
-                                                            ),
-                                                        );
-                                                    }
 
                                                     // Track presence for no-auth connect
                                                     {

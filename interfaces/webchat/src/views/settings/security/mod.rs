@@ -16,8 +16,8 @@
 //! - [`sandbox`] — sandbox rate-limit + bucket cards
 //! - this module — `SecurityView` entry point + shared `validate_regex` helper
 
-mod devices;
 mod gateway;
+mod gateway_token;
 mod outbound;
 mod pii_rules;
 mod pii_section;
@@ -32,8 +32,8 @@ use crate::api::{SearchConfig, SearchConfigApi, SecurityConfig, SecurityConfigAp
 use crate::context::DashboardState;
 use crate::i18n::{t_string, t, use_i18n};
 
-use devices::PanelDevicesSection;
 use gateway::NetworkAccessSection;
+use gateway_token::GatewayTokenSection;
 use outbound::OutboundSecuritySection;
 use pii_rules::CustomPiiRulesSection;
 use pii_section::PIISection;
@@ -179,7 +179,7 @@ pub fn SecurityView() -> impl IntoView {
                                     </div>
                                 })}
 
-                                <PanelDevicesSection />
+                                <GatewayTokenSection />
                                 <NetworkAccessSection config=config />
                                 <OutboundSecuritySection config=config />
                                 <ShellSecuritySection config=config />

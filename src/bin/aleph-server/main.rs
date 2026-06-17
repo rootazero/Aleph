@@ -125,6 +125,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.command {
         Some(Command::Stop) => return daemon::handle_stop(&args.pid_file),
         Some(Command::Secret { action }) => return commands::handle_secret_command(action),
+        // Print the shared Gateway token: pure read of the 0600 security.db,
+        // no tokio runtime and no instance lock required (mirrors `secret`).
+        Some(Command::BootstrapToken) => return commands::handle_bootstrap_token(),
         Some(Command::Status { json }) => return daemon::handle_status(&args.pid_file, json),
         // Shell-hook consent: pure file IO against ~/.aleph/, no tokio
         // runtime and no instance lock required (the consent module guards
@@ -258,6 +261,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         Some(
             Command::Stop
             | Command::Secret { .. }
+            | Command::BootstrapToken
             | Command::Status { .. }
             | Command::Hooks { .. }
             | Command::PromptSize { .. }

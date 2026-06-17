@@ -441,6 +441,21 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Publish the vault handle (also installs the process-global used by
     // vault consumers outside the request path).
     server.set_shared_token_manager(auth_bundle.auth_ctx.shared_token_mgr.clone());
+
+    // Gateway-token RPCs: read the shared token (display / QR) and rotate it
+    // (revoke all authorized remotes). Authorized-only — the WS login wall
+    // refuses every non-`connect` method to an unauthorized caller. Both
+    // resolve the token via `SharedTokenManager::global()` (installed above).
+    server
+        .handlers_mut()
+        .register("gateway.token.current", |req| async move {
+            alephcore::gateway::handlers::gateway_token::handle_token_current(req).await
+        });
+    server
+        .handlers_mut()
+        .register("gateway.token.rotate", |req| async move {
+            alephcore::gateway::handlers::gateway_token::handle_token_rotate(req).await
+        });
     // Wire the security store so the WS node connect/disconnect paths can
     // stamp enrolled-node last_seen_at (offline fleet view honesty).
     server.set_security_store(auth_bundle.security_store.clone());
@@ -2013,61 +2028,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             println!("  - channel.pairing.reject   : Reject a channel sender");
             println!("  - channel.pairing.approved : List approved channel senders");
             println!("  - channel.pairing.revoke   : Revoke a channel sender");
-            println!();
-        }
-    }
-
-    // Panel device tier store (G2/G3): persists remote Panel devices and their
-    // Chat/Config tier. Shared by the WS connect handshake (via process-global)
-    // and the devices.* RPC handlers. Loopback connections never touch it —
-    // they are always operator (single-machine zero-config).
-    let panel_device_store: Arc<dyn alephcore::gateway::panel_devices::PanelDeviceStore> = {
-        let path = alephcore::utils::paths::get_panel_devices_db_path()
-            .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_panel_devices.db"));
-        let store = alephcore::gateway::panel_devices::SqlitePanelDeviceStore::new(&path)
-            .or_else(|e| {
-                eprintln!("Warning: Failed to create panel device store: {e}. Using in-memory.");
-                alephcore::gateway::panel_devices::SqlitePanelDeviceStore::in_memory()
-            })
-            .map_err(|e| format!("Failed to create panel device store: {e}"))?;
-        Arc::new(store)
-    };
-    alephcore::gateway::panel_devices::set_global_store(panel_device_store.clone());
-
-    // Register Panel device tier RPC handlers (operator-only — gated in
-    // method_authz + the WS dispatch RPC gate).
-    {
-        use alephcore::gateway::handlers::devices as device_handlers;
-
-        let store = panel_device_store.clone();
-        server
-            .handlers_mut()
-            .register("devices.list", move |req| {
-                let store = store.clone();
-                async move { device_handlers::handle_list(req, store).await }
-            });
-
-        let store = panel_device_store.clone();
-        server
-            .handlers_mut()
-            .register("devices.set_level", move |req| {
-                let store = store.clone();
-                async move { device_handlers::handle_set_level(req, store).await }
-            });
-
-        let store = panel_device_store.clone();
-        server
-            .handlers_mut()
-            .register("devices.revoke", move |req| {
-                let store = store.clone();
-                async move { device_handlers::handle_revoke(req, store).await }
-            });
-
-        if !args.daemon {
-            println!("Panel device methods:");
-            println!("  - devices.list      : List paired Panel devices + tiers");
-            println!("  - devices.set_level : Grant/revoke a device's Config tier");
-            println!("  - devices.revoke    : Forget a Panel device");
             println!();
         }
     }

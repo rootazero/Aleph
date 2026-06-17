@@ -164,10 +164,26 @@ pub(super) fn SlashPaletteView(
     current_namespace: RwSignal<Option<String>>,
     on_select: Callback<PaletteEntry>,
 ) -> impl IntoView {
+    // Follow ↑/↓ selection: scroll the highlighted row into view when it
+    // leaves the capped viewport.
+    let list_ref = NodeRef::<leptos::html::Div>::new();
+    Effect::new(move |_| {
+        let idx = selected_index.get();
+        let _ = palette_entries.get(); // re-run when entries change (filter / drill resets idx)
+        if let Some(el) = list_ref.get() {
+            let el: &web_sys::HtmlElement = &el;
+            crate::views::chat::list_scroll::reveal_selected_row(el, idx);
+        }
+    });
+
     view! {
         <Show when=move || show.get() && !palette_entries.get().is_empty()>
-            <div class="mb-2 rounded-2xl border border-border bg-surface-raised shadow-lg
-                        max-h-[200px] overflow-y-auto">
+            <div
+                node_ref=list_ref
+                class="glass animate-pop-in absolute bottom-full inset-x-0 mb-2 z-50
+                       rounded-xl border border-border bg-surface-overlay/85 shadow-xl
+                       max-h-[200px] overflow-y-auto"
+            >
                 // Namespace breadcrumb header.
                 <Show when=move || current_namespace.get().is_some()>
                     <div class="px-3 py-1.5 text-xs text-text-tertiary border-b border-border">
@@ -186,8 +202,10 @@ pub(super) fn SlashPaletteView(
                         let is_back = entry.is_back;
                         let is_ns = entry.is_namespace;
                         let ns_ctx = current_namespace.get_untracked();
+                        let pidx = idx.to_string();
                         view! {
                             <button
+                                data-pidx=pidx
                                 class=move || {
                                     let base = "w-full text-left px-3 py-2 flex items-baseline gap-2 text-sm transition-colors";
                                     if selected_index.get() == idx {

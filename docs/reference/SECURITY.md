@@ -7,7 +7,7 @@
 ## Overview
 
 Aleph's security system provides:
-- **Permission Model**: Under LAN-trust every caller collapses to a single owner identity (see below)
+- **Permission Model**: single-tier Gateway-token auth — loopback is operator zero-config; a remote presents the shared token (or is walled). Authorized == full local-equivalent authority (see below)
 - **Tool Permission Enforcement**: Per-channel tool permissions via `ScopedToolService` — governs *what an agent may do*, orthogonal to *who may connect*
 - **Exec Approval**: Human-in-the-loop for shell commands
 - **Command Analysis**: Static analysis of command risk
@@ -18,43 +18,48 @@ Aleph's security system provides:
 
 ---
 
-## Permission Model (LAN-trust)
+## Permission Model (network boundary + Gateway token)
 
-Aleph has no authentication step — the trust boundary is the network
-boundary (see [Trust model: LAN-trust](#auth-ux)). The local (loopback)
-desktop App is always the implicit **operator** (single-machine zero-config).
-A **remote** Panel, however, is *not* automatically trusted to reconfigure
-Aleph: it connects at the **Chat** tier by default and must be explicitly
-raised to **Config** by an operator (see *Panel device tier* below). Raw
-execution (`bash`, PTY) still rides the network trust boundary — the device
-tier governs *configuration* mutation, not execution.
+The trust boundary is the network boundary, gated by a single shared
+**Gateway token** (see [Trust model](#auth-ux)). The Panel connects over plain
+WS (same-origin HTTP) — **not** the channel pipeline — so a thin-shell App
+reaching a LAN core behaves exactly like a browser opening the core's IP:
 
-### Panel device tier (Chat / Config)
+- **Loopback** (the local desktop App / same machine): always authorized as
+  **operator**, no token (single-machine zero-config).
+- **Remote** (LAN): must present the shared Gateway token (`aleph-<uuid>`,
+  provisioned at boot by `SharedTokenManager`) in the `connect` handshake.
+  A valid token grants the **same** operator authority as local — there is no
+  Chat/Config sub-tier. A missing / invalid token leaves the connection
+  unauthorized behind a **login wall**.
+- **Revocation**: rotate the token (`gateway.token.rotate`), which invalidates
+  every previously authorized remote. No per-device sessions.
 
-Each remote Panel reports a stable `device_id` (a UUID it keeps in
-`localStorage`) on the `connect` handshake. The gateway resolves a tier and
-persists it in `src/gateway/panel_devices.rs` (`panel_devices.db`):
+Two ways to present the token, both equivalent to a browser login:
 
-- **Chat** (default, role `"guest"`): converse + read + use tools/PTY. The
-  Panel's config pages are hidden (`ConfigGate`).
-- **Config** (role `"operator"`): the above plus Aleph's own configuration
-  surface. Granted by an operator via `devices.set_level` — after the fact
-  or the moment a new device pairs (a `panel.device.pairing` event surfaces
-  the newcomer in **Settings → Security → Panel devices**).
+- **Token box** — open the core IP, the Panel shows a token input; paste the
+  token → authorized.
+- **QR / link** — scan the QR (or open `http://<ip>:<port>/?token=<token>`)
+  shown in **Settings → Security → Gateway token**; the token rides the URL.
 
-Enforcement is **defense-in-depth**, both keyed off the connection role
-stamped onto `ConnectionState.caller_role` at the handshake:
+Operators read the token via that Settings section or the
+`aleph-server bootstrap-token` CLI.
 
-1. **RPC gate** (`server::handler` + `method_authz::rpc_requires_operator`):
-   config-mutating RPC methods (`self_config`-class, `*.install`, `cron.*`
-   writes, `identity.set`, `gateway.credentials`, `devices.*`, …) are refused
-   for a Chat-tier connection — so a hand-crafted RPC can't bypass the hidden
-   UI.
-2. **Tool gate** (`tools/scoped/dispatch.rs` + `method_authz::tool_requires_operator`):
-   config-mutating *tools* invoked through the agent loop are likewise refused.
+### Enforcement
 
-Loopback connections never touch the device store — they are operator
-unconditionally.
+- **Login wall** (`server::handler` + `handlers::connect::connect_authorized`):
+  the WS dispatch refuses every method except `connect` to an unauthorized
+  connection. The handshake computes the verdict — loopback, or a valid token
+  via `SharedTokenManager::validate` — stamps `ConnectionState.caller_role`
+  (`operator` / `guest`), and echoes `role` / `authorized` / `needs_token` so
+  the Panel renders the wall or unlocks the full app.
+- **Channel tool gate** (`tools/scoped/dispatch.rs` +
+  `method_authz::tool_requires_operator`): governs **channels only**. The
+  inbound router stamps each channel run's `caller_role` from its
+  `ChannelPermissionLevel` (default `Chat` ⇒ `guest`), and the tool-dispatch
+  chokepoint refuses self-config tools to a chat-tier channel (e.g. a default
+  Telegram bot). An authorized Panel is always operator, so this gate is a
+  no-op for it — it is not a Panel sub-tier.
 
 ### What was removed
 
@@ -829,31 +834,33 @@ blocked_hosts = ["*.malware.com"]
 
 ---
 
-## Trust model: LAN-trust {#auth-ux}
+## Trust model: network boundary + Gateway token {#auth-ux}
 
-Aleph has **no authentication step**. The trust boundary *is* the network
-boundary: whoever can reach the gateway socket is the owner. Every
-`connect` handshake is accepted as `operator`
-(`src/gateway/handlers/connect.rs`) — legacy `token` / `device_name`
-params from old clients are accepted and ignored, never validated.
+The trust boundary is the network boundary, gated by a single shared
+**Gateway token**. Loopback is the implicit operator (zero-config); a remote
+connection must present the token at the `connect` handshake
+(`src/gateway/handlers/connect.rs::connect_authorized`). A valid token = full
+operator authority (single tier, identical to local); a missing / invalid one
+is walled (the WS dispatch refuses every method but `connect`). Revocation is
+token rotation (`gateway.token.rotate`).
 
-### Network boundary = trust boundary
+### Network boundary = reachability
 
 - **Default — loopback only.** `aleph-server` binds `127.0.0.1`
   (`GatewayServerConfig::default`), so only processes on the same machine
-  can connect. A single-machine desktop install needs zero configuration.
+  can connect. A single-machine desktop install needs zero configuration and
+  is auto-authorized as operator.
 - **LAN opt-in.** Set `[gateway] host = "0.0.0.0"` in
-  `~/.aleph/config.toml` to listen on every interface. **This grants every
-  device on your LAN complete control over the agent** — including the
-  PTY / shell-execution tools. There is no method-level gate to fall back
-  on: the old per-RPC operator-vs-guest authorization
-  (`method_authz`) is inert under LAN-trust because the caller role is
-  always `operator`. Only enable `0.0.0.0` on a network you trust
-  end-to-end (home LAN behind your router), never on an untrusted or
-  public segment.
+  `~/.aleph/config.toml` to listen on every interface. A remote device on the
+  LAN can then reach the socket, but is **walled until it presents the Gateway
+  token** — so exposure of the socket no longer equals control of the agent.
+  Still, treat the token as the single key to everything (an authorized remote
+  has full operator authority, including PTY / shell): share it only over a
+  trusted channel, and rotate it if it may have leaked.
 - **Beyond the LAN.** To reach Aleph across the internet, front it with
   your own reverse proxy / VPN / SSH tunnel that terminates trust
-  *upstream* of the gateway. Aleph itself adds no transport auth.
+  *upstream* of the gateway. The Gateway token is the only transport auth
+  Aleph itself provides.
 
 ### The one remaining guardrail: WS Origin check
 

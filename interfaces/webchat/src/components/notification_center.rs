@@ -155,7 +155,7 @@ pub fn NotificationCenter() -> impl IntoView {
                                                 <div class="text-sm font-medium text-text-primary">
                                                     {t!(i18n, notifications.approval_header)}
                                                 </div>
-                                                <div class="font-mono text-sm my-1 text-indigo-300">
+                                                <div class="font-mono text-sm my-1 text-primary">
                                                     {command}
                                                 </div>
                                                 <div class="text-xs text-text-secondary">
@@ -167,7 +167,7 @@ pub fn NotificationCenter() -> impl IntoView {
                                                 <div class="flex gap-2 mt-2">
                                                     <button
                                                         type="button"
-                                                        class="flex-1 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors"
+                                                        class="flex-1 py-1.5 rounded bg-primary hover:bg-primary-hover text-white text-xs font-semibold transition-colors"
                                                         on:click=move |_| {
                                                             let id = id_once.clone();
                                                             spawn_local(async move {
@@ -177,7 +177,7 @@ pub fn NotificationCenter() -> impl IntoView {
                                                                         dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
                                                                     }
                                                                     Err(e) => {
-                                                                        tracing::warn!("Failed to resolve approval (allow-once): {e}");
+                                                                        web_sys::console::warn_1(&format!("Failed to resolve approval (allow-once): {e:?}").into());
                                                                     }
                                                                 }
                                                             });
@@ -198,7 +198,7 @@ pub fn NotificationCenter() -> impl IntoView {
                                                                         dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
                                                                     }
                                                                     Err(e) => {
-                                                                        tracing::warn!("Failed to resolve approval (allow-session): {e}");
+                                                                        web_sys::console::warn_1(&format!("Failed to resolve approval (allow-session): {e:?}").into());
                                                                     }
                                                                 }
                                                             });
@@ -219,7 +219,7 @@ pub fn NotificationCenter() -> impl IntoView {
                                                                         dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
                                                                     }
                                                                     Err(e) => {
-                                                                        tracing::warn!("Failed to resolve approval (deny): {e}");
+                                                                        web_sys::console::warn_1(&format!("Failed to resolve approval (deny): {e:?}").into());
                                                                     }
                                                                 }
                                                             });
