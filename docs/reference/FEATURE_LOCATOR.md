@@ -343,11 +343,11 @@
 - **打磨话术**：「全局开关在 `config/types/general.rs` 的 output_mode；‘所有 channel 同步’靠 `handlers/agent.rs::resolved_output_mode` 每次 run fresh 读同一配置。前端呈现在 `webchat/.../markdown.rs`。」
 
 ### 5.8 自我管理 (Self-Config / Self-Manage)
-- **口语关键词**：self 自我管理、自动配置、LLM 驱动配置、配置向导
-- **代码锚点**：`src/builtin_tools/self_config.rs`（交互配置向导）、`src/builtin_tools/self_manage.rs`（LLM intent → 读 self SKILL.md 自管理手册）、`src/builtin_tools/doctor.rs`
-- **职责**：self_manage 读 `~/.aleph/skills/self/SKILL.md` 导航自管理；self_config 交互式配置向导；密钥走 vault_store，结构改动触发 hot-reload。
-- **状态**：✅ 已实现。
-- **打磨话术**：「‘自我管理/自动配置’= self_manage + self_config 两工具；密钥不进 config.toml 走 vault。」
+- **口语关键词**：self 自我管理、自动配置、LLM 驱动配置、配置向导、改完 provider 验证可达
+- **代码锚点**：`src/builtin_tools/self_config.rs`（身份文件 + config.toml CRUD + `verify` 探活）、`src/builtin_tools/self_manage.rs`（LLM intent → 读 self SKILL.md 自管理手册）、`src/config/patcher.rs`（`ConfigPatcher`：deep-merge/校验/备份/回滚 + `health_check` provider 探活，`with_vault` 注入金库）、`src/config/reload_impact.rs`（live/restart/inert 分类）、`src/builtin_tools/doctor.rs`
+- **职责**：self_manage 读 `~/.aleph/skills/self/SKILL.md` 导航自管理；self_config 交互式配置 + `update_config(verify=true)` 在 patch `providers.*` 后经 `providers::probe::probe_provider`（单一真源）探活回填 `health_check`；密钥走 vault_store，结构改动触发 hot-reload / reload_impact 告知生效时机。
+- **状态**：✅ 已实现。**健康探活已连线（2026-06-17）**：`PatchRequest.health_check` 不再是 no-op——命中 `providers.*` 且 patcher 注入了 vault 时，apply 后探活并回填 `Passed/Failed/Skipped`，同源服务 `providers.healthcheck` RPC 与 doctor `providers/connectivity`。死字段 `secret_fields` 已移除（熵减）。
+- **打磨话术**：「‘自我管理/自动配置’= self_manage + self_config 两工具；密钥不进 config.toml 走 vault。‘改完 provider 想确认能连’= `update_config(..., verify=true)`（仅 `providers.*` 有效，dry_run 跳过），探活逻辑在 `patcher.rs::run_provider_health_check`，复用 `providers::probe`。」
 
 ### 5.9 Doctor 诊断与修复 (Doctor & Auto-Fix)
 - **口语关键词**：doctor、诊断、自动修复、doctor+f、机械修复

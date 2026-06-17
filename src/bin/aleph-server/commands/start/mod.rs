@@ -1149,11 +1149,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let config_patcher = {
         let config_path = alephcore::Config::default_path();
         let backup = alephcore::ConfigBackup::new(alephcore::ConfigBackup::default_dir(), 10);
-        Arc::new(alephcore::ConfigPatcher::new(
-            app_config.clone(),
-            config_path,
-            backup,
-        ))
+        // Wire the vault so a `health_check` provider patch (self_config
+        // verify / Panel config.patch) can probe live reachability with the
+        // same `ai:<name>` key resolution the connectivity doctor uses.
+        Arc::new(
+            alephcore::ConfigPatcher::new(app_config.clone(), config_path, backup)
+                .with_vault(auth_bundle.auth_ctx.shared_token_mgr.clone()),
+        )
     };
     let app_config_for_channels = app_config.clone();
     let app_config_for_reload = app_config.clone();

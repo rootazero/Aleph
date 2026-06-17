@@ -461,7 +461,11 @@ pub async fn handle_get_full_config(
 /// Handle config.patch RPC method
 ///
 /// Delegates to `ConfigPatcher` for the full pipeline: schema validation,
-/// conflict detection, backup, secret routing, and atomic save.
+/// conflict detection, backup, and atomic save. Channel secrets are stripped
+/// to the vault by `store_and_strip_channel_secrets` before the patch (LLM
+/// provider keys go through `vault_store`, never the patch body). When
+/// `health_check` is set on a `providers.*` patch, the affected provider is
+/// probed for reachability and the verdict returned in `result.health_check`.
 ///
 /// # Request
 ///
@@ -473,7 +477,6 @@ pub async fn handle_get_full_config(
 ///   "params": {
 ///     "path": "providers.openai",
 ///     "patch": { "model": "gpt-4o", "temperature": 0.8 },
-///     "secret_fields": { "api_key": "sk-xxx" },
 ///     "dry_run": false,
 ///     "health_check": true
 ///   }
@@ -490,6 +493,7 @@ pub async fn handle_get_full_config(
 ///     "status": "ok",
 ///     "applied_sections": ["providers"],
 ///     "diff": [...],
+///     "health_check": "passed",
 ///     "warnings": []
 ///   }
 /// }
