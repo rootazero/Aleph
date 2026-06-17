@@ -514,7 +514,7 @@ Actions:
 - resize_window: Resize a window to width × height pixels by window_id.
 - clipboard_read: Read clipboard text.
 - clipboard_write: Write text to clipboard.
-- screen_record: Record screen as MP4. Optional duration/fps/with_audio.
+- screen_record: Record screen as MP4. Optional duration/fps/with_audio and region {x,y,width,height} (defaults to the full primary display). region honors coord_space:"normalized" like screenshot.
 - display_list: List all connected displays with resolution and scale info.
 - batch: Execute multiple actions sequentially. Requires actions array.
 - paste: Paste text via clipboard (Cmd+V). Better for multiline text than type_text.
@@ -530,6 +530,7 @@ Examples:
 {"action":"scroll","delta_y":-300}
 {"action":"type_text","text":"Hello"}
 {"action":"screen_record","duration":3.0,"fps":30}
+{"action":"screen_record","duration":5.0,"fps":30,"region":{"x":0,"y":0,"width":1280,"height":720}}
 {"action":"display_list"}
 {"action":"move_window","window_id":1234,"x":100,"y":80}
 {"action":"resize_window","window_id":1234,"width":1280,"height":800}
