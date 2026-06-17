@@ -884,17 +884,18 @@ where
                             } else if crate::looping::pursuit::exhausted(&state, tokens_now, now_ms) {
                                 // Distinguish token-budget / wall-clock exhaustion
                                 // from the iteration cap so the user sees the real
-                                // stop reason (mirrors the goal hook).
-                                let note = if state.over_budget(tokens_now) {
-                                    crate::looping::pursuit::budget_reached_note(&state)
-                                } else if state.deadline_ms.is_some_and(|d| now_ms != 0 && now_ms > d)
-                                {
-                                    crate::looping::pursuit::deadline_reached_note(&state)
-                                } else {
-                                    crate::looping::pursuit::cap_reached_note(&state)
-                                };
-                                loop_reg
-                                    .put(state.with_status(crate::looping::LoopStatus::Stopped));
+                                // stop reason (mirrors the goal hook). The note is
+                                // STORED on the loop (not just logged) so
+                                // loop(action='status') can explain why a silently
+                                // capped watch loop ended on the user's next turn.
+                                let note = crate::looping::pursuit::stop_reason_note(
+                                    &state, tokens_now, now_ms,
+                                );
+                                loop_reg.put(
+                                    state
+                                        .with_status(crate::looping::LoopStatus::Stopped)
+                                        .with_stop_reason(Some(note.clone())),
+                                );
                                 info!(session = %session_key_str, note = %note,
                                     "loop: safety cap reached, loop stopped");
                             }
@@ -1186,9 +1187,15 @@ async fn stop_loop_on_failure(
     let reason: String = format!("{error}").chars().take(300).collect();
     if let Some(reg) = crate::looping::global() {
         // Only stop a loop still Active — never clobber one the user already
-        // stopped between the tick firing and its failure landing.
+        // stopped between the tick firing and its failure landing. Store the
+        // failure reason so loop(action='status') explains the halt even for
+        // Panel-only sessions that have no origin channel to receive the notice.
         if let Some(state) = reg.get_active(session_key_str) {
-            reg.put(state.with_status(crate::looping::LoopStatus::Stopped));
+            reg.put(
+                state
+                    .with_status(crate::looping::LoopStatus::Stopped)
+                    .with_stop_reason(Some(format!("Halted by an error: {reason}"))),
+            );
         }
     }
     if let Some((reg, ch, conv)) = origin {

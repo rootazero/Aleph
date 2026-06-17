@@ -92,6 +92,22 @@ pub fn budget_reached_note(state: &LoopState) -> String {
     }
 }
 
+/// Pick the user-facing reason for the *binding* exhaustion cause, in priority
+/// order token-budget → deadline → iteration cap. Single source for the choice
+/// the continuation hook previously inlined as a 3-way `if/else`, so the stored
+/// `stop_reason` and any future surfacing stay consistent. Call only when
+/// [`exhausted`] is true; otherwise it falls through to the iteration-cap note.
+#[must_use]
+pub fn stop_reason_note(state: &LoopState, tokens_now: u64, now_ms: u64) -> String {
+    if state.over_budget(tokens_now) {
+        budget_reached_note(state)
+    } else if state.deadline_ms.is_some_and(|d| now_ms != 0 && now_ms > d) {
+        deadline_reached_note(state)
+    } else {
+        cap_reached_note(state)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +251,23 @@ mod tests {
         let l = fixed().with_token_budget(Some(500)).with_baseline(2_000);
         assert!(!exhausted(&l, 2_000, 2_000), "no spend at baseline");
         assert!(exhausted(&l, 2_600, 2_000), "600 over budget after baseline");
+    }
+
+    #[test]
+    fn stop_reason_note_picks_binding_cause_in_priority_order() {
+        // Token budget binds first.
+        let budgeted = fixed()
+            .with_token_budget(Some(500))
+            .with_baseline(1_000)
+            .with_deadline_ms(Some(5_000))
+            .with_max_iterations(Some(2));
+        assert!(stop_reason_note(&budgeted, 1_600, 6_000).contains("token budget"));
+        // No budget overrun → deadline binds next.
+        let timed = fixed().with_deadline_ms(Some(5_000)).with_max_iterations(Some(2));
+        assert!(stop_reason_note(&timed, 0, 6_000).contains("time"));
+        // Neither → iteration cap.
+        let capped = fixed().with_max_iterations(Some(2));
+        assert!(stop_reason_note(&capped, 0, 2_000).contains("iteration"));
     }
 
     #[test]

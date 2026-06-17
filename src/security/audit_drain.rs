@@ -1,17 +1,23 @@
-//! Background task that drains `SecurityAuditLog` entries to SQL.
+//! Background task that drains `SecurityAuditLog` entries to SQL and applies
+//! the retention policy.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::gateway::security::store::SecurityStore;
-use crate::security::audit::AuditEntry;
+use crate::security::audit::{AuditEntry, DEFAULT_RETENTION_SECS};
+
+/// How often the drain task prunes entries past the retention horizon.
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 
 /// Spawn a single drain task that pulls `AuditEntry` items from `rx` and
-/// inserts them into the `security_audit_log` table via `store`. Returns
-/// the join handle. The task exits gracefully when `rx`'s sender side
-/// drops.
+/// inserts them into the `security_audit_log` table via `store`. The same task
+/// periodically purges entries older than [`DEFAULT_RETENTION_SECS`] so the
+/// table does not grow without bound. Returns the join handle. The task exits
+/// gracefully when `rx`'s sender side drops.
 pub fn spawn_audit_drain(
     rx: mpsc::Receiver<AuditEntry>,
     store: Arc<SecurityStore>,
@@ -20,9 +26,32 @@ pub fn spawn_audit_drain(
 }
 
 async fn drain_loop(mut rx: mpsc::Receiver<AuditEntry>, store: Arc<SecurityStore>) {
-    while let Some(entry) = rx.recv().await {
-        if let Err(e) = store.insert_audit_entry(&entry) {
-            tracing::error!(error = %e, ?entry.event_type, "audit drain insert failed");
+    let mut cleanup = tokio::time::interval(CLEANUP_INTERVAL);
+    // The first tick fires immediately; drop it so startup isn't spent purging
+    // an empty table.
+    cleanup.tick().await;
+
+    loop {
+        tokio::select! {
+            received = rx.recv() => match received {
+                Some(entry) => {
+                    if let Err(e) = store.insert_audit_entry(&entry) {
+                        tracing::error!(error = %e, ?entry.event_type, "audit drain insert failed");
+                    }
+                }
+                None => break,
+            },
+            _ = cleanup.tick() => {
+                match store.purge_audit_entries(DEFAULT_RETENTION_SECS) {
+                    Ok(n) if n > 0 => {
+                        tracing::debug!(removed = n, "audit retention purge complete");
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::error!(error = %e, "audit retention purge failed");
+                    }
+                }
+            }
         }
     }
     tracing::debug!("audit drain channel closed; task exiting");
@@ -61,6 +90,37 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM security_audit_log", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn purge_removes_entries_past_retention() {
+        let store = SecurityStore::in_memory().unwrap();
+        {
+            let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
+            // One ancient row (well past any retention window) and one fresh row.
+            conn.execute(
+                "INSERT INTO security_audit_log (timestamp, event_type, severity, detail) \
+                 VALUES (strftime('%s','now') - 1000000, 'ssrf_blocked', 'warn', 'old')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO security_audit_log (event_type, severity, detail) \
+                 VALUES ('ssrf_blocked', 'warn', 'fresh')",
+                [],
+            )
+            .unwrap();
+        }
+
+        // Retention horizon of 100s removes only the ancient row.
+        let removed = store.purge_audit_entries(100).unwrap();
+        assert_eq!(removed, 1);
+
+        let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM security_audit_log", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[tokio::test]
