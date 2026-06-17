@@ -279,6 +279,7 @@ mod tests {
     use super::*;
     use crate::extension::{HookAction, HookConfig, HookKind, HookPriority};
 
+    #[cfg(unix)]
     fn observer_touch_hook(event: HookEvent, sentinel: &std::path::Path) -> HookConfig {
         let cmd = if cfg!(windows) {
             format!("type nul > \"{}\"", sentinel.display())

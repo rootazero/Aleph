@@ -903,17 +903,15 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // symlink-escape detection is exercised via POSIX symlinks only
     fn test_is_path_inside_symlink_escape() {
         let dir = tempdir().unwrap();
         let outside = tempdir().unwrap();
         let link_path = dir.path().join("escape-link");
 
         // Create symlink pointing outside
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(outside.path(), &link_path).unwrap();
-            assert!(!is_path_inside(dir.path(), &link_path));
-        }
+        std::os::unix::fs::symlink(outside.path(), &link_path).unwrap();
+        assert!(!is_path_inside(dir.path(), &link_path));
     }
 
     #[test]

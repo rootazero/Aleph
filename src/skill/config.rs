@@ -169,10 +169,12 @@ mod tests {
 
     #[test]
     fn prompt_budget_roundtrips_toml() {
-        let mut config = SkillsConfig::default();
-        config.prompt_budget = SkillPromptBudget {
-            max_skills: 10,
-            max_chars: 2000,
+        let config = SkillsConfig {
+            prompt_budget: SkillPromptBudget {
+                max_skills: 10,
+                max_chars: 2000,
+            },
+            ..Default::default()
         };
         let tmp = NamedTempFile::new().unwrap();
         config.save(tmp.path()).unwrap();

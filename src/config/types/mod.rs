@@ -56,7 +56,6 @@ pub mod voice_local;
 pub use acp::*;
 pub use agent::*;
 pub use agents_def::*;
-pub use desktop::DesktopDaemonConfig;
 pub use dispatcher::*;
 pub use evolution::*;
 pub use execution::*;

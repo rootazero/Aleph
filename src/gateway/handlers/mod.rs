@@ -1062,12 +1062,16 @@ mod tests {
     }
 
     #[test]
-    fn test_identity_handlers_registered() {
+    fn test_identity_handlers_not_registered_until_boot() {
+        // identity.get/set/clear/list are wired against the live
+        // SharedIdentityResolver by register_identity_handlers at server boot,
+        // not in HandlerRegistry::new(). An unwired registry must report
+        // METHOD_NOT_FOUND rather than a misleading placeholder stub error.
         let registry = HandlerRegistry::new();
-        assert!(registry.has_method("identity.get"));
-        assert!(registry.has_method("identity.set"));
-        assert!(registry.has_method("identity.clear"));
-        assert!(registry.has_method("identity.list"));
+        assert!(!registry.has_method("identity.get"));
+        assert!(!registry.has_method("identity.set"));
+        assert!(!registry.has_method("identity.clear"));
+        assert!(!registry.has_method("identity.list"));
     }
 
     #[test]

@@ -438,7 +438,6 @@ mod tests {
         let budget = TokenBudget {
             max_total_chars: 1500,
             truncation_warning: TruncationWarning::Off,
-            ..TokenBudget::default()
         };
         let out = fit_dynamic_suffix(200, "D".repeat(40_000), &budget);
         assert!(out.len() < 40_000, "still trims to protect the budget");

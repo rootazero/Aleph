@@ -195,6 +195,7 @@ impl OrchestratorFixture {
             default_prompt_mode: Default::default(),
             prompt_extra_files: None,
             mcp_handle: None,
+            parallel_tool_concurrency: None,
         });
 
         let orchestrator = Orchestrator::new(

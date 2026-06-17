@@ -405,6 +405,8 @@ fn canonicalize_best_effort(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the (non-Windows) file-change-detection test uses these.
+    #[cfg(not(windows))]
     use crate::sync_primitives::{AtomicBool, Ordering};
     use std::fs;
     use std::thread;

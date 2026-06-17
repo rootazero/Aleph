@@ -1002,6 +1002,7 @@ mod tests {
             .contains("ungated"));
     }
 
+    #[cfg(unix)]
     fn observer_command_hook(event: HookEvent, command: &str) -> HookConfig {
         HookConfig {
             event,

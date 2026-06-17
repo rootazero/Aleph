@@ -210,6 +210,7 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         default_prompt_mode: Default::default(),
         prompt_extra_files: None,
         mcp_handle: None,
+        parallel_tool_concurrency: None,
     };
 
     Arc::new(Orchestrator::new(

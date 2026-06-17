@@ -1,10 +1,14 @@
 use super::*;
+// HookExecutor + make_command_hook are only exercised by the cfg(unix) hook tests below.
+#[cfg(unix)]
 use crate::extension::hooks::HookExecutor;
+#[cfg(unix)]
 use crate::extension::{HookAction, HookConfig, HookEvent, HookKind, HookPriority};
 use crate::sync_primitives::Arc as StdArc;
 use crate::tools::refresh::ToolRefreshSource;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult as LoopToolResult};
 use serde_json::{json, Value};
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -546,6 +550,7 @@ fn echo_registry() -> Arc<LoopToolRegistry> {
     Arc::new(r)
 }
 
+#[cfg(unix)]
 fn make_command_hook(event: HookEvent, kind: HookKind, command: &str) -> HookConfig {
     HookConfig {
         event,

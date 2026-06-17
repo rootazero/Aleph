@@ -323,9 +323,7 @@ impl Sandbox for WorkspaceSandbox {
         // is a no-op for the proxy path (capability becomes IP-only), but
         // it's still required for `AllowAll` (no-op) and for the Linux
         // fallback path where AllowHosts goes straight to the driver.
-        if let Err(e) = dns::resolve_hosts_in_capabilities(&mut cmd.capabilities).await {
-            return Err(e);
-        }
+        dns::resolve_hosts_in_capabilities(&mut cmd.capabilities).await?;
 
         let profile = self.os_driver.profile_for(&cmd.capabilities, &cwd)?;
 
