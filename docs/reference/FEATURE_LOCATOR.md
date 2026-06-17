@@ -204,8 +204,8 @@
 - **口语关键词**：MCP、外部 server、tools/resources/prompts、OAuth、sampling
 - **代码锚点**：`src/mcp/`——`client.rs`（连接）、`manager/`（生命周期）、`transport`（Stdio/Http/Sse）、`tool_bridge`（动态注册 MCP 工具）、`resources`、`prompts`、`approval.rs`、`context_injector.rs`、`auth/`、`external/`、`preflight.rs`
 - **职责**：标准 MCP 协议联接外部 server，发现并代理 tools/resources/prompts，支持 OAuth/采样/工具过滤/上下文注入/风险批准。
-- **状态**：✅ 已实现。
-- **打磨话术**：「MCP 全在 `src/mcp/`；‘MCP 工具如何进 Aleph 工具表’找 tool_bridge；‘外部 server 配置’找 `external/`。」
+- **状态**：✅ 已实现（2026-06-17 强化：补齐 MCP **cursor 分页**——`tools/list`·`resources/list`·`prompts/list` 经 `connection.rs::drain_paginated` 跟随 `nextCursor` 翻页直到耗尽，`MAX_PAGES=100` 防呆/防非终止游标；首页不带 `params` 向后兼容旧 server。**修复**：此前三个 list 仅发单次请求，工具数超单页上限的大型 server 会静默丢条目）。
+- **打磨话术**：「MCP 全在 `src/mcp/`；‘MCP 工具如何进 Aleph 工具表’找 tool_bridge；‘外部 server 配置’找 `external/`；‘大型 server 只看到部分工具/资源’= 分页，看 `connection.rs::drain_paginated`（result 类型的 `next_cursor` 在 `protocol.rs`）。」
 
 ### 3.10 插件系统 (Plugin System)
 - **口语关键词**：plugins、插件、WASM 插件、MCP 插件、marketplace、plugin.json

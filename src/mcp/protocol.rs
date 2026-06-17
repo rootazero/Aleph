@@ -185,6 +185,11 @@ impl ToolAnnotations {
 pub struct ToolsListResult {
     /// Available tools
     pub tools: Vec<ToolDefinition>,
+    /// Opaque pagination cursor (MCP spec). When present, more tools remain
+    /// and the client must re-issue `tools/list` with `params.cursor` set to
+    /// this value. Absent on the final (or only) page.
+    #[serde(default, rename = "nextCursor", skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 /// Tool call request parameters
@@ -291,6 +296,11 @@ pub struct ResourceDefinition {
 pub struct ResourcesListResult {
     /// Available resources
     pub resources: Vec<ResourceDefinition>,
+    /// Opaque pagination cursor (MCP spec). When present, more resources
+    /// remain and the client must re-issue `resources/list` with
+    /// `params.cursor` set to this value. Absent on the final (or only) page.
+    #[serde(default, rename = "nextCursor", skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 /// Resource read request parameters
@@ -364,6 +374,11 @@ pub struct PromptDefinition {
 pub struct PromptsListResult {
     /// Available prompts
     pub prompts: Vec<PromptDefinition>,
+    /// Opaque pagination cursor (MCP spec). When present, more prompts remain
+    /// and the client must re-issue `prompts/list` with `params.cursor` set to
+    /// this value. Absent on the final (or only) page.
+    #[serde(default, rename = "nextCursor", skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 /// Prompt get request parameters
@@ -722,6 +737,32 @@ mod tests {
         let tool: ToolDefinition = serde_json::from_str(json).unwrap();
         assert_eq!(tool.name, "file_read");
         assert!(tool.description.is_some());
+    }
+
+    #[test]
+    fn test_list_results_parse_next_cursor() {
+        // Cursor present → carried through for the next page.
+        let tools: ToolsListResult =
+            serde_json::from_str(r#"{"tools": [], "nextCursor": "page2"}"#).unwrap();
+        assert_eq!(tools.next_cursor.as_deref(), Some("page2"));
+
+        let resources: ResourcesListResult =
+            serde_json::from_str(r#"{"resources": [], "nextCursor": "r2"}"#).unwrap();
+        assert_eq!(resources.next_cursor.as_deref(), Some("r2"));
+
+        let prompts: PromptsListResult =
+            serde_json::from_str(r#"{"prompts": [], "nextCursor": "p2"}"#).unwrap();
+        assert_eq!(prompts.next_cursor.as_deref(), Some("p2"));
+    }
+
+    #[test]
+    fn test_list_results_absent_cursor_is_backward_compatible() {
+        // Pre-pagination servers omit the field → None (final page), and we do
+        // not emit a null `nextCursor` back on serialization.
+        let tools: ToolsListResult = serde_json::from_str(r#"{"tools": []}"#).unwrap();
+        assert!(tools.next_cursor.is_none());
+        let reserialized = serde_json::to_string(&tools).unwrap();
+        assert!(!reserialized.contains("nextCursor"));
     }
 
     #[test]

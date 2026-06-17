@@ -234,31 +234,72 @@ impl McpServerConnection {
         Ok(())
     }
 
+    /// Drain a paginated MCP list method, following the spec `nextCursor`
+    /// chain until the server stops returning one.
+    ///
+    /// The first page omits `params` (the cursor is optional per spec); each
+    /// subsequent page echoes the previous page's `nextCursor` back as
+    /// `params.cursor`. `extract` parses one page's raw JSON-RPC result into
+    /// `(items, next_cursor)`. `MAX_PAGES` bounds a server whose cursor never
+    /// terminates (or fails to advance) so a buggy or hostile server cannot
+    /// pin the connection in an unbounded fetch loop.
+    async fn drain_paginated<T, F>(&self, method: &str, mut extract: F) -> Result<Vec<T>>
+    where
+        F: FnMut(Value) -> Result<(Vec<T>, Option<String>)>,
+    {
+        const MAX_PAGES: usize = 100;
+        let mut items: Vec<T> = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        for _ in 0..MAX_PAGES {
+            let request = match &cursor {
+                Some(c) => {
+                    JsonRpcRequest::with_params(self.id_gen.next(), method, json!({ "cursor": c }))
+                }
+                None => JsonRpcRequest::new(self.id_gen.next(), method),
+            };
+            let response = self.transport.send_request(&request).await?;
+            let result = response.into_result().map_err(|e| {
+                AlephError::IoError(format!("MCP server '{}' {} failed: {}", self.name, method, e))
+            })?;
+
+            let (page, next) = extract(result)?;
+            items.extend(page);
+            match next {
+                Some(c) if !c.is_empty() => cursor = Some(c),
+                _ => return Ok(items),
+            }
+        }
+
+        tracing::warn!(
+            server = %self.name,
+            method,
+            max_pages = MAX_PAGES,
+            collected = items.len(),
+            "MCP list pagination hit the page cap; truncating (server cursor did not terminate)"
+        );
+        Ok(items)
+    }
+
     /// Refresh the cached tools list
     pub async fn refresh_tools(&self) -> Result<()> {
-        let request = JsonRpcRequest::new(self.id_gen.next(), "tools/list");
-        let response = self.transport.send_request(&request).await?;
-
-        let result = response.into_result().map_err(|e| {
-            AlephError::IoError(format!(
-                "MCP server '{}' tools/list failed: {}",
-                self.name, e
-            ))
-        })?;
-
-        let tools_result: mcp_types::ToolsListResult =
-            serde_json::from_value(result).map_err(|e| {
-                AlephError::IoError(format!(
-                    "Failed to parse tools list from '{}': {}",
-                    self.name, e
-                ))
-            })?;
+        let raw_tools = self
+            .drain_paginated("tools/list", |result| {
+                let page: mcp_types::ToolsListResult =
+                    serde_json::from_value(result).map_err(|e| {
+                        AlephError::IoError(format!(
+                            "Failed to parse tools list from '{}': {}",
+                            self.name, e
+                        ))
+                    })?;
+                Ok((page.tools, page.next_cursor))
+            })
+            .await?;
 
         // Convert to our McpTool format. External tool metadata is untrusted:
         // normalize the input schema so strict providers do not reject malformed
         // schemas, and flag descriptions that look like prompt injection.
-        let tools: Vec<McpTool> = tools_result
-            .tools
+        let tools: Vec<McpTool> = raw_tools
             .into_iter()
             .map(|t| {
                 let description = t.description.unwrap_or_default();
@@ -316,27 +357,21 @@ impl McpServerConnection {
         }
         drop(caps);
 
-        let request = JsonRpcRequest::new(self.id_gen.next(), "resources/list");
-        let response = self.transport.send_request(&request).await?;
-
-        let result = response.into_result().map_err(|e| {
-            AlephError::IoError(format!(
-                "MCP server '{}' resources/list failed: {}",
-                self.name, e
-            ))
-        })?;
-
-        let resources_result: mcp_types::ResourcesListResult = serde_json::from_value(result)
-            .map_err(|e| {
-                AlephError::IoError(format!(
-                    "Failed to parse resources list from '{}': {}",
-                    self.name, e
-                ))
-            })?;
+        let raw_resources = self
+            .drain_paginated("resources/list", |result| {
+                let page: mcp_types::ResourcesListResult =
+                    serde_json::from_value(result).map_err(|e| {
+                        AlephError::IoError(format!(
+                            "Failed to parse resources list from '{}': {}",
+                            self.name, e
+                        ))
+                    })?;
+                Ok((page.resources, page.next_cursor))
+            })
+            .await?;
 
         // Convert to our McpResource format
-        let resources: Vec<crate::mcp::types::McpResource> = resources_result
-            .resources
+        let resources: Vec<crate::mcp::types::McpResource> = raw_resources
             .into_iter()
             .map(|r| crate::mcp::types::McpResource {
                 uri: format!("{}:{}", self.name, r.uri), // Namespace with server
@@ -368,27 +403,21 @@ impl McpServerConnection {
         }
         drop(caps);
 
-        let request = JsonRpcRequest::new(self.id_gen.next(), "prompts/list");
-        let response = self.transport.send_request(&request).await?;
-
-        let result = response.into_result().map_err(|e| {
-            AlephError::IoError(format!(
-                "MCP server '{}' prompts/list failed: {}",
-                self.name, e
-            ))
-        })?;
-
-        let prompts_result: mcp_types::PromptsListResult =
-            serde_json::from_value(result).map_err(|e| {
-                AlephError::IoError(format!(
-                    "Failed to parse prompts list from '{}': {}",
-                    self.name, e
-                ))
-            })?;
+        let raw_prompts = self
+            .drain_paginated("prompts/list", |result| {
+                let page: mcp_types::PromptsListResult =
+                    serde_json::from_value(result).map_err(|e| {
+                        AlephError::IoError(format!(
+                            "Failed to parse prompts list from '{}': {}",
+                            self.name, e
+                        ))
+                    })?;
+                Ok((page.prompts, page.next_cursor))
+            })
+            .await?;
 
         // Convert to our McpPrompt format
-        let prompts: Vec<crate::mcp::prompts::McpPrompt> = prompts_result
-            .prompts
+        let prompts: Vec<crate::mcp::prompts::McpPrompt> = raw_prompts
             .into_iter()
             .map(|p| crate::mcp::prompts::McpPrompt {
                 name: format!("{}:{}", self.name, p.name), // Namespace with server
