@@ -5,9 +5,10 @@
 //! 不靠 id —— 因此反向 RPC id 与客户端自身 id 空间重叠也不影响路由。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use crate::sync_primitives::{Arc, Mutex};
+use crate::sync_primitives::{AtomicU64, Ordering};
 
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
