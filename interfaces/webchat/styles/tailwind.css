@@ -1513,7 +1513,7 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
   background-color: var(--color-surface-raised);
   background-image: linear-gradient(to bottom, var(--aleph-sheen), transparent 52%);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-2xl);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md), inset 0 1px 0 var(--aleph-sheen);
   backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
   -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
