@@ -63,6 +63,26 @@ pub enum Verbosity {
     Elaborate,
 }
 
+impl Verbosity {
+    /// Human-readable behavioral instruction for prompt injection.
+    ///
+    /// Unlike `{:?}` debug output (e.g. "Balanced"), this returns an
+    /// actionable directive the model can follow directly — keeping the
+    /// intelligence in the prompt (R9) rather than leaking enum names.
+    #[must_use]
+    pub const fn prompt_hint(self) -> &'static str {
+        match self {
+            Self::Concise => "Keep responses brief and to the point; lead with the answer.",
+            Self::Balanced => {
+                "Aim for balanced responses — enough detail to be useful, without padding."
+            }
+            Self::Elaborate => {
+                "Give thorough, comprehensive responses with context, reasoning, and examples."
+            }
+        }
+    }
+}
+
 /// Formatting style preference for responses
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -74,6 +94,22 @@ pub enum FormattingStyle {
     Markdown,
     /// Rich formatting with full feature usage
     Rich,
+}
+
+impl FormattingStyle {
+    /// Human-readable formatting instruction for prompt injection.
+    #[must_use]
+    pub const fn prompt_hint(self) -> &'static str {
+        match self {
+            Self::Minimal => "Prefer plain prose; use markdown sparingly.",
+            Self::Markdown => {
+                "Use standard markdown (headings, lists, code blocks) where it aids clarity."
+            }
+            Self::Rich => {
+                "Use rich markdown — tables, callouts, structured sections — to maximize clarity."
+            }
+        }
+    }
 }
 
 /// Relationship mode defining how AI relates to the user
@@ -203,9 +239,22 @@ impl SoulManifest {
     }
 
     /// Check if this is an empty/default soul
+    ///
+    /// A soul is "empty" only when it carries no expressed intent across any
+    /// meaningful field. Previously this checked just `identity` + `directives`,
+    /// which caused souls defining only a voice/tone, anti-patterns, expertise,
+    /// or an addendum to be dropped entirely by `SoulLayer`. Verbosity and
+    /// formatting style are excluded because their defaults are
+    /// indistinguishable from an explicit choice.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.identity.is_empty() && self.directives.is_empty()
+        self.identity.is_empty()
+            && self.directives.is_empty()
+            && self.anti_patterns.is_empty()
+            && self.expertise.is_empty()
+            && self.voice.tone.is_empty()
+            && self.voice.language_notes.is_none()
+            && self.addendum.is_none()
     }
 
     /// Load soul manifest from a file path
@@ -362,6 +411,18 @@ impl SoulManifest {
             "anti-patterns" | "antipatterns" | "anti patterns" => {
                 if manifest.anti_patterns.is_empty() {
                     manifest.anti_patterns = Self::parse_list_items(content);
+                }
+            }
+            "expertise" => {
+                if manifest.expertise.is_empty() {
+                    manifest.expertise = Self::parse_list_items(content);
+                }
+            }
+            "voice" | "communication style" => {
+                // A free-text voice/communication-style section maps onto the
+                // tone field. Frontmatter `voice:` still takes priority.
+                if manifest.voice.tone.is_empty() {
+                    manifest.voice.tone = content.to_string();
                 }
             }
             "addendum" | "additional context" | "context" if manifest.addendum.is_none() => {
@@ -718,7 +779,8 @@ mod tests {
         };
         assert!(!with_directives.is_empty());
 
-        // Soul with only voice/relationship is still "empty" by our definition
+        // Soul defining only a voice tone now counts as non-empty: it carries
+        // expressed intent that SoulLayer must render (regression guard).
         let with_voice = SoulManifest {
             voice: SoulVoice {
                 tone: "casual".to_string(),
@@ -726,7 +788,57 @@ mod tests {
             },
             ..Default::default()
         };
-        assert!(with_voice.is_empty());
+        assert!(!with_voice.is_empty());
+
+        // Anti-patterns / expertise / addendum alone are also non-empty.
+        let with_anti = SoulManifest {
+            anti_patterns: vec!["Never lie".to_string()],
+            ..Default::default()
+        };
+        assert!(!with_anti.is_empty());
+
+        // A pure default (only the default relationship) is still empty.
+        let with_relationship = SoulManifest {
+            relationship: RelationshipMode::Peer,
+            ..Default::default()
+        };
+        assert!(with_relationship.is_empty());
+    }
+
+    #[test]
+    fn test_prompt_hints_are_human_readable() {
+        // Hints must be actionable instructions, not enum debug names.
+        assert!(Verbosity::Concise.prompt_hint().contains("brief"));
+        assert!(Verbosity::Elaborate.prompt_hint().contains("thorough"));
+        assert!(FormattingStyle::Minimal.prompt_hint().contains("plain"));
+        assert!(FormattingStyle::Rich.prompt_hint().contains("rich"));
+        // No leaked enum identifiers.
+        assert!(!Verbosity::Balanced.prompt_hint().contains("Balanced"));
+    }
+
+    #[test]
+    fn test_from_markdown_voice_and_expertise_body_sections() {
+        // Regression: `## Voice` and `## Expertise` body sections were
+        // recognized as known sections but silently discarded.
+        let content = r#"# Soul: Test
+
+## Identity
+
+I am a test soul.
+
+## Voice
+
+Warm, encouraging, and precise.
+
+## Expertise
+
+- rust
+- distributed systems
+"#;
+        let manifest = SoulManifest::from_markdown(content).unwrap();
+        assert!(manifest.voice.tone.contains("encouraging"));
+        assert_eq!(manifest.expertise, vec!["rust", "distributed systems"]);
+        assert!(!manifest.is_empty());
     }
 
     // ========== Markdown Parser Tests ==========
