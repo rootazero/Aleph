@@ -77,6 +77,50 @@ pub enum TurnState {
     Done,
 }
 
+/// Outcome of one `run_turn_internal` cycle.
+///
+/// Replaces the former anonymous `(TurnState, usize, bool, Option<SessionId>)`
+/// 4-tuple, whose bare `usize`/`bool` were destructured positionally across
+/// `think.rs` and `agent.rs` — the kind of primitive obsession Rust's type
+/// system lets us delete outright. Naming the fields makes the loop driver's
+/// `match` arms self-documenting and stops a future fifth signal from being
+/// bolted on as `.4`. Pure scaffolding: it records what the turn did, it does
+/// not decide anything (R10-safe).
+#[derive(Debug)]
+#[must_use = "TurnStep carries the loop-control signal; dropping it loses the turn outcome"]
+pub struct TurnStep {
+    /// Whether the loop continues or the model finished this turn.
+    pub state: TurnState,
+    /// Number of tool calls actually executed this turn.
+    pub executed: usize,
+    /// `true` when a verifier vetoed the turn (forces Continue + retry).
+    pub vetoed: bool,
+    /// A forked child session id when the turn split into a sub-session.
+    pub split_child: Option<SessionId>,
+}
+
+impl TurnStep {
+    /// Terminal turn: the model finished, nothing further executed, no fork.
+    pub const fn done() -> Self {
+        Self {
+            state: TurnState::Done,
+            executed: 0,
+            vetoed: false,
+            split_child: None,
+        }
+    }
+
+    /// Continue the loop after executing `executed` tool calls (no veto/fork).
+    pub const fn cont(executed: usize) -> Self {
+        Self {
+            state: TurnState::Continue,
+            executed,
+            vetoed: false,
+            split_child: None,
+        }
+    }
+}
+
 /// Identifies which sub-phase of a turn was hung when a per-turn timeout fired.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnPhase {
