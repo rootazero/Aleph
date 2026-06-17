@@ -196,8 +196,8 @@
 ### 3.8 沙箱命令策略 (Sandbox Command Policy)
 - **口语关键词**：sandbox shell 安全、命令过滤、危险命令、hardline、反混淆、policy
 - **代码锚点**：`src/sandbox/command_policy/`（mod.rs 引擎、rules.rs 规则集、normalize.rs 反混淆）、`src/sandbox/scrub.rs`（输出秘密清理）、`src/sandbox/hooks.rs`（SandboxBeforeHook 集成）、`src/sandbox/policy.rs`、`exec_approval/`、`deny_globs.rs`
-- **职责**：OS 沙箱之前的**内容层**防御：正则硬过滤，分 hardline（不可绕过：fork-bomb/dd/mkfs/rm --no-preserve-root）与 tunable（block/warn/off 三态）；命令先 normalize 反混淆（零宽符/反斜杠/空引号）。
-- **状态**：✅ 已实现。
+- **职责**：OS 沙箱之前的**内容层**防御：正则硬过滤，分 hardline（不可绕过：fork-bomb/dd/mkfs/rm --no-preserve-root/wipefs·blkdiscard·shred 设备擦除/Windows 灾难形）与 tunable（block/warn/off 三态）；命令先 normalize 反混淆（零宽符/反斜杠/脱字符/反引号/空引号）。
+- **状态**：✅ 已实现（2026-06-17 强化：① 修复设备类绕过——`dd`/`>` redirect 漏 `/dev/xvd*`(AWS EC2 根盘)·`dm-`·`md`·`pmem`·`sr`·`loop`，统一并补齐；② 新增 hardline `device_wipe_tools`(wipefs/blkdiscard/shred→/dev/)；③ 新增 tunable warn `shell_eval_download`(`bash <(curl…)` 进程替换 + `eval "$(curl…)"` 绕 `pipe_to_shell`)）。
 - **打磨话术**：「改‘命令拦截规则’找 `command_policy/rules.rs`；‘灾难性底线’在 hardline_rules（即便关 enforcement 也生效）；‘绕过手法’防御在 `normalize.rs`。」
 
 ### 3.9 MCP 集成 (MCP Integration)
