@@ -43,16 +43,18 @@ fn truncate_utf8(s: &str, max: usize) -> String {
 /// Build the **recovery** section for a re-dispatched task.
 ///
 /// Returns an empty string for a task's first attempt (no prior run records).
-/// On a retry — after a zombie/orphan reclaim or a leader-driven
-/// `Failed`/`Cancelled` → `Pending` reset — it surfaces the durable hand-off
-/// that earlier attempts produced but which, until now, only the panel ever
-/// read: the per-attempt run log (`coord_task_runs`) and the structured exit
+/// On a retry — bounded automatic re-dispatch on `Failed`/`Timeout`
+/// ([`fail_or_retry`](super::schedule), the common case), an orphan reclaim, or a
+/// leader-driven `Failed`/`Cancelled` → `Pending` reset — it surfaces the durable
+/// hand-off that earlier attempts produced but which, until now, only the panel
+/// ever read: the per-attempt run log (`coord_task_runs`) and the structured exit
 /// journal (`coord_task_journals`, written by the `task_exit_journal` tool).
 ///
 /// This closes the write→read loop on `ClawTeam`'s context-recovery pattern: the
 /// resuming agent reads what its previous self learned instead of cold-starting.
-/// Pure context assembly — the dumb loop performs no recovery *decision* (that
-/// stays the leader's, per R7/R10); it only hands the member what already exists.
+/// Pure context assembly — the dumb loop performs no recovery *decision* beyond a
+/// mechanical retry ceiling (R7/R10); *how* to recover stays the model's call,
+/// expressed through this injected context.
 async fn build_recovery_section(coord_store: &Arc<dyn CoordTaskStore>, task: &CoordTask) -> String {
     // `build_handoff_context` runs before `start_task_run`, so every row here
     // belongs to an *earlier* attempt — the current claim is not yet recorded.

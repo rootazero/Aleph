@@ -255,10 +255,10 @@
 
 ### 4.4 协调任务 (Coordinated Tasks)
 - **口语关键词**：task 任务管理、规划、分解、子任务分配、实施、验证、收尾、僵尸任务
-- **代码锚点**：`src/agents/swarm/tasks/`（coord_task.rs / store.rs / types.rs）、`src/teams/dispatcher/schedule.rs`（select_schedulable）、`src/teams/dispatcher/runner.rs`（execute_member_task）
-- **职责**：DAG 中每个 CoordTask 按 blocked_by 扫描依赖，上游完成→Runnable，分派器选最闲 owner 并发执行，失败重试 3 次→FailedFinal，超时→僵尸强制失败。
-- **状态**：✅ 已实现（CoordTaskState 四态 + DispatcherConfig：max_concurrent=4 / zombie_ttl=7200s / lock_ttl=900s）。**注意**：tasks 无直接用户工具，经 workflow/teams leader 间接驱动。
-- **打磨话术**：「任务调度/依赖/重试/僵尸检测在 `teams/dispatcher/`；任务数据结构在 `agents/swarm/tasks/`。」
+- **代码锚点**：`src/agents/swarm/tasks/`（mod.rs 数据模型 / store/ 持久化 / dag.rs 环检测 / acceptance.rs 验收 / **retry.rs 有界重试**）、`src/teams/dispatcher/schedule.rs`（select_schedulable + **fail_or_retry**）、`src/teams/dispatcher/runner.rs`（execute_member_task）、`src/teams/dispatcher/handoff.rs`（build_recovery_section 续做上下文）
+- **职责**：DAG 中每个 CoordTask 按 blocked_by 扫描依赖，上游完成→Runnable，分派器选最闲 owner 并发执行；失败/超时**有界自动重试**（默认 2 次=至多 3 次尝试，每次重试携带前序 recovery 上下文续做），耗尽预算→FailedFinal，僵尸（worker 失联）→强制失败不重试。
+- **状态**：✅ 已实现。**重试连线（2026-06-17）**：此前 `fail_task` 失败即永久 `Failed`，文档承诺的「失败重试 3 次→FailedFinal」是空头——recovery 基础设施（`build_recovery_section`「这是第 N 次尝试」+ 退出日志续做 + `coord_task_runs` 逐次历史）全建好却只能靠 leader 手动 reset 或孤儿回收触发。现新增纯决策 `retry.rs::retry_decision`（有界计数）+ `schedule.rs::fail_or_retry`：失败时数已记录的失败 run 次数对比 `max_retries`（任务 metadata 覆盖，否则 `DispatcherConfig.default_max_retries=2`），未超限 reset `Pending`（**激活既有 recovery 注入**），超限才走 `fail_task`（终态 `Failed`=FailedFinal）。孤儿回收留 `Running` 行不计入预算；僵尸绕过重试直接 `fail_task`。per-task 覆盖经 `task_create` 的 `max_retries` 参数透传。**注意**：CoordTaskStatus 实为 10 态（含派生 `Blocked`/`Unsatisfiable`），无独立 `FailedFinal` 状态——`Failed` 即终态，重试期任务回 `Pending` 不落 `Failed`。tasks 无直接用户工具，经 workflow/teams leader 间接驱动。
+- **打磨话术**：「任务调度/依赖/僵尸检测在 `teams/dispatcher/`；‘失败重试几次’= 纯函数 `tasks/retry.rs::retry_decision` + 连线 `schedule.rs::fail_or_retry`，调默认改 `DispatcherConfig.default_max_retries`、按任务改 `task_create` 的 `max_retries`；‘重试时续做而非重来’= `handoff.rs::build_recovery_section`（智慧在 prompt，R9）；任务数据结构在 `agents/swarm/tasks/`。」
 
 ### 4.5 多代理 / 团队 (Teams / Multi-Agent)
 - **口语关键词**：multi-agent、teams、多线程多任务多代理、leader、群聊广播、roster

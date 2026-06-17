@@ -67,6 +67,20 @@ pub struct DispatcherConfig {
     /// **load-balanced round-robin** across owners so freed slots prefer the
     /// least-busy agent — see [`select_schedulable`](super::schedule::select_schedulable).
     pub max_per_owner: usize,
+    /// Default number of times a task whose attempt fails (cleanly `Failed` or
+    /// `Timeout`) is automatically re-dispatched before being marked terminally
+    /// `Failed`. A per-task `max_retries` in the task metadata overrides this.
+    ///
+    /// On a retry the task is reset to `Pending`; the next tick re-claims it and
+    /// the hand-off builder injects the prior attempts as recovery context, so
+    /// the resuming member resumes instead of cold-starting (R9 — *how* to
+    /// recover lives in the prompt; this is only the mechanical ceiling).
+    ///
+    /// `0` reproduces the pre-enhancement behaviour (first failure is terminal).
+    /// Default `2` = up to **3 total attempts**, mirroring `ClawTeam`'s bounded
+    /// retry. Zombies (a worker that vanished, caught by [`Self::zombie_ttl_secs`])
+    /// never retry — they have already exhausted their budget.
+    pub default_max_retries: u32,
 }
 
 impl Default for DispatcherConfig {
@@ -80,6 +94,8 @@ impl Default for DispatcherConfig {
             // 0 = no hard per-owner cap; load-balanced round-robin still
             // spreads slots across owners regardless of this value.
             max_per_owner: 0,
+            // Up to 3 total attempts (initial + 2 retries) before FailedFinal.
+            default_max_retries: 2,
         }
     }
 }

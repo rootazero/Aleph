@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod acceptance;
 pub mod dag;
+pub mod retry;
 pub mod store;
 pub mod template;
 

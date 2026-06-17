@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::agents::swarm::tasks::acceptance::with_acceptance_criteria;
+use crate::agents::swarm::tasks::retry::with_max_retries;
 use crate::agents::swarm::tasks::{CoordTaskStore, NewCoordTask, Priority};
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -42,6 +43,13 @@ pub struct TaskCreateArgs {
     /// grounded). Optional — omit for tasks with no explicit acceptance bar.
     #[serde(default)]
     pub acceptance_criteria: Option<Vec<String>>,
+    /// How many times the dispatcher should automatically re-run this task if an
+    /// attempt fails or times out, before marking it failed for good. Each retry
+    /// resumes with the prior attempts' context (run log + exit journal), so the
+    /// re-run continues rather than starting over. Omit to use the team
+    /// dispatcher's default; `0` makes the first failure terminal.
+    #[serde(default)]
+    pub max_retries: Option<u32>,
     /// Arbitrary metadata JSON
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
@@ -129,9 +137,12 @@ impl AlephTool for TaskCreateTool {
         // Compose the metadata channel: dispatcher marker first, then fold in
         // the acceptance-criteria contract (a no-op when none were supplied, so
         // the row stays byte-identical to the legacy shape).
-        let metadata = with_acceptance_criteria(
-            with_managed_marker(args.metadata),
-            args.acceptance_criteria.unwrap_or_default(),
+        let metadata = with_max_retries(
+            with_acceptance_criteria(
+                with_managed_marker(args.metadata),
+                args.acceptance_criteria.unwrap_or_default(),
+            ),
+            args.max_retries,
         );
 
         let new_task = NewCoordTask {
