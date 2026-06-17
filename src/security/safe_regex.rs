@@ -15,14 +15,13 @@
 //!
 //! Reserve this for patterns that arrive from config or user input (secret leak
 //! patterns, custom PII rules, shell risk patterns, hook matchers). Hardcoded,
-//! in-crate patterns are trusted and need no bound. Mirrors the limit already
-//! applied to routing rules in `crate::routing::rules`.
+//! in-crate patterns are trusted and need no bound.
 
 use regex::RegexBuilder;
 
 /// Maximum size, in bytes, of a compiled regex program built from an untrusted
 /// pattern. The `regex` crate default is 10 MiB; 1 MiB is ample for operator
-/// patterns while rejecting expansion bombs. Matches `routing::rules`.
+/// patterns while rejecting expansion bombs.
 pub const MAX_COMPILED_SIZE: usize = 1 << 20;
 
 /// A [`RegexBuilder`] pre-configured with conservative size limits, suitable for

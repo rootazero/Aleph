@@ -25,7 +25,7 @@ pub use registry::ResolvedCommand;
 pub use registry::ToolCatalog;
 pub use registry::{HealthReason, HealthSnapshot, ProbeResult, ToolHealthCache, ToolHealthProbe};
 pub use types::{
-    ChannelType, ConflictInfo, ConflictResolution, DispatchMode, RoutingLayer, StructuredToolMeta,
+    ChannelType, ConflictInfo, ConflictResolution, DispatchMode, StructuredToolMeta,
     ToolCategory, ToolDefinition, ToolDiff, ToolIndex, ToolIndexCategory, ToolIndexEntry,
     ToolPriority, ToolResult, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool,
     UnifiedToolInfo,

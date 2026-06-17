@@ -5,8 +5,7 @@ use tracing::info;
 
 use crate::error::Result;
 use crate::routing::{
-    resolve_route, MatchedBy, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind, RoutingRules,
-    SessionConfig,
+    resolve_route, MatchedBy, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind, SessionConfig,
 };
 use crate::tools::AlephTool;
 
@@ -23,14 +22,6 @@ pub struct GatewayRouteArgs {
     pub team_id: Option<String>,
     #[serde(default)]
     pub account_id: Option<String>,
-    #[serde(default)]
-    pub message: Option<String>,
-    #[serde(default = "default_llm_fallback")]
-    pub enable_llm_fallback: bool,
-}
-
-const fn default_llm_fallback() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -40,8 +31,6 @@ pub struct GatewayRouteOutput {
     pub matched_by: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
-    pub task_route: String,
-    pub routing_layer: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<GatewayRouteDetails>,
 }
@@ -59,7 +48,6 @@ pub struct GatewayRouteTool {
     bindings: Vec<crate::routing::RouteBinding>,
     session_config: SessionConfig,
     default_agent: String,
-    rules: RoutingRules,
 }
 
 impl GatewayRouteTool {
@@ -69,12 +57,10 @@ impl GatewayRouteTool {
         session_config: SessionConfig,
         default_agent: String,
     ) -> Self {
-        let rules = RoutingRules::from_config(&crate::routing::RoutingPatternsConfig::default());
         Self {
             bindings,
             session_config,
             default_agent,
-            rules,
         }
     }
 
@@ -94,9 +80,12 @@ impl Default for GatewayRouteTool {
 impl AlephTool for GatewayRouteTool {
     const NAME: &'static str = "gateway_route";
     const DESCRIPTION: &'static str =
-        "Query Aleph's routing engine to determine how a message would be routed. \
-        Returns the target agent, session key, and task classification. \
-        Use this when agents need to self-route or coordinate cross-channel communication.";
+        "Query Aleph's routing engine to determine which agent and session a message \
+        would be routed to. Returns the target agent, session key, and how the match \
+        was made (peer/guild/team/account/channel/default). Use this when agents need \
+        to self-route or coordinate cross-channel communication. This is a deterministic, \
+        config-driven channel→agent lookup — it does NOT classify the message's intent \
+        (that is the model's job).";
 
     type Args = GatewayRouteArgs;
     type Output = GatewayRouteOutput;
@@ -152,25 +141,11 @@ impl AlephTool for GatewayRouteTool {
             MatchedBy::Default => "default",
         };
 
-        let (task_route_str, routing_layer_str) = if let Some(ref msg) = args.message {
-            if let Some(route) = self.rules.classify(msg) {
-                (route.label().to_string(), "L1".to_string())
-            } else if args.enable_llm_fallback {
-                ("simple".to_string(), "L2".to_string())
-            } else {
-                ("simple".to_string(), "L1".to_string())
-            }
-        } else {
-            ("simple".to_string(), "L1".to_string())
-        };
-
         let output = GatewayRouteOutput {
             agent_id: resolved.agent_id.clone(),
             session_key: resolved.session_key.to_key_string(),
             matched_by: matched_by_str.to_string(),
             workspace: resolved.workspace,
-            task_route: task_route_str,
-            routing_layer: routing_layer_str,
             details: Some(GatewayRouteDetails {
                 channel: resolved.channel,
                 account_id: resolved.account_id,
@@ -183,7 +158,6 @@ impl AlephTool for GatewayRouteTool {
             tool = "gateway_route",
             agent_id = %output.agent_id,
             matched_by = %output.matched_by,
-            task_route = %output.task_route,
             "routing query complete"
         );
 
@@ -205,8 +179,6 @@ mod tests {
             guild_id: None,
             team_id: None,
             account_id: None,
-            message: None,
-            enable_llm_fallback: true,
         };
 
         let result = tool.call(args).await.unwrap();
@@ -215,21 +187,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_task_classification() {
+    async fn test_invalid_peer_kind_rejected() {
         let tool = GatewayRouteTool::with_defaults();
         let args = GatewayRouteArgs {
             channel: "telegram".to_string(),
             peer_id: Some("user123".to_string()),
-            peer_kind: Some("dm".to_string()),
+            peer_kind: Some("groupp".to_string()),
             guild_id: None,
             team_id: None,
             account_id: None,
-            message: Some("帮我翻译".to_string()),
-            enable_llm_fallback: true,
         };
 
-        let result = tool.call(args).await.unwrap();
-        assert_eq!(result.task_route, "simple");
-        assert_eq!(result.routing_layer, "L1");
+        // A typo'd peer_kind must error, not silently coerce to DM.
+        assert!(tool.call(args).await.is_err());
     }
 }

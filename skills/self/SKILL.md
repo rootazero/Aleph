@@ -260,7 +260,6 @@ All top-level sections available in `config.toml`:
 | `generation` | Media generation | `providers`, `image_providers`, `video_providers`, `speech_providers`, `audio_providers` |
 | `orchestrator` | Three-Layer Orchestrator | `guards.max_rounds`, `guards.max_tool_calls`, `guards.max_tokens` |
 | `subagent` | ⚠️ Legacy — parsed but inert (no runtime consumer) | `enabled`, `max_depth`, `inherit_context` |
-| `task_routing` | ⚠️ Legacy — parsed but inert (no runtime consumer) | `enabled`, `default_queue`, `strategies` |
 | `route` | Local-vs-cloud failover routing (LIVE — shapes the failover chain by endpoint tier) | `mode` (`auto`/`always_local`/`always_cloud`), `allow_cloud_escalation`, `local_provider`, `cloud_provider` |
 | `group_chat` | Multi-agent chat | `enabled`, `personas`, `rotation_strategy` |
 | `cron` | Scheduler runtime (jobs themselves are DB-backed, managed via the `cron_manage` tool) | `enabled`, `db_path`, `check_interval_secs`, `max_concurrent_jobs`, `job_timeout_secs` |

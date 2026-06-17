@@ -153,7 +153,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "gateway_route",
-        description: "Query Aleph's routing engine to determine how a message would be routed. Returns the target agent, session key, and task classification.",
+        description: "Query Aleph's routing engine to determine which agent and session a message would be routed to. Returns the target agent, session key, and how the match was made — a deterministic channel→agent lookup, not intent classification.",
         requires_config: false,
     },
     BuiltinToolDefinition {

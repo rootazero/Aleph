@@ -10,7 +10,7 @@ use crate::config::types::{
     PromptSectionConfig, ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, SearchConfig,
     SearchConfigInternal, SecretMapping, SecretProviderConfig, SecretsConfig, ShellSecurityConfig,
     SkillsConfig, SmartFlowConfig, SmartMatchingConfig, StabilityToml, StopHookConfig,
-    SubAgentConfig, TaskRoutingConfig, ToolServiceConfig, ToolsConfig, UnifiedToolsConfig,
+    SubAgentConfig, ToolServiceConfig, ToolsConfig, UnifiedToolsConfig,
     VoiceLocalConfig, VoiceSection,
 };
 use crate::tasks::cron::CronConfig;
@@ -125,9 +125,6 @@ pub struct Config {
     /// Sub-agent synchronization configuration
     #[serde(default)]
     pub subagent: SubAgentConfig,
-    /// Task routing decision layer configuration
-    #[serde(default)]
-    pub task_routing: TaskRoutingConfig,
     /// Local-vs-cloud failover routing mode. `Auto` (default) is a no-op:
     /// failover candidate order is unchanged. `AlwaysLocal`/`AlwaysCloud`
     /// shape the chain by endpoint tier (see `[route]`).
@@ -411,7 +408,6 @@ impl Default for Config {
             voice_local: VoiceSection::default(),
             orchestrator: OrchestratorConfig::default(),
             subagent: SubAgentConfig::default(),
-            task_routing: TaskRoutingConfig::default(),
             route: crate::config::types::ModelRouteConfig::default(),
             group_chat: GroupChatConfig::default(),
             cron: CronConfig::default(),
