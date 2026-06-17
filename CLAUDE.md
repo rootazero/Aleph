@@ -245,11 +245,13 @@ LAN-trust：没有认证步骤，信任边界就是网络边界。默认只绑 `
 
 ## 📚 文档索引
 
+> **Context Tiers**: Tier 1（每次加载）= 本 CLAUDE.md，项目是什么 + 怎么工作；Tier 2（按需加载）= 下表 `docs/reference/*`，Claude 工作时按主题自取；Tier 3（默认忽略）= `docs/archive/`、历史规格，除非明确要求不碰。
+
 | 文档 | 链接 |
 |------|------|
 | ARCHITECTURE.md | [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) |
 | **PRODUCT_TOPOLOGY.md** | [docs/reference/PRODUCT_TOPOLOGY.md](docs/reference/PRODUCT_TOPOLOGY.md) — 产品形态：一套源码(panel/core/shell)→三产物(完整App/纯壳Panel/独立core)排列组合 + 参考部署拓扑(家庭服务器+瘦客户端) |
-| **HARNESS_PHILOSOPHY.md** | [docs/reference/HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md) — 薄 Harness 哲学 + 笨循环编排核心（R11 详解） |
+| **HARNESS_PHILOSOPHY.md** | [docs/reference/HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md) — 薄 Harness 哲学 + 笨循环编排核心（R10 详解） |
 | AGENT_SYSTEM.md | [docs/reference/AGENT_SYSTEM.md](docs/reference/AGENT_SYSTEM.md) |
 | AGENT_LOOP_CONTEXT_BUDGET.md | [docs/reference/AGENT_LOOP_CONTEXT_BUDGET.md](docs/reference/AGENT_LOOP_CONTEXT_BUDGET.md) |
 | AGENT_LOOP_TOOL_EXECUTION.md | [docs/reference/AGENT_LOOP_TOOL_EXECUTION.md](docs/reference/AGENT_LOOP_TOOL_EXECUTION.md) |
@@ -281,6 +283,8 @@ LAN-trust：没有认证步骤，信任边界就是网络边界。默认只绑 `
 | DESKTOP_SHELL.md | [docs/reference/DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) |
 | WINDOWS_RUNTIME.md | [docs/reference/WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md) — Windows 运行时部署/运维：install.ps1 安装、前台运行、`--daemon` 限制与替代、单例锁、stop/status 注意事项、LAN 信任、刷新二进制链 |
 | GOOGLE_MEET_BRIDGE.md | [docs/reference/GOOGLE_MEET_BRIDGE.md](docs/reference/GOOGLE_MEET_BRIDGE.md) — `google_meet` 薄工具契约 + 外部 transport bridge JSON-RPC 协议 |
+| RELEASE.md | [docs/reference/RELEASE.md](docs/reference/RELEASE.md) — 发版两步流程 + `just verify-build` 预检 + CI fail-fast 轮询 |
+| PROCESS_MANAGEMENT.md | [docs/reference/PROCESS_MANAGEMENT.md](docs/reference/PROCESS_MANAGEMENT.md) — Singleton flock / Spec C 不变量 / CLI 写策略 |
 
 ---
 
