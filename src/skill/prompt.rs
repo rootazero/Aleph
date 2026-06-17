@@ -38,7 +38,14 @@ pub const DEFAULT_MAX_SKILLS_PROMPT_CHARS: usize = 12_000;
 /// `<available_skills>` index may consume in a system prompt.
 ///
 /// A field set to `0` means "unlimited" for that dimension.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serializable so it can live under `[prompt_budget]` in `skills.toml`
+/// ([`crate::skill::config::SkillsConfig`]). The container-level
+/// `#[serde(default)]` fills any field omitted from the TOML table from
+/// [`Default`] (64 skills / 12k chars), so a partial table stays valid and a
+/// default config deserializes to the built-in budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct SkillPromptBudget {
     /// Maximum number of `<skill>` entries to render (`0` = unlimited).
     pub max_skills: usize,

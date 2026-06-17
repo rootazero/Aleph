@@ -3,6 +3,7 @@
 //! persists to ~/.aleph/data/skills.toml. API keys route to the Vault.
 
 use crate::domain::skill::{PromptScope, SkillId};
+use crate::skill::prompt::SkillPromptBudget;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -49,6 +50,11 @@ pub struct SkillsConfig {
     pub install_preferences: InstallPreferences,
     #[serde(default)]
     pub entries: HashMap<String, SkillEntryConfig>,
+    /// Budget bounding the injected `<available_skills>` prompt index. Lets a
+    /// host with a large skill library trade detail for context (or lift the
+    /// cap entirely). Omitted → built-in default (64 skills / 12k chars).
+    #[serde(default)]
+    pub prompt_budget: SkillPromptBudget,
 }
 
 /// Update request for a single skill's config.
@@ -139,6 +145,40 @@ mod tests {
     fn load_missing_file_returns_default() {
         let config = SkillsConfig::load(Path::new("/nonexistent/path.toml"));
         assert!(config.entries.is_empty());
+    }
+
+    #[test]
+    fn prompt_budget_defaults_when_absent() {
+        // A config TOML with no [prompt_budget] table deserializes to the
+        // built-in default budget (64 skills / 12k chars).
+        let config: SkillsConfig = toml::from_str("").unwrap();
+        assert_eq!(config.prompt_budget, SkillPromptBudget::default());
+    }
+
+    #[test]
+    fn prompt_budget_partial_table_fills_missing_field() {
+        // Only max_skills set → max_chars falls back to the default via the
+        // container-level #[serde(default)] on SkillPromptBudget.
+        let config: SkillsConfig = toml::from_str("[prompt_budget]\nmax_skills = 8\n").unwrap();
+        assert_eq!(config.prompt_budget.max_skills, 8);
+        assert_eq!(
+            config.prompt_budget.max_chars,
+            SkillPromptBudget::default().max_chars
+        );
+    }
+
+    #[test]
+    fn prompt_budget_roundtrips_toml() {
+        let mut config = SkillsConfig::default();
+        config.prompt_budget = SkillPromptBudget {
+            max_skills: 10,
+            max_chars: 2000,
+        };
+        let tmp = NamedTempFile::new().unwrap();
+        config.save(tmp.path()).unwrap();
+        let loaded = SkillsConfig::load(tmp.path());
+        assert_eq!(loaded.prompt_budget.max_skills, 10);
+        assert_eq!(loaded.prompt_budget.max_chars, 2000);
     }
 
     #[test]

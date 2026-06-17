@@ -1136,6 +1136,10 @@ impl AgentHarnessRunner {
             return None;
         }
 
+        // Capture the configured prompt budget before the snapshot is consumed
+        // (Copy type, so a by-ref read suffices). `SkillInstructionsLayer` uses
+        // it to bound the injected `<available_skills>` index.
+        let skill_prompt_budget = skill_snapshot.as_ref().map(|s| s.prompt_budget);
         let eligible_skills = skill_snapshot
             .map(|s| s.eligible_manifests)
             .filter(|m| !m.is_empty());
@@ -1149,6 +1153,7 @@ impl AgentHarnessRunner {
         let mut builder = PromptBuilder::new(PromptConfig {
             native_tools_enabled: true,
             eligible_skills,
+            skill_prompt_budget,
             mcp_instructions,
             ..PromptConfig::default()
         });

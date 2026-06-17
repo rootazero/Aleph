@@ -37,7 +37,7 @@ pub use installer::{
 };
 pub use manifest::{parse_skill_content, parse_skill_file, SkillParseError};
 pub use preprocess::{preprocess_skill_content, SkillPreprocessContext};
-pub use prompt::build_skills_prompt_xml;
+pub use prompt::{build_skills_prompt_xml, SkillPromptBudget};
 pub use registry::SkillRegistry;
 pub use shared::shared_skill_system;
 pub use snapshot::SkillSnapshot;
@@ -568,11 +568,15 @@ impl SkillSystem {
             .and_then(|c| serde_json::to_value(&c).ok())
             .unwrap_or_else(|| serde_json::json!({}));
 
-        // Snapshot the user's per-skill overrides (enable/disable, scope) so the
-        // rebuilt snapshot reflects them in eligibility and prompt injection.
-        // Cloned under a short-lived lock to avoid holding config + registry
-        // locks simultaneously.
-        let skill_entries = self.inner.config.read().await.entries.clone();
+        // Snapshot the user's per-skill overrides (enable/disable, scope) and the
+        // configured prompt budget so the rebuilt snapshot reflects them in
+        // eligibility, prompt injection, and the budget carried to the layer.
+        // Read under a single short-lived lock to avoid holding config +
+        // registry locks simultaneously.
+        let (skill_entries, prompt_budget) = {
+            let cfg = self.inner.config.read().await;
+            (cfg.entries.clone(), cfg.prompt_budget)
+        };
 
         // Archived skills (LLM-curated via `skill_manage` or future dreaming
         // stages) stay listed in status surfaces but must not occupy prompt
@@ -587,7 +591,7 @@ impl SkillSystem {
             .collect();
 
         let registry = self.inner.registry.read().await;
-        let new_snapshot = SkillSnapshot::build(
+        let mut new_snapshot = SkillSnapshot::build(
             &registry,
             &self.inner.eligibility,
             current_version,
@@ -595,6 +599,10 @@ impl SkillSystem {
             &skill_entries,
             &archived,
         );
+        // Carry the configured budget to consumers (the prompt layer renders
+        // the authoritative index with it; `build` only computes the
+        // default-budget preview).
+        new_snapshot.prompt_budget = prompt_budget;
         let skill_ids: Vec<String> = registry
             .list_all()
             .iter()

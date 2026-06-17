@@ -218,8 +218,8 @@
 - **口语关键词**：skills、技能、SKILL.md、资格评估、prompt 注入、共现
 - **代码锚点**：`src/skill/`——`manifest.rs`（SKILL.md 解析）、`registry.rs`、`installer.rs`、`eligibility.rs`、`preprocess.rs`、`prompt.rs`（build_skills_prompt_xml）、`guard.rs`（安全扫描）、`cooccurrence.rs`
 - **职责**：解析 SKILL.md → 评估资格 → 执行安装指令 → 注入 prompt → 跟踪使用与共现。
-- **状态**：✅ 已实现，与插件共享源优先级（workspace > plugin > global > bundled）。
-- **打磨话术**：「技能定义解析在 `manifest.rs`，‘何时把技能塞进 prompt’在 `eligibility.rs` + `prompt.rs`。」
+- **状态**：✅ 已实现，与插件共享源优先级（workspace > plugin > global > bundled）。**Prompt 预算连线（2026-06-17）**：`prompt.rs` 的 `SkillPromptBudget` 降级引擎（full→compact 两层 + 省略 note）原先只硬编码默认值（64 skills / 12k chars），**从未连到任何配置**。现已连线：`skills.toml [prompt_budget]`（`max_skills`/`max_chars`，`0`=不限，缺字段回退默认）→ `SkillsConfig.prompt_budget` → `SkillSnapshot.prompt_budget` → `PromptConfig.skill_prompt_budget` → `SkillInstructionsLayer` 用 `build_skills_prompt_xml_with_budget` 渲染权威索引。`snapshot.prompt_xml` 仍是默认预算预览（生产不读，仅测试用），真正注入由层按配置预算渲染。
+- **打磨话术**：「技能定义解析在 `manifest.rs`，‘何时把技能塞进 prompt’在 `eligibility.rs` + `prompt.rs`。要调‘prompt 里列几个技能/占多少字符’改 `skills.toml` 的 `[prompt_budget]`（配置项，非代码）；连线终点在 `thinker/layers/skill_instructions.rs`，预算来源在 `skill/config.rs::SkillsConfig.prompt_budget`。」
 
 ### 3.12 浏览器自动化 (Browser Automation)
 - **口语关键词**：browser、浏览器、screenshot、Chrome MCP、Playwright、网络策略

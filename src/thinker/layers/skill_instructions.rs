@@ -1,7 +1,7 @@
 //! `SkillInstructionsLayer` — skill system v2 instructions with scope filtering (priority 1050)
 
 use crate::domain::skill::{PromptScope, SkillManifest};
-use crate::skill::prompt::build_skills_prompt_xml;
+use crate::skill::prompt::{build_skills_prompt_xml, build_skills_prompt_xml_with_budget};
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
@@ -73,7 +73,13 @@ impl PromptLayer for SkillInstructionsLayer {
             return;
         }
 
-        let xml = build_skills_prompt_xml(&filtered);
+        // Render under the configured budget when one was threaded through
+        // (`SkillsConfig.prompt_budget` → snapshot → `PromptConfig`); otherwise
+        // fall back to the built-in default budget.
+        let xml = match input.config.skill_prompt_budget {
+            Some(budget) => build_skills_prompt_xml_with_budget(&filtered, &budget),
+            None => build_skills_prompt_xml(&filtered),
+        };
         let xml = sanitize_for_prompt(&xml, SanitizeLevel::Moderate);
         output.push_str("## Available Skills\n\n");
         output.push_str(
@@ -286,6 +292,57 @@ mod tests {
         assert!(paths.contains(&AssemblyPath::Soul));
         assert!(paths.contains(&AssemblyPath::Context));
         assert!(paths.contains(&AssemblyPath::Cached));
+    }
+
+    #[test]
+    fn configured_budget_bounds_injected_index() {
+        use crate::skill::prompt::SkillPromptBudget;
+
+        let layer = SkillInstructionsLayer;
+        let skills = vec![
+            make_skill("AlphaSkill", PromptScope::System),
+            make_skill("BravoSkill", PromptScope::System),
+            make_skill("CharlieSkill", PromptScope::System),
+        ];
+        let config = PromptConfig {
+            eligible_skills: Some(skills),
+            skill_prompt_budget: Some(SkillPromptBudget {
+                max_skills: 1,
+                max_chars: 0,
+            }),
+            ..Default::default()
+        };
+        let tools: Vec<ToolInfo> = vec![];
+        let input = LayerInput::basic(&config, &tools);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        // Exactly one <skill> survives the budget; the other two are summarised
+        // by the omission note rather than rendered in full.
+        assert_eq!(out.matches("<skill>").count(), 1);
+        assert!(out.contains("2 additional skill(s) omitted"));
+    }
+
+    #[test]
+    fn absent_budget_renders_every_eligible_skill() {
+        let layer = SkillInstructionsLayer;
+        let skills = vec![
+            make_skill("OneSkill", PromptScope::System),
+            make_skill("TwoSkill", PromptScope::System),
+        ];
+        let config = PromptConfig {
+            eligible_skills: Some(skills),
+            skill_prompt_budget: None,
+            ..Default::default()
+        };
+        let tools: Vec<ToolInfo> = vec![];
+        let input = LayerInput::basic(&config, &tools);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        // No budget → default budget (well above 2) → both rendered, no note.
+        assert_eq!(out.matches("<skill>").count(), 2);
+        assert!(!out.contains("omitted"));
     }
 
     #[test]
