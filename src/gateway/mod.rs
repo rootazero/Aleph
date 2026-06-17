@@ -104,7 +104,6 @@ pub mod rate_limiter;
 pub mod restart_backoff;
 pub mod resume_coordinator;
 pub mod run_event_bus;
-pub mod session_scheduler;
 pub mod state_version;
 pub mod streaming;
 pub mod tailscale;

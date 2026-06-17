@@ -49,9 +49,10 @@ pub enum ReloadImpact {
 /// - `route` — `self_config::update_config` and the gateway `route_config`
 ///   handler both call `route_handle.store(..)` after patching it.
 /// - `behavior` — `output_mode` is re-read fresh from the shared config on
-///   every run by all channel paths (`server_init`, `session_scheduler`,
-///   `inbound_router` executor), so the typewriter/instant switch takes effect
-///   on the next turn. No restart is needed despite no explicit hot-swap call.
+///   every run by all channel paths (`server_init`, the `inbound_router`
+///   executor, and the `agent` handler's `resolved_output_mode`), so the
+///   typewriter/instant switch takes effect on the next turn. No restart is
+///   needed despite no explicit hot-swap call.
 const LIVE_SECTIONS: &[&str] = &["route", "behavior"];
 
 /// Legacy top-level sections that are parsed but inert (no runtime consumer).

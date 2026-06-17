@@ -49,7 +49,7 @@
 | Loop | multi-agent / teams / 多代理 | Teams / Multi-Agent | `src/teams/` + `src/agents/` | ✅ |
 | Loop | agent 切换 | Agent Switching | `src/builtin_tools/agent_manage/` | ✅ |
 | Loop | 消息流 / 最终结果汇总打印 | Message Stream & Final Answer | `src/gateway/event_emitter/` | ✅ |
-| Loop | 新消息排队 / 插入 / 改需求打断 | Message Queue & Steering | `src/gateway/session_scheduler.rs` `lane.rs` | ✅ |
+| Loop | 新消息排队 / 插入 / 改需求打断 | Message Queue & Steering | `src/gateway/inbound_router/busy_queue.rs` + `execution_engine/steering.rs` + `lane.rs` | ✅ |
 | 横切 | 安全模块 | Security Primitives | `src/security/` + `src/pii/` | ✅ |
 | 横切 | 全局/agent/channel 三级权限 | Permission Hierarchy | `src/approval/` | ✅ |
 | 横切 | LLM 与用户互动 / 确认 / 授权 | LLM-User Interaction | `src/clarification/` + `src/event/permission.rs` | ✅ |
@@ -282,11 +282,15 @@
 - **打磨话术**：「‘最后那段汇总输出怎么来的’= harness 发 RunComplete 事件，消费方调 `extract_final_response()` 扫事件日志。没有‘答案表’，改投递逻辑去 broadcast/cron executor。」
 
 ### 4.8 消息排队与改需求打断 (Message Queue & Steering)
-- **口语关键词**：新消息排队、插入策略、agent 执行中改需求、打断、插队、steering、lane 优先级
-- **代码锚点**：`src/gateway/session_scheduler.rs`（per-session FIFO + active_run_id + MAX_QUEUE_AGE=5min）、`src/gateway/inbound_router/busy_queue.rs`（per-agent FIFO + 原子 ticket，上限 32/agent）、`src/gateway/lane.rs`（Lane 分类 Query/Execute/Mutate/System + ChannelClass 优先级）、`src/gateway/resume_coordinator.rs`、`src/gateway/cancellation.rs`
-- **职责**：新消息入 SessionScheduler FIFO，空闲立即执行否则排队；agent 繁忙时入 busy_queue（限 32），仅队首尝试投递；Lane + ChannelClass 让 Panel 优先级高于 Bot；超龄任务丢弃返 429。用户执行中可调 steering 工具改目标或中止。
-- **状态**：✅ 已实现。
-- **打磨话术**：「‘用户改需求/插队/打断’的核心在 `session_scheduler.rs`（会话级 FIFO）+ `busy_queue.rs`（agent 级 FIFO）+ `lane.rs`（优先级）。要改‘改需求时是排队还是打断当前 run’就动这三处 + `cancellation.rs`。」
+- **口语关键词**：新消息排队、插入策略、agent 执行中改需求、打断、插队、steering、lane 优先级、busy-input 策略
+- **代码锚点**：
+  - **busy 排队**：`src/gateway/inbound_router/busy_queue.rs`（per-agent FIFO + 原子 ticket，上限 32/agent，`REJECT_NEWEST` 溢出）、`src/gateway/inbound_router/executor.rs`（register→is_front 轮询投递，`BUSY_QUEUE_MAX_WAIT_SECS=1800`）
+  - **改需求/打断（三态策略）**：`src/gateway/execution_engine/mod.rs`（`BusyInputMode` = Steer/Interrupt/Queue + `BUSY_INPUT_MODE_KEY`）、`src/gateway/execution_engine/execute.rs`（busy 分支按模式分流）、`src/gateway/execution_engine/steering.rs`（mid-loop 注入 + 合并去重 + `MAX_PENDING_STEERING=16` 背压 + teardown rescue）
+  - **优先级**：`src/gateway/lane.rs`（Lane 分类 Query/Execute/Mutate/System + ChannelClass 双池 Panel 优先）、`src/gateway/server/handler.rs`（按 loopback 派生 ChannelClass 并 `acquire`）
+  - **取消/续跑**：`src/gateway/cancellation.rs`、`src/gateway/resume_coordinator.rs`
+- **职责**：agent 繁忙时新消息进 `busy_queue` per-agent FIFO（上限 32，仅队首尝试投递，保到达序，超 30min 才通知失败而非静默丢弃）；同会话有活跃 run 时，按通道 `BusyInputMode` 分流——**Steer**（默认，注入 live event log 让运行中的 loop 下个轮次接住）/ **Interrupt**（取消同会话 sibling，经 busy_queue 以全上下文重启）/ **Queue**（不打扰，排队等当前 run 结束）；Lane + ChannelClass 让本地 Panel 优先于 Bot/CLI。
+- **状态**：✅ 已实现。**熵减（2026-06-17）**：删除死代码 `session_scheduler.rs`（631 行，per-session FIFO 旧版调度器，`::new`/`enqueue` 仅存在于自身测试，零生产消费者）——其职责早被 harness `try_start_run` 每-agent 闸 + `busy_queue` FIFO + `steering` 完整取代，违 R10 YAGNI 故连根清除。
+- **打磨话术**：「‘用户改需求/插队/打断’的真核心 = `busy_queue.rs`（agent 级 FIFO）+ `steering.rs`（mid-loop 注入）+ `BusyInputMode`（Steer/Interrupt/Queue 三态，在 `execution_engine/{mod,execute}.rs`）+ `lane.rs`（Panel 优先）。要改‘改需求时是排队、注入还是打断当前 run’就动 `execute.rs` 的 busy 分支 + 对应通道的 busy-input 模式 + `cancellation.rs`。**注意**：`session_scheduler.rs` 已删除——它从来不是活跃路径，别再去找它。」
 
 ---
 
@@ -336,7 +340,7 @@
 
 ### 5.7 输出模式：打字机 / 即时 (Output Mode)
 - **口语关键词**：打字机模式、流式输出、即时输出、全局开关、所有 channel 同步、output_mode
-- **代码锚点**：`src/config/types/general.rs`（BehaviorConfig.output_mode + typing_speed）、`src/gateway/event_emitter/instant_buffer.rs`（instant 装饰器）、`src/gateway/handlers/agent.rs`（resolved_output_mode，每次 run fresh 读）、`src/gateway/session_scheduler.rs`、前端 `interfaces/webchat/src/components/markdown.rs`（StreamingRenderer）
+- **代码锚点**：`src/config/types/general.rs`（BehaviorConfig.output_mode + typing_speed）、`src/gateway/event_emitter/instant_buffer.rs`（instant 装饰器）、`src/gateway/handlers/agent.rs`（resolved_output_mode，每次 run fresh 读）、`src/gateway/inbound_router/executor.rs`（通道路径 fresh 读）、前端 `interfaces/webchat/src/components/markdown.rs`（StreamingRenderer）
 - **职责**：全局 `behavior.output_mode` = typewriter（逐字符，可设速度）/ instant（整体返回）；instant 是 EventEmitter 装饰器包裹任意 inner emitter；Panel run 与 inbound channel run **同源**，改配置下次运行即生效无需重启。
 - **状态**：✅ 已实现（这是真·全局开关 + 全通道同源，**与你的描述一致**）。
 - **打磨话术**：「全局开关在 `config/types/general.rs` 的 output_mode；‘所有 channel 同步’靠 `handlers/agent.rs::resolved_output_mode` 每次 run fresh 读同一配置。前端呈现在 `webchat/.../markdown.rs`。」
