@@ -492,6 +492,15 @@ fn repair_json_emission_defects(raw: &str) -> Option<String> {
 #[derive(Debug, Default)]
 pub struct IndexIdTracker {
     map: HashMap<u64, String>,
+    /// Argument fragments that arrived for a stream index *before* its
+    /// id-bearing chunk. Strict OpenAI sends `id`+`name` in the first
+    /// tool-call chunk, but loose OpenAI-compatible aggregators occasionally
+    /// stream a leading `arguments` fragment ahead of the id. Without
+    /// buffering, `get(index)` returns `None` and that fragment is silently
+    /// dropped, leaving the accumulated args malformed (truncated-looking)
+    /// and burning a needless provider retry. Flushed by [`take_pending`]
+    /// once the id is known.
+    pending_args: HashMap<u64, String>,
 }
 
 impl IndexIdTracker {
@@ -510,6 +519,20 @@ impl IndexIdTracker {
     #[must_use]
     pub fn get(&self, index: u64) -> Option<&str> {
         self.map.get(&index).map(|s| s.as_str())
+    }
+
+    /// Buffer an argument fragment for an index whose id has not arrived yet.
+    /// Appends so multiple pre-id fragments accumulate in stream order.
+    pub fn buffer_pending(&mut self, index: u64, fragment: &str) {
+        self.pending_args.entry(index).or_default().push_str(fragment);
+    }
+
+    /// Remove and return any buffered pre-id argument fragments for an index.
+    /// Called right after the id is tracked so the leading fragments can be
+    /// emitted as the first `ToolCallArgDelta` before later fragments.
+    #[must_use]
+    pub fn take_pending(&mut self, index: u64) -> Option<String> {
+        self.pending_args.remove(&index)
     }
 
     /// Return every tracked id, ordered by ascending index.
@@ -1080,6 +1103,22 @@ mod tests {
         assert_eq!(tracker.get(0), Some("tc_a"));
         assert_eq!(tracker.get(1), Some("tc_b"));
         assert_eq!(tracker.get(2), None);
+    }
+
+    #[test]
+    fn tracker_buffers_args_arriving_before_id() {
+        // A loose OpenAI-compatible backend streams a leading argument
+        // fragment for index 0 before the id-bearing chunk arrives.
+        let mut tracker = IndexIdTracker::new();
+        tracker.buffer_pending(0, "{\"q\":");
+        tracker.buffer_pending(0, "\"rust\"}");
+        // No id yet → nothing tracked, but the fragments are preserved.
+        assert_eq!(tracker.get(0), None);
+        // Id arrives; the buffered fragments flush in stream order.
+        tracker.track(0, "tc_a");
+        assert_eq!(tracker.take_pending(0).as_deref(), Some("{\"q\":\"rust\"}"));
+        // Second flush is empty (idempotent drain).
+        assert_eq!(tracker.take_pending(0), None);
     }
 
     #[tokio::test]
