@@ -14,8 +14,10 @@ pub fn build_member_input(
     is_leader: bool,
 ) -> String {
     let leader_block = if is_leader {
-        "\n\n你还是这个群的 leader——除了平等参与讨论,当任务需要严肃编排时,\
-         你可以用 `task_create` / `team_delegate` 派活给成员、汇总产出给用户。但这是你的判断,不是义务。"
+        "\n\n你还是这个群的 leader。当用户给团队的是一项需要完成的实质工作\
+         (而非寒暄或简单问答)时,默认先用 `team_delegate` / `task_create` 把它\
+         拆成可追踪任务派给成员、再汇总产出回复用户——这样进度会显示在团队看板上。\
+         是否拆解、如何拆解由你判断;闲聊或你能直接答的,就直接答。"
     } else {
         ""
     };
@@ -64,5 +66,10 @@ mod tests {
         );
         assert!(out.contains("你还是这个群的 leader"), "leader 身份段");
         assert!(out.contains("task_create"), "leader 段提到编排工具");
+        assert!(out.contains("team_delegate"), "leader 段提到 team_delegate");
+        assert!(
+            out.contains("拆成可追踪任务") || out.contains("派给成员"),
+            "leader 段指示把实质工作拆成可追踪任务"
+        );
     }
 }
