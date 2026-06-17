@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use super::{AgentHarness, InputGuardrailOutcome};
 use crate::context::budget::LoopDirective;
 use crate::harness::callback::HarnessCallback;
-use crate::harness::trait_def::{HarnessError, TurnState};
+use crate::harness::trait_def::{HarnessError, TurnState, TurnStep};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::message::UnifiedMessage;
 use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord, TurnId};
@@ -353,9 +353,9 @@ impl AgentHarness {
     /// Internal turn execution with pre-computed counters to avoid O(n²)
     /// event-log scans in the outer loop.
     ///
-    /// Returns `(TurnState, tool_calls_executed, is_verifier_veto, split_child_session_id)`.
-    /// The 4th element is `Some(child)` only when a `SplitSession` directive
-    /// succeeded; `None` in all other cases.
+    /// Returns a [`TurnStep`] describing the turn outcome. `split_child` is
+    /// `Some(child)` only when a `SplitSession` directive succeeded; `None`
+    /// in all other cases.
     pub(crate) async fn run_turn_internal(
         &self,
         session_id: &SessionId,
@@ -364,7 +364,7 @@ impl AgentHarness {
         tool_calls_made: usize,
         tool_history: &mut std::collections::VecDeque<ToolCallSummary>,
         parent_cancel: &CancellationToken,
-    ) -> Result<(TurnState, usize, bool, Option<SessionId>), HarnessError> {
+    ) -> Result<TurnStep, HarnessError> {
         // Hold a sleep-inhibit assertion for the duration of this turn so a long
         // Think→Act cycle does not get cut off by macOS idle sleep. Drop happens
         // automatically when this scope exits, releasing the IOPMAssertion.
@@ -407,7 +407,7 @@ impl AgentHarness {
                     InputGuardrailOutcome::Sanitized(events) => events,
                     InputGuardrailOutcome::Blocked(reason) => {
                         callback.on_safety_block(&reason);
-                        return Ok((TurnState::Done, 0, false, None));
+                        return Ok(TurnStep::done());
                     }
                 }
             } else {
@@ -573,7 +573,12 @@ impl AgentHarness {
 
             if let Some(child) = split_child {
                 // Continue the run in the child; run() rebinds current_session.
-                return Ok((TurnState::Continue, 0, false, Some(child)));
+                return Ok(TurnStep {
+                    state: TurnState::Continue,
+                    executed: 0,
+                    vetoed: false,
+                    split_child: Some(child),
+                });
             }
             // Fail-soft: behave like the FinalReply branch.
             self.hit_limit.store(true, Ordering::Relaxed);
@@ -590,7 +595,7 @@ impl AgentHarness {
                 parent_cancel,
             )
             .await;
-            return Ok((TurnState::Done, 0, false, None));
+            return Ok(TurnStep::done());
         }
 
         // 2d. `FinalReply` directive — record hit_limit and short-circuit to
@@ -618,7 +623,7 @@ impl AgentHarness {
                 parent_cancel,
             )
             .await;
-            return Ok((TurnState::Done, 0, false, None));
+            return Ok(TurnStep::done());
         }
 
         // 2d-G1. Last-step soft hint (opencode parity). When the iteration
@@ -1133,7 +1138,7 @@ impl AgentHarness {
                 outcome: crate::harness::trace::LoopTraceTurnOutcome::Stop,
                 metrics: verdict_metrics,
             });
-            return Ok((TurnState::Done, 0, false, None));
+            return Ok(TurnStep::done());
         } else if let VerifierVerdict::Veto { reason, .. } = verdict {
             tracing::info!(?session_id, reason = %reason, "verifier vetoed; forcing continue");
             // Surface the interception reason on the user-facing trace stream
@@ -1175,7 +1180,12 @@ impl AgentHarness {
             .await;
             outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Continue;
             metrics_for_trace = verdict_metrics;
-            result = Ok((TurnState::Continue, 0, true, None));
+            result = Ok(TurnStep {
+                state: TurnState::Continue,
+                executed: 0,
+                vetoed: true,
+                split_child: None,
+            });
         } else if response.tool_calls.is_empty() {
             // This turn ends the run, so a degraded final response IS the
             // loop-exit cause. Both flags were captured right after their
@@ -1192,7 +1202,7 @@ impl AgentHarness {
             }
             outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Stop;
             metrics_for_trace = verdict_metrics;
-            result = Ok((TurnState::Done, 0, false, None));
+            result = Ok(TurnStep::done());
         } else {
             self.emit(|| crate::harness::trace::LoopTraceEvent::TurnStateEntered {
                 iteration: iterations,
@@ -1217,7 +1227,7 @@ impl AgentHarness {
                 consecutive_errors: 0,
                 total_tokens: turn_tokens as usize,
             };
-            result = Ok((TurnState::Continue, executed, false, None));
+            result = Ok(TurnStep::cont(executed));
         }
 
         // Cycle 3 — wire DiminishingReturnsDetector. `after_turn` had zero
@@ -1230,7 +1240,7 @@ impl AgentHarness {
         //
         // The veto flag is the 3rd element of `result`; `verdict` was moved
         // into the if-let binding above and is no longer in scope.
-        let is_verifier_veto = matches!(result, Ok((_, _, true, _)));
+        let is_verifier_veto = matches!(&result, Ok(step) if step.vetoed);
         if !is_verifier_veto {
             let after_directive = if let Some(budget) = self.deps.context_budget.as_ref() {
                 let mut guard = budget.lock().await;
@@ -1265,12 +1275,12 @@ impl AgentHarness {
                     outcome: crate::harness::trace::LoopTraceTurnOutcome::Stop,
                     metrics: metrics_for_trace.clone(),
                 });
-                return Ok((
-                    TurnState::Done,
-                    metrics_for_trace.executed_tool_calls,
-                    false,
-                    None,
-                ));
+                return Ok(TurnStep {
+                    state: TurnState::Done,
+                    executed: metrics_for_trace.executed_tool_calls,
+                    vetoed: false,
+                    split_child: None,
+                });
             }
         }
 
