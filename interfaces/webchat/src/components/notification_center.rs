@@ -177,7 +177,7 @@ pub fn NotificationCenter() -> impl IntoView {
                                                                         dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
                                                                     }
                                                                     Err(e) => {
-                                                                        tracing::warn!("Failed to resolve approval (allow-once): {e}");
+                                                                        web_sys::console::warn_1(&format!("Failed to resolve approval (allow-once): {e:?}").into());
                                                                     }
                                                                 }
                                                             });
@@ -198,7 +198,7 @@ pub fn NotificationCenter() -> impl IntoView {
                                                                         dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
                                                                     }
                                                                     Err(e) => {
-                                                                        tracing::warn!("Failed to resolve approval (allow-session): {e}");
+                                                                        web_sys::console::warn_1(&format!("Failed to resolve approval (allow-session): {e:?}").into());
                                                                     }
                                                                 }
                                                             });
@@ -219,7 +219,7 @@ pub fn NotificationCenter() -> impl IntoView {
                                                                         dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
                                                                     }
                                                                     Err(e) => {
-                                                                        tracing::warn!("Failed to resolve approval (deny): {e}");
+                                                                        web_sys::console::warn_1(&format!("Failed to resolve approval (deny): {e:?}").into());
                                                                     }
                                                                 }
                                                             });
