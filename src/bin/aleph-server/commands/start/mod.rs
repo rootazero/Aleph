@@ -41,9 +41,9 @@ use orchestrator_init::initialize_orchestrator;
 
 mod helpers;
 use helpers::{
-    build_http_provider, build_sqlite_session_service, initialize_extension_manager,
-    initialize_session_store, initialize_tracing, load_gateway_config, print_startup_banner,
-    setup_graceful_shutdown, validate_bind_address,
+    build_http_provider, build_sqlite_session_service, format_socket_addr,
+    initialize_extension_manager, initialize_session_store, initialize_tracing,
+    load_gateway_config, print_startup_banner, setup_graceful_shutdown, validate_bind_address,
 };
 
 mod runtime_warmup;
@@ -74,6 +74,22 @@ fn build_task_delivery_engine(
     engine.register(Arc::new(GatewayDeliveryTarget::new(channel_cell)));
     engine.register(Arc::new(MemoryDeliveryTarget::new(memory_store)));
     Arc::new(engine)
+}
+
+/// Build the platform-specific `DesktopPlatform` instance.
+fn build_desktop_platform() -> Arc<dyn aleph_desktop::DesktopPlatform> {
+    #[cfg(target_os = "macos")]
+    {
+        Arc::new(aleph_desktop_macos::MacOSPlatform::new())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Arc::new(aleph_desktop_linux::LinuxPlatform::new())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Arc::new(aleph_desktop_windows::WindowsPlatform::new())
+    }
 }
 
 /// Start the gateway server
@@ -412,7 +428,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Security store + vault construction (early — vault needed for API key
     // resolution).
-    let auth_bundle = initialize_vault(args.port, server.node_registry.clone());
+    let auth_bundle = initialize_vault(final_port, server.node_registry.clone());
     register_core_handlers(
         &mut server,
         &auth_bundle.auth_ctx,
@@ -1798,20 +1814,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     {
         let presence_cfg = alephcore::tasks::presence::PresenceConfig::default();
         if presence_cfg.enabled {
-            let platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
-                #[cfg(target_os = "macos")]
-                {
-                    Arc::new(aleph_desktop_macos::MacOSPlatform::new())
-                }
-                #[cfg(target_os = "linux")]
-                {
-                    Arc::new(aleph_desktop_linux::LinuxPlatform::new())
-                }
-                #[cfg(target_os = "windows")]
-                {
-                    Arc::new(aleph_desktop_windows::WindowsPlatform::new())
-                }
-            };
+            let platform = build_desktop_platform();
             if platform.system().is_some() {
                 let reporter = alephcore::tasks::presence::PresenceReporter::new(
                     platform,
@@ -1840,20 +1843,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     {
         let mic_cfg = alephcore::tasks::mic_level::MicLevelConfig::default();
         if mic_cfg.enabled {
-            let platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
-                #[cfg(target_os = "macos")]
-                {
-                    Arc::new(aleph_desktop_macos::MacOSPlatform::new())
-                }
-                #[cfg(target_os = "linux")]
-                {
-                    Arc::new(aleph_desktop_linux::LinuxPlatform::new())
-                }
-                #[cfg(target_os = "windows")]
-                {
-                    Arc::new(aleph_desktop_windows::WindowsPlatform::new())
-                }
-            };
+            let platform = build_desktop_platform();
             if platform.media().is_some() {
                 let reporter = alephcore::tasks::mic_level::MicLevelReporter::new(
                     platform,
@@ -2231,11 +2221,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     start_webchat_server(args, &final_bind, final_port).await;
 
     if !args.daemon {
+        let addr_display = format_socket_addr(&final_bind, final_port);
         println!();
         println!("Aleph Server:");
-        println!("  - URL:       http://{final_bind}:{final_port}");
-        println!("  - WebSocket: ws://{final_bind}:{final_port}/ws");
-        println!("  - Panel UI:  http://{final_bind}:{final_port}/");
+        println!("  - URL:       http://{addr_display}");
+        println!("  - WebSocket: ws://{addr_display}/ws");
+        println!("  - Panel UI:  http://{addr_display}/");
         println!();
     }
 

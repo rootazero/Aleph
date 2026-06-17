@@ -166,6 +166,9 @@ impl ProfileManager {
         let cfg = self
             .get_config(profile_name)
             .ok_or_else(|| BrowserError::ProfileNotFound(profile_name.into()))?;
+        if matches!(self.get_state(profile_name), Some(ProfileState::Stopping)) {
+            return Err(BrowserError::ProfileBusy(profile_name.into()));
+        }
         match cfg.driver {
             BrowserDriver::Managed => {
                 let headless = cfg.headless.unwrap_or(self.config.playwright_cli.headless);
@@ -197,7 +200,7 @@ impl ProfileManager {
     /// Returns the number of profiles reaped (best-effort; safe to call any time).
     pub async fn reap_idle(&self) -> usize {
         let idle = self.idle_profiles();
-        let count = idle.len();
+        let mut reaped = 0;
         for name in idle {
             if let Some(BrowserDriver::ExistingSession) = self.get_driver(&name) {
                 self.chrome_mcp_driver.destroy_session(&name).await;
@@ -207,10 +210,11 @@ impl ProfileManager {
             if let Some(profile) = profiles.get_mut(&name) {
                 if profile.state.is_running() {
                     profile.state = ProfileState::Idle;
+                    reaped += 1;
                 }
             }
         }
-        count
+        reaped
     }
 
     /// Record activity on a specific tab so its idle timer resets. No-op for
@@ -250,12 +254,16 @@ impl ProfileManager {
             };
             let backend = match self.get_backend(&profile) {
                 Ok(b) => b,
-                Err(_) => continue,
+                Err(e) => {
+                    tracing::warn!(profile = %profile, error = %e, "reap_idle_tabs: failed to get backend");
+                    continue;
+                }
             };
             let tabs_text = match backend.list_tabs().await {
                 Ok(t) => t,
-                Err(_) => {
+                Err(e) => {
                     // Browser gone — stop re-probing this profile every sweep.
+                    tracing::warn!(profile = %profile, error = %e, "reap_idle_tabs: failed to list tabs");
                     self.tab_registry.clear_profile(&profile);
                     continue;
                 }
@@ -268,7 +276,9 @@ impl ProfileManager {
                 Duration::from_secs(idle_secs),
             );
             for victim in victims {
-                if backend.close_tab(&victim).await.is_ok() {
+                if let Err(e) = backend.close_tab(&victim).await {
+                    tracing::warn!(profile = %profile, tab = %victim, error = %e, "reap_idle_tabs: failed to close tab");
+                } else {
                     self.tab_registry.forget(&profile, &victim);
                     closed += 1;
                 }

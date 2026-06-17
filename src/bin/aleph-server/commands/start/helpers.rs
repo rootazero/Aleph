@@ -26,11 +26,20 @@ pub(super) fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::erro
 }
 
 fn resolve_socket_addr(args: &Args) -> Result<SocketAddr, Box<dyn std::error::Error>> {
-    let ip: std::net::IpAddr = args
-        .bind
+    let bind = args.bind.as_deref().unwrap_or("127.0.0.1");
+    let port = args.port.unwrap_or(18790);
+    let ip: std::net::IpAddr = bind
         .parse()
-        .map_err(|e| format!("Invalid bind address '{}': {e}", args.bind))?;
-    Ok(SocketAddr::new(ip, args.port))
+        .map_err(|e| format!("Invalid bind address '{bind}': {e}"))?;
+    Ok(SocketAddr::new(ip, port))
+}
+
+/// Format a bind address + port into a bracketed string safe for IPv6.
+pub(super) fn format_socket_addr(bind: &str, port: u16) -> String {
+    match bind.parse::<std::net::IpAddr>() {
+        Ok(ip) => std::net::SocketAddr::new(ip, port).to_string(),
+        Err(_) => format!("{bind}:{port}"),
+    }
 }
 
 /// Print the startup banner and available method list to stdout.
@@ -122,22 +131,15 @@ pub(super) fn load_gateway_config(
         },
     };
 
-    // CLI args override config file settings
-    let final_bind = if args.bind == "127.0.0.1" {
-        full_config.gateway.host.clone()
-    } else {
-        args.bind.clone()
-    };
-    let final_port = if args.port == 18790 {
-        full_config.gateway.port
-    } else {
-        args.port
-    };
-    let final_max_connections = if args.max_connections == 1000 {
-        full_config.gateway.max_connections
-    } else {
-        args.max_connections
-    };
+    // CLI args override config file settings only when explicitly provided.
+    let final_bind = args
+        .bind
+        .clone()
+        .unwrap_or_else(|| full_config.gateway.host.clone());
+    let final_port = args.port.unwrap_or(full_config.gateway.port);
+    let final_max_connections = args
+        .max_connections
+        .unwrap_or(full_config.gateway.max_connections);
 
     Ok((full_config, final_bind, final_port, final_max_connections))
 }

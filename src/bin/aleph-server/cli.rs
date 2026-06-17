@@ -36,12 +36,12 @@ pub struct Args {
     pub log_file: Option<PathBuf>,
 
     /// Bind address
-    #[arg(long, default_value = "127.0.0.1")]
-    pub bind: String,
+    #[arg(long)]
+    pub bind: Option<String>,
 
     /// Port number
-    #[arg(long, default_value = "18790")]
-    pub port: u16,
+    #[arg(long)]
+    pub port: Option<u16>,
 
     /// Force start even if port appears to be in use
     #[arg(long)]
@@ -52,8 +52,8 @@ pub struct Args {
     pub log_level: String,
 
     /// Maximum number of concurrent connections
-    #[arg(long, default_value = "1000")]
-    pub max_connections: usize,
+    #[arg(long)]
+    pub max_connections: Option<usize>,
 
     /// `WebChat` UI directory (serves static files)
     #[arg(long)]

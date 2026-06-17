@@ -355,7 +355,7 @@ mod tests {
         assert!(active_agents.contains(&"coordinator".to_string()));
         assert!(active_agents.contains(&"worker-1".to_string()));
         assert_eq!(completed, 1);
-        assert_eq!(total, 0); // total_steps was never set
+        assert_eq!(total, 2); // total_steps initialized to participant count
         assert_eq!(artifacts.len(), 1);
         assert!(artifacts[0].contains("Text"));
     }
