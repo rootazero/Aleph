@@ -2,7 +2,7 @@
 
 > **用途**：把"打磨某个功能时的口语关键词"翻译成**代码规范名 + 文件锚点 + 精准话术**，让 Claude 在局部优化时一次定位到正确的模块/文件，而不是从头摸索。
 >
-> **架构主轴**：Aleph agent 按 **Prompt → Context → Harness → Loop** 四层构建。本词典按这四层 + **横切关注点** + **UI/Panel** 两个补充区组织。
+> **架构主轴**：Aleph agent 按 **Prompt → Context → Harness → Loop** 四层构建。本词典按这四层 + **横切关注点** + **UI/Panel** + **Desktop（桌面端）** 三个补充区组织。
 >
 > **怎么用**：
 > 1. 打磨前先在「速查索引」里用你的口语关键词找到**规范名**；
@@ -63,6 +63,12 @@
 | 横切 | CLI | Command Line Interface | `src/bin/aleph-server/commands/` | ✅ |
 | UI | 流式回显 / 工作区面板 | Streaming Echo & Workspace Panel | `interfaces/webchat/src/components/workspace_panel.rs` | ✅ |
 | UI | panel 双层权限 / 配对 tier | Panel Permission Tiers | `src/gateway/panel_devices.rs`(tier store) · `src/gateway/server/handler.rs`(connect 解析+RPC门) · `src/gateway/method_authz.rs`(rpc/tool_requires_operator) · `src/gateway/handlers/devices.rs`(devices.*) · `interfaces/webchat/src/{context.rs(device_id),views/settings/security/devices.rs,components/permission.rs(ConfigGate)}` | ✅ |
+| Desktop | 大脑四肢分离 / 能力 trait / Swift 桥 / IPC | Desktop Capability Contracts & Bridge IPC | `desktop/shared/`(`aleph-desktop`：`traits/` + `platform.rs` + `bridge/`) | ✅ |
+| Desktop | macOS/Windows/Linux 原生实现 / Swift bridge / 四肢 | Native Bridge Implementations | `desktop/{macos,windows,linux}/src/` + `desktop/macos/bridge/Sources/AlephBridge` | ✅ |
+| Desktop | screenshot / 点击 / GUI 自动化 / set-of-marks / ax / 视觉定位 | Desktop Control & GUI Tools | `src/builtin_tools/desktop/` | ✅ |
+| Desktop | 通知 / 剪贴板 / 启动应用 / AppleScript / 相机录音 / 备忘录 / 权限 | System / Automation / Permission / Media / PIM Tools | `src/builtin_tools/{system_tool,automation_tool,permission_tool,media_tool,pim}` | ✅ |
+| Desktop | 桌面 App / Tauri / 托盘 / daemon 生命周期 / auto-update / 唤起热键 / 连远程 core | Desktop Shell | `desktop/shell/` | ✅ |
+| Desktop | 桌面能力注入 / per-OS 构造 / power inhibit / presence / mic / 平台 OCR | Core Wiring & Daemon Consumers | `src/executor/builtin_registry/builder/constructor.rs` · `src/harness/deps.rs` · `src/tasks/{presence,mic_level}` · `src/vision/providers/platform_ocr.rs` | ✅ |
 
 ---
 
@@ -402,6 +408,54 @@
 
 ---
 
+## 7. Desktop（桌面端）
+
+> 桌面端是 **R1「大脑-四肢绝对分离」** 的物理落地：`src` 内只持有**能力契约 (Trait)**，真实平台 API（AppKit / Vision / windows-rs …）全在 `desktop/*` 原生 Bridge 子 crate，二者经 **JSON-RPC IPC** 跨界。本章按"契约 → 四肢 → 工具 → 壳 → 连线"组织。改桌面功能前先认清：**`src` 严禁直接调平台 API**（违 R1 不得合入）。
+
+### 7.1 桌面能力契约与 Bridge IPC (Desktop Capability Contracts & Bridge IPC)
+- **口语关键词**：大脑四肢分离、能力 trait、DesktopPlatform、Swift helper、JSON-RPC 桥、IPC、supervisor、能力契约
+- **代码锚点**：`desktop/shared/`（`aleph-desktop` crate）——`traits/`（`screen.rs`/`system.rs`/`automation.rs`/`permission.rs`/`media.rs`/`pim.rs` + macOS 专属 `ax`/`power` 共八大能力 trait）、`platform.rs`（`DesktopPlatform` 聚合器，每能力返 `Option<&dyn XCapability>`，平台缺失即 `None`）、`bridge/`（`client.rs` + `codec.rs` + `supervisor.rs`(Backoff/RestartWindow) + `inflight.rs`，stdio 上的 JSON-RPC 2.0 连 Swift helper 子进程）、`coord.rs` + `*_types.rs`（共享数据类型）；协议详解见 `docs/reference/DESKTOP_BRIDGE.md`
+- **职责**：定义"桌面能做什么"的契约层（trait + 类型 + IPC 协议），不含任何平台实现。`DesktopPlatform` 是核心拿到的唯一抽象入口。
+- **状态**：✅ 已实现（八能力 trait + DesktopPlatform 聚合 + JSON-RPC supervisor/backoff/inflight）。
+- **打磨话术**：「能力契约都在 `desktop/shared/traits/`；新增一种桌面能力 = 先加 trait + 类型，再各平台实现，**严禁在 `src` 直接调平台 API（违 R1）**。IPC 传输/方法表/错误信封在 `bridge/` + DESKTOP_BRIDGE.md。」
+
+### 7.2 原生 Bridge 实现（四肢）(Native Bridge Implementations)
+- **口语关键词**：macOS/Windows/Linux 原生实现、Swift bridge、AppKit/Vision、平台 OCR、四肢、平台特定代码
+- **代码锚点**：`desktop/macos/src/`（Rust 侧 `screen.rs`/`ax.rs`/`automation.rs`/`permission.rs`/`pim.rs`/`system/` + Swift helper `desktop/macos/bridge/Sources/AlephBridge`）、`desktop/windows/src/`、`desktop/linux/src/`；各 crate 暴露 `MacOSPlatform`/`WindowsPlatform`/`LinuxPlatform` 实现 `DesktopPlatform`；构造装配点见 §7.6
+- **职责**：每个 OS 一个 crate，提供 §7.1 契约的真实实现（macOS 经 Swift helper 触达 AppKit/Vision）。能力缺失返 `None`/`NotImplemented`，绝不 panic（P7）。
+- **状态**：✅ 已实现（三平台 + macOS Swift helper）。
+- **打磨话术**：「平台真实实现按 OS 分 crate（macos 含 Swift helper）。改‘某平台某能力的实现’去对应 `desktop/<os>/src/<capability>.rs`；这是‘四肢’，绝不在 `src`（大脑）里写平台代码。」
+
+### 7.3 桌面控制与 GUI 工具 (Desktop Control & GUI Tools)
+- **口语关键词**：screenshot、点击、GUI 自动化、set-of-marks、accessibility 树、视觉定位、屏幕操作、操控桌面
+- **代码锚点**：`src/builtin_tools/desktop/`——`tool.rs`/`types.rs`（DesktopTool：screenshot/ocr/click/double_click/drag/scroll/launch_app/quit_app/window_list/focus_window…）、`ax.rs`（无障碍树查询 4 工具）、`set_of_marks.rs`、`gui_locate.rs`、`browser_operator.rs`、`vision_bridge.rs`（OCR 文本层，喂纯文本模型）、`coord_resolve.rs`、`safety.rs`、`session_lock.rs`
+- **职责**：LLM 面向的桌面控制工具集，全部经 `DesktopPlatform` 调四肢；视觉定位（set-of-marks / gui_locate / ax）把屏幕变成可点击的结构化标的。
+- **状态**：✅ 已实现，含坐标解析 + 安全护栏 + 会话锁。
+- **打磨话术**：「LLM 控制桌面的工具都在 `builtin_tools/desktop/`；‘点哪/看哪’的视觉定位走 `set_of_marks` + `gui_locate` + `ax`。工具只调 `DesktopPlatform`，不碰平台 API。」
+
+### 7.4 系统类桌面工具 (System / Automation / Permission / Media / PIM Tools)
+- **口语关键词**：通知、剪贴板、启动应用、系统信息、AppleScript/快捷指令、相机/录音/语音转写、备忘录 PIM、权限检查/请求
+- **代码锚点**：`src/builtin_tools/system_tool.rs`（启动/退出应用、通知、剪贴板、系统信息）、`automation_tool.rs`（脚本/快捷指令）、`permission_tool.rs`（权限检查/请求/引导）、`media_tool.rs`（相机/录音/STT/mic）、`pim/`（备忘录 CRUD）；均经对应 `DesktopPlatform` 能力
+- **职责**：DesktopTool 之外的系统能力工具——一能力一工具，全经 `DesktopPlatform` 路由到四肢。
+- **状态**：✅ 已实现。
+- **打磨话术**：「这些是 GUI 控制之外的系统能力工具，一能力一工具。加新系统能力先回 §7.1 看契约有没有对应 trait，没有先加 trait。」
+
+### 7.5 Tauri 桌面壳 (Desktop Shell)
+- **口语关键词**：桌面 App、Tauri、托盘、系统通知、daemon 生命周期、auto-update、`aleph://` deeplink、全局唤起热键、应用菜单、连远程 core
+- **代码锚点**：`desktop/shell/`（`aleph-desktop-shell` crate）——`src/`（`main.rs`/`daemon.rs`(启动+监督 detached daemon)/`tray.rs`/`notify.rs`/`menu.rs`/`hotkey.rs`(全局唤起)/`update.rs`(后台自更新)/`deeplink.rs`+`external_link.rs`(`aleph://`)/`perm_monitor.rs`/`webview_perms.rs`/`connection.rs`+`connect_setup.rs`(连本地或远程 Gateway，target 持久化 `~/.aleph/.desktop-shell-target`)）、`tauri*.conf.json`、`build.rs`、`Info.plist`/`Entitlements.plist`；文档 `docs/reference/DESKTOP_SHELL.md`
+- **职责**："最后一公里"原生外壳：把 Panel（Leptos/WASM）装进原生窗口，提供托盘/通知/自启/自更新/deeplink/热键/菜单 + daemon 生命周期。**零业务 UI、零业务逻辑**（R2/R10）——UI 在 Panel、推理在 daemon。
+- **状态**：✅ 已实现（Tauri v2）。
+- **打磨话术**：「壳是纯 I/O + OS 集成，**别往里加业务 UI/逻辑（违 R2/R10）**。改窗口/托盘/更新/热键在 `desktop/shell/src/`；‘连本地还是远程 core’在 `connection.rs`。注意 Panel 经 rust_embed 编译期嵌入 daemon，改 Panel 看不到效果是漏了重编 binary（见 CLAUDE.md 嵌入链）。」
+
+### 7.6 核心侧连线与 daemon 消费者 (Core Wiring & Daemon Consumers)
+- **口语关键词**：桌面能力注入、per-OS 构造、单一注入点、power inhibit、防休眠、presence、麦克风电平、平台 OCR
+- **代码锚点**：构造/装配 `src/executor/builtin_registry/builder/constructor.rs`（按 OS `new` 对应 `DesktopPlatform` + 装配全部桌面工具 + VisionBridge）、`src/bin/aleph-server/commands/start/orchestrator_init.rs`（`power` 能力注入）、`src/harness/deps.rs`（`power` 字段——turn 进行中抑制系统休眠）；**daemon 侧消费者（非工具）** `src/tasks/presence/`（周期广播 system_info + user_idle）、`src/tasks/mic_level/`、`src/vision/providers/platform_ocr.rs`（`ScreenCapability` → OCR 视觉 provider）
+- **职责**：桌面能力的**唯一注入点**在 `constructor.rs`（per-OS 选择 Platform，依赖倒置 P4）；power 用于 turn 内防休眠；presence/mic/OCR 是 daemon 后台对桌面能力的消费者。
+- **状态**：✅ 已实现。
+- **打磨话术**：「桌面能力的**单一注入点**在 `constructor.rs`（按 OS new Platform）；‘turn 中防休眠’在 `deps.rs` 的 power；presence/mic/平台 OCR 是 daemon 侧**消费者**不是工具——找‘桌面能力被谁用了’来这里。」
+
+---
+
 ## 附录 A. 实现现状体检（⚠️/❌ 清单——打磨时最该先看）
 
 | # | 功能 | 状态 | 现状 vs 直觉的差距 | 若要"做成描述的样子"的性质 |
@@ -422,5 +476,6 @@
 - **"命令/工具/斜杠命令"**：同一套 ToolCatalog（§3.5），不是三套。
 - **"插件"**：plugins ⊂ extension（`src/extension/`），不是独立目录。
 - **"loop vs cron"**：loop 内存态随会话消亡（`src/looping/`）；要持久周期任务用 cron（`src/tasks/cron/`）。
+- **"desktop"**：能力契约 trait（`desktop/shared`，大脑只持有它）≠ 原生 Bridge 实现（`desktop/{macos,windows,linux}`，四肢）≠ LLM 桌面工具（`src/builtin_tools/desktop` + system/automation/permission/media/pim）≠ Tauri 桌面壳（`desktop/shell`，纯外壳）。说"桌面"时指明是契约 / 四肢 / 工具 / 壳哪一层（§7）。
 </content>
 </invoke>
