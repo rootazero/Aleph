@@ -31,12 +31,63 @@ pub struct GatewayEvent {
 // Event handler callback type
 type EventHandler = Arc<dyn Fn(GatewayEvent) + Send + Sync>;
 
-/// Pure predicate mirroring the gateway's `tier::role_for_permissions`
-/// classification: only the literal `"operator"` role (config tier) grants
-/// control-plane access. Extracted for host-side unit testing.
+/// Pure predicate for the single-tier Gateway-token model: an authorized
+/// connection reports the `"operator"` role (loopback, or a remote that
+/// presented a valid token) and has full local-equivalent authority. Anything
+/// else is unauthorized (login wall). Extracted for host-side unit testing.
 pub(crate) fn role_is_operator(role: Option<&str>) -> bool {
     role == Some("operator")
 }
+
+/// localStorage key holding the shared Gateway token a remote Panel presents
+/// at the `connect` handshake.
+#[cfg(target_arch = "wasm32")]
+const GATEWAY_TOKEN_KEY: &str = "aleph_gateway_token";
+
+/// Read the Gateway token to present at handshake. A `?token=` URL query
+/// (QR / shared link) wins over a previously persisted localStorage token.
+#[cfg(target_arch = "wasm32")]
+fn read_gateway_token() -> Option<String> {
+    let win = web_sys::window()?;
+    if let Ok(search) = win.location().search() {
+        if let Some(tok) = parse_query_token(&search) {
+            return Some(tok);
+        }
+    }
+    win.local_storage()
+        .ok()
+        .flatten()
+        .and_then(|s| s.get_item(GATEWAY_TOKEN_KEY).ok().flatten())
+        .filter(|v| !v.is_empty())
+}
+
+/// Extract `token` from a `?token=…&…` query string. The token is an
+/// `aleph-<uuid>` (no URL-special characters), so no percent-decoding is
+/// needed. Machine-format parsing, not natural language — regex-free by P8.
+#[cfg(target_arch = "wasm32")]
+fn parse_query_token(search: &str) -> Option<String> {
+    let q = search.strip_prefix('?').unwrap_or(search);
+    q.split('&')
+        .find_map(|pair| pair.strip_prefix("token="))
+        .filter(|v| !v.is_empty())
+        .map(std::string::ToString::to_string)
+}
+
+/// Persist a validated Gateway token so refreshes / reconnects stay authorized.
+#[cfg(target_arch = "wasm32")]
+fn persist_gateway_token(token: &str) {
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = s.set_item(GATEWAY_TOKEN_KEY, token);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_gateway_token() -> Option<String> {
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn persist_gateway_token(_token: &str) {}
 
 #[derive(Clone, Copy)]
 pub struct DashboardState {
@@ -79,11 +130,16 @@ pub struct DashboardState {
     /// Initialized from localStorage; mutated by the Settings panel toggle.
     pub canvas_radial_navigation: RwSignal<bool>,
 
-    /// Connection role captured from the `connect` response. Under the LAN-trust
-    /// model the gateway always reports `Some("operator")`; `None` before the
-    /// first successful connect. Read by `is_operator()` to gate operator-only
-    /// settings surfaces (e.g. cluster management) client-side.
+    /// Connection role captured from the `connect` response. `Some("operator")`
+    /// once authorized (loopback, or a remote that presented a valid Gateway
+    /// token); `None` before the first successful connect. Read by
+    /// `is_operator()`.
     pub role: RwSignal<Option<String>>,
+
+    /// True when the `connect` response reported `needs_token` — a remote
+    /// connection without a valid Gateway token. Drives the full-screen login
+    /// wall (token box). False for loopback / authorized connections.
+    pub needs_token: RwSignal<bool>,
 }
 
 /// Derive the Gateway WebSocket URL from the current page location.
@@ -202,6 +258,7 @@ impl DashboardState {
                 crate::api::settings::load_canvas_radial_navigation(),
             ),
             role: RwSignal::new(None),
+            needs_token: RwSignal::new(false),
         }
     }
 
@@ -214,12 +271,32 @@ impl DashboardState {
         role_is_operator(self.role.get().as_deref())
     }
 
-    /// Capture the connection `role` from a `connect` response into the `role`
-    /// signal. No-op fields (missing `role`) reset to `None`, keeping the
-    /// signal consistent across reconnects.
+    /// Capture the connection `role` + `needs_token` verdict from a `connect`
+    /// response. Missing fields reset to a safe default (no role / not walled),
+    /// keeping the signals consistent across reconnects.
     fn capture_role(&self, resp: &Value) {
         self.role
             .set(resp.get("role").and_then(|r| r.as_str()).map(String::from));
+        self.needs_token.set(
+            resp.get("needs_token")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        );
+    }
+
+    /// Submit a Gateway token from the login wall: persist it, then reload the
+    /// page so the fresh `connect` handshake presents it. Reload (vs. in-place
+    /// reconnect) keeps the boot/subscription wiring on its single happy path.
+    pub fn submit_token(&self, token: String) {
+        let token = token.trim().to_string();
+        if token.is_empty() {
+            return;
+        }
+        persist_gateway_token(&token);
+        #[cfg(target_arch = "wasm32")]
+        if let Some(w) = web_sys::window() {
+            let _ = w.location().reload();
+        }
     }
 
     /// Subscribe to Gateway events
@@ -340,23 +417,30 @@ impl DashboardState {
     /// Complete the session handshake after the WebSocket connection is
     /// established.
     ///
-    /// LAN-trust model: there is no authentication. The handshake is a single
-    /// `connect` frame carrying this Panel's stable `device_id`; the gateway
-    /// replies with the session baseline (`role`/`state_version`/`keepalive`).
-    /// `role` reflects the device tier — `operator` for the local (loopback)
-    /// App, or this remote device's granted tier (`operator` = Config,
-    /// otherwise Chat). We read `role` so `is_operator()` gates config UI.
+    /// Gateway-token model: the handshake is a single `connect` frame carrying
+    /// this Panel's `device_id` and, for a remote connection, the shared
+    /// Gateway token (from `?token=` URL or persisted localStorage). The gateway
+    /// replies with the session baseline plus the authorization verdict
+    /// (`role` / `authorized` / `needs_token`). Loopback is always authorized
+    /// (operator); a remote needs a valid token. A token that authorizes is
+    /// persisted so refreshes stay logged in; an unauthorized verdict drives the
+    /// login wall via `needs_token`.
     async fn handshake(&self) -> Result<(), String> {
         let (device_id, device_name) = panel_device_identity();
-        let resp = self
-            .rpc_call(
-                "connect",
-                serde_json::json!({
-                    "device_id": device_id,
-                    "device_name": device_name,
-                }),
-            )
-            .await?;
+        let token = read_gateway_token();
+        let mut params = serde_json::json!({
+            "device_id": device_id,
+            "device_name": device_name,
+        });
+        if let Some(t) = token.as_ref() {
+            params["token"] = serde_json::json!(t);
+        }
+        let resp = self.rpc_call("connect", params).await?;
+        if resp.get("authorized").and_then(serde_json::Value::as_bool) == Some(true) {
+            if let Some(t) = token {
+                persist_gateway_token(&t);
+            }
+        }
         self.capture_role(&resp);
         Ok(())
     }
@@ -438,8 +522,8 @@ impl DashboardState {
                                                 if let Some(error) = value.get("error") {
                                                     let msg = error.get("message")
                                                         .and_then(|m| m.as_str())
-                                                        .unwrap_or("Unknown error");
-                                                    let msg = crate::components::permission::friendly_error(msg);
+                                                        .unwrap_or("Unknown error")
+                                                        .to_string();
                                                     let _ = tx.send(Err(msg));
                                                 } else if let Some(result) = value.get("result") {
                                                     let _ = tx.send(Ok(result.clone()));

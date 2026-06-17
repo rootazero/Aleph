@@ -141,6 +141,9 @@ pub enum Command {
     },
     /// Bootstrap runtime dependencies (fnm, node, uv, playwright-cli, chromium, venv)
     BootstrapRuntime(BootstrapRuntimeArgs),
+    /// Print the shared Gateway token (authorizes a remote Panel: paste into the
+    /// token box or encode in a QR / LAN URL `http://<ip>:<port>/?token=<token>`)
+    BootstrapToken,
     /// SP-2 internal: apply landlock + seccomp then exec target. Invoked
     /// by `BubblewrapDriver` inside the bwrap namespace; not for users.
     #[command(hide = true)]
