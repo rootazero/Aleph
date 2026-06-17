@@ -292,7 +292,7 @@ fn expand_line(
         }
         // Trigger only when `@` opens a token (not mid-word like an email
         // `user@host`) and we are outside an inline code span.
-        if c == '@' && backticks % 2 == 0 && !prev_alnum {
+        if c == '@' && backticks.is_multiple_of(2) && !prev_alnum {
             let mut j = i + 1;
             while j < chars.len() && !chars[j].is_whitespace() && chars[j] != '`' {
                 j += 1;

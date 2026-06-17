@@ -573,7 +573,7 @@ mod tests {
                     .transition(request_id, RequestState::Processing)
                     .unwrap()
                     .unwrap();
-                registry.complete(request_id);
+                let _ = registry.complete(request_id);
             });
             handles.push(handle);
         }

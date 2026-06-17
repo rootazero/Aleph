@@ -515,7 +515,7 @@ fn MessageBubble(
         let color = crate::views::chat::agent_identity::agent_color_for_id(aid);
 
         let show_header = use_context::<AttributionMap>()
-            .map_or(true, |m| m.0.get_untracked().get(&message.id).copied().unwrap_or(true));
+            .is_none_or(|m| m.0.get_untracked().get(&message.id).copied().unwrap_or(true));
         (name, emoji, color, show_header)
     });
 

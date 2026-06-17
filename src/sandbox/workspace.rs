@@ -848,11 +848,13 @@ mod tests {
     /// workspace engages the Phase B Linux branch of `maybe_spawn_proxy`
     /// (managed proxy + host bridge + route spec). The bridge itself is
     /// cross-platform (UDS ↔ TCP), so this path runs on a macOS dev box.
+    #[cfg(target_os = "linux")] // sole consumer is the linux-gated test below
     struct CapturingLinuxDriver {
         captured_env: Mutex<HashMap<String, String>>,
         captured_caps: Mutex<Option<SandboxCapabilities>>,
     }
 
+    #[cfg(target_os = "linux")]
     impl CapturingLinuxDriver {
         fn new() -> Arc<Self> {
             Arc::new(Self {
@@ -875,6 +877,7 @@ mod tests {
     }
 
     #[async_trait]
+    #[cfg(target_os = "linux")]
     impl OsSandboxDriverTrait for CapturingLinuxDriver {
         fn platform(&self) -> &'static str {
             "linux/bwrap"

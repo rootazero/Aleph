@@ -90,7 +90,6 @@ If a current purpose is given, refine it minimally rather than rewriting wholesa
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[test]
     fn split_sentinel_separates_overview_and_purpose() {
         let text = "Overview body here.\n===PURPOSE===\n- goal one\n- goal two";

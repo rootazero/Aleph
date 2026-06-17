@@ -306,14 +306,14 @@ mod tests {
         let mut saw_working = false;
         while let Ok(raw) = rx.try_recv() {
             let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-            if v.get("topic").and_then(|t| t.as_str()) == Some("team.team-3.activity") {
-                if v.pointer("/data/status").and_then(|s| s.as_str()) == Some("working") {
-                    assert_eq!(
-                        v.pointer("/data/tool").and_then(|t| t.as_str()),
-                        Some("bash")
-                    );
-                    saw_working = true;
-                }
+            if v.get("topic").and_then(|t| t.as_str()) == Some("team.team-3.activity")
+                && v.pointer("/data/status").and_then(|s| s.as_str()) == Some("working")
+            {
+                assert_eq!(
+                    v.pointer("/data/tool").and_then(|t| t.as_str()),
+                    Some("bash")
+                );
+                saw_working = true;
             }
         }
         assert!(saw_working, "ToolStart should publish activity status=working with tool name");
