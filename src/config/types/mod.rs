@@ -20,6 +20,7 @@
 pub mod acp;
 pub mod agent;
 pub mod agents_def;
+pub mod desktop;
 pub mod dispatcher;
 pub mod evolution;
 pub mod execution;
@@ -55,6 +56,7 @@ pub mod voice_local;
 pub use acp::*;
 pub use agent::*;
 pub use agents_def::*;
+pub use desktop::DesktopDaemonConfig;
 pub use dispatcher::*;
 pub use evolution::*;
 pub use execution::*;

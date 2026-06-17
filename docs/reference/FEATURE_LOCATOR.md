@@ -453,8 +453,9 @@
 - **口语关键词**：桌面能力注入、per-OS 构造、单一注入点、power inhibit、防休眠、presence、麦克风电平、平台 OCR
 - **代码锚点**：构造/装配 `src/executor/builtin_registry/builder/constructor.rs`（按 OS `new` 对应 `DesktopPlatform` + 装配全部桌面工具 + VisionBridge）、`src/bin/aleph-server/commands/start/orchestrator_init.rs`（`power` 能力注入）、`src/harness/deps.rs`（`power` 字段——turn 进行中抑制系统休眠）；**daemon 侧消费者（非工具）** `src/tasks/presence/`（周期广播 system_info + user_idle）、`src/tasks/mic_level/`、`src/vision/providers/platform_ocr.rs`（`ScreenCapability` → OCR 视觉 provider）
 - **职责**：桌面能力的**唯一注入点**在 `constructor.rs`（per-OS 选择 Platform，依赖倒置 P4）；power 用于 turn 内防休眠；presence/mic/OCR 是 daemon 后台对桌面能力的消费者。
-- **状态**：✅ 已实现。
-- **打磨话术**：「桌面能力的**单一注入点**在 `constructor.rs`（按 OS new Platform）；‘turn 中防休眠’在 `deps.rs` 的 power；presence/mic/平台 OCR 是 daemon 侧**消费者**不是工具——找‘桌面能力被谁用了’来这里。」
+- **配置连线**：presence/mic 的策略（开关 / 周期 / 阈值）经 **`[desktop]` 段**驱动（`src/config/types/desktop.rs` 的 `DesktopDaemonConfig` 复用 `tasks::{presence,mic_level}` 的 config 结构，零重复 schema）；boot 路径 `start/mod.rs` 读 `config.desktop` 后**只构造一次平台 Arc** 共享给两个 reporter（段缺省＝presence 开@30s / mic 关，与历史硬编码行为字节一致）。
+- **状态**：✅ 已实现（含 `[desktop]` 配置连线——此前 reporter 跑 `::default()`，mic_level 整特性无配置路径可开启）。
+- **打磨话术**：「桌面能力的**单一注入点**在 `constructor.rs`（按 OS new Platform）；‘turn 中防休眠’在 `deps.rs` 的 power；presence/mic/平台 OCR 是 daemon 侧**消费者**不是工具——找‘桌面能力被谁用了’来这里。调 presence/mic 的开关与周期去 `[desktop.presence]` / `[desktop.mic_level]`。」
 
 ---
 

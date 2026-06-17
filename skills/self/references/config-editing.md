@@ -70,6 +70,9 @@ default_hotkey
 [context_budget]
 [resume]
 [projects]                 # project-workspace filesystem scope
+[desktop]                  # desktop daemon consumers (§7.6)
+  [desktop.presence]       # host presence broadcast (on @30s default)
+  [desktop.mic_level]      # mic-level meter (opt-in, off by default)
 ```
 
 ## Process Management (CRITICAL)

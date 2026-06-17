@@ -239,6 +239,11 @@ pub struct Config {
     /// are the only directories a paired client can traverse / mkdir into.
     #[serde(default)]
     pub projects: crate::config::types::ProjectsConfig,
+    /// Desktop daemon-consumer settings (FEATURE_LOCATOR §7.6) — presence
+    /// broadcaster + mic-level meter. Absent section reproduces the historical
+    /// hardcoded behavior (presence on @30s, mic-level off).
+    #[serde(default)]
+    pub desktop: crate::config::types::desktop::DesktopDaemonConfig,
     /// Presets override loaded from ~/.aleph/presets.toml
     /// Not serialized to config.toml — lives in its own file
     #[serde(skip)]
@@ -439,6 +444,7 @@ impl Default for Config {
             context_budget: None,
             resume: crate::config::types::ResumeConfig::default(),
             projects: crate::config::types::ProjectsConfig::default(),
+            desktop: crate::config::types::desktop::DesktopDaemonConfig::default(),
             presets_override: crate::config::presets_override::PresetsOverride::default(),
             prompts_override: crate::config::prompts_override::PromptsOverride::default(),
             defaults_override: crate::config::defaults_override::DefaultsOverride::default(),
