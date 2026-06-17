@@ -96,6 +96,37 @@ pub fn GenerationProvidersView() -> impl IntoView {
                     set_error_message.set(Some(format!("Failed to load preset catalog: {e}")))
                 }
             }
+
+            // Auto-select a default card on first load so the detail pane shows content
+            // instead of the EmptyState (mirrors Embedding/Reranking). Prefer a configured
+            // provider in the current category; otherwise fall back to its first preset card,
+            // using the same configured-vs-preset id convention as the cards' on_click.
+            if selected_provider_id.get_untracked().is_none() {
+                let cat = selected_category.get_untracked();
+                let prov = providers.get_untracked();
+                let pick = prov
+                    .iter()
+                    .filter(|p| p.effective_generation_type() == Some(cat))
+                    .find(|p| !p.is_default_for.is_empty())
+                    .or_else(|| {
+                        prov.iter().find(|p| p.effective_generation_type() == Some(cat))
+                    })
+                    .map(|p| p.name.clone())
+                    .or_else(|| {
+                        catalog.get_untracked().by_category(cat).first().map(|first| {
+                            let id = first.id.clone();
+                            if prov.iter().any(|p| p.name == id) {
+                                id
+                            } else {
+                                format!("__preset__{id}")
+                            }
+                        })
+                    });
+                if let Some(sel) = pick {
+                    set_selected_provider_id.set(Some(sel));
+                }
+            }
+
             set_is_loading.set(false);
         });
     });

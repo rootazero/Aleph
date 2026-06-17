@@ -53,6 +53,19 @@ pub fn ProvidersView() -> impl IntoView {
     spawn_local(async move {
         match ProvidersApi::list(&state).await {
             Ok(list) => {
+                // Auto-select the default provider on first load so the detail pane
+                // shows content instead of the empty placeholder (mirrors Embedding/Reranking).
+                if selected.get_untracked().is_none() {
+                    if let Some(name) = list
+                        .iter()
+                        .find(|p| p.is_default)
+                        .or_else(|| list.iter().find(|p| p.enabled))
+                        .or_else(|| list.first())
+                        .map(|p| p.name.clone())
+                    {
+                        selected.set(Some(name));
+                    }
+                }
                 providers.set(list);
                 error.set(None);
             }

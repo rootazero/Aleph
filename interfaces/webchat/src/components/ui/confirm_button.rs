@@ -65,6 +65,15 @@ where
     view! {
         <button
             node_ref=btn_ref
+            // macOS WebKit (Safari / the desktop app's WKWebView) does NOT focus
+            // a <button> on mouse click. Without this, clicking the armed button
+            // moves focus away from it, firing `on:blur` -> `confirming.set(false)`
+            // which unmounts the button before `on:click` can run `on_confirm` —
+            // so the action silently never fires (works in Chromium, broken in
+            // the .app). Preventing the mousedown default keeps focus on the
+            // button, so no blur fires and the click reaches `on_confirm`.
+            // Clicking elsewhere still blurs/cancels (that mousedown is not ours).
+            on:mousedown=move |ev| ev.prevent_default()
             on:click=move |ev| {
                 if stop_propagation {
                     ev.stop_propagation();
