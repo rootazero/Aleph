@@ -1904,6 +1904,14 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
     /* Mirrors `.aleph-sidebar-head` top padding so every right-pane page's
        content top edge lines up with the sidebar brand-logo top edge. */
     --aleph-content-top: 0.85rem;
+    /* Workspace pane width — single source of truth. The pane's flex-basis
+       AND the chrome that tracks its edge (the LayoutToggle's right offset
+       and the "WORKSPACE · …" label's left offset, both in `app.rs`) all
+       read this, so they stay glued to the real boundary at any window
+       width and a width tweak only happens here. Pane is 40% of `<main>`;
+       the band chrome is positioned absolutely inside `<main>`, so the same
+       `%` resolves to the same pixel column. */
+    --aleph-workspace-w: 40%;
 }
 html[data-platform="macos"] {
     --aleph-chrome-y: 15px;

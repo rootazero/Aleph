@@ -266,14 +266,18 @@ fn AppContent() -> impl IntoView {
 /// Two affordances, both chat-tab-only:
 ///   • `LayoutToggle` — sits at the chat-surface top-right. Right offset
 ///     is `right-[44px]` in `ChatOnly` (4 px left of the
-///     `NotificationCenter` bell) and `right-[calc(66%+8px)]` in
-///     `Split` so it tracks the chat / workspace boundary (workspace
-///     pane is `basis-[66%]` of main, so its left edge is at 34 % of
-///     main width and the toggle parks 8 px inside the chat surface).
-///   • Workspace label ("WORKSPACE · idle / tool") — Split-only,
-///     left offset is `left-[calc(34%+16px)]` so the text sits 16 px
-///     inside the workspace pane's leading edge, matching the previous
-///     `WorkspaceHeader.px-4` placement.
+///     `NotificationCenter` bell) and `right-[calc(var(--aleph-workspace-w)+8px)]`
+///     in `Split` so it tracks the chat / workspace boundary: the pane is
+///     `--aleph-workspace-w` of main, so the toggle parks 8 px inside the
+///     chat surface, glued to the pane's leading edge at any window width.
+///   • Workspace label ("WORKSPACE · idle / tool") — Split-only, left
+///     offset is `left-[calc(100% - var(--aleph-workspace-w) + 16px)]` so
+///     the text sits 16 px inside the workspace pane's leading edge,
+///     matching the previous `WorkspaceHeader.px-4` placement.
+///
+/// Both offsets read the same `--aleph-workspace-w` token that sizes the
+/// pane (see `tailwind.css` `:root`), so they never drift from the real
+/// boundary — change the width in one place and all three follow.
 ///
 /// Both children opt out of the drag region (`aleph-no-drag` +
 /// `data-tauri-drag-region="false"`); the surrounding band space still
@@ -295,7 +299,7 @@ fn ChatBandChrome() -> impl IntoView {
             <Show when=move || workspace.mode.get() == LayoutMode::Split>
                 <div
                     class="aleph-no-drag pointer-events-none absolute aleph-chrome-top
-                           left-[calc(34%+16px)] flex items-center gap-2
+                           left-[calc(100%_-_var(--aleph-workspace-w)_+_16px)] flex items-center gap-2
                            text-xs uppercase tracking-wider text-text-tertiary h-7"
                     data-tauri-drag-region="false"
                 >
@@ -323,7 +327,7 @@ fn ChatBandChrome() -> impl IntoView {
                     let base = "absolute aleph-chrome-top z-[45] \
                                 pointer-events-auto aleph-no-drag";
                     if workspace.mode.get() == LayoutMode::Split {
-                        format!("{base} right-[calc(66%+8px)]")
+                        format!("{base} right-[calc(var(--aleph-workspace-w)_+_8px)]")
                     } else {
                         format!("{base} right-[44px]")
                     }

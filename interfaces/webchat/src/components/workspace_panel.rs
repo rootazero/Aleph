@@ -73,7 +73,7 @@ pub fn WorkspacePanel() -> impl IntoView {
         <aside
             class="aleph-workspace-pane flex flex-col h-full
                    border-l border-border bg-surface-base/40
-                   min-w-[280px] basis-[40%] shrink overflow-hidden"
+                   min-w-[280px] basis-[var(--aleph-workspace-w)] shrink overflow-hidden"
             class:workspace-collapsed=move || workspace.mode.get() != LayoutMode::Split
         >
             <Show
