@@ -300,4 +300,10 @@ Files identified for refactoring, ordered by priority. Each item links to the pa
 
 ---
 
+## Git Worktree 注意事项
+
+`EnterWorktree` 会在每次 Bash 命令后强制重置 CWD 到 worktree 目录，即使 `cd` 切回主仓库也无效。因此在同一会话内执行 `git worktree remove` 会导致 Shell 永久损坏。**正确做法**：在 `EnterWorktree` 会话内只合并不删除，用新会话清理 worktree；或不用 `EnterWorktree`，手动用绝对路径管理。
+
+---
+
 *Last updated: 2026-02-23. See git log for change history.*
