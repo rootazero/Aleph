@@ -13,7 +13,7 @@
 | ~~G4~~ | ~~per-model 压缩阈值~~ | 新增配置 | M | 无 | ✅ **已实现 2026-06-16（待用户统一 cargo 验证）** |
 | ~~G1~~ | ~~doctor LLM 修复 + `f` 入口~~ | 新功能 | S（实际） | 无 | ✅ **已实现 2026-06-16（待用户统一 cargo 验证）** |
 | ~~G5~~ | ~~"DAG 工具执行"命名澄清~~ | 仅澄清 | — | 无 | ✅ **已澄清 2026-06-16（零代码，四处文档区分两概念）** |
-| ~~G2+G3~~ | ~~Panel 真双层权限~~ | 新建子系统 | L | 信任模型已决策（loopback=operator / remote=chat） | ✅ **已实现 2026-06-16** |
+| ~~G2+G3~~ | ~~Panel 真双层权限~~ | 新建子系统 | L | 信任模型已决策 | ⛔ **已被取代 2026-06-17**：双层 device tier → 单层 Gateway-token（见 [FEATURE_LOCATOR §6.2](FEATURE_LOCATOR.md)） |
 
 ---
 
@@ -96,21 +96,21 @@
 
 ---
 
-## G2 + G3 — Panel 真双层权限（✅ 已实现 2026-06-16）
+## G2 + G3 — Panel 真双层权限（⛔ 已被取代 2026-06-17 → 单层 Gateway-token）
+
+> **取代说明**：双层 device tier（2026-06-16 实现）于 **2026-06-17 被单层 Gateway-token 模型取代**——远程“授权后权限即同本地”，无 Chat/Config 子层。本节保留为决策史；**当前真相见 [FEATURE_LOCATOR §6.2](FEATURE_LOCATOR.md)**。下方“落地”所列文件多已随收敛删除，勿按其定位现状（见“取代后的去留”）。
 
 - **类型**：新建子系统（"恢复/新建双层"，非微调）
-- **决策**：信任模型已拍板——**loopback（本机 App）= operator（Config）保单机零配置；remote（局域网 Panel）= Chat 默认，须显式提权**。tier 治理的是"配置变更"，不是"执行"（`bash`/PTY 仍随网络信任边界）。"配对时选 tier" + "事后 `devices.set_level`" 两条都做。
-- **实勘修正（实施时发现，与原假设有出入）**：
-  - 前端 2 层权限**早已 100% 建好**（`DashboardState.role` + `ConfigGate` 包 17 个配置页 + `LockedNotice`/`PermissionBanner`/`friendly_error` + i18n "re-pair selecting Config"），只是后端 `connect.rs` 硬编码 `"role":"operator"` 让整套**恒真失效**。
-  - 原假设的 `devices.set_level` / device 表 tier 字段 / pairing 选 tier **均不存在**（`devices` 表是 cluster 节点专用）。`ChannelPermissionLevel{Chat,Config}` 枚举已存在（→`guest`/`operator`），工具门 `tool_requires_operator` 已存在但因恒 operator 从不触发。
-- **落地（实际改动）**：
-  - **新建** `src/gateway/panel_devices.rs`（`PanelDeviceStore` + SQLite `panel_devices.db` + 进程全局 + `resolve_tier`；loopback→Config，remote→持久化 per-device tier 默认 Chat）+ `utils/paths.rs::get_panel_devices_db_path`
-  - **连线** `server/handler.rs`：`connect` 握手按 `device_id`+loopback 解析 tier → 写入 `ConnectionState.caller_role`（新字段，loopback 默认 operator）→ 改写 connect 响应 `role`（前端 ConfigGate 即激活）→ 新设备发 `panel.device.pairing` 事件；删掉 line 492 的硬编码 operator，改为按连接读取
-  - **纵深防御** `method_authz.rs::rpc_requires_operator` + `OPERATOR_RPC_METHODS`（config 类 RPC 白名单）+ handler 调度前 RPC 门（chat tier 拦配置 RPC，挡手搓 RPC 绕过隐藏 UI）；工具门复用已存在的 `tool_requires_operator`
-  - **新建** `handlers/devices.rs`（`devices.list`/`set_level`/`revoke`，operator-only）+ `start/mod.rs` 注册 + 全局 store 安装
-  - **前端** `context.rs` 生成持久 `device_id`（localStorage UUID）+ `device_name` 进握手；`views/settings/security/devices.rs` 新增 `PanelDevicesSection`（设备列表 + Grant Config / Set Chat / Revoke）
-- **验收**：remote chat 设备连接后，配置类 RPC + 工具被后端真实拦截（PERMISSION_DENIED）；前端 ConfigGate 真生效；配对默认 Chat；`devices.set_level` 能提权/降权；loopback 始终 operator。
-- **遗留**：pairing 实时 toast 未做（新设备靠 Settings→Security 列表 + Refresh 呈现，授权 = 选 tier）；i18n 用英文字面量（未进 locale 文件）；**NOT cargo-checked**（用户统一验证）。
+- **原决策（已废）**：loopback（本机 App）= operator（Config）；remote（局域网 Panel）= Chat 默认，须显式提权。tier 治理“配置变更”而非“执行”。
+- **2026-06-16 落地（已被取代，多数文件已删）**：
+  - 新建 `src/gateway/panel_devices.rs`（`PanelDeviceStore` + SQLite）+ `handlers/devices.rs`（`devices.list`/`set_level`/`revoke`）
+  - `server/handler.rs` connect 握手按 `device_id`+loopback 解析 tier，回填 `role`
+  - `method_authz.rs::rpc_requires_operator` + `OPERATOR_RPC_METHODS` RPC 门；前端 `views/settings/security/devices.rs::PanelDevicesSection` + `ConfigGate` 包 17 配置页
+- **取代后的去留（2026-06-17 收敛）**：
+  - **删除**：`src/gateway/panel_devices.rs`、`src/gateway/handlers/devices.rs`、前端 `views/settings/security/devices.rs`(`PanelDevicesSection`)、`components/permission.rs`(`ConfigGate`)、`method_authz.rs::rpc_requires_operator`/`OPERATOR_RPC_METHODS`、`devices.set_level` RPC。
+  - **保留并改义**：`server/handler.rs` connect 握手改为校验 Gateway token（`connect_authorized`）→ `caller_role` 仅 operator/guest 二值；登录墙（非 operator 仅放行 `connect`）取代逐 RPC 白名单；`method_authz.rs` 仅余 **channel** tier 的 `tool_requires_operator`（panel 已解耦）。
+  - **未受影响**：`security/store/devices.rs` 的 device 表（始终是 **cluster 节点**专用，与 panel tier 无关，仍由 `handlers/cluster.rs` 使用）。
+- **当前真相**：见 [FEATURE_LOCATOR §6.2](FEATURE_LOCATOR.md) 与附录 A #2/#3（均 ✅ 单层）。
 
 ---
 
@@ -119,5 +119,5 @@
 1. ~~**先 G6**（验证，可能零成本）~~ → ✅ **G6 已完成（零代码，链路已通）**。
 2. ~~**G4**（per-model 压缩阈值，新增配置）~~ → ✅ **G4 已实现 2026-06-16**。~~**G1**（doctor LLM 修复 + `f` 入口）~~ → ✅ **G1 已实现 2026-06-16**（纯前端 `f` 入口，doctor 后端零改动）。下一步 **G5**（命名澄清，无需开发）/ **G2+G3**（需架构决策）。
 3. ~~**G5** 只在文档/沟通层澄清，不进开发队列。~~ → ✅ **G5 已澄清 2026-06-16**（零代码，FEATURE_LOCATOR 四处区分"工具并发群分"vs"任务 DAG"）。
-4. ~~**G2+G3** 单独拉一次架构决策会（信任模型）。~~ → ✅ **G2+G3 已实现 2026-06-16**（信任模型决策：loopback=operator / remote=chat 默认 + 显式提权；新建 `panel_devices` 子系统 + RPC/工具双门 + 前端设备管理）。**Backlog 全部清空。**
+4. ~~**G2+G3** 单独拉一次架构决策会（信任模型）。~~ → 双层 2026-06-16 实现，**2026-06-17 被单层 Gateway-token 取代**（远程授权后权限即同本地，无 Chat/Config 子层；两层 tier 文件已删，见 §6.2）。**Backlog 全部清空。**
 </content>
