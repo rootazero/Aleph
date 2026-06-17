@@ -81,6 +81,7 @@ pub(super) fn InputArea() -> impl IntoView {
 
     let file_input_ref = NodeRef::<leptos::html::Input>::new();
     let stack_ref = NodeRef::<leptos::html::Div>::new();
+    let textarea_ref = NodeRef::<leptos::html::Textarea>::new();
 
     // Composer height → `--composer-clearance` on <html>, so the scroll
     // content + jump pill always clear the floating bar (queue bar /
@@ -107,6 +108,26 @@ pub(super) fn InputArea() -> impl IntoView {
             observer.observe(&el);
         }
         cb.forget();
+    });
+
+    // Auto-grow the composer textarea to fit its content. We track the
+    // `input_text` signal (not just the DOM `input` event) so every
+    // programmatic rewrite — send-clear, retry refill, draft seed, slash/@
+    // completion, clear button, queue replay — resizes too. Set height to
+    // `auto` first so the box can shrink, then to `scroll_height`; CSS
+    // `max-h-[140px]` caps it and `overflow-y-auto` scrolls beyond the cap.
+    Effect::new(move |_| {
+        let _ = input_text.get();
+        if let Some(ta) = textarea_ref.get() {
+            // Cast to HtmlElement so `.style()` resolves to the web-sys
+            // inherent method, not Leptos's `ElementExt::style` (which is in
+            // scope and would otherwise shadow it on HtmlTextAreaElement).
+            let el: web_sys::HtmlElement = ta.unchecked_into();
+            let _ = el.style().set_property("height", "auto");
+            let _ = el
+                .style()
+                .set_property("height", &format!("{}px", el.scroll_height()));
+        }
     });
 
     // i18n labels threaded into the pure palette builder so palette.rs
@@ -735,10 +756,11 @@ pub(super) fn InputArea() -> impl IntoView {
                     </Show>
                 </div>
 
-                // Compact single-row composer — paperclip | textarea |
-                // [clear] | [abort | send]. Textarea grows up to 140px;
-                // items-end keeps the side buttons pinned to the bottom.
-                <div class="aleph-composer flex items-end gap-2 px-3 py-1.5">
+                // Composer card — two zones: full-width auto-grow textarea
+                // on top, a toolbar row below (attach + voice on the left,
+                // clear / queue / abort / send on the right). The textarea
+                // grows up to 140px then scrolls internally.
+                <div class="aleph-composer flex flex-col gap-1.5 px-3 py-2">
                     // Hidden file input. `accept` is a *hint* — the OS
                     // picker defaults to images, common video, plain
                     // text / markdown / pdf / json. Users can still
@@ -752,31 +774,13 @@ pub(super) fn InputArea() -> impl IntoView {
                         on:change=on_file_change
                     />
 
-                    <button
-                        class="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary
-                               hover:bg-surface-sunken transition-colors flex-shrink-0"
-                        title=move || t_string!(i18n, chat.attach).to_string()
-                        on:click=on_attach_click
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5"
-                             viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd"
-                                  d="M15.621 4.379a3 3 0 0 0-4.242 0l-7 7a3 3 0 0 0 4.241 4.243h.001l.497-.5a.75.75 0 0 1 1.064 1.057l-.498.501-.002.002a4.5 4.5 0 0 1-6.364-6.364l7-7a4.5 4.5 0 0 1 6.368 6.36l-3.455 3.553A2.625 2.625 0 1 1 9.52 9.52l3.45-3.451a.75.75 0 1 1 1.061 1.06l-3.45 3.451a1.125 1.125 0 0 0 1.587 1.595l3.454-3.553a3 3 0 0 0 0-4.242Z"
-                                  clip-rule="evenodd" />
-                        </svg>
-                    </button>
-
-                    // Voice loop — record → STT → send → spoken reply.
-                    <voice::VoiceInputButton
-                        disabled=Signal::derive(move || is_sending.get())
-                    />
-
                     <textarea
-                        class="flex-1 min-w-0 resize-none bg-transparent px-1 py-[6px] text-sm leading-snug
+                        class="w-full resize-none overflow-y-auto bg-transparent px-1 py-[6px] text-sm leading-snug
                                text-text-primary placeholder:text-text-tertiary
                                focus:outline-none min-h-[32px] max-h-[140px]"
                         placeholder=move || t_string!(i18n, chat.send_placeholder).to_string()
                         rows=1
+                        node_ref=textarea_ref
                         prop:value=move || input_text.get()
                         on:input=move |ev| {
                             let val = event_target_value(&ev);
@@ -802,82 +806,107 @@ pub(super) fn InputArea() -> impl IntoView {
                         on:keydown=on_keydown
                     />
 
-                    // Clear-draft ✕ — visible only when text exists.
-                    // Wipes text + closes palette + exits namespace in
-                    // one click. Attachments are left alone (own ✕).
-                    <Show when=move || !input_text.get().trim().is_empty()>
+                    // Toolbar row — left: attach + voice; right cluster: the
+                    // conditional clear / queue / abort / send buttons.
+                    <div class="flex items-center gap-2">
                         <button
-                            class="w-8 h-8 rounded-full text-text-tertiary hover:text-text-primary
-                                   hover:bg-surface-sunken flex items-center justify-center
-                                   transition-colors flex-shrink-0"
-                            title=move || t_string!(i18n, chat.clear).to_string()
-                            on:click=move |_| {
-                                input_text.set(String::new());
-                                show_palette.set(false);
-                                current_namespace.set(None);
-                                show_mention.set(false);
-                                mention_at.set(None);
-                            }
+                            class="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary
+                                   hover:bg-surface-sunken transition-colors flex-shrink-0"
+                            title=move || t_string!(i18n, chat.attach).to_string()
+                            on:click=on_attach_click
                         >
-                            <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5"
-                                 viewBox="0 0 20 20" fill="currentColor">
-                                <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
-                            </svg>
-                        </button>
-                    </Show>
-
-                    // Queue button — only while a run is active. Lets the user
-                    // line up a follow-up that auto-sends when the turn settles.
-                    <Show when=move || chat.active_run_id.get().is_some()>
-                        <button
-                            class="w-8 h-8 rounded-full bg-surface-sunken text-text-secondary
-                                   flex items-center justify-center hover:bg-surface-raised
-                                   hover:text-text-primary disabled:opacity-35
-                                   disabled:cursor-not-allowed transition-colors flex-shrink-0"
-                            title=move || t_string!(i18n, chat.queue).to_string()
-                            disabled=move || !has_draft.get()
-                            on:click=move |_| enqueue_message()
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4"
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5"
                                  viewBox="0 0 20 20" fill="currentColor">
                                 <path fill-rule="evenodd"
-                                      d="M10 3a.75.75 0 0 1 .75.75v5.5h5.5a.75.75 0 0 1 0 1.5h-5.5v5.5a.75.75 0 0 1-1.5 0v-5.5h-5.5a.75.75 0 0 1 0-1.5h5.5v-5.5A.75.75 0 0 1 10 3Z"
+                                      d="M15.621 4.379a3 3 0 0 0-4.242 0l-7 7a3 3 0 0 0 4.241 4.243h.001l.497-.5a.75.75 0 0 1 1.064 1.057l-.498.501-.002.002a4.5 4.5 0 0 1-6.364-6.364l7-7a4.5 4.5 0 0 1 6.368 6.36l-3.455 3.553A2.625 2.625 0 1 1 9.52 9.52l3.45-3.451a.75.75 0 1 1 1.061 1.06l-3.45 3.451a1.125 1.125 0 0 0 1.587 1.595l3.454-3.553a3 3 0 0 0 0-4.242Z"
                                       clip-rule="evenodd" />
                             </svg>
                         </button>
-                    </Show>
 
-                    <Show when=move || chat.active_run_id.get().is_some()>
-                        <button
-                            class="w-8 h-8 rounded-full bg-danger/15 text-danger flex items-center
-                                   justify-center hover:bg-danger/25 transition-colors flex-shrink-0"
-                            title=move || t_string!(i18n, chat.stop).to_string()
-                            on:click=on_abort
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5"
-                                 viewBox="0 0 20 20" fill="currentColor">
-                                <rect x="4" y="4" width="12" height="12" rx="2" />
-                            </svg>
-                        </button>
-                    </Show>
+                        // Voice loop — record → STT → send → spoken reply.
+                        <voice::VoiceInputButton
+                            disabled=Signal::derive(move || is_sending.get())
+                        />
 
-                    <Show when=move || chat.active_run_id.get().is_none()>
-                        <button
-                            class="w-8 h-8 rounded-full bg-primary text-white flex items-center
-                                   justify-center shadow-sm hover:bg-primary-hover
-                                   disabled:opacity-35 disabled:cursor-not-allowed
-                                   disabled:shadow-none transition-all flex-shrink-0"
-                            disabled=move || !can_send.get()
-                            on:click=move |_| send_message()
-                        >
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
-                                 class="w-4 h-4">
-                                <path d="M12 19V5" />
-                                <path d="M5 12l7-7 7 7" />
-                            </svg>
-                        </button>
-                    </Show>
+                        <div class="ml-auto flex items-center gap-2">
+                            // Clear-draft ✕ — visible only when text exists.
+                            // Wipes text + closes palette + exits namespace in
+                            // one click. Attachments are left alone (own ✕).
+                            <Show when=move || !input_text.get().trim().is_empty()>
+                                <button
+                                    class="w-8 h-8 rounded-full text-text-tertiary hover:text-text-primary
+                                           hover:bg-surface-sunken flex items-center justify-center
+                                           transition-colors flex-shrink-0"
+                                    title=move || t_string!(i18n, chat.clear).to_string()
+                                    on:click=move |_| {
+                                        input_text.set(String::new());
+                                        show_palette.set(false);
+                                        current_namespace.set(None);
+                                        show_mention.set(false);
+                                        mention_at.set(None);
+                                    }
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5"
+                                         viewBox="0 0 20 20" fill="currentColor">
+                                        <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
+                                    </svg>
+                                </button>
+                            </Show>
+
+                            // Queue button — only while a run is active. Lets the user
+                            // line up a follow-up that auto-sends when the turn settles.
+                            <Show when=move || chat.active_run_id.get().is_some()>
+                                <button
+                                    class="w-8 h-8 rounded-full bg-surface-sunken text-text-secondary
+                                           flex items-center justify-center hover:bg-surface-raised
+                                           hover:text-text-primary disabled:opacity-35
+                                           disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                                    title=move || t_string!(i18n, chat.queue).to_string()
+                                    disabled=move || !has_draft.get()
+                                    on:click=move |_| enqueue_message()
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4"
+                                         viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd"
+                                              d="M10 3a.75.75 0 0 1 .75.75v5.5h5.5a.75.75 0 0 1 0 1.5h-5.5v5.5a.75.75 0 0 1-1.5 0v-5.5h-5.5a.75.75 0 0 1 0-1.5h5.5v-5.5A.75.75 0 0 1 10 3Z"
+                                              clip-rule="evenodd" />
+                                    </svg>
+                                </button>
+                            </Show>
+
+                            <Show when=move || chat.active_run_id.get().is_some()>
+                                <button
+                                    class="w-8 h-8 rounded-full bg-danger/15 text-danger flex items-center
+                                           justify-center hover:bg-danger/25 transition-colors flex-shrink-0"
+                                    title=move || t_string!(i18n, chat.stop).to_string()
+                                    on:click=on_abort
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5"
+                                         viewBox="0 0 20 20" fill="currentColor">
+                                        <rect x="4" y="4" width="12" height="12" rx="2" />
+                                    </svg>
+                                </button>
+                            </Show>
+
+                            <Show when=move || chat.active_run_id.get().is_none()>
+                                <button
+                                    class="w-8 h-8 rounded-full bg-primary text-white flex items-center
+                                           justify-center shadow-sm hover:bg-primary-hover
+                                           disabled:opacity-35 disabled:cursor-not-allowed
+                                           disabled:shadow-none transition-all flex-shrink-0"
+                                    disabled=move || !can_send.get()
+                                    on:click=move |_| send_message()
+                                >
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+                                         class="w-4 h-4">
+                                        <path d="M12 19V5" />
+                                        <path d="M5 12l7-7 7 7" />
+                                    </svg>
+                                </button>
+                            </Show>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
