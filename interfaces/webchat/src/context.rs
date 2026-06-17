@@ -81,6 +81,47 @@ fn persist_gateway_token(token: &str) {
     }
 }
 
+/// Drop the `token=` pair from a `?…` query string, returning the remaining
+/// query (no leading `?`); empty when `token` was the only param. Inverse of
+/// `parse_query_token` — machine-format, regex-free (P8). Host-testable.
+pub(crate) fn strip_token_param(search: &str) -> String {
+    let q = search.strip_prefix('?').unwrap_or(search);
+    q.split('&')
+        .filter(|pair| !pair.is_empty() && !pair.starts_with("token="))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// Scrub a `?token=…` from the address bar (no reload) once the token is safely
+/// in localStorage. Two reasons: (1) keep the shared Gateway token out of the
+/// address bar, browser history, and accidental bookmarks; (2) stop a *stale*
+/// link's `?token=` from shadowing localStorage on the next load —
+/// `read_gateway_token` gives the URL query precedence, so without this scrub a
+/// rotated/expired QR link would re-trip the login wall forever (the freshly
+/// entered token can never win). No-op when the query carries no token.
+#[cfg(target_arch = "wasm32")]
+fn scrub_token_from_url() {
+    let Some(win) = web_sys::window() else { return };
+    let Ok(search) = win.location().search() else {
+        return;
+    };
+    if !search.contains("token=") {
+        return;
+    }
+    let Ok(history) = win.history() else { return };
+    let pathname = win
+        .location()
+        .pathname()
+        .unwrap_or_else(|_| "/".to_string());
+    let remaining = strip_token_param(&search);
+    let new_url = if remaining.is_empty() {
+        pathname
+    } else {
+        format!("{pathname}?{remaining}")
+    };
+    let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&new_url));
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn read_gateway_token() -> Option<String> {
     None
@@ -88,6 +129,9 @@ fn read_gateway_token() -> Option<String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn persist_gateway_token(_token: &str) {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn scrub_token_from_url() {}
 
 #[derive(Clone, Copy)]
 pub struct DashboardState {
@@ -294,8 +338,15 @@ impl DashboardState {
         }
         persist_gateway_token(&token);
         #[cfg(target_arch = "wasm32")]
-        if let Some(w) = web_sys::window() {
-            let _ = w.location().reload();
+        {
+            // Drop any stale `?token=` from the URL *before* reloading:
+            // `read_gateway_token` prefers the URL query over localStorage, so
+            // an expired link token would otherwise shadow the one just entered
+            // and re-trip the login wall on every reload.
+            scrub_token_from_url();
+            if let Some(w) = web_sys::window() {
+                let _ = w.location().reload();
+            }
         }
     }
 
@@ -440,6 +491,10 @@ impl DashboardState {
             if let Some(t) = token {
                 persist_gateway_token(&t);
             }
+            // Token is now in localStorage (or this is loopback). Strip any
+            // `?token=` from the address bar so the secret does not linger in
+            // history/bookmarks and a stale link can't shadow localStorage.
+            scrub_token_from_url();
         }
         self.capture_role(&resp);
         Ok(())
@@ -989,7 +1044,30 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::role_is_operator;
+    use super::{role_is_operator, strip_token_param};
+
+    #[test]
+    fn strip_token_only_param_collapses_to_empty() {
+        assert_eq!(strip_token_param("?token=aleph-abc"), "");
+        assert_eq!(strip_token_param("token=aleph-abc"), "");
+    }
+
+    #[test]
+    fn strip_token_keeps_other_params() {
+        assert_eq!(strip_token_param("?token=aleph-abc&view=chat"), "view=chat");
+        assert_eq!(strip_token_param("?view=chat&token=aleph-abc"), "view=chat");
+        assert_eq!(
+            strip_token_param("?a=1&token=aleph-abc&b=2"),
+            "a=1&b=2"
+        );
+    }
+
+    #[test]
+    fn strip_token_noop_without_token() {
+        assert_eq!(strip_token_param("?view=chat"), "view=chat");
+        assert_eq!(strip_token_param(""), "");
+        assert_eq!(strip_token_param("?"), "");
+    }
 
     #[test]
     fn operator_role_is_operator() {

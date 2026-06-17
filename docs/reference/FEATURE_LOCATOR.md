@@ -62,7 +62,7 @@
 | 横切 | hook | Hook System | `src/verification/stop_hooks.rs` `src/sandbox/hooks.rs` | ✅ |
 | 横切 | CLI | Command Line Interface | `src/bin/aleph-server/commands/` | ✅ |
 | UI | 流式回显 / 工作区面板 | Streaming Echo & Workspace Panel | `interfaces/webchat/src/components/workspace_panel.rs` | ✅ |
-| UI | panel 双层权限 / 配对 tier | Panel Permission Tiers | `src/gateway/panel_devices.rs`(tier store) · `src/gateway/server/handler.rs`(connect 解析+RPC门) · `src/gateway/method_authz.rs`(rpc/tool_requires_operator) · `src/gateway/handlers/devices.rs`(devices.*) · `interfaces/webchat/src/{context.rs(device_id),views/settings/security/devices.rs,components/permission.rs(ConfigGate)}` | ✅ |
+| UI | panel 远程连接 / Gateway token 授权 / QR 配对 / 网页式登录 | Remote Panel Connect & Gateway-Token Auth | `src/gateway/handlers/connect.rs`(`connect_authorized` 纯函数) · `src/gateway/server/handler.rs`(connect 校验+回填+登录墙) · `src/gateway/security/shared_token.rs`(`SharedTokenManager`) · `src/bin/aleph-server/commands/bootstrap_token.rs`(CLI) · `interfaces/webchat/src/{context.rs(token 握手/持久化/scrub),components/token_wall.rs(登录墙),views/settings/security/gateway_token.rs(QR/rotate)}` | ✅ 单层(§6.2) |
 | Desktop | 大脑四肢分离 / 能力 trait / Swift 桥 / IPC | Desktop Capability Contracts & Bridge IPC | `desktop/shared/`(`aleph-desktop`：`traits/` + `platform.rs` + `bridge/`) | ✅ |
 | Desktop | macOS/Windows/Linux 原生实现 / Swift bridge / 四肢 | Native Bridge Implementations | `desktop/{macos,windows,linux}/src/` + `desktop/macos/bridge/Sources/AlephBridge` | ✅ |
 | Desktop | screenshot / 点击 / GUI 自动化 / set-of-marks / ax / 视觉定位 | Desktop Control & GUI Tools | `src/builtin_tools/desktop/` | ✅ |
@@ -392,19 +392,21 @@
 - **状态**：✅ 已实现。
 - **打磨话术**：「‘流式回显气泡’在 `views/chat/messages.rs`；‘右侧工作区时间线’在 `components/workspace_panel.rs`。这是前端 Leptos/WASM，改完要重编 binary（rust_embed，见 CLAUDE.md Panel↔Daemon 嵌入链）。」
 
-### 6.2 Panel 远程连接与 Gateway Token 授权 (Remote Panel Connect & Gateway-Token Auth) 🚧
+### 6.2 Panel 远程连接与 Gateway Token 授权 (Remote Panel Connect & Gateway-Token Auth) ✅
 - **口语关键词**：panel 远程连接、局域网连 core、Gateway token、token 授权框、二维码授权、QR 配对、壳连远程 core、授权后权限同本地、网页式登录
 - **代码锚点**：
-  - 传输/握手：`src/gateway/server/handler.rs`（WS `/ws` 升级与 connect 握手）、`src/gateway/handlers/connect.rs`（**目标：校验 token；现状 `connect.rs:23` 忽略 token 硬返 operator**）
-  - Token（已存在，复用）：`src/gateway/security/shared_token.rs`（`SharedTokenManager`：`generate_token` / `validate` / `try_load_token_from_db`，token 形如 `aleph-<uuid>`）、`src/gateway/security/store/tokens.rs`（`validate_shared_token_hash`）、boot 生成于 `commands/start/builder/subsystems.rs:86-120`
-  - 前端：`interfaces/webchat/src/context.rs`（device_id 生成 + connect 握手 + role 捕获）、**token 输入框 + QR 授权页（待建）**
-- **职责（目标模型，单一真相）**：Panel 远程 = **纯 HTTP/WS 直连，不走 channel 通道**。壳 App 远程连 LAN core 的行为逻辑与「浏览器打开 core IP 网址」**完全一致**——同一条 Gateway-token 授权路径，壳无任何特权捷径。
+  - 传输/握手：`src/gateway/server/handler.rs`（WS `/ws` 升级；connect 握手在 `handler.rs:707-781` 取 `params.token` → 调 `connect_authorized` → 回填 `role`/`authorized`/`needs_token` 到 connect 响应 + stamp `caller_role`/`permissions` 到连接态）、`src/gateway/handlers/connect.rs`（`connect_authorized` 纯函数：loopback 恒 operator，远程须有效 token）
+  - 登录墙：`src/gateway/server/handler.rs:512-543`（`caller_role != "operator"` 时除 `connect` 外全部拒（`AUTH_REQUIRED`））
+  - Token：`src/gateway/security/shared_token.rs`（`SharedTokenManager`：`generate_token` / `validate` / `try_load_token_from_db` / `reset_token` 轮换，token 形如 `aleph-<uuid>`）、`src/gateway/security/store/tokens.rs`（`validate_shared_token_hash`）、boot 生成于 `commands/start/builder/subsystems.rs`
+  - CLI：`src/bin/aleph-server/commands/bootstrap_token.rs`（`aleph-server bootstrap-token` 直读 `~/.aleph/data/security.db` 打印 token，供壳/QR 生成）
+  - 前端：`interfaces/webchat/src/context.rs`（device_id 生成 + `handshake` 送 token + `capture_role` 捕获 `role`/`needs_token` + `read_gateway_token`(URL `?token=` > localStorage) + `scrub_token_from_url`(授权后清地址栏 token)）、`interfaces/webchat/src/components/token_wall.rs`（全屏登录墙 token 框）、`interfaces/webchat/src/views/settings/security/gateway_token.rs`（QR + LAN URL + rotate）
+- **职责（单一真相）**：Panel 远程 = **纯 HTTP/WS 直连，不走 channel 通道**。壳 App 远程连 LAN core 的行为逻辑与「浏览器打开 core IP 网址」**完全一致**——同一条 Gateway-token 授权路径，壳无任何特权捷径。
   - **本机 (loopback)**：自动授权 = operator，**零配置**（壳内置 server / 浏览器 `127.0.0.1`）。信任边界 = 同机。
-  - **远程 (LAN)**：首连未授权 → 弹 **Gateway token 输入框**，或扫 core 展示的 **二维码**（编码 `http://<ip>:<port>/?token=<gateway-token>`，扫码即带 token 打开）→ `SharedTokenManager::validate` 通过 → 授权成功，**权限与本地完全一致（单层，无 Chat/Config 之分）**。客户端把 token 持久化（`localStorage`）供后续自动重连。
+  - **远程 (LAN)**：首连未授权 → 弹 **Gateway token 输入框**（`token_wall.rs`），或扫 core 展示的 **二维码**（编码 `http(s)://<ip>:<port>/?token=<gateway-token>`，扫码即带 token 打开）→ `SharedTokenManager::validate` 通过 → 授权成功，**权限与本地完全一致（单层，无 Chat/Config 之分）**。客户端把 token 持久化（`localStorage`）供后续自动重连，并**清除地址栏 `?token=`**（不留痕、防过期链接锁死）。
   - **撤销**：轮换 Gateway token（旧 token 全部失效，所有远程端须重新输入）。无 per-device 会话（YAGNI）。
   - 前置：`[gateway] host = "0.0.0.0"` 才开放局域网到达；token 授权是到达之后的第二道闸（**在执行之前**，比旧模型「Chat tier 可未授权跑 bash」更强）。
-- **状态**：🚧 **目标模型已定义，当前代码尚未对齐**。现状是 `ebf5027a9` 引入的「两层 device tier」（远程默认 Chat，operator 经 `devices.set_level` 提权）+ connect **忽略 token**（`connect.rs:23`）。Gateway token 已在 boot 生成但**无人校验**。需对齐项见本仓 `docs/superpowers/specs/2026-06-17-panel-remote-token-auth-design.md`（含代码审计清单 + 修复 prompt）。
-- **打磨话术**：「Panel 远程不是 channel，是**网页式 token 登录**。本机零配置 operator；远程输 Gateway token（或扫 QR）后**权限同本地，单层**。token 已在 boot 由 `SharedTokenManager` 生成，缺的是 ① connect 校验 token ② 前端 token 框/QR ③ 把两层 tier 收敛成单层 ④ 复活 `bootstrap-token` CLI。注意 `ChannelPermissionLevel` 是 channel 系统共用，不能删，只能让 panel 解耦。」
+- **状态**：✅ **已实现并对齐目标模型（2026-06-17）**。端到端连通：connect 校验 token（`handler.rs:707-781`）+ 登录墙（`handler.rs:512-543`）+ 单层收敛（`method_authz.rs` 仅余 channel tier 闸，Panel 无 Chat/Config 子层）+ 前端 token 框/QR + `bootstrap-token` CLI。`ChannelPermissionLevel` 仍为 channel 系统共用（未删，panel 已解耦）。
+- **打磨话术**：「Panel 远程不是 channel，是**网页式 token 登录**且已落地。本机零配置 operator；远程输 Gateway token（或扫 QR）后**权限同本地，单层**。改‘授权判定’去 `connect_authorized`（纯函数，主机可测）；改‘登录墙’去 `handler.rs:512-543`；改‘前端 token 框/QR/持久化’去 `context.rs` + `token_wall.rs` + `settings/security/gateway_token.rs`。注意 `read_gateway_token` 让 URL `?token=` 优先于 localStorage——授权后必须 `scrub_token_from_url` 清掉，否则过期 QR 链接会锁死登录墙。改 Panel 记得重编 binary（rust_embed 嵌入链）。」
 
 ---
 
@@ -461,8 +463,8 @@
 | # | 功能 | 状态 | 现状 vs 直觉的差距 | 若要"做成描述的样子"的性质 |
 |---|------|------|---------------------|----------------------------|
 | 1 | doctor+f LLM 修复 | ✅ G1 已实现 2026-06-16 | Panel `f` 入口已加（带编辑焦点护栏）；「LLM 修复」= 注入 prompt 走现有 loop+工具（doctor 后端零改动，结构化 findings 早已喂 LLM） | ~~新功能~~ 已完成 |
-| 2 | Panel 远程 token 授权（单层） | 🚧 目标 | 现状=两层 device tier（`ebf5027a9`，远程默认 Chat 经 `set_level` 提权），与「授权后权限同本地」相悖 | **收敛为单层**：删两层 tier 闸（见 §6.2 + 修复 prompt） |
-| 3 | Gateway token 输入框 / QR 授权 | 🚧 目标 | token 已 boot 生成（`SharedTokenManager`）但 `connect.rs:23` 忽略；无 token UI / QR | **接 token 校验 + 前端 token 框/QR + 复活 `bootstrap-token`** |
+| 2 | Panel 远程 token 授权（单层） | ✅ **已实现 2026-06-17** | 已收敛单层：connect 校验 token + 登录墙（`handler.rs:512-543`/`707-781`）；两层 device tier 已退场，`method_authz.rs` 仅余 channel tier 闸 | **完成**，见 §6.2 |
+| 3 | Gateway token 输入框 / QR 授权 | ✅ **已实现 2026-06-17** | token 框 `token_wall.rs` + QR/LAN URL/rotate `settings/security/gateway_token.rs` + `bootstrap-token` CLI 已复活；授权后 `scrub_token_from_url` 清地址栏 token（修复过期 QR 链接锁死登录墙） | **完成**，见 §6.2 |
 | 4 | ~~kimi vs claude 差异化压缩阈值~~ | ✅ **G4 已实现 2026-06-16** | 窗口比例自动浮动 **+** `[[context_budget.model_thresholds]]` per-model 阈值覆盖（matcher=model id/provider key 子串，逐项回退全局，过防御闸） | **新增配置完成**，见 §2.2 |
 | 5 | DAG 工具执行 | ✅ G5 已澄清 2026-06-16 | 工具层=资源群分并行（`concurrency.rs`，非真 DAG）；真任务 DAG 在 `workflow/compile.rs`+`teams/dispatcher/` | ~~描述时分清~~ 已在 §3.3 / §4.3 / §4.4 / 术语表四处区分；**仅澄清，无需开发** |
 | 6 | ~~错误沉淀教训(三支柱③)~~ | ✅ **G6 已查证 2026-06-16** | 端到端已连且存活（flag_user_correction→FeedbackDistill→feedback note→召回）；auto error-hook 故意不做(R7/R10) | **零代码完成**，见 §2.5③ |
