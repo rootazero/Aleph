@@ -65,11 +65,18 @@ pub fn WorkspacePanel() -> impl IntoView {
     let active_tab = RwSignal::new(0u8); // 0 = 交付物, 1 = 任务
 
     view! {
-        <Show when=move || workspace.mode.get() == LayoutMode::Split>
-            <aside class="aleph-workspace-pane flex flex-col h-full
-                           border-l border-border bg-surface-base/40
-                           min-w-[280px] basis-[66%] shrink overflow-hidden">
-                <Show
+        // Always mounted so collapse/expand can EASE via a CSS transition
+        // (mirrors the left `.aleph-sidebar`), instead of popping in/out the
+        // way a `<Show>` mount/unmount would. The `workspace-collapsed`
+        // modifier shrinks flex-basis + min-width to 0 over 200ms when not
+        // in Split mode.
+        <aside
+            class="aleph-workspace-pane flex flex-col h-full
+                   border-l border-border bg-surface-base/40
+                   min-w-[280px] basis-[40%] shrink overflow-hidden"
+            class:workspace-collapsed=move || workspace.mode.get() != LayoutMode::Split
+        >
+            <Show
                     when=move || chat.team_id.get().is_some()
                     fallback=move || {
                         // Right-pane auto-follow: stick the activity timeline to
@@ -146,7 +153,6 @@ pub fn WorkspacePanel() -> impl IntoView {
                     </div>
                 </Show>
             </aside>
-        </Show>
     }
 }
 

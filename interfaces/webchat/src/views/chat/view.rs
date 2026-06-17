@@ -148,7 +148,7 @@ pub fn ChatView() -> impl IntoView {
             on:dragleave=on_dragleave
             on:drop=on_drop
         >
-            // Chat surface — collapses to 33% when workspace pane is open.
+            // Chat surface — yields ~40% to the workspace pane when it's open.
             // `relative` anchors the workspace toggle (top-right corner
             // affordance) so it follows the chat-surface boundary: in
             // ChatOnly mode the toggle sits to the LEFT of the
@@ -199,7 +199,7 @@ pub fn ChatView() -> impl IntoView {
                     <InputArea />
                 </div>
             </div>
-            // Workspace pane — renders only when LayoutMode::Split.
+            // Workspace pane — always mounted; eases open/closed on Split.
             <WorkspacePanel />
             // Drop overlay — only visible while a file is hovering.
             <Show when=move || chat.is_dragging_files.get()>
