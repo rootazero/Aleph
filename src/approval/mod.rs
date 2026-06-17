@@ -293,6 +293,8 @@ mod tests {
             ActionType::DesktopType,
             ActionType::DesktopKeyCombo,
             ActionType::DesktopLaunchApp,
+            ActionType::DesktopAutomation,
+            ActionType::PimWrite,
             ActionType::ShellExec,
         ];
 

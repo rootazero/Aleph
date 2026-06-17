@@ -229,7 +229,12 @@ impl BuiltinToolRegistry {
             .with_platform(Arc::clone(&desktop_platform));
 
         let system_tool = SystemTool::new(Arc::clone(&desktop_platform));
-        let automation_tool = AutomationTool::new(Arc::clone(&desktop_platform));
+        // Automation runs arbitrary host code (AppleScript/JXA/shell/PowerShell)
+        // + Shortcuts — gate it behind the same approval policy as DesktopTool/
+        // PimTool via the `DesktopAutomation` action type (permissive default =
+        // Allow, so byte-identical until a policy file tightens it).
+        let automation_tool = AutomationTool::new(Arc::clone(&desktop_platform))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let permission_tool = PermissionTool::new(Arc::clone(&desktop_platform));
         let media_tool = MediaTool::new(Arc::clone(&desktop_platform));
 

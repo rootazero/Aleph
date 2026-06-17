@@ -24,6 +24,12 @@ pub enum ActionType {
     DesktopType,
     DesktopKeyCombo,
     DesktopLaunchApp,
+    /// Run an automation script (AppleScript/JXA/shell/PowerShell) or a named
+    /// Shortcut — arbitrary code execution on the host.
+    DesktopAutomation,
+    /// Write/mutate a personal-information store (Calendar, Reminders, Notes,
+    /// Contacts) via the PIM tool.
+    PimWrite,
     ShellExec,
 }
 
@@ -39,6 +45,8 @@ impl fmt::Display for ActionType {
             Self::DesktopType => "desktop type",
             Self::DesktopKeyCombo => "desktop key combo",
             Self::DesktopLaunchApp => "desktop launch app",
+            Self::DesktopAutomation => "desktop automation script",
+            Self::PimWrite => "personal-information write",
             Self::ShellExec => "shell exec",
         };
         write!(f, "{s}")

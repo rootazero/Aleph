@@ -91,9 +91,13 @@ pub struct PimArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
 
-    /// Search query for contacts.
+    /// Search query for contacts or mail.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
+
+    /// Maximum number of results to return (used by `mail_search`; default 20).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
 
     /// Contact given (first) name.
     #[serde(skip_serializing_if = "Option::is_none")]

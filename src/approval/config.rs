@@ -257,11 +257,12 @@ impl ConfigApprovalPolicy {
     /// Every action type defaults to [`ApprovalDecision::Allow`] except
     /// [`ActionType::ShellExec`], which stays [`ApprovalDecision::Deny`].
     ///
-    /// This is the production no-config default: the only tools that hold an
-    /// `ApprovalPolicy` (`DesktopTool`, `PimTool`) emit `Desktop*` action types,
-    /// so an all-`Allow` desktop default keeps autonomous desktop/PIM behavior
-    /// unchanged from when no policy was wired at all. Dropping a
-    /// `~/.aleph/approval-policy.json` is the explicit opt-in to tighten this.
+    /// This is the production no-config default: the tools that hold an
+    /// `ApprovalPolicy` (`DesktopTool`, `PimTool`, `AutomationTool`) emit
+    /// `Desktop*`/`PimWrite` action types, so an all-`Allow` desktop default
+    /// keeps autonomous desktop/PIM/automation behavior unchanged from when no
+    /// policy was wired at all. Dropping a `~/.aleph/approval-policy.json` is
+    /// the explicit opt-in to tighten this (e.g. `desktop_automation: ask`).
     fn permissive_default() -> Self {
         let mut defaults = HashMap::new();
         defaults.insert(ActionType::BrowserNavigate, DefaultDecision::Allow);
@@ -273,6 +274,8 @@ impl ConfigApprovalPolicy {
         defaults.insert(ActionType::DesktopType, DefaultDecision::Allow);
         defaults.insert(ActionType::DesktopKeyCombo, DefaultDecision::Allow);
         defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Allow);
+        defaults.insert(ActionType::DesktopAutomation, DefaultDecision::Allow);
+        defaults.insert(ActionType::PimWrite, DefaultDecision::Allow);
         defaults.insert(ActionType::ShellExec, DefaultDecision::Deny);
 
         Self::new(PolicyConfig {
@@ -301,6 +304,8 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::DesktopType, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopKeyCombo, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Ask);
+        defaults.insert(ActionType::DesktopAutomation, DefaultDecision::Ask);
+        defaults.insert(ActionType::PimWrite, DefaultDecision::Ask);
         defaults.insert(ActionType::ShellExec, DefaultDecision::Deny);
 
         Self::new(PolicyConfig {
