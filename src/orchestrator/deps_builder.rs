@@ -97,6 +97,7 @@ const MIN_AUTO_WARNING_THRESHOLD: f64 = 0.40;
 /// so the result is always in a sane range; the single-arg `min`/`max` avoid the
 /// `f64::clamp` min>max panic risk for a pathologically low configured critical
 /// (which the downstream threshold-ordering validation rejects anyway).
+#[allow(clippy::manual_clamp)] // intentional min/max chain; see doc above re: clamp panic risk
 fn window_aware_warning_default(usable: u64, critical: f64) -> f64 {
     if usable == 0 {
         return DEFAULT_WARNING_THRESHOLD.min(critical);

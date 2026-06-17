@@ -220,20 +220,18 @@ impl ChromeMcpDriver {
             .map_err(|e| BrowserError::LaunchFailed(format!("Failed to launch Chrome: {e}")))?;
 
         // Verify the process did not immediately exit instead of blind-sleeping.
-        for _ in 0..20 {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    return Err(BrowserError::LaunchFailed(format!(
-                        "Chrome exited immediately with status {status}"
-                    )));
-                }
-                Ok(None) => break,
-                Err(e) => {
-                    return Err(BrowserError::LaunchFailed(format!(
-                        "Failed to check Chrome process status: {e}"
-                    )));
-                }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return Err(BrowserError::LaunchFailed(format!(
+                    "Chrome exited immediately with status {status}"
+                )));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return Err(BrowserError::LaunchFailed(format!(
+                    "Failed to check Chrome process status: {e}"
+                )));
             }
         }
         Ok(())

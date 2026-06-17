@@ -122,9 +122,9 @@ pub async fn wire_persistence(manager: &AcpAdapterManager) {
                 }
                 store.clone()
             };
-            let _ = tokio::task::spawn_blocking(move || {
+            drop(tokio::task::spawn_blocking(move || {
                 save_persisted_sessions(&store_clone);
-            });
+            }));
         }))
         .await;
 
