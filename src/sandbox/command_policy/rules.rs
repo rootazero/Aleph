@@ -95,11 +95,20 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
             action: Block,
             pattern: r"\brm\b[^\n]*--no-preserve-root",
         },
+        // Canonical raw-block-device class shared by the dd / redirect / wipe
+        // rules below: SCSI/SATA (`sd`), NVMe, macOS (`disk`), legacy IDE
+        // (`hd`), virtio (`vd`), Xen/AWS-EC2 root volumes (`xvd` — previously
+        // uncovered, so `dd of=/dev/xvda` wiped an EC2 root disk undetected),
+        // SD/eMMC (`mmcblk`), loop, optical (`sr`), persistent memory (`pmem`),
+        // device-mapper/LVM (`dm-`) and software-RAID (`md`). Kept in sync
+        // across all three device rules. `xvd` precedes `vd` only for reading
+        // clarity — the alternation is anchored right after `/dev/`, so order
+        // does not affect matching.
         PolicyRule {
             name: "dd_to_block_device",
             description: "dd writing directly to a raw block device (disk-wipe / overwrite)",
             action: Block,
-            pattern: r"\bdd\b[^\n]*\bof\s*=\s*/dev/(sd|nvme|disk|hd|vd|mmcblk|loop)",
+            pattern: r"\bdd\b[^\n]*\bof\s*=\s*/dev/(sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)",
         },
         PolicyRule {
             name: "mkfs_device",
@@ -111,7 +120,18 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
             name: "redirect_to_block_device",
             description: "shell redirect overwriting a raw block device",
             action: Block,
-            pattern: r">\s*/dev/(sd|nvme|disk|hd|vd|mmcblk)",
+            pattern: r">\s*/dev/(sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)",
+        },
+        PolicyRule {
+            name: "device_wipe_tools",
+            description: "wipefs/blkdiscard/shred targeting a raw block device (destroys partition table / filesystem signatures)",
+            action: Block,
+            // `wipefs`/`blkdiscard` operate *only* on block devices, so a
+            // `/dev/<class>` argument is enough. `shred` is also a legitimate
+            // file-shredder (`shred -u secret.txt`), so it is catastrophic only
+            // when its target is a raw device — hence the explicit `/dev/<class>`
+            // requirement keeps file-level `shred` off the floor.
+            pattern: r"\b(?:wipefs|blkdiscard)\b[^\n]*\s/dev/(?:sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)|\bshred\b[^\n]*\s/dev/(?:sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)",
         },
         // --- Windows catastrophic shapes (cmd.exe / PowerShell) -------------
         // The Unix floor above does not cover the native Windows command
@@ -198,6 +218,19 @@ pub fn default_rules() -> Vec<PolicyRule> {
                 "download piped straight into an interpreter (curl|wget … | sh/bash/python)",
             action: Warn,
             pattern: r"\b(?:curl|wget|fetch)\b[^\n|]*\|[^\n]*\b(?:sh|bash|zsh|ksh|python3?|perl|ruby|node)\b",
+        },
+        PolicyRule {
+            name: "shell_eval_download",
+            description:
+                "interpreter executing downloaded content via process substitution or eval (bash <(curl …) / eval \"$(curl …)\")",
+            action: Warn,
+            // The `| sh` cradle has two common pipe-free siblings that evade
+            // `pipe_to_shell`: process substitution fed to an interpreter
+            // (`bash <(curl …)`, `source <(wget …)`) and command substitution
+            // inside `eval` (`eval "$(curl …)"`). Both download-and-execute
+            // without a literal `|`-into-shell, so they warrant the same paper
+            // trail.
+            pattern: r"\b(?:sh|bash|zsh|ksh|source|eval|python3?|perl|ruby|node)\b[^\n]*<\(\s*(?:curl|wget|fetch)\b|\beval\b[^\n]*\$\(\s*(?:curl|wget|fetch)\b",
         },
         PolicyRule {
             name: "chmod_777_system",
