@@ -174,6 +174,23 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // state.db == no historical usage to aggregate).
     let mut state_db_out: Option<Arc<alephcore::resilience::StateDatabase>> = None;
 
+    let resolve_note_memory_dir = || -> Option<std::path::PathBuf> {
+        if let Some(ref dir) = note_memory_dir {
+            return Some(dir.clone());
+        }
+        match alephcore::utils::paths::get_note_memory_dir() {
+            Ok(dir) => Some(dir),
+            Err(e) => {
+                if !daemon {
+                    eprintln!("Warning: Failed to resolve note memory directory: {e}.");
+                }
+                tracing::warn!(error = %e, "Failed to resolve note memory directory");
+                None
+            }
+        }
+    };
+    let note_dir = resolve_note_memory_dir();
+
     let arena_manager = Arc::new(RwLock::new(alephcore::arena::ArenaManager::new()));
 
     // Coord + snapshot stores (single shared connection to coord.db).
@@ -458,18 +475,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         > = {
             use alephcore::memory::notes::profile::synthesizer::FsProfileSynthesizer;
             let prov = provider_registry.default_provider();
-            let note_dir_opt = if let Some(dir) = note_memory_dir.clone() {
-                Some(dir)
-            } else {
-                match alephcore::utils::paths::get_note_memory_dir() {
-                    Ok(dir) => Some(dir),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to resolve note memory directory; profile synthesizer disabled");
-                        None
-                    }
-                }
-            };
-            note_dir_opt.map(|note_dir| {
+            note_dir.clone().map(|note_dir| {
                 let mut synth = FsProfileSynthesizer::new(note_dir, prov);
                 if let Some(ref wiki) = orientation {
                     synth = synth.with_orientation(wiki.clone());
@@ -723,23 +729,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 use alephcore::memory::notes::query_filer::{DefaultQueryFiler, QueryFiler};
                 use alephcore::memory::notes::NoteIndexer;
 
-                let note_dir_opt = if let Some(dir) = note_memory_dir.clone() {
-                    Some(dir)
-                } else {
-                    match alephcore::utils::paths::get_note_memory_dir() {
-                        Ok(dir) => Some(dir),
-                        Err(e) => {
-                            if !daemon {
-                                eprintln!(
-                                    "Warning: Failed to resolve note memory directory: {e}. Query filer disabled."
-                                );
-                            }
-                            tracing::warn!(error = %e, "Failed to resolve note memory directory; query filer disabled");
-                            None
-                        }
-                    }
-                };
-                if let Some(note_dir) = note_dir_opt {
+                if let Some(ref note_dir) = note_dir {
                     let indexer_arc =
                         std::sync::Arc::new(NoteIndexer::new(note_dir.clone(), memory_db.clone()));
                     let query_filer: std::sync::Arc<dyn QueryFiler> =
@@ -748,7 +738,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             indexer: indexer_arc,
                             provider: prov.clone(),
                             orientation: orientation.clone(),
-                            memory_dir: note_dir,
+                            memory_dir: note_dir.clone(),
                             config: app_config.memory.query_filer.clone(),
                         });
                     tool_registry.set_query_filer(query_filer);
@@ -866,23 +856,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         dedup_similarity_threshold: cfg.dedup_similarity_threshold,
                         dedup_noop_threshold: cfg.dedup_noop_threshold,
                     };
-                    let note_dir_opt = if let Some(dir) = note_memory_dir.clone() {
-                        Some(dir)
-                    } else {
-                        match alephcore::utils::paths::get_note_memory_dir() {
-                            Ok(dir) => Some(dir),
-                            Err(e) => {
-                                if !daemon {
-                                    eprintln!(
-                                        "Warning: Failed to resolve note memory directory: {e}. Compound ingestor disabled."
-                                    );
-                                }
-                                tracing::warn!(error = %e, "Failed to resolve note memory directory; compound ingestor disabled");
-                                None
-                            }
-                        }
-                    };
-                    if let Some(note_dir) = note_dir_opt {
+                    if let Some(ref note_dir) = note_dir {
                         let indexer =
                             std::sync::Arc::new(NoteIndexer::new(note_dir.clone(), memory_db.clone()));
                         Some(std::sync::Arc::new(DefaultCompoundIngestor {
@@ -891,7 +865,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             provider: prov.clone(),
                             embedder: emb.clone(),
                             orientation: orientation.clone(),
-                            memory_dir: note_dir,
+                            memory_dir: note_dir.clone(),
                             budget,
                             // B5.2: ingest-tail flush wiring deferred to a
                             // follow-up (the manager is constructed locally

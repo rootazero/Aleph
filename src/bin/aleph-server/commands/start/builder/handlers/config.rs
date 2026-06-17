@@ -184,11 +184,11 @@ pub(in crate::commands::start) async fn start_webchat_server(
     if let Some(webchat_path) = webchat_dir {
         if webchat_path.exists() {
             let webchat_port = args.webchat_port.unwrap_or(final_port);
-            let webchat_addr: SocketAddr = match format!("{final_bind}:{webchat_port}").parse() {
-                Ok(addr) => addr,
+            let webchat_addr: SocketAddr = match final_bind.parse::<std::net::IpAddr>() {
+                Ok(ip) => SocketAddr::new(ip, webchat_port),
                 Err(e) => {
                     eprintln!(
-                        "Warning: Invalid webchat address '{final_bind}:{webchat_port}': {e}. WebChat server not started."
+                        "Warning: Invalid webchat bind address '{final_bind}': {e}. WebChat server not started."
                     );
                     return;
                 }

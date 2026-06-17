@@ -38,6 +38,14 @@ pub fn check_path_escalation(
     approved_paths: &[String],
 ) -> Option<EscalationTrigger> {
     for (key, value) in params {
+        if value.contains('\0') {
+            return Some(EscalationTrigger {
+                reason: EscalationReason::PathOutOfScope,
+                requested_path: Some(PathBuf::from(value)),
+                approved_paths: approved_paths.to_vec(),
+            });
+        }
+
         if key.contains("path") || key.contains("file") || key.contains("dir") {
             // Resolve path with symlink resolution to prevent TOCTOU bypasses.
             // This ensures symlinks like "/tmp/safe -> /etc" are resolved before

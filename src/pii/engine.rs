@@ -476,7 +476,7 @@ mod tests {
         PiiEngine::reload(new_config);
 
         let engine = PiiEngine::global().unwrap();
-        let guard = engine.read().unwrap();
+        let guard = engine.read().unwrap_or_else(|e| e.into_inner());
         let result = guard.filter("Token: TK-1234");
         assert_eq!(result.blocked_count, 1);
         assert!(result.text.contains("[TK]"));

@@ -34,6 +34,9 @@ pub enum LoaderError {
     )]
     ForbiddenSystemField { path: PathBuf, field: &'static str },
 
+    #[error("file stem is not valid UTF-8: {path}")]
+    NonUtf8Stem { path: PathBuf },
+
     #[error("io error reading {path}: {source}")]
     Io {
         path: PathBuf,
@@ -124,7 +127,9 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
     let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("")
+        .ok_or_else(|| LoaderError::NonUtf8Stem {
+            path: path.to_path_buf(),
+        })?
         .to_string();
     if stem != fm.id {
         return Err(LoaderError::IdMismatch {

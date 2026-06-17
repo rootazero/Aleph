@@ -52,6 +52,13 @@ impl PlatformOcrProvider {
         match image {
             ImageInput::Base64 { data, .. } => {
                 use base64::Engine;
+                let estimated_decoded = (data.len() / 4) * 3;
+                if estimated_decoded as u64 > crate::vision::types::MAX_IMAGE_FILE_SIZE {
+                    return Err(VisionError::ImageError(format!(
+                        "base64 image exceeds maximum size of {} MB",
+                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
+                    )));
+                }
                 let decoded = base64::engine::general_purpose::STANDARD
                     .decode(data)
                     .map_err(|e| VisionError::ImageError(format!("Invalid base64 image: {e}")))?;
@@ -64,26 +71,20 @@ impl PlatformOcrProvider {
                 Ok(decoded)
             }
             ImageInput::FilePath { path } => {
-                let metadata = std::fs::metadata(path).map_err(|e| {
-                    VisionError::ImageError(format!(
-                        "Failed to read image metadata {}: {}",
-                        path.display(),
-                        e
-                    ))
-                })?;
-                if metadata.len() > crate::vision::types::MAX_IMAGE_FILE_SIZE {
-                    return Err(VisionError::ImageError(format!(
-                        "image file exceeds maximum size of {} MB",
-                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
-                    )));
-                }
-                std::fs::read(path).map_err(|e| {
+                let bytes = std::fs::read(path).map_err(|e| {
                     VisionError::ImageError(format!(
                         "Failed to read image file {}: {}",
                         path.display(),
                         e
                     ))
-                })
+                })?;
+                if bytes.len() as u64 > crate::vision::types::MAX_IMAGE_FILE_SIZE {
+                    return Err(VisionError::ImageError(format!(
+                        "image file exceeds maximum size of {} MB",
+                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
+                    )));
+                }
+                Ok(bytes)
             }
             ImageInput::Url { url } => Err(VisionError::ImageError(format!(
                 "Platform OCR does not support URL images directly: {url}"

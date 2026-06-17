@@ -73,12 +73,13 @@ impl GatewayClient {
 
         let (mut write, mut read) = ws_stream.split();
 
+        let request_id = 1;
         // Build JSON-RPC request
         let request = json!({
             "jsonrpc": "2.0",
             "method": method,
             "params": params.unwrap_or(json!({})),
-            "id": 1
+            "id": request_id
         });
 
         // Send request
@@ -87,19 +88,28 @@ impl GatewayClient {
             .await
             .map_err(|e| CliError::Connection(e.to_string()))?;
 
-        // Wait for response with timeout
-        let response = timeout(Duration::from_millis(self.timeout_ms), read.next())
-            .await
-            .map_err(|e| CliError::Timeout(format!("Read timeout: {e}")))?
-            .ok_or_else(|| CliError::Disconnected("Server closed connection".to_string()))?
-            .map_err(|e| CliError::Connection(e.to_string()))?;
+        // Wait for the response whose `id` matches our request, ignoring
+        // notifications and out-of-order frames that may arrive first.
+        let json = tokio::time::timeout(Duration::from_millis(self.timeout_ms), async {
+            loop {
+                let response = read
+                    .next()
+                    .await
+                    .ok_or_else(|| CliError::Disconnected("Server closed connection".to_string()))?
+                    .map_err(|e| CliError::Connection(e.to_string()))?;
 
-        // Parse response
-        let text = response
-            .to_text()
-            .map_err(|e| CliError::Other(format!("Invalid response: {e}")))?;
+                let text = response
+                    .to_text()
+                    .map_err(|e| CliError::Other(format!("Invalid response: {e}")))?;
 
-        let json: Value = serde_json::from_str(text)?;
+                let json: Value = serde_json::from_str(text)?;
+                if json.get("id").and_then(|id| id.as_i64()) == Some(request_id) {
+                    return Ok::<Value, CliError>(json);
+                }
+            }
+        })
+        .await
+        .map_err(|e| CliError::Timeout(format!("Read timeout: {e}")))??;
 
         // Check for RPC error
         if let Some(error) = json.get("error") {

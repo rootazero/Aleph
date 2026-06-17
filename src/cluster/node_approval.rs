@@ -9,7 +9,7 @@
 //!
 //! Redlines: pure routing, no LLM reasoning (R7); not in `src/harness/` (R10).
 
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 
 use async_trait::async_trait;
 use serde_json::json;

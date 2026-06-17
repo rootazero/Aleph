@@ -84,7 +84,11 @@ impl TurnVerifier for ScratchpadGoalVerifier {
         };
 
         let manager = ScratchpadManager::new(&project_id, session_key);
-        let snapshot = match manager.snapshot().await {
+        let snapshot = match tokio::select! {
+            biased;
+            _ = _cancel.cancelled() => return VerifierVerdict::Continue,
+            res = manager.snapshot() => res,
+        } {
             Ok(s) => s,
             // Fail-open: a watchdog must never wedge the loop on I/O error.
             Err(_) => return VerifierVerdict::Continue,

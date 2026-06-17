@@ -246,6 +246,22 @@ fn add_column_if_missing(
     column: &str,
     type_decl: &str,
 ) -> crate::error::Result<()> {
+    fn is_safe_identifier(s: &str) -> bool {
+        !s.is_empty()
+            && s.chars().next().unwrap().is_ascii_alphabetic()
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    }
+    fn is_safe_type_decl(s: &str) -> bool {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_() ".contains(c))
+    }
+    if !is_safe_identifier(table) || !is_safe_identifier(column) || !is_safe_type_decl(type_decl) {
+        return Err(crate::error::AlephError::invalid_input(format!(
+            "Unsafe identifier for migration: table={table}, column={column}, type={type_decl}"
+        )));
+    }
+
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
         .map_err(db_err)?;

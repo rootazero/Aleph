@@ -83,7 +83,7 @@ impl RememberTool {
         &self,
         args: RememberArgs,
     ) -> std::result::Result<RememberOutput, ToolError> {
-        notify_tool_start("remember", &format!("{:?}", &args));
+        notify_tool_start("remember", "(args redacted)");
         // Phase 6 follow-up — soft rejections (scanner reject, duplicate,
         // over-budget, legacy-block, no-match, ambiguous, empty) are returned
         // as a successful tool result with `message: "rejected: …"` so the

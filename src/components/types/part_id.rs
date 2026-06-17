@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use tracing::warn;
 
 use super::parts::SessionPart;
 
@@ -110,7 +111,10 @@ impl PartUpdateData {
             part_id: part.part_id(),
             part_type: part.type_name().to_string(),
             event_type: PartEventType::Added,
-            part_json: serde_json::to_string(part).unwrap_or_default(),
+            part_json: serde_json::to_string(part).unwrap_or_else(|e| {
+                warn!(error = %e, part_type = part.type_name(), "PartUpdateData::added: serialization failed, using empty JSON");
+                String::new()
+            }),
             delta: None,
             timestamp: chrono::Utc::now().timestamp_millis(),
         }
@@ -124,7 +128,10 @@ impl PartUpdateData {
             part_id: part.part_id(),
             part_type: part.type_name().to_string(),
             event_type: PartEventType::Updated,
-            part_json: serde_json::to_string(part).unwrap_or_default(),
+            part_json: serde_json::to_string(part).unwrap_or_else(|e| {
+                warn!(error = %e, part_type = part.type_name(), "PartUpdateData::updated: serialization failed, using empty JSON");
+                String::new()
+            }),
             delta,
             timestamp: chrono::Utc::now().timestamp_millis(),
         }

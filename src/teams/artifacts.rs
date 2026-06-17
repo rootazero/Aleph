@@ -556,13 +556,27 @@ impl SqliteArtifactStore {
 
         let conn = self.conn.lock().await;
         let placeholders = blocked_by.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!(
-            "SELECT COUNT(*) FROM task_artifacts WHERE id IN ({placeholders}) AND status != 'completed'"
-        );
         let params_vec: Vec<&dyn rusqlite::types::ToSql> = blocked_by
             .iter()
             .map(|s| s as &dyn rusqlite::types::ToSql)
             .collect();
+
+        // A non-existent dependency must not satisfy the block — require that
+        // every referenced artifact exists and is completed.
+        let existing_count: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM task_artifacts WHERE id IN ({placeholders})"),
+                params_vec.as_slice(),
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        if existing_count != blocked_by.len() as i64 {
+            return Ok(false);
+        }
+
+        let sql = format!(
+            "SELECT COUNT(*) FROM task_artifacts WHERE id IN ({placeholders}) AND status != 'completed'"
+        );
         let incomplete_count: i64 = conn
             .query_row(&sql, params_vec.as_slice(), |row| row.get(0))
             .map_err(db_err)?;

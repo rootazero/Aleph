@@ -44,7 +44,6 @@ fn build_groups() -> std::collections::HashMap<String, GroupMeta> {
         "tools" => { label: "Tools", order: 50, icon: "wrench" },
         "memory" => { label: "Memory", order: 60, icon: "brain" },
         "search" => { label: "Search", order: 70, icon: "search" },
-        "shortcuts" => { label: "Shortcuts", order: 80, icon: "keyboard" },
         "behavior" => { label: "Behavior", order: 90, icon: "sliders" },
         "advanced" => { label: "Advanced", order: 100, icon: "cog" },
     }
@@ -213,26 +212,6 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             advanced: true,
         },
 
-        // === Shortcuts ===
-        "shortcuts.summon" => {
-            label: "Summon Shortcut",
-            help: "Keyboard shortcut to summon Aleph",
-            group: "shortcuts",
-            placeholder: "Command+Grave",
-        },
-        "shortcuts.cancel" => {
-            label: "Cancel Shortcut",
-            help: "Keyboard shortcut to cancel current operation",
-            group: "shortcuts",
-            placeholder: "Escape",
-        },
-        "shortcuts.new_conversation" => {
-            label: "New Conversation",
-            help: "Keyboard shortcut to start a new conversation",
-            group: "shortcuts",
-            placeholder: "Command+N",
-        },
-
         // === Behavior ===
         "behavior.output_mode" => {
             label: "Output Mode",
@@ -242,16 +221,6 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
         "behavior.typing_speed" => {
             label: "Typing Speed",
             help: "Characters per second for typewriter mode (50-400)",
-            group: "behavior",
-        },
-        "behavior.auto_scroll" => {
-            label: "Auto Scroll",
-            help: "Automatically scroll to new content",
-            group: "behavior",
-        },
-        "behavior.confirm_dangerous_actions" => {
-            label: "Confirm Dangerous Actions",
-            help: "Require confirmation for file modifications and shell commands",
             group: "behavior",
         },
 
@@ -291,23 +260,6 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             help: "Enable shell command execution",
             group: "tools",
         },
-        "tools.browser_enabled" => {
-            label: "Browser Control",
-            help: "Enable browser automation via CDP",
-            group: "tools",
-        },
-        "tools.allowed_paths" => {
-            label: "Allowed Paths",
-            help: "Paths the agent is allowed to access",
-            group: "tools",
-            advanced: true,
-        },
-        "tools.blocked_paths" => {
-            label: "Blocked Paths",
-            help: "Paths the agent is not allowed to access",
-            group: "tools",
-            advanced: true,
-        },
 
         // === MCP ===
         "mcp.enabled" => {
@@ -340,23 +292,6 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             label: "Require Confirmation",
             help: "Require user confirmation for actions",
             group: "agents",
-        },
-        "agent.default_thinking" => {
-            label: "Default Thinking Level",
-            help: "Default thinking level for agent responses (off, minimal, low, medium, high, xhigh)",
-            group: "agents",
-        },
-        "agent.max_iterations" => {
-            label: "Max Iterations",
-            help: "Maximum number of tool-use iterations per request",
-            group: "agents",
-            advanced: true,
-        },
-        "agent.identity" => {
-            label: "Agent Identity",
-            help: "System prompt defining the agent's persona",
-            group: "agents",
-            advanced: true,
         },
 
         // === Channels ===
@@ -409,11 +344,6 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             help: "Provider to use when pattern matches",
             group: "advanced",
         },
-        "rules.*.priority" => {
-            label: "Priority",
-            help: "Rule priority (lower = higher priority)",
-            group: "advanced",
-        },
 
         // === Gateway ===
         "gateway.port" => {
@@ -432,16 +362,6 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
         "session.dm_scope" => {
             label: "DM Scope",
             help: "Session isolation strategy for direct messages",
-            group: "advanced",
-        },
-        "session.auto_reset_hour" => {
-            label: "Auto Reset Hour",
-            help: "Hour of day (0-23) to auto-reset sessions",
-            group: "advanced",
-        },
-        "session.expiry_days" => {
-            label: "Session Expiry",
-            help: "Days until sessions expire",
             group: "advanced",
         },
     }

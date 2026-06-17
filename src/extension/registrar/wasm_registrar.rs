@@ -54,7 +54,7 @@ mod tests {
 
         // Register plugin first
         {
-            let mut reg = registry.write().unwrap();
+            let mut reg = registry.write().unwrap_or_else(|e| e.into_inner());
             let record = create_test_record("wasm-plugin");
             reg.register_plugin(record);
         }
@@ -70,7 +70,7 @@ mod tests {
         let input = serde_json::to_vec(&caps).unwrap();
         host_fn_register("wasm-plugin", &registry, &[], &input).unwrap();
 
-        let reg = registry.read().unwrap();
+        let reg = registry.read().unwrap_or_else(|e| e.into_inner());
         assert!(reg.get_tool("wasm-tool").is_some());
     }
 
@@ -85,7 +85,7 @@ mod tests {
     fn test_host_fn_register_multiple_tools() {
         let registry = RwLock::new(PluginRegistry::new());
         {
-            let mut reg = registry.write().unwrap();
+            let mut reg = registry.write().unwrap_or_else(|e| e.into_inner());
             reg.register_plugin(create_test_record("wasm-multi"));
         }
 
@@ -109,7 +109,7 @@ mod tests {
         let input = serde_json::to_vec(&caps).unwrap();
         host_fn_register("wasm-multi", &registry, &[], &input).unwrap();
 
-        let reg = registry.read().unwrap();
+        let reg = registry.read().unwrap_or_else(|e| e.into_inner());
         assert!(reg.get_tool("tool-x").is_some());
         assert!(reg.get_tool("tool-y").is_some());
     }
@@ -118,7 +118,7 @@ mod tests {
     fn test_host_fn_register_permission_denied() {
         let registry = RwLock::new(PluginRegistry::new());
         {
-            let mut reg = registry.write().unwrap();
+            let mut reg = registry.write().unwrap_or_else(|e| e.into_inner());
             reg.register_plugin(create_test_record("wasm-noperm"));
         }
 
@@ -141,7 +141,7 @@ mod tests {
     fn test_host_fn_register_empty_input() {
         let registry = RwLock::new(PluginRegistry::new());
         {
-            let mut reg = registry.write().unwrap();
+            let mut reg = registry.write().unwrap_or_else(|e| e.into_inner());
             reg.register_plugin(create_test_record("wasm-empty"));
         }
 

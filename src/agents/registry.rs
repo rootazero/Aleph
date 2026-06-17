@@ -242,11 +242,10 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_when_to_use("When you need to write, edit, or create code files")
             .with_prompt_sections(vec!["coder_guidelines".into()])
             .with_allowed_tools(vec![
-                "read_file".into(),
-                "write_file".into(),
-                "edit_file".into(),
-                "glob".into(),
-                "grep".into(),
+                "file_read".into(),
+                "file_write".into(),
+                "file_edit".into(),
+                "file_ops".into(),
                 "bash".into(),
             ])
             .with_max_iterations(30),
@@ -260,9 +259,9 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_allowed_tools(vec![
                 "search".into(),
                 "web_fetch".into(),
-                "read_file".into(),
+                "file_read".into(),
             ])
-            .with_denied_tools(vec!["write_file".into(), "file_edit".into(), "bash".into()])
+            .with_denied_tools(vec!["file_write".into(), "file_edit".into(), "bash".into()])
             .with_max_iterations(15),
         // Default agent - general-purpose sub-agent
         AgentDef::new("default", AgentMode::SubAgent)
@@ -277,12 +276,11 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             )
             .with_prompt_sections(vec!["plan_protocol".into()])
             .with_allowed_tools(vec![
-                "glob".into(),
-                "grep".into(),
-                "read_file".into(),
+                "file_ops".into(),
+                "file_read".into(),
                 "bash".into(),
             ])
-            .with_denied_tools(vec!["write_file".into(), "file_edit".into()])
+            .with_denied_tools(vec!["file_write".into(), "file_edit".into()])
             .with_max_iterations(20)
             .with_context_mode(ContextMode::Summary),
         // Verify agent - adversarial verifier (read-only)
@@ -291,7 +289,7 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_when_to_use("When you need to independently verify that work was done correctly")
             .with_prompt_sections(vec!["verify_protocol".into()])
             .with_allowed_tools(vec!["*".into()])
-            .with_denied_tools(vec!["write_file".into(), "file_edit".into()])
+            .with_denied_tools(vec!["file_write".into(), "file_edit".into()])
             .with_max_iterations(25)
             .with_context_mode(ContextMode::Summary),
     ]
@@ -396,8 +394,8 @@ mod tests {
         let registry = AgentRegistry::with_builtins();
         let coder = registry.get("coder").unwrap();
 
-        assert!(coder.is_tool_allowed("write_file"));
-        assert!(coder.is_tool_allowed("edit_file"));
+        assert!(coder.is_tool_allowed("file_write"));
+        assert!(coder.is_tool_allowed("file_edit"));
         assert!(coder.is_tool_allowed("bash"));
         assert_eq!(coder.max_iterations, Some(30));
     }
@@ -409,7 +407,7 @@ mod tests {
 
         assert!(researcher.is_tool_allowed("search"));
         assert!(researcher.is_tool_allowed("web_fetch"));
-        assert!(!researcher.is_tool_allowed("write_file"));
+        assert!(!researcher.is_tool_allowed("file_write"));
         assert_eq!(researcher.max_iterations, Some(15));
     }
 
@@ -418,9 +416,9 @@ mod tests {
         let registry = AgentRegistry::with_builtins();
         let verify = registry.get("verify").unwrap();
         assert_eq!(verify.mode, AgentMode::SubAgent);
-        assert!(verify.is_tool_allowed("glob"));
+        assert!(verify.is_tool_allowed("file_ops"));
         assert!(verify.is_tool_allowed("bash"));
-        assert!(!verify.is_tool_allowed("write_file")); // read-only: write denied
+        assert!(!verify.is_tool_allowed("file_write")); // read-only: write denied
         assert!(!verify.is_tool_allowed("file_edit")); // read-only: edit denied
         assert_eq!(verify.max_iterations, Some(25));
         assert_eq!(verify.prompt_sections, vec!["verify_protocol"]);

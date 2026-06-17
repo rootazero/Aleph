@@ -52,7 +52,9 @@ impl SessionKey {
 }
 
 pub(super) fn canonicalize_cwd(cwd: &str) -> PathBuf {
-    std::fs::canonicalize(cwd).unwrap_or_else(|_| {
+    // Use the non-blocking `std::path::absolute` instead of `std::fs::canonicalize`
+    // so this async-path helper does not stall the tokio runtime on filesystem I/O.
+    std::path::absolute(cwd).unwrap_or_else(|_| {
         let path = PathBuf::from(cwd);
         let normalized = normalize_path(&path);
         let final_path = if normalized.is_absolute() {
@@ -65,7 +67,7 @@ pub(super) fn canonicalize_cwd(cwd: &str) -> PathBuf {
         debug!(
             cwd,
             ?final_path,
-            "SessionKey: canonicalize failed, using normalized path"
+            "SessionKey: absolute resolution failed, using normalized path"
         );
         final_path
     })

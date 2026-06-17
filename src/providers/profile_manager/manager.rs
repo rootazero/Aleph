@@ -101,6 +101,7 @@ impl AuthProfileManager {
         provider: &str,
         agent_id: &str,
     ) -> ProfileManagerResult<EffectiveProfile> {
+        Self::validate_agent_id(agent_id)?;
         let configs = self.configs.read().unwrap_or_else(|e| e.into_inner());
         let status_map = self.status.read().unwrap_or_else(|e| e.into_inner());
 
@@ -268,6 +269,7 @@ impl AuthProfileManager {
         output_tokens: u64,
         cost_usd: f64,
     ) -> ProfileManagerResult<()> {
+        Self::validate_agent_id(agent_id)?;
         let mut agent_states = self.agent_states.write().unwrap_or_else(|e| e.into_inner());
 
         // Load or get cached state
@@ -355,6 +357,29 @@ impl AuthProfileManager {
         self.agents_dir.join(agent_id).join("state.json")
     }
 
+    /// Validate that `agent_id` is safe to use as a filesystem component.
+    /// Rejects empty IDs and any ID containing path separators or parent-dir
+    /// references that would escape `agents_dir`.
+    fn validate_agent_id(agent_id: &str) -> ProfileManagerResult<()> {
+        if agent_id.is_empty() {
+            return Err(ProfileManagerError::InvalidAgentId(
+                "agent_id must not be empty".to_string(),
+            ));
+        }
+        if agent_id.contains(std::path::MAIN_SEPARATOR)
+            || agent_id.contains('/')
+            || agent_id.contains('\\')
+            || agent_id == ".."
+            || agent_id.contains("../")
+            || agent_id.contains("..\\")
+        {
+            return Err(ProfileManagerError::InvalidAgentId(format!(
+                "agent_id contains path separators: {agent_id}"
+            )));
+        }
+        Ok(())
+    }
+
     /// Load agent state (with caching)
     fn load_agent_state(&self, agent_id: &str) -> ProfileManagerResult<AgentState> {
         // Use write lock with entry API to avoid TOCTOU race between read and write
@@ -389,6 +414,7 @@ impl AuthProfileManager {
         profile_id: &str,
         max_budget_usd: Option<f64>,
     ) -> ProfileManagerResult<()> {
+        Self::validate_agent_id(agent_id)?;
         let mut agent_states = self.agent_states.write().unwrap_or_else(|e| e.into_inner());
 
         let state = agent_states.entry(agent_id.to_string()).or_insert_with(|| {
@@ -419,6 +445,7 @@ impl AuthProfileManager {
         profile_id: &str,
         disabled: bool,
     ) -> ProfileManagerResult<()> {
+        Self::validate_agent_id(agent_id)?;
         let mut agent_states = self.agent_states.write().unwrap_or_else(|e| e.into_inner());
 
         let state = agent_states.entry(agent_id.to_string()).or_insert_with(|| {

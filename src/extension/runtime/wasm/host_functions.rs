@@ -49,8 +49,10 @@ host_fn!(pub host_workspace_read(state: HostState; path: String) -> String {
         Ok(p) => p,
         Err(e) => return Ok(serde_json::json!({"error": e.to_string()}).to_string()),
     };
-    let root = std::fs::canonicalize(&state.workspace_root)
-        .unwrap_or_else(|_| state.workspace_root.clone());
+    let root = match std::fs::canonicalize(&state.workspace_root) {
+        Ok(p) => p,
+        Err(e) => return Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+    };
     if !canonical.starts_with(&root) {
         return Ok(serde_json::json!({"error": "path escapes workspace"}).to_string());
     }

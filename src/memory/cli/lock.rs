@@ -122,8 +122,8 @@ impl MemoryLock {
                     .write(true)
                     .share_mode(0) // Exclusive
                     .open(&lock_path)
-                    .map_err(|_| LockError::WriteLockFailed {
-                        hint: "Gateway may be running.".into(),
+                    .map_err(|e| LockError::WriteLockFailed {
+                        hint: format!("Gateway may be running: {e}"),
                     })?;
 
                 return Ok(Self {

@@ -7,7 +7,7 @@
 //! synchronously-testable rescale plus a thin async helper that resolves the
 //! viewport once at dispatch time.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use aleph_desktop::{CoordinateSpace, DesktopPlatform};
 

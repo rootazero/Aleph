@@ -275,21 +275,23 @@ impl AlephClient {
             pending.insert(id.clone(), PendingRequest { tx });
         }
 
-        // Send request
+        // Send request. Hold the write lock only for the send, then release it
+        // before touching `pending` so we never nest `write` -> `pending` and
+        // invert the lock order used by `handle_message` (`pending` -> `write`).
         let json = serde_json::to_string(&request)?;
         debug!("Sending: {}", json);
-
-        {
+        let send_result = {
             let mut write = self.write.lock().await;
-            if let Err(e) = write.send(Message::Text(json.into())).await {
-                // Send failed after the pending entry was registered: drop it so
-                // the pending map doesn't leak across repeated failures, and mark
-                // the connection dead so subsequent calls fail fast.
-                self.pending.write().await.remove(&id);
-                self.connected
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                return Err(e.into());
-            }
+            write.send(Message::Text(json.into())).await
+        };
+        if let Err(e) = send_result {
+            // Send failed after the pending entry was registered: drop it so
+            // the pending map doesn't leak across repeated failures, and mark
+            // the connection dead so subsequent calls fail fast.
+            self.pending.write().await.remove(&id);
+            self.connected
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            return Err(e.into());
         }
 
         // Wait for response with timeout

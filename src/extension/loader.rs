@@ -149,7 +149,7 @@ impl PluginLoader {
         let runtime = self
             .wasm_runtime
             .as_mut()
-            .expect("wasm runtime just initialized");
+            .ok_or_else(|| ExtensionError::Runtime("WASM runtime not initialized".to_string()))?;
 
         runtime.load_plugin(manifest)?;
 

@@ -117,7 +117,7 @@ impl ChromeMcpBackend {
 impl BrowserBackend for ChromeMcpBackend {
     async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError> {
         self.ssrf_guard
-            .check_url(url)
+            .check_navigation(url)
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
         // Hold the per-profile lock across new_page + re-list so a concurrent
         // open on the same profile can't append a tab between the two calls and
@@ -164,7 +164,7 @@ impl BrowserBackend for ChromeMcpBackend {
 
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError> {
         self.ssrf_guard
-            .check_url(url)
+            .check_navigation(url)
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
         self.select_and_call(tab_id, "navigate_page", json!({ "url": url }))
             .await?;
@@ -257,10 +257,14 @@ impl BrowserBackend for ChromeMcpBackend {
     async fn screenshot(
         &self,
         tab_id: &str,
-        _opts: ScreenshotOpts,
+        opts: ScreenshotOpts,
     ) -> Result<ScreenshotOutput, BrowserError> {
         let result = self
-            .select_and_call(tab_id, "take_screenshot", json!({}))
+            .select_and_call(
+                tab_id,
+                "take_screenshot",
+                json!({ "fullPage": opts.full_page }),
+            )
             .await?;
         // Check if result has image content type with base64 data
         if let Some(content) = result.get("content").and_then(|v| v.as_array()) {
@@ -339,13 +343,27 @@ impl BrowserBackend for ChromeMcpBackend {
         text: &str,
         timeout_ms: u64,
     ) -> Result<bool, BrowserError> {
-        self.select_and_call(
-            tab_id,
-            "wait_for",
-            json!({ "text": text, "timeout": timeout_ms }),
-        )
-        .await?;
-        Ok(true)
+        match self
+            .select_and_call(
+                tab_id,
+                "wait_for",
+                json!({ "text": text, "timeout": timeout_ms }),
+            )
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                let msg = e.to_string().to_lowercase();
+                if msg.contains("timeout")
+                    || msg.contains("not found")
+                    || msg.contains("did not appear")
+                {
+                    Ok(false)
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     async fn console_messages(&self, tab_id: &str) -> Result<String, BrowserError> {

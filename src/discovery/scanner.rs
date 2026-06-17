@@ -367,8 +367,8 @@ impl DirectoryScanner {
 /// Check if a path represents a hidden directory (name starts with '.')
 fn is_hidden(path: &Path) -> bool {
     path.file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|name| name.starts_with('.'))
+        .map(|n| n.to_string_lossy().starts_with('.'))
+        .unwrap_or(false)
 }
 
 /// Return the expected marker file for a component type directory.

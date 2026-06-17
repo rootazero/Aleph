@@ -42,9 +42,26 @@ struct NodeIdentity {
     center: String,
 }
 
-/// `~/.aleph/node/<name>.json`. `None` only if the home dir is unresolvable.
+/// `~/.aleph/node/<name>.json`. `None` only if the home dir is unresolvable
+/// or if `name` contains path separators or traversal components.
 fn identity_path(name: &str) -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".aleph").join("node").join(format!("{name}.json")))
+    if name.is_empty() || name == "." || name == ".." {
+        return None;
+    }
+    let file_name = format!("{name}.json");
+    if Path::new(&file_name)
+        .components()
+        .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    let base = dirs::home_dir()?.join(".aleph").join("node");
+    let candidate = base.join(&file_name);
+    if candidate.strip_prefix(&base).is_ok() {
+        Some(candidate)
+    } else {
+        None
+    }
 }
 
 /// Migration note: old pre-LAN-trust `NodeCredential` files (which carry an
@@ -92,17 +109,18 @@ pub async fn handle_node(
     let table = Arc::new(table);
     let declared = table.descriptors();
     let url = format!("{}/ws", center.trim_end_matches('/'));
-    let id_path = identity_path(&name);
+    let id_path = identity_path(&name)
+        .ok_or_else(|| format!("Invalid node name (path traversal not allowed): {name}"))?;
 
     // Resolve the node identity: persisted enrollment > enroll now.
-    let node_id = match id_path.as_deref().and_then(read_identity) {
+    let node_id = match read_identity(&id_path) {
         Some(id) => {
             tracing::info!("node '{name}' using persisted identity {}", id.node_id);
             id.node_id
         }
         None => {
             let id = enroll_node(&url, &center, &name).await?;
-            persist_identity(id_path.as_deref(), &id);
+            persist_identity(Some(&id_path), &id);
             id.node_id
         }
     };

@@ -13,18 +13,6 @@ use crate::sync_primitives::{Arc, RwLock};
 use crate::tools::{AlephToolServer, AlephToolServerHandle};
 use tracing::{info, warn};
 
-/// Built-in tool names
-pub const BUILTIN_TOOLS: &[&str] = &[
-    "search",
-    "web_fetch",
-    "file_ops",
-    "bash",
-    "code_exec",
-    "generate_image",
-    "pdf_generate",
-    "snapshot_capture",
-];
-
 /// Configuration for built-in tools
 ///
 /// DEPRECATED: Use `executor::builtin_registry::BuiltinToolConfig` instead.

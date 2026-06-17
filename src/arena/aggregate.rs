@@ -58,7 +58,7 @@ impl SharedArena {
             manifest,
             slots,
             progress: ArenaProgress {
-                total_steps: 0,
+                total_steps: agent_progress.len(),
                 completed_steps: 0,
                 agent_progress,
             },

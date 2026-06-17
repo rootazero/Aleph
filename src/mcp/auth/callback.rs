@@ -310,16 +310,18 @@ fn url_decode(s: &str) -> String {
     result
 }
 
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 /// Send an HTTP error response
 async fn send_error_response(stream: &mut tokio::net::TcpStream, status: u16, message: &str) {
     use tokio::io::AsyncWriteExt;
 
-    // HTML-escape message to prevent XSS
-    let safe_message = message
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;");
+    let safe_message = html_escape(message);
 
     let body = format!(
         r#"<!DOCTYPE html>
@@ -355,13 +357,15 @@ async fn send_error_response(stream: &mut tokio::net::TcpStream, status: u16, me
 async fn send_success_response(stream: &mut tokio::net::TcpStream, message: &str) {
     use tokio::io::AsyncWriteExt;
 
+    let safe_message = html_escape(message);
+
     let body = format!(
         r#"<!DOCTYPE html>
 <html>
 <head><title>Authorization Complete</title></head>
 <body style="font-family: system-ui; text-align: center; padding: 50px;">
 <h1>Success!</h1>
-<p>{message}</p>
+<p>{safe_message}</p>
 <script>setTimeout(function() {{ window.close(); }}, 3000);</script>
 </body>
 </html>"#

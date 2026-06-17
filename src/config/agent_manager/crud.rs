@@ -399,9 +399,7 @@ impl AgentManager {
         // Move workspace to trash
         let ws_dir = self.workspace_root.join(id);
         if ws_dir.exists() {
-            let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-            let trash_name = format!("{id}_{timestamp}");
-            let trash_dir = self.trash_root.join(trash_name);
+            let trash_dir = self.unique_trash_path(id, "");
             fs::create_dir_all(&self.trash_root)
                 .map_err(|e| AlephError::IoError(format!("Failed to create trash dir: {e}")))?;
             fs::rename(&ws_dir, &trash_dir).map_err(|e| {
@@ -413,9 +411,7 @@ impl AgentManager {
         // Move agent state directory to trash
         let agent_state_dir = self.agents_root.join(id);
         if agent_state_dir.exists() {
-            let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-            let trash_name = format!("{id}_agent_{timestamp}");
-            let trash_dir = self.trash_root.join(trash_name);
+            let trash_dir = self.unique_trash_path(id, "agent_");
             fs::create_dir_all(&self.trash_root)
                 .map_err(|e| AlephError::IoError(format!("Failed to create trash dir: {e}")))?;
             fs::rename(&agent_state_dir, &trash_dir).map_err(|e| {
@@ -483,22 +479,66 @@ impl AgentManager {
         Ok(())
     }
 
-    /// Validate filename: no path separators or traversal
+    /// Validate filename: no path separators, traversal, or non-normal components.
     pub(super) fn validate_filename(&self, filename: &str) -> Result<()> {
-        if filename.is_empty()
-            || filename.contains('/')
-            || filename.contains('\\')
-            || filename.contains("..")
-            || filename.contains(':')
-        {
-            // ':' is rejected because on Windows a drive-qualified name like
-            // "C:evil" has a prefix component, so `agent_dir.join(filename)`
-            // would REPLACE the base path entirely (path traversal); it also
-            // blocks NTFS alternate data stream names.
+        if filename.is_empty() {
+            return Err(AlephError::invalid_config("Filename must not be empty".to_string()));
+        }
+
+        let path = std::path::Path::new(filename);
+        for component in path.components() {
+            match component {
+                std::path::Component::Normal(_) => {}
+                _ => {
+                    return Err(AlephError::invalid_config(format!(
+                        "Invalid filename '{filename}': must not contain path separators or traversal"
+                    )));
+                }
+            }
+        }
+
+        // ':' is rejected because on Windows a drive-qualified name like
+        // "C:evil" has a prefix component, so `agent_dir.join(filename)`
+        // would REPLACE the base path entirely (path traversal); it also
+        // blocks NTFS alternate data stream names.
+        if filename.contains(':') {
             return Err(AlephError::invalid_config(format!(
-                "Invalid filename '{filename}': must not contain '/', '\\', ':', or '..'"
+                "Invalid filename '{filename}': must not contain ':'"
             )));
         }
+
         Ok(())
+    }
+
+    /// Generate a unique trash directory path that will not collide on rapid
+    /// consecutive deletes. Uses a timestamp with nanoseconds; if the path
+    /// already exists, appends an incrementing counter.
+    fn unique_trash_path(&self, id: &str, prefix: &str) -> std::path::PathBuf {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let base = format!("{id}_{prefix}{}_{:09}", now.as_secs(), now.subsec_nanos());
+        let mut path = self.trash_root.join(&base);
+        if !path.exists() {
+            return path;
+        }
+        let mut counter = 1u32;
+        loop {
+            path = self.trash_root.join(format!("{base}_{counter}"));
+            if !path.exists() {
+                return path;
+            }
+            counter += 1;
+            if counter > 10_000 {
+                // Avoid unbounded spin; fall back to a monotonic nanosecond name
+                let later = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                path = self
+                    .trash_root
+                    .join(format!("{base}_{}_{:09}", later.as_secs(), later.subsec_nanos()));
+                return path;
+            }
+        }
     }
 }

@@ -199,26 +199,53 @@ impl ProfileConfig {
         })
     }
 
-    /// Simple glob matching (supports * as wildcard)
+    /// Simple glob matching (supports * as wildcard anywhere in the pattern)
     fn glob_match(pattern: &str, text: &str) -> bool {
-        // Handle simple patterns like "git_*" or "*_read"
+        // Fast paths for the common simple patterns
         if pattern == "*" {
             return true;
         }
-
+        if !pattern.contains('*') {
+            return pattern == text;
+        }
         if let Some(prefix) = pattern.strip_suffix('*') {
-            // Pattern like "git_*"
-            return text.starts_with(prefix);
+            if !prefix.contains('*') {
+                return text.starts_with(prefix);
+            }
         }
-
         if let Some(suffix) = pattern.strip_prefix('*') {
-            // Pattern like "*_read"
-            return text.ends_with(suffix);
+            if !suffix.contains('*') {
+                return text.ends_with(suffix);
+            }
         }
 
-        // For more complex patterns, do exact match
-        // TODO: Consider using the `glob` crate for full pattern support
-        pattern == text
+        // General case: split pattern by '*' and match each literal chunk in order.
+        let mut chunks = pattern.split('*');
+        let first = chunks.next().unwrap_or("");
+        let mut text = text;
+
+        // The leading chunk must match at the start.
+        if !text.starts_with(first) {
+            return false;
+        }
+        text = &text[first.len()..];
+
+        // Middle chunks must appear in order somewhere in the remaining text.
+        let mut last_chunk = "";
+        for chunk in chunks {
+            last_chunk = chunk;
+            if chunk.is_empty() {
+                continue;
+            }
+            if let Some(pos) = text.find(chunk) {
+                text = &text[pos + chunk.len()..];
+            } else {
+                return false;
+            }
+        }
+
+        // The trailing chunk must match at the end.
+        text.ends_with(last_chunk)
     }
 
     /// Get the effective model, falling back to a default
@@ -290,6 +317,19 @@ mod tests {
             ..Default::default()
         };
         assert!(profile.is_tool_allowed("any_tool"));
+    }
+
+    #[test]
+    fn test_tool_whitelist_glob_embedded() {
+        let profile = ProfileConfig {
+            tools: vec!["*foo*bar*".to_string()],
+            ..Default::default()
+        };
+        assert!(profile.is_tool_allowed("prefixfoo_middlebar_suffix"));
+        assert!(profile.is_tool_allowed("fooxbar"));
+        assert!(profile.is_tool_allowed("foobar"));
+        assert!(profile.is_tool_allowed("foobarbaz"));
+        assert!(!profile.is_tool_allowed("barfoo"));
     }
 
     #[test]

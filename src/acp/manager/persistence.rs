@@ -52,7 +52,11 @@ pub fn save_persisted_sessions(sessions: &[crate::acp::session::PersistedAcpSess
 pub async fn wire_persistence(manager: &AcpAdapterManager) {
     use crate::sync_primitives::Mutex;
 
-    let sessions = Arc::new(Mutex::new(load_persisted_sessions()));
+    let sessions = Arc::new(Mutex::new(
+        tokio::task::spawn_blocking(load_persisted_sessions)
+            .await
+            .unwrap_or_default(),
+    ));
 
     let sessions_ref = Arc::clone(&sessions);
     manager
@@ -118,7 +122,9 @@ pub async fn wire_persistence(manager: &AcpAdapterManager) {
                 }
                 store.clone()
             };
-            save_persisted_sessions(&store_clone);
+            let _ = tokio::task::spawn_blocking(move || {
+                save_persisted_sessions(&store_clone);
+            });
         }))
         .await;
 

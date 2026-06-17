@@ -393,7 +393,7 @@ impl RateLimiter {
             }
             // Keep if any timestamp is recent enough
             match sw.timestamps.back() {
-                Some(&last) => now.duration_since(last) < max_age,
+                Some(&last) => now.saturating_duration_since(last) < max_age,
                 None => false,
             }
         });

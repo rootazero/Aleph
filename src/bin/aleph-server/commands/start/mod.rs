@@ -41,9 +41,9 @@ use orchestrator_init::initialize_orchestrator;
 
 mod helpers;
 use helpers::{
-    build_http_provider, build_sqlite_session_service, initialize_extension_manager,
-    initialize_session_store, initialize_tracing, load_gateway_config, print_startup_banner,
-    setup_graceful_shutdown, validate_bind_address,
+    build_http_provider, build_sqlite_session_service, format_socket_addr,
+    initialize_extension_manager, initialize_session_store, initialize_tracing,
+    load_gateway_config, print_startup_banner, setup_graceful_shutdown, validate_bind_address,
 };
 
 mod runtime_warmup;
@@ -74,6 +74,22 @@ fn build_task_delivery_engine(
     engine.register(Arc::new(GatewayDeliveryTarget::new(channel_cell)));
     engine.register(Arc::new(MemoryDeliveryTarget::new(memory_store)));
     Arc::new(engine)
+}
+
+/// Build the platform-specific `DesktopPlatform` instance.
+fn build_desktop_platform() -> Arc<dyn aleph_desktop::DesktopPlatform> {
+    #[cfg(target_os = "macos")]
+    {
+        Arc::new(aleph_desktop_macos::MacOSPlatform::new())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Arc::new(aleph_desktop_linux::LinuxPlatform::new())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Arc::new(aleph_desktop_windows::WindowsPlatform::new())
+    }
 }
 
 /// Start the gateway server
@@ -150,9 +166,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let (full_config, final_bind, final_port, final_max_connections) = load_gateway_config(args)?;
 
-    let addr: SocketAddr = format!("{final_bind}:{final_port}")
-        .parse()
-        .map_err(|e| format!("Invalid address: {e}"))?;
+    let addr = {
+        let ip: std::net::IpAddr = final_bind
+            .parse()
+            .map_err(|e| format!("Invalid bind address '{final_bind}': {e}"))?;
+        SocketAddr::new(ip, final_port)
+    };
 
     alephcore::pii::PiiEngine::init(full_config.privacy.clone());
     if !args.daemon {
@@ -409,7 +428,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Security store + vault construction (early — vault needed for API key
     // resolution).
-    let auth_bundle = initialize_vault(args.port, server.node_registry.clone());
+    let auth_bundle = initialize_vault(final_port, server.node_registry.clone());
     register_core_handlers(
         &mut server,
         &auth_bundle.auth_ctx,
@@ -1659,13 +1678,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             use alephcore::tasks::heartbeat::probe::DefaultProbeExecutor;
             use alephcore::tasks::heartbeat::service::timer::{run_heartbeat_loop, TickContext};
 
-            let hb_state = {
+            let (hb_state, hb_wake) = {
                 let guard = hb_svc.lock().await;
-                guard.state().clone()
-            };
-            let hb_wake = {
-                let guard = hb_svc.lock().await;
-                guard.wake_queue().clone()
+                (guard.state().clone(), guard.wake_queue().clone())
             };
 
             // Open a dedicated connection for the DedupEngine (separate from the HeartbeatStore
@@ -1801,20 +1816,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     {
         let presence_cfg = alephcore::tasks::presence::PresenceConfig::default();
         if presence_cfg.enabled {
-            let platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
-                #[cfg(target_os = "macos")]
-                {
-                    Arc::new(aleph_desktop_macos::MacOSPlatform::new())
-                }
-                #[cfg(target_os = "linux")]
-                {
-                    Arc::new(aleph_desktop_linux::LinuxPlatform::new())
-                }
-                #[cfg(target_os = "windows")]
-                {
-                    Arc::new(aleph_desktop_windows::WindowsPlatform::new())
-                }
-            };
+            let platform = build_desktop_platform();
             if platform.system().is_some() {
                 let reporter = alephcore::tasks::presence::PresenceReporter::new(
                     platform,
@@ -1843,20 +1845,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     {
         let mic_cfg = alephcore::tasks::mic_level::MicLevelConfig::default();
         if mic_cfg.enabled {
-            let platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
-                #[cfg(target_os = "macos")]
-                {
-                    Arc::new(aleph_desktop_macos::MacOSPlatform::new())
-                }
-                #[cfg(target_os = "linux")]
-                {
-                    Arc::new(aleph_desktop_linux::LinuxPlatform::new())
-                }
-                #[cfg(target_os = "windows")]
-                {
-                    Arc::new(aleph_desktop_windows::WindowsPlatform::new())
-                }
-            };
+            let platform = build_desktop_platform();
             if platform.media().is_some() {
                 let reporter = alephcore::tasks::mic_level::MicLevelReporter::new(
                     platform,
@@ -2289,11 +2278,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     start_webchat_server(args, &final_bind, final_port).await;
 
     if !args.daemon {
+        let addr_display = format_socket_addr(&final_bind, final_port);
         println!();
         println!("Aleph Server:");
-        println!("  - URL:       http://{final_bind}:{final_port}");
-        println!("  - WebSocket: ws://{final_bind}:{final_port}/ws");
-        println!("  - Panel UI:  http://{final_bind}:{final_port}/");
+        println!("  - URL:       http://{addr_display}");
+        println!("  - WebSocket: ws://{addr_display}/ws");
+        println!("  - Panel UI:  http://{addr_display}/");
         println!();
     }
 
@@ -2351,7 +2341,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // NOTE: SIGTERM path (setup_graceful_shutdown) calls std::process::exit
     // and bypasses this cleanup; stale file is overwritten on next start.
     if let Some(dir) = ipc_data_dir.as_deref() {
-        alephcore::cli::endpoint::remove_endpoint(dir);
+        if let Err(e) = alephcore::cli::endpoint::remove_endpoint(dir) {
+            tracing::warn!(
+                error = %e,
+                path = %dir.display(),
+                "failed to remove endpoint file during shutdown"
+            );
+        }
     }
 
     // Notify extension hooks of shutdown (best-effort; the SIGTERM path in

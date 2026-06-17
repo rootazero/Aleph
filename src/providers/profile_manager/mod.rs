@@ -95,6 +95,10 @@ pub enum ProfileManagerError {
     /// Budget exceeded
     #[error("Budget exceeded for profile {0}: limit ${1}, used ${2}")]
     BudgetExceeded(String, f64, f64),
+
+    /// Invalid agent identifier
+    #[error("Invalid agent id: {0}")]
+    InvalidAgentId(String),
 }
 
 /// Result type for profile manager operations

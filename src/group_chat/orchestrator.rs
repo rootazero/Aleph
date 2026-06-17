@@ -11,7 +11,7 @@ use crate::resilience::database::StateDatabase;
 use crate::sync_primitives::{Arc, Mutex};
 
 use super::persona::PersonaRegistry;
-use super::protocol::{GroupChatError, PersonaSource};
+use super::protocol::{GroupChatError, GroupChatStatus, PersonaSource};
 use super::session::GroupChatSession;
 
 /// A shared, async-lockable session handle.
@@ -97,6 +97,12 @@ impl GroupChatOrchestrator {
             persona.validate()?;
         }
 
+        if participants.is_empty() {
+            return Err(GroupChatError::InvalidPersona(
+                "at least one persona is required".into(),
+            ));
+        }
+
         let participant_count = participants.len();
 
         // 4. Generate session ID
@@ -173,7 +179,10 @@ impl GroupChatOrchestrator {
 
         // Persist status change to database
         if let Some(db) = &self.db {
-            if let Err(e) = db.update_group_chat_session_status(session_id, "ended") {
+            if let Err(e) = db.update_group_chat_session_status(
+                session_id,
+                GroupChatStatus::Ended.as_str(),
+            ) {
                 tracing::warn!(
                     subsystem = "group_chat",
                     error = %e,

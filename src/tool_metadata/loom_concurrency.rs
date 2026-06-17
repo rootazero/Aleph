@@ -19,14 +19,14 @@ fn loom_registry_concurrent_read_write() {
 
         let w = registry.clone();
         let writer = thread::spawn(move || {
-            let mut map = w.write().unwrap();
+            let mut map = w.write().unwrap_or_else(|e| e.into_inner());
             map.insert("tool_a".to_string(), 1);
             map.insert("tool_b".to_string(), 2);
         });
 
         let r = registry.clone();
         let reader = thread::spawn(move || {
-            let map = r.read().unwrap();
+            let map = r.read().unwrap_or_else(|e| e.into_inner());
             if map.get("tool_b").is_some() {
                 assert!(map.get("tool_a").is_some());
             }
@@ -96,20 +96,20 @@ fn loom_progress_snapshot() {
 
         let w = progress.clone();
         let writer = thread::spawn(move || {
-            let mut p = w.write().unwrap();
+            let mut p = w.write().unwrap_or_else(|e| e.into_inner());
             p.0 = 5;
             p.1 = 10;
         });
 
         let r1 = progress.clone();
         let reader1 = thread::spawn(move || {
-            let p = r1.read().unwrap();
+            let p = r1.read().unwrap_or_else(|e| e.into_inner());
             assert!(p.0 <= p.1);
         });
 
         let r2 = progress.clone();
         let reader2 = thread::spawn(move || {
-            let p = r2.read().unwrap();
+            let p = r2.read().unwrap_or_else(|e| e.into_inner());
             assert!(p.0 <= p.1);
         });
 

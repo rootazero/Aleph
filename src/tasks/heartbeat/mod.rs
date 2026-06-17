@@ -95,15 +95,19 @@ impl HeartbeatService {
     }
 
     /// Add a new task. Returns the task ID.
-    pub async fn add_task<C: Clock>(&self, task: HeartbeatTask, clock: &C) -> String {
+    pub async fn add_task<C: Clock>(
+        &self,
+        task: HeartbeatTask,
+        clock: &C,
+    ) -> Result<String, String> {
         let id = {
             let mut store = self.state.store.lock().await;
             let id = ops::add_task(&mut store, task, clock);
-            let _ = store.persist();
+            store.persist()?;
             id
         };
         self.emit_change(&id, crate::gateway::events::ChangeKind::Created);
-        id
+        Ok(id)
     }
 
     /// Apply partial updates to an existing task.
@@ -116,7 +120,7 @@ impl HeartbeatService {
         {
             let mut store = self.state.store.lock().await;
             ops::update_task(&mut store, id, updates, clock)?;
-            let _ = store.persist();
+            store.persist()?;
         }
         self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         Ok(())
@@ -127,18 +131,22 @@ impl HeartbeatService {
         {
             let mut store = self.state.store.lock().await;
             ops::delete_task(&mut store, id)?;
-            let _ = store.persist();
+            store.persist()?;
         }
         self.emit_change(id, crate::gateway::events::ChangeKind::Deleted);
         Ok(())
     }
 
     /// Toggle a task's enabled state. Returns the new enabled state.
-    pub async fn toggle_task<C: Clock>(&self, id: &str, clock: &C) -> Result<bool, String> {
+    pub async fn toggle_task<C: Clock>(
+        &self,
+        id: &str,
+        clock: &C,
+    ) -> Result<bool, String> {
         let enabled = {
             let mut store = self.state.store.lock().await;
             let enabled = ops::toggle_task(&mut store, id, clock)?;
-            let _ = store.persist();
+            store.persist()?;
             enabled
         };
         self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
@@ -191,7 +199,7 @@ mod tests {
 
         // Add
         let task = make_task("Test Task");
-        let id = service.add_task(task, &clock).await;
+        let id = service.add_task(task, &clock).await.unwrap();
         assert_eq!(service.list_tasks().await.len(), 1);
 
         // Get

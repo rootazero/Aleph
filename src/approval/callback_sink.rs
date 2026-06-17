@@ -1,4 +1,5 @@
-//! `ApprovalCallbackSink` 的实现 —— 把通道按钮回调投递进 `ExecApprovalManager`。
+//! `ApprovalCallbackSink` implementation — delivers channel-button callbacks
+//! into `ExecApprovalManager`.
 
 use async_trait::async_trait;
 
@@ -9,7 +10,8 @@ use crate::gateway::inbound_router::approval_callback::{
 };
 use crate::sync_primitives::Arc;
 
-/// 包 `Arc<ExecApprovalManager>`，解析回调并 resolve 对应待决审批。
+/// Wraps `Arc<ExecApprovalManager>`, parses callbacks and resolves the
+/// corresponding pending approval.
 pub struct ManagerCallbackSink {
     manager: Arc<ExecApprovalManager>,
 }
@@ -28,7 +30,8 @@ impl ApprovalCallbackSink for ManagerCallbackSink {
         callback_data: &str,
         user_id: &str,
     ) -> Option<ApprovalCallbackResult> {
-        // parse 失败 → 非审批回调 → None（router 放行）
+        // Failed parse means this is not an approval callback — return None so
+        // the router lets the request through.
         let (id, decision) = ApprovalBridge::parse_callback(callback_data)?;
         let resolved = self
             .manager

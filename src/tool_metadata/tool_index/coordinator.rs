@@ -6,6 +6,7 @@
 //! - Bulk synchronization of tools
 //! - Retrieving all valid tool notes
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::inference::SemanticPurposeInferrer;
@@ -17,7 +18,7 @@ use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::{KnowledgeNote, NoteIndexer};
 use crate::memory::store::MemoryBackend;
 use crate::skill::{SkillSystem, SkillSystemEvent};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AsyncRwLock};
 use tokio::sync::broadcast;
 
 /// Metadata for a tool to be indexed
@@ -86,6 +87,7 @@ const TOOL_CATEGORY: &str = "tool";
 pub struct ToolIndexCoordinator {
     indexer: NoteIndexer<crate::memory::store::SqliteMemoryBackend>,
     inferrer: Arc<SemanticPurposeInferrer>,
+    tool_locks: AsyncRwLock<HashMap<String, Arc<AsyncRwLock<()>>>>,
 }
 
 impl ToolIndexCoordinator {
@@ -97,6 +99,7 @@ impl ToolIndexCoordinator {
         Self {
             indexer: NoteIndexer::new(memory_dir, db),
             inferrer: Arc::new(SemanticPurposeInferrer::new()),
+            tool_locks: AsyncRwLock::new(HashMap::new()),
         }
     }
 
@@ -109,6 +112,7 @@ impl ToolIndexCoordinator {
         Self {
             indexer: NoteIndexer::new(memory_dir, db),
             inferrer: Arc::new(SemanticPurposeInferrer::with_llm(llm_provider)),
+            tool_locks: AsyncRwLock::new(HashMap::new()),
         }
     }
 
@@ -123,6 +127,15 @@ impl ToolIndexCoordinator {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64
+    }
+
+    /// Get or create a per-tool lock for synchronization.
+    async fn lock_for_tool(&self, name: &str) -> Arc<AsyncRwLock<()>> {
+        let mut locks = self.tool_locks.write().await;
+        locks
+            .entry(name.to_string())
+            .or_insert_with(|| Arc::new(AsyncRwLock::new(())))
+            .clone()
     }
 
     /// Build a fallback `KnowledgeNote` when markdown parsing fails or file is missing.
@@ -210,6 +223,10 @@ impl ToolIndexCoordinator {
         structured_meta: Option<&str>,
         embedding: Option<Vec<f32>>,
     ) -> Result<String, AlephError> {
+        // Acquire per-tool read lock for the duration of L1 sync.
+        let tool_lock = self.lock_for_tool(name).await;
+        let _guard = tool_lock.read().await;
+
         // Infer semantic purpose using ranked strategy (L0 -> L1)
         let inferred = self
             .inferrer
@@ -286,12 +303,14 @@ impl ToolIndexCoordinator {
             let indexer_store = Arc::clone(self.indexer.store());
             let memory_dir = self.indexer.memory_dir().to_path_buf();
             let inferrer = Arc::clone(&self.inferrer);
+            let tool_lock = tool_lock.clone();
             let tool_name = name.to_string();
             let tool_desc = description.map(|s| s.to_string());
             let tool_cat = category.map(|s| s.to_string());
             let note_id = format!("tool:{name}");
 
             tokio::spawn(async move {
+                let _write_guard = tool_lock.write().await;
                 match inferrer
                     .enhance_with_llm(
                         &note_id,
@@ -361,6 +380,9 @@ impl ToolIndexCoordinator {
 
     /// Remove a tool from Memory by deleting its note file and index entry.
     pub async fn remove_tool(&self, name: &str) -> Result<(), AlephError> {
+        let tool_lock = self.lock_for_tool(name).await;
+        let _guard = tool_lock.write().await;
+
         let note_path = Self::tool_note_path(name);
 
         // Delete the markdown file

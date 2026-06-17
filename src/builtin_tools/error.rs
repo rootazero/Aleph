@@ -11,8 +11,6 @@ pub enum ToolError {
     InvalidArgs(String),
     /// Execution failed
     Execution(String),
-    /// Execution failed (alias for Execution)
-    ExecutionFailed(String),
     /// Resource not found
     NotFound(String),
 }
@@ -23,7 +21,6 @@ impl fmt::Display for ToolError {
             Self::Network(msg) => write!(f, "Network error: {msg}"),
             Self::InvalidArgs(msg) => write!(f, "Invalid arguments: {msg}"),
             Self::Execution(msg) => write!(f, "Execution error: {msg}"),
-            Self::ExecutionFailed(msg) => write!(f, "Execution failed: {msg}"),
             Self::NotFound(msg) => write!(f, "Not found: {msg}"),
         }
     }
@@ -37,7 +34,6 @@ impl From<ToolError> for crate::error::AlephError {
             ToolError::Network(msg) => Self::network(msg),
             ToolError::InvalidArgs(msg) => Self::tool(msg),
             ToolError::Execution(msg) => Self::tool(msg),
-            ToolError::ExecutionFailed(msg) => Self::tool(msg),
             ToolError::NotFound(msg) => Self::NotFound(msg),
         }
     }

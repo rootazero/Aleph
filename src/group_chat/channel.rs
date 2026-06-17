@@ -111,12 +111,11 @@ fn parse_start_command(args: &str) -> Option<GroupChatRequest> {
             }
             "--role" => {
                 i += 1;
-                if i < tokens.len() {
-                    let role_spec = &tokens[i];
-                    if let Some(persona) = parse_inline_role(role_spec) {
-                        personas.push(PersonaSource::Inline(persona));
-                    }
+                if i >= tokens.len() {
+                    return None;
                 }
+                let persona = parse_inline_role(&tokens[i])?;
+                personas.push(PersonaSource::Inline(persona));
             }
             "--topic" => {
                 i += 1;

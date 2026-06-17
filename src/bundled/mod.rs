@@ -1,7 +1,7 @@
 //! Bundled official skills and plugins, embedded at compile time.
 //!
 //! On startup, these are extracted to `~/.aleph/` if the bundled version
-//! is newer than what's already installed.
+//! differs from what's already installed.
 
 mod extractor;
 pub mod manifest;

@@ -266,8 +266,19 @@ impl ClawHubClient {
             bytes.extend_from_slice(&chunk);
         }
 
-        // Sanitize slug for filename: "owner/skill" → "owner-skill"
-        let safe_slug = slug.replace('/', "-");
+        // Sanitize slug for filename: "owner/skill" → "owner-skill".
+        // Keep only filename-safe characters so a crafted slug cannot create
+        // subdirectories or use platform-reserved characters.
+        let safe_slug: String = slug
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
         let safe_slug = if safe_slug.len() > 100 {
             safe_slug.chars().take(100).collect::<String>()
         } else {

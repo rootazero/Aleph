@@ -103,22 +103,6 @@ pub struct PathCluster {
     pub top_score: f32,
 }
 
-/// Extract the summary depth (d0, d1, d2) from a session fact path.
-///
-/// Paths follow the pattern `aleph://session/{id}/dN/...` where N is 0, 1, or 2.
-/// Returns 0 if the depth segment cannot be parsed.
-fn _extract_depth_from_path(path: &str) -> u32 {
-    // Look for a segment matching "dN" after the path prefix
-    for segment in path.split('/') {
-        if let Some(rest) = segment.strip_prefix('d') {
-            if let Ok(n) = rest.parse::<u32>() {
-                return n;
-            }
-        }
-    }
-    0
-}
-
 /// Group facts by path, returning clusters where count >= threshold
 fn cluster_facts_by_path(facts: &[FactResult], threshold: usize) -> Vec<PathCluster> {
     use std::collections::HashMap;
@@ -343,7 +327,9 @@ impl MemorySearchTool {
                     .database
                     .get_raw_by_path_prefix(&path_prefix, agent_id, fetch_limit)
                     .await
-                    .unwrap_or_default();
+                    .map_err(|e| {
+                        ToolError::Execution(format!("Session raw fact lookup failed: {e}"))
+                    })?;
 
                 let query_lower = args.query.to_lowercase();
                 raws.into_iter()

@@ -1,7 +1,7 @@
 //! Configuration types for command execution security.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Security level for command execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -46,7 +46,7 @@ pub struct ExecApprovalsFile {
 
     /// Per-agent configuration overrides
     #[serde(default)]
-    pub agents: HashMap<String, AgentExecConfig>,
+    pub agents: BTreeMap<String, AgentExecConfig>,
 }
 
 const fn default_version() -> u8 {
@@ -59,7 +59,7 @@ impl Default for ExecApprovalsFile {
             version: default_version(),
             socket: None,
             defaults: None,
-            agents: HashMap::new(),
+            agents: BTreeMap::new(),
         }
     }
 }

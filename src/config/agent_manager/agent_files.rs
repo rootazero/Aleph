@@ -79,7 +79,9 @@ impl AgentManager {
     pub fn read_file(&self, agent_id: &str, filename: &str) -> Result<String> {
         self.validate_agent_id(agent_id)?;
         self.validate_filename(filename)?;
-        let path = self.agents_root.join(agent_id).join(filename);
+        let agent_dir = self.agents_root.join(agent_id);
+        let path = agent_dir.join(filename);
+        self.require_contained(&agent_dir, &path)?;
         fs::read_to_string(&path).map_err(|e| {
             AlephError::IoError(format!("Failed to read file '{}': {}", path.display(), e))
         })
@@ -90,9 +92,10 @@ impl AgentManager {
         self.validate_agent_id(agent_id)?;
         self.validate_filename(filename)?;
         let agent_dir = self.agents_root.join(agent_id);
+        let path = agent_dir.join(filename);
+        self.require_contained(&agent_dir, &path)?;
         fs::create_dir_all(&agent_dir)
             .map_err(|e| AlephError::IoError(format!("Failed to create agent dir: {e}")))?;
-        let path = agent_dir.join(filename);
         fs::write(&path, content).map_err(|e| {
             AlephError::IoError(format!("Failed to write file '{}': {}", path.display(), e))
         })
@@ -102,7 +105,9 @@ impl AgentManager {
     pub fn delete_file(&self, agent_id: &str, filename: &str) -> Result<()> {
         self.validate_agent_id(agent_id)?;
         self.validate_filename(filename)?;
-        let path = self.agents_root.join(agent_id).join(filename);
+        let agent_dir = self.agents_root.join(agent_id);
+        let path = agent_dir.join(filename);
+        self.require_contained(&agent_dir, &path)?;
         if path.exists() {
             fs::remove_file(&path).map_err(|e| {
                 AlephError::IoError(format!("Failed to delete file '{}': {}", path.display(), e))
@@ -110,4 +115,46 @@ impl AgentManager {
         }
         Ok(())
     }
+
+    /// Ensure `candidate` resolves inside `base` using lexical normalization.
+    /// Catches traversal that survives string-level validation (e.g. symlinks
+    /// resolved by the OS, or crafted relative paths).
+    fn require_contained(
+        &self,
+        base: &std::path::Path,
+        candidate: &std::path::Path,
+    ) -> Result<()> {
+        let normalized = normalize_path_lexically(candidate);
+        let base_normalized = normalize_path_lexically(base);
+        if !normalized.starts_with(&base_normalized) {
+            return Err(AlephError::invalid_config(format!(
+                "Path '{}' escapes allowed directory '{}'",
+                candidate.display(),
+                base.display()
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Lexically normalize a path by resolving `.` and `..` components without
+/// touching the filesystem. Returns the input unchanged if it is absolute
+/// (absolute paths are unexpected here and rejected by the caller).
+fn normalize_path_lexically(path: &std::path::Path) -> std::path::PathBuf {
+    let mut normalized = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                // Preserve absolute prefix so that starts_with works later;
+                // such paths are rejected by validate_filename anyway.
+                normalized.push(component.as_os_str());
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Normal(c) => normalized.push(c),
+        }
+    }
+    normalized
 }

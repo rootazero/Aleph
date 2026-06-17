@@ -26,8 +26,7 @@ impl Config {
     ///
     /// # Returns
     /// * `Ok(Config)` - Successfully loaded config
-    /// * `Err(AlephError::ConfigNotFound)` - File doesn't exist
-    /// * `Err(AlephError::InvalidConfig)` - File exists but parsing failed
+    /// * `Err(AlephError::InvalidConfig)` - File doesn't exist or parsing failed
     ///
     /// # Example
     /// ```rust,ignore

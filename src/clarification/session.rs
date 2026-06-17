@@ -119,6 +119,12 @@ impl ClarificationManager {
         let Some(mut entry) = pending.remove(session_key) else {
             return false;
         };
+        if entry.is_expired() {
+            if let Some(sender) = entry.sender.take() {
+                let _ = sender.send(ClarificationResult::timeout());
+            }
+            return true;
+        }
         let result = interpret_reply(&entry.request, reply);
         match entry.sender.take() {
             Some(sender) => sender.send(result).is_ok(),

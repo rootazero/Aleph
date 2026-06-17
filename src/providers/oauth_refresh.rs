@@ -92,7 +92,6 @@ pub async fn refresh_token(cred: &OAuthCredential) -> Result<OAuthCredential> {
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        debug!("Token refresh error body: {}", body);
         // Sanitize and truncate body to avoid leaking credentials.
         let sanitized = body
             .replace("client_secret", "[REDACTED_SECRET_KEY]")
@@ -101,6 +100,7 @@ pub async fn refresh_token(cred: &OAuthCredential) -> Result<OAuthCredential> {
             .replace("access_token", "[REDACTED_ACCESS]")
             .replace("token", "[REDACTED_TOKEN]");
         let body_preview: String = sanitized.chars().take(200).collect();
+        debug!(status = %status, body = %body_preview, "OAuth token refresh failed");
         return Err(anyhow::anyhow!(
             "Token refresh failed: {status} — {body_preview}"
         ));

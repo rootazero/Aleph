@@ -25,7 +25,7 @@ struct ChromeMcpSession {
 
 /// Manages Chrome `DevTools` MCP sessions with lazy creation and profile-keyed caching.
 pub struct ChromeMcpDriver {
-    sessions: RwLock<HashMap<String, ChromeMcpSession>>,
+    sessions: RwLock<HashMap<String, Arc<ChromeMcpSession>>>,
     config: ChromeMcpConfig,
     /// Prevents concurrent Chrome launches from racing.
     chrome_launch_lock: tokio::sync::Mutex<()>,
@@ -72,6 +72,7 @@ impl ChromeMcpDriver {
         let session = sessions.get(profile_name).ok_or_else(|| {
             BrowserError::ChromeMcpError("Session not found after creation".into())
         })?;
+        let session = Arc::clone(session);
 
         // MCP tools are namespaced with server prefix: "chrome-mcp-{profile}:{tool}"
         let server_name = format!("chrome-mcp-{profile_name}");
@@ -88,9 +89,11 @@ impl ChromeMcpDriver {
                     tracing::warn!(
                         "Chrome MCP transport error for profile '{profile_name}': {err_str}"
                     );
-                    // Drop read lock before destroying session
+                    // Drop read lock before destroying session, but only destroy
+                    // if the same session is still stored (avoid racing a
+                    // concurrent recreate that replaced the errored session).
                     drop(sessions);
-                    self.destroy_session(profile_name).await;
+                    self.destroy_session_if_same(profile_name, &session).await;
                 }
                 return Err(BrowserError::ChromeMcpError(err_str));
             }
@@ -125,7 +128,7 @@ impl ChromeMcpDriver {
         }
 
         let session = self.create_session(profile_name).await?;
-        sessions.insert(profile_name.to_string(), session);
+        sessions.insert(profile_name.to_string(), Arc::new(session));
         Ok(())
     }
 
@@ -206,7 +209,7 @@ impl ChromeMcpDriver {
             chrome_path.display()
         );
 
-        Command::new(&chrome_path)
+        let mut child = Command::new(&chrome_path)
             .arg("--remote-debugging-port=0")
             .arg("--no-first-run")
             .arg("--no-default-browser-check")
@@ -216,7 +219,23 @@ impl ChromeMcpDriver {
             .spawn()
             .map_err(|e| BrowserError::LaunchFailed(format!("Failed to launch Chrome: {e}")))?;
 
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        // Verify the process did not immediately exit instead of blind-sleeping.
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    return Err(BrowserError::LaunchFailed(format!(
+                        "Chrome exited immediately with status {status}"
+                    )));
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    return Err(BrowserError::LaunchFailed(format!(
+                        "Failed to check Chrome process status: {e}"
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -270,6 +289,26 @@ impl ChromeMcpDriver {
         })
         .await
         .unwrap_or(false)
+    }
+
+    /// Destroy a session only if the stored session is still the expected one.
+    /// Prevents a transport-error destroy from wiping out a concurrently
+    /// recreated session.
+    async fn destroy_session_if_same(&self, profile_name: &str, expected: &Arc<ChromeMcpSession>) {
+        let session = {
+            let mut sessions = self.sessions.write().await;
+            match sessions.get(profile_name) {
+                Some(current) if Arc::ptr_eq(current, expected) => sessions.remove(profile_name),
+                _ => None,
+            }
+        };
+        if let Some(session) = session {
+            let _ = session.client.stop_all().await;
+            tracing::info!(
+                "Chrome MCP session destroyed for profile '{}'",
+                profile_name
+            );
+        }
     }
 
     /// Destroy a session (for cleanup after transport errors).

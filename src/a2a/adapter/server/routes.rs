@@ -327,19 +327,22 @@ fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
 }
 
 /// Fallback socket address when `ConnectInfo` is not available.
-/// WARNING: All remote requests appear as loopback — IP-based access control is ineffective.
-/// `ConnectInfo` must be wired via `.into_make_service_with_connect_info::<SocketAddr>()`.
+///
+/// Returns a non-loopback address so that missing `ConnectInfo` does NOT
+/// trigger the localhost authentication bypass. `ConnectInfo` must be wired
+/// via `.into_make_service_with_connect_info::<SocketAddr>()` in production;
+/// the fallback is only safe for local tests and oneshot requests.
 fn fallback_addr() -> SocketAddr {
-    SocketAddr::from(([127, 0, 0, 1], 0))
+    SocketAddr::from(([0, 0, 0, 0], 0))
 }
 
 /// Peer socket address extractor that never rejects.
 ///
 /// Reads the `ConnectInfo<SocketAddr>` injected by
 /// `.into_make_service_with_connect_info::<SocketAddr>()` (always present when
-/// the server is wired that way) and falls back to a loopback address when it
-/// is absent — e.g. a `oneshot` request in tests. This keeps the handlers
-/// infallible instead of returning a 500 when `ConnectInfo` is missing.
+/// the server is wired that way) and falls back to a non-loopback address when
+/// it is absent — e.g. a `oneshot` request in tests. This keeps the handlers
+/// infallible without granting localhost trust to remote callers.
 struct PeerAddr(SocketAddr);
 
 impl<S> FromRequestParts<S> for PeerAddr
@@ -446,9 +449,9 @@ mod tests {
     }
 
     #[test]
-    fn fallback_addr_is_loopback() {
+    fn fallback_addr_is_not_loopback() {
         let addr = fallback_addr();
-        assert!(addr.ip().is_loopback());
+        assert!(!addr.ip().is_loopback());
         assert_eq!(addr.port(), 0);
     }
 

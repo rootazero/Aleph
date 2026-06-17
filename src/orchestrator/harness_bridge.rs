@@ -821,6 +821,7 @@ pub fn compute_runtime_state_blocks(
         .map(|(reason, mut tools)| {
             tools.sort_unstable();
             let label = match tools.as_slice() {
+                [] => String::new(),
                 [single] => (*single).to_string(),
                 many => format!("{} (+{} more)", many[0], many.len() - 1),
             };

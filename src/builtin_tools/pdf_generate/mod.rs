@@ -88,7 +88,7 @@ Examples:\n\
     ) -> std::result::Result<PathBuf, ToolError> {
         let output_path = Path::new(output_path);
 
-        if output_path.starts_with("/") {
+        if output_path.is_absolute() {
             return Ok(output_path.to_path_buf());
         }
 
@@ -164,7 +164,7 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
             RenderEngine::Browser => browser_engine::generate(&args, &output_path).await,
             RenderEngine::Native => native_engine::generate(&args, &output_path),
             RenderEngine::Auto => {
-                if browser_engine::is_chrome_available() {
+                if browser_engine::is_browser_engine_available() {
                     match browser_engine::generate(&args, &output_path).await {
                         Ok(output) => Ok(output),
                         Err(e) => {
