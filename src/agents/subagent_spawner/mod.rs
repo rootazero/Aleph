@@ -359,7 +359,15 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             session_epoch_registrar: None,
             tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
             in_flight_tool_calls: None,
-            parallel_tool_concurrency: None,
+            // Parity with the main gateway harness (was `None` — subagents ran
+            // every tool batch serially). Subagents routinely fan out
+            // independent reads/searches; the Act phase only parallelizes
+            // concurrent-safe calls (writes/exec/send still serialize via the
+            // resource-scope partitioner in `tools::concurrency`), so this is a
+            // safe throughput win, not a correctness change.
+            parallel_tool_concurrency: Some(
+                crate::harness::deps::DEFAULT_PARALLEL_TOOL_CONCURRENCY,
+            ),
         };
         let harness = Arc::new(AgentHarness::new(deps));
 

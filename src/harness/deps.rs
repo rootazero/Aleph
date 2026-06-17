@@ -23,6 +23,14 @@ use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
+/// Default concurrent-tool fan-out for the Act phase, shared by the main
+/// gateway harness and spawned subagents so both run the same parallel
+/// pipeline. `Some(8)` matches opencode's `Effect.forEach({ concurrency: 10 })`
+/// default; kept as a single source of truth so the production runner
+/// (`orchestrator::harness_bridge`) and the subagent runner
+/// (`agents::subagent_spawner`) cannot drift apart.
+pub const DEFAULT_PARALLEL_TOOL_CONCURRENCY: usize = 8;
+
 pub struct HarnessDeps {
     pub session: Arc<dyn SessionService>,
     pub tools: Arc<dyn ToolService>,
