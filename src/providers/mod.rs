@@ -121,7 +121,9 @@ pub use http_provider::HttpProvider;
 pub use load_stats::{InFlightGuard, LoadStats};
 pub use metering::MeteringProvider;
 pub use mock::{MockError, MockProvider};
-pub use model_catalog::{capabilities_for, infer_vendor, ModelCapabilities};
+pub use model_catalog::{
+    capabilities_for, endpoint_kind_for_base_url, infer_vendor, EndpointKind, ModelCapabilities,
+};
 pub use model_override_provider::ModelOverrideProvider;
 pub use ollama::OllamaProvider;
 pub use presets::{get_preset, resolve_provider_from_model, ProviderPreset, PRESETS};

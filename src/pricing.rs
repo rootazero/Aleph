@@ -657,6 +657,17 @@ pub struct RateCard {
     /// USD per million cached-prompt-read tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_per_mtok: Option<f64>,
+    /// USD per million cached-prompt-write tokens (prompt-cache creation). A
+    /// slight premium over input; `None` for vendors without a cache-write
+    /// surcharge (most non-Anthropic). Surfaced so the picker's
+    /// cost-at-a-glance is honest for cache-heavy Anthropic usage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_creation_per_mtok: Option<f64>,
+    /// USD per million reasoning tokens, when the vendor bills them
+    /// separately (Gemini). `None` when reasoning is folded into the output
+    /// rate (Anthropic, `OpenAI` o-series), so a `None` here is not "free".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_per_mtok: Option<f64>,
 }
 
 /// Resolve the [`Rates`] entry for a `(provider, model)` pair, or `None` when
@@ -730,6 +741,8 @@ pub fn rate_card(provider: &str, model: &str) -> Option<RateCard> {
         input_per_mtok: r.input_per_mtok,
         output_per_mtok: r.output_per_mtok,
         cache_read_per_mtok: r.cache_read_per_mtok,
+        cache_creation_per_mtok: r.cache_creation_per_mtok,
+        reasoning_per_mtok: r.reasoning_per_mtok,
     })
 }
 
@@ -1030,6 +1043,19 @@ mod tests {
         assert_eq!(card.input_per_mtok, Some(3.0));
         assert_eq!(card.output_per_mtok, Some(15.0));
         assert_eq!(card.cache_read_per_mtok, Some(0.30));
+        // Anthropic bills cache-creation; reasoning is folded into output.
+        assert_eq!(card.cache_creation_per_mtok, Some(3.75));
+        assert_eq!(card.reasoning_per_mtok, None);
+    }
+
+    #[test]
+    fn rate_card_surfaces_separately_billed_reasoning() {
+        // Gemini bills reasoning tokens at their own rate; the picker now sees
+        // it rather than silently dropping the component.
+        let card = rate_card("google", "gemini-2.0-flash").expect("priced");
+        assert_eq!(card.reasoning_per_mtok, Some(0.30));
+        // Gemini has no prompt-cache write surcharge in the table.
+        assert_eq!(card.cache_creation_per_mtok, None);
     }
 
     #[test]

@@ -14,7 +14,6 @@ use crate::config::Config;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::SystemTime;
@@ -44,11 +43,10 @@ pub struct PatchRequest {
     pub path: String,
     /// JSON values to deep-merge at the path
     pub patch: serde_json::Value,
-    /// Sensitive fields to route to the vault instead of config.toml.
-    /// Keys are field names, values are the plaintext secrets.
-    #[serde(default)]
-    pub secret_fields: HashMap<String, String>,
-    /// Whether to run a health check after applying (reserved for future use)
+    /// When `true` and the patch targets a `providers.*` section, probe the
+    /// affected LLM provider(s) for reachability after applying. Result is
+    /// reported in [`PatchResult::health_check`]. Ignored for other sections
+    /// and when no vault handle is wired (then the result is `Skipped`).
     #[serde(default)]
     pub health_check: bool,
     /// If true, compute the diff but do not persist changes
@@ -82,8 +80,11 @@ pub struct FieldDiff {
     pub new_value: serde_json::Value,
 }
 
-/// Health check outcome.
+/// Health check outcome. Serialized snake_case (`"passed"` /
+/// `{"failed":{"reason":…}}` / `"skipped"`) to match the self_config docs and
+/// the `ReloadImpact` convention.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HealthCheckResult {
     Passed,
     Failed { reason: String },
@@ -118,6 +119,10 @@ pub struct ConfigPatcher {
     backup: ConfigBackup,
     /// Last known modification time of the config file (for conflict detection)
     last_known_mtime: Mutex<Option<SystemTime>>,
+    /// Optional vault handle enabling post-patch provider connectivity
+    /// verification. Absent in tests / offline construction — a requested
+    /// health check then reports `Skipped` rather than failing.
+    vault: Option<Arc<crate::gateway::security::SharedTokenManager>>,
 }
 
 impl ConfigPatcher {
@@ -128,7 +133,21 @@ impl ConfigPatcher {
             config_path,
             backup,
             last_known_mtime: Mutex::new(None),
+            vault: None,
         }
+    }
+
+    /// Wire a vault handle so a `health_check` patch can probe the affected
+    /// provider's live reachability (`ai:<name>` key resolution + ping).
+    /// Non-breaking: callers without a vault keep the no-arg `new` and get
+    /// `Skipped` health results.
+    #[must_use]
+    pub fn with_vault(
+        mut self,
+        vault: Arc<crate::gateway::security::SharedTokenManager>,
+    ) -> Self {
+        self.vault = Some(vault);
+        self
     }
 
     /// Get the config file path.
@@ -167,10 +186,10 @@ impl ConfigPatcher {
     /// 8. Compute diff
     /// 9. If `dry_run`: return early with diff
     /// 10. Check conflict (mtime)
-    /// 11. Route secrets to vault (currently ignored; secrets managed via `SharedTokenManager`)
-    /// 12. Backup snapshot
-    /// 13. Write lock -> replace config -> `save_incremental`([`top_section`])
-    /// 14. Update mtime
+    /// 11. Backup snapshot
+    /// 12. Write lock -> replace config -> `save_incremental`([`top_section`])
+    /// 13. Update mtime
+    /// 14. Run post-patch provider health check when `health_check` is set
     /// 15. Return `PatchResult`
     pub async fn apply(&self, request: PatchRequest) -> Result<PatchResult> {
         let mut warnings: Vec<String> = Vec::new();
@@ -251,17 +270,14 @@ impl ConfigPatcher {
         // 10. Check conflict (mtime) — hard error if file was modified externally
         self.check_conflict().await?;
 
-        // Note: secret_fields are accepted for future use but currently ignored.
-        // Secrets are managed via SharedTokenManager, not the config patcher.
-
-        // 12. Backup snapshot
+        // 11. Backup snapshot
         if self.config_path.exists() {
             if let Err(e) = self.backup.create_snapshot(&self.config_path) {
                 warnings.push(format!("Backup warning: {e}"));
             }
         }
 
-        // 13. Write lock -> re-apply patch on latest config -> save incrementally
+        // 12. Write lock -> re-apply patch on latest config -> save incrementally
         //
         // Re-read the config under write lock to avoid TOCTOU: between step 2
         // (read snapshot) and now, another handler may have modified unrelated
@@ -307,8 +323,18 @@ impl ConfigPatcher {
             }
         }
 
-        // 14. Update mtime
+        // 13. Update mtime
         self.record_mtime().await;
+
+        // 14. Optional post-patch verification — probe the affected provider(s)
+        // so a credential/endpoint change can be confirmed reachable in the same
+        // call. Runs against the just-installed live config; non-provider paths
+        // and the no-vault case report Skipped (no network I/O).
+        let health_check = if request.health_check {
+            Some(self.run_provider_health_check(&request.path).await)
+        } else {
+            None
+        };
 
         info!(
             path = %request.path,
@@ -322,13 +348,86 @@ impl ConfigPatcher {
             success: true,
             applied_sections: vec![top_section],
             diff,
-            health_check: if request.health_check {
-                Some(HealthCheckResult::Skipped)
-            } else {
-                None
-            },
+            health_check,
             warnings,
         })
+    }
+
+    /// Probe the provider(s) touched by a `providers.*` patch to confirm the
+    /// new credentials/endpoint are actually reachable.
+    ///
+    /// Single source of truth: [`crate::providers::probe::probe_provider`] —
+    /// the same probe the `providers.healthcheck` RPC and the
+    /// `providers/connectivity` doctor check use, so the verdict never drifts
+    /// between surfaces. Returns:
+    /// - `Skipped` — non-provider path, no vault wired, or no matching enabled
+    ///   provider (nothing to probe);
+    /// - `Passed` — every probed provider answered;
+    /// - `Failed` — one or more were unreachable, with a joined reason.
+    async fn run_provider_health_check(&self, path: &str) -> HealthCheckResult {
+        use crate::providers::probe::{probe_provider, provider_vault_key};
+
+        let mut segments = path.split('.');
+        if segments.next() != Some("providers") {
+            return HealthCheckResult::Skipped;
+        }
+        let Some(vault) = self.vault.as_ref() else {
+            return HealthCheckResult::Skipped;
+        };
+        // `providers.openai` → probe just openai; bare `providers` → all enabled.
+        let target = segments.next().map(str::to_string);
+
+        // Snapshot the post-patch provider configs + resolve keys under the read
+        // lock, then release it before any network I/O (same discipline as the
+        // connectivity doctor check).
+        let probes: Vec<(String, crate::config::ProviderConfig)> = {
+            let cfg = self.config.read().await;
+            cfg.providers
+                .iter()
+                .filter(|(name, pc)| {
+                    pc.enabled && target.as_deref().is_none_or(|t| t == name.as_str())
+                })
+                .map(|(name, pc)| {
+                    let mut runtime = pc.clone();
+                    runtime.api_key = match vault.get_secret(&provider_vault_key(name)) {
+                        Ok(Some(secret)) => Some(secret.expose().to_string()),
+                        _ => None,
+                    };
+                    (name.clone(), runtime)
+                })
+                .collect()
+        };
+
+        if probes.is_empty() {
+            return HealthCheckResult::Skipped;
+        }
+
+        // Per-provider deadline so a hung endpoint can't stall the patch return.
+        const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+        let mut failures: Vec<String> = Vec::new();
+        for (name, runtime) in probes {
+            match tokio::time::timeout(PROBE_TIMEOUT, probe_provider(&name, runtime)).await {
+                Ok(outcome) if outcome.success => {}
+                Ok(outcome) => failures.push(format!(
+                    "{name}: {}",
+                    outcome
+                        .error
+                        .unwrap_or_else(|| "unknown probe error".to_string())
+                )),
+                Err(_) => failures.push(format!(
+                    "{name}: timed out after {}s",
+                    PROBE_TIMEOUT.as_secs()
+                )),
+            }
+        }
+
+        if failures.is_empty() {
+            HealthCheckResult::Passed
+        } else {
+            HealthCheckResult::Failed {
+                reason: failures.join("; "),
+            }
+        }
     }
 
     /// Validate a JSON value against the Config JSON Schema.
@@ -882,7 +981,6 @@ mod tests {
         let request = PatchRequest {
             path: "general".to_string(),
             patch: json!({"language": "zh-Hans"}),
-            secret_fields: HashMap::new(),
             health_check: false,
             dry_run: true,
         };
@@ -907,7 +1005,6 @@ mod tests {
         let request = PatchRequest {
             path: "general".to_string(),
             patch: json!({"language": "zh-Hans"}),
-            secret_fields: HashMap::new(),
             health_check: false,
             dry_run: false,
         };
@@ -937,7 +1034,6 @@ mod tests {
         let request = PatchRequest {
             path: "general".to_string(),
             patch: json!({"language": "zh-Hans"}),
-            secret_fields: HashMap::new(),
             health_check: false,
             dry_run: false,
         };
@@ -963,7 +1059,6 @@ mod tests {
         let request1 = PatchRequest {
             path: "general".to_string(),
             patch: json!({"language": "en"}),
-            secret_fields: HashMap::new(),
             health_check: false,
             dry_run: false,
         };
@@ -978,7 +1073,6 @@ mod tests {
         let request2 = PatchRequest {
             path: "general".to_string(),
             patch: json!({"language": "zh-Hans"}),
-            secret_fields: HashMap::new(),
             health_check: false,
             dry_run: false,
         };
@@ -1003,7 +1097,6 @@ mod tests {
             .apply(PatchRequest {
                 path: "general".to_string(),
                 patch: json!({"language": "zh-Hans"}),
-                secret_fields: HashMap::new(),
                 health_check: false,
                 dry_run: false,
             })
@@ -1041,7 +1134,6 @@ mod tests {
             .apply(PatchRequest {
                 path: "general".to_string(),
                 patch: json!({"language": "zh-Hans"}),
-                secret_fields: HashMap::new(),
                 health_check: false,
                 dry_run: false,
             })
@@ -1066,5 +1158,24 @@ mod tests {
         let (patcher, _config_path, _backup_dir) = setup_patcher(&tmp);
         let err = patcher.rollback(None, false).await.unwrap_err().to_string();
         assert!(err.contains("No config backups available"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn health_check_skips_non_provider_path() {
+        // A non-`providers.*` path is never probed, regardless of vault wiring.
+        let tmp = TempDir::new().unwrap();
+        let (patcher, _config_path, _backup_dir) = setup_patcher(&tmp);
+        let result = patcher.run_provider_health_check("general").await;
+        assert!(matches!(result, HealthCheckResult::Skipped));
+    }
+
+    #[tokio::test]
+    async fn health_check_skips_without_vault() {
+        // Even a provider path reports Skipped (never Failed) when no vault is
+        // wired — verification is best-effort, never a write gate.
+        let tmp = TempDir::new().unwrap();
+        let (patcher, _config_path, _backup_dir) = setup_patcher(&tmp);
+        let result = patcher.run_provider_health_check("providers.openai").await;
+        assert!(matches!(result, HealthCheckResult::Skipped));
     }
 }

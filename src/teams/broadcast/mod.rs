@@ -29,8 +29,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::gateway::context::GatewayContext;
 use crate::gateway::event_emitter::team_fanout::{team_event_bus, TeamFanoutEmitter};
-use crate::gateway::event_emitter::{CollectingEventEmitter, EventEmitter, StreamEvent};
+use crate::gateway::event_emitter::{CollectingEventEmitter, EventEmitter};
 use crate::gateway::execution_engine::RunRequest;
+use crate::gateway::reply_emitter::extract_final_response;
 use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Arc;
 use crate::teams::messages::{MessageStore, MessageType, NewMessage};
@@ -40,14 +41,6 @@ use crate::teams::TeamStore;
 #[must_use]
 pub fn over_depth(chain_depth: u32) -> bool {
     chain_depth >= MAX_CHAIN_DEPTH
-}
-
-/// 从收集到的事件里取 agent 最终回复文本。
-fn extract_final_response(events: &[StreamEvent]) -> Option<String> {
-    events.iter().find_map(|e| match e {
-        StreamEvent::RunComplete { summary, .. } => summary.final_response.clone(),
-        _ => None,
-    })
 }
 
 /// 组装被唤醒成员 run 的 metadata。

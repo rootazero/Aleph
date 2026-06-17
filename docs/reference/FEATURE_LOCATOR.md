@@ -277,11 +277,11 @@
 - **打磨话术**：「agent 创建/切换/列出/删除 工具在 `agent_manage/`（同一运行时实例注册表）；切换落 `switch.rs`→`set_active_agent`，生效点在 `agent_resolver.rs` Tier2。‘加载与项目覆盖’在 `agents/loader.rs`（那是 AgentDef 侧，另一套）。」
 
 ### 4.7 消息流与最终答案汇总 (Message Stream & Final Answer)
-- **口语关键词**：对话消息流、StreamEvent、最终结果汇总、final_response、RunComplete、汇总打印输出
-- **代码锚点**：`src/gateway/event_emitter/`（types.rs StreamEvent、impls.rs、instant_buffer.rs）；最终答案提取 `src/teams/broadcast/mod.rs::extract_final_response()`、`src/tasks/cron/executor.rs::extract_final_response()`
-- **职责**：执行中逐步发 StreamEvent（Reasoning/ToolStart/ResponseChunk/RunComplete），`RunComplete.RunSummary.final_response` 是最终文本，broadcast/cron 从事件日志提取后投递/打印。
-- **状态**：✅ 已实现。**注意**：**最终答案没有独立的表**，靠扫描 StreamEvent 日志找 RunComplete 抽取。
-- **打磨话术**：「‘最后那段汇总输出怎么来的’= harness 发 RunComplete 事件，消费方调 `extract_final_response()` 扫事件日志。没有‘答案表’，改投递逻辑去 broadcast/cron executor。」
+- **口语关键词**：对话消息流、StreamEvent、最终结果汇总、final_response、RunComplete、汇总打印输出、instant/打字机缓冲
+- **代码锚点**：`src/gateway/event_emitter/`（types.rs StreamEvent、impls.rs `GatewayEventEmitter`、instant_buffer.rs `plan_instant`+`InstantBufferingEmitter`）；**最终答案提取单一源** `src/gateway/reply_emitter/extract.rs::extract_final_response()`（消费者：`src/teams/broadcast/mod.rs` 群聊 + `src/tasks/cron/executor.rs` cron）。
+- **职责**：执行中逐步发 StreamEvent（Reasoning/ToolStart/ResponseChunk/RunComplete），`RunComplete.RunSummary.final_response` 是最终文本；消费方调 `reply_emitter::extract_final_response()` 扫事件日志抽取（RunComplete→sanitize→ResponseChunk fallback）。instant 模式"流式文本合并成单条"由 `plan_instant` 状态机统一驱动两个 emitter。
+- **状态**：✅ 已实现。**熵减（2026-06-17）**：① 最终答案提取从 broadcast(弱版,无 sanitize/fallback)+cron(强版) **两份漂移副本**收口到 `reply_emitter::extract_final_response` 单一源（群聊顺带获得 sanitize 防 `<think>` 泄漏 + 纯流式回复 fallback）；② instant 缓冲状态机从 `GatewayEventEmitter`(内联)+`InstantBufferingEmitter`(镜像) **两份**收口到 `instant_buffer::plan_instant` sink-无关 planner（修复 seq 漂移：原两份对再发 chunk 的 seq 处理不一致）。**注意**：**最终答案没有独立的表**，靠扫描 StreamEvent 日志找 RunComplete 抽取。
+- **打磨话术**：「‘最后那段汇总输出怎么来的’= harness 发 RunComplete 事件，消费方调 `reply_emitter::extract_final_response()` 扫事件日志。没有‘答案表’。要改‘提取/sanitize/fallback 规则’改 `reply_emitter/extract.rs`（单一源，别再在消费者里手写副本）；要改‘instant 缓冲/打字机’改 `instant_buffer::plan_instant`（单一源，GatewayEventEmitter 与 InstantBufferingEmitter 都走它）。」
 
 ### 4.8 消息排队与改需求打断 (Message Queue & Steering)
 - **口语关键词**：新消息排队、插入策略、agent 执行中改需求、打断、插队、steering、lane 优先级、busy-input 策略
@@ -322,9 +322,9 @@
 ### 5.4 预设 Provider 与模型路由 (Provider & Model Catalog)
 - **口语关键词**：预设 provider、模型别名、规范化、能力门控、成本路由、failover、metadata
 - **代码锚点**：`src/providers/presets/registry.rs`（PROFILES 单一源 + 别名展开）、`src/providers/model_catalog/`（alias.rs / endpoint.rs / 能力矩阵）、`src/providers/capability_gate.rs`、`src/providers/failover.rs`、`src/providers/metadata.rs`、`src/pricing.rs`
-- **职责**：PROFILES 驱动预设别名（Kimi=Moonshot）；model_catalog 存能力矩阵；capability_gate 做 per-model 需求匹配；failover + pricing 驱动降级/选型。
-- **状态**：✅ 已实现。
-- **打磨话术**：「加/改预设别名在 `presets/registry.rs`；‘某模型支不支持 vision/tool-use’在 `model_catalog/` + `capability_gate.rs`；‘成本’在 `pricing.rs`。」
+- **职责**：PROFILES 驱动预设别名（Kimi=Moonshot）；model_catalog 存能力矩阵 + 端点定位（`endpoint.rs` Local/Cloud）；capability_gate 做 per-model 需求匹配；failover + pricing 驱动降级/选型。能力/成本/端点定位三类参考数据统一暴露到 `providers.catalog` RPC（Panel picker）与 `list_models` 工具（LLM 选模，R8 模型可感知）。
+- **状态**：✅ 已实现。端点定位 Local/Cloud 已从 route_policy 内部连出到 catalog + list_models（`EndpointKind::as_str`）；`RateCard` 已补全 cache_creation/reasoning 费率投影。
+- **打磨话术**：「加/改预设别名在 `presets/registry.rs`；‘某模型支不支持 vision/tool-use’在 `model_catalog/capabilities.rs` + `capability_gate.rs`；‘本地还是云端模型’在 `model_catalog/endpoint.rs`（已暴露到 catalog/list_models 的 `endpoint` 字段）；‘成本’在 `pricing.rs`（`RateCard` = picker 用的费率投影）。」
 
 ### 5.5 集群 (Cluster)
 - **口语关键词**：gateway 集群、单中心非对称节点、反向 RPC、node_invoke、node_list、扇出、center approval、LAN-trust
@@ -348,11 +348,11 @@
 - **打磨话术**：「全局开关在 `config/types/general.rs` 的 output_mode；‘所有 channel 同步’靠 `handlers/agent.rs::resolved_output_mode` 每次 run fresh 读同一配置。前端呈现在 `webchat/.../markdown.rs`。」
 
 ### 5.8 自我管理 (Self-Config / Self-Manage)
-- **口语关键词**：self 自我管理、自动配置、LLM 驱动配置、配置向导
-- **代码锚点**：`src/builtin_tools/self_config.rs`（交互配置向导）、`src/builtin_tools/self_manage.rs`（LLM intent → 读 self SKILL.md 自管理手册）、`src/builtin_tools/doctor.rs`
-- **职责**：self_manage 读 `~/.aleph/skills/self/SKILL.md` 导航自管理；self_config 交互式配置向导；密钥走 vault_store，结构改动触发 hot-reload。
-- **状态**：✅ 已实现。
-- **打磨话术**：「‘自我管理/自动配置’= self_manage + self_config 两工具；密钥不进 config.toml 走 vault。」
+- **口语关键词**：self 自我管理、自动配置、LLM 驱动配置、配置向导、改完 provider 验证可达
+- **代码锚点**：`src/builtin_tools/self_config.rs`（身份文件 + config.toml CRUD + `verify` 探活）、`src/builtin_tools/self_manage.rs`（LLM intent → 读 self SKILL.md 自管理手册）、`src/config/patcher.rs`（`ConfigPatcher`：deep-merge/校验/备份/回滚 + `health_check` provider 探活，`with_vault` 注入金库）、`src/config/reload_impact.rs`（live/restart/inert 分类）、`src/builtin_tools/doctor.rs`
+- **职责**：self_manage 读 `~/.aleph/skills/self/SKILL.md` 导航自管理；self_config 交互式配置 + `update_config(verify=true)` 在 patch `providers.*` 后经 `providers::probe::probe_provider`（单一真源）探活回填 `health_check`；密钥走 vault_store，结构改动触发 hot-reload / reload_impact 告知生效时机。
+- **状态**：✅ 已实现。**健康探活已连线（2026-06-17）**：`PatchRequest.health_check` 不再是 no-op——命中 `providers.*` 且 patcher 注入了 vault 时，apply 后探活并回填 `Passed/Failed/Skipped`，同源服务 `providers.healthcheck` RPC 与 doctor `providers/connectivity`。死字段 `secret_fields` 已移除（熵减）。
+- **打磨话术**：「‘自我管理/自动配置’= self_manage + self_config 两工具；密钥不进 config.toml 走 vault。‘改完 provider 想确认能连’= `update_config(..., verify=true)`（仅 `providers.*` 有效，dry_run 跳过），探活逻辑在 `patcher.rs::run_provider_health_check`，复用 `providers::probe`。」
 
 ### 5.9 Doctor 诊断与修复 (Doctor & Auto-Fix)
 - **口语关键词**：doctor、诊断、自动修复、doctor+f、机械修复

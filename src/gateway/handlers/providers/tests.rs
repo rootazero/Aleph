@@ -332,6 +332,8 @@ async fn catalog_configured_view_returns_verified_enabled_entry() {
     assert_eq!(entry["id"], "openai");
     assert_eq!(entry["verified"], true);
     assert_eq!(entry["enabled"], true);
+    // Endpoint locality is surfaced; the OpenAI preset is a public API.
+    assert_eq!(entry["endpoint"], "cloud");
     // User-extended model list flows through.
     let models = entry["models"].as_array().unwrap();
     assert_eq!(models[0], "gpt-4o");

@@ -41,14 +41,19 @@ pub struct GoalArgs {
     pub status: Option<GoalStatus>,
     /// Optional status note — for `update`/`set`.
     pub note: Option<String>,
-    /// Optional soft token budget — for `set`.
+    /// Optional soft token budget — for `set`; on `update` adjusts it in place.
+    /// Raise it (with `status='active'`) to resume a goal blocked at its budget.
     pub token_budget: Option<u64>,
     /// If present on `set`, enables autonomous continuation (opt-in,
-    /// default-off) bounded by this many Think→Act iterations.
+    /// default-off) bounded by this many Think→Act iterations. On `update` it
+    /// resets the TOTAL iteration cap in place (a total, not an increment) —
+    /// raise it above the used count (with `status='active'`) to resume a goal
+    /// blocked at its iteration cap, without losing accumulated lessons.
     pub pursuit_max_iterations: Option<u32>,
-    /// Optional per-goal objective gate shell command — for `set`. Evaluated
-    /// like a stop hook (exit 0 = pass, exit 2 = veto). Supplements the global
-    /// gate. Use a real pass/fail command (tests/build/lint), not prose.
+    /// Optional per-goal objective gate shell command — for `set`; on `update`
+    /// replaces it (pass an empty string to clear). Evaluated like a stop hook
+    /// (exit 0 = pass, exit 2 = veto). Supplements the global gate. Use a real
+    /// pass/fail command (tests/build/lint), not prose.
     pub gate_command: Option<String>,
     /// Optional lesson to append to the goal's state file — for `update`.
     /// Record a durable, transferable insight (a missed step, a constraint, an
@@ -58,8 +63,10 @@ pub struct GoalArgs {
     /// those harden into self-imposed refusals the agent cites against itself
     /// for the rest of the pursuit.
     pub lesson: Option<String>,
-    /// For `set`: wall-clock budget in minutes. Converted to an absolute
-    /// deadline (now + minutes) at set time. None = no time limit.
+    /// Wall-clock budget in minutes. Converted to an absolute deadline
+    /// (now + minutes). On `set` it bounds the pursuit; on `update` it sets a
+    /// FRESH deadline from now — use it (with `status='active'`) to resume a
+    /// goal blocked at its deadline. None = leave unchanged (no time limit).
     pub timeout_minutes: Option<u32>,
 }
 
@@ -136,6 +143,24 @@ impl GoalTool {
 /// regardless of what the caller asks for (R5 不打扰 backstop).
 const MAX_PURSUIT_ITERATIONS: u32 = 50;
 
+/// Clamp a requested autonomous-iteration cap to the hard ceiling
+/// (`MAX_PURSUIT_ITERATIONS`, R5 不打扰 backstop). Shared by `set` and the
+/// in-place `update` adjuster so both honour the same ceiling.
+const fn clamp_iterations(requested: u32) -> u32 {
+    if requested > MAX_PURSUIT_ITERATIONS {
+        MAX_PURSUIT_ITERATIONS
+    } else {
+        requested
+    }
+}
+
+/// Convert a wall-clock budget in minutes to an absolute deadline (Unix epoch
+/// ms) measured from `now`. Saturating throughout so a large value can never
+/// overflow. Shared by `set` and `update`.
+const fn deadline_from_minutes(now: u64, minutes: u32) -> u64 {
+    now.saturating_add((minutes as u64).saturating_mul(60_000))
+}
+
 /// Wall-clock milliseconds since the Unix epoch; 0 if the clock is before
 /// the epoch (never in practice).
 fn now_ms() -> u64 {
@@ -156,7 +181,12 @@ impl AlephTool for GoalTool {
 exit 0 before an autonomous goal is accepted as complete). On action='update' \
 you may also pass a lesson to record a durable, transferable insight for future \
 iterations (never an environment-specific or transient failure, nor a 'tool is \
-broken' claim — those poison later iterations). \
+broken' claim — those poison later iterations). action='update' can ALSO adjust \
+token_budget, pursuit_max_iterations, gate_command, and timeout_minutes in place \
+without losing accumulated progress (continuation count, lessons) — to resume a \
+goal blocked at its iteration cap / deadline / token budget, update status='active' \
+together with a higher pursuit_max_iterations / fresh timeout_minutes / higher \
+token_budget. \
          Read it with action='get'. When \
          you have achieved the objective, self-report with action='update', \
          status='complete'; if you are stuck and need the user, use \
@@ -174,6 +204,7 @@ broken' claim — those poison later iterations). \
             "goal(action='get')".into(),
             "goal(action='update', status='complete', note='all endpoints migrated and tests green')".into(),
             "goal(action='update', lesson='remember to run db migrations before tests')".into(),
+            "goal(action='update', status='active', pursuit_max_iterations=15)".into(),
             "goal(action='clear')".into(),
         ])
     }
@@ -209,13 +240,12 @@ broken' claim — those poison later iterations). \
                     // unbounded value would let a single session self-run for
                     // days. The clamped value is surfaced to the model via
                     // `render` so it sees the effective cap.
-                    let max_iterations = requested.min(MAX_PURSUIT_ITERATIONS);
+                    let max_iterations = clamp_iterations(requested);
                     goal = goal.with_pursuit(PursuitMode::Active { max_iterations });
                 }
                 goal = goal.with_gate_command(args.gate_command.clone());
                 if let Some(minutes) = args.timeout_minutes {
-                    let deadline = now.saturating_add(u64::from(minutes).saturating_mul(60_000));
-                    goal = goal.with_deadline_ms(Some(deadline));
+                    goal = goal.with_deadline_ms(Some(deadline_from_minutes(now, minutes)));
                 }
                 self.store.put(&goal)?;
                 Ok(GoalOutput {
@@ -238,11 +268,45 @@ broken' claim — those poison later iterations). \
                     .store
                     .get(&session)?
                     .ok_or_else(|| AlephError::tool("no standing goal to update".to_string()))?;
+                let prev_status = goal.status;
                 if let Some(status) = args.status {
                     goal = goal.with_status(status, now);
                 }
+                // In-place reconfiguration (R8: natural-language tuning without a
+                // destructive clear+set that would wipe continuations_used /
+                // lessons / gate_outcome). Each field is touched ONLY when the
+                // caller provides it, so an omitted field stays unchanged.
+                // Raising a cap / budget / deadline here is exactly how a goal
+                // blocked at one of those limits is resumed (see the cap notes in
+                // goal_pursuit.rs): once the binding limit is lifted and status is
+                // set back to `active`, the continuation hook fires again.
+                if args.token_budget.is_some() {
+                    goal = goal.with_budget(args.token_budget);
+                }
+                if let Some(requested) = args.pursuit_max_iterations {
+                    goal = goal.with_pursuit(PursuitMode::Active {
+                        max_iterations: clamp_iterations(requested),
+                    });
+                }
+                if let Some(minutes) = args.timeout_minutes {
+                    goal = goal.with_deadline_ms(Some(deadline_from_minutes(now, minutes)));
+                }
+                if let Some(cmd) = args.gate_command.clone() {
+                    // Empty string clears the per-goal gate; anything else sets it.
+                    let next = if cmd.trim().is_empty() { None } else { Some(cmd) };
+                    goal = goal.with_gate_command(next);
+                }
                 if args.note.is_some() {
                     goal = goal.with_note(args.note.clone(), now);
+                } else if matches!(args.status, Some(GoalStatus::Active))
+                    && prev_status != GoalStatus::Active
+                {
+                    // Re-activating a paused/blocked goal: the existing note
+                    // explained why it stopped (cap / deadline / error) and is now
+                    // stale. Clear it so the prompt does not surface a
+                    // contradictory "blocked" reason on a freshly-active goal. An
+                    // explicit note (handled above) always wins over this reset.
+                    goal = goal.with_note(None, now);
                 }
                 if let Some(lesson) = args.lesson.clone() {
                     goal = goal.with_lesson_appended(lesson, now);
@@ -279,6 +343,21 @@ mod tests {
             GoalTool::new(store).with_session_key_handle(Some(handle)),
             dir,
         )
+    }
+
+    /// All-`None` args for `action`, so a test sets only the fields it exercises.
+    fn args(action: GoalAction) -> GoalArgs {
+        GoalArgs {
+            action,
+            objective: None,
+            status: None,
+            note: None,
+            token_budget: None,
+            pursuit_max_iterations: None,
+            gate_command: None,
+            lesson: None,
+            timeout_minutes: None,
+        }
     }
 
     #[tokio::test]
@@ -570,5 +649,156 @@ mod tests {
             .await
             .unwrap();
         assert!(out.message.contains("deadline set"));
+    }
+
+    /// Set an Active goal, attach a lesson, then `update` the iteration cap in
+    /// place. The new cap is surfaced and — crucially — the accumulated lesson
+    /// survives (the bug this fixes: previously only clear+set could raise the
+    /// cap, wiping progress).
+    #[tokio::test]
+    async fn update_raises_iteration_cap_without_losing_progress() {
+        let (tool, _d) = tool_with_session("sess-resume");
+        tool.call(GoalArgs {
+            objective: Some("Long migration".into()),
+            pursuit_max_iterations: Some(3),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        tool.call(GoalArgs {
+            lesson: Some("checkpoint after each table".into()),
+            ..args(GoalAction::Update)
+        })
+        .await
+        .unwrap();
+        let out = tool
+            .call(GoalArgs {
+                status: Some(GoalStatus::Active),
+                pursuit_max_iterations: Some(10),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap();
+        assert!(
+            out.message.contains("0/10 iterations used"),
+            "got: {}",
+            out.message
+        );
+        assert!(
+            out.message.contains("checkpoint after each table"),
+            "lesson kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_adjusts_budget_and_deadline_in_place() {
+        let (tool, _d) = tool_with_session("sess-budget");
+        tool.call(GoalArgs {
+            objective: Some("Bounded work".into()),
+            pursuit_max_iterations: Some(5),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        let out = tool
+            .call(GoalArgs {
+                token_budget: Some(80_000),
+                timeout_minutes: Some(45),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap();
+        assert!(
+            out.message.contains("token_budget=80000"),
+            "got: {}",
+            out.message
+        );
+        assert!(out.message.contains("deadline set"), "got: {}", out.message);
+    }
+
+    #[tokio::test]
+    async fn update_gate_command_sets_then_clears() {
+        let (tool, _d) = tool_with_session("sess-gate-upd");
+        tool.call(GoalArgs {
+            objective: Some("Ship".into()),
+            pursuit_max_iterations: Some(3),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        let set = tool
+            .call(GoalArgs {
+                gate_command: Some("cargo test".into()),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap();
+        assert!(set.message.contains("per-goal command set"));
+        // Empty/whitespace string clears the gate.
+        let cleared = tool
+            .call(GoalArgs {
+                gate_command: Some("   ".into()),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap();
+        assert!(
+            !cleared.message.contains("per-goal command set"),
+            "gate cleared: {}",
+            cleared.message
+        );
+    }
+
+    #[tokio::test]
+    async fn update_iterations_are_capped() {
+        let (tool, _d) = tool_with_session("sess-upd-cap");
+        tool.call(GoalArgs {
+            objective: Some("x".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        let out = tool
+            .call(GoalArgs {
+                pursuit_max_iterations: Some(1_000_000),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap();
+        assert!(out
+            .message
+            .contains(&format!("0/{MAX_PURSUIT_ITERATIONS} iterations used")));
+    }
+
+    /// Re-activating a blocked goal with no explicit note clears the stale
+    /// "blocked" reason so the prompt does not contradict the active status.
+    #[tokio::test]
+    async fn update_to_active_clears_stale_block_note() {
+        let (tool, _d) = tool_with_session("sess-note");
+        tool.call(GoalArgs {
+            objective: Some("y".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        tool.call(GoalArgs {
+            status: Some(GoalStatus::Blocked),
+            note: Some("reached iteration cap".into()),
+            ..args(GoalAction::Update)
+        })
+        .await
+        .unwrap();
+        let out = tool
+            .call(GoalArgs {
+                status: Some(GoalStatus::Active),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap();
+        assert!(
+            !out.message.contains("reached iteration cap"),
+            "stale note kept: {}",
+            out.message
+        );
     }
 }

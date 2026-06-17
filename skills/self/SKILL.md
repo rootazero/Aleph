@@ -116,6 +116,24 @@ self_config(
 )
 ```
 
+**Verify mode (verify=true)** — for `providers.*` changes, probe the provider's
+live reachability right after applying, so you confirm the new key/endpoint
+actually works in the same call:
+```
+self_config(
+  action="update_config",
+  config_path="providers.openai",
+  config_value={ "enabled": true, "models": ["gpt-4o"] },
+  dry_run=false,
+  verify=true
+)
+```
+The response `message` then reports "Provider connectivity verified: reachable"
+or "Provider connectivity FAILED: …", and `data.health_check` is
+`passed` / `{"failed": {"reason": …}}` / `skipped`. `verify` is ignored for
+non-provider paths and in `dry_run`. On FAILED, refresh the key with
+`vault_store` (`ai:<name>`) or fix the `providers.<name>` section, then retry.
+
 ### Preview Response
 
 When `dry_run=true`, the response includes a `preview_message` in Chinese:
@@ -304,7 +322,7 @@ All top-level sections available in `config.toml`:
 1. Store secret: `vault_store(action="store", key="ai:openai", secret="sk-...")`
 2. Read config: `self_config(action="read_config", config_path="providers.openai")`
 3. Preview: `self_config(action="update_config", config_path="providers.openai", config_value={...}, dry_run=true)`
-4. Apply: `self_config(action="update_config", ..., dry_run=false)`
+4. Apply + verify: `self_config(action="update_config", ..., dry_run=false, verify=true)` — `verify=true` probes the provider so you confirm the key works immediately.
 
 ### For Complex Config Edits (via bash)
 

@@ -13,7 +13,7 @@ use crate::gateway::event_emitter::CollectingEventEmitter;
 use crate::gateway::event_emitter::StreamEvent;
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{ExecutionError, RunRequest};
-use crate::gateway::reply_emitter::sanitize_llm_output;
+use crate::gateway::reply_emitter::extract_final_response;
 use crate::gateway::router::SessionKey;
 use crate::sync_primitives::Arc;
 use crate::tasks::cron::config::{
@@ -221,8 +221,9 @@ async fn execute_cron_job(
         Ok(()) => {
             let ended_at = chrono::Utc::now().timestamp_millis();
 
-            // Extract final response from collected events
-            let final_response = extract_final_response(&collector).await;
+            // Extract final response from collected events (shared with the
+            // group-chat broadcaster via `reply_emitter::extract_final_response`).
+            let final_response = extract_final_response(&collector.events().await);
 
             // P3: when the harness reports
             // `BudgetExhaustedPartialResult`, persist the partial text
@@ -505,39 +506,6 @@ async fn extract_terminate_reason(
         }
     }
     None
-}
-
-async fn extract_final_response(collector: &CollectingEventEmitter) -> Option<String> {
-    let events = collector.events().await;
-
-    // First try: find RunComplete with final_response in summary
-    for event in events.iter().rev() {
-        if let StreamEvent::RunComplete { ref summary, .. } = event {
-            if let Some(ref text) = summary.final_response {
-                let sanitized = sanitize_llm_output(text);
-                if !sanitized.is_empty() {
-                    return Some(sanitized.into_owned());
-                }
-            }
-        }
-    }
-
-    // Fallback: concatenate all ResponseChunk deltas
-    let mut full_text = String::new();
-    for event in &events {
-        if let StreamEvent::ResponseChunk { ref delta, .. } = event {
-            full_text.push_str(delta);
-        }
-    }
-    if full_text.is_empty() {
-        return None;
-    }
-    let sanitized = sanitize_llm_output(&full_text);
-    if sanitized.is_empty() {
-        None
-    } else {
-        Some(sanitized.into_owned())
-    }
 }
 
 /// Map a run's final text to what (if anything) should reach the channel.

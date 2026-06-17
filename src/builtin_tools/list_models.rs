@@ -83,6 +83,11 @@ pub struct ModelEntry {
     /// USD per million output tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_per_mtok: Option<f64>,
+    /// Endpoint locality of the provider serving this model: `"local"`
+    /// (on-machine / LAN) or `"cloud"` (public API). Lets the model prefer an
+    /// on-machine option (privacy / offline / cost) when one exists. Always
+    /// present — an absent/unparseable `base_url` classifies as `"cloud"`.
+    pub endpoint: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -144,6 +149,7 @@ fn enrich(
     configured: bool,
     is_default: bool,
     display_name: Option<String>,
+    base_url: Option<&str>,
 ) -> ModelEntry {
     let caps = crate::providers::capabilities_for(model);
     let rate = crate::pricing::rate_card(provider, model);
@@ -160,6 +166,9 @@ fn enrich(
         supports_reasoning: caps.map(|c| c.supports_reasoning),
         input_per_mtok: rate.and_then(|r| r.input_per_mtok),
         output_per_mtok: rate.and_then(|r| r.output_per_mtok),
+        endpoint: crate::providers::endpoint_kind_for_base_url(base_url)
+            .as_str()
+            .to_string(),
     }
 }
 
@@ -228,6 +237,7 @@ impl crate::tools::AlephTool for ListModelsTool {
                     configured,
                     is_default,
                     display_name.clone(),
+                    Some(preset.base_url),
                 ));
             }
         }
@@ -250,7 +260,14 @@ impl crate::tools::AlephTool for ListModelsTool {
                     continue;
                 }
                 let is_default = default_provider.as_deref() == Some(name.as_str());
-                models.push(enrich(name, model, configured, is_default, None));
+                models.push(enrich(
+                    name,
+                    model,
+                    configured,
+                    is_default,
+                    None,
+                    cfg.base_url.as_deref(),
+                ));
             }
         }
 
@@ -370,5 +387,35 @@ mod tests {
         let out = tool.call(ListModelsArgs::default()).await.unwrap();
         assert!(!out.ok);
         assert!(out.models.is_empty());
+    }
+
+    #[test]
+    fn enrich_surfaces_endpoint_locality() {
+        // A public vendor base_url classifies as "cloud"; a loopback Ollama
+        // endpoint classifies as "local" — letting the model prefer
+        // on-machine inference when one is configured.
+        let cloud = enrich(
+            "claude",
+            "claude-sonnet-4-6",
+            true,
+            true,
+            None,
+            Some("https://api.anthropic.com"),
+        );
+        assert_eq!(cloud.endpoint, "cloud");
+
+        let local = enrich(
+            "ollama",
+            "llama-3.3-70b",
+            true,
+            false,
+            None,
+            Some("http://localhost:11434"),
+        );
+        assert_eq!(local.endpoint, "local");
+
+        // Absent base_url falls back to the conservative cloud default.
+        let unknown = enrich("custom", "mystery-model", false, false, None, None);
+        assert_eq!(unknown.endpoint, "cloud");
     }
 }

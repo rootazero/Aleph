@@ -780,6 +780,9 @@ pub async fn handle_catalog(
             // and the model can reason over, not an auto-router.
             let capabilities = crate::providers::capabilities_for(preset.default_model);
             let cost = crate::pricing::rate_card(entry.name, preset.default_model);
+            let endpoint = crate::providers::endpoint_kind_for_base_url(Some(preset.base_url))
+                .as_str()
+                .to_string();
 
             Some(CatalogEntryView {
                 id: entry.name.to_string(),
@@ -810,6 +813,7 @@ pub async fn handle_catalog(
                 is_default: default_provider.as_deref() == Some(entry.name),
                 capabilities,
                 cost,
+                endpoint,
             })
         })
         .collect();
@@ -829,6 +833,9 @@ pub async fn handle_catalog(
             let default_model = cfg.models.first().cloned().unwrap_or_default();
             let capabilities = crate::providers::capabilities_for(&default_model);
             let cost = crate::pricing::rate_card(name, &default_model);
+            let endpoint = crate::providers::endpoint_kind_for_base_url(cfg.base_url.as_deref())
+                .as_str()
+                .to_string();
             CatalogEntryView {
                 id: name.clone(),
                 display_name: name.clone(),
@@ -850,6 +857,7 @@ pub async fn handle_catalog(
                 is_default: default_provider.as_deref() == Some(name.as_str()),
                 capabilities,
                 cost,
+                endpoint,
             }
         })
         .collect();

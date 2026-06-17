@@ -61,6 +61,12 @@ pub enum SelfConfigArgs {
         /// Preview changes without persisting (default: false)
         #[serde(default)]
         dry_run: bool,
+        /// After applying a `providers.*` change, probe the affected LLM
+        /// provider(s) for reachability and report a pass/fail in the result.
+        /// Lets a self-config provider edit be verified in the same call.
+        /// Ignored for non-provider paths and in `dry_run` (default: false).
+        #[serde(default)]
+        verify: bool,
     },
     /// Show the live routing/failover status: route mode, load-balance
     /// strategy, provider pins, the failover chain order, and per-provider
@@ -419,6 +425,7 @@ impl SelfConfigTool {
         config_path: &str,
         config_value: serde_json::Value,
         dry_run: bool,
+        verify: bool,
     ) -> Result<SelfConfigOutput> {
         let patcher = match &self.config_patcher {
             Some(p) => p,
@@ -435,8 +442,9 @@ impl SelfConfigTool {
         let request = PatchRequest {
             path: config_path.to_string(),
             patch: config_value,
-            secret_fields: std::collections::HashMap::new(),
-            health_check: false,
+            // A dry-run never writes, so there is nothing to probe — only an
+            // applied provider patch carries the verification request through.
+            health_check: verify && !dry_run,
             dry_run,
         };
 
@@ -490,14 +498,29 @@ impl SelfConfigTool {
                     );
                 }
 
+                // Fold the post-patch provider probe verdict into the message so
+                // the agent reads "reachable / failed" without inspecting the raw
+                // `health_check` field. Skipped/None add nothing.
+                let health_note = match &result.health_check {
+                    Some(crate::config::patcher::HealthCheckResult::Passed) => {
+                        " Provider connectivity verified: reachable.".to_string()
+                    }
+                    Some(crate::config::patcher::HealthCheckResult::Failed { reason }) => format!(
+                        " Provider connectivity FAILED: {reason}. Refresh the key with \
+                         vault_store (ai:<name>) or fix the providers.<name> section."
+                    ),
+                    _ => String::new(),
+                };
+
                 Ok(SelfConfigOutput {
                     success: result.success,
                     message: format!(
-                        "Config patch {} at '{}' ({} changes). {}",
+                        "Config patch {} at '{}' ({} changes). {}{}",
                         mode,
                         config_path,
                         result.diff.len(),
-                        impact.agent_hint()
+                        impact.agent_hint(),
+                        health_note
                     ),
                     data: Some(data),
                     preview_message,
@@ -736,8 +759,9 @@ impl AlephTool for SelfConfigTool {
                 config_path,
                 config_value,
                 dry_run,
+                verify,
             } => {
-                self.update_config(&config_path, config_value, dry_run)
+                self.update_config(&config_path, config_value, dry_run, verify)
                     .await
             }
             SelfConfigArgs::RouteStatus => self.route_status().await,
