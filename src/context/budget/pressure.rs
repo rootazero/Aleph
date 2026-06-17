@@ -107,40 +107,77 @@ const CODE_RATIO: f64 = 2.5;
 /// Content-aware chars-per-token ratio, using `prose_ratio` as the baseline for
 /// ordinary (non-CJK, non-code) text.
 ///
-/// CJK-dominant and code-like content override the baseline with their denser
-/// ratios — these are the two cases a single flat ratio gets catastrophically
-/// wrong (a fixed `3.5` under-counts CJK ~2.3× and code ~1.4×). Keeping the
-/// caller's `prose_ratio` as the anchor means a configured estimate ratio still
-/// governs prose, so wiring this into the budget sensor stays backward-compatible
-/// for English conversations while fixing the CJK/code blind spots.
+/// Rather than flipping the *entire* text to one ratio at a 30%-CJK threshold,
+/// this charges each character class at its own density and folds the result
+/// back into a single effective chars-per-token ratio:
+///
+/// - CJK characters are charged at [`CJK_RATIO`] (token-dense).
+/// - The remaining (Latin/symbol) characters are charged at [`CODE_RATIO`] when
+///   the text looks like source, otherwise at the caller's `prose_ratio`.
+///
+/// The proportional blend matters for *mixed* content — bilingual CN/EN prose,
+/// or code with CJK comments — which the old hard threshold mis-sized: a 40%
+/// CJK / 60% Latin message was charged entirely at the CJK ratio, over-counting
+/// the Latin portion ~2.3× and inflating the budget so compaction / session
+/// split fired early and shed context prematurely. Pure-content inputs are
+/// unchanged: pure CJK still collapses to [`CJK_RATIO`], pure code to
+/// [`CODE_RATIO`], and pure prose to `prose_ratio`, so every caller stays
+/// byte-identical at the extremes while the mixed case gets the accurate
+/// estimate. The budget's EWMA calibration then refines whatever residual error
+/// remains. Keeping the caller's `prose_ratio` as the Latin/prose anchor means a
+/// configured estimate ratio still governs ordinary text.
 #[must_use]
 pub fn content_ratio_with_baseline(text: &str, prose_ratio: f64) -> f64 {
     if text.is_empty() {
         return prose_ratio;
     }
 
-    // Check CJK character ratio
-    let total_chars = text.chars().count();
-    let cjk_count = text.chars().filter(|&c| is_cjk(c)).count();
-    let cjk_ratio = cjk_count as f64 / total_chars as f64;
-
-    if cjk_ratio > 0.30 {
-        return CJK_RATIO;
+    // Single pass: total chars and the CJK subset (avoids the prior two scans).
+    let mut total_chars = 0usize;
+    let mut cjk_count = 0usize;
+    for c in text.chars() {
+        total_chars += 1;
+        if is_cjk(c) {
+            cjk_count += 1;
+        }
     }
+    let non_cjk_count = total_chars - cjk_count;
 
-    // Check if content looks like code
-    if looks_like_code(text) {
-        return CODE_RATIO;
+    // Code detection is whole-text (sampled), so the non-CJK class gets one
+    // density: the code ratio when the text looks like source, else the prose
+    // anchor supplied by the caller.
+    let non_cjk_ratio = if looks_like_code(text) {
+        CODE_RATIO
+    } else {
+        prose_ratio
+    };
+
+    // Tokens contributed by each class. A non-positive `non_cjk_ratio` (only
+    // reachable via an explicit `0.0` anchor) makes the non-CJK class infinite,
+    // collapsing the effective ratio to `0.0` so the estimators' `ratio <= 0.0`
+    // zero-guard fires — preserving the prior contract.
+    let cjk_tokens = cjk_count as f64 / CJK_RATIO;
+    let non_cjk_tokens = if non_cjk_count == 0 {
+        0.0
+    } else if non_cjk_ratio > 0.0 {
+        non_cjk_count as f64 / non_cjk_ratio
+    } else {
+        f64::INFINITY
+    };
+
+    let total_tokens = cjk_tokens + non_cjk_tokens;
+    if total_tokens <= 0.0 {
+        return prose_ratio;
     }
-
-    prose_ratio
+    total_chars as f64 / total_tokens
 }
 
-/// Detects the content type and returns an appropriate chars-per-token ratio.
+/// Detects the content type and returns an effective chars-per-token ratio.
 ///
-/// - Returns `1.5` if more than 30% of characters are CJK (fewer chars per token).
-/// - Returns `2.5` if content looks like code.
-/// - Returns `3.5` for default English prose.
+/// Charges CJK characters at `1.5`, source-code characters at `2.5`, and prose
+/// at `3.5`, blending proportionally for mixed content (see
+/// [`content_ratio_with_baseline`]). Pure CJK collapses to `1.5`, pure code to
+/// `2.5`, and pure English prose to `3.5`.
 ///
 /// This is [`content_ratio_with_baseline`] anchored at [`DEFAULT_PROSE_RATIO`].
 #[must_use]
@@ -181,29 +218,64 @@ pub fn estimate_tokens_aware(content: &str, prose_ratio: f64) -> usize {
 /// and the stripper agree on what an image costs.
 pub const IMAGE_TOKENS_ESTIMATE: usize = 1500;
 
-/// Content-aware token estimate for a whole message.
+/// Append `part` to `buf`, space-separating from any prior content. Mirrors
+/// `UnifiedMessage::text_content`'s `parts.join(" ")` for non-empty parts, so a
+/// single-class message stays byte-identical to the old flattened estimate.
+fn push_part(buf: &mut String, part: &str) {
+    if !buf.is_empty() {
+        buf.push(' ');
+    }
+    buf.push_str(part);
+}
+
+/// Content-aware token estimate for a whole message, charging each block class
+/// at its own density.
 ///
-/// Text/JSON/thinking/tool-call blocks are estimated via [`estimate_tokens_aware`]
-/// (which already adapts to CJK/code density), plus a flat per-image charge for
-/// every [`ContentBlock::Image`] block. The image term matters because
-/// [`UnifiedMessage::text_content`] omits image blocks entirely: without it the
-/// pressure sensor counts a multi-megabyte screenshot as **zero tokens** and
-/// under-estimates vision-heavy contexts by ~[`IMAGE_TOKENS_ESTIMATE`] tokens
-/// per image — so compaction (and the image-stripping that would shed those
-/// very images) fires too late, risking provider-side overflow before the EWMA
-/// usage calibration can correct.
+/// Blocks split into three accounting classes instead of being flattened into
+/// one prose-anchored string (the old `text_content()` path):
 ///
-/// Image-free messages contain no image blocks, so this is byte-identical to
-/// `estimate_tokens_aware(&msg.text_content(), prose_ratio)` for the common case.
+/// - **Prose** ([`ContentBlock::Text`] + [`ContentBlock::Thinking`]): estimated
+///   via [`estimate_tokens_aware`] at the caller's `prose_ratio`, so CJK/code
+///   density still applies inside natural-language blocks.
+/// - **Structured** ([`ContentBlock::Json`] tool output + [`ContentBlock::ToolCall`]
+///   `name`+`arguments`): estimated at the denser [`CODE_RATIO`] anchor. JSON is
+///   symbol-dense (`{`, `"`, `:`, `,`) and tokenizes ~like source, but the old
+///   path charged it at the 3.5 prose ratio — `looks_like_code` misses pure JSON
+///   (braces only bookend it), so it never tripped the code ratio. Agentic loops
+///   are dominated by tool calls and tool results, so this under-count made the
+///   sensor systematically *under-report* pressure on exactly the tool-heavy
+///   turns, firing compaction late. CJK *inside* structured values still gets
+///   CJK density because the code ratio is only the non-CJK anchor.
+/// - **Image** ([`ContentBlock::Image`]): a flat [`IMAGE_TOKENS_ESTIMATE`] per
+///   block. `text_content()` omits images, so without this a multi-megabyte
+///   screenshot counted as **zero tokens** and vision contexts under-reported
+///   pressure by ~[`IMAGE_TOKENS_ESTIMATE`] per image.
+///
+/// A message with no structured or image blocks (ordinary chat: text/thinking
+/// only) is byte-identical to the old
+/// `estimate_tokens_aware(&msg.text_content(), prose_ratio)` — the empty
+/// structured string contributes zero. The EWMA usage calibration then refines
+/// whatever residual error remains; this just gives it a more accurate base so
+/// it converges from the right side on tool-heavy and vision-heavy contexts.
 #[must_use]
 pub fn estimate_message_tokens_aware(msg: &UnifiedMessage, prose_ratio: f64) -> usize {
-    let text_tokens = estimate_tokens_aware(&msg.text_content(), prose_ratio);
-    let image_count = msg
-        .content_blocks()
-        .iter()
-        .filter(|b| matches!(b, ContentBlock::Image { .. }))
-        .count();
-    text_tokens + image_count * IMAGE_TOKENS_ESTIMATE
+    let mut prose = String::new();
+    let mut structured = String::new();
+    let mut image_count = 0usize;
+    for block in msg.content_blocks() {
+        match block {
+            ContentBlock::Text { text, .. } => push_part(&mut prose, text),
+            ContentBlock::Thinking { thinking, .. } => push_part(&mut prose, thinking),
+            ContentBlock::Json { value } => push_part(&mut structured, &value.to_string()),
+            ContentBlock::ToolCall {
+                name, arguments, ..
+            } => push_part(&mut structured, &format!("{name} {arguments}")),
+            ContentBlock::Image { .. } => image_count += 1,
+        }
+    }
+    estimate_tokens_aware(&prose, prose_ratio)
+        + estimate_tokens_aware(&structured, CODE_RATIO)
+        + image_count * IMAGE_TOKENS_ESTIMATE
 }
 
 // =============================================================================
@@ -222,8 +294,51 @@ mod tests {
 
     #[test]
     fn detect_ratio_chinese_text() {
+        // CJK-dominant text with a sprinkle of Latin ("token") blends to a ratio
+        // near — but, after the proportional blend, no longer pinned exactly at —
+        // the pure-CJK 1.5. It stays well below the prose anchor and below 2.0.
         let ratio = detect_content_ratio("这是一段中文文本，用于测试token估算比率。");
-        assert!((ratio - 1.5).abs() < 0.01);
+        assert!(
+            (1.5..2.0).contains(&ratio),
+            "CJK-dominant mixed text should blend just above pure-CJK 1.5, got {ratio}"
+        );
+    }
+
+    #[test]
+    fn detect_ratio_pure_cjk_is_exactly_cjk_ratio() {
+        // Pure CJK (no Latin) must still collapse to the CJK ratio exactly — the
+        // blend is byte-identical at the pure-content extremes.
+        let ratio = detect_content_ratio("这是一段没有任何拉丁字符的纯中文文本内容");
+        assert!((ratio - 1.5).abs() < 0.01, "pure CJK must be 1.5, got {ratio}");
+    }
+
+    #[test]
+    fn blend_mixed_cjk_english_between_extremes() {
+        // A balanced CN/EN mix must land strictly between the CJK ratio (1.5) and
+        // the prose anchor (3.5) — the core accuracy fix. The old hard threshold
+        // flipped the WHOLE string to 1.5 once CJK passed 30%, over-counting the
+        // English half ~2.3×.
+        let mixed = "the quick brown fox 这是一段用于测试的中文内容";
+        let ratio = detect_content_ratio(mixed);
+        assert!(
+            ratio > 1.5 && ratio < 3.5,
+            "mixed CN/EN must blend between 1.5 and 3.5, got {ratio}"
+        );
+    }
+
+    #[test]
+    fn blend_charges_latin_fewer_tokens_than_hard_flip() {
+        // Regression guard for the over-counting bug: a mixed message must
+        // estimate FEWER tokens than the old "treat everything as CJK density"
+        // behaviour (chars / 1.5), because its Latin half is charged at the
+        // sparser prose ratio.
+        let mixed = "please review this pull request 请审查这个合并请求并给出反馈意见";
+        let blended = estimate_tokens_aware(mixed, DEFAULT_PROSE_RATIO);
+        let hard_flip_all_cjk = (mixed.chars().count() as f64 / 1.5).ceil() as usize;
+        assert!(
+            blended < hard_flip_all_cjk,
+            "blended estimate ({blended}) must undercut the all-CJK flip ({hard_flip_all_cjk})"
+        );
     }
 
     #[test]
@@ -308,7 +423,8 @@ mod tests {
         // The core fix: a CJK message under a 3.5 prose anchor must estimate far
         // MORE tokens than a flat 3.5 ratio would — otherwise the budget sensor
         // under-counts CJK ~2.3× and overflows before compaction triggers.
-        let cjk = "这是一段中文文本用于测试token估算的比率检测逻辑是否正确工作";
+        // Pure CJK (no Latin) so the blend collapses exactly to the CJK ratio.
+        let cjk = "这是一段中文文本用于测试估算的比率检测逻辑是否正确工作没有拉丁字符";
         let chars = cjk.chars().count();
         let flat = (chars as f64 / 3.5).ceil() as usize; // what the old sensor did
         let aware = estimate_tokens_aware(cjk, 3.5);
@@ -316,7 +432,7 @@ mod tests {
             aware > flat,
             "content-aware ({aware}) must exceed flat-3.5 ({flat}) for CJK"
         );
-        // CJK ratio is 1.5, so aware ≈ chars/1.5.
+        // Pure CJK ratio is 1.5, so aware == chars/1.5 exactly.
         assert_eq!(aware, (chars as f64 / 1.5).ceil() as usize);
     }
 
@@ -387,6 +503,80 @@ mod tests {
         assert_eq!(
             estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO),
             3 * IMAGE_TOKENS_ESTIMATE
+        );
+    }
+
+    #[test]
+    fn message_estimate_byte_identical_for_multi_block_chat() {
+        // Text + Thinking only (no structured / image): must stay exactly the old
+        // flattened text_content estimate, so ordinary conversation is untouched.
+        let msg = UnifiedMessage::user_with_content(vec![
+            ContentBlock::Text {
+                text: "first prose block here".to_string(),
+                cache_control: None,
+            },
+            ContentBlock::Thinking {
+                thinking: "and a thinking trace block".to_string(),
+                signature: None,
+            },
+        ]);
+        assert_eq!(
+            estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO),
+            estimate_tokens_aware(&msg.text_content(), DEFAULT_PROSE_RATIO),
+        );
+    }
+
+    #[test]
+    fn message_estimate_charges_structured_at_code_density() {
+        // The fix: a JSON tool-output block flattened alongside prose used to be
+        // folded through the prose anchor (3.5) — `looks_like_code` misses JSON
+        // mixed into prose — under-counting the symbol-dense payload and
+        // under-reporting pressure on tool-heavy turns. Now the structured block
+        // is charged at the denser CODE_RATIO while the prose stays at its anchor.
+        let json = serde_json::json!({
+            "status": "ok",
+            "items": [{"id": 1, "name": "alpha"}, {"id": 2, "name": "beta"}],
+            "count": 2
+        });
+        let text = "Here is the tool result you asked for, summarized in prose.";
+        let msg = UnifiedMessage::user_with_content(vec![
+            ContentBlock::Text {
+                text: text.to_string(),
+                cache_control: None,
+            },
+            ContentBlock::Json {
+                value: json.clone(),
+            },
+        ]);
+        // Exact decomposition: prose at the prose anchor + JSON at code density.
+        let expected = estimate_tokens_aware(text, DEFAULT_PROSE_RATIO)
+            + estimate_tokens_aware(&json.to_string(), CODE_RATIO);
+        assert_eq!(
+            estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO),
+            expected
+        );
+        // Never cheaper than charging everything at the looser prose anchor —
+        // the systematic direction of the fix (denser ⇒ ≥ tokens).
+        let all_prose_anchored = estimate_tokens_aware(text, DEFAULT_PROSE_RATIO)
+            + estimate_tokens_aware(&json.to_string(), DEFAULT_PROSE_RATIO);
+        assert!(estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO) >= all_prose_anchored);
+    }
+
+    #[test]
+    fn message_estimate_charges_tool_call_arguments_as_structured() {
+        // A tool call's JSON arguments are structured, not prose — charged at the
+        // code anchor, matching how the same bytes estimate via the code ratio.
+        let arguments = serde_json::json!({"path": "/etc/hosts", "limit": 100});
+        let msg = UnifiedMessage::user_with_content(vec![ContentBlock::ToolCall {
+            id: "call_1".to_string(),
+            name: "read_file".to_string(),
+            arguments: arguments.clone(),
+            thought_signature: None,
+        }]);
+        let flattened = format!("read_file {arguments}");
+        assert_eq!(
+            estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO),
+            estimate_tokens_aware(&flattened, CODE_RATIO),
         );
     }
 }

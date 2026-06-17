@@ -50,24 +50,30 @@ impl PromptLayer for SoulLayer {
             return;
         }
 
-        // Communication style
+        // Communication style. Rendered for any non-empty soul (we are past
+        // the `is_empty` guard): verbosity and formatting always carry an
+        // actionable behavioral hint, so they must emit even when no explicit
+        // tone is set. The tone line is conditional on a tone being present.
+        output.push_str("## Communication Style\n\n");
         if !soul.voice.tone.is_empty() {
             let tone = sanitize_for_prompt(&soul.voice.tone, SanitizeLevel::Moderate);
             let tone = sanitize_for_prompt(&tone, SanitizeLevel::Light);
-            output.push_str("## Communication Style\n\n");
             output.push_str(&format!("- **Tone**: {tone}\n"));
-            output.push_str(&format!("- **Verbosity**: {:?}\n", soul.voice.verbosity));
-            output.push_str(&format!(
-                "- **Formatting**: {:?}\n",
-                soul.voice.formatting_style
-            ));
-            if let Some(ref notes) = soul.voice.language_notes {
-                let notes = sanitize_for_prompt(notes, SanitizeLevel::Moderate);
-                let notes = sanitize_for_prompt(&notes, SanitizeLevel::Light);
-                output.push_str(&format!("- **Language Notes**: {notes}\n"));
-            }
-            output.push('\n');
         }
+        output.push_str(&format!(
+            "- **Verbosity**: {}\n",
+            soul.voice.verbosity.prompt_hint()
+        ));
+        output.push_str(&format!(
+            "- **Formatting**: {}\n",
+            soul.voice.formatting_style.prompt_hint()
+        ));
+        if let Some(ref notes) = soul.voice.language_notes {
+            let notes = sanitize_for_prompt(notes, SanitizeLevel::Moderate);
+            let notes = sanitize_for_prompt(&notes, SanitizeLevel::Light);
+            output.push_str(&format!("- **Language Notes**: {notes}\n"));
+        }
+        output.push('\n');
 
         // Relationship mode
         output.push_str("## Relationship with User\n\n");
@@ -158,6 +164,32 @@ mod tests {
         assert!(out.contains("What I Never Do"));
         assert!(out.contains("Never lie"));
         assert!(out.contains("---"));
+    }
+
+    #[test]
+    fn renders_verbosity_hint_without_tone() {
+        // A soul with no tone but an explicit identity must still emit the
+        // Communication Style block with human-readable verbosity/formatting
+        // hints (regression: previously gated behind a non-empty tone).
+        let layer = SoulLayer;
+        let config = PromptConfig::default();
+        let soul = SoulManifest {
+            identity: "I am Aleph.".to_string(),
+            voice: SoulVoice {
+                verbosity: Verbosity::Concise,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let input = LayerInput::soul(&config, &[], &soul);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(out.contains("Communication Style"));
+        assert!(out.contains("brief"), "verbosity hint should render");
+        // No leaked enum debug names in the prompt.
+        assert!(!out.contains("Concise"));
+        assert!(!out.contains("Verbosity::"));
     }
 
     #[test]

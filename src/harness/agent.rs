@@ -32,7 +32,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::harness::callback::{HarnessCallback, NoopHarnessCallback};
 use crate::harness::deps::HarnessDeps;
-use crate::harness::trait_def::{Harness, HarnessError, TurnState};
+use crate::harness::trait_def::{Harness, HarnessError, TurnState, TurnStep};
 use crate::orchestrator::dispatch::{TerminateReason, TokenBreakdown, ToolInvocation};
 use crate::providers::adapter::NativeToolCall;
 
@@ -528,7 +528,12 @@ impl Harness for AgentHarness {
                     self.set_terminate_reason(TerminateReason::Cancelled);
                     break Err(e);
                 }
-                Ok((TurnState::Continue, executed, is_veto, split_child)) => {
+                Ok(TurnStep {
+                    state: TurnState::Continue,
+                    executed,
+                    vetoed,
+                    split_child,
+                }) => {
                     if let Some(child) = split_child {
                         current_session = child;
                     }
@@ -537,7 +542,7 @@ impl Harness for AgentHarness {
                     }
                     iterations = iterations.saturating_add(1);
                     tool_calls_made = tool_calls_made.saturating_add(executed);
-                    if executed == 0 && !is_veto {
+                    if executed == 0 && !vetoed {
                         let events = self
                             .deps
                             .session
@@ -590,7 +595,7 @@ impl Harness for AgentHarness {
                     } else if executed > 0 {
                         consecutive_failure_turns = 0;
                     }
-                    if is_veto {
+                    if vetoed {
                         verifier_veto_count = verifier_veto_count.saturating_add(1);
                         if verifier_veto_count >= Self::MAX_VERIFIER_VETOS {
                             tracing::warn!(
@@ -643,7 +648,7 @@ impl Harness for AgentHarness {
                         }
                     }
                 }
-                Ok((TurnState::Done, _, _, _)) => {
+                Ok(TurnStep { state: TurnState::Done, .. }) => {
                     // Pi `getFollowUpMessages` parity. A steering message that
                     // landed during this run's final turn was not in that turn's
                     // prompt (the boundary race in
@@ -782,7 +787,7 @@ impl Harness for AgentHarness {
             &cancel,
         )
         .await
-        .map(|(state, _, _, _)| state)
+        .map(|step| step.state)
     }
 }
 

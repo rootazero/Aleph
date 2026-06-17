@@ -136,56 +136,6 @@ pub struct EnvironmentContract {
     pub security_notes: Vec<String>,
 }
 
-impl EnvironmentContract {
-    /// Generate a description suitable for system prompt injection
-    #[must_use]
-    pub fn to_prompt_description(&self) -> String {
-        let mut parts = Vec::new();
-
-        // Paradigm description
-        parts.push(format!("Environment: {}", self.paradigm.description()));
-
-        // Active capabilities
-        if !self.active_capabilities.is_empty() {
-            let cap_hints: Vec<String> = self
-                .active_capabilities
-                .iter()
-                .map(|c| {
-                    let (name, hint) = c.prompt_hint();
-                    format!("- {name}: {hint}")
-                })
-                .collect();
-            parts.push(format!("Capabilities:\n{}", cap_hints.join("\n")));
-        }
-
-        // Constraints
-        let mut constraint_notes = Vec::new();
-        if let Some(max_chars) = self.constraints.max_output_chars {
-            constraint_notes.push(format!("Max output: {max_chars} characters"));
-        }
-        if self.constraints.prefer_compact {
-            constraint_notes.push("Prefer compact responses".to_string());
-        }
-        if !constraint_notes.is_empty() {
-            parts.push(format!("Constraints: {}", constraint_notes.join(", ")));
-        }
-
-        // Security notes
-        if !self.security_notes.is_empty() {
-            parts.push(format!(
-                "Security:\n{}",
-                self.security_notes
-                    .iter()
-                    .map(|n| format!("- {n}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ));
-        }
-
-        parts.join("\n\n")
-    }
-}
-
 /// Resolved context after two-phase filtering
 ///
 /// This is the final output of the `ContextAggregator`, containing:
@@ -516,26 +466,5 @@ mod tests {
             canvas_disabled.reason,
             DisableReason::UnsupportedByChannel
         ));
-    }
-
-    #[test]
-    fn test_environment_contract_prompt_description() {
-        let interaction = InteractionManifest::new(InteractionParadigm::WebRich);
-        let security = SecurityContext::strict_readonly(PathBuf::from("/workspace"));
-
-        let resolved = ContextAggregator::resolve(&interaction, &security, &[]);
-
-        let description = resolved.environment_contract.to_prompt_description();
-
-        // Should contain environment info
-        assert!(description.contains("Environment:"));
-        assert!(description.contains("Web"));
-
-        // Should contain capabilities
-        assert!(description.contains("Capabilities:"));
-
-        // Should contain security info
-        assert!(description.contains("Security:"));
-        assert!(description.contains("Strict"));
     }
 }

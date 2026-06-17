@@ -355,11 +355,27 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             consecutive_failure_cap: base.consecutive_failure_cap,
             turn_timeout: base.turn_timeout,
             turn_budget: None,
-            result_store: None,
+            // §3.2 overflow-tier parity: was `None`, so a subagent's oversized
+            // tool results were truncated inline (the subagent then re-ran the
+            // tool against truncated context). Reuse the same shared
+            // `ToolResultStore` singleton the main harness falls back to
+            // (`orchestrator::harness_bridge`), so large subagent results spill
+            // to the session directory and the subagent can re-read the marker.
+            result_store: crate::tools::result_store::global_tool_result_store(),
             session_epoch_registrar: None,
             tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
             in_flight_tool_calls: None,
-            parallel_tool_concurrency: None,
+            // Parity with the main gateway harness (was `None` — subagents ran
+            // every tool batch serially). Subagents routinely fan out
+            // independent reads/searches; the Act phase only parallelizes
+            // concurrent-safe calls (writes/exec/send still serialize via the
+            // resource-scope partitioner in `tools::concurrency`), so this is a
+            // safe throughput win, not a correctness change. Uses the same
+            // `[tool_service]` default the main harness's config knob falls back
+            // to, so the two cannot drift.
+            parallel_tool_concurrency: Some(
+                crate::config::types::tools::default_parallel_tool_concurrency(),
+            ),
         };
         let harness = Arc::new(AgentHarness::new(deps));
 

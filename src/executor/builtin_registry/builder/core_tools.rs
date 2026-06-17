@@ -4,8 +4,9 @@ use crate::builtin_tools::skill_reader::{
     ListSkillsTool as SkillListTool, ReadSkillTool as SkillReadTool,
 };
 use crate::builtin_tools::{
-    AutomationTool, CodeExecTool, CtxSearchTool, DesktopTool, FileEditTool, FileReadTool,
-    FileWriteTool, MediaTool, PdfGenerateTool, PermissionTool, PimTool, ReadConfigGuideTool,
+    AutomationTool, CodeExecTool, CtxSearchTool, DesktopTool, FileEditTool, FileOpsTool,
+    FileReadTool, FileWriteTool, MediaTool, PdfGenerateTool, PermissionTool, PimTool,
+    ReadConfigGuideTool,
     RecallEventsTool, ScratchpadTool, SearchTool, SelfManageTool, SystemTool,
 };
 use crate::tool_metadata::{ToolSource, UnifiedTool};
@@ -51,7 +52,7 @@ impl BuiltinToolRegistry {
         reg(
             tools,
             "file_ops",
-            "File system operations - list, move, copy, delete, mkdir, search, batch_move, organize",
+            FileOpsTool::DESCRIPTION,
             schema::<crate::builtin_tools::file_ops::FileOpsArgs>("file_ops"),
         );
         reg(

@@ -94,18 +94,21 @@ impl IdentityResolver {
     }
 
     /// Resolve the effective `SoulManifest` for current context
+    ///
+    /// Priority: Session > Global > Default. The session override is *layered*
+    /// over the global soul via [`SoulManifest::merge_with`] — a session that
+    /// sets only a tone keeps the global identity/directives as fallback,
+    /// rather than blanking them out. This both fixes the previous
+    /// full-replace fallback gap and wires the formerly test-only
+    /// `merge_with` into a real consumer.
     #[must_use]
     pub fn resolve(&self) -> SoulManifest {
-        // Priority: Session > Global > Default
-        if let Some(ref override_soul) = self.session_override {
-            return override_soul.clone();
+        match (&self.session_override, self.load_global_soul()) {
+            (Some(session), Some(global)) => session.merge_with(&global),
+            (Some(session), None) => session.clone(),
+            (None, Some(global)) => global,
+            (None, None) => SoulManifest::default(),
         }
-
-        if let Some(soul) = self.load_global_soul() {
-            return soul;
-        }
-
-        SoulManifest::default()
     }
 
     /// Load global soul
@@ -118,7 +121,7 @@ impl IdentityResolver {
             let parent = self.global_path.parent();
 
             if let (Some(stem), Some(parent)) = (stem, parent) {
-                for ext in ["json", "toml"] {
+                for ext in ["json", "toml", "yaml", "yml"] {
                     let alt_path = parent.join(format!("{stem}.{ext}"));
                     if alt_path.exists() {
                         if let Ok(manifest) = SoulManifest::from_file(&alt_path) {
@@ -307,6 +310,37 @@ directives = ["Be concise"]
         assert_eq!(parsed.source_type, IdentitySourceType::Global);
         assert_eq!(parsed.path, PathBuf::from("/test/path"));
         assert!(parsed.loaded);
+    }
+
+    #[test]
+    fn test_session_layers_over_global() {
+        // A partial session override must keep global fields as fallback
+        // (merge semantics), not blank them out (old full-replace bug).
+        let tmp = TempDir::new().unwrap();
+        let global_path = tmp.path().join("soul.json");
+        let global_soul = SoulManifest {
+            identity: "I am the global identity".to_string(),
+            directives: vec!["Be helpful".to_string()],
+            ..Default::default()
+        };
+        fs::write(&global_path, serde_json::to_string(&global_soul).unwrap()).unwrap();
+
+        let mut resolver = IdentityResolver::new(global_path);
+        // Session sets only a voice tone.
+        resolver.set_session_override(SoulManifest {
+            voice: crate::thinker::soul::SoulVoice {
+                tone: "playful".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let resolved = resolver.resolve();
+        // Session tone wins...
+        assert_eq!(resolved.voice.tone, "playful");
+        // ...but global identity and directives survive as fallback.
+        assert_eq!(resolved.identity, "I am the global identity");
+        assert_eq!(resolved.directives, vec!["Be helpful".to_string()]);
     }
 
     #[test]

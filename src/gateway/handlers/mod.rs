@@ -429,39 +429,10 @@ impl HandlerRegistry {
         registry.register("clawhub.detail", clawhub::handle_detail);
         registry.register("clawhub.install", clawhub::handle_install);
 
-        // Identity handlers (placeholders - actual handlers wired with IdentityResolver)
-        registry.register("identity.get", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "identity.get requires IdentityResolver - wire SharedIdentityResolver first"
-                    .to_string(),
-            )
-        });
-        registry.register("identity.set", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "identity.set requires IdentityResolver - wire SharedIdentityResolver first"
-                    .to_string(),
-            )
-        });
-        registry.register("identity.clear", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "identity.clear requires IdentityResolver - wire SharedIdentityResolver first"
-                    .to_string(),
-            )
-        });
-        registry.register("identity.list", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "identity.list requires IdentityResolver - wire SharedIdentityResolver first"
-                    .to_string(),
-            )
-        });
+        // Identity handlers (identity.get/set/clear/list) are wired against the
+        // live `SharedIdentityResolver` by `register_identity_handlers` at
+        // server boot. No placeholder is registered here: an unwired registry
+        // correctly reports METHOD_NOT_FOUND rather than a misleading stub error.
 
         // Workspace handlers (placeholders - actual handlers wired with AgentEnvStore)
         registry.register("workspace.create", |req| async move {

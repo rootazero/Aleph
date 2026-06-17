@@ -108,13 +108,40 @@ pub struct ContextBudgetToml {
     /// inaccurate value compacts too early or too late. Default `200_000`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<u64>,
-    /// Fraction of `token_budget` at which compaction begins. Default 0.70.
+    /// Fraction of `token_budget` at which compaction begins. When unset the
+    /// default is **window-aware**: a wide window (≈1M) resolves to `0.70`,
+    /// while a narrow window (≈200k) automatically compacts earlier so one
+    /// large tool result cannot leap the warning→critical band and overflow
+    /// before compaction fires. Set this to pin a fixed fraction regardless of
+    /// window size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning_threshold: Option<f64>,
     /// Fraction of `token_budget` at which the run is forced to a final reply
     /// without further tool calls. Default 0.85.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub critical_threshold: Option<f64>,
+    /// Cheap-tier model id for side-channel history summarization (Reasonix
+    /// `summaryModel` parity). When set, compaction's summarization call routes
+    /// to a provider built from the *primary* provider's config (same vendor /
+    /// API key / endpoint / protocol) with this model substituted — typically a
+    /// flash-tier sibling (e.g. `claude-haiku-4-5`, `gemini-2.5-flash-lite`,
+    /// `deepseek-chat`). Summarization is read-and-condense work where the
+    /// strongest model is almost never required, so routing it here yields a
+    /// large per-token cost reduction with no measurable quality regression.
+    ///
+    /// **Unset / empty (default):** auto-fall back to the primary provider
+    /// preset's declared cheap aux model (`default_aux_model` — openai→
+    /// `gpt-5.4-mini`, claude→`claude-haiku-4-5`, gemini→`gemini-2.5-flash-lite`,
+    /// deepseek→`deepseek-chat`). A provider whose preset declares no cheap tier
+    /// (or a custom/unknown provider key) keeps summarization on the main LLM.
+    ///
+    /// **Opt out:** set this to the primary's own model id — the resolved model
+    /// then equals the configured default, so no separate provider is built and
+    /// summarization stays on the main LLM. A model id that fails to build a
+    /// provider (bad protocol/preset) also degrades silently to the main LLM —
+    /// never a hard boot failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_model: Option<String>,
     /// Per-model trigger-point overrides. The compaction budget is sized for
     /// the *smallest* context window on the failover chain, so the warning /
     /// critical fractions are keyed off that same model. These let a narrow
@@ -247,6 +274,7 @@ critical_threshold = 0.85
                 token_budget: Some(128_000),
                 warning_threshold: Some(0.7),
                 critical_threshold: Some(0.85),
+                summary_model: None,
                 model_thresholds: Vec::new(),
             })
         );
@@ -301,6 +329,16 @@ critical_threshold = 0.85
         assert!(cb.token_budget.is_none());
         // Per-model overrides default to empty → every model inherits globals.
         assert!(cb.model_thresholds.is_empty());
+        // Cheap summarization is opt-in — unset by default.
+        assert!(cb.summary_model.is_none());
+    }
+
+    #[test]
+    fn summary_model_parses_for_cheap_tier_summarization() {
+        let toml_str = "[context_budget]\nenabled = true\nsummary_model = \"claude-haiku-4-5\"\n";
+        let p: Probe = toml::from_str(toml_str).expect("toml parses");
+        let cb = p.context_budget.expect("section present");
+        assert_eq!(cb.summary_model.as_deref(), Some("claude-haiku-4-5"));
     }
 
     #[test]

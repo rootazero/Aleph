@@ -18,7 +18,7 @@ use super::layers::{
 use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_mode::PromptMode;
-use crate::context::budget::pressure::estimate_tokens_aware;
+use crate::context::budget::pressure::{estimate_tokens_aware, DEFAULT_PROSE_RATIO};
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -142,12 +142,17 @@ impl PromptPipeline {
             };
         }
 
-        // 3. Enforce budget — protected priorities
+        // 3. Enforce budget — never trim the foundational layers. Each entry
+        //    maps to a real registered layer (see `default_layers`): 50 soul,
+        //    55 agent_role, 60 curated_memory, 75 profile, 100 role, 500 tools,
+        //    501 hydrated_tools, 600 security. The previous list carried a
+        //    phantom `1200` (no layer at that priority) and left `security`
+        //    (600) trimmable — safety guidance must survive budget pressure.
         let refs: Vec<(u32, &str, &str)> = sections
             .iter()
             .map(|(p, n, c)| (*p, *n, c.as_str()))
             .collect();
-        let protected = &[50u32, 55, 75, 100, 500, 501, 1200];
+        let protected = &[50u32, 55, 60, 75, 100, 500, 501, 600];
         let (prompt, stats) = enforce_budget(&refs, budget.max_total_chars, protected);
 
         PromptResult {
@@ -257,8 +262,8 @@ impl PromptPipeline {
                         stability: layer.stability(),
                         chars: section.chars().count(),
                         bytes: section.len(),
-                        // 3.5 chars/token prose anchor; CJK/code auto-densify.
-                        tokens: estimate_tokens_aware(&section, 3.5),
+                        // Canonical prose anchor; CJK/code auto-densify.
+                        tokens: estimate_tokens_aware(&section, DEFAULT_PROSE_RATIO),
                     });
                 }
             }

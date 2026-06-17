@@ -207,7 +207,15 @@ pub struct Budget {
 
 `token_budget` is already model-aware — it is sized for the *smallest* context
 window on the resolved failover chain (`derive_chain_min_budget`,
-`src/orchestrator/deps_builder.rs`). The **trigger fractions** can also vary per
+`src/orchestrator/deps_builder.rs`). The conservative consequence: a single
+**narrow fallback sibling** caps the compaction budget for an otherwise-wide
+primary, so the primary compacts earlier than its real window requires. When the
+chain-min winner is *not* the primary and the budget falls below
+`CHAIN_MIN_UNDERCUT_WARN_FRACTION` (60%) of the primary's own usable window,
+`build_context_budget_config` logs a one-line startup advisory naming the
+offending sibling and the fix (reorder/trim `[fallback_provider].chain`, or pin
+an explicit `token_budget`). It is observability only — the safe smaller budget
+still stands. The **trigger fractions** can also vary per
 model: a narrow 200k-window model often wants to compact earlier than a 1M model
 (less absolute headroom above the warning line). Declare overrides keyed off the
 same chain-min model that sizes the budget:

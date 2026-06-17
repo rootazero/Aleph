@@ -39,6 +39,74 @@ const DEFAULT_OUTPUT_RESERVE: u64 = 8_192;
 /// would force compaction or a final reply on the very first turn.
 const MIN_USABLE_BUDGET: u64 = 16_384;
 
+/// Fraction below which an auto-sized chain-minimum budget is considered to
+/// *materially* undercut the primary's own window: a narrow fallback sibling
+/// dragging the budget under 60% of the primary's usable budget means the
+/// primary model compacts >40% earlier than its real window would require.
+/// Purely an observability threshold — it changes no budget value.
+const CHAIN_MIN_UNDERCUT_WARN_FRACTION: f64 = 0.60;
+
+/// Whether an auto-sized chain-minimum budget materially undercuts the
+/// primary's own usable window (see [`CHAIN_MIN_UNDERCUT_WARN_FRACTION`]).
+///
+/// The chain-min design is deliberately conservative — it sizes compaction for
+/// the *smallest* window any in-request failover migration could land on — but
+/// that makes a single narrow fallback sibling silently shrink the effective
+/// context of a wide primary, the one genuinely surprising consequence of the
+/// design. This predicate gates the one-line startup advisory that explains it.
+/// Returns `false` when the primary budget is unknown (`0`), so an undeterminable
+/// comparison never produces a spurious warning.
+fn chain_min_materially_undercuts_primary(chain_min_usable: u64, primary_usable: u64) -> bool {
+    primary_usable > 0
+        && (chain_min_usable as f64) < (primary_usable as f64) * CHAIN_MIN_UNDERCUT_WARN_FRACTION
+}
+
+/// Historical flat default compaction thresholds, also the *caps* for the
+/// window-aware auto-derivation below: a window wide enough to absorb a tool
+/// spike at these fractions keeps them exactly, so wide models (and the
+/// calibrated common case) stay byte-identical to the pre-wiring behaviour.
+const DEFAULT_WARNING_THRESHOLD: f64 = 0.70;
+const DEFAULT_CRITICAL_THRESHOLD: f64 = 0.85;
+
+/// Absolute token headroom the auto-derived *warning* (compact) line keeps
+/// below the critical line. This is the heart of model-aware compaction
+/// *timing*: the same `0.70` fraction that leaves ~130k of runway on a 1M
+/// window leaves only ~30k on a 200k window — not enough to absorb one large
+/// tool result (a full file read / web fetch / search dump is easily 40k+
+/// tokens) landing in a single turn, which would leap the whole warning→critical
+/// band and overflow before compaction ever fires. Sizing the band by an
+/// *absolute* token count instead of a flat fraction makes a narrow window
+/// start compacting earlier so it keeps the same spike protection a wide
+/// window gets for free.
+const WARNING_SPIKE_HEADROOM_TOKENS: f64 = 48_000.0;
+
+/// Lower bound for the auto-derived warning fraction, so a very small window
+/// cannot drive the compaction trigger absurdly low (summarizing nearly every
+/// turn). Operators with tiny windows can still set an explicit
+/// `warning_threshold` to go lower.
+const MIN_AUTO_WARNING_THRESHOLD: f64 = 0.40;
+
+/// Window-aware *default* warning (compaction) fraction, used only when neither
+/// a per-model nor a global `warning_threshold` is configured.
+///
+/// Keeps a model-independent *absolute* token band of
+/// [`WARNING_SPIKE_HEADROOM_TOKENS`] below the effective `critical` line: a wide
+/// 1M window resolves to the historical [`DEFAULT_WARNING_THRESHOLD`], while a
+/// narrow 200k window automatically compacts earlier. Floored at
+/// [`MIN_AUTO_WARNING_THRESHOLD`] and capped at [`DEFAULT_WARNING_THRESHOLD`],
+/// so the result is always in a sane range; the single-arg `min`/`max` avoid the
+/// `f64::clamp` min>max panic risk for a pathologically low configured critical
+/// (which the downstream threshold-ordering validation rejects anyway).
+fn window_aware_warning_default(usable: u64, critical: f64) -> f64 {
+    if usable == 0 {
+        return DEFAULT_WARNING_THRESHOLD.min(critical);
+    }
+    let spike_fraction = WARNING_SPIKE_HEADROOM_TOKENS / usable as f64;
+    (critical - spike_fraction)
+        .min(DEFAULT_WARNING_THRESHOLD)
+        .max(MIN_AUTO_WARNING_THRESHOLD)
+}
+
 /// Stability triple — three independent Optionals derived from `[stability]`.
 ///
 /// Returned as a struct (not tuple) so consumers can name fields and future
@@ -599,12 +667,38 @@ pub fn build_context_budget_config(
                 chain_len = derived.chain_len,
                 "context budget derived from chain-minimum model context window"
             );
+            // Advisory (P7/observability): when a *narrower* fallback sibling
+            // wins the chain-minimum, the compaction budget is capped well
+            // below the primary's own window, so the primary model compacts far
+            // earlier than its real context would require. This is the single
+            // most confusing consequence of the conservative chain-min design;
+            // surface it with an actionable line. Log-only — the safe (smaller)
+            // budget stands; the operator can reorder/trim the chain or pin an
+            // explicit `token_budget` if the early compaction is unwanted.
+            let primary = config.providers.get(primary_provider_key);
+            let primary_model = primary.and_then(|p| p.models.first().map(String::as_str));
+            let primary_usable = derive_token_budget(primary, primary_model).usable;
+            if !derived.provider.eq_ignore_ascii_case(primary_provider_key)
+                && chain_min_materially_undercuts_primary(derived.budget.usable, primary_usable)
+            {
+                tracing::warn!(
+                    primary = %primary_provider_key,
+                    primary_usable,
+                    chain_min_provider = %derived.provider,
+                    chain_min_usable = derived.budget.usable,
+                    "context budget: a narrower fallback sibling caps the compaction budget well \
+                     below the primary's window — the primary will compact early. Reorder/trim \
+                     [fallback_provider].chain or set an explicit [context_budget] token_budget \
+                     to override."
+                );
+            }
             derived.budget.usable
         }
     };
     // Per-model trigger-point override, keyed off the resolved chain-min model.
-    // Each field falls back to the global threshold, then the built-in default,
-    // so an absent or non-matching override is byte-identical to before.
+    // Each field falls back to the global threshold, then the built-in default
+    // (flat critical, window-aware warning), so an absent or non-matching
+    // override leaves the model-aware defaults intact.
     let model_override = cb.threshold_override_for(derived.model.as_deref(), &derived.provider);
     if let Some(o) = model_override {
         tracing::info!(
@@ -614,14 +708,23 @@ pub fn build_context_budget_config(
             "context budget: applying per-model threshold override"
         );
     }
-    let warning_threshold = model_override
-        .and_then(|o| o.warning_threshold)
-        .or(cb.warning_threshold)
-        .unwrap_or(0.70);
+    // Critical (hard-stop) keeps the flat default: once `FinalReply` fires the
+    // harness runs no further tools, so no tool result can be appended between
+    // the critical check and the bounded final reply — the hard line is safe at
+    // a fixed fraction regardless of window size.
     let critical_threshold = model_override
         .and_then(|o| o.critical_threshold)
         .or(cb.critical_threshold)
-        .unwrap_or(0.85);
+        .unwrap_or(DEFAULT_CRITICAL_THRESHOLD);
+    // Warning (compaction trigger) is window-aware: absent explicit config, a
+    // narrow window compacts earlier so one large tool result cannot leap the
+    // whole band and overshoot critical before compaction fires (see
+    // `window_aware_warning_default`). A configured threshold still wins.
+    let auto_warning = window_aware_warning_default(token_budget, critical_threshold);
+    let warning_threshold = model_override
+        .and_then(|o| o.warning_threshold)
+        .or(cb.warning_threshold)
+        .unwrap_or(auto_warning);
 
     // Defensive validation (P7): a misconfigured budget silently cuts off
     // every run — e.g. inverted thresholds make `CompactAndContinue`
@@ -649,13 +752,105 @@ pub fn build_context_budget_config(
         critical_threshold,
         // Internal tuning — validated defaults, deliberately not exposed as
         // toml knobs (KISS: every run inherits the same compaction cadence).
-        token_estimate_ratio: 3.5,
+        // The prose anchor reuses the estimator's own canonical default rather
+        // than a duplicated literal (single source of truth); CJK/code content
+        // is auto-densified by the content-aware estimator regardless.
+        token_estimate_ratio: crate::context::budget::pressure::DEFAULT_PROSE_RATIO,
         fresh_tail_count: 6,
         circuit_breaker_max: 3,
         diminishing_window: 4,
         diminishing_threshold: 500,
         max_splits: 3,
     })
+}
+
+/// Build the cheap-tier summarization provider for [`ContextCompactor`].
+///
+/// Resolves the summary model in two tiers:
+/// 1. **Explicit** — `[context_budget] summary_model` (Reasonix `summaryModel`
+///    parity). Whatever the operator names is used verbatim.
+/// 2. **Auto** — when `summary_model` is unset/blank, fall back to the *primary*
+///    provider preset's declared cheap aux model (`default_aux_model`:
+///    openai→`gpt-5.4-mini`, anthropic→`claude-haiku-4-5`,
+///    gemini→`gemini-2.5-flash-lite`, deepseek→`deepseek-chat`). This makes the
+///    preset's long-dormant `default_aux_model` field a live routing consumer:
+///    a vendor with a declared cheap tier gets cost-efficient summarization with
+///    zero config. Only an **explicitly declared** aux model triggers this — a
+///    preset whose `default_aux_model` is `None` (or a custom/unknown provider
+///    key) keeps the legacy main-LLM path, never silently routing to a
+///    same-tier `default_model`.
+///
+/// In both tiers the cheap provider reuses the primary provider's full config
+/// (api key, base url, protocol, timeouts) with only `models` swapped, so it
+/// targets the same vendor — just a cheaper sibling.
+///
+/// Returns `None` (→ compactor reuses the main LLM) when:
+/// - section missing / `enabled = false`;
+/// - the primary provider key has no `[providers.*]` entry to clone;
+/// - `summary_model` unset AND the primary preset declares no cheap aux model;
+/// - the resolved model equals the primary's configured default (a separate
+///   provider would be byte-identical — pointless). Setting `summary_model` to
+///   the primary's own model is therefore the explicit opt-out from auto aux
+///   routing;
+/// - `create_provider` fails (bad protocol/preset) — logged, then degraded.
+///
+/// Fail-soft by construction: a misconfigured model never aborts boot and never
+/// blocks summarization (the compactor falls back to the main LLM).
+#[must_use]
+pub fn build_cheap_summary_provider(
+    config: &Config,
+    primary_provider_key: &str,
+) -> Option<Arc<dyn AiProvider>> {
+    let cb = config.context_budget.as_ref()?;
+    if !cb.enabled {
+        return None;
+    }
+
+    let base = config.providers.get(primary_provider_key)?;
+
+    // Tier 1: explicit operator override. Tier 2: the primary preset's declared
+    // cheap aux model (`default_aux_model`, never the `default_model` fallback).
+    let explicit = cb
+        .summary_model
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let summary_model: String = match explicit {
+        Some(model) => model.to_string(),
+        None => crate::providers::get_preset(&primary_provider_key.to_lowercase())
+            .and_then(|p| p.default_aux_model)?
+            .to_string(),
+    };
+
+    // No-op when the resolved summary model is the primary's own default model —
+    // the rebuilt provider would be byte-identical, so reuse the main LLM.
+    if base.models.first().is_some_and(|m| m.as_str() == summary_model) {
+        return None;
+    }
+
+    let source = if explicit.is_some() { "summary_model" } else { "preset aux_model" };
+    let mut cheap_cfg = base.clone();
+    cheap_cfg.models = vec![summary_model.clone()];
+    match create_provider(primary_provider_key, cheap_cfg) {
+        Ok(provider) => {
+            tracing::info!(
+                provider = %primary_provider_key,
+                summary_model = %summary_model,
+                source,
+                "context budget: routing history summarization to cheap-tier model"
+            );
+            Some(provider)
+        }
+        Err(e) => {
+            tracing::warn!(
+                provider = %primary_provider_key,
+                summary_model = %summary_model,
+                error = %e,
+                "context budget: cheap summary provider build failed — summarization will use the main LLM"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -696,12 +891,21 @@ mod tests {
             ..ContextBudgetToml::default()
         }));
         let bc = build_context_budget_config(&cfg, "primary").expect("enabled → Some");
+        let usable = DEFAULT_CONTEXT_TOKEN_BUDGET - DEFAULT_OUTPUT_RESERVE;
+        assert_eq!(bc.token_budget, usable);
+        // Critical keeps the flat default; warning is window-aware. The default
+        // 200k window is narrow enough that the 48k spike band pulls the warning
+        // line below 0.70 (so one big tool result can't overshoot critical).
+        assert_eq!(bc.critical_threshold, DEFAULT_CRITICAL_THRESHOLD);
         assert_eq!(
-            bc.token_budget,
-            DEFAULT_CONTEXT_TOKEN_BUDGET - DEFAULT_OUTPUT_RESERVE
+            bc.warning_threshold,
+            window_aware_warning_default(usable, DEFAULT_CRITICAL_THRESHOLD)
         );
-        assert_eq!(bc.warning_threshold, 0.70);
-        assert_eq!(bc.critical_threshold, 0.85);
+        assert!(
+            bc.warning_threshold < DEFAULT_WARNING_THRESHOLD,
+            "a 200k window must compact earlier than the flat 0.70 default, got {}",
+            bc.warning_threshold
+        );
     }
 
     #[test]
@@ -911,8 +1115,16 @@ mod tests {
         };
         let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
         let bc = build_context_budget_config(&cfg, "moonshot").expect("enabled → Some");
-        assert_eq!(bc.warning_threshold, 0.70);
-        assert_eq!(bc.critical_threshold, 0.85);
+        // No matching override → the *global default*, which for warning is now
+        // window-aware. kimi-k2's usable window is narrow enough that the auto
+        // warning sits below 0.70; critical still uses the flat default.
+        let usable = 262_144 - 32_768;
+        assert_eq!(
+            bc.warning_threshold,
+            window_aware_warning_default(usable, DEFAULT_CRITICAL_THRESHOLD)
+        );
+        assert_eq!(bc.critical_threshold, DEFAULT_CRITICAL_THRESHOLD);
+        assert!(bc.warning_threshold < DEFAULT_WARNING_THRESHOLD);
     }
 
     #[test]
@@ -953,6 +1165,83 @@ mod tests {
             build_context_budget_config(&cfg, "moonshot").is_none(),
             "inverted per-model thresholds disable the budget (P7 defensive)"
         );
+    }
+
+    // ── window-aware default compaction timing (kimi 20w vs claude 100w) ─
+
+    #[test]
+    fn window_aware_warning_wide_window_keeps_flat_default() {
+        // A 1M-class usable window absorbs a 48k spike at 0.70, so the auto
+        // warning is exactly the historical flat default — wide models stay
+        // byte-identical to the pre-wiring behaviour.
+        let w = window_aware_warning_default(936_000, DEFAULT_CRITICAL_THRESHOLD);
+        assert_eq!(w, DEFAULT_WARNING_THRESHOLD);
+    }
+
+    #[test]
+    fn window_aware_warning_narrow_window_compacts_earlier() {
+        // A 200k-class window cannot absorb a 48k spike at 0.70, so the auto
+        // warning drops below it — keeping the absolute 48k band below critical.
+        let usable = 262_144u64 - 32_768; // kimi-k2 usable
+        let w = window_aware_warning_default(usable, DEFAULT_CRITICAL_THRESHOLD);
+        assert!(w < DEFAULT_WARNING_THRESHOLD);
+        let band_tokens = (DEFAULT_CRITICAL_THRESHOLD - w) * usable as f64;
+        assert!(
+            (band_tokens - WARNING_SPIKE_HEADROOM_TOKENS).abs() < 1.0,
+            "warning→critical band must equal one spike (~48k), got {band_tokens}"
+        );
+    }
+
+    #[test]
+    fn window_aware_warning_floored_for_tiny_window() {
+        // When the spike exceeds the whole band, the auto warning floors at the
+        // minimum — never negative, never absurdly low.
+        let w = window_aware_warning_default(MIN_USABLE_BUDGET, DEFAULT_CRITICAL_THRESHOLD);
+        assert_eq!(w, MIN_AUTO_WARNING_THRESHOLD);
+    }
+
+    #[test]
+    fn window_aware_warning_tracks_effective_critical() {
+        // The band is measured below the *effective* critical, so a higher
+        // configured critical lifts the auto warning with it.
+        let usable = 262_144u64 - 32_768;
+        assert!(
+            window_aware_warning_default(usable, 0.90)
+                > window_aware_warning_default(usable, 0.85)
+        );
+    }
+
+    #[test]
+    fn narrow_model_compacts_earlier_than_wide_by_default() {
+        // Headline property: with NO explicit thresholds, a narrow kimi window
+        // starts compacting at a lower fraction than a wide claude window —
+        // model-aware compaction timing without any per-model config.
+        let cb = || ContextBudgetToml {
+            enabled: true,
+            ..ContextBudgetToml::default()
+        };
+        let mut claude = ProviderConfig::test_config("claude-sonnet-4-6");
+        claude.context_window = Some(1_000_000);
+        claude.max_tokens = Some(64_000);
+        let claude_cfg = cfg_with_primary("claude", claude, cb());
+        let claude_bc = build_context_budget_config(&claude_cfg, "claude").expect("some");
+
+        let kimi_cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb());
+        let kimi_bc = build_context_budget_config(&kimi_cfg, "moonshot").expect("some");
+
+        assert_eq!(
+            claude_bc.warning_threshold, DEFAULT_WARNING_THRESHOLD,
+            "a 1M window keeps the flat 0.70 default"
+        );
+        assert!(
+            kimi_bc.warning_threshold < claude_bc.warning_threshold,
+            "narrow kimi compacts earlier than wide claude: kimi {} < claude {}",
+            kimi_bc.warning_threshold,
+            claude_bc.warning_threshold
+        );
+        // Both keep the flat critical hard-stop — only the *trigger* is window-aware.
+        assert_eq!(kimi_bc.critical_threshold, DEFAULT_CRITICAL_THRESHOLD);
+        assert_eq!(claude_bc.critical_threshold, DEFAULT_CRITICAL_THRESHOLD);
     }
 
     // ── min-over-chain budgeting (failover-safe window) ──────────────────
@@ -1269,5 +1558,141 @@ mod tests {
         assert!(triple.stall_config.is_none());
         assert!(triple.consecutive_failure_cap.is_none());
         assert_eq!(triple.turn_timeout, Some(Duration::from_secs(60)));
+    }
+
+    // ── cheap-tier summary provider wiring (Reasonix summaryModel parity) ──
+
+    /// Config with `[context_budget]` enabled, a `summary_model`, and a single
+    /// mock-protocol primary provider keyed `key` whose default model is
+    /// `primary_model`. The `key` selects which preset (if any) the auto
+    /// aux-model fallback resolves against; `"primary"` is a non-preset key.
+    fn cfg_summary_keyed(key: &str, primary_model: &str, summary_model: Option<&str>) -> Config {
+        let mut primary = ProviderConfig::test_config(primary_model);
+        primary.protocol = Some("mock".to_string());
+        let mut cfg = cfg_with_fallback(None, vec![(key, primary)]);
+        cfg.context_budget = Some(ContextBudgetToml {
+            enabled: true,
+            summary_model: summary_model.map(str::to_string),
+            ..ContextBudgetToml::default()
+        });
+        cfg
+    }
+
+    /// `cfg_summary_keyed` with the non-preset key `"primary"` (no aux fallback).
+    fn cfg_summary(primary_model: &str, summary_model: Option<&str>) -> Config {
+        cfg_summary_keyed("primary", primary_model, summary_model)
+    }
+
+    #[test]
+    fn cheap_summary_none_when_section_missing() {
+        // No `[context_budget]` at all → no cheap provider (legacy main-LLM path).
+        let cfg = Config::default();
+        assert!(build_cheap_summary_provider(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_none_when_disabled() {
+        let mut cfg = cfg_summary("main-model", Some("cheap-model"));
+        cfg.context_budget.as_mut().unwrap().enabled = false;
+        assert!(build_cheap_summary_provider(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_none_when_unset_and_no_preset_aux() {
+        // Key "primary" has no preset → no declared aux model → auto fallback
+        // finds nothing → main LLM. Holds for both unset and blank.
+        let cfg = cfg_summary("main-model", None);
+        assert!(build_cheap_summary_provider(&cfg, "primary").is_none());
+        let cfg = cfg_summary("main-model", Some("   "));
+        assert!(build_cheap_summary_provider(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_auto_falls_back_to_preset_aux_model() {
+        // summary_model unset + a preset that declares a cheap aux model
+        // (claude → claude-haiku-4-5) + a distinct configured default →
+        // auto-route summarization to the aux model. This is the dead
+        // `default_aux_model` field's live routing consumer.
+        let cfg = cfg_summary_keyed("claude", "claude-opus-4-8", None);
+        assert!(
+            build_cheap_summary_provider(&cfg, "claude").is_some(),
+            "unset summary_model must auto-fall back to the preset's declared aux model"
+        );
+    }
+
+    #[test]
+    fn cheap_summary_none_when_unset_and_preset_declares_no_aux() {
+        // A real preset whose `default_aux_model` is None (cerebras) must NOT
+        // route to its `default_model` — that would be a same-tier no-op. Auto
+        // fallback fires only for an explicitly declared cheap aux model.
+        let cfg = cfg_summary_keyed("cerebras", "some-model", None);
+        assert!(build_cheap_summary_provider(&cfg, "cerebras").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_none_when_aux_equals_configured_default() {
+        // Auto fallback resolves claude's aux (claude-haiku-4-5), but the
+        // operator already runs that as the primary model → rebuilding would be
+        // byte-identical → reuse the main LLM. (Also the explicit opt-out path:
+        // setting summary_model to the primary's own model.)
+        let cfg = cfg_summary_keyed("claude", "claude-haiku-4-5", None);
+        assert!(build_cheap_summary_provider(&cfg, "claude").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_none_when_equals_primary_default() {
+        // A summary model identical to the primary's default would rebuild a
+        // byte-identical provider — pointless, so reuse the main LLM.
+        let cfg = cfg_summary("same-model", Some("same-model"));
+        assert!(build_cheap_summary_provider(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_none_when_primary_key_absent() {
+        // summary_model set but the named primary has no [providers.*] entry.
+        let cfg = cfg_summary("main-model", Some("cheap-model"));
+        assert!(build_cheap_summary_provider(&cfg, "does-not-exist").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_some_when_distinct_model_builds() {
+        // Enabled + a distinct, buildable summary model → a cheap provider that
+        // targets the primary vendor (mock protocol here) with the swapped model.
+        let cfg = cfg_summary("main-model", Some("cheap-model"));
+        assert!(
+            build_cheap_summary_provider(&cfg, "primary").is_some(),
+            "enabled + distinct buildable summary model must yield a cheap provider"
+        );
+    }
+
+    // --- chain-min undercut advisory (observability predicate) ---
+
+    #[test]
+    fn undercut_fires_when_chain_min_well_below_primary() {
+        // A 200k-usable fallback sibling against a 1M-usable primary is far
+        // under the 60% line → the primary will compact early → advise.
+        assert!(chain_min_materially_undercuts_primary(200_000, 1_000_000));
+    }
+
+    #[test]
+    fn undercut_silent_when_chain_min_close_to_primary() {
+        // A sibling within the 60% band is not surprising enough to warn about:
+        // 700k of a 1M primary keeps most of the window.
+        assert!(!chain_min_materially_undercuts_primary(700_000, 1_000_000));
+    }
+
+    #[test]
+    fn undercut_silent_when_chain_min_equals_primary() {
+        // Single-provider / uniform-window chain: chain-min IS the primary, so
+        // there is nothing to advise.
+        assert!(!chain_min_materially_undercuts_primary(1_000_000, 1_000_000));
+    }
+
+    #[test]
+    fn undercut_silent_when_primary_unknown() {
+        // An undeterminable primary budget (0) must never produce a spurious
+        // warning — the predicate guards the division-by-intent.
+        assert!(!chain_min_materially_undercuts_primary(0, 0));
+        assert!(!chain_min_materially_undercuts_primary(50_000, 0));
     }
 }

@@ -16,11 +16,17 @@ impl PromptLayer for RoleLayer {
         !matches!(mode, PromptMode::Minimal)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
+        // `Cached` is the live main-agent-loop path. The Think→Act role
+        // framing ("observe → decide the SINGLE next action → execute") is
+        // harness scaffolding that complements persona/identity; it belongs in
+        // every prompt, including the cached production one where it was
+        // previously absent. Stable, so it joins the cacheable prefix.
         &[
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
             AssemblyPath::Context,
+            AssemblyPath::Cached,
         ]
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
@@ -65,6 +71,7 @@ mod tests {
         assert!(paths.contains(&AssemblyPath::Hydration));
         assert!(paths.contains(&AssemblyPath::Soul));
         assert!(paths.contains(&AssemblyPath::Context));
-        assert!(!paths.contains(&AssemblyPath::Cached));
+        // Core role framing must reach the live cached production path.
+        assert!(paths.contains(&AssemblyPath::Cached));
     }
 }

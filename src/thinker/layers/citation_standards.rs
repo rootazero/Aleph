@@ -16,7 +16,16 @@ impl PromptLayer for CitationStandardsLayer {
         matches!(mode, PromptMode::Full)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Soul, AssemblyPath::Context]
+        // `Cached` is the live main-agent-loop path
+        // (`build_system_prompt_cached_with_mode`). Without it, the citation
+        // standards — which govern how the model attributes recalled memory
+        // (`[Source: <path>#<id>]`) — never reached production prompts. Stable +
+        // Full-only, so it rides the cacheable prefix at zero per-request cost.
+        &[
+            AssemblyPath::Soul,
+            AssemblyPath::Context,
+            AssemblyPath::Cached,
+        ]
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         output.push_str("## Citation Standards\n\n");
@@ -55,9 +64,12 @@ mod tests {
     #[test]
     fn test_citation_standards_paths() {
         let paths = CitationStandardsLayer.paths();
-        assert_eq!(paths.len(), 2);
+        assert_eq!(paths.len(), 3);
         assert!(paths.contains(&AssemblyPath::Soul));
         assert!(paths.contains(&AssemblyPath::Context));
+        // Must participate in the live main-loop path so citation rules
+        // actually reach production prompts.
+        assert!(paths.contains(&AssemblyPath::Cached));
         assert!(!paths.contains(&AssemblyPath::Basic));
     }
 }

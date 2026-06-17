@@ -21,6 +21,7 @@ pub struct BuiltinToolAdapter {
     cached_name: String,
     cached_description: String,
     cached_schema: Value,
+    cached_max_result_tokens: Option<usize>,
 }
 
 impl BuiltinToolAdapter {
@@ -33,6 +34,9 @@ impl BuiltinToolAdapter {
             cached_name: def.name.clone(),
             cached_description: def.description.clone(),
             cached_schema: def.parameters.clone(),
+            // Forward the tool's declared per-result budget (replaces the
+            // legacy tool-name budget table in `result_processing`).
+            cached_max_result_tokens: inner.max_result_tokens(),
             inner,
         }
     }
@@ -50,6 +54,10 @@ impl LoopTool for BuiltinToolAdapter {
 
     fn schema(&self) -> Value {
         self.cached_schema.clone()
+    }
+
+    fn max_result_tokens(&self) -> Option<usize> {
+        self.cached_max_result_tokens
     }
 
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
@@ -146,6 +154,10 @@ mod tests {
                 }
             })
         }
+
+        fn max_result_tokens(&self) -> Option<usize> {
+            Some(4_242)
+        }
     }
 
     #[test]
@@ -169,6 +181,16 @@ mod tests {
         let schema = adapter.schema();
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["required"], json!(["query"]));
+    }
+
+    #[test]
+    fn test_adapter_forwards_max_result_tokens() {
+        // The adapter caches the wrapped tool's declared per-result budget at
+        // construction and exposes it via LoopTool — this is the path that
+        // replaced the legacy `resolve_result_budget` name table.
+        let tool = Arc::new(FakeAlephTool::success());
+        let adapter = BuiltinToolAdapter::new(tool);
+        assert_eq!(adapter.max_result_tokens(), Some(4_242));
     }
 
     #[tokio::test]

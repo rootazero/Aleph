@@ -596,10 +596,13 @@ fn serialize_transcript(messages: &[UnifiedMessage]) -> String {
 }
 
 /// Estimate token count using content-aware ratio detection.
+///
+/// Thin alias for [`pressure::estimate_tokens_smart`] — the single source of
+/// truth for the prose-anchored, CJK/code-aware char→token estimate (which now
+/// blends mixed content proportionally). Kept as a local name so the ten call
+/// sites below read clearly.
 fn estimate_tokens(text: &str) -> usize {
-    let ratio = crate::context::budget::pressure::detect_content_ratio(text);
-    let char_count = text.chars().count();
-    (char_count as f64 / ratio).ceil() as usize
+    crate::context::budget::pressure::estimate_tokens_smart(text)
 }
 
 /// Deterministic truncation: keep only the first line of each message.

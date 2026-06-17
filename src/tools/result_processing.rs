@@ -15,7 +15,9 @@
 
 use std::path::PathBuf;
 
-use crate::context::budget::pressure::estimate_tokens_smart;
+use crate::context::budget::pressure::{
+    content_ratio_with_baseline, estimate_tokens_smart, DEFAULT_PROSE_RATIO,
+};
 use crate::context::retrieval::IndexOutcome;
 use crate::session::events::ToolImage;
 use crate::tools::result_store::{extract_persisted_ref, ToolResultStore};
@@ -33,9 +35,10 @@ pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 8_000;
 ///    a persisted marker file back into context, so persisting one would
 ///    create a loop).
 /// 2. `explicit` (typically the tool's own `max_result_tokens()` value)
-///    wins for every other name.
-/// 3. Otherwise fall back to a hardcoded name table for legacy builtin
-///    names that have not been migrated to the trait method.
+///    wins for every other name. Builtins declare their budget there now
+///    (`bash`, `web_fetch`), so they never reach the table below.
+/// 3. Otherwise a single remaining legacy entry (`search_files`/`Grep`,
+///    which has no in-crate tool to carry the trait method).
 /// 4. Otherwise fall back to [`DEFAULT_RESULT_BUDGET_TOKENS`].
 ///
 /// `None` from this function means "do not persist this tool's output;
@@ -50,8 +53,12 @@ pub fn resolve_result_budget(name: &str, explicit: Option<usize>) -> Option<usiz
         return Some(n);
     }
     match name {
-        "Bash" | "bash" | "bash_exec" | "terminal" => Some(8_000),
-        "WebFetch" | "web_fetch" => Some(10_000),
+        // Last legacy entry: `search_files`/`Grep` has no in-crate `AlephTool`
+        // to hang `max_result_tokens()` on (external / MCP-provided search), so
+        // its budget stays here until that owner exists. `bash` (8k) and
+        // `web_fetch` (10k) now declare their budget via the trait and arrive
+        // through the `explicit` branch above; their old name-table arms (and
+        // dead aliases like `terminal` / capitalised `WebFetch`) were removed.
         "Grep" | "search_files" => Some(6_000),
         _ => Some(DEFAULT_RESULT_BUDGET_TOKENS),
     }
@@ -258,16 +265,25 @@ pub fn truncate_with_budget(text: &str, budget_tokens: usize) -> String {
     if estimated <= budget_tokens {
         return text.to_string();
     }
-    // Roughly 4 chars per token; keep ~70 % head + 30 % tail under the budget.
-    let target_chars = budget_tokens.saturating_mul(4);
-    let head_chars = (target_chars.saturating_mul(7) / 10).min(text.len());
-    let tail_budget = target_chars.saturating_sub(head_chars);
-    let tail_chars = tail_budget.min(text.len().saturating_sub(head_chars));
+    // Content-aware char budget: invert `estimate_tokens_smart`'s own
+    // chars-per-token ratio so the kept head+tail lands at ~budget_tokens for
+    // CJK / code / prose alike. The prior fixed 4-chars/token assumption
+    // diverged from the CJK/code-aware estimator — dense code/log output (the
+    // common Bash-result case) stayed ~1.6x over budget, while CJK conflated
+    // char counts with byte offsets. All slicing is on exact char counts via
+    // `char_byte_offset`, so there is no char/byte unit mixing. Keep ~70 %
+    // head + 30 % tail.
+    let ratio = content_ratio_with_baseline(text, DEFAULT_PROSE_RATIO).max(1.0);
+    let total_chars = text.chars().count();
+    let target_chars = ((budget_tokens as f64) * ratio) as usize;
+    if target_chars >= total_chars {
+        return text.to_string();
+    }
+    let head_chars = target_chars.saturating_mul(7) / 10;
+    let tail_chars = target_chars.saturating_sub(head_chars);
 
-    let head_end = floor_char_boundary(text, head_chars);
-    let tail_start_raw = text.len().saturating_sub(tail_chars);
-    let tail_start = ceil_char_boundary(text, tail_start_raw);
-    let tail_start = tail_start.max(head_end);
+    let head_end = char_byte_offset(text, head_chars);
+    let tail_start = char_byte_offset(text, total_chars.saturating_sub(tail_chars)).max(head_end);
 
     let omitted = estimated.saturating_sub(budget_tokens);
     format!(
@@ -278,26 +294,13 @@ pub fn truncate_with_budget(text: &str, budget_tokens: usize) -> String {
     )
 }
 
-const fn floor_char_boundary(s: &str, idx: usize) -> usize {
-    if idx >= s.len() {
-        return s.len();
-    }
-    let mut i = idx;
-    while i > 0 && !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
-}
-
-const fn ceil_char_boundary(s: &str, idx: usize) -> usize {
-    if idx >= s.len() {
-        return s.len();
-    }
-    let mut i = idx;
-    while i < s.len() && !s.is_char_boundary(i) {
-        i += 1;
-    }
-    i
+/// Byte offset where the `n`-th char starts, clamped to `text.len()`. Lets the
+/// truncator slice on exact char counts without ever mixing char and byte
+/// units (the bug the old `floor`/`ceil_char_boundary` byte-index helpers hid).
+fn char_byte_offset(text: &str, n: usize) -> usize {
+    text.char_indices()
+        .nth(n)
+        .map_or(text.len(), |(byte_idx, _)| byte_idx)
 }
 
 fn parse_marker_path(line: &str) -> Option<PathBuf> {
@@ -393,15 +396,24 @@ mod tests {
     }
 
     #[test]
-    fn fallback_table_bash_returns_eight_k() {
-        assert_eq!(resolve_result_budget("bash_exec", None), Some(8_000));
-        assert_eq!(resolve_result_budget("Bash", None), Some(8_000));
+    fn migrated_builtins_flow_through_explicit() {
+        // bash/web_fetch no longer carry a name-table budget — they declare it
+        // via `AlephTool::max_result_tokens`, which reaches this fn as the
+        // `explicit` argument (verified end-to-end by the adapter test).
+        assert_eq!(resolve_result_budget("web_fetch", Some(10_000)), Some(10_000));
+        assert_eq!(resolve_result_budget("bash", Some(8_000)), Some(8_000));
+        // With no explicit budget they now fall to the global default rather
+        // than the removed name-table arms.
+        assert_eq!(
+            resolve_result_budget("web_fetch", None),
+            Some(DEFAULT_RESULT_BUDGET_TOKENS)
+        );
     }
 
     #[test]
-    fn fallback_table_web_and_grep() {
-        assert_eq!(resolve_result_budget("web_fetch", None), Some(10_000));
-        assert_eq!(resolve_result_budget("WebFetch", None), Some(10_000));
+    fn fallback_table_keeps_grep() {
+        // `search_files`/`Grep` has no in-crate tool to declare the trait
+        // method, so it remains the single legacy name-table entry.
         assert_eq!(resolve_result_budget("Grep", None), Some(6_000));
         assert_eq!(resolve_result_budget("search_files", None), Some(6_000));
     }
@@ -561,5 +573,29 @@ mod tests {
             &out[out.len() - 80..]
         );
         assert!(out.contains("[output truncated"));
+    }
+
+    #[test]
+    fn truncate_is_content_aware_and_lands_near_budget() {
+        // CJK content far over budget. Because the kept head+tail is now sized
+        // from the estimator's own chars-per-token ratio (not a fixed
+        // 4-chars/token assumption), the truncated result's estimated tokens
+        // land near the budget regardless of script — never the divergence the
+        // old byte-vs-char math produced.
+        let text = "数据分析报告".repeat(3000);
+        let budget = 250;
+        let out = truncate_with_budget(&text, budget);
+        assert!(out.contains("[output truncated"), "should be truncated");
+        let kept = estimate_tokens_smart(&out);
+        assert!(
+            kept <= budget * 2,
+            "content-aware truncation kept {kept} tokens for budget {budget} (expected ~budget)"
+        );
+        assert!(
+            kept >= budget / 4,
+            "should not over-truncate to near-nothing: kept {kept}"
+        );
+        // Slicing stays on char boundaries (no panic, valid UTF-8 out).
+        assert!(out.chars().count() > 0);
     }
 }
