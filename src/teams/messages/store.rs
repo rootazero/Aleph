@@ -128,6 +128,9 @@ pub trait MessageStore: Send + Sync {
         team_id: &str,
         limit: usize,
     ) -> crate::error::Result<Vec<TeamMessage>>;
+
+    /// Hard-delete all messages (and their recipients) for a team. Returns rows deleted.
+    async fn delete_team_messages(&self, team_id: &str) -> crate::error::Result<usize>;
 }
 
 // ---------------------------------------------------------------------------
@@ -776,6 +779,24 @@ impl MessageStore for SqliteMessageStore {
         }
         Ok(messages)
     }
+
+    async fn delete_team_messages(&self, team_id: &str) -> crate::error::Result<usize> {
+        let conn = self.conn.lock().await;
+        // Delete recipients first (no FK cascade in SQLite schema).
+        conn.execute(
+            "DELETE FROM message_recipients WHERE message_id IN \
+             (SELECT id FROM team_messages WHERE team_id = ?1)",
+            params![team_id],
+        )
+        .map_err(db_err)?;
+        let n = conn
+            .execute(
+                "DELETE FROM team_messages WHERE team_id = ?1",
+                params![team_id],
+            )
+            .map_err(db_err)?;
+        Ok(n)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1175,6 +1196,61 @@ mod tests {
         let got = store.list_team_messages("t", 100).await.expect("list");
         assert_eq!(got.len(), 1, "expired messages still in durable transcript");
         assert_eq!(got[0].content, "remembered");
+    }
+
+    #[tokio::test]
+    async fn delete_team_messages_removes_rows_and_recipients() {
+        let store = SqliteMessageStore::new_in_memory().await;
+
+        // Seed two messages for team-A and one for team-B.
+        for from in ["alice", "bob"] {
+            store
+                .send_message(NewMessage {
+                    team_id: "team-A".to_string(),
+                    from_agent: from.to_string(),
+                    msg_type: MessageType::Message,
+                    subject: String::new(),
+                    content: from.to_string(),
+                    recipients: vec![to_recipient("carol")],
+                    reply_to: None,
+                    attachments: vec![],
+                })
+                .await
+                .expect("send team-A message");
+        }
+        store
+            .send_message(NewMessage {
+                team_id: "team-B".to_string(),
+                from_agent: "carol".to_string(),
+                msg_type: MessageType::Message,
+                subject: String::new(),
+                content: "team-B message".to_string(),
+                recipients: vec![to_recipient("alice")],
+                reply_to: None,
+                attachments: vec![],
+            })
+            .await
+            .expect("send team-B message");
+
+        let n = store.delete_team_messages("team-A").await.unwrap();
+        assert_eq!(n, 2, "should delete exactly 2 team-A messages");
+        assert!(
+            store
+                .list_team_messages("team-A", 100)
+                .await
+                .unwrap()
+                .is_empty(),
+            "team-A messages should be gone"
+        );
+        assert_eq!(
+            store
+                .list_team_messages("team-B", 100)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "team-B message must not be deleted"
+        );
     }
 
     #[tokio::test]
