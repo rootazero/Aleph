@@ -1,7 +1,15 @@
-//! 4-signal relevance: direct-link ×3, source-overlap ×4, Adamic-Adar ×1.5,
-//! type-affinity ×1. Concurrency for the full pairwise pass via std threads.
+//! 4-signal relevance: direct-link ×3, source-overlap ×4 (IDF-damped),
+//! Adamic-Adar ×1.5, type-affinity ×1. Concurrency for the full pairwise pass
+//! via std threads.
+//!
+//! Both evidence signals share one rarity principle: a connector linking few
+//! notes is stronger than one linking many. Adamic-Adar applies it to shared
+//! graph neighbours (`1/ln(degree)`); source-overlap applies it to shared
+//! `source_notes` via document frequency (`ln2/ln(df)`), so a source cited by
+//! exactly the two notes carries full weight while a ubiquitous source decays.
 
 use std::collections::HashSet;
+use std::f32::consts::LN_2;
 
 use super::GraphIndex;
 
@@ -34,9 +42,19 @@ pub fn score_pair(g: &GraphIndex, w: &SignalWeights, a: usize, b: usize) -> f32 
     if g.adj[a].contains(&b) {
         s += w.direct_link;
     }
-    let overlap = g.sources[a].intersection(&g.sources[b]).count();
-    if overlap > 0 {
-        s += w.source_overlap * overlap as f32;
+    // Source-overlap, damped by each shared source's document frequency
+    // (Adamic-Adar over the note↔source bipartite graph). df ≥ 2 always holds
+    // for a shared source, so `ln2/ln(df)` lands in (0, 1]: df=2 → 1.0 (the
+    // rarest possible shared source, exactly the two notes), larger df decays.
+    let mut src_signal = 0.0_f32;
+    for &src in g.sources[a].intersection(&g.sources[b]) {
+        let df = g.source_df(src);
+        if df > 1 {
+            src_signal += LN_2 / (df as f32).ln();
+        }
+    }
+    if src_signal > 0.0 {
+        s += w.source_overlap * src_signal;
     }
     let mut aa = 0.0_f32;
     for &c in g.adj[a].intersection(&g.adj[b]) {
@@ -64,13 +82,8 @@ pub fn related(g: &GraphIndex, w: &SignalWeights, seed: usize, k: usize) -> Vec<
             cand.insert(n2);
         }
     }
-    if !g.sources[seed].is_empty() {
-        for i in 0..g.len() {
-            if i != seed && g.sources[i].intersection(&g.sources[seed]).next().is_some() {
-                cand.insert(i);
-            }
-        }
-    }
+    // Source-sharers from the inverted index (O(postings), not an O(N) scan).
+    cand.extend(g.source_sharers(seed));
     cand.remove(&seed);
     let mut scored: Vec<(String, f32)> = cand
         .into_iter()

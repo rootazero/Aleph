@@ -44,8 +44,70 @@ fn source_overlap_scores() {
     };
     let g = GraphIndex::build(&snap);
     let w = relevance::SignalWeights::default();
-    // one shared source = 4.0, no link, different type
+    // one shared source cited only by these two notes (df=2) = full weight 4.0,
+    // no link, different type
     assert!((relevance::score_pair(&g, &w, 0, 1) - 4.0).abs() < 1e-4);
+}
+
+#[test]
+fn rare_shared_source_outscores_ubiquitous_one() {
+    use crate::memory::notes::graph::*;
+    let node = |p: &str, cat: &str, src: &[&str]| GraphNode {
+        path: p.into(),
+        category: cat.into(),
+        sources: src.iter().map(|s| s.to_string()).collect(),
+    };
+    // "rare" is cited by exactly a,b (df=2); "common" by a,c,d (df=3).
+    // Distinct categories + no edges isolate the source signal.
+    let snap = GraphSnapshot {
+        nodes: vec![
+            node("p/a", "ca", &["rare", "common"]),
+            node("p/b", "cb", &["rare"]),
+            node("p/c", "cc", &["common"]),
+            node("p/d", "cd", &["common"]),
+        ],
+        edges: vec![],
+    };
+    let g = GraphIndex::build(&snap);
+    let w = relevance::SignalWeights::default();
+    let s_rare = relevance::score_pair(&g, &w, 0, 1); // a—b via "rare"
+    let s_common = relevance::score_pair(&g, &w, 0, 2); // a—c via "common"
+    // df=2 → 4.0 * ln2/ln2 = 4.0 ; df=3 → 4.0 * ln2/ln3 ≈ 2.524
+    assert!((s_rare - 4.0).abs() < 1e-4);
+    assert!((s_common - 4.0 * (2.0_f32).ln() / (3.0_f32).ln()).abs() < 1e-4);
+    assert!(
+        s_rare > s_common,
+        "rare source ({s_rare}) must outscore ubiquitous one ({s_common})"
+    );
+}
+
+#[test]
+fn source_sharers_inverted_index_matches_full_scan() {
+    use crate::memory::notes::graph::*;
+    let node = |p: &str, src: &[&str]| GraphNode {
+        path: p.into(),
+        category: "x".into(),
+        sources: src.iter().map(|s| s.to_string()).collect(),
+    };
+    let snap = GraphSnapshot {
+        nodes: vec![
+            node("p/a", &["s1", "s2"]),
+            node("p/b", &["s1"]),
+            node("p/c", &["s2"]),
+            node("p/d", &["s3"]),
+        ],
+        edges: vec![],
+    };
+    let g = GraphIndex::build(&snap);
+    // a shares s1 with b and s2 with c, but nothing with d.
+    let sharers = g.source_sharers(0);
+    assert!(sharers.contains(&1));
+    assert!(sharers.contains(&2));
+    assert!(!sharers.contains(&3));
+    assert!(!sharers.contains(&0)); // never includes the seed itself
+    assert_eq!(g.source_df("s1"), 2);
+    assert_eq!(g.source_df("s2"), 2);
+    assert_eq!(g.source_df("missing"), 0);
 }
 
 #[test]
