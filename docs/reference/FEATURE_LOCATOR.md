@@ -269,11 +269,12 @@
 - **打磨话术**：「‘多代理协作/群聊’在 `src/teams/`；‘单个 agent 怎么跑/怎么 spawn 子代理’在 `src/agents/`。两者配合。」
 
 ### 4.6 Agent 切换 (Agent Switching)
-- **口语关键词**：agent 切换、创建/删除/列出、项目覆盖、agent 配置
-- **代码锚点**：`src/builtin_tools/agent_manage/`（create/delete/list/info）、`src/agents/registry.rs`、`src/agents/loader.rs`（lookup_with_overlay 项目覆盖）
-- **职责**：agent 工具管生命周期，全局（~/.aleph/agents/）+ 项目层（project/.aleph/agents/）两级，项目层可影子覆盖全局。
-- **状态**：✅ 已实现。
-- **打磨话术**：「agent 创建/切换 UI 工具在 `agent_manage/`；‘加载与项目覆盖’在 `agents/loader.rs`。」
+- **口语关键词**：agent 切换、创建/删除/列出、绑定 channel、项目覆盖、agent 配置
+- **代码锚点**：`src/builtin_tools/agent_manage/`（create/delete/list/info/**switch**）、`src/agents/registry.rs`、`src/agents/loader.rs`（lookup_with_overlay 项目覆盖）；运行时绑定 `src/gateway/agent_env/manager_ops.rs::set_active_agent`，inbound 消费 `src/gateway/inbound_router/agent_resolver.rs`（Tier2 `get_active_agent`）。
+- **职责**：agent 工具管生命周期，全局（~/.aleph/agents/）+ 项目层（project/.aleph/agents/）两级，项目层可影子覆盖全局。**切换** = 把当前 channel 的活跃 agent 重绑到另一个已存在实例。
+- **状态**：✅ 已实现。**切换工具连线（2026-06-17）**：新增 `agent_switch` 工具——本节namesake 此前缺失（只有 Panel RPC `channels.set_agent`，LLM 无法经自然语言切换，违 R8）。`switch.rs` 复用 `SessionContext.__channel` 注入链 + 实例 `AgentRegistry`（存在性校验，杜绝绑幽灵 agent）+ `set_active_agent` + `GatewayEventBus`（新 `AgentLifecycleEvent::Bound`），逐点接入 9 处枚举（definitions/groups/method_authz(operator 门控)/registry_adapter(EXCLUSIVE)/slash_command/dispatch）。顺带修 `create.rs` 死引用（旧描述让模型调不存在的 `agent_bind`→ 改 `agent_switch`）。
+- **设计边界**：`agent_info` 查的是 AgentDef 子代理目录（explore/coder…），`list/create/delete/switch` 查运行时实例注册表——两套**刻意分层**（persona 实例 vs 子代理 role），未合并。
+- **打磨话术**：「agent 创建/切换/列出/删除 工具在 `agent_manage/`（同一运行时实例注册表）；切换落 `switch.rs`→`set_active_agent`，生效点在 `agent_resolver.rs` Tier2。‘加载与项目覆盖’在 `agents/loader.rs`（那是 AgentDef 侧，另一套）。」
 
 ### 4.7 消息流与最终答案汇总 (Message Stream & Final Answer)
 - **口语关键词**：对话消息流、StreamEvent、最终结果汇总、final_response、RunComplete、汇总打印输出

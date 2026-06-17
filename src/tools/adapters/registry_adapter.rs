@@ -39,6 +39,7 @@ pub(crate) const EXCLUSIVE_TOOLS: &[&str] = &[
     "cron_manage",
     "agent_create",
     "agent_delete",
+    "agent_switch",
     "team_create",
     "team_delegate",
     "team_set_protocol",

@@ -117,8 +117,8 @@ pub use acp_tools::{
 };
 pub use agent_manage::{
     AgentCreateArgs, AgentCreateOutput, AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput,
-    AgentDeleteTool, AgentListArgs, AgentListInfo, AgentListOutput, AgentListTool, SessionContext,
-    SessionContextHandle,
+    AgentDeleteTool, AgentListArgs, AgentListInfo, AgentListOutput, AgentListTool, AgentSwitchArgs,
+    AgentSwitchOutput, AgentSwitchTool, SessionContext, SessionContextHandle,
 };
 pub use arena::{
     ArenaCreateArgs, ArenaCreateOutput, ArenaCreateTool, ArenaQueryArgs, ArenaQueryOutput,

@@ -4,6 +4,7 @@ pub mod create;
 pub mod delete;
 pub mod info;
 pub mod list;
+pub mod switch;
 
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
@@ -62,6 +63,7 @@ pub use create::{AgentCreateArgs, AgentCreateOutput, AgentCreateTool};
 pub use delete::{AgentDeleteArgs, AgentDeleteOutput, AgentDeleteTool};
 pub use info::{AgentInfoArgs, AgentInfoOutput, AgentInfoTool};
 pub use list::{AgentListArgs, AgentListInfo, AgentListOutput, AgentListTool};
+pub use switch::{AgentSwitchArgs, AgentSwitchOutput, AgentSwitchTool};
 
 #[cfg(test)]
 mod policy_tests {

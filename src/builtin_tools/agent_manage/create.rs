@@ -186,7 +186,7 @@ impl AlephTool for AgentCreateTool {
     const DESCRIPTION: &'static str =
         "Create a new agent with its own workspace and memory. Use this when the \
          user wants a specialized assistant (e.g., trading, coding, health). \
-         After creation, bind the agent to a channel with agent_bind.";
+         After creation, make it active for the conversation with agent_switch.";
 
     type Args = AgentCreateArgs;
     type Output = AgentCreateOutput;
