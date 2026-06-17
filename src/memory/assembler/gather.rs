@@ -284,6 +284,12 @@ impl Gatherer {
 /// Category-prefix of `feedback/` notes (written by `FeedbackDistill`).
 const FEEDBACK_CATEGORY_PREFIX: &str = "feedback/";
 
+/// Category-prefix of `goal-lessons/` notes (written by `GoalLessonsPromoteStage`).
+/// Distilled goal lessons are behavioural directives, so they share the
+/// `Feedback` slot's standing-directive treatment rather than the generic
+/// `RelevantNotes` slot.
+const GOAL_LESSONS_CATEGORY_PREFIX: &str = "goal-lessons/";
+
 /// Decide which slot a retrieved note belongs to from its scheme-less path
 /// (`"{category}/{filename}"`).
 ///
@@ -291,8 +297,17 @@ const FEEDBACK_CATEGORY_PREFIX: &str = "feedback/";
 /// so `to_category_dir()` would also yield `"feedback"`, but the physical path
 /// is the durable signal: it stays correct for legacy notes written before the
 /// variant existed (whose persisted type mangled to `Other`).
+///
+/// `feedback/` and `goal-lessons/` both route to [`SlotKind::Feedback`]: both are
+/// distilled behavioural rules that, once a query matches them, must survive the
+/// LLM re-rank (see `hybrid.rs` Feedback pre-population) and render under the
+/// standing-directive label. Routing here does NOT make them always-on — the
+/// always-on floor is a separate physical scan of `feedback/*.md`
+/// (`feedback_floor.rs`); these still surface only when retrieval matches.
 fn slot_hint_for_path(path_no_scheme: &str) -> SlotKind {
-    if path_no_scheme.starts_with(FEEDBACK_CATEGORY_PREFIX) {
+    if path_no_scheme.starts_with(FEEDBACK_CATEGORY_PREFIX)
+        || path_no_scheme.starts_with(GOAL_LESSONS_CATEGORY_PREFIX)
+    {
         SlotKind::Feedback
     } else {
         SlotKind::RelevantNotes

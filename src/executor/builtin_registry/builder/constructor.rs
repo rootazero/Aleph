@@ -1796,7 +1796,10 @@ impl BuiltinToolRegistry {
                         as crate::sync_primitives::Arc<
                             dyn crate::memory::store::raw_memory::RawMemoryStore,
                         >,
-                    "default".to_string(),
+                    // Corrections must be namespaced to the active agent so
+                    // FeedbackDistill (which reads per-agent) can find them.
+                    // Previously hardcoded "default" — broke multi-agent recall.
+                    current_agent_id.clone(),
                 )
             }),
             browser_open_tool,
