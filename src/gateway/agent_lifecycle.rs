@@ -30,6 +30,13 @@ pub enum AgentLifecycleEvent {
         agent_id: String,
         workspace_archived: bool,
     },
+    /// A channel's active agent was switched (re-bound) to `agent_id`.
+    Bound {
+        agent_id: String,
+        channel: String,
+        /// The agent previously bound to the channel, if any.
+        previous_agent: Option<String>,
+    },
     /// A sub-agent was spawned by a parent agent
     SubagentSpawned {
         parent_agent_id: String,
@@ -53,6 +60,7 @@ impl AgentLifecycleEvent {
             Self::Completed { .. } => "agent.lifecycle.completed",
             Self::Unregistered { .. } => "agent.lifecycle.unregistered",
             Self::Deleted { .. } => "agent.lifecycle.deleted",
+            Self::Bound { .. } => "agent.lifecycle.bound",
             Self::SubagentSpawned { .. } => "agent.lifecycle.subagent_spawned",
             Self::SubagentCompleted { .. } => "agent.lifecycle.subagent_completed",
         }

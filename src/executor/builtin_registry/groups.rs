@@ -211,7 +211,13 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "agent_mgmt",
         name: "Agent 管理",
-        tools: &["agent_create", "agent_list", "agent_delete", "agent_info"],
+        tools: &[
+            "agent_create",
+            "agent_list",
+            "agent_switch",
+            "agent_delete",
+            "agent_info",
+        ],
     },
     ToolCategory {
         id: "session_mgmt",

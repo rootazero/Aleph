@@ -201,6 +201,7 @@ pub struct BuiltinToolRegistry {
 
     pub(crate) agent_list_tool: Option<crate::builtin_tools::agent_manage::AgentListTool>,
     pub(crate) agent_delete_tool: Option<crate::builtin_tools::agent_manage::AgentDeleteTool>,
+    pub(crate) agent_switch_tool: Option<crate::builtin_tools::agent_manage::AgentSwitchTool>,
     pub(crate) arena_create_tool: Option<crate::builtin_tools::arena::ArenaCreateTool>,
     pub(crate) arena_query_tool: Option<crate::builtin_tools::arena::ArenaQueryTool>,
     pub(crate) arena_settle_tool: Option<crate::builtin_tools::arena::ArenaSettleTool>,
@@ -1145,7 +1146,7 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Agent management tools — snapshot session context into arguments
             // to avoid race conditions from concurrent reads of the shared handle.
-            "agent_create" | "agent_list" | "agent_delete" => {
+            "agent_create" | "agent_list" | "agent_delete" | "agent_switch" => {
                 // Snapshot session context into tool arguments before async execution
                 let arguments = {
                     let mut args = arguments;
@@ -1178,6 +1179,12 @@ impl ToolRegistry for BuiltinToolRegistry {
                     "agent_delete" => Box::pin(async move {
                         let tool = self.agent_delete_tool.as_ref().ok_or_else(|| {
                             AlephError::tool("agent_delete not available: no AgentRegistry/AgentEnvStore configured")
+                        })?;
+                        tool.call_json(arguments).await
+                    }),
+                    "agent_switch" => Box::pin(async move {
+                        let tool = self.agent_switch_tool.as_ref().ok_or_else(|| {
+                            AlephError::tool("agent_switch not available: no AgentRegistry/AgentEnvStore configured")
                         })?;
                         tool.call_json(arguments).await
                     }),

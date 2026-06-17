@@ -631,58 +631,72 @@ impl BuiltinToolRegistry {
                 }
             });
 
-        let (agent_create_tool, agent_list_tool, agent_delete_tool, session_context_handle) =
-            if let (Some(ref ar), Some(ref wm), Some(ref sm)) = (
-                &config.agent_registry,
-                &config.workspace_manager,
-                &sm_for_agents,
-            ) {
-                use crate::builtin_tools::agent_manage;
-                let ctx = agent_manage::new_session_context_handle();
-                let create = {
-                    let tool = agent_manage::AgentCreateTool::new(
-                        Arc::clone(ar),
-                        Arc::clone(wm),
-                        Arc::clone(sm),
-                    );
-                    if let Some(ref am) = config.agent_manager {
-                        tool.with_agent_manager(Arc::clone(am))
-                    } else {
-                        tool
-                    }
-                };
-                let list = agent_manage::AgentListTool::new(Arc::clone(ar), Arc::clone(wm));
-                let delete = agent_manage::AgentDeleteTool::new(
-                    Arc::clone(ar),
-                    Arc::clone(wm),
-                    config.event_bus.clone(),
-                );
-
-                // Register agent tools WITH their parameter schemas so LLMs
-                // know which arguments to pass.
-                {
-                    use crate::tools::AlephTool;
-                    let tool_defs = [create.definition(), list.definition(), delete.definition()];
-                    for td in &tool_defs {
-                        let mut ut = UnifiedTool::new(
-                            format!("builtin:{}", td.name),
-                            &td.name,
-                            &td.description,
-                            ToolSource::Builtin,
-                        );
-                        ut = ut.with_parameters_schema(td.parameters.clone());
-                        tools.insert(td.name.clone(), ut);
-                    }
+        let (
+            agent_create_tool,
+            agent_list_tool,
+            agent_delete_tool,
+            agent_switch_tool,
+            session_context_handle,
+        ) = if let (Some(ref ar), Some(ref wm), Some(ref sm)) = (
+            &config.agent_registry,
+            &config.workspace_manager,
+            &sm_for_agents,
+        ) {
+            use crate::builtin_tools::agent_manage;
+            let ctx = agent_manage::new_session_context_handle();
+            let create = {
+                let tool =
+                    agent_manage::AgentCreateTool::new(Arc::clone(ar), Arc::clone(wm), Arc::clone(sm));
+                if let Some(ref am) = config.agent_manager {
+                    tool.with_agent_manager(Arc::clone(am))
+                } else {
+                    tool
                 }
-
-                info!("Registered agent management tools (agent.create, agent.list, agent.delete)");
-                (Some(create), Some(list), Some(delete), Some(ctx))
-            } else {
-                if config.agent_registry.is_some() && config.workspace_manager.is_some() {
-                    warn!("Agent management tools disabled: SessionManager not available");
-                }
-                (None, None, None, None)
             };
+            let list = agent_manage::AgentListTool::new(Arc::clone(ar), Arc::clone(wm));
+            let delete = agent_manage::AgentDeleteTool::new(
+                Arc::clone(ar),
+                Arc::clone(wm),
+                config.event_bus.clone(),
+            );
+            let switch = agent_manage::AgentSwitchTool::new(
+                Arc::clone(ar),
+                Arc::clone(wm),
+                config.event_bus.clone(),
+            );
+
+            // Register agent tools WITH their parameter schemas so LLMs
+            // know which arguments to pass.
+            {
+                use crate::tools::AlephTool;
+                let tool_defs = [
+                    create.definition(),
+                    list.definition(),
+                    delete.definition(),
+                    switch.definition(),
+                ];
+                for td in &tool_defs {
+                    let mut ut = UnifiedTool::new(
+                        format!("builtin:{}", td.name),
+                        &td.name,
+                        &td.description,
+                        ToolSource::Builtin,
+                    );
+                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    tools.insert(td.name.clone(), ut);
+                }
+            }
+
+            info!(
+                "Registered agent management tools (agent.create, agent.list, agent.delete, agent.switch)"
+            );
+            (Some(create), Some(list), Some(delete), Some(switch), Some(ctx))
+        } else {
+            if config.agent_registry.is_some() && config.workspace_manager.is_some() {
+                warn!("Agent management tools disabled: SessionManager not available");
+            }
+            (None, None, None, None, None)
+        };
 
         // Add ACP delegate tools (if AcpAdapterManager is provided)
         let (acp_delegate_tool, acp_switch_tool, acp_session_control_tool) = if let Some(
@@ -1830,6 +1844,7 @@ impl BuiltinToolRegistry {
             agent_create_tool,
             agent_list_tool,
             agent_delete_tool,
+            agent_switch_tool,
             agent_info_tool,
             session_context_handle,
             tool_policy_handle,

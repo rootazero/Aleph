@@ -402,6 +402,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires agent_registry + workspace_manager
     },
     BuiltinToolDefinition {
+        name: "agent_switch",
+        description: "Switch the active agent bound to the current channel to another existing agent",
+        requires_config: true, // Requires agent_registry + workspace_manager
+    },
+    BuiltinToolDefinition {
         name: "agent_info",
         description: "Get detailed capabilities and configuration of a registered agent (allowed/denied tools, iteration limits, context mode, usage hints)",
         requires_config: false, // Always available — builds its own agent-definition catalog
@@ -912,9 +917,10 @@ pub fn create_tool_boxed(
             crate::builtin_tools::heartbeat_manage::HeartbeatReportTool,
         )),
         // Agent management tools are created dynamically in
-        // BuiltinToolRegistry::with_config() — agent_create/list/delete need
-        // agent_registry + workspace_manager; agent_info builds its own catalog.
-        "agent_create" | "agent_list" | "agent_delete" | "agent_info" => None,
+        // BuiltinToolRegistry::with_config() — agent_create/list/delete/switch
+        // need agent_registry + workspace_manager; agent_info builds its own
+        // catalog.
+        "agent_create" | "agent_list" | "agent_delete" | "agent_switch" | "agent_info" => None,
         // self_config requires the per-agent agent_id, injected at construction time
         // in BuiltinToolRegistry — cannot be created standalone here.
         "self_config" => None,

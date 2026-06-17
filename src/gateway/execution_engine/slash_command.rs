@@ -240,7 +240,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 /// names for each tool's expected schema.
 fn build_tool_arguments(tool_id: &str, args_str: &str, raw_input: &str) -> serde_json::Value {
     match tool_id {
-        "agent_delete" => serde_json::json!({
+        "agent_delete" | "agent_switch" => serde_json::json!({
             "agent_id": args_str,
         }),
         "agent_create" => serde_json::json!({
