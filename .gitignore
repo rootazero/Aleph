@@ -131,3 +131,4 @@ examples/*
 /docs/*
 !/docs/reference/
 !/docs/guides/
+!/docs/images
