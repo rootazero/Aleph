@@ -3,6 +3,12 @@
 //! Provides a two-layer permission system: Global (Policies) + Agent-level.
 //! Each tool can be set to Allow, Ask (needs confirmation), or Deny.
 //! When merging global and agent permissions, the most restrictive level wins.
+//!
+//! Override keys may be **exact tool names** or **glob patterns** (`*`, `?`),
+//! reusing the same matcher as the action-type approval layer
+//! ([`crate::approval::matches_glob`]). Exact names always win over patterns
+//! (specific > general); when several patterns match one tool, the most
+//! restrictive of them wins — consistent with the module-wide merge philosophy.
 
 use std::collections::HashMap;
 
@@ -22,8 +28,10 @@ use crate::extension::PermissionAction;
 /// default = "allow"
 ///
 /// [policies.tool_permissions.overrides]
-/// shell = "ask"
-/// file_delete = "deny"
+/// shell = "ask"          # exact tool name
+/// file_delete = "deny"   # exact tool name
+/// "mcp__*" = "ask"       # glob: every MCP-bridged tool
+/// "*_delete" = "deny"    # glob: any tool whose name ends in `_delete`
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ToolPermissionsConfig {
@@ -52,12 +60,33 @@ impl Default for ToolPermissionsConfig {
 impl ToolPermissionsConfig {
     /// Resolve the effective permission for a tool.
     ///
-    /// Returns the override if present, otherwise the default.
+    /// Precedence (most specific first):
+    /// 1. **Exact** override for `tool_name` — the fast path.
+    /// 2. **Glob** overrides (keys containing `*`/`?`) matched against
+    ///    `tool_name`. When more than one pattern matches, the most restrictive
+    ///    (`Deny > Ask > Allow`) wins, mirroring [`Self::merge`].
+    /// 3. The configured `default`.
+    ///
+    /// Exact entries always take precedence over patterns, so a config can
+    /// carve out specific allowances inside a broad pattern (e.g. `"mcp__*" =
+    /// "ask"` plus `mcp__github_read = "allow"`).
     pub fn resolve(&self, tool_name: &str) -> PermissionAction {
-        self.overrides
-            .get(tool_name)
-            .copied()
-            .unwrap_or(self.default)
+        // 1. Exact override — fast path and most specific.
+        if let Some(action) = self.overrides.get(tool_name).copied() {
+            return action;
+        }
+        // 2. Glob-pattern overrides; most restrictive match wins.
+        let mut matched: Option<PermissionAction> = None;
+        for (pattern, action) in &self.overrides {
+            if is_glob_pattern(pattern) && crate::approval::matches_glob(tool_name, pattern) {
+                matched = Some(match matched {
+                    Some(prev) => restrictive_min(prev, *action),
+                    None => *action,
+                });
+            }
+        }
+        // 3. Default fallback.
+        matched.unwrap_or(self.default)
     }
 
     /// Merge global and agent-level permissions into an effective config.
@@ -92,6 +121,15 @@ impl ToolPermissionsConfig {
 
         Self { default, overrides }
     }
+}
+
+/// Whether an override key is a glob pattern rather than an exact tool name.
+///
+/// Mirrors the metacharacters honored by [`crate::approval::matches_glob`]
+/// (`*`, `?`). Real tool names never contain these, so any key carrying one is
+/// unambiguously a pattern.
+fn is_glob_pattern(key: &str) -> bool {
+    key.contains('*') || key.contains('?')
 }
 
 /// Return the more restrictive of two permission actions.
@@ -136,6 +174,87 @@ mod tests {
             overrides: HashMap::new(),
         };
         assert_eq!(config.resolve("anything"), PermissionAction::Deny);
+    }
+
+    #[test]
+    fn test_glob_override_matches_family() {
+        let config = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [("mcp__*".to_string(), PermissionAction::Ask)]
+                .into_iter()
+                .collect(),
+        };
+        assert_eq!(config.resolve("mcp__github"), PermissionAction::Ask);
+        assert_eq!(config.resolve("mcp__slack_send"), PermissionAction::Ask);
+        // Non-matching tools fall back to the default.
+        assert_eq!(config.resolve("read_file"), PermissionAction::Allow);
+    }
+
+    #[test]
+    fn test_exact_override_beats_glob() {
+        // Broad pattern asks, but a specific tool is explicitly allowed.
+        let config = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [
+                ("mcp__*".to_string(), PermissionAction::Ask),
+                ("mcp__github_read".to_string(), PermissionAction::Allow),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        assert_eq!(config.resolve("mcp__github_read"), PermissionAction::Allow);
+        assert_eq!(config.resolve("mcp__github_write"), PermissionAction::Ask);
+    }
+
+    #[test]
+    fn test_multiple_glob_matches_most_restrictive_wins() {
+        // `file_delete` matches both patterns; Deny must win over Ask.
+        let config = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [
+                ("file_*".to_string(), PermissionAction::Ask),
+                ("*_delete".to_string(), PermissionAction::Deny),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        assert_eq!(config.resolve("file_delete"), PermissionAction::Deny);
+        // Only the Ask pattern matches here.
+        assert_eq!(config.resolve("file_read"), PermissionAction::Ask);
+    }
+
+    #[test]
+    fn test_star_glob_overrides_all() {
+        let config = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [("*".to_string(), PermissionAction::Deny)]
+                .into_iter()
+                .collect(),
+        };
+        assert_eq!(config.resolve("anything"), PermissionAction::Deny);
+        assert_eq!(config.resolve("read_file"), PermissionAction::Deny);
+    }
+
+    #[test]
+    fn test_merge_composes_with_glob() {
+        // Global denies an MCP family via glob; agent tries to allow one member
+        // exactly. Most-restrictive-wins must keep it denied after merge.
+        let global = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [("mcp__*".to_string(), PermissionAction::Deny)]
+                .into_iter()
+                .collect(),
+        };
+        let agent = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [("mcp__github".to_string(), PermissionAction::Allow)]
+                .into_iter()
+                .collect(),
+        };
+        let merged = ToolPermissionsConfig::merge(&global, &agent);
+        assert_eq!(merged.resolve("mcp__github"), PermissionAction::Deny);
+        assert_eq!(merged.resolve("mcp__slack"), PermissionAction::Deny);
+        assert_eq!(merged.resolve("read_file"), PermissionAction::Allow);
     }
 
     #[test]
