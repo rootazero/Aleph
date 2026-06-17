@@ -12,7 +12,7 @@ use crate::error::AlephError;
 use crate::memory::context::{FactSource, NoteType};
 use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
 use crate::memory::notes::store::NoteStore;
-use crate::memory::notes::{sanitize_title, KnowledgeNote, NoteIndexer};
+use crate::memory::notes::{sanitize_note_path, sanitize_title, KnowledgeNote, NoteIndexer};
 use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::resilience::database::StateDatabase;
 use crate::routing::DEFAULT_AGENT_ID;
@@ -114,12 +114,15 @@ impl MemoryCommandHandler {
                     match indexer.store().find_by_filename(&title, agent_id).await {
                         Ok(paths) if !paths.is_empty() => {
                             for note_path in paths {
+                                let safe_path = crate::memory::notes::store::sanitize_note_path(&note_path);
                                 let file = indexer
                                     .memory_dir()
                                     .join(agent_id)
-                                    .join(format!("{note_path}.md"));
+                                    .join(format!("{safe_path}.md"));
                                 if file.exists() {
-                                    tokio::fs::remove_file(&file).await.ok();
+                                    if let Err(e) = tokio::fs::remove_file(&file).await {
+                                        tracing::error!(fact_id, path = %file.display(), error = %e, "Notes dual-write: failed to remove note file");
+                                    }
                                 }
                                 if let Err(e) = indexer
                                     .store()
@@ -143,7 +146,9 @@ impl MemoryCommandHandler {
                                 .join(cat)
                                 .join(format!("{title}.md"));
                             if file.exists() {
-                                tokio::fs::remove_file(&file).await.ok();
+                                if let Err(e) = tokio::fs::remove_file(&file).await {
+                                    tracing::error!(fact_id, path = %file.display(), error = %e, "Notes dual-write: failed to remove note file");
+                                }
                                 let note_path = format!("{cat}/{title}");
                                 if let Err(e) = indexer
                                     .store()

@@ -100,6 +100,20 @@ pub(crate) fn yaml_inline_array(items: &[String]) -> String {
     format!("[{}]", parts.join(", "))
 }
 
+/// Sanitize a `category/filename` note path for safe use as a filesystem path.
+/// Each path component is run through [`sanitize_title`] and joined with the
+/// platform separator, preventing traversal out of the agent memory directory.
+#[must_use]
+pub fn sanitize_note_path(note_path: &str) -> String {
+    note_path
+        .split(['/', '\\'])
+        .filter(|s| !s.is_empty())
+        .map(sanitize_title)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_default()
+        .join("/")
+}
+
 /// Sanitize a note title for safe use as a filename.
 ///
 /// Strips path separators, null bytes, and filesystem-unsafe characters

@@ -153,23 +153,31 @@ impl RawMemoryStore for SqliteMemoryBackend {
         }
 
         let conn = lock_conn!(self)?;
+        // SQLite places a hard limit on the number of host parameters in a
+        // single statement (commonly 999). Chunk large ID lists to stay below it.
+        const CHUNK_SIZE: usize = 900;
+        let mut total = 0usize;
 
-        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
-        let sql = format!(
-            "UPDATE raw_memories SET is_processed = 1 WHERE id IN ({})",
-            placeholders.join(", ")
-        );
+        for chunk in ids.chunks(CHUNK_SIZE) {
+            let placeholders: Vec<String> =
+                (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+            let sql = format!(
+                "UPDATE raw_memories SET is_processed = 1 WHERE id IN ({})",
+                placeholders.join(", ")
+            );
 
-        let params: Vec<&dyn rusqlite::types::ToSql> = ids
-            .iter()
-            .map(|id| id as &dyn rusqlite::types::ToSql)
-            .collect();
+            let params: Vec<&dyn rusqlite::types::ToSql> = chunk
+                .iter()
+                .map(|id| id as &dyn rusqlite::types::ToSql)
+                .collect();
 
-        let affected = conn
-            .execute(&sql, params.as_slice())
-            .map_err(|e| AlephError::config(format!("mark_raw_as_processed failed: {e}")))?;
+            let affected = conn
+                .execute(&sql, params.as_slice())
+                .map_err(|e| AlephError::config(format!("mark_raw_as_processed failed: {e}")))?;
+            total += affected;
+        }
 
-        Ok(affected)
+        Ok(total)
     }
 
     async fn count_unprocessed(&self, agent_id: &str) -> Result<usize, AlephError> {

@@ -253,7 +253,8 @@ impl<S: NoteStore> NoteIndexer<S> {
             if !CATEGORY_DIRS.contains(&entry.category.as_str()) {
                 continue;
             }
-            let file = agent_dir.join(&entry.category).join(
+            let safe_cat = sanitize_title(&entry.category).unwrap_or_else(|_| "other".to_string());
+            let file = agent_dir.join(safe_cat).join(
                 crate::memory::notes::store::note_md_filename(&entry.filename),
             );
             if fs::metadata(&file).await.is_err() {
@@ -383,10 +384,13 @@ impl<S: NoteStore> NoteIndexer<S> {
         content: &str,
     ) -> Result<PathBuf, AlephError> {
         let safe_title = sanitize_title(title)?;
+        let safe_agent = sanitize_title(agent_id)
+            .unwrap_or_else(|_| crate::memory::notes::DEFAULT_AGENT_ID.to_string());
+        let safe_category = sanitize_title(category).unwrap_or_else(|_| "other".to_string());
         let path = self
             .memory_dir
-            .join(agent_id)
-            .join(category)
+            .join(safe_agent)
+            .join(safe_category)
             .join(format!("{safe_title}.md"));
 
         if let Some(parent) = path.parent() {

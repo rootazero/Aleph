@@ -160,7 +160,9 @@ fn render_item_markdown(out: &mut String, item: &EnvelopeItem, slot: SlotKind) {
     };
     out.push_str(&header);
     out.push('\n');
-    out.push_str(&item.content);
+    // Escape closing-tag sequences in user content so a recalled memory cannot
+    // prematurely close the surrounding <memory> or slot fences.
+    out.push_str(&item.content.replace("</", "<\\/"));
     out.push('\n');
 }
 

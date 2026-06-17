@@ -6,6 +6,7 @@ use crate::gateway::router::SessionKey;
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::message::UnifiedMessage;
 use crate::sync_primitives::Ordering;
+use crate::thinker::xml_util::escape_xml_attr;
 use tracing::{debug, warn};
 
 impl SessionCompactor {
@@ -136,7 +137,8 @@ impl SessionCompactor {
         // budget so a verbose hook can't blow it out; the summary loop below
         // sees the reduced `used_tokens`.
         for ctx_text in &pinned_contexts {
-            let xml = format!("<session_context depth=\"hook\">\n{ctx_text}\n</session_context>");
+            let escaped = escape_xml_attr(ctx_text);
+            let xml = format!("<session_context depth=\"hook\">\n{escaped}\n</session_context>");
             used_tokens += super::context_window::estimate_tokens(&xml, ratio);
             result.push(UnifiedMessage::user(xml));
         }
@@ -165,7 +167,7 @@ impl SessionCompactor {
 
             let xml_content = format!(
                 "<session_context depth=\"d{depth}\">\n{}\n</session_context>",
-                fact.content
+                escape_xml_attr(&fact.content)
             );
             result.push(UnifiedMessage::user(xml_content));
             used_tokens += summary_tokens;

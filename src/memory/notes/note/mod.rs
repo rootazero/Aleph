@@ -14,7 +14,7 @@ mod relation;
 mod tests;
 pub mod types;
 
-pub use helpers::sanitize_title;
+pub use helpers::{sanitize_note_path, sanitize_title};
 pub use relation::Relation;
 pub use types::{FactProvenance, ProvenanceOrigin, Severity};
 

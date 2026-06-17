@@ -29,7 +29,13 @@ impl SnapshotWriter {
     ///
     /// Returns the path of the written file on success.
     pub fn write(&self, snapshot: &SessionSnapshot) -> std::io::Result<PathBuf> {
-        let dir = self.base_dir.join(&snapshot.session_id);
+        // Sanitize the session id so it cannot escape `base_dir` via path
+        // separators or parent references.
+        let safe_id = snapshot
+            .session_id
+            .replace(['/', '\\', '\0'], "_")
+            .replace("..", "__");
+        let dir = self.base_dir.join(&safe_id);
         std::fs::create_dir_all(&dir)?;
 
         let path = dir.join("resume.json");
@@ -96,7 +102,7 @@ mod tests {
         let path = writer.write(&snap).unwrap();
 
         assert!(path.exists());
-        assert!(path.ends_with("session-abc/resume.json"));
+        assert!(path.ends_with("session-abc\\resume.json") || path.ends_with("session-abc/resume.json"));
 
         let content = std::fs::read_to_string(&path).unwrap();
         let restored: SessionSnapshot = serde_json::from_str(&content).unwrap();

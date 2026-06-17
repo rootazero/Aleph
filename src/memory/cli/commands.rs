@@ -7,6 +7,7 @@ use crate::error::AlephError;
 use crate::memory::notes::store::note_md_filename;
 use crate::memory::notes::store::NoteIndexEntry;
 use crate::memory::notes::store::NoteStore;
+use crate::memory::notes::sanitize_title;
 use crate::memory::store::MemoryBackend;
 
 /// Filter options for listing notes
@@ -330,22 +331,30 @@ impl MemoryCommands {
 
         // Delete the markdown file from disk
         if let Some(entry_) = entry {
+            let safe_cat = sanitize_title(&entry_.category).unwrap_or_else(|_| "other".to_string());
+            let safe_file = sanitize_title(&entry_.filename).unwrap_or_else(|_| "note".to_string());
             let file_path = self
                 .memory_dir
                 .join(&self.agent_id)
-                .join(&entry_.category)
-                .join(note_md_filename(&entry_.filename));
-            let _ = tokio::fs::remove_file(&file_path).await;
+                .join(safe_cat)
+                .join(note_md_filename(&safe_file));
+            if let Err(e) = tokio::fs::remove_file(&file_path).await {
+                tracing::warn!(path = %file_path.display(), error = %e, "Notes CLI: failed to remove note file");
+            }
         } else {
             // Entry was already removed from index — try to infer the file path
             // from the path components ("category/filename")
             if let Some((category, filename)) = full_path.split_once('/') {
+                let safe_cat = sanitize_title(category).unwrap_or_else(|_| "other".to_string());
+                let safe_file = sanitize_title(filename).unwrap_or_else(|_| "note".to_string());
                 let file_path = self
                     .memory_dir
                     .join(&self.agent_id)
-                    .join(category)
-                    .join(note_md_filename(filename));
-                let _ = tokio::fs::remove_file(&file_path).await;
+                    .join(safe_cat)
+                    .join(note_md_filename(&safe_file));
+                if let Err(e) = tokio::fs::remove_file(&file_path).await {
+                    tracing::warn!(path = %file_path.display(), error = %e, "Notes CLI: failed to remove note file");
+                }
             }
         }
 
