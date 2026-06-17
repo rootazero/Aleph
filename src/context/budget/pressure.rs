@@ -218,29 +218,64 @@ pub fn estimate_tokens_aware(content: &str, prose_ratio: f64) -> usize {
 /// and the stripper agree on what an image costs.
 pub const IMAGE_TOKENS_ESTIMATE: usize = 1500;
 
-/// Content-aware token estimate for a whole message.
+/// Append `part` to `buf`, space-separating from any prior content. Mirrors
+/// `UnifiedMessage::text_content`'s `parts.join(" ")` for non-empty parts, so a
+/// single-class message stays byte-identical to the old flattened estimate.
+fn push_part(buf: &mut String, part: &str) {
+    if !buf.is_empty() {
+        buf.push(' ');
+    }
+    buf.push_str(part);
+}
+
+/// Content-aware token estimate for a whole message, charging each block class
+/// at its own density.
 ///
-/// Text/JSON/thinking/tool-call blocks are estimated via [`estimate_tokens_aware`]
-/// (which already adapts to CJK/code density), plus a flat per-image charge for
-/// every [`ContentBlock::Image`] block. The image term matters because
-/// [`UnifiedMessage::text_content`] omits image blocks entirely: without it the
-/// pressure sensor counts a multi-megabyte screenshot as **zero tokens** and
-/// under-estimates vision-heavy contexts by ~[`IMAGE_TOKENS_ESTIMATE`] tokens
-/// per image — so compaction (and the image-stripping that would shed those
-/// very images) fires too late, risking provider-side overflow before the EWMA
-/// usage calibration can correct.
+/// Blocks split into three accounting classes instead of being flattened into
+/// one prose-anchored string (the old `text_content()` path):
 ///
-/// Image-free messages contain no image blocks, so this is byte-identical to
-/// `estimate_tokens_aware(&msg.text_content(), prose_ratio)` for the common case.
+/// - **Prose** ([`ContentBlock::Text`] + [`ContentBlock::Thinking`]): estimated
+///   via [`estimate_tokens_aware`] at the caller's `prose_ratio`, so CJK/code
+///   density still applies inside natural-language blocks.
+/// - **Structured** ([`ContentBlock::Json`] tool output + [`ContentBlock::ToolCall`]
+///   `name`+`arguments`): estimated at the denser [`CODE_RATIO`] anchor. JSON is
+///   symbol-dense (`{`, `"`, `:`, `,`) and tokenizes ~like source, but the old
+///   path charged it at the 3.5 prose ratio — `looks_like_code` misses pure JSON
+///   (braces only bookend it), so it never tripped the code ratio. Agentic loops
+///   are dominated by tool calls and tool results, so this under-count made the
+///   sensor systematically *under-report* pressure on exactly the tool-heavy
+///   turns, firing compaction late. CJK *inside* structured values still gets
+///   CJK density because the code ratio is only the non-CJK anchor.
+/// - **Image** ([`ContentBlock::Image`]): a flat [`IMAGE_TOKENS_ESTIMATE`] per
+///   block. `text_content()` omits images, so without this a multi-megabyte
+///   screenshot counted as **zero tokens** and vision contexts under-reported
+///   pressure by ~[`IMAGE_TOKENS_ESTIMATE`] per image.
+///
+/// A message with no structured or image blocks (ordinary chat: text/thinking
+/// only) is byte-identical to the old
+/// `estimate_tokens_aware(&msg.text_content(), prose_ratio)` — the empty
+/// structured string contributes zero. The EWMA usage calibration then refines
+/// whatever residual error remains; this just gives it a more accurate base so
+/// it converges from the right side on tool-heavy and vision-heavy contexts.
 #[must_use]
 pub fn estimate_message_tokens_aware(msg: &UnifiedMessage, prose_ratio: f64) -> usize {
-    let text_tokens = estimate_tokens_aware(&msg.text_content(), prose_ratio);
-    let image_count = msg
-        .content_blocks()
-        .iter()
-        .filter(|b| matches!(b, ContentBlock::Image { .. }))
-        .count();
-    text_tokens + image_count * IMAGE_TOKENS_ESTIMATE
+    let mut prose = String::new();
+    let mut structured = String::new();
+    let mut image_count = 0usize;
+    for block in msg.content_blocks() {
+        match block {
+            ContentBlock::Text { text, .. } => push_part(&mut prose, text),
+            ContentBlock::Thinking { thinking, .. } => push_part(&mut prose, thinking),
+            ContentBlock::Json { value } => push_part(&mut structured, &value.to_string()),
+            ContentBlock::ToolCall {
+                name, arguments, ..
+            } => push_part(&mut structured, &format!("{name} {arguments}")),
+            ContentBlock::Image { .. } => image_count += 1,
+        }
+    }
+    estimate_tokens_aware(&prose, prose_ratio)
+        + estimate_tokens_aware(&structured, CODE_RATIO)
+        + image_count * IMAGE_TOKENS_ESTIMATE
 }
 
 // =============================================================================
@@ -468,6 +503,80 @@ mod tests {
         assert_eq!(
             estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO),
             3 * IMAGE_TOKENS_ESTIMATE
+        );
+    }
+
+    #[test]
+    fn message_estimate_byte_identical_for_multi_block_chat() {
+        // Text + Thinking only (no structured / image): must stay exactly the old
+        // flattened text_content estimate, so ordinary conversation is untouched.
+        let msg = UnifiedMessage::user_with_content(vec![
+            ContentBlock::Text {
+                text: "first prose block here".to_string(),
+                cache_control: None,
+            },
+            ContentBlock::Thinking {
+                thinking: "and a thinking trace block".to_string(),
+                signature: None,
+            },
+        ]);
+        assert_eq!(
+            estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO),
+            estimate_tokens_aware(&msg.text_content(), DEFAULT_PROSE_RATIO),
+        );
+    }
+
+    #[test]
+    fn message_estimate_charges_structured_at_code_density() {
+        // The fix: a JSON tool-output block flattened alongside prose used to be
+        // folded through the prose anchor (3.5) — `looks_like_code` misses JSON
+        // mixed into prose — under-counting the symbol-dense payload and
+        // under-reporting pressure on tool-heavy turns. Now the structured block
+        // is charged at the denser CODE_RATIO while the prose stays at its anchor.
+        let json = serde_json::json!({
+            "status": "ok",
+            "items": [{"id": 1, "name": "alpha"}, {"id": 2, "name": "beta"}],
+            "count": 2
+        });
+        let text = "Here is the tool result you asked for, summarized in prose.";
+        let msg = UnifiedMessage::user_with_content(vec![
+            ContentBlock::Text {
+                text: text.to_string(),
+                cache_control: None,
+            },
+            ContentBlock::Json {
+                value: json.clone(),
+            },
+        ]);
+        // Exact decomposition: prose at the prose anchor + JSON at code density.
+        let expected = estimate_tokens_aware(text, DEFAULT_PROSE_RATIO)
+            + estimate_tokens_aware(&json.to_string(), CODE_RATIO);
+        assert_eq!(
+            estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO),
+            expected
+        );
+        // Never cheaper than charging everything at the looser prose anchor —
+        // the systematic direction of the fix (denser ⇒ ≥ tokens).
+        let all_prose_anchored = estimate_tokens_aware(text, DEFAULT_PROSE_RATIO)
+            + estimate_tokens_aware(&json.to_string(), DEFAULT_PROSE_RATIO);
+        assert!(estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO) >= all_prose_anchored);
+    }
+
+    #[test]
+    fn message_estimate_charges_tool_call_arguments_as_structured() {
+        // A tool call's JSON arguments are structured, not prose — charged at the
+        // code anchor, matching how the same bytes estimate via the code ratio.
+        let arguments = serde_json::json!({"path": "/etc/hosts", "limit": 100});
+        let msg = UnifiedMessage::user_with_content(vec![ContentBlock::ToolCall {
+            id: "call_1".to_string(),
+            name: "read_file".to_string(),
+            arguments: arguments.clone(),
+            thought_signature: None,
+        }]);
+        let flattened = format!("read_file {arguments}");
+        assert_eq!(
+            estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO),
+            estimate_tokens_aware(&flattened, CODE_RATIO),
         );
     }
 }
