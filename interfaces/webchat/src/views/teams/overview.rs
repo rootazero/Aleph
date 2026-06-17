@@ -92,14 +92,16 @@ pub fn OverviewView() -> impl IntoView {
         spawn_local(async move {
             if let Err(e) = TeamsApi::disband(&state, &team_id).await {
                 web_sys::console::error_1(&format!("Disband failed: {e}").into());
+                error_msg.set(Some(format!("解散失败: {e}")));
+                return;
             }
+            error_msg.set(None);
             // Collapse if this team was expanded
             if expanded_id.get_untracked().as_deref() == Some(&team_id) {
                 expanded_id.set(None);
                 expanded_detail.set(None);
             }
             is_loading.set(true);
-            error_msg.set(None);
             match TeamsApi::list(&state).await {
                 Ok(list) => teams.set(list),
                 Err(e) => error_msg.set(Some(e)),
@@ -114,13 +116,15 @@ pub fn OverviewView() -> impl IntoView {
         spawn_local(async move {
             if let Err(e) = TeamsApi::delete(&state, &team_id).await {
                 web_sys::console::error_1(&format!("Delete failed: {e}").into());
+                error_msg.set(Some(format!("删除失败: {e}")));
+                return;
             }
+            error_msg.set(None);
             if expanded_id.get_untracked().as_deref() == Some(&team_id) {
                 expanded_id.set(None);
                 expanded_detail.set(None);
             }
             is_loading.set(true);
-            error_msg.set(None);
             match TeamsApi::list(&state).await {
                 Ok(list) => teams.set(list),
                 Err(e) => error_msg.set(Some(e)),
