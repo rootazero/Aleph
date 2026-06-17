@@ -169,9 +169,9 @@
 - **MSRV = 1.95**（由 `sysinfo 0.39` 决定），在 `Cargo.toml` 的 `[workspace.package]` 与 `[package]` 两处 `rust-version` 声明。
 - 仓库根的 `rust-toolchain.toml` 钉住具体 stable（当前 `1.96.0`），本地与 CI 自动使用同一工具链——无需 `rustup default` 或 `cargo +<ver>`。抬高 MSRV 时同步更新这两处。
 
-> **分发形态**: Aleph 发布三类产物（同一 tag 一并出）：**完整桌面 App**（macOS `.dmg` / Windows `.msi` / Linux `.deb`，通过 Tauri `externalBin` 内置 `aleph-server`，单机零配置，首次启动自动拉起并接管旧 daemon）、**Aleph Panel 纯壳 App**（`embedded-core` feature 关闭，不带 server，连接局域网内任一 `aleph-server`）、**独立 `aleph-server` 二进制**（类 Unix 用 `scripts/install.sh` 经 `curl | bash`；Windows 用 `scripts/install.ps1` 经 `irm … | iex` 装到 `%LOCALAPPDATA%\Aleph\aleph-server.exe`；用于服务器 / NAS 部署）。
+> **分发形态**: Aleph 同一 tag 发三产物——完整桌面 App（内置 `aleph-server`，单机零配置）、Aleph Panel 纯壳 App（连局域网 server）、独立 `aleph-server` 二进制（`install.sh` / `install.ps1`）。详见 [PRODUCT_TOPOLOGY.md](docs/reference/PRODUCT_TOPOLOGY.md)。
 >
-> **信任模型 = 网络边界**：server 默认只绑 `127.0.0.1`（只信本机）；在 `~/.aleph/config.toml` 写一行 `[gateway] host = "0.0.0.0"` 即显式开放整个局域网——**局域网内任何设备由此可连接 agent**（对话 + 读 + 执行工具/PTY/shell，仍随网络信任边界开放）。**唯一的方法级门槛是 device tier**：远程 Panel 默认 **Chat tier**，对 Aleph **自身配置**的变更（`self_config`/`skill_install`/provider 配置/`devices.*` 等 config 类 RPC 与工具）走 `src/gateway/method_authz.rs` 的 RPC+工具双门拦截，须 operator 经 `devices.set_level` 显式提权；本机(loopback) 始终 operator（单机零配置）。另一道协议护栏是 WS Origin 校验（`src/gateway/origin_policy.rs`，挡公网恶意网页**跨源**驱动 agent；经典 DNS-rebinding 已防御——same-origin 仅在 `Host` 为 IP 字面量/loopback 时放行，域名 `Host` 不再自动同源放行，域名部署须把 origin 加进 `[gateway] allowed_origins`，详见 SECURITY.md。`[gateway] allow_any_origin = true` 可关）。详见 [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)。
+> **信任模型 = 网络边界**: 默认只绑 `127.0.0.1`；`[gateway] host = "0.0.0.0"` 显式开放局域网。方法级门槛是 device tier（远程 Panel 默认 Chat tier，config 类 RPC 须 operator 提权），协议护栏是 WS Origin 校验。详见 [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)。
 
 > **⚠️ Panel ↔ Daemon 资源嵌入链**: Panel UI 经 `rust_embed` 在 `aleph-server` **编译时**静态嵌入二进制，运行中的 daemon 不读磁盘 dist/*。改完 panel 看不到效果＝漏了重编 binary。完整刷新链（`just wasm` → 重编 server → 替换运行中 binary，dev / macOS .app / Windows 三种 daemon 替换法）详见 [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md)。
 
