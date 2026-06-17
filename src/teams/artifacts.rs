@@ -290,6 +290,10 @@ pub trait ArtifactStore: Send + Sync + Any {
         &self,
         task_id: &str,
     ) -> crate::error::Result<Vec<TaskArtifact>>;
+
+    /// Hard-delete all artifacts (and their dependency rows) belonging to the given tasks.
+    /// Returns artifact rows deleted.
+    async fn delete_artifacts_for_tasks(&self, task_ids: &[String]) -> crate::error::Result<usize>;
 }
 
 // ---------------------------------------------------------------------------
@@ -467,6 +471,34 @@ impl ArtifactStore for SqliteArtifactStore {
             .map_err(db_err)?;
 
         Ok(artifacts)
+    }
+
+    async fn delete_artifacts_for_tasks(&self, task_ids: &[String]) -> crate::error::Result<usize> {
+        if task_ids.is_empty() {
+            return Ok(0);
+        }
+        let placeholders = task_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            task_ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let conn = self.conn.lock().await;
+        // Delete dependency rows for artifacts belonging to the given tasks first.
+        // (The FK has ON DELETE CASCADE, but pragma foreign_keys may not be set;
+        // deleting explicitly is always safe.)
+        conn.execute(
+            &format!(
+                "DELETE FROM task_artifact_dependencies WHERE artifact_id IN \
+                 (SELECT id FROM task_artifacts WHERE task_id IN ({placeholders}))"
+            ),
+            params.as_slice(),
+        )
+        .map_err(db_err)?;
+        let n = conn
+            .execute(
+                &format!("DELETE FROM task_artifacts WHERE task_id IN ({placeholders})"),
+                params.as_slice(),
+            )
+            .map_err(db_err)?;
+        Ok(n)
     }
 }
 
@@ -926,5 +958,53 @@ mod tests {
         let unblocked = store.complete_task(&dep2.id).await.unwrap();
         assert_eq!(unblocked.len(), 1);
         assert_eq!(unblocked[0].id, blocked.id);
+    }
+
+    #[tokio::test]
+    async fn delete_artifacts_for_tasks_removes_only_listed() {
+        let store = SqliteArtifactStore::new_in_memory().await;
+
+        let a = store
+            .create_artifact(NewArtifact {
+                task_id: "task-1".into(),
+                agent_id: "agent-1".into(),
+                artifact_type: ArtifactType::Report,
+                title: "Artifact 1".into(),
+                content: "content".into(),
+                status: TaskStatus::Pending,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
+                metadata: serde_json::Value::Object(serde_json::Map::new()),
+            })
+            .await
+            .unwrap();
+
+        store
+            .create_artifact(NewArtifact {
+                task_id: "task-2".into(),
+                agent_id: "agent-1".into(),
+                artifact_type: ArtifactType::Report,
+                title: "Artifact 2".into(),
+                content: "content".into(),
+                status: TaskStatus::Pending,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
+                metadata: serde_json::Value::Object(serde_json::Map::new()),
+            })
+            .await
+            .unwrap();
+
+        let n = store
+            .delete_artifacts_for_tasks(&["task-1".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        assert!(store.get_artifact(&a.id).await.unwrap().is_none());
+        assert_eq!(
+            store.get_artifacts_for_task("task-2").await.unwrap().len(),
+            1
+        );
     }
 }
