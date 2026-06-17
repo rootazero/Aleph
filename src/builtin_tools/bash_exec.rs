@@ -192,6 +192,12 @@ Examples:
         ])
     }
 
+    /// Build/test/log output can run long; cap at 8k tokens (was the legacy
+    /// `resolve_result_budget` name-table value for `bash`).
+    fn max_result_tokens(&self) -> Option<usize> {
+        Some(8_000)
+    }
+
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Background-process management never runs a command — handle first.
         if let Some(action) = args.process_action.as_deref() {

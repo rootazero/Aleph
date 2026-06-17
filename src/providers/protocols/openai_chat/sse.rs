@@ -122,7 +122,9 @@ pub(crate) fn parse_chat_sse_event(
         for tc in tool_calls {
             let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
 
-            // First chunk: has `id` and `function.name` — emit ToolCallStart
+            // First chunk: has `id` and `function.name` — emit ToolCallStart,
+            // then flush any argument fragments a loose backend streamed ahead
+            // of the id (see `IndexIdTracker::pending_args`).
             if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
                 let name = tc
                     .get("function")
@@ -135,20 +137,34 @@ pub(crate) fn parse_chat_sse_event(
                     id: id.to_string(),
                     name: desanitize_tool_name(name),
                 }));
+                if let Some(buffered) = tracker.take_pending(index) {
+                    if !buffered.is_empty() {
+                        out.push_back(Ok(ProviderDelta::ToolCallArgDelta {
+                            id: id.to_string(),
+                            delta: buffered,
+                        }));
+                    }
+                }
             }
 
-            // Argument fragment delta (may be on the same or subsequent chunks)
+            // Argument fragment delta (may be on the same or subsequent chunks).
+            // If the id has not arrived for this index yet, buffer the fragment
+            // instead of dropping it so the accumulated args stay well-formed.
             if let Some(args) = tc
                 .get("function")
                 .and_then(|f| f.get("arguments"))
                 .and_then(|a| a.as_str())
             {
                 if !args.is_empty() {
-                    if let Some(call_id) = tracker.get(index) {
-                        out.push_back(Ok(ProviderDelta::ToolCallArgDelta {
-                            id: call_id.to_string(),
+                    // Clone the id first so the immutable borrow ends before the
+                    // `buffer_pending` mutable borrow in the `None` arm.
+                    let known_id = tracker.get(index).map(str::to_string);
+                    match known_id {
+                        Some(call_id) => out.push_back(Ok(ProviderDelta::ToolCallArgDelta {
+                            id: call_id,
                             delta: args.to_string(),
-                        }));
+                        })),
+                        None => tracker.buffer_pending(index, args),
                     }
                 }
             }

@@ -88,6 +88,19 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
         false
     }
 
+    /// Per-result token budget for this tool's output (Layer-2 spill/truncate).
+    ///
+    /// `Some(n)` caps the tool's result at `n` tokens before the overflow
+    /// cascade (`compress → persist-if-large → truncate`) in
+    /// [`crate::tools::result_processing::resolve_result_budget`); `None`
+    /// (the default) defers to the global default budget. Override on tools
+    /// whose output is reliably larger or smaller than the norm (e.g. a web
+    /// fetch returns whole pages). This replaces the legacy hardcoded
+    /// tool-name budget table — declare the budget where the tool lives.
+    fn max_result_tokens(&self) -> Option<usize> {
+        None
+    }
+
     /// Provide usage examples for LLM context (Few-shot learning).
     ///
     /// Returns a list of example usage strings that demonstrate how to use the tool.
@@ -380,6 +393,14 @@ pub trait AlephToolDyn: Send + Sync {
     ///
     /// Returns a boxed future for object safety.
     fn call(&self, args: Value) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>>;
+
+    /// Per-result token budget, forwarded from [`AlephTool::max_result_tokens`].
+    /// Defaulted so manual `AlephToolDyn` impls (tests, adapters) need not
+    /// change; the blanket impl below overrides it to forward the concrete
+    /// tool's value.
+    fn max_result_tokens(&self) -> Option<usize> {
+        None
+    }
 }
 
 // =============================================================================
@@ -407,6 +428,10 @@ impl<T: AlephTool> AlephToolDyn for T {
 
     fn call(&self, args: Value) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
         Box::pin(async move { self.call_json(args).await })
+    }
+
+    fn max_result_tokens(&self) -> Option<usize> {
+        AlephTool::max_result_tokens(self)
     }
 }
 
