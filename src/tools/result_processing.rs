@@ -33,9 +33,10 @@ pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 8_000;
 ///    a persisted marker file back into context, so persisting one would
 ///    create a loop).
 /// 2. `explicit` (typically the tool's own `max_result_tokens()` value)
-///    wins for every other name.
-/// 3. Otherwise fall back to a hardcoded name table for legacy builtin
-///    names that have not been migrated to the trait method.
+///    wins for every other name. Builtins declare their budget there now
+///    (`bash`, `web_fetch`), so they never reach the table below.
+/// 3. Otherwise a single remaining legacy entry (`search_files`/`Grep`,
+///    which has no in-crate tool to carry the trait method).
 /// 4. Otherwise fall back to [`DEFAULT_RESULT_BUDGET_TOKENS`].
 ///
 /// `None` from this function means "do not persist this tool's output;
@@ -50,8 +51,12 @@ pub fn resolve_result_budget(name: &str, explicit: Option<usize>) -> Option<usiz
         return Some(n);
     }
     match name {
-        "Bash" | "bash" | "bash_exec" | "terminal" => Some(8_000),
-        "WebFetch" | "web_fetch" => Some(10_000),
+        // Last legacy entry: `search_files`/`Grep` has no in-crate `AlephTool`
+        // to hang `max_result_tokens()` on (external / MCP-provided search), so
+        // its budget stays here until that owner exists. `bash` (8k) and
+        // `web_fetch` (10k) now declare their budget via the trait and arrive
+        // through the `explicit` branch above; their old name-table arms (and
+        // dead aliases like `terminal` / capitalised `WebFetch`) were removed.
         "Grep" | "search_files" => Some(6_000),
         _ => Some(DEFAULT_RESULT_BUDGET_TOKENS),
     }
@@ -393,15 +398,24 @@ mod tests {
     }
 
     #[test]
-    fn fallback_table_bash_returns_eight_k() {
-        assert_eq!(resolve_result_budget("bash_exec", None), Some(8_000));
-        assert_eq!(resolve_result_budget("Bash", None), Some(8_000));
+    fn migrated_builtins_flow_through_explicit() {
+        // bash/web_fetch no longer carry a name-table budget — they declare it
+        // via `AlephTool::max_result_tokens`, which reaches this fn as the
+        // `explicit` argument (verified end-to-end by the adapter test).
+        assert_eq!(resolve_result_budget("web_fetch", Some(10_000)), Some(10_000));
+        assert_eq!(resolve_result_budget("bash", Some(8_000)), Some(8_000));
+        // With no explicit budget they now fall to the global default rather
+        // than the removed name-table arms.
+        assert_eq!(
+            resolve_result_budget("web_fetch", None),
+            Some(DEFAULT_RESULT_BUDGET_TOKENS)
+        );
     }
 
     #[test]
-    fn fallback_table_web_and_grep() {
-        assert_eq!(resolve_result_budget("web_fetch", None), Some(10_000));
-        assert_eq!(resolve_result_budget("WebFetch", None), Some(10_000));
+    fn fallback_table_keeps_grep() {
+        // `search_files`/`Grep` has no in-crate tool to declare the trait
+        // method, so it remains the single legacy name-table entry.
         assert_eq!(resolve_result_budget("Grep", None), Some(6_000));
         assert_eq!(resolve_result_budget("search_files", None), Some(6_000));
     }
