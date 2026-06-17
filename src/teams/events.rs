@@ -159,6 +159,9 @@ pub trait EventLogStore: Send + Sync {
         team_id: &str,
         max_age: chrono::Duration,
     ) -> crate::error::Result<usize>;
+
+    /// Hard-delete all events for a team. Returns rows deleted.
+    async fn delete_team_events(&self, team_id: &str) -> crate::error::Result<usize>;
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +381,17 @@ impl EventLogStore for SqliteEventLogStore {
             .map_err(db_err)?;
 
         Ok(deleted)
+    }
+
+    async fn delete_team_events(&self, team_id: &str) -> crate::error::Result<usize> {
+        let conn = self.conn.lock().await;
+        let n = conn
+            .execute(
+                "DELETE FROM team_events WHERE team_id = ?1",
+                params![team_id],
+            )
+            .map_err(db_err)?;
+        Ok(n)
     }
 }
 
@@ -637,5 +651,35 @@ mod tests {
         // since = base-2h, until = base-1h — should get e2
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].id, "e2");
+    }
+
+    #[tokio::test]
+    async fn delete_team_events_removes_team_rows_only() {
+        let store = SqliteEventLogStore::new_in_memory().await;
+
+        store
+            .log_event(NewTeamEvent {
+                team_id: "team-A".into(),
+                event_type: TeamEventType::SessionStarted,
+                agent_id: "agent-a".into(),
+                payload: json!({}),
+            })
+            .await
+            .unwrap();
+
+        store
+            .log_event(NewTeamEvent {
+                team_id: "team-B".into(),
+                event_type: TeamEventType::SessionStarted,
+                agent_id: "agent-b".into(),
+                payload: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let n = store.delete_team_events("team-A").await.unwrap();
+        assert_eq!(n, 1);
+        assert!(store.get_events("team-A", None, None).await.unwrap().is_empty());
+        assert_eq!(store.get_events("team-B", None, None).await.unwrap().len(), 1);
     }
 }
