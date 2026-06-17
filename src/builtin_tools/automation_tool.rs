@@ -11,6 +11,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
 use crate::error::Result;
 use crate::tools::AlephTool;
 
@@ -18,11 +19,64 @@ use crate::tools::AlephTool;
 #[derive(Clone)]
 pub struct AutomationTool {
     platform: Arc<dyn aleph_desktop::DesktopPlatform>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl AutomationTool {
     pub fn new(platform: Arc<dyn aleph_desktop::DesktopPlatform>) -> Self {
-        Self { platform }
+        Self {
+            platform,
+            approval_policy: None,
+        }
+    }
+
+    /// Attach an approval policy to gate code-executing actions.
+    ///
+    /// `run_script` (AppleScript/JXA/shell/PowerShell) and `run_shortcut` are
+    /// arbitrary code execution on the host and are checked against the
+    /// `DesktopAutomation` action type before execution. Read-only
+    /// `list_shortcuts` is always allowed.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
+    }
+
+    /// Check the approval policy for a code-executing action.
+    ///
+    /// Returns `None` if allowed (or no policy configured), or
+    /// `Some(AutomationOutput)` describing the denial / confirmation prompt.
+    async fn check_approval(&self, target: String, context: String) -> Option<AutomationOutput> {
+        let policy = self.approval_policy.as_ref()?;
+        let request = ActionRequest {
+            action_type: ActionType::DesktopAutomation,
+            target,
+            agent_id: String::new(),
+            context,
+            timestamp: chrono::Utc::now(),
+        };
+        let decision = policy.check(&request).await;
+        match decision {
+            ApprovalDecision::Allow => {
+                policy.record(&request, &decision).await;
+                None
+            }
+            ApprovalDecision::Deny { ref reason } => {
+                policy.record(&request, &decision).await;
+                Some(AutomationOutput {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Action denied by approval policy: {reason}")),
+                })
+            }
+            ApprovalDecision::Ask { ref prompt } => Some(AutomationOutput {
+                success: false,
+                data: Some(serde_json::json!({
+                    "approval_required": true,
+                    "prompt": prompt,
+                })),
+                message: Some(format!("Approval required: {prompt}")),
+            }),
+        }
     }
 }
 
@@ -140,6 +194,15 @@ Examples:
                         });
                     }
                 };
+                if let Some(out) = self
+                    .check_approval(
+                        format!("{lang_str} script"),
+                        format!("run_script ({lang_str}): {script}"),
+                    )
+                    .await
+                {
+                    return Ok(out);
+                }
                 match auto.run_script(language, script).await {
                     Ok(output) => Ok(AutomationOutput {
                         success: true,
@@ -179,6 +242,15 @@ Examples:
                     }
                 };
                 let input = args.input.as_deref();
+                if let Some(out) = self
+                    .check_approval(
+                        format!("shortcut: {name}"),
+                        format!("run_shortcut: {name}"),
+                    )
+                    .await
+                {
+                    return Ok(out);
+                }
                 match auto.run_shortcut(name, input).await {
                     Ok(output) => Ok(AutomationOutput {
                         success: true,

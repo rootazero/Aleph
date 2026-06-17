@@ -60,6 +60,7 @@ impl AlephTool for SystemTool {
 Actions:
 - launch_app: Launch an application. Required: app_name
 - quit_app: Quit a running application. Required: app_name
+- restart_app: Quit then relaunch an application. Required: app_name
 - list_running_apps: List currently running applications
 - send_notification: Send a system notification. Required: title, body
 - clipboard_read: Read current clipboard content
@@ -70,6 +71,7 @@ Actions:
 Examples:
 {"action":"launch_app","app_name":"Safari"}
 {"action":"quit_app","app_name":"Safari"}
+{"action":"restart_app","app_name":"Safari"}
 {"action":"list_running_apps"}
 {"action":"send_notification","title":"Reminder","body":"Meeting in 5 minutes"}
 {"action":"clipboard_read"}
@@ -134,6 +136,33 @@ Examples:
                     }
                 };
                 match sys.quit_app(app_name).await {
+                    Ok(()) => Ok(SystemOutput {
+                        success: true,
+                        data: None,
+                        message: None,
+                    }),
+                    Err(e) => Ok(SystemOutput {
+                        success: false,
+                        data: None,
+                        message: Some(e.to_string()),
+                    }),
+                }
+            }
+
+            "restart_app" => {
+                let app_name = match args.app_name {
+                    Some(ref name) => name.as_str(),
+                    None => {
+                        return Ok(SystemOutput {
+                            success: false,
+                            data: None,
+                            message: Some(
+                                "restart_app requires 'app_name' parameter.".to_string(),
+                            ),
+                        });
+                    }
+                };
+                match sys.restart_app(app_name).await {
                     Ok(()) => Ok(SystemOutput {
                         success: true,
                         data: None,
@@ -268,8 +297,8 @@ Examples:
                 data: None,
                 message: Some(format!(
                     "Unknown action: '{unknown}'. Valid actions: launch_app, quit_app, \
-                     list_running_apps, send_notification, clipboard_read, clipboard_write, \
-                     system_info, user_idle_time"
+                     restart_app, list_running_apps, send_notification, clipboard_read, \
+                     clipboard_write, system_info, user_idle_time"
                 )),
             }),
         }

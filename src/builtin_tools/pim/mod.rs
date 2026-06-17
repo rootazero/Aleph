@@ -250,6 +250,25 @@ impl PimTool {
                     .await
                     .map(|v| serde_json::to_value(v).unwrap_or_default()),
 
+                // ── Mail ────────────────────────────────────────
+                "mail_search" => {
+                    let query = args.query.as_deref()?;
+                    let limit = args.limit.unwrap_or(20);
+                    pim.mail_search(query, args.folder.as_deref(), limit)
+                        .await
+                        .map(|v| serde_json::to_value(v).unwrap_or_default())
+                }
+                "mail_get" => {
+                    let id = args.id.as_deref()?;
+                    pim.mail_get(id)
+                        .await
+                        .map(|v| serde_json::to_value(v).unwrap_or_default())
+                }
+                "mail_folders" => pim
+                    .mail_folders()
+                    .await
+                    .map(|v| serde_json::to_value(v).unwrap_or_default()),
+
                 // contacts_create, contacts_update, contacts_delete are not in
                 // PimCapability today and remain unsupported on the platform path.
                 _ => return None,
@@ -281,11 +300,8 @@ impl PimTool {
 
         let policy = self.approval_policy.as_ref()?;
 
-        // TODO: Add PIM-specific ActionTypes (e.g., PimCalendarWrite, PimContactsWrite).
-        // For now, reuse DesktopClick as a placeholder to integrate with the existing
-        // approval infrastructure.
         let request = ActionRequest {
-            action_type: ActionType::DesktopClick,
+            action_type: ActionType::PimWrite,
             target: Self::describe_action(action),
             agent_id: String::new(),
             context: format!("PIM write action: {action}"),
@@ -390,7 +406,12 @@ Notes:
 Contacts:
 - contacts_search: Search contacts. Required: query
 - contacts_get: Get contact details. Required: id
-- contacts_groups: List contact groups"#;
+- contacts_groups: List contact groups
+
+Mail:
+- mail_search: Search mail messages. Required: query. Optional: folder, limit (default 20)
+- mail_get: Get a mail message (full body + attachments). Required: id
+- mail_folders: List available mail folders"#;
 
     type Args = PimArgs;
     type Output = PimOutput;
@@ -452,6 +473,7 @@ mod tests {
             body: None,
             folder: None,
             query: None,
+            limit: None,
             given_name: None,
             family_name: None,
             organization: None,
@@ -492,6 +514,9 @@ mod tests {
         assert!(!PimTool::is_write_action("contacts_search"));
         assert!(!PimTool::is_write_action("contacts_get"));
         assert!(!PimTool::is_write_action("contacts_groups"));
+        assert!(!PimTool::is_write_action("mail_search"));
+        assert!(!PimTool::is_write_action("mail_get"));
+        assert!(!PimTool::is_write_action("mail_folders"));
     }
     /// A mock policy that returns a fixed decision for all checks.
     struct MockPolicy {

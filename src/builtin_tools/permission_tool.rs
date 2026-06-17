@@ -28,7 +28,7 @@ impl PermissionTool {
 /// Arguments for the permission tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PermissionArgs {
-    /// Action to perform: "check", "`check_all`", "request"
+    /// Action to perform: "check", "`check_all`", "request", "guide", "`open_settings`"
     pub action: String,
     /// Permission to check or request (required for check, request).
     /// Values: "`screen_recording`", "camera", "microphone", "`speech_recognition`",
@@ -62,13 +62,17 @@ Actions:
 - check: Check status of a specific permission. Required: permission
 - check_all: Check status of all managed permissions
 - request: Request a permission (may show system dialog). Required: permission
+- guide: Get a step-by-step guide (deep link + steps + rationale) for granting a permission the user must enable manually. Required: permission
+- open_settings: Open System Settings to the pane for a permission. Required: permission
 
 Permission values: screen_recording, camera, microphone, speech_recognition, accessibility, notifications
 
 Examples:
 {"action":"check","permission":"screen_recording"}
 {"action":"check_all"}
-{"action":"request","permission":"microphone"}"#;
+{"action":"request","permission":"microphone"}
+{"action":"guide","permission":"accessibility"}
+{"action":"open_settings","permission":"screen_recording"}"#;
 
     type Args = PermissionArgs;
     type Output = PermissionOutput;
@@ -163,11 +167,76 @@ Examples:
                 }
             }
 
+            "guide" => {
+                let perm = match args.permission.as_deref().and_then(parse_permission) {
+                    Some(p) => p,
+                    None => {
+                        return Ok(PermissionOutput {
+                            success: false,
+                            data: None,
+                            message: Some(
+                                "guide requires a valid 'permission' parameter. \
+                                 Values: screen_recording, camera, microphone, \
+                                 speech_recognition, accessibility, notifications"
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                };
+                match perm_cap.guide_permission(perm).await {
+                    Ok(guide) => Ok(PermissionOutput {
+                        success: true,
+                        data: Some(serde_json::to_value(guide).unwrap_or_default()),
+                        message: None,
+                    }),
+                    Err(e) => Ok(PermissionOutput {
+                        success: false,
+                        data: None,
+                        message: Some(e.to_string()),
+                    }),
+                }
+            }
+
+            "open_settings" => {
+                let perm = match args.permission.as_deref().and_then(parse_permission) {
+                    Some(p) => p,
+                    None => {
+                        return Ok(PermissionOutput {
+                            success: false,
+                            data: None,
+                            message: Some(
+                                "open_settings requires a valid 'permission' parameter. \
+                                 Values: screen_recording, camera, microphone, \
+                                 speech_recognition, accessibility, notifications"
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                };
+                match perm_cap.open_settings(perm).await {
+                    Ok(opened) => Ok(PermissionOutput {
+                        success: opened,
+                        data: Some(serde_json::json!({ "opened": opened })),
+                        message: if opened {
+                            None
+                        } else {
+                            Some("System Settings could not be opened for this permission.".into())
+                        },
+                    }),
+                    Err(e) => Ok(PermissionOutput {
+                        success: false,
+                        data: None,
+                        message: Some(e.to_string()),
+                    }),
+                }
+            }
+
             unknown => Ok(PermissionOutput {
                 success: false,
                 data: None,
                 message: Some(format!(
-                    "Unknown action: '{unknown}'. Valid actions: check, check_all, request"
+                    "Unknown action: '{unknown}'. Valid actions: check, check_all, \
+                     request, guide, open_settings"
                 )),
             }),
         }

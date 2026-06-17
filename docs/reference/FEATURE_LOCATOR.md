@@ -66,7 +66,7 @@
 | Desktop | 大脑四肢分离 / 能力 trait / Swift 桥 / IPC | Desktop Capability Contracts & Bridge IPC | `desktop/shared/`(`aleph-desktop`：`traits/` + `platform.rs` + `bridge/`) | ✅ |
 | Desktop | macOS/Windows/Linux 原生实现 / Swift bridge / 四肢 | Native Bridge Implementations | `desktop/{macos,windows,linux}/src/` + `desktop/macos/bridge/Sources/AlephBridge` | ✅ |
 | Desktop | screenshot / 点击 / GUI 自动化 / set-of-marks / ax / 视觉定位 | Desktop Control & GUI Tools | `src/builtin_tools/desktop/` | ✅ |
-| Desktop | 通知 / 剪贴板 / 启动应用 / AppleScript / 相机录音 / 备忘录 / 权限 | System / Automation / Permission / Media / PIM Tools | `src/builtin_tools/{system_tool,automation_tool,permission_tool,media_tool,pim}` | ✅ |
+| Desktop | 通知 / 剪贴板 / 启动/重启应用 / AppleScript / 相机录音 / 备忘录 / Mail / 权限引导 | System / Automation / Permission / Media / PIM Tools | `src/builtin_tools/{system_tool,automation_tool,permission_tool,media_tool,pim}` | ✅ 连线补全(§7.4, 2026-06-17) |
 | Desktop | 桌面 App / Tauri / 托盘 / daemon 生命周期 / auto-update / 唤起热键 / 连远程 core | Desktop Shell | `desktop/shell/` | ✅ |
 | Desktop | 桌面能力注入 / per-OS 构造 / power inhibit / presence / mic / 平台 OCR | Core Wiring & Daemon Consumers | `src/executor/builtin_registry/builder/constructor.rs` · `src/harness/deps.rs` · `src/tasks/{presence,mic_level}` · `src/vision/providers/platform_ocr.rs` | ✅ |
 
@@ -435,10 +435,10 @@
 
 ### 7.4 系统类桌面工具 (System / Automation / Permission / Media / PIM Tools)
 - **口语关键词**：通知、剪贴板、启动应用、系统信息、AppleScript/快捷指令、相机/录音/语音转写、备忘录 PIM、权限检查/请求
-- **代码锚点**：`src/builtin_tools/system_tool.rs`（启动/退出应用、通知、剪贴板、系统信息）、`automation_tool.rs`（脚本/快捷指令）、`permission_tool.rs`（权限检查/请求/引导）、`media_tool.rs`（相机/录音/STT/mic）、`pim/`（备忘录 CRUD）；均经对应 `DesktopPlatform` 能力
+- **代码锚点**：`src/builtin_tools/system_tool.rs`（启动/退出/**重启**应用、通知、剪贴板、系统信息、idle）、`automation_tool.rs`（脚本/快捷指令，**已接 approval 闸**）、`permission_tool.rs`（权限检查/请求/**引导/开设置**）、`media_tool.rs`（相机/录音/STT/mic）、`pim/`（备忘录/日历/提醒/联系人 + **Mail 检索**）；均经对应 `DesktopPlatform` 能力
 - **职责**：DesktopTool 之外的系统能力工具——一能力一工具，全经 `DesktopPlatform` 路由到四肢。
-- **状态**：✅ 已实现。
-- **打磨话术**：「这些是 GUI 控制之外的系统能力工具，一能力一工具。加新系统能力先回 §7.1 看契约有没有对应 trait，没有先加 trait。」
+- **状态**：✅ 已实现。**连线补全（2026-06-17）**：此前若干 trait 能力已全平台实现却无工具 action 暴露（悬空四肢），现已逐项连线：① **PIM Mail**——`PimCapability::{mail_search,mail_get,mail_folders}`（macos/windows/linux 三平台全实现）此前 `pim` 工具零 mail action，现接入（只读免审批，新增 `limit` 参数）；② **Permission 引导**——`permission` 工具补 `guide`（深链+步骤+理由 `guide_permission`）+ `open_settings`（开系统设置面板），文档承诺的"引导"此前缺失；③ **System restart_app**——暴露 `SystemCapability::restart_app` 默认方法；④ **错误修复/熵减**——`pim` 写操作审批此前借 `ActionType::DesktopClick` 占位（代码内 TODO，策略无法区分桌面点击 vs PIM 写），现新增专属 `ActionType::PimWrite`；⑤ **安全增强**——`automation.run_script`（任意 AppleScript/JXA/shell/PowerShell 代码执行）+ `run_shortcut` 此前**完全无审批**（而 PIM 日历写却受闸，安全不一致），现接入 approval policy 经新 `ActionType::DesktopAutomation`（permissive 默认 Allow 保持 byte-identical，用户可在 `~/.aleph/approval-policy.json` 设 `desktop_automation: ask/deny` 收紧）。两个新 ActionType 已同步进 `config.rs` 的 permissive(Allow)/strict(Ask) 两张默认表。
+- **打磨话术**：「这些是 GUI 控制之外的系统能力工具，一能力一工具。加新系统能力先回 §7.1 看契约有没有对应 trait，没有先加 trait。**注意契约方法 ≠ 工具 action**：trait 实现了不等于 LLM 够得到，要在对应 `*_tool.rs` 的 action match 里连出来（参 2026-06-17 Mail/guide/restart_app 连线）。‘脚本/快捷指令要不要审批’= `automation_tool.rs` 的 `DesktopAutomation` 闸；‘PIM 写审批’= `PimWrite`（不再借 DesktopClick）。」
 
 ### 7.5 Tauri 桌面壳 (Desktop Shell)
 - **口语关键词**：桌面 App、Tauri、托盘、系统通知、daemon 生命周期、auto-update、`aleph://` deeplink、全局唤起热键、应用菜单、连远程 core
