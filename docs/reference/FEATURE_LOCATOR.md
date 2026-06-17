@@ -423,8 +423,8 @@
 - **口语关键词**：macOS/Windows/Linux 原生实现、Swift bridge、AppKit/Vision、平台 OCR、四肢、平台特定代码
 - **代码锚点**：`desktop/macos/src/`（Rust 侧 `screen.rs`/`ax.rs`/`automation.rs`/`permission.rs`/`pim.rs`/`system/` + Swift helper `desktop/macos/bridge/Sources/AlephBridge`）、`desktop/windows/src/`、`desktop/linux/src/`；各 crate 暴露 `MacOSPlatform`/`WindowsPlatform`/`LinuxPlatform` 实现 `DesktopPlatform`；构造装配点见 §7.6
 - **职责**：每个 OS 一个 crate，提供 §7.1 契约的真实实现（macOS 经 Swift helper 触达 AppKit/Vision）。能力缺失返 `None`/`NotImplemented`，绝不 panic（P7）。
-- **状态**：✅ 已实现（三平台 + macOS Swift helper）。
-- **打磨话术**：「平台真实实现按 OS 分 crate（macos 含 Swift helper）。改‘某平台某能力的实现’去对应 `desktop/<os>/src/<capability>.rs`；这是‘四肢’，绝不在 `src`（大脑）里写平台代码。」
+- **状态**：✅ 已实现（三平台 + macOS Swift helper）。**PIM「缺位域」默认化（2026-06-17）**：`PimCapability` 的 Apple 专属四域（Notes/Calendar/Reminders/Contacts 共 21 方法）已改为 trait 内 `default → NotImplemented`（对齐 `MediaCapability` 既有模式），单一真相源在 `desktop/shared/src/traits/pim.rs`；Windows/Linux 仅实现各自的 `mail_*`，删去各 ~16 个重复 stub；macOS 全量 override 不变。
+- **打磨话术**：「平台真实实现按 OS 分 crate（macos 含 Swift helper）。改‘某平台某能力的实现’去对应 `desktop/<os>/src/<capability>.rs`；这是‘四肢’，绝不在 `src`（大脑）里写平台代码。**某能力在某平台天然缺位**？别在该平台 crate 写 stub——把方法在 §7.1 的 trait 里给 `default → NotImplemented`，缺位平台自动继承（PIM 四域已如此）。」
 
 ### 7.3 桌面控制与 GUI 工具 (Desktop Control & GUI Tools)
 - **口语关键词**：screenshot、点击、GUI 自动化、set-of-marks、accessibility 树、视觉定位、屏幕操作、操控桌面
