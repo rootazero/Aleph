@@ -24,6 +24,46 @@ fn invalid_args(message: impl Into<String>) -> DesktopOutput {
     }
 }
 
+/// Validate and convert the tool-level `region` (f64; possibly already
+/// normalized-then-rescaled by [`super::coord_resolve`]) into the limb-level
+/// [`aleph_desktop::ScreenRegion`] (u32).
+///
+/// Shared by `screenshot` and `screen_record` so a region is honored
+/// identically by both — capture and recording validate and clamp the same
+/// way, and `coord_space:"normalized"` regions resolve through the one rescale
+/// path. Returns `Ok(None)` when no region was supplied (capture the whole
+/// display), or a structured validation failure for negative / oversized
+/// coordinates.
+fn screen_region_from_args(
+    args: &DesktopArgs,
+    action: &str,
+) -> std::result::Result<Option<aleph_desktop::ScreenRegion>, DesktopOutput> {
+    let r = match args.region.as_ref() {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+    if r.x < 0.0 || r.y < 0.0 || r.width < 0.0 || r.height < 0.0 {
+        return Err(invalid_args(format!(
+            "{action} region coordinates must be non-negative"
+        )));
+    }
+    if r.x > f64::from(u32::MAX)
+        || r.y > f64::from(u32::MAX)
+        || r.width > f64::from(u32::MAX)
+        || r.height > f64::from(u32::MAX)
+    {
+        return Err(invalid_args(format!(
+            "{action} region coordinates exceed maximum value"
+        )));
+    }
+    Ok(Some(aleph_desktop::ScreenRegion {
+        x: r.x as u32,
+        y: r.y as u32,
+        width: r.width as u32,
+        height: r.height as u32,
+    }))
+}
+
 /// Extract the `x`/`y` pair required by point actions (click, hover, …).
 ///
 /// Returns a clear validation error rather than silently defaulting to
@@ -187,40 +227,9 @@ impl super::DesktopTool {
 
         match args.action.as_str() {
             "screenshot" => {
-                let region = match args.region.as_ref() {
-                    Some(r) => {
-                        if r.x < 0.0 || r.y < 0.0 || r.width < 0.0 || r.height < 0.0 {
-                            return Ok(Some(DesktopOutput {
-                                success: false,
-                                data: None,
-                                message: Some(
-                                    "screenshot region coordinates must be non-negative"
-                                        .to_string(),
-                                ),
-                            }));
-                        }
-                        if r.x > f64::from(u32::MAX)
-                            || r.y > f64::from(u32::MAX)
-                            || r.width > f64::from(u32::MAX)
-                            || r.height > f64::from(u32::MAX)
-                        {
-                            return Ok(Some(DesktopOutput {
-                                success: false,
-                                data: None,
-                                message: Some(
-                                    "screenshot region coordinates exceed maximum value"
-                                        .to_string(),
-                                ),
-                            }));
-                        }
-                        Some(aleph_desktop::ScreenRegion {
-                            x: r.x as u32,
-                            y: r.y as u32,
-                            width: r.width as u32,
-                            height: r.height as u32,
-                        })
-                    }
-                    None => None,
+                let region = match screen_region_from_args(args, "screenshot") {
+                    Ok(region) => region,
+                    Err(out) => return Ok(Some(out)),
                 };
 
                 // Extract post-processing params before moving region
@@ -664,11 +673,20 @@ impl super::DesktopTool {
                 }
             }
             "screen_record" => {
+                // Honor `region` like `screenshot` does: a normalized region is
+                // already rescaled to pixels by `coord_resolve::maybe_normalize`
+                // (it runs for every non-batch action), so recording a sub-rect
+                // of the display now works end-to-end instead of being silently
+                // widened to the full display.
+                let region = match screen_region_from_args(args, "screen_record") {
+                    Ok(region) => region,
+                    Err(out) => return Ok(Some(out)),
+                };
                 let config = aleph_desktop::screen_types::ScreenRecordConfig {
                     duration_secs: args.duration.unwrap_or(5.0),
                     fps: args.fps.unwrap_or(30),
                     with_audio: args.with_audio.unwrap_or(false),
-                    region: None,
+                    region,
                 };
                 match screen.screen_record(config).await {
                     Ok(result) => Ok(Some(DesktopOutput {
@@ -1027,6 +1045,42 @@ mod tests {
     fn require_xy_accepts_full_coordinates() {
         let full = args(serde_json::json!({"action": "click", "x": 12.0, "y": 34.0}));
         assert_eq!(require_xy(&full, "click").unwrap(), (12.0, 34.0));
+    }
+
+    #[test]
+    fn screen_region_none_when_absent() {
+        // No region supplied → capture the whole display (Ok(None)), shared by
+        // screenshot and screen_record alike.
+        let a = args(serde_json::json!({"action": "screen_record"}));
+        assert!(screen_region_from_args(&a, "screen_record")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn screen_region_converts_valid_rect_to_u32() {
+        let a = args(serde_json::json!({
+            "action": "screen_record",
+            "region": {"x": 10.0, "y": 20.0, "width": 640.0, "height": 480.0}
+        }));
+        let region = screen_region_from_args(&a, "screen_record")
+            .unwrap()
+            .expect("region present");
+        assert_eq!(
+            (region.x, region.y, region.width, region.height),
+            (10, 20, 640, 480)
+        );
+    }
+
+    #[test]
+    fn screen_region_rejects_negative() {
+        let a = args(serde_json::json!({
+            "action": "screenshot",
+            "region": {"x": -1.0, "y": 0.0, "width": 100.0, "height": 100.0}
+        }));
+        let err = screen_region_from_args(&a, "screenshot").expect_err("negative must reject");
+        assert!(!err.success);
+        assert!(err.message.unwrap().contains("non-negative"));
     }
 
     #[test]

@@ -428,7 +428,7 @@
 
 ### 7.3 桌面控制与 GUI 工具 (Desktop Control & GUI Tools)
 - **口语关键词**：screenshot、点击、GUI 自动化、set-of-marks、accessibility 树、视觉定位、屏幕操作、操控桌面
-- **代码锚点**：`src/builtin_tools/desktop/`——`tool.rs`/`types.rs`（DesktopTool：screenshot/ocr/click/double_click/drag/scroll/launch_app/quit_app/window_list/focus_window…）、`ax.rs`（无障碍树查询 4 工具）、`set_of_marks.rs`、`gui_locate.rs`、`browser_operator.rs`、`vision_bridge.rs`（OCR 文本层，喂纯文本模型）、`coord_resolve.rs`、`safety.rs`、`session_lock.rs`
+- **代码锚点**：`src/builtin_tools/desktop/`——`mod.rs`（DesktopTool 入口：安全硬阻断/审批/会话锁/escape 中止/coord 归一化/batch 展开）、`native.rs`（平台分发大 match：screenshot/ocr/click/double_click/drag/scroll/launch_app/quit_app/window_list/focus_window/screen_record…，**screenshot 与 screen_record 共用 `screen_region_from_args` region 校验**）、`types.rs`（DesktopArgs/DesktopOutput）、`ax.rs`（无障碍树查询 4 工具）、`set_of_marks.rs`、`gui_locate.rs`、`browser_operator.rs`、`vision_bridge.rs`（OCR 文本层，喂纯文本模型）、`coord_resolve.rs`（含 region 归一化重缩放）、`safety.rs`、`session_lock.rs`
 - **职责**：LLM 面向的桌面控制工具集，全部经 `DesktopPlatform` 调四肢；视觉定位（set-of-marks / gui_locate / ax）把屏幕变成可点击的结构化标的。
 - **状态**：✅ 已实现，含坐标解析 + 安全护栏 + 会话锁。
 - **打磨话术**：「LLM 控制桌面的工具都在 `builtin_tools/desktop/`；‘点哪/看哪’的视觉定位走 `set_of_marks` + `gui_locate` + `ax`。工具只调 `DesktopPlatform`，不碰平台 API。」
