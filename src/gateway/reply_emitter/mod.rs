@@ -24,7 +24,6 @@ mod tests;
 pub use config::ReplyEmitterConfig;
 pub use emitter::ReplyEmitter;
 pub(crate) use extract::extract_final_response;
-pub(crate) use sanitize::sanitize_llm_output;
 
 #[cfg(test)]
-pub(crate) use sanitize::split_reasoning;
+pub(crate) use sanitize::{sanitize_llm_output, split_reasoning};
