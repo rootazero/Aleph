@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicU64, Ordering};
 
+use super::instant_buffer::{plan_instant, InstantOutcome};
 use super::types::{EventEmitError, OutputMode, StreamEvent};
 use super::EventEmitter;
 use crate::gateway::event_bus::GatewayEventBus;
@@ -63,118 +64,33 @@ impl GatewayEventEmitter {
 #[async_trait]
 impl EventEmitter for GatewayEventEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
-        // In instant mode, buffer non-final ResponseChunks and only emit on final
+        // Instant mode: coalesce streamed response text through the shared
+        // planner (single-sourced with `InstantBufferingEmitter`) before it
+        // reaches the bus. `Prepend`/`Forward` fall through to the common
+        // broadcast below, so the original event is published exactly once.
         if self.output_mode == OutputMode::Instant {
-            if let StreamEvent::ResponseChunk {
-                ref delta,
-                is_final,
-                is_intermediate,
-                ref run_id,
-                ..
-            } = event
-            {
-                if is_intermediate {
-                    if delta.is_empty() {
-                        // Intermediate boundary marker: flush accumulated buffer
-                        // as an intermediate message, then clear it
-                        let mut buffer = self.instant_buffer.lock().await;
-                        let accumulated = std::mem::take(&mut *buffer);
-                        drop(buffer);
-                        if !accumulated.is_empty() {
-                            let flush_frame = GatewayEventFrame::ResponseChunk {
-                                run_id: run_id.clone(),
-                                seq: self.next_seq(),
-                                delta: accumulated.clone(),
-                                full_text: accumulated.clone(),
-                                content: accumulated,
-                                chunk_index: 0,
-                                is_final: false,
-                                is_intermediate: true,
-                            };
-                            self.event_bus.publish_frame(&flush_frame)?;
-                        }
-                    } else {
-                        // Non-empty intermediate: emit immediately as standalone message
-                        let frame = GatewayEventFrame::from(event);
-                        self.event_bus.publish_frame(&frame)?;
+            let outcome = {
+                let mut buffer = self.instant_buffer.lock().await;
+                plan_instant(&mut buffer, &event, || self.next_seq())
+            };
+            match outcome {
+                InstantOutcome::Buffered => return Ok(()),
+                InstantOutcome::Replace(events) => {
+                    for e in events {
+                        self.event_bus.publish_frame(&GatewayEventFrame::from(e))?;
                     }
                     return Ok(());
-                } else if !is_final {
-                    // Buffer the chunk delta, don't emit yet
-                    self.instant_buffer.lock().await.push_str(delta);
-                    return Ok(());
                 }
-
-                // Final chunk: combine buffered content + this chunk, emit as single response
-                let mut buffer = self.instant_buffer.lock().await;
-                let full_content = if buffer.is_empty() {
-                    delta.clone()
-                } else {
-                    let buffered = std::mem::take(&mut *buffer);
-                    format!("{buffered}{delta}")
-                };
-                drop(buffer);
-
-                let final_frame = GatewayEventFrame::ResponseChunk {
-                    run_id: run_id.clone(),
-                    seq: self.next_seq(),
-                    delta: full_content.clone(),
-                    full_text: full_content.clone(),
-                    content: full_content,
-                    chunk_index: 0,
-                    is_final: true,
-                    is_intermediate: false,
-                };
-                self.event_bus.publish_frame(&final_frame)?;
-                return Ok(());
+                InstantOutcome::Prepend(events) => {
+                    for e in events {
+                        self.event_bus.publish_frame(&GatewayEventFrame::from(e))?;
+                    }
+                }
+                InstantOutcome::Forward => {}
             }
         }
 
-        // In instant mode, flush any buffered content on RunComplete
-        if self.output_mode == OutputMode::Instant {
-            if let StreamEvent::RunComplete {
-                ref run_id,
-                ref summary,
-                ..
-            } = event
-            {
-                let mut buffer = self.instant_buffer.lock().await;
-                if !buffer.is_empty() {
-                    let buffered = std::mem::take(&mut *buffer);
-                    drop(buffer);
-                    let flush_frame = GatewayEventFrame::ResponseChunk {
-                        run_id: run_id.clone(),
-                        seq: self.next_seq(),
-                        delta: buffered.clone(),
-                        full_text: buffered.clone(),
-                        content: buffered,
-                        chunk_index: 0,
-                        is_final: true,
-                        is_intermediate: false,
-                    };
-                    self.event_bus.publish_frame(&flush_frame)?;
-                } else if let Some(ref final_response) = summary.final_response {
-                    // Fallback: buffer was empty (race with fire-and-forget emit),
-                    // use final_response from summary
-                    if !final_response.is_empty() {
-                        drop(buffer);
-                        let fallback_frame = GatewayEventFrame::ResponseChunk {
-                            run_id: run_id.clone(),
-                            seq: self.next_seq(),
-                            delta: final_response.clone(),
-                            full_text: final_response.clone(),
-                            content: final_response.clone(),
-                            chunk_index: 0,
-                            is_final: true,
-                            is_intermediate: false,
-                        };
-                        self.event_bus.publish_frame(&fallback_frame)?;
-                    }
-                }
-            }
-        }
-
-        // Default: broadcast immediately (typewriter mode or non-ResponseChunk events)
+        // Typewriter mode, or instant-mode passthrough: broadcast immediately.
         let frame = GatewayEventFrame::from(event);
         self.event_bus.publish_frame(&frame)?;
         Ok(())
