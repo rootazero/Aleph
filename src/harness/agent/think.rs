@@ -1062,8 +1062,14 @@ impl AgentHarness {
                 parent_cancel,
             )
             .await;
-        let zero_metrics = crate::harness::trace::LoopTraceTurnMetrics {
-            requested_tool_calls: 0,
+        // Metrics for the non-executing verdict turns (verifier Halt / Veto and
+        // the empty-tool-call Stop). `executed`/`productive` are genuinely zero
+        // — nothing ran — but the model still *requested* tool calls on a
+        // Halt/Veto turn (the verifier rejected them). Reporting `requested: 0`
+        // there silently erased the attempt from trace telemetry. The Stop
+        // branch naturally lands `len() == 0` since its tool list is empty.
+        let verdict_metrics = crate::harness::trace::LoopTraceTurnMetrics {
+            requested_tool_calls: response.tool_calls.len(),
             executed_tool_calls: 0,
             productive: false,
             consecutive_errors: 0,
@@ -1125,7 +1131,7 @@ impl AgentHarness {
             self.emit(|| crate::harness::trace::LoopTraceEvent::TurnCompleted {
                 iteration: iterations,
                 outcome: crate::harness::trace::LoopTraceTurnOutcome::Stop,
-                metrics: zero_metrics,
+                metrics: verdict_metrics,
             });
             return Ok((TurnState::Done, 0, false, None));
         } else if let VerifierVerdict::Veto { reason, .. } = verdict {
@@ -1168,7 +1174,7 @@ impl AgentHarness {
             )
             .await;
             outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Continue;
-            metrics_for_trace = zero_metrics;
+            metrics_for_trace = verdict_metrics;
             result = Ok((TurnState::Continue, 0, true, None));
         } else if response.tool_calls.is_empty() {
             // This turn ends the run, so a degraded final response IS the
@@ -1185,7 +1191,7 @@ impl AgentHarness {
                 );
             }
             outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Stop;
-            metrics_for_trace = zero_metrics;
+            metrics_for_trace = verdict_metrics;
             result = Ok((TurnState::Done, 0, false, None));
         } else {
             self.emit(|| crate::harness::trace::LoopTraceEvent::TurnStateEntered {
@@ -1537,10 +1543,20 @@ impl AgentHarness {
         }
         let mut grace_messages = messages.to_vec();
         grace_messages.push(UnifiedMessage::user(reason.nudge()));
-        let grace_payload = match self.deps.system_prompt.as_deref() {
-            Some(sp) => RequestPayload::new(&grace_messages).with_system(Some(sp)),
-            None => RequestPayload::new(&grace_messages),
-        };
+        // Reuse the shared payload builder so the grace call threads the same
+        // cache-split `system_blocks` (and `session_id` cache-key metadata) as
+        // every other LLM call in the harness. The grace turn fires *right
+        // after* a primary turn that already warmed the prompt-cache prefix, so
+        // sending the flat string alone re-billed the whole system prompt;
+        // threading the parts turns that into a cache hit. No tools — the grace
+        // turn salvages terminal text, it must not act.
+        let grace_payload = build_request_payload(
+            self.deps.system_prompt.as_deref(),
+            self.deps.system_prompt_parts.as_deref(),
+            &grace_messages,
+            None,
+            session_id,
+        );
         // Race the grace call against cancel + turn-timeout, like every
         // other LLM call in the harness. The grace turn fires precisely
         // when things are already degraded, so a hung provider here must
