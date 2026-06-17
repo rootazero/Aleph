@@ -19,6 +19,49 @@ pub enum Cadence {
     ModelPaced { fallback_ms: u64 },
 }
 
+impl Cadence {
+    /// Human-readable one-liner for status output (e.g. "every 5m" /
+    /// "model-paced (fallback 10m)"). Mirrors the human duration form the
+    /// `loop` tool accepts on input, so what the user reads matches what they
+    /// type.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Fixed { interval_ms } => format!("every {}", fmt_duration_ms(*interval_ms)),
+            Self::ModelPaced { fallback_ms } => {
+                format!("model-paced (fallback {})", fmt_duration_ms(*fallback_ms))
+            }
+        }
+    }
+}
+
+/// Render a millisecond duration as a compact human string ("5m" / "1h30m" /
+/// "45s"). The display inverse of `loop_manage::parse_interval_ms`; kept beside
+/// `Cadence` so status output and input parsing share one vocabulary. Sub-second
+/// values are never produced (loops reject them), so ms precision is unneeded.
+#[must_use]
+pub fn fmt_duration_ms(ms: u64) -> String {
+    let total_secs = ms / 1_000;
+    let (h, m, s) = (
+        total_secs / 3_600,
+        (total_secs % 3_600) / 60,
+        total_secs % 60,
+    );
+    let mut out = String::new();
+    if h > 0 {
+        out.push_str(&format!("{h}h"));
+    }
+    if m > 0 {
+        out.push_str(&format!("{m}m"));
+    }
+    // Only show seconds when they are the sole component or a remainder; an even
+    // "5m" stays "5m", not "5m0s".
+    if s > 0 || out.is_empty() {
+        out.push_str(&format!("{s}s"));
+    }
+    out
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LoopStatus {
@@ -65,6 +108,15 @@ pub struct LoopState {
     pub baseline_captured: bool,
     pub status: LoopStatus,
     pub created_at_ms: u64,
+    /// Why the loop last stopped, in user-facing prose. Set by the continuation
+    /// hook when a safety cap (iteration / deadline / token budget) trips, and
+    /// by the failure path when a tick errors. `None` while `Active` or for a
+    /// loop the user stopped by hand. Surfaced by `loop(action='status')` so a
+    /// silently-capped watch loop can explain itself on the next turn — without
+    /// it, the stop reason the hook computes was logged and dropped.
+    /// `#[serde(default)]` → old payloads read `None`.
+    #[serde(default)]
+    pub stop_reason: Option<String>,
 }
 
 impl LoopState {
@@ -83,6 +135,7 @@ impl LoopState {
             baseline_captured: false,
             status: LoopStatus::Active,
             created_at_ms: now_ms,
+            stop_reason: None,
         }
     }
 
@@ -95,6 +148,15 @@ impl LoopState {
     #[must_use]
     pub fn with_status(mut self, status: LoopStatus) -> Self {
         self.status = status;
+        self
+    }
+
+    /// Record the user-facing reason the loop stopped (or clear it with `None`).
+    /// Pairs with `with_status(Stopped)` at every stop site so the reason and
+    /// the status flip stay together.
+    #[must_use]
+    pub fn with_stop_reason(mut self, reason: Option<String>) -> Self {
+        self.stop_reason = reason;
         self
     }
 
@@ -171,6 +233,47 @@ impl LoopState {
     #[must_use]
     pub fn is_active(&self) -> bool {
         self.status == LoopStatus::Active
+    }
+
+    /// User-facing one-paragraph status. Replaces a raw `{:?}` Debug dump with
+    /// prose the model can relay verbatim: cadence in human units, ticks done
+    /// (vs cap), any caps, the next wake for model-paced loops, and the stop
+    /// reason when stopped. `now_ms` (0 = clock unavailable) turns the absolute
+    /// `next_wake_ms` into a relative "in 8m".
+    #[must_use]
+    pub fn human_summary(&self, now_ms: u64) -> String {
+        let mut parts = vec![match self.status {
+            LoopStatus::Active => "Loop active".to_string(),
+            LoopStatus::Stopped => "Loop stopped".to_string(),
+        }];
+        parts.push(format!("cadence: {}", self.cadence.describe()));
+        match self.max_iterations {
+            Some(max) => parts.push(format!("ticks: {}/{max}", self.iterations_used)),
+            None => parts.push(format!("ticks: {}", self.iterations_used)),
+        }
+        if let Some(deadline) = self.deadline_ms {
+            if now_ms != 0 && deadline > now_ms {
+                parts.push(format!("time left: {}", fmt_duration_ms(deadline - now_ms)));
+            } else {
+                parts.push("deadline: set".to_string());
+            }
+        }
+        if let Some(budget) = self.token_budget {
+            parts.push(format!("token budget: {budget}"));
+        }
+        if matches!(self.cadence, Cadence::ModelPaced { .. }) {
+            match self.next_wake_ms {
+                Some(wake) if now_ms != 0 && wake > now_ms => {
+                    parts.push(format!("next wake: in {}", fmt_duration_ms(wake - now_ms)));
+                }
+                Some(_) => parts.push("next wake: due now".to_string()),
+                None => parts.push("next wake: unset (uses fallback)".to_string()),
+            }
+        }
+        if let Some(reason) = &self.stop_reason {
+            parts.push(format!("reason: {reason}"));
+        }
+        parts.join(", ")
     }
 }
 
@@ -320,6 +423,81 @@ mod tests {
         assert!(l.over_budget(1_600), "600 spent over a 500 budget");
         // No budget → never over budget, even at u64::MAX.
         assert!(!sample().with_baseline(1_000).over_budget(u64::MAX));
+    }
+
+    #[test]
+    fn fmt_duration_renders_compact_human_units() {
+        assert_eq!(fmt_duration_ms(45_000), "45s");
+        assert_eq!(fmt_duration_ms(300_000), "5m");
+        assert_eq!(fmt_duration_ms(3_600_000), "1h");
+        assert_eq!(fmt_duration_ms(5_400_000), "1h30m");
+        assert_eq!(fmt_duration_ms(90_000), "1m30s");
+        assert_eq!(fmt_duration_ms(0), "0s");
+    }
+
+    #[test]
+    fn cadence_describe_matches_input_vocabulary() {
+        assert_eq!(
+            Cadence::Fixed {
+                interval_ms: 300_000
+            }
+            .describe(),
+            "every 5m"
+        );
+        assert!(Cadence::ModelPaced {
+            fallback_ms: 600_000
+        }
+        .describe()
+        .contains("model-paced"));
+    }
+
+    #[test]
+    fn with_stop_reason_sets_and_clears() {
+        let l = sample().with_stop_reason(Some("hit cap".to_string()));
+        assert_eq!(l.stop_reason.as_deref(), Some("hit cap"));
+        assert!(l.with_stop_reason(None).stop_reason.is_none());
+        assert!(sample().stop_reason.is_none(), "new loop has no reason");
+    }
+
+    #[test]
+    fn human_summary_surfaces_stop_reason_and_caps() {
+        let active = sample().with_max_iterations(Some(20));
+        let s = active.human_summary(2_000);
+        assert!(s.contains("Loop active"));
+        assert!(s.contains("every 5m"));
+        assert!(s.contains("ticks: 0/20"));
+
+        let stopped = sample()
+            .with_status(LoopStatus::Stopped)
+            .with_stop_reason(Some("reached the iteration cap (20 ticks).".to_string()));
+        let s = stopped.human_summary(2_000);
+        assert!(s.contains("Loop stopped"));
+        assert!(s.contains("reason: reached the iteration cap"));
+    }
+
+    #[test]
+    fn human_summary_shows_relative_next_wake_for_model_paced() {
+        let l = LoopState::new(
+            "s",
+            "p",
+            Cadence::ModelPaced {
+                fallback_ms: 600_000,
+            },
+            0,
+        )
+        .with_next_wake_ms(Some(10_000));
+        // now=4_000, wake=10_000 → "in 6s"
+        assert!(l.human_summary(4_000).contains("next wake: in 6s"));
+    }
+
+    #[test]
+    fn old_payload_without_stop_reason_deserializes_none() {
+        // stop_reason absent in an older payload must read None, never error.
+        let json = r#"{"session_id":"s","prompt":"p",
+            "cadence":{"kind":"fixed","interval_ms":300000},
+            "iterations_used":0,"status":"stopped","created_at_ms":1}"#;
+        let l: LoopState = serde_json::from_str(json).expect("deserialize old payload");
+        assert!(l.stop_reason.is_none());
     }
 
     #[test]

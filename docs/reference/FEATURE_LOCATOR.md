@@ -244,8 +244,8 @@
 - **口语关键词**：loop 命令、周期循环、定时、cadence、内存态
 - **代码锚点**：`src/looping/`（mod.rs / types.rs / pursuit.rs）、`src/builtin_tools/loop_manage/`（set/update/list/stop/clear）
 - **职责**：内存 HashMap 维护每会话 LoopState（Fixed/Timeout），hook 按 next_wake 定时触发续跑 RPC。
-- **状态**：✅ 已实现（含 fail-closed `stop_loop_on_failure` + update 原地重定速）。**注意**：状态**只存进程内，daemon 重启清零**（设计意图"随会话消亡"）。
-- **打磨话术**：「loop 状态在 `src/looping/`，**内存态、重启丢失**别当持久。要持久周期任务用 cron（`src/tasks/cron/`）。」
+- **状态**：✅ 已实现（含 fail-closed `stop_loop_on_failure` + update 原地重定速）。**注意**：状态**只存进程内，daemon 重启清零**（设计意图"随会话消亡"）。**硬化（2026-06-17）**：① **停因连线（修死计算）**——cap-reached 分支此前算出 `note`（token/deadline/iteration 三因）后只 `info!` 丢弃；现 `LoopState.stop_reason` 字段存储之，失败路径 `stop_loop_on_failure` 同样写入，`loop(action='status')` 表面化，静默封顶的 watch loop 能在下一轮自报停因；② **`status` 打磨**——从裸 `{:?}` Debug dump 改为 `human_summary()` 人类可读摘要（cadence "every 5m"、ticks N/cap、time left、next wake「in 8m」、停因）；③ **`update`/`stop` 诚实化（修误导）**——对已停 loop 的 `update` 不再谎报 `"Loop updated"`（hook 只对 Active fire，永不再跑），改返回 `success=false` 引导 `start`；`stop` 已停 loop 报 `"already stopped"`；④ **熵减**——三路选 note 的 if/else 下沉为 `pursuit::stop_reason_note()`，execute.rs 一行调用。
+- **打磨话术**：「loop 状态在 `src/looping/`，**内存态、重启丢失**别当持久。要持久周期任务用 cron（`src/tasks/cron/`）。停因在 `LoopState.stop_reason`（`pursuit::stop_reason_note` 选 token/deadline/iteration 三因），status 输出在 `LoopState::human_summary`，duration 显示走 `types::fmt_duration_ms`（`parse_interval_ms` 的逆）。」
 
 ### 4.3 Workflow 命令 (Workflow)
 - **口语关键词**：workflow 命令、DAG 工作流、步骤模板、workflow.js 互转、per-step 模型覆盖、提案评审

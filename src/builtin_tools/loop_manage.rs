@@ -193,8 +193,21 @@ impl LoopTool {
 
     fn stop(&self, session: &str) -> std::result::Result<LoopOutput, String> {
         match self.registry.get(session) {
+            // Already stopped → report honestly rather than claiming a fresh
+            // stop. Surfaces the prior stop reason so the user understands why.
+            Some(state) if !state.is_active() => Ok(LoopOutput {
+                success: false,
+                message: match &state.stop_reason {
+                    Some(r) => format!("Loop was already stopped ({r})."),
+                    None => "Loop was already stopped.".to_string(),
+                },
+            }),
             Some(state) => {
-                self.registry.put(state.with_status(LoopStatus::Stopped));
+                self.registry.put(
+                    state
+                        .with_status(LoopStatus::Stopped)
+                        .with_stop_reason(Some("Stopped by user request.".to_string())),
+                );
                 Ok(LoopOutput {
                     success: true,
                     message: "Loop stopped.".to_string(),
@@ -211,16 +224,7 @@ impl LoopTool {
         match self.registry.get(session) {
             Some(s) => Ok(LoopOutput {
                 success: true,
-                message: format!(
-                    "Loop: status={:?}, ticks_used={}, cadence={:?}, \
-                     max_iterations={:?}, deadline_ms={:?}, token_budget={:?}",
-                    s.status,
-                    s.iterations_used,
-                    s.cadence,
-                    s.max_iterations,
-                    s.deadline_ms,
-                    s.token_budget
-                ),
+                message: s.human_summary(now_ms()),
             }),
             None => Ok(LoopOutput {
                 success: false,
@@ -236,6 +240,23 @@ impl LoopTool {
                 message: "No loop in this session.".to_string(),
             });
         };
+        // A stopped loop cannot be re-paced in place — `update` is for live
+        // loops. Resurrecting it silently would lie ("Loop updated") while the
+        // continuation hook (which only fires for Active loops) never re-runs
+        // it. Tell the user to start a fresh loop instead.
+        if !state.is_active() {
+            return Ok(LoopOutput {
+                success: false,
+                message: match &state.stop_reason {
+                    Some(r) => format!(
+                        "Loop is stopped ({r}); update only re-paces a running loop. \
+                         Call loop(action='start') to begin a new one."
+                    ),
+                    None => "Loop is stopped; call loop(action='start') to begin a new one."
+                        .to_string(),
+                },
+            });
+        }
         // Re-pace a Fixed loop (or convert model-paced → fixed) without a
         // stop/start cycle. `with_cadence` clears any stale next_wake.
         if let Some(i) = &args.interval {
@@ -520,6 +541,107 @@ mod tests {
             reg.get("s").unwrap().max_iterations,
             Some(DEFAULT_SOFT_MAX_ITERATIONS)
         );
+    }
+
+    #[tokio::test]
+    async fn status_is_human_readable_and_shows_stop_reason() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        reg.put(
+            crate::looping::LoopState::new(
+                "s",
+                "p",
+                crate::looping::Cadence::Fixed {
+                    interval_ms: 300_000,
+                },
+                0,
+            )
+            .with_status(LoopStatus::Stopped)
+            .with_stop_reason(Some("reached the iteration cap (20 ticks).".to_string())),
+        );
+        let tool = LoopTool::new(reg).with_session_for_test("s");
+        let out = tool
+            .run(LoopArgs {
+                action: LoopAction::Status,
+                interval: None,
+                prompt: None,
+                max_iterations: None,
+                timeout_minutes: None,
+                token_budget: None,
+                next_wake: None,
+            })
+            .await
+            .unwrap();
+        assert!(out.success);
+        assert!(out.message.contains("Loop stopped"), "{}", out.message);
+        assert!(out.message.contains("every 5m"), "{}", out.message);
+        assert!(out.message.contains("reason:"), "{}", out.message);
+        // No raw Debug enum leakage.
+        assert!(!out.message.contains("Fixed {"), "{}", out.message);
+    }
+
+    #[tokio::test]
+    async fn update_on_stopped_loop_reports_honestly_without_mutating() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        reg.put(
+            crate::looping::LoopState::new(
+                "s",
+                "old",
+                crate::looping::Cadence::Fixed {
+                    interval_ms: 300_000,
+                },
+                0,
+            )
+            .with_status(LoopStatus::Stopped),
+        );
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
+        let out = tool
+            .run(LoopArgs {
+                action: LoopAction::Update,
+                interval: Some("10m".to_string()),
+                prompt: Some("new prompt".to_string()),
+                max_iterations: None,
+                timeout_minutes: None,
+                token_budget: None,
+                next_wake: None,
+            })
+            .await
+            .unwrap();
+        assert!(!out.success, "updating a stopped loop must not claim success");
+        assert!(out.message.contains("start"), "{}", out.message);
+        // The loop must be untouched: still stopped, prompt unchanged.
+        let st = reg.get("s").unwrap();
+        assert!(!st.is_active());
+        assert_eq!(st.prompt, "old", "stopped loop must not be mutated");
+    }
+
+    #[tokio::test]
+    async fn stop_on_already_stopped_loop_reports_not_active() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        reg.put(
+            crate::looping::LoopState::new(
+                "s",
+                "p",
+                crate::looping::Cadence::Fixed { interval_ms: 1000 },
+                0,
+            )
+            .with_status(LoopStatus::Stopped)
+            .with_stop_reason(Some("reached its time limit.".to_string())),
+        );
+        let tool = LoopTool::new(reg).with_session_for_test("s");
+        let out = tool
+            .run(LoopArgs {
+                action: LoopAction::Stop,
+                interval: None,
+                prompt: None,
+                max_iterations: None,
+                timeout_minutes: None,
+                token_budget: None,
+                next_wake: None,
+            })
+            .await
+            .unwrap();
+        assert!(!out.success);
+        assert!(out.message.contains("already stopped"), "{}", out.message);
     }
 
     #[tokio::test]
