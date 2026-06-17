@@ -45,6 +45,31 @@ fn strip_inline_markers(line: &str) -> String {
     out
 }
 
+/// True for a markdown table separator row like `|---|:--:|` or `--- | ---`,
+/// which carries no spoken content and would otherwise be voiced as a run of
+/// "dash" / "vertical bar".
+fn is_table_separator(line: &str) -> bool {
+    let t = line.trim();
+    !t.is_empty()
+        && t.contains('-')
+        && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
+}
+
+/// Flatten a pipe-delimited table row (`| Name | Age |`) into a spoken comma
+/// list ("Name, Age"). Lines without a `|` pass through untouched. The
+/// `VoiceModeLayer` asks the model to avoid tables, but per R7/P7 we don't trust
+/// compliance — an emitted table must still read cleanly aloud.
+fn flatten_table_row(line: &str) -> String {
+    if !line.contains('|') {
+        return line.to_string();
+    }
+    line.split('|')
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Replace bare `http(s)://…` URLs with a short spoken placeholder so the engine
 /// does not spell the address out character by character.
 fn replace_urls(text: &str) -> String {
@@ -107,7 +132,14 @@ pub fn sanitize_for_tts(text: &str) -> String {
         } else if let Some(rest) = content.strip_prefix("* ") {
             content = rest;
         }
-        lines.push(strip_inline_markers(content));
+        // Tables read terribly aloud — drop separator rows entirely and flatten
+        // pipe-delimited rows into a spoken comma list before inline markers are
+        // stripped (so link labels inside cells survive).
+        if is_table_separator(content) {
+            continue;
+        }
+        let content = flatten_table_row(content);
+        lines.push(strip_inline_markers(&content));
     }
 
     // Collapse consecutive blank lines into a single paragraph break.
@@ -164,6 +196,28 @@ mod tests {
             sanitize_for_tts("open https://example.com/path now"),
             "open (link) now"
         );
+    }
+
+    #[test]
+    fn flattens_table_into_spoken_list() {
+        let input = "| Name | Age |\n|------|-----|\n| Alice | 30 |";
+        let out = sanitize_for_tts(input);
+        // Separator row is gone; content rows read as comma lists.
+        assert!(!out.contains('|'));
+        assert!(!out.contains("---"));
+        assert!(out.contains("Name, Age"));
+        assert!(out.contains("Alice, 30"));
+    }
+
+    #[test]
+    fn table_cell_keeps_link_label() {
+        let input = "| [docs](https://x.com) | ok |";
+        assert_eq!(sanitize_for_tts(input), "docs, ok");
+    }
+
+    #[test]
+    fn prose_without_pipe_is_untouched() {
+        assert_eq!(sanitize_for_tts("just a plain sentence"), "just a plain sentence");
     }
 
     #[test]
