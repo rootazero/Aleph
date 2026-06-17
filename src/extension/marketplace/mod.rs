@@ -13,13 +13,10 @@ use std::path::{Path, PathBuf};
 use github_source::sync_github_marketplace;
 use local_source::resolve_local_marketplace;
 use manifest::parse_marketplace_manifest;
-use types::{
-    MarketplaceConfig, MarketplaceSourceType, PluginSearchResult, BUILTIN_MARKETPLACE_NAME,
-    BUILTIN_MARKETPLACE_SOURCE,
-};
-
 pub use types::{
-    default_install_dir, marketplace_cache_dir, MarketplaceManifest, MarketplacePluginEntry,
+    MarketplaceConfig, MarketplaceSourceType, PluginSearchResult, BUILTIN_MARKETPLACE_NAME,
+    BUILTIN_MARKETPLACE_SOURCE, default_install_dir, marketplace_cache_dir, MarketplaceManifest,
+    MarketplacePluginEntry,
 };
 
 // =============================================================================

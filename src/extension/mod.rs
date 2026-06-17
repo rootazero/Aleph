@@ -66,6 +66,9 @@ pub use types::*;
 // Re-export config types
 pub use config::{AlephConfig, ConfigManager};
 
+// Re-export marketplace types
+pub use marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
+
 // Re-export sync API
 pub use sync_api::SyncExtensionManager;
 

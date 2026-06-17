@@ -8,6 +8,7 @@ use std::collections::{HashSet, VecDeque};
 
 use rusqlite::{params, Connection};
 
+#[cfg(test)]
 use super::CoordTaskStore;
 
 /// Check if adding edges `new_task_id ← blocked_by[..]` would create a cycle.

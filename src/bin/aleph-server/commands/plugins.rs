@@ -7,6 +7,9 @@
 //! the reverse-regression check (Task 25).
 
 use crate::cli::MarketplaceAction;
+use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
+use alephcore::Config;
+use alephcore::PluginMarketplaceEntry;
 
 /// Handle plugins list command
 pub async fn handle_plugins_list() -> Result<(), Box<dyn std::error::Error>> {
@@ -225,40 +228,44 @@ pub fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+/// Load marketplace entries from `config.toml` into the manager type.
+fn load_marketplace_configs(
+) -> Result<std::collections::HashMap<String, MarketplaceConfig>, Box<dyn std::error::Error>> {
+    let config = Config::load()?;
+    Ok(config
+        .plugin_marketplaces
+        .iter()
+        .map(
+            |(name, entry): (&String, &PluginMarketplaceEntry)| {
+                let source_type = match entry.source_type.as_str() {
+                    "local" => MarketplaceSourceType::Local,
+                    _ => MarketplaceSourceType::Github,
+                };
+                (
+                    name.clone(),
+                    MarketplaceConfig {
+                        source: entry.source.clone(),
+                        source_type,
+                    },
+                )
+            },
+        )
+        .collect())
+}
+
 /// Install plugin from marketplace (by name) or URL (legacy path)
 pub async fn handle_plugin_install(
     source: &str,
     scope: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
     use alephcore::extension::marketplace::MarketplaceManager;
     use alephcore::extension::scope::parse_scope;
-    use alephcore::Config;
 
     // If source looks like a plugin name (no /, ., or :), use marketplace install locally
     let is_plugin_name = !source.contains('/') && !source.contains('.') && !source.contains(':');
 
     if is_plugin_name {
-        let config = Config::load()?;
-        let marketplace_configs: std::collections::HashMap<String, MarketplaceConfig> = config
-            .plugin_marketplaces
-            .iter()
-            .map(
-                |(name, entry): (&String, &alephcore::PluginMarketplaceEntry)| {
-                    let source_type = match entry.source_type.as_str() {
-                        "local" => MarketplaceSourceType::Local,
-                        _ => MarketplaceSourceType::Github,
-                    };
-                    (
-                        name.clone(),
-                        MarketplaceConfig {
-                            source: entry.source.clone(),
-                            source_type,
-                        },
-                    )
-                },
-            )
-            .collect();
+        let marketplace_configs = load_marketplace_configs()?;
 
         let manager = MarketplaceManager::new(marketplace_configs, None);
         let plugin_scope = parse_scope(scope)?;
@@ -283,30 +290,9 @@ pub async fn handle_plugin_install(
 /// Build a [`MarketplaceManager`] from the marketplace entries in `config.toml`.
 fn build_marketplace_manager(
 ) -> Result<alephcore::extension::marketplace::MarketplaceManager, Box<dyn std::error::Error>> {
-    use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
     use alephcore::extension::marketplace::MarketplaceManager;
-    use alephcore::Config;
 
-    let config = Config::load()?;
-    let marketplace_configs: std::collections::HashMap<String, MarketplaceConfig> = config
-        .plugin_marketplaces
-        .iter()
-        .map(
-            |(name, entry): (&String, &alephcore::PluginMarketplaceEntry)| {
-                let source_type = match entry.source_type.as_str() {
-                    "local" => MarketplaceSourceType::Local,
-                    _ => MarketplaceSourceType::Github,
-                };
-                (
-                    name.clone(),
-                    MarketplaceConfig {
-                        source: entry.source.clone(),
-                        source_type,
-                    },
-                )
-            },
-        )
-        .collect();
+    let marketplace_configs = load_marketplace_configs()?;
     Ok(MarketplaceManager::new(marketplace_configs, None))
 }
 
@@ -388,29 +374,11 @@ pub async fn handle_plugin_update(
 pub async fn handle_marketplace_command(
     action: MarketplaceAction,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
+    use alephcore::extension::marketplace::types::MarketplaceSourceType;
     use alephcore::extension::marketplace::MarketplaceManager;
-    use alephcore::{Config, PluginMarketplaceEntry};
 
     // Load marketplace config from config.toml
-    let config = Config::load()?;
-    let marketplace_configs: std::collections::HashMap<String, MarketplaceConfig> = config
-        .plugin_marketplaces
-        .iter()
-        .map(|(name, entry): (&String, &PluginMarketplaceEntry)| {
-            let source_type = match entry.source_type.as_str() {
-                "local" => MarketplaceSourceType::Local,
-                _ => MarketplaceSourceType::Github,
-            };
-            (
-                name.clone(),
-                MarketplaceConfig {
-                    source: entry.source.clone(),
-                    source_type,
-                },
-            )
-        })
-        .collect();
+    let marketplace_configs = load_marketplace_configs()?;
 
     let mut manager = MarketplaceManager::new(marketplace_configs, None);
 

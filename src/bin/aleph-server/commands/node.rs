@@ -45,15 +45,23 @@ struct NodeIdentity {
 /// `~/.aleph/node/<name>.json`. `None` only if the home dir is unresolvable
 /// or if `name` contains path separators or traversal components.
 fn identity_path(name: &str) -> Option<PathBuf> {
-    if name.is_empty()
-        || name == "."
-        || name == ".."
-        || name.contains('/')
-        || name.contains('\\')
+    if name.is_empty() || name == "." || name == ".." {
+        return None;
+    }
+    let file_name = format!("{name}.json");
+    if Path::new(&file_name)
+        .components()
+        .any(|c| !matches!(c, std::path::Component::Normal(_)))
     {
         return None;
     }
-    dirs::home_dir().map(|h| h.join(".aleph").join("node").join(format!("{name}.json")))
+    let base = dirs::home_dir()?.join(".aleph").join("node");
+    let candidate = base.join(&file_name);
+    if candidate.strip_prefix(&base).is_ok() {
+        Some(candidate)
+    } else {
+        None
+    }
 }
 
 /// Migration note: old pre-LAN-trust `NodeCredential` files (which carry an
