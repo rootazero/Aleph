@@ -108,7 +108,12 @@ pub struct ContextBudgetToml {
     /// inaccurate value compacts too early or too late. Default `200_000`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<u64>,
-    /// Fraction of `token_budget` at which compaction begins. Default 0.70.
+    /// Fraction of `token_budget` at which compaction begins. When unset the
+    /// default is **window-aware**: a wide window (≈1M) resolves to `0.70`,
+    /// while a narrow window (≈200k) automatically compacts earlier so one
+    /// large tool result cannot leap the warning→critical band and overflow
+    /// before compaction fires. Set this to pin a fixed fraction regardless of
+    /// window size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning_threshold: Option<f64>,
     /// Fraction of `token_budget` at which the run is forced to a final reply

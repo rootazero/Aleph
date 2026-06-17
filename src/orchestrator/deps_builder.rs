@@ -61,6 +61,52 @@ fn chain_min_materially_undercuts_primary(chain_min_usable: u64, primary_usable:
         && (chain_min_usable as f64) < (primary_usable as f64) * CHAIN_MIN_UNDERCUT_WARN_FRACTION
 }
 
+/// Historical flat default compaction thresholds, also the *caps* for the
+/// window-aware auto-derivation below: a window wide enough to absorb a tool
+/// spike at these fractions keeps them exactly, so wide models (and the
+/// calibrated common case) stay byte-identical to the pre-wiring behaviour.
+const DEFAULT_WARNING_THRESHOLD: f64 = 0.70;
+const DEFAULT_CRITICAL_THRESHOLD: f64 = 0.85;
+
+/// Absolute token headroom the auto-derived *warning* (compact) line keeps
+/// below the critical line. This is the heart of model-aware compaction
+/// *timing*: the same `0.70` fraction that leaves ~130k of runway on a 1M
+/// window leaves only ~30k on a 200k window — not enough to absorb one large
+/// tool result (a full file read / web fetch / search dump is easily 40k+
+/// tokens) landing in a single turn, which would leap the whole warning→critical
+/// band and overflow before compaction ever fires. Sizing the band by an
+/// *absolute* token count instead of a flat fraction makes a narrow window
+/// start compacting earlier so it keeps the same spike protection a wide
+/// window gets for free.
+const WARNING_SPIKE_HEADROOM_TOKENS: f64 = 48_000.0;
+
+/// Lower bound for the auto-derived warning fraction, so a very small window
+/// cannot drive the compaction trigger absurdly low (summarizing nearly every
+/// turn). Operators with tiny windows can still set an explicit
+/// `warning_threshold` to go lower.
+const MIN_AUTO_WARNING_THRESHOLD: f64 = 0.40;
+
+/// Window-aware *default* warning (compaction) fraction, used only when neither
+/// a per-model nor a global `warning_threshold` is configured.
+///
+/// Keeps a model-independent *absolute* token band of
+/// [`WARNING_SPIKE_HEADROOM_TOKENS`] below the effective `critical` line: a wide
+/// 1M window resolves to the historical [`DEFAULT_WARNING_THRESHOLD`], while a
+/// narrow 200k window automatically compacts earlier. Floored at
+/// [`MIN_AUTO_WARNING_THRESHOLD`] and capped at [`DEFAULT_WARNING_THRESHOLD`],
+/// so the result is always in a sane range; the single-arg `min`/`max` avoid the
+/// `f64::clamp` min>max panic risk for a pathologically low configured critical
+/// (which the downstream threshold-ordering validation rejects anyway).
+fn window_aware_warning_default(usable: u64, critical: f64) -> f64 {
+    if usable == 0 {
+        return DEFAULT_WARNING_THRESHOLD.min(critical);
+    }
+    let spike_fraction = WARNING_SPIKE_HEADROOM_TOKENS / usable as f64;
+    (critical - spike_fraction)
+        .min(DEFAULT_WARNING_THRESHOLD)
+        .max(MIN_AUTO_WARNING_THRESHOLD)
+}
+
 /// Stability triple — three independent Optionals derived from `[stability]`.
 ///
 /// Returned as a struct (not tuple) so consumers can name fields and future
@@ -650,8 +696,9 @@ pub fn build_context_budget_config(
         }
     };
     // Per-model trigger-point override, keyed off the resolved chain-min model.
-    // Each field falls back to the global threshold, then the built-in default,
-    // so an absent or non-matching override is byte-identical to before.
+    // Each field falls back to the global threshold, then the built-in default
+    // (flat critical, window-aware warning), so an absent or non-matching
+    // override leaves the model-aware defaults intact.
     let model_override = cb.threshold_override_for(derived.model.as_deref(), &derived.provider);
     if let Some(o) = model_override {
         tracing::info!(
@@ -661,14 +708,23 @@ pub fn build_context_budget_config(
             "context budget: applying per-model threshold override"
         );
     }
-    let warning_threshold = model_override
-        .and_then(|o| o.warning_threshold)
-        .or(cb.warning_threshold)
-        .unwrap_or(0.70);
+    // Critical (hard-stop) keeps the flat default: once `FinalReply` fires the
+    // harness runs no further tools, so no tool result can be appended between
+    // the critical check and the bounded final reply — the hard line is safe at
+    // a fixed fraction regardless of window size.
     let critical_threshold = model_override
         .and_then(|o| o.critical_threshold)
         .or(cb.critical_threshold)
-        .unwrap_or(0.85);
+        .unwrap_or(DEFAULT_CRITICAL_THRESHOLD);
+    // Warning (compaction trigger) is window-aware: absent explicit config, a
+    // narrow window compacts earlier so one large tool result cannot leap the
+    // whole band and overshoot critical before compaction fires (see
+    // `window_aware_warning_default`). A configured threshold still wins.
+    let auto_warning = window_aware_warning_default(token_budget, critical_threshold);
+    let warning_threshold = model_override
+        .and_then(|o| o.warning_threshold)
+        .or(cb.warning_threshold)
+        .unwrap_or(auto_warning);
 
     // Defensive validation (P7): a misconfigured budget silently cuts off
     // every run — e.g. inverted thresholds make `CompactAndContinue`
@@ -835,12 +891,21 @@ mod tests {
             ..ContextBudgetToml::default()
         }));
         let bc = build_context_budget_config(&cfg, "primary").expect("enabled → Some");
+        let usable = DEFAULT_CONTEXT_TOKEN_BUDGET - DEFAULT_OUTPUT_RESERVE;
+        assert_eq!(bc.token_budget, usable);
+        // Critical keeps the flat default; warning is window-aware. The default
+        // 200k window is narrow enough that the 48k spike band pulls the warning
+        // line below 0.70 (so one big tool result can't overshoot critical).
+        assert_eq!(bc.critical_threshold, DEFAULT_CRITICAL_THRESHOLD);
         assert_eq!(
-            bc.token_budget,
-            DEFAULT_CONTEXT_TOKEN_BUDGET - DEFAULT_OUTPUT_RESERVE
+            bc.warning_threshold,
+            window_aware_warning_default(usable, DEFAULT_CRITICAL_THRESHOLD)
         );
-        assert_eq!(bc.warning_threshold, 0.70);
-        assert_eq!(bc.critical_threshold, 0.85);
+        assert!(
+            bc.warning_threshold < DEFAULT_WARNING_THRESHOLD,
+            "a 200k window must compact earlier than the flat 0.70 default, got {}",
+            bc.warning_threshold
+        );
     }
 
     #[test]
@@ -1050,8 +1115,16 @@ mod tests {
         };
         let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
         let bc = build_context_budget_config(&cfg, "moonshot").expect("enabled → Some");
-        assert_eq!(bc.warning_threshold, 0.70);
-        assert_eq!(bc.critical_threshold, 0.85);
+        // No matching override → the *global default*, which for warning is now
+        // window-aware. kimi-k2's usable window is narrow enough that the auto
+        // warning sits below 0.70; critical still uses the flat default.
+        let usable = 262_144 - 32_768;
+        assert_eq!(
+            bc.warning_threshold,
+            window_aware_warning_default(usable, DEFAULT_CRITICAL_THRESHOLD)
+        );
+        assert_eq!(bc.critical_threshold, DEFAULT_CRITICAL_THRESHOLD);
+        assert!(bc.warning_threshold < DEFAULT_WARNING_THRESHOLD);
     }
 
     #[test]
@@ -1092,6 +1165,83 @@ mod tests {
             build_context_budget_config(&cfg, "moonshot").is_none(),
             "inverted per-model thresholds disable the budget (P7 defensive)"
         );
+    }
+
+    // ── window-aware default compaction timing (kimi 20w vs claude 100w) ─
+
+    #[test]
+    fn window_aware_warning_wide_window_keeps_flat_default() {
+        // A 1M-class usable window absorbs a 48k spike at 0.70, so the auto
+        // warning is exactly the historical flat default — wide models stay
+        // byte-identical to the pre-wiring behaviour.
+        let w = window_aware_warning_default(936_000, DEFAULT_CRITICAL_THRESHOLD);
+        assert_eq!(w, DEFAULT_WARNING_THRESHOLD);
+    }
+
+    #[test]
+    fn window_aware_warning_narrow_window_compacts_earlier() {
+        // A 200k-class window cannot absorb a 48k spike at 0.70, so the auto
+        // warning drops below it — keeping the absolute 48k band below critical.
+        let usable = 262_144u64 - 32_768; // kimi-k2 usable
+        let w = window_aware_warning_default(usable, DEFAULT_CRITICAL_THRESHOLD);
+        assert!(w < DEFAULT_WARNING_THRESHOLD);
+        let band_tokens = (DEFAULT_CRITICAL_THRESHOLD - w) * usable as f64;
+        assert!(
+            (band_tokens - WARNING_SPIKE_HEADROOM_TOKENS).abs() < 1.0,
+            "warning→critical band must equal one spike (~48k), got {band_tokens}"
+        );
+    }
+
+    #[test]
+    fn window_aware_warning_floored_for_tiny_window() {
+        // When the spike exceeds the whole band, the auto warning floors at the
+        // minimum — never negative, never absurdly low.
+        let w = window_aware_warning_default(MIN_USABLE_BUDGET, DEFAULT_CRITICAL_THRESHOLD);
+        assert_eq!(w, MIN_AUTO_WARNING_THRESHOLD);
+    }
+
+    #[test]
+    fn window_aware_warning_tracks_effective_critical() {
+        // The band is measured below the *effective* critical, so a higher
+        // configured critical lifts the auto warning with it.
+        let usable = 262_144u64 - 32_768;
+        assert!(
+            window_aware_warning_default(usable, 0.90)
+                > window_aware_warning_default(usable, 0.85)
+        );
+    }
+
+    #[test]
+    fn narrow_model_compacts_earlier_than_wide_by_default() {
+        // Headline property: with NO explicit thresholds, a narrow kimi window
+        // starts compacting at a lower fraction than a wide claude window —
+        // model-aware compaction timing without any per-model config.
+        let cb = || ContextBudgetToml {
+            enabled: true,
+            ..ContextBudgetToml::default()
+        };
+        let mut claude = ProviderConfig::test_config("claude-sonnet-4-6");
+        claude.context_window = Some(1_000_000);
+        claude.max_tokens = Some(64_000);
+        let claude_cfg = cfg_with_primary("claude", claude, cb());
+        let claude_bc = build_context_budget_config(&claude_cfg, "claude").expect("some");
+
+        let kimi_cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb());
+        let kimi_bc = build_context_budget_config(&kimi_cfg, "moonshot").expect("some");
+
+        assert_eq!(
+            claude_bc.warning_threshold, DEFAULT_WARNING_THRESHOLD,
+            "a 1M window keeps the flat 0.70 default"
+        );
+        assert!(
+            kimi_bc.warning_threshold < claude_bc.warning_threshold,
+            "narrow kimi compacts earlier than wide claude: kimi {} < claude {}",
+            kimi_bc.warning_threshold,
+            claude_bc.warning_threshold
+        );
+        // Both keep the flat critical hard-stop — only the *trigger* is window-aware.
+        assert_eq!(kimi_bc.critical_threshold, DEFAULT_CRITICAL_THRESHOLD);
+        assert_eq!(claude_bc.critical_threshold, DEFAULT_CRITICAL_THRESHOLD);
     }
 
     // ── min-over-chain budgeting (failover-safe window) ──────────────────
