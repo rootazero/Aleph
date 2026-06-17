@@ -15,6 +15,7 @@
 
 mod config;
 mod emitter;
+mod extract;
 mod sanitize;
 
 #[cfg(test)]
@@ -22,6 +23,7 @@ mod tests;
 
 pub use config::ReplyEmitterConfig;
 pub use emitter::ReplyEmitter;
+pub(crate) use extract::extract_final_response;
 pub(crate) use sanitize::sanitize_llm_output;
 
 #[cfg(test)]
