@@ -173,16 +173,7 @@
 >
 > **信任模型 = 网络边界**：server 默认只绑 `127.0.0.1`（只信本机）；在 `~/.aleph/config.toml` 写一行 `[gateway] host = "0.0.0.0"` 即显式开放整个局域网——**局域网内任何设备由此可连接 agent**（对话 + 读 + 执行工具/PTY/shell，仍随网络信任边界开放）。**唯一的方法级门槛是 device tier**：远程 Panel 默认 **Chat tier**，对 Aleph **自身配置**的变更（`self_config`/`skill_install`/provider 配置/`devices.*` 等 config 类 RPC 与工具）走 `src/gateway/method_authz.rs` 的 RPC+工具双门拦截，须 operator 经 `devices.set_level` 显式提权；本机(loopback) 始终 operator（单机零配置）。另一道协议护栏是 WS Origin 校验（`src/gateway/origin_policy.rs`，挡公网恶意网页**跨源**驱动 agent；经典 DNS-rebinding 已防御——same-origin 仅在 `Host` 为 IP 字面量/loopback 时放行，域名 `Host` 不再自动同源放行，域名部署须把 origin 加进 `[gateway] allowed_origins`，详见 SECURITY.md。`[gateway] allow_any_origin = true` 可关）。详见 [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)。
 
-> **⚠️ Panel ↔ Daemon 资源嵌入链**: Panel UI（`interfaces/webchat/dist/*`）通过 `rust_embed`（`src/gateway/control_plane/assets.rs`）在 **`aleph-server` 编译时** 静态嵌入到二进制；运行中的 daemon **不会** 从磁盘读取 dist/*。改完 panel 源码后看不到效果，几乎都是漏了重编 binary 这一步。完整刷新链：
->
-> 1. `just wasm` — 重建 `interfaces/webchat/dist/{aleph_panel.js, aleph_panel_bg.wasm, tailwind.css, index.html}`
-> 2. `cargo build --release -p alephcore --bin aleph-server` — 让 `rust_embed` 把新 dist 烧进 binary
-> 3. 替换正在跑的 binary，让 supervisor relaunch：
->    - **dev** (`cargo run` 启动的 daemon)：`./target/release/aleph-server stop` → `cargo run --release -p alephcore --bin aleph-server start`（Windows 同理，二进制为 `aleph-server.exe`）
->    - **.app daemon (macOS)**：`mv /Applications/Aleph.app/Contents/MacOS/aleph-server{,.bak}` → `cp target/release/aleph-server /Applications/Aleph.app/Contents/MacOS/` → `kill <pid>`（Tauri shell 的 supervisor 会自动 relaunch 新 binary 并 reload webview）
->    - **安装版 App daemon (Windows)**：先停（`aleph-server stop` 或 `taskkill /IM aleph-server.exe /F`）——**Windows 无法覆盖正在运行的 exe，必须先停**——再 `Copy-Item target\release\aleph-server.exe "$env:LOCALAPPDATA\Aleph\aleph-server.exe" -Force`（NSIS 默认按用户安装；旧 `aleph-server.exe` 与 `Aleph.exe` 同目录），最后重启 `Aleph.exe`，supervisor 会拉起新 binary 并 reload webview
->
-> 单跑 `just wasm` / `just dev` **不够**——前者只更磁盘，后者只在 daemon 还没启动时有效。已经在跑的 daemon 必须替换 binary 才能感知 panel 改动。
+> **⚠️ Panel ↔ Daemon 资源嵌入链**: Panel UI 经 `rust_embed` 在 `aleph-server` **编译时**静态嵌入二进制，运行中的 daemon 不读磁盘 dist/*。改完 panel 看不到效果＝漏了重编 binary。完整刷新链（`just wasm` → 重编 server → 替换运行中 binary，dev / macOS .app / Windows 三种 daemon 替换法）详见 [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md)。
 
 ### Windows 构建
 

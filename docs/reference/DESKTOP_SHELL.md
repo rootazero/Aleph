@@ -264,6 +264,21 @@ build is unchanged and simply ships no auto-update artifacts that release.
 Auto-update is therefore an additive, opt-in layer over the CalVer release
 model, not a change to it.
 
+## Panel ↔ Daemon 资源嵌入链与刷新
+
+Panel UI（`interfaces/webchat/dist/*`）通过 `rust_embed`（`src/gateway/control_plane/assets.rs`）在 **`aleph-server` 编译时** 静态嵌入到二进制；运行中的 daemon **不会** 从磁盘读取 dist/*。改完 panel 源码后看不到效果，几乎都是漏了重编 binary 这一步。
+
+完整刷新链：
+
+1. `just wasm` — 重建 `interfaces/webchat/dist/{aleph_panel.js, aleph_panel_bg.wasm, tailwind.css, index.html}`
+2. `cargo build --release -p alephcore --bin aleph-server` — 让 `rust_embed` 把新 dist 烧进 binary
+3. 替换正在跑的 binary，让 supervisor relaunch：
+   - **dev** (`cargo run` 启动的 daemon)：`./target/release/aleph-server stop` → `cargo run --release -p alephcore --bin aleph-server start`（Windows 同理，二进制为 `aleph-server.exe`）
+   - **.app daemon (macOS)**：`mv /Applications/Aleph.app/Contents/MacOS/aleph-server{,.bak}` → `cp target/release/aleph-server /Applications/Aleph.app/Contents/MacOS/` → `kill <pid>`（Tauri shell 的 supervisor 会自动 relaunch 新 binary 并 reload webview）
+   - **安装版 App daemon (Windows)**：先停（`aleph-server stop` 或 `taskkill /IM aleph-server.exe /F`）——**Windows 无法覆盖正在运行的 exe，必须先停**——再 `Copy-Item target\release\aleph-server.exe "$env:LOCALAPPDATA\Aleph\aleph-server.exe" -Force`（NSIS 默认按用户安装；旧 `aleph-server.exe` 与 `Aleph.exe` 同目录），最后重启 `Aleph.exe`，supervisor 会拉起新 binary 并 reload webview
+
+单跑 `just wasm` / `just dev` **不够**——前者只更磁盘，后者只在 daemon 还没启动时有效。已经在跑的 daemon 必须替换 binary 才能感知 panel 改动。
+
 ## Follow-ups (not in this cycle)
 
 - **Heartbeat → EventBus topic.** True proactive heartbeat notifications would
