@@ -990,7 +990,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                         let id_del = group_id.clone();
                                         view! {
                                             <div class="w-full px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 flex items-center justify-between text-xs">
-                                                <span class="text-red-400 font-medium">{move || t_string!(i18n, chat.confirm_delete).to_string()}</span>
+                                                <span class="text-red-400 font-medium">{move || t_string!(i18n, common.confirm_dissolve).to_string()}</span>
                                                 <div class="flex items-center gap-1.5">
                                                     <button
                                                         class="px-2 py-0.5 rounded bg-red-500 text-white text-[10px] font-medium hover:bg-red-600 transition-colors disabled:opacity-50"
@@ -1106,7 +1106,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                                                     group_menu_id.set(None);
                                                                     group_deleting_id.set(Some(id_del_menu.clone()));
                                                                 }
-                                                            >{move || t_string!(i18n, common.delete).to_string()}</button>
+                                                            >{move || t_string!(i18n, teams.disband).to_string()}</button>
                                                         </div>
                                                     }.into_any()
                                                 } else {
