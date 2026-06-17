@@ -1,9 +1,11 @@
-//! ACP↔teams bridge.
+//! ACP↔teams naming bridge.
 //!
 //! Lets Claude Code / Codex / Gemini CLI / any other ACP harness run as a
-//! first-class team member by routing dispatcher `execute_member_task` calls
-//! to [`AcpAdapterManager::prompt_named`] when the `agent_id` follows the
-//! reserved namespace.
+//! first-class team member. This module owns only the `agent_id` **naming
+//! convention** that marks a member as an ACP harness; the actual task
+//! execution lives in [`super::runner::execute_member_task`], which routes the
+//! structured `MemberDispatchTarget::AcpSession` variant through the gateway's
+//! `AcpAdapterManager`.
 //!
 //! ## Naming convention
 //!
@@ -16,22 +18,17 @@
 //! - `acp:codex/backend`
 //! - `acp:gemini/frontend`
 //!
-//! The harness ID must match one of the entries registered with
-//! [`AcpAdapterManager`] (built-in presets cover ~16 popular CLIs; users can
+//! The harness ID must match one of the entries registered with the
+//! `AcpAdapterManager` (built-in presets cover ~16 popular CLIs; users can
 //! register more via `[acp.adapters.<id>]` TOML).
 //!
 //! ## Why a parallel path (not registry registration)?
 //!
 //! ACP harnesses are external OS processes with their own session pool, mode
-//! switching, and cancel semantics handled by [`AcpAdapterManager`]. Wrapping
-//! one as an [`AgentInstance`] would require synthesizing a fake LLM provider,
+//! switching, and cancel semantics handled by the `AcpAdapterManager`. Wrapping
+//! one as an `AgentInstance` would require synthesizing a fake LLM provider,
 //! tool registry, and prompt builder — fighting the abstraction. Routing
 //! directly to the ACP manager keeps each subsystem speaking its native API.
-
-use crate::acp::manager::AcpAdapterManager;
-use crate::sync_primitives::Arc;
-
-use super::runner::{MemberRunOutcome, MemberRunStatus};
 
 /// Reserved prefix that marks a team-member `agent_id` as an ACP harness.
 pub const ACP_MEMBER_PREFIX: &str = "acp:";
@@ -80,54 +77,12 @@ impl AcpMemberRef {
     }
 }
 
-/// Execute one task by handing it to the ACP harness identified by
-/// `member_ref`. Wraps the manager's result into [`MemberRunOutcome`] so the
-/// dispatcher writes uniform state regardless of agent kind.
-///
-/// `cwd` is the working directory the harness should run in — usually the
-/// team's project root or the dispatcher's inherited workspace.
-pub async fn execute_acp_member_task(
-    acp_manager: &Arc<AcpAdapterManager>,
-    member_ref: &AcpMemberRef,
-    cwd: &str,
-    prompt_text: String,
-    timeout_secs: u64,
-) -> MemberRunOutcome {
-    let prompt_future = acp_manager.prompt_named(
-        &member_ref.harness_id,
-        &prompt_text,
-        cwd,
-        member_ref.session_name.as_deref(),
-        None, // honour harness default mode
-        true, // reuse session — keep context across team turns
-        None, // no streaming callback yet
-    );
-
-    let timeout = std::time::Duration::from_secs(timeout_secs);
-    match tokio::time::timeout(timeout, prompt_future).await {
-        Ok(Ok(reply)) => MemberRunOutcome {
-            status: MemberRunStatus::Completed,
-            reply: Some(reply),
-            error: None,
-        },
-        Ok(Err(e)) => MemberRunOutcome {
-            status: MemberRunStatus::Failed,
-            reply: None,
-            error: Some(format!(
-                "ACP harness '{}' failed: {e}",
-                member_ref.harness_id
-            )),
-        },
-        Err(_) => MemberRunOutcome {
-            status: MemberRunStatus::Timeout,
-            reply: None,
-            error: Some(format!(
-                "ACP harness '{}' timed out after {timeout_secs}s",
-                member_ref.harness_id
-            )),
-        },
-    }
-}
+// Note: task execution for ACP members lives in
+// [`super::runner::execute_member_task`] (which routes the structured
+// `MemberDispatchTarget::AcpSession` variant through the gateway's
+// `AcpAdapterManager`). This module owns only the `agent_id` naming
+// convention (`AcpMemberRef`) so team-creation tools can recognise and
+// validate ACP members before the dispatcher ever sees the task.
 
 #[cfg(test)]
 mod tests {
