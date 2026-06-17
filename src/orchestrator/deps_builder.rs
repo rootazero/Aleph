@@ -658,6 +658,66 @@ pub fn build_context_budget_config(
     })
 }
 
+/// Build the cheap-tier summarization provider for [`ContextCompactor`] from
+/// `[context_budget] summary_model` (Reasonix `summaryModel` parity).
+///
+/// Returns `Some(provider)` only when the section is enabled AND `summary_model`
+/// names a model distinct from the primary provider's own default. The cheap
+/// provider reuses the *primary* provider's full config (api key, base url,
+/// protocol, timeouts) with only `models` swapped for the summary model, so it
+/// targets the same vendor — just a cheaper sibling.
+///
+/// Every other case returns `None`, which keeps the compactor's legacy path:
+/// summarization reuses the main LLM. Reasons that yield `None`:
+/// - section missing / `enabled = false` / `summary_model` unset or blank;
+/// - the primary provider key has no `[providers.*]` entry to clone;
+/// - `summary_model` equals the primary's default model (a separate provider
+///   would be byte-identical — pointless);
+/// - `create_provider` fails (bad protocol/preset) — logged, then degraded.
+///
+/// Fail-soft by construction: a misconfigured `summary_model` never aborts boot
+/// and never blocks summarization (the compactor falls back to the main LLM).
+#[must_use]
+pub fn build_cheap_summary_provider(
+    config: &Config,
+    primary_provider_key: &str,
+) -> Option<Arc<dyn AiProvider>> {
+    let cb = config.context_budget.as_ref()?;
+    if !cb.enabled {
+        return None;
+    }
+    let summary_model = cb.summary_model.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty())?;
+
+    let base = config.providers.get(primary_provider_key)?;
+    // No-op when the summary model is the primary's own default model — the
+    // rebuilt provider would be byte-identical, so reuse the main LLM directly.
+    if base.models.first().is_some_and(|m| m.as_str() == summary_model) {
+        return None;
+    }
+
+    let mut cheap_cfg = base.clone();
+    cheap_cfg.models = vec![summary_model.to_string()];
+    match create_provider(primary_provider_key, cheap_cfg) {
+        Ok(provider) => {
+            tracing::info!(
+                provider = %primary_provider_key,
+                summary_model = %summary_model,
+                "context budget: routing history summarization to cheap-tier model"
+            );
+            Some(provider)
+        }
+        Err(e) => {
+            tracing::warn!(
+                provider = %primary_provider_key,
+                summary_model = %summary_model,
+                error = %e,
+                "context budget: cheap summary provider build failed — summarization will use the main LLM"
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1269,5 +1329,71 @@ mod tests {
         assert!(triple.stall_config.is_none());
         assert!(triple.consecutive_failure_cap.is_none());
         assert_eq!(triple.turn_timeout, Some(Duration::from_secs(60)));
+    }
+
+    // ── cheap-tier summary provider wiring (Reasonix summaryModel parity) ──
+
+    /// Config with `[context_budget]` enabled, a `summary_model`, and a single
+    /// mock-protocol primary provider whose default model is `primary_model`.
+    fn cfg_summary(primary_model: &str, summary_model: Option<&str>) -> Config {
+        let mut primary = ProviderConfig::test_config(primary_model);
+        primary.protocol = Some("mock".to_string());
+        let mut cfg = cfg_with_fallback(None, vec![("primary", primary)]);
+        cfg.context_budget = Some(ContextBudgetToml {
+            enabled: true,
+            summary_model: summary_model.map(str::to_string),
+            ..ContextBudgetToml::default()
+        });
+        cfg
+    }
+
+    #[test]
+    fn cheap_summary_none_when_section_missing() {
+        // No `[context_budget]` at all → no cheap provider (legacy main-LLM path).
+        let cfg = Config::default();
+        assert!(build_cheap_summary_provider(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_none_when_disabled() {
+        let mut cfg = cfg_summary("main-model", Some("cheap-model"));
+        cfg.context_budget.as_mut().unwrap().enabled = false;
+        assert!(build_cheap_summary_provider(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_none_when_model_unset_or_blank() {
+        // Unset → None.
+        let cfg = cfg_summary("main-model", None);
+        assert!(build_cheap_summary_provider(&cfg, "primary").is_none());
+        // Whitespace-only → trimmed to empty → None.
+        let cfg = cfg_summary("main-model", Some("   "));
+        assert!(build_cheap_summary_provider(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_none_when_equals_primary_default() {
+        // A summary model identical to the primary's default would rebuild a
+        // byte-identical provider — pointless, so reuse the main LLM.
+        let cfg = cfg_summary("same-model", Some("same-model"));
+        assert!(build_cheap_summary_provider(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_none_when_primary_key_absent() {
+        // summary_model set but the named primary has no [providers.*] entry.
+        let cfg = cfg_summary("main-model", Some("cheap-model"));
+        assert!(build_cheap_summary_provider(&cfg, "does-not-exist").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_some_when_distinct_model_builds() {
+        // Enabled + a distinct, buildable summary model → a cheap provider that
+        // targets the primary vendor (mock protocol here) with the swapped model.
+        let cfg = cfg_summary("main-model", Some("cheap-model"));
+        assert!(
+            build_cheap_summary_provider(&cfg, "primary").is_some(),
+            "enabled + distinct buildable summary model must yield a cheap provider"
+        );
     }
 }

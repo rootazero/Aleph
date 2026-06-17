@@ -21,9 +21,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use alephcore::orchestrator::{
-    build_context_budget_config, build_sandbox_factory, dispatch::Orchestrator,
-    flow_registry::FlowRegistry, harness_bridge::AgentHarnessRunner, loader::load_presets,
-    resolver::RoutingOverrides, sandbox_factory::WorkspaceBuilder,
+    build_cheap_summary_provider, build_context_budget_config, build_sandbox_factory,
+    dispatch::Orchestrator, flow_registry::FlowRegistry, harness_bridge::AgentHarnessRunner,
+    loader::load_presets, resolver::RoutingOverrides, sandbox_factory::WorkspaceBuilder,
 };
 use alephcore::verification::{
     stop_hooks::build_from_config as build_stop_hooks, ScratchpadGoalVerifier, StopHookVerifier,
@@ -258,7 +258,12 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         memory_backend,
         tool_catalog,
         session_epoch_registrar,
-        cheap_provider: None,
+        // Reasonix-parity cheap-tier summarization: when `[context_budget]
+        // summary_model` names a flash-tier sibling of the primary provider,
+        // route history-compaction summarization through it instead of the main
+        // LLM. `None` (default / unset / same-as-primary / build error) keeps
+        // the legacy path (summarization on the main provider).
+        cheap_provider: build_cheap_summary_provider(config, primary_provider_key),
         mcp_handle,
         // Wire `[prompt.extra_files]` so the documented config section has a
         // production consumer (`ExtraFilesLayer` via `build_system_prompt`).

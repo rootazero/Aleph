@@ -115,6 +115,22 @@ pub struct ContextBudgetToml {
     /// without further tool calls. Default 0.85.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub critical_threshold: Option<f64>,
+    /// Cheap-tier model id for side-channel history summarization (Reasonix
+    /// `summaryModel` parity). When set, compaction's summarization call routes
+    /// to a provider built from the *primary* provider's config (same vendor /
+    /// API key / endpoint / protocol) with this model substituted — typically a
+    /// flash-tier sibling (e.g. `claude-haiku-4-5`, `gemini-2.5-flash-lite`,
+    /// `deepseek-chat`). Summarization is read-and-condense work where the
+    /// strongest model is almost never required, so routing it here yields a
+    /// large per-token cost reduction with no measurable quality regression.
+    ///
+    /// `None` (default), empty, or a value equal to the primary's default model
+    /// keeps the legacy path: summarization reuses the main LLM
+    /// (`cheap_provider` stays unset on the compactor). A model id that fails to
+    /// build a provider (bad protocol/preset) also degrades silently to the
+    /// main LLM — never a hard boot failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_model: Option<String>,
     /// Per-model trigger-point overrides. The compaction budget is sized for
     /// the *smallest* context window on the failover chain, so the warning /
     /// critical fractions are keyed off that same model. These let a narrow
@@ -247,6 +263,7 @@ critical_threshold = 0.85
                 token_budget: Some(128_000),
                 warning_threshold: Some(0.7),
                 critical_threshold: Some(0.85),
+                summary_model: None,
                 model_thresholds: Vec::new(),
             })
         );
@@ -301,6 +318,16 @@ critical_threshold = 0.85
         assert!(cb.token_budget.is_none());
         // Per-model overrides default to empty → every model inherits globals.
         assert!(cb.model_thresholds.is_empty());
+        // Cheap summarization is opt-in — unset by default.
+        assert!(cb.summary_model.is_none());
+    }
+
+    #[test]
+    fn summary_model_parses_for_cheap_tier_summarization() {
+        let toml_str = "[context_budget]\nenabled = true\nsummary_model = \"claude-haiku-4-5\"\n";
+        let p: Probe = toml::from_str(toml_str).expect("toml parses");
+        let cb = p.context_budget.expect("section present");
+        assert_eq!(cb.summary_model.as_deref(), Some("claude-haiku-4-5"));
     }
 
     #[test]
