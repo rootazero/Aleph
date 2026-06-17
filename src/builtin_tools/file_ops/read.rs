@@ -16,7 +16,7 @@ use tracing::info;
 
 use super::ops::read_file_bytes;
 use super::path_utils::get_denied_paths;
-use super::text::{is_binary, DEFAULT_READ_LINE_LIMIT, MAX_LINE_CHARS};
+use super::text::{clamp_line, is_binary, DEFAULT_READ_LINE_LIMIT};
 use crate::error::Result;
 use crate::tools::AlephTool;
 
@@ -167,7 +167,9 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
     }
 
     let end = start.saturating_add(limit).min(lines.len());
-    let width = end.to_string().len();
+    // Pad to the full-file line count so numbers align across paginated reads
+    // of the same file (matching `cat -n`), not just within this single window.
+    let width = total_lines.to_string().len();
 
     let mut rendered = String::new();
     for (idx, line) in lines[start..end].iter().enumerate() {
@@ -198,17 +200,6 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
         truncated,
         message,
     }
-}
-
-/// Clamp a single line to [`MAX_LINE_CHARS`] characters (char-boundary safe),
-/// appending a marker when truncated — guards against minified one-line files.
-fn clamp_line(line: &str) -> String {
-    let char_count = line.chars().count();
-    if char_count <= MAX_LINE_CHARS {
-        return line.to_string();
-    }
-    let head: String = line.chars().take(MAX_LINE_CHARS).collect();
-    format!("{head}… [line truncated — {char_count} chars total]")
 }
 
 // =============================================================================
@@ -385,6 +376,7 @@ mod tests {
 
     #[test]
     fn long_lines_are_clamped() {
+        use super::super::text::MAX_LINE_CHARS;
         let clamped = clamp_line(&"x".repeat(MAX_LINE_CHARS + 500));
         assert!(clamped.contains("line truncated"));
         assert!(clamped.starts_with(&"x".repeat(MAX_LINE_CHARS)));
