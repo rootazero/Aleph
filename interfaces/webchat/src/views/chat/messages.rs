@@ -740,6 +740,7 @@ fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
     // strip the user just collapsed mid-run. The hoisted override survives the
     // remount (see `ChatState::strip_open`).
     let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
     let run_id = steps
         .first()
         .map(|m| run_id_from_message_id(&m.id))
@@ -749,7 +750,12 @@ fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
         Memo::new(move |_| chat.strip_is_open(&run, !completed))
     };
     let count = steps.len();
-    let summary = format!("{count} {}", if count == 1 { "step" } else { "steps" });
+    let word = if count == 1 {
+        t_string!(i18n, chat.step).to_string()
+    } else {
+        t_string!(i18n, chat.steps).to_string()
+    };
+    let summary = format!("{count} {word}");
 
     // Stick the inner scroll window to its bottom so a running strip shows the
     // latest step, not the first 220px. The row remounts on every streamed
