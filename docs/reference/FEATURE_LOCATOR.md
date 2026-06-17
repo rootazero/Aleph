@@ -414,10 +414,10 @@
 
 ### 7.1 桌面能力契约与 Bridge IPC (Desktop Capability Contracts & Bridge IPC)
 - **口语关键词**：大脑四肢分离、能力 trait、DesktopPlatform、Swift helper、JSON-RPC 桥、IPC、supervisor、能力契约
-- **代码锚点**：`desktop/shared/`（`aleph-desktop` crate）——`traits/`（`screen.rs`/`system.rs`/`automation.rs`/`permission.rs`/`media.rs`/`pim.rs` + macOS 专属 `ax`/`power` 共八大能力 trait）、`platform.rs`（`DesktopPlatform` 聚合器，每能力返 `Option<&dyn XCapability>`，平台缺失即 `None`）、`bridge/`（`client.rs` + `codec.rs` + `supervisor.rs`(Backoff/RestartWindow) + `inflight.rs`，stdio 上的 JSON-RPC 2.0 连 Swift helper 子进程）、`coord.rs` + `*_types.rs`（共享数据类型）；协议详解见 `docs/reference/DESKTOP_BRIDGE.md`
+- **代码锚点**：`desktop/shared/`（`aleph-desktop` crate）——`traits/`（`screen.rs`/`system.rs`/`automation.rs`/`permission.rs`/`media.rs`/`pim.rs` + macOS 专属 `ax`/`power` 共八大能力 trait）、`platform.rs`（`DesktopPlatform` 聚合器，每能力返 `Option<&dyn XCapability>`，平台缺失即 `None`）、`bridge/`（`client.rs` + `codec.rs` + `supervisor.rs`(Backoff/RestartWindow/**SpawnGate**) + `inflight.rs`，stdio 上的 JSON-RPC 2.0 连 Swift helper 子进程）、`coord.rs` + `*_types.rs`（共享数据类型）；协议详解见 `docs/reference/DESKTOP_BRIDGE.md`
 - **职责**：定义"桌面能做什么"的契约层（trait + 类型 + IPC 协议），不含任何平台实现。`DesktopPlatform` 是核心拿到的唯一抽象入口。
-- **状态**：✅ 已实现（八能力 trait + DesktopPlatform 聚合 + JSON-RPC supervisor/backoff/inflight）。
-- **打磨话术**：「能力契约都在 `desktop/shared/traits/`；新增一种桌面能力 = 先加 trait + 类型，再各平台实现，**严禁在 `src` 直接调平台 API（违 R1）**。IPC 传输/方法表/错误信封在 `bridge/` + DESKTOP_BRIDGE.md。」
+- **状态**：✅ 已实现（八能力 trait + DesktopPlatform 聚合 + JSON-RPC supervisor/backoff/inflight）。**Bridge supervisor 硬化（2026-06-17）**：① **修退避失效死 bug**——`ensure_running` 此前算出 `Backoff::next_delay()` 后 `let _delay=` **丢弃**（顶部 doc 谎称"backoff 已强制"），崩溃/spawn 失败以零间隔重试→毫秒内打穿 RestartWindow(5次/10min)→永久 `disabled`；现把散落的 `Backoff`+`RestartWindow`+"下次可 spawn 时刻"收口为单一内聚 `supervisor::SpawnGate`（poll/record_failure/record_success），退避真正强制（1s→2s→…→30s），窗口内返回新错误 `DesktopError::BridgeBackoff`（瞬时，区别于永久 `BridgeDisabled`）**不**重生；reader 崩溃路径也记退避。② **修双 spawn 竞态**——`ensure_running` 改为**持 `state` 锁跨越 check→spawn→store**（`spawn_process` 改为返回 `BridgeProcess` 不自锁），杜绝两个并发首呼各 spawn 一个 helper 留下孤儿 reader task 向窗口记幻影崩溃。③ **handshake 协议协商**——`BRIDGE_PROTOCOL_VERSION=2` 常量替魔数 + 校验 helper 返回版本不符即 `BridgeFailed`。④ **熵减**——删 `lib.rs` 死结构体 `Capability`（零构造零消费）+ 修过期模块 doc（4→8 能力）。
+- **打磨话术**：「能力契约都在 `desktop/shared/traits/`；新增一种桌面能力 = 先加 trait + 类型，再各平台实现，**严禁在 `src` 直接调平台 API（违 R1）**。IPC 传输/方法表/错误信封在 `bridge/` + DESKTOP_BRIDGE.md。**helper 重生节流/崩溃恢复**全在 `bridge/supervisor.rs::SpawnGate`（单一真源，client 不再自管退避时刻）；‘helper 反复崩溃后多久才放弃’= RestartWindow 阈值，‘崩溃后多久才重试’= Backoff 阶梯 + SpawnGate 闸门（返回 `BridgeBackoff` 而非死等）。」
 
 ### 7.2 原生 Bridge 实现（四肢）(Native Bridge Implementations)
 - **口语关键词**：macOS/Windows/Linux 原生实现、Swift bridge、AppKit/Vision、平台 OCR、四肢、平台特定代码

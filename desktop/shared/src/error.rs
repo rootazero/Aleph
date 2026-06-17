@@ -40,6 +40,14 @@ pub enum DesktopError {
     #[error("bridge timed out: {0}")]
     BridgeTimeout(String),
 
+    /// A spawn was requested while the helper is cooling down inside its
+    /// restart-backoff window. The call did not run; the caller may retry
+    /// after the indicated delay. Distinct from `BridgeDisabled` (permanent
+    /// give-up) — this is transient pacing that keeps a crash loop from
+    /// burning through the restart window in milliseconds.
+    #[error("desktop bridge backing off: {0}")]
+    BridgeBackoff(String),
+
     /// The bridge has been disabled after too many crashes inside the
     /// restart window. Callers should surface this explicitly rather than
     /// retrying.

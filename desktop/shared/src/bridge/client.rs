@@ -5,11 +5,18 @@
 //! the shared `InflightTable`. Stderr is forwarded to tracing for diagnostics.
 //!
 //! Crash recovery: when the reader task detects stdout EOF it drains the
-//! inflight table, resets the state slot to `None`, and records a restart in
-//! the `RestartWindow`. If the window trips (5 crashes within 10 minutes by
-//! default) the `disabled` latch is set and all subsequent calls return
-//! `DesktopError::BridgeDisabled` immediately. Backoff between respawn
-//! attempts is handled by `ensure_running` using `supervisor::Backoff`.
+//! inflight table, resets the state slot to `None`, and records the crash in
+//! the shared [`SpawnGate`]. If the restart window trips (5 crashes within 10
+//! minutes by default) the `disabled` latch is set and all subsequent calls
+//! return `DesktopError::BridgeDisabled` immediately.
+//!
+//! Respawn pacing: every (re)spawn goes through `ensure_running`, which asks the
+//! `SpawnGate` whether enough time has elapsed since the last failure. Within
+//! the backoff window it returns `DesktopError::BridgeBackoff` *without*
+//! spawning, so a crash/spawn-failure loop spaces out (1s→2s→…→30s) instead of
+//! hammering — the old code computed this delay and then discarded it, leaving
+//! the ladder inert. The state lock is held across the check-and-spawn so two
+//! concurrent first-callers cannot both spawn a helper.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -26,7 +33,7 @@ use aleph_protocol::desktop_bridge::methods::perm::PermissionGuide;
 
 use super::codec::{decode_line, encode};
 use super::inflight::InflightTable;
-use super::supervisor::{Backoff, RestartWindow};
+use super::supervisor::{SpawnDecision, SpawnGate};
 use crate::error::{DesktopError, Result};
 
 /// Convert a bridge `RpcError` into a `DesktopError`.
@@ -62,6 +69,10 @@ fn map_bridge_error(e: RpcError) -> DesktopError {
 /// requested duration instead.
 pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_mins(1);
 
+/// JSON-RPC envelope version Aleph speaks to the Swift helper. Sent in the
+/// `bridge.handshake` request and required to match the helper's reply.
+pub const BRIDGE_PROTOCOL_VERSION: u32 = 2;
+
 /// Long-lived RPC client for the `aleph-bridge` Swift helper.
 ///
 /// Cheap to clone the internal state; the external wrapper owns one copy.
@@ -70,8 +81,8 @@ pub struct SwiftBridge {
     state: Arc<Mutex<Option<BridgeProcess>>>,
     inflight: InflightTable,
     id_seq: AtomicU64,
-    backoff: Arc<Mutex<Backoff>>,
-    restart_window: Arc<Mutex<RestartWindow>>,
+    /// Single source of truth for respawn pacing (backoff + restart window).
+    gate: Arc<Mutex<SpawnGate>>,
     disabled: Arc<AtomicBool>,
 }
 
@@ -89,11 +100,7 @@ impl SwiftBridge {
             state: Arc::new(Mutex::new(None)),
             inflight: InflightTable::default(),
             id_seq: AtomicU64::new(1),
-            backoff: Arc::new(Mutex::new(Backoff::default())),
-            restart_window: Arc::new(Mutex::new(RestartWindow::new(
-                5,
-                std::time::Duration::from_mins(10),
-            ))),
+            gate: Arc::new(Mutex::new(SpawnGate::new(5, Duration::from_mins(10)))),
             disabled: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -111,8 +118,12 @@ impl SwiftBridge {
     }
 
     /// Spawn the helper subprocess and wire up reader + stderr tasks.
-    /// This is the inner spawn — does NOT touch backoff or `restart_window`.
-    async fn spawn_process(&self) -> Result<()> {
+    ///
+    /// This is the inner spawn — it does NOT touch the `SpawnGate` and does NOT
+    /// install the process into `self.state`; it returns the live
+    /// [`BridgeProcess`] so the caller (`ensure_running`) can store it while
+    /// still holding the state lock, closing the double-spawn race.
+    async fn spawn_process(&self) -> Result<BridgeProcess> {
         let mut cmd = Command::new(&self.binary_path);
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -154,7 +165,7 @@ impl SwiftBridge {
         // Clones for the reader task.
         let inflight = self.inflight.clone();
         let state_for_reader = Arc::clone(&self.state);
-        let restart_window_for_reader = Arc::clone(&self.restart_window);
+        let gate_for_reader = Arc::clone(&self.gate);
         let disabled_for_reader = Arc::clone(&self.disabled);
 
         // Reader task: stdout → InflightTable. On EOF, drain inflight,
@@ -199,10 +210,12 @@ impl SwiftBridge {
                 *guard = None;
             }
 
-            // 3. Record the crash in the restart window; trip disabled if threshold exceeded.
+            // 3. Record the crash in the spawn gate: arm the backoff window so
+            //    the next call paces its respawn, and trip disabled if the
+            //    restart threshold is exceeded.
             {
-                let mut rw = restart_window_for_reader.lock().await;
-                if rw.record_and_should_disable() {
+                let mut gate = gate_for_reader.lock().await;
+                if gate.record_failure() {
                     disabled_for_reader.store(true, Ordering::SeqCst);
                     tracing::error!(
                         target: "bridge",
@@ -220,13 +233,17 @@ impl SwiftBridge {
             }
         });
 
-        let mut guard = self.state.lock().await;
-        *guard = Some(BridgeProcess { child, stdin });
-        Ok(())
+        Ok(BridgeProcess { child, stdin })
     }
 
-    /// Ensure the helper is running. Respawns on demand with backoff.
-    /// Returns `BridgeDisabled` immediately if the disabled latch is set.
+    /// Ensure the helper is running, respawning on demand subject to the
+    /// `SpawnGate` backoff.
+    ///
+    /// Returns `BridgeDisabled` if the disabled latch is set, or `BridgeBackoff`
+    /// if a respawn was requested while still inside the cooldown window. The
+    /// `state` lock is held across the whole check-and-spawn so two concurrent
+    /// first-callers cannot both spawn a helper (which would leave one orphan
+    /// reader task polluting the restart window with a phantom crash).
     pub async fn ensure_running(&self) -> Result<()> {
         if self.disabled.load(Ordering::SeqCst) {
             return Err(DesktopError::BridgeDisabled(
@@ -234,24 +251,34 @@ impl SwiftBridge {
             ));
         }
 
-        {
-            let guard = self.state.lock().await;
-            if guard.is_some() {
-                return Ok(());
+        let mut guard = self.state.lock().await;
+        if guard.is_some() {
+            return Ok(());
+        }
+
+        // Respawn pacing gate. Holding the state lock here is safe: no other
+        // path acquires the gate lock while holding the state lock except this
+        // one, and the reader task never nests the two.
+        match self.gate.lock().await.poll() {
+            SpawnDecision::Go => {}
+            SpawnDecision::Backoff { remaining } => {
+                return Err(DesktopError::BridgeBackoff(format!(
+                    "helper recovering; retry in {}s",
+                    remaining.as_secs().max(1)
+                )));
             }
         }
 
-        // State is None — attempt a spawn.
+        // Gate cleared — attempt a spawn (does not touch state or gate).
         match self.spawn_process().await {
-            Ok(()) => {
-                // Reset backoff on a successful spawn.
-                self.backoff.lock().await.reset();
+            Ok(proc) => {
+                *guard = Some(proc);
+                self.gate.lock().await.record_success();
                 Ok(())
             }
             Err(e) => {
-                // Record a restart event (process failed to start counts as a crash).
-                let should_disable = self.restart_window.lock().await.record_and_should_disable();
-                if should_disable {
+                // A failed spawn counts as a crash: arm backoff + restart window.
+                if self.gate.lock().await.record_failure() {
                     self.disabled.store(true, Ordering::SeqCst);
                     tracing::error!(
                         target: "bridge",
@@ -261,9 +288,6 @@ impl SwiftBridge {
                         "restart threshold exceeded".into(),
                     ));
                 }
-                // Advance backoff (but don't sleep here — let the caller retry
-                // on the next call so we don't hold up the thread for 1-30 s).
-                let _delay = self.backoff.lock().await.next_delay();
                 Err(e)
             }
         }
@@ -407,15 +431,28 @@ impl SwiftBridge {
         &self,
         rust_version: &str,
     ) -> Result<aleph_protocol::desktop_bridge::methods::bridge::HandshakeResult> {
-        use aleph_protocol::desktop_bridge::methods::bridge::{HandshakeParams, METHOD_HANDSHAKE};
-        self.call(
-            METHOD_HANDSHAKE,
-            HandshakeParams {
-                rust_version: rust_version.into(),
-                protocol_version: 2,
-            },
-        )
-        .await
+        use aleph_protocol::desktop_bridge::methods::bridge::{
+            HandshakeParams, HandshakeResult, METHOD_HANDSHAKE,
+        };
+        let result: HandshakeResult = self
+            .call(
+                METHOD_HANDSHAKE,
+                HandshakeParams {
+                    rust_version: rust_version.into(),
+                    protocol_version: BRIDGE_PROTOCOL_VERSION,
+                },
+            )
+            .await?;
+        // Negotiate explicitly: a helper speaking a different envelope version
+        // would mis-decode params/results silently, so fail loud and early.
+        if result.protocol_version != BRIDGE_PROTOCOL_VERSION {
+            return Err(DesktopError::BridgeFailed(format!(
+                "protocol mismatch: core speaks v{BRIDGE_PROTOCOL_VERSION}, \
+                 helper '{}' speaks v{}",
+                result.swift_version, result.protocol_version
+            )));
+        }
+        Ok(result)
     }
 }
 
@@ -534,8 +571,12 @@ done
         let _ = bridge
             .call::<_, serde_json::Value>("bridge.ping", serde_json::json!({}))
             .await;
-        // Give the reader task a moment to observe stdout EOF and reset state.
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        // Wait past the first backoff rung (1s): the reader observes stdout EOF,
+        // resets state, and arms the spawn gate. A respawn before the window
+        // elapses is now (correctly) refused with BridgeBackoff, so the sleep
+        // must clear the 1s cooldown (plus reader-task scheduling jitter) before
+        // the second call.
+        tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
 
         let v: serde_json::Value = bridge
             .call("bridge.ping", serde_json::json!({}))
@@ -585,26 +626,37 @@ done
     }
 
     #[tokio::test]
-    async fn trips_disabled_after_too_many_spawn_failures() {
-        // Non-existent binary guarantees every spawn fails instantly.
+    async fn spawn_failures_back_off_instead_of_hammering() {
+        // Non-existent binary guarantees every spawn fails instantly. The
+        // backoff gate must space respawns out rather than burning through the
+        // restart window in a tight loop (the old behaviour: 6 rapid calls
+        // tripped the disable latch in microseconds). The disable threshold
+        // itself is covered by the SpawnGate unit tests, which don't need to
+        // wait out real backoff windows.
         let bridge = SwiftBridge::new(std::path::PathBuf::from(
             "/tmp/aleph-nonexistent-helper-for-test-0f3d",
         ));
-        // 6 calls should drive past the 5-restart threshold.
-        for _ in 0..6 {
-            let _ = bridge
-                .call::<_, serde_json::Value>("bridge.ping", serde_json::json!({}))
-                .await;
-        }
-        // Next call must short-circuit with BridgeDisabled.
-        let err = bridge
+
+        // First attempt actually tries to spawn → surfaces the spawn error and
+        // arms the 1s backoff.
+        let first = bridge
             .call::<_, serde_json::Value>("bridge.ping", serde_json::json!({}))
             .await
             .unwrap_err();
-        let msg = format!("{err}");
         assert!(
-            msg.contains("disabled"),
-            "expected BridgeDisabled, got: {msg}"
+            matches!(first, DesktopError::BridgeFailed(_)),
+            "first call should report the spawn failure, got: {first:?}"
+        );
+
+        // An immediate retry must be refused by the gate (BridgeBackoff), NOT
+        // attempt another spawn and NOT trip the permanent disable latch.
+        let second = bridge
+            .call::<_, serde_json::Value>("bridge.ping", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(second, DesktopError::BridgeBackoff(_)),
+            "rapid retry should back off, got: {second:?}"
         );
     }
 
