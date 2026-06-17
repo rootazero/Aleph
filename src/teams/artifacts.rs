@@ -477,10 +477,10 @@ impl ArtifactStore for SqliteArtifactStore {
         if task_ids.is_empty() {
             return Ok(0);
         }
+        let conn = self.conn.lock().await;
         let placeholders = task_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let params: Vec<&dyn rusqlite::types::ToSql> =
             task_ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
-        let conn = self.conn.lock().await;
         // Delete dependency rows for artifacts belonging to the given tasks first.
         // (The FK has ON DELETE CASCADE, but pragma foreign_keys may not be set;
         // deleting explicitly is always safe.)
