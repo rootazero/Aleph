@@ -305,8 +305,8 @@
 - **口语关键词**：全局/agent/channel 权限、工具权限、临时授予、escalation
 - **代码锚点**：`src/approval/`（policy.rs / types.rs / session_route.rs / operator_requester.rs / node_requester.rs）、`src/event/permission.rs`、`src/config/types/policies/tool_permissions.rs`、`src/gateway/inbound_router/permission.rs`、`src/gateway/channel_policy.rs`
 - **职责**：分级授权——工具级（action_type → block/allow/ask）、通道级（per-channel policy）、代理级（全局默认），支持临时授权记忆与跨节点 escalation。
-- **状态**：✅ 已实现（ApprovalPolicy::check → Allow/Deny/Ask）。
-- **打磨话术**：「三级权限引擎在 `src/approval/`；‘通道级覆盖’在 `gateway/channel_policy.rs`；‘人工确认/集群上报’在 operator_requester/node_requester。」
+- **状态**：✅ 已实现（ApprovalPolicy::check → Allow/Deny/Ask）。工具名权限三级合并（global→agent→channel，最严格胜）在 `gateway/execution_engine/run_loop.rs`，强制点在 `tools/scoped/`（Deny 隐藏+拒绝、Ask 走审批门）。**glob 对齐（2026-06-17）**：`config/types/policies/tool_permissions.rs::resolve` 此前**仅精确匹配**工具名，与 action-type 审批层 `ConfigApprovalPolicy` 的 glob 能力不对称；现复用同一 `crate::approval::matches_glob`，override key 支持 `*`/`?` 通配（如 `"mcp__*"="ask"`、`"*_delete"="deny"`）。优先级：精确名 > 多 glob 命中取最严格 > default，与 `merge` 三级合并自洽（精确条目穿透 merge，杜绝 channel/agent 用精确名绕过 global 的 glob deny）。
+- **打磨话术**：「三级权限引擎在 `src/approval/`；‘通道级覆盖’在 `gateway/channel_policy.rs`；‘人工确认/集群上报’在 operator_requester/node_requester。‘工具名权限三级合并’在 `run_loop.rs`，强制在 `tools/scoped/`。**工具名权限要按家族批量配**用 glob（`tool_permissions.rs::resolve`，复用 `approval::matches_glob`，精确名优先）。」
 
 ### 5.3 LLM 与用户互动 (LLM-User Interaction)
 - **口语关键词**：确认消息、授权、clarification、ask_user、Halo 浮窗、permission request
