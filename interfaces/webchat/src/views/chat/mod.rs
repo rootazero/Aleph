@@ -3,6 +3,7 @@ pub mod composer;
 pub mod mention_palette;
 pub mod context_gauge;
 pub mod events;
+pub mod list_scroll;
 pub mod messages;
 pub mod project_menu;
 pub mod reasoning;

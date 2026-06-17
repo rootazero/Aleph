@@ -677,6 +677,13 @@ pub(super) fn InputArea() -> impl IntoView {
 
                 <QueuedPromptBar queue=chat.prompt_queue />
 
+                // Floating-overlay anchor. The palettes below are positioned
+                // `absolute bottom-full` against this `relative` wrapper, so
+                // they float above the input cluster instead of sitting in
+                // flow. Critical: an in-flow palette would grow the
+                // ResizeObserver-tracked `stack_ref`, inflate
+                // `--composer-clearance`, and push chat content up.
+                <div class="relative">
                 <SlashPaletteView
                     show=show_palette
                     palette_entries=palette_entries
@@ -908,6 +915,7 @@ pub(super) fn InputArea() -> impl IntoView {
                         </div>
                     </div>
                 </div>
+                </div>  // /relative floating-overlay anchor
             </div>
         </div>
     }

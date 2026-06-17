@@ -79,10 +79,26 @@ pub fn MentionPaletteView(
     /// (e.g. `"@risk_analyst "` or `"@all "`).
     on_select: Callback<String>,
 ) -> impl IntoView {
+    // Follow ↑/↓ selection: scroll the highlighted row into view when it
+    // leaves the capped viewport.
+    let list_ref = NodeRef::<leptos::html::Div>::new();
+    Effect::new(move |_| {
+        let idx = selected_index.get();
+        let _ = members.get(); // re-run when the roster changes
+        if let Some(el) = list_ref.get() {
+            let el: &web_sys::HtmlElement = &el;
+            crate::views::chat::list_scroll::reveal_selected_row(el, idx);
+        }
+    });
+
     view! {
         <Show when=move || show.get()>
-            <div class="mb-2 rounded-2xl border border-border bg-surface-raised shadow-lg
-                        max-h-[200px] overflow-y-auto">
+            <div
+                node_ref=list_ref
+                class="glass animate-pop-in absolute bottom-full inset-x-0 mb-2 z-50
+                       rounded-xl border border-border bg-surface-overlay/85 shadow-xl
+                       max-h-[200px] overflow-y-auto"
+            >
                 // "@ 所有人" fixed first row
                 {move || {
                     let is_selected = selected_index.get() == 0;
@@ -95,6 +111,7 @@ pub fn MentionPaletteView(
                     };
                     view! {
                         <button
+                            data-pidx="0"
                             class=cls
                             on:mousedown=move |ev| {
                                 ev.prevent_default(); // keep textarea focus
@@ -142,8 +159,10 @@ pub fn MentionPaletteView(
                                     .unwrap_or_else(|| "?".to_string())
                             });
                         let token = format!("@{id} ");
+                        let pidx = row_idx.to_string();
                         view! {
                             <button
+                                data-pidx=pidx
                                 class=move || {
                                     let base = "w-full text-left px-3 py-2 flex items-center \
                                                 gap-2 text-sm transition-colors";
