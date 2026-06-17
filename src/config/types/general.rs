@@ -121,13 +121,14 @@ mod tests {
         blocked_domains = ["evil.com"]
 
         [browser.playwright_mcp]
-        enabled = true
+        headless = true
         "#;
 
         let config: GeneralConfig = toml::from_str(toml_str).unwrap();
         assert!(config.browser.policy.block_private);
         assert_eq!(config.browser.profiles.len(), 1);
-        assert!(config.browser.playwright_cli.enabled);
+        // Legacy [browser.playwright_mcp] alias still maps to playwright_cli.
+        assert!(config.browser.playwright_cli.headless);
     }
 
     #[test]

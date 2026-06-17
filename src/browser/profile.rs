@@ -149,10 +149,6 @@ const fn default_true() -> bool {
 /// Configuration for the Playwright CLI integration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PlaywrightCliConfig {
-    /// Whether Playwright CLI is enabled.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
     /// Optional override: absolute path to `playwright-cli` binary.
     /// When `None`, resolved via `fnm exec --using lts which playwright-cli`.
     #[serde(default)]
@@ -169,10 +165,6 @@ pub struct PlaywrightCliConfig {
     /// Timeout (seconds) for other actions (click/fill/type/etc).
     #[serde(default = "default_action_timeout")]
     pub action_timeout_secs: u64,
-
-    /// Persist session profile to disk (`--persistent` flag).
-    #[serde(default)]
-    pub persistent_sessions: bool,
 }
 
 const fn default_nav_timeout() -> u64 {
@@ -185,12 +177,10 @@ const fn default_action_timeout() -> u64 {
 impl Default for PlaywrightCliConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             binary_path: None,
             headless: true,
             nav_timeout_secs: 30,
             action_timeout_secs: 10,
-            persistent_sessions: false,
         }
     }
 }
@@ -335,8 +325,11 @@ args = ["./mcp-server.js"]
         assert!(config.policy.block_private);
         assert_eq!(config.policy.blocked_domains, vec!["*.malware.com"]);
 
-        // Playwright CLI (deserialized from legacy [playwright_mcp] section)
-        assert!(!config.playwright_cli.enabled);
+        // Playwright CLI (legacy [playwright_mcp] section still maps to
+        // playwright_cli via the serde alias; unknown legacy keys are ignored,
+        // surviving fields fall back to defaults).
+        assert!(config.playwright_cli.headless);
+        assert_eq!(config.playwright_cli.nav_timeout_secs, 30);
     }
 
     #[test]
@@ -378,7 +371,7 @@ args = ["./mcp-server.js"]
         let config = BrowserSystemConfig::default();
         assert!(config.profiles.is_empty());
         assert!(config.policy.block_private);
-        assert!(config.playwright_cli.enabled);
+        assert!(config.playwright_cli.headless);
     }
 
     #[test]
@@ -420,7 +413,6 @@ command = "npx"
 args = ["@playwright/mcp@latest", "--headless"]
 "##;
         let config: BrowserSystemConfig = toml::from_str(toml_str).unwrap();
-        assert!(config.playwright_cli.enabled);
         assert!(config.playwright_cli.headless);
         assert_eq!(config.playwright_cli.nav_timeout_secs, 30);
     }
@@ -428,12 +420,10 @@ args = ["@playwright/mcp@latest", "--headless"]
     #[test]
     fn test_playwright_cli_defaults() {
         let config = PlaywrightCliConfig::default();
-        assert!(config.enabled);
         assert!(config.binary_path.is_none());
         assert!(config.headless);
         assert_eq!(config.nav_timeout_secs, 30);
         assert_eq!(config.action_timeout_secs, 10);
-        assert!(!config.persistent_sessions);
     }
 
     #[test]

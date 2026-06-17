@@ -237,14 +237,10 @@ impl BrowserBackend for PlaywrightCliBackend {
         _target: ActionTarget,
         direction: ScrollDirection,
     ) -> Result<(), BrowserError> {
-        let (dx, dy) = match direction {
-            ScrollDirection::Up => ("0", "-400"),
-            ScrollDirection::Down => ("0", "400"),
-            ScrollDirection::Left => ("-400", "0"),
-            ScrollDirection::Right => ("400", "0"),
-        };
+        let (dx, dy) = direction.wheel_delta();
+        let (dx, dy) = (dx.to_string(), dy.to_string());
         let _ = self
-            .run(&["mousewheel", dx, dy], self.action_timeout())
+            .run(&["mousewheel", &dx, &dy], self.action_timeout())
             .await?;
         Ok(())
     }
