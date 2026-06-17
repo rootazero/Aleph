@@ -385,7 +385,7 @@ impl<S: NoteStore> NoteIndexer<S> {
     ) -> Result<PathBuf, AlephError> {
         let safe_title = sanitize_title(title)?;
         let safe_agent = sanitize_title(agent_id)
-            .unwrap_or_else(|_| crate::memory::notes::DEFAULT_AGENT_ID.to_string());
+            .unwrap_or_else(|_| crate::routing::DEFAULT_AGENT_ID.to_string());
         let safe_category = sanitize_title(category).unwrap_or_else(|_| "other".to_string());
         let path = self
             .memory_dir

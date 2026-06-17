@@ -387,7 +387,9 @@ pub async fn handle_read_file(request: JsonRpcRequest, config: SharedConfig) -> 
         // Truncate on a UTF-8 character boundary so multi-byte characters are
         // not split and replaced with U+FFFD in the returned preview.
         let mut cap = READ_FILE_CAP;
-        while cap > 0 && !bytes.is_char_boundary(cap) {
+        // `bytes` is raw `Vec<u8>`; a UTF-8 continuation byte matches 0b10xxxxxx.
+        // Walk back until `cap` lands on a leading byte (a char boundary).
+        while cap > 0 && (bytes[cap] & 0xC0) == 0x80 {
             cap -= 1;
         }
         &bytes[..cap]

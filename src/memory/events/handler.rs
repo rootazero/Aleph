@@ -114,7 +114,7 @@ impl MemoryCommandHandler {
                     match indexer.store().find_by_filename(&title, agent_id).await {
                         Ok(paths) if !paths.is_empty() => {
                             for note_path in paths {
-                                let safe_path = crate::memory::notes::store::sanitize_note_path(&note_path);
+                                let safe_path = sanitize_note_path(&note_path);
                                 let file = indexer
                                     .memory_dir()
                                     .join(agent_id)
