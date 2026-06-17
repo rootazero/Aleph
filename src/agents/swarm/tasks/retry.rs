@@ -43,6 +43,17 @@ pub const MAX_RETRIES_METADATA_KEY: &str = "max_retries";
 /// forever. 20 retries (21 attempts) is far past any healthy workload.
 pub const MAX_RETRIES_CEILING: u32 = 20;
 
+/// Metadata key under which the earliest wall-clock epoch (seconds) a retried
+/// task may be re-dispatched is stored. Stamped by the dispatcher when it
+/// schedules a backoff-delayed retry; read by the scheduler's eligibility gate.
+///
+/// Absent → the task is eligible immediately (no pending backoff). This is
+/// transient *runtime* state living in the same metadata channel as the
+/// per-task config keys ([`MAX_RETRIES_METADATA_KEY`], `managed_by`, …) — a
+/// past value is harmless (the gate is `> now`) and the next failure overwrites
+/// it, so it never needs explicit clearing.
+pub const RETRY_NOT_BEFORE_METADATA_KEY: &str = "retry_not_before";
+
 /// What the dispatcher should do with a task whose attempt just failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryDecision {
@@ -114,6 +125,84 @@ pub const fn retry_decision(failed_attempts: u32, max_retries: u32) -> RetryDeci
     }
 }
 
+/// Exponential backoff (seconds) before the next retry of a task whose attempt
+/// just failed.
+///
+/// `failed_attempts` is the number of failures recorded so far (`>= 1` when a
+/// retry is being scheduled). The delay grows as `base * 2^(failed_attempts-1)`,
+/// saturating, and is capped at `cap` so unbounded exponential growth cannot
+/// push a re-dispatch arbitrarily far out. `base == 0` (or `failed_attempts ==
+/// 0`) returns `0` — immediate re-dispatch, the pre-enhancement behaviour.
+///
+/// ## Why backoff
+///
+/// The dominant cause of a *retriable* task failure is a transient provider
+/// condition — rate-limit, model overload, a network blip. Without a delay the
+/// scheduler re-claims the reset task on the very next tick (the failing run
+/// signals the loop on exit), so it re-fails instantly and the whole retry
+/// budget is spent in milliseconds before the transient condition can clear.
+/// Spacing attempts out is what makes the bounded retry *useful*, matching the
+/// backoff every production task queue ships (Celery, Sidekiq, Temporal,
+/// `ClawTeam`).
+///
+/// Pure, total, and `const` — mechanical scaffolding of the same class as the
+/// dispatcher's zombie/lock TTLs (R10), exercised directly in tests without a
+/// live dispatcher.
+#[must_use]
+pub const fn backoff_secs(failed_attempts: u32, base_secs: u64, cap_secs: u64) -> u64 {
+    if base_secs == 0 || failed_attempts == 0 {
+        return 0;
+    }
+    let shift = failed_attempts - 1;
+    // Saturating exponential: beyond 63 shifts the factor would overflow u64, so
+    // clamp to the max and let the cap below bring it back into range.
+    let factor = if shift >= 63 { u64::MAX } else { 1u64 << shift };
+    let delay = base_secs.saturating_mul(factor);
+    if delay > cap_secs {
+        cap_secs
+    } else {
+        delay
+    }
+}
+
+/// Read a task's pending retry-backoff deadline (epoch seconds) from its
+/// `metadata`, if any. Tolerant: a missing key or non-integer value reads as
+/// `None` (eligible now).
+#[must_use]
+pub fn read_retry_not_before(metadata: &Value) -> Option<u64> {
+    metadata.get(RETRY_NOT_BEFORE_METADATA_KEY).and_then(Value::as_u64)
+}
+
+/// Return a new metadata value with [`RETRY_NOT_BEFORE_METADATA_KEY`] set to
+/// `not_before`, preserving every other key. Mirrors [`with_max_retries`]: a
+/// non-object input is promoted to an empty object, and the original is left
+/// untouched (immutability).
+#[must_use]
+pub fn with_retry_not_before(metadata: Value, not_before: u64) -> Value {
+    let mut value = match metadata {
+        Value::Object(_) => metadata,
+        _ => Value::Object(serde_json::Map::new()),
+    };
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            RETRY_NOT_BEFORE_METADATA_KEY.to_string(),
+            Value::Number(not_before.into()),
+        );
+    }
+    value
+}
+
+/// Whether a task may be (re-)dispatched at `now_epoch` given any pending
+/// backoff deadline in its `metadata`.
+///
+/// Returns `true` when there is no deadline (the common case — a task that has
+/// never failed) or the deadline has elapsed. This is the orthogonal time gate
+/// the scheduler applies on top of the (time-independent) fairness selection.
+#[must_use]
+pub fn is_retry_eligible(metadata: &Value, now_epoch: u64) -> bool {
+    read_retry_not_before(metadata).is_none_or(|not_before| not_before <= now_epoch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +263,50 @@ mod tests {
     fn decision_with_zero_retries_gives_up_immediately() {
         // The pre-enhancement behaviour: first failure is terminal.
         assert_eq!(retry_decision(1, 0), RetryDecision::GiveUp);
+    }
+
+    #[test]
+    fn backoff_grows_exponentially_and_caps() {
+        // base 5, cap 120: 5, 10, 20, 40, 80, then capped at 120.
+        assert_eq!(backoff_secs(1, 5, 120), 5);
+        assert_eq!(backoff_secs(2, 5, 120), 10);
+        assert_eq!(backoff_secs(3, 5, 120), 20);
+        assert_eq!(backoff_secs(4, 5, 120), 40);
+        assert_eq!(backoff_secs(5, 5, 120), 80);
+        assert_eq!(backoff_secs(6, 5, 120), 120); // 160 → capped
+        assert_eq!(backoff_secs(7, 5, 120), 120); // stays capped
+    }
+
+    #[test]
+    fn backoff_zero_base_or_zero_attempt_is_immediate() {
+        assert_eq!(backoff_secs(3, 0, 120), 0); // disabled → pre-enhancement
+        assert_eq!(backoff_secs(0, 5, 120), 0);
+    }
+
+    #[test]
+    fn backoff_saturates_without_overflow_at_extreme_shift() {
+        // A hand-edited huge attempt count must not panic on shift overflow.
+        assert_eq!(backoff_secs(u32::MAX, 5, 120), 120);
+    }
+
+    #[test]
+    fn retry_not_before_round_trips_and_preserves_keys() {
+        let original = json!({ MAX_RETRIES_METADATA_KEY: 2 });
+        let stamped = with_retry_not_before(original.clone(), 1_700_000_000);
+        assert!(original.get(RETRY_NOT_BEFORE_METADATA_KEY).is_none()); // immutable
+        assert_eq!(read_retry_not_before(&stamped), Some(1_700_000_000));
+        assert_eq!(read_max_retries(&stamped), Some(2)); // sibling preserved
+    }
+
+    #[test]
+    fn eligibility_gate_respects_deadline() {
+        // No deadline → always eligible.
+        assert!(is_retry_eligible(&json!({}), 0));
+        // Deadline in the future → not yet.
+        let pending = json!({ RETRY_NOT_BEFORE_METADATA_KEY: 100 });
+        assert!(!is_retry_eligible(&pending, 99));
+        // At or past the deadline → eligible.
+        assert!(is_retry_eligible(&pending, 100));
+        assert!(is_retry_eligible(&pending, 101));
     }
 }

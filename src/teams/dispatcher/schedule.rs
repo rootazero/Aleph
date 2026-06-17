@@ -6,6 +6,7 @@
 //! (done via `task_create`); this only drives the DAG mechanically.
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use tokio::sync::OwnedSemaphorePermit;
 
@@ -13,7 +14,10 @@ use super::handoff::build_handoff_context;
 use super::runner::{execute_member_task, MemberDispatchTarget, MemberRunStatus};
 use super::TeamDispatcher;
 use crate::agents::swarm::tasks::acceptance::lead_review_required;
-use crate::agents::swarm::tasks::retry::{read_max_retries, retry_decision, RetryDecision};
+use crate::agents::swarm::tasks::retry::{
+    backoff_secs, is_retry_eligible, read_max_retries, retry_decision, with_retry_not_before,
+    RetryDecision,
+};
 use crate::agents::swarm::tasks::{
     CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate, TaskRunStatus,
 };
@@ -222,9 +226,20 @@ impl TeamDispatcher {
             }
         };
 
+        // Retry-backoff gate (orthogonal to the fairness selection below): a task
+        // re-dispatched after a failure carries a `retry_not_before` deadline in
+        // its metadata; skip it until that deadline elapses so a transient
+        // failure can clear before the next attempt. Tasks that never failed have
+        // no deadline and pass through untouched.
+        let now = Self::now_epoch();
+        let eligible: Vec<CoordTask> = pending
+            .into_iter()
+            .filter(|t| is_retry_eligible(&t.metadata, now))
+            .collect();
+
         let running_snapshot: HashMap<String, String> = self.running.lock().await.clone();
         let selected = select_schedulable(
-            &pending,
+            &eligible,
             &running_snapshot,
             available,
             self.config.max_per_owner,
@@ -647,13 +662,25 @@ impl TeamDispatcher {
 
         match retry_decision(failed_attempts, max_retries) {
             RetryDecision::Retry => {
+                // Exponential backoff: stamp the earliest epoch this task may be
+                // re-claimed into metadata, so the scheduler's eligibility gate
+                // spaces the next attempt out instead of re-claiming on the next
+                // tick. `0` backoff → immediate (the pre-enhancement behaviour).
+                let backoff = backoff_secs(
+                    failed_attempts,
+                    self.config.retry_backoff_base_secs,
+                    self.config.retry_backoff_cap_secs,
+                );
+                let not_before = Self::now_epoch().saturating_add(backoff);
+                let metadata = with_retry_not_before(task.metadata.clone(), not_before);
                 tracing::info!(
                     task_id = %task.id,
                     attempt = failed_attempts,
                     max_retries,
+                    backoff_secs = backoff,
                     "dispatcher: task attempt failed; scheduling retry"
                 );
-                // Reset to Pending so the next tick re-dispatches. Surfacing the
+                // Reset to Pending so a later tick re-dispatches. Surfacing the
                 // last error as the (transient) result keeps the panel honest
                 // until the retry overwrites it; the durable recovery context is
                 // the run log + exit journal, assembled at hand-off time.
@@ -664,8 +691,9 @@ impl TeamDispatcher {
                         CoordTaskUpdate {
                             status: Some(CoordTaskStatus::Pending),
                             result: Some(format!(
-                                "retry {failed_attempts}/{max_retries} after: {error}"
+                                "retry {failed_attempts}/{max_retries} in {backoff}s after: {error}"
                             )),
+                            metadata: Some(metadata),
                             ..Default::default()
                         },
                     )
@@ -673,6 +701,16 @@ impl TeamDispatcher {
                 {
                     tracing::warn!(task_id = %task.id, error = %e, "dispatcher: failed to reset task for retry; marking failed");
                     self.fail_task(task, error).await;
+                } else if backoff > 0 {
+                    // Precise wake so a short backoff isn't stranded until the
+                    // (minute-scale) fallback tick. A detached timer that fires a
+                    // single signal is cheap and idiomatic — leaning on Tokio
+                    // rather than busy-polling the deadline.
+                    let signal = Arc::clone(&self.signal);
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(backoff)).await;
+                        signal.notify_one();
+                    });
                 }
             }
             RetryDecision::GiveUp => self.fail_task(task, error).await,
