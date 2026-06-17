@@ -151,6 +151,7 @@
 
 **Do NOT introduce unless explicitly requested**（基于 R1/R3/R7 推导，违者不得合入）:
 
+- **为 Aleph 自身代码引入第二个 async runtime**（async-std / smol）—— 一方代码全栈锁定 tokio（Cargo.lock 中的 async-std 是三方传递依赖，不影响此禁令）
 - **独立向量数据库 client 进 core**（qdrant / lancedb / milvus 等）—— 记忆层已锁 sqlite + sqlite-vec
 - **`src` 中直接依赖平台 API crate**（windows-rs / core-graphics / cocoa / objc / winapi）—— 违 R1，必须走原生 Bridge IPC
 - **正则 / 规则引擎做意图识别或路由**—— 违 R7/P8，语义判断交 LLM
