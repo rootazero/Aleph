@@ -12,7 +12,6 @@
 //! - `safety`: Tool safety level classification
 //! - `conflict`: Conflict resolution system for flat namespace
 //! - `unified`: Unified tool representation
-//! - `routing`: Routing layer indicator
 //! - `index`: Tool index system for smart discovery
 //! - `tool_info`: Simplified types for Gateway JSON-RPC
 
@@ -21,7 +20,6 @@ mod conflict;
 mod definition;
 mod index;
 mod result;
-mod routing;
 mod safety;
 mod tool_info;
 mod unified;
@@ -50,9 +48,6 @@ pub use unified::UnifiedTool;
 
 // Dispatch & Channel Types
 pub use unified::{ChannelType, DispatchMode};
-
-// Routing Layer
-pub use routing::RoutingLayer;
 
 // Tool Index System
 pub use index::{ToolIndex, ToolIndexCategory, ToolIndexEntry};

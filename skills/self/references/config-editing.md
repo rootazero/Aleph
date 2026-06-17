@@ -40,7 +40,6 @@ default_hotkey
   [generation.audio_providers.*]
 [orchestrator]
 [subagent]
-[task_routing]
 [route]                    # local-vs-cloud failover routing
 [group_chat]
 [cron]

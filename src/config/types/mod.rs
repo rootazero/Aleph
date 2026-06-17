@@ -47,7 +47,6 @@ pub mod skills;
 pub mod smart_flow;
 pub mod stop_hooks;
 pub mod subagent;
-pub mod task_routing;
 pub mod tools;
 pub mod voice_local;
 
@@ -82,6 +81,5 @@ pub use skills::*;
 pub use smart_flow::*;
 pub use stop_hooks::*;
 pub use subagent::*;
-pub use task_routing::*;
 pub use tools::*;
 pub use voice_local::*;

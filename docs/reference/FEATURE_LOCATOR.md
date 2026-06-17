@@ -181,10 +181,10 @@
 
 ### 3.6 AI 动态路由 (LLM-Driven Routing)
 - **口语关键词**：AI 动态路由、意图路由、工具选择、语义路由
-- **代码锚点**：`src/harness/agent/prompt.rs`（把工具 schema 列表注入 system prompt）、`src/harness/agent/think.rs`（`.with_tools()` 发给 LLM）、`src/routing/task_router.rs`（TaskRoute 枚举，**值类型，harness 不强制消费**）、`src/builtin_tools/gateway_route.rs`（regex 分类**仅建议**）
-- **职责**：把全部可用工具 schema 注入提示词，**由 LLM 自由选择/组合**；系统不做确定性意图分类或工具过滤。
+- **代码锚点**：`src/harness/agent/prompt.rs`（把工具 schema 列表注入 system prompt）、`src/harness/agent/think.rs`（`.with_tools()` 发给 LLM）、`src/builtin_tools/gateway_route.rs`（**纯确定性 channel→agent 解析查询**，不分类意图）、`src/routing/resolve.rs`（`resolve_route` 层级匹配引擎）
+- **职责**：把全部可用工具 schema 注入提示词，**由 LLM 自由选择/组合**；系统不做确定性意图分类或工具过滤。`gateway_route` 只回答"这条消息按 channel/peer 绑定路由到哪个 agent/session"，是配置驱动的 I/O 查询，不碰语义。
 - **状态**：✅ 已实现（LLM 主权 R7）。
-- **打磨话术**：「‘动态路由’= LLM 看全量工具自选（`prompt.rs` 注入）。**不要加规则引擎式意图分类**（违 R7）。`gateway_route` 只是建议不是强制。」
+- **打磨话术**：「‘动态路由’= LLM 看全量工具自选（`prompt.rs` 注入）。**不要加规则引擎式意图分类**（违 R7）。`gateway_route` 是确定性 channel 解析，不是意图分类器。**已熵减（2026-06-17）**：删除寄生的 regex 任务分类器（旧 `routing/rules.rs` + `routing/task_router.rs` + `tool_metadata` 的 L1/L2/L3 `RoutingLayer` + 死配置 `[task_routing]`）——它们是 Dispatcher 解散遗骸、suggestion-only 无消费者、直接违 R7/P8，已连根清除。」
 
 ### 3.7 Shell/Bash 工具 (Shell Execution)
 - **口语关键词**：bash、shell、脚本执行、后台进程
