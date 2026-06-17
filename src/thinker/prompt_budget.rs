@@ -5,18 +5,26 @@
 
 use super::prompt_mode::PromptMode;
 
+/// Rough characters-per-token ratio for English-ish text, matching the
+/// `chars / 4` heuristic already used elsewhere in the codebase (e.g. team
+/// transcript budgeting in `teams/broadcast/transcript.rs`). Used only for
+/// human/model-facing *reporting* — truncation itself stays exact and
+/// character-based, never token-estimated.
+pub const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
+
+/// Estimate a token count from a character count via
+/// [`CHARS_PER_TOKEN_ESTIMATE`]. A reporting aid, not a hard accounting tool.
+#[must_use]
+pub const fn estimate_tokens(chars: usize) -> usize {
+    chars / CHARS_PER_TOKEN_ESTIMATE
+}
+
 /// Budget configuration for system prompt assembly.
 #[derive(Debug, Clone)]
 pub struct TokenBudget {
     /// Maximum total characters for assembled system prompt.
     /// Default: `80_000` (~20K tokens).
     pub max_total_chars: usize,
-    /// Bootstrap section total budget.
-    /// Default: `100_000`.
-    pub max_bootstrap_chars: usize,
-    /// Per-bootstrap-file character limit.
-    /// Default: `20_000`.
-    pub max_per_file_chars: usize,
     /// Warning mode for truncation events.
     pub truncation_warning: TruncationWarning,
 }
@@ -25,8 +33,6 @@ impl Default for TokenBudget {
     fn default() -> Self {
         Self {
             max_total_chars: 80_000,
-            max_bootstrap_chars: 100_000,
-            max_per_file_chars: 20_000,
             truncation_warning: TruncationWarning::default(),
         }
     }
@@ -68,10 +74,25 @@ pub struct TruncationStat {
     pub fully_removed: bool,
 }
 
+/// Byte offset where the `n`-th character begins (i.e. the end of the first
+/// `n` characters). Returns the full byte length when `n` is at or past the
+/// end. UTF-8 safe by construction — offsets always land on char boundaries.
+fn char_byte_offset(s: &str, n: usize) -> usize {
+    s.char_indices().nth(n).map_or(s.len(), |(i, _)| i)
+}
+
+/// First `n` characters of `s` as an owned string (UTF-8 safe).
+fn take_chars(s: &str, n: usize) -> String {
+    s[..char_byte_offset(s, n)].to_string()
+}
+
 /// Truncate content preserving head and tail, UTF-8 safe.
 ///
-/// Keeps `head_ratio` of chars from the start and `tail_ratio` from the end,
-/// inserting a truncation marker in between.
+/// Keeps `head_ratio` of characters from the start and `tail_ratio` from the
+/// end, inserting a truncation marker in between. **All budgeting is in
+/// characters, never bytes** — a 3-byte CJK glyph counts as one unit, so
+/// multi-byte text is truncated at the correct visual boundary instead of ~3×
+/// too aggressively.
 #[must_use]
 pub fn truncate_with_head_tail(
     content: &str,
@@ -79,18 +100,19 @@ pub fn truncate_with_head_tail(
     head_ratio: f64,
     tail_ratio: f64,
 ) -> String {
-    // Compare character count (not byte length) so CJK/multi-byte text is
-    // truncated at the correct visual boundary.
-    if content.chars().count() <= max_chars {
+    let total_chars = content.chars().count();
+    if total_chars <= max_chars {
         return content.to_string();
     }
 
+    // Marker is pure ASCII, so its byte length equals its character length; the
+    // `+ 10` reserves room for the inserted digit count and the " chars " text.
     let marker_template = "\n\n[... truncated ...]\n\n";
-    let marker_overhead = marker_template.len() + 10; // extra for digit count
+    let marker_overhead = marker_template.len() + 10;
 
-    // If max_chars is too small for head+tail+marker, just take head
+    // Too small for head+tail+marker: just take the head (char-accurate).
     if max_chars <= marker_overhead {
-        return content[..content.floor_char_boundary(max_chars)].to_string();
+        return take_chars(content, max_chars);
     }
 
     let usable = max_chars - marker_overhead;
@@ -102,28 +124,22 @@ pub fn truncate_with_head_tail(
     };
     let tail_chars = usable.saturating_sub(head_chars);
 
-    let truncated_count = content
-        .chars()
-        .count()
+    let truncated_count = total_chars
         .saturating_sub(head_chars)
         .saturating_sub(tail_chars);
     let marker = format!("\n\n[... {truncated_count} chars truncated ...]\n\n");
 
-    // UTF-8 safe boundary finding
-    let head_end = content.floor_char_boundary(head_chars);
+    // Char-accurate offsets: the first `head_chars` characters and the last
+    // `tail_chars` characters. Since head_chars + tail_chars == usable <
+    // total_chars, the head always ends before the tail begins (no overlap).
+    let head_end = char_byte_offset(content, head_chars);
+    let tail_start = char_byte_offset(content, total_chars.saturating_sub(tail_chars));
 
-    let tail_start = content.ceil_char_boundary(content.len().saturating_sub(tail_chars));
+    let result = format!("{}{}{}", &content[..head_end], marker, &content[tail_start..]);
 
-    let result = format!(
-        "{}{}{}",
-        &content[..head_end],
-        marker,
-        &content[tail_start..]
-    );
-
-    // Final safety check — if still over budget, hard truncate
-    if result.len() > max_chars {
-        return result[..result.floor_char_boundary(max_chars)].to_string();
+    // Safety net in *characters* (the marker can nudge the total over budget).
+    if result.chars().count() > max_chars {
+        return take_chars(&result, max_chars);
     }
 
     result
@@ -205,11 +221,13 @@ pub fn render_truncation_notice(mode: TruncationWarning, saved_chars: usize) -> 
     if mode == TruncationWarning::Off || saved_chars == 0 {
         return None;
     }
+    let approx_tokens = estimate_tokens(saved_chars);
     Some(format!(
         "\n\n<system-reminder>\n\
-         Your per-request context was trimmed by ~{saved_chars} characters to fit the \
-         system-prompt budget. Some dynamic context (memory, session, runtime hints) may be \
-         incomplete — re-fetch specifics with tools rather than assuming you saw everything.\n\
+         Your per-request context was trimmed by ~{saved_chars} characters (~{approx_tokens} \
+         tokens) to fit the system-prompt budget. Some dynamic context (memory, session, \
+         runtime hints) may be incomplete — re-fetch specifics with tools rather than assuming \
+         you saw everything.\n\
          </system-reminder>"
     ))
 }
@@ -256,9 +274,14 @@ mod tests {
     fn default_budget_values() {
         let b = TokenBudget::default();
         assert_eq!(b.max_total_chars, 80_000);
-        assert_eq!(b.max_bootstrap_chars, 100_000);
-        assert_eq!(b.max_per_file_chars, 20_000);
         assert_eq!(b.truncation_warning, TruncationWarning::Once);
+    }
+
+    #[test]
+    fn estimate_tokens_uses_chars_per_token_ratio() {
+        assert_eq!(estimate_tokens(0), 0);
+        assert_eq!(estimate_tokens(4 * 1000), 1000);
+        assert_eq!(CHARS_PER_TOKEN_ESTIMATE, 4);
     }
 
     #[test]
@@ -285,6 +308,30 @@ mod tests {
         let result = truncate_with_head_tail(&content, 50, 0.7, 0.2);
         assert!(result.contains("[..."));
         // Should not panic
+    }
+
+    #[test]
+    fn truncate_cjk_budgets_in_chars_not_bytes() {
+        // Regression for the char/byte unit-confusion bug: head/tail were
+        // computed as character counts but applied as byte offsets, so 3-byte
+        // CJK glyphs were truncated ~3× too aggressively (and the byte-vs-char
+        // final guard usually nuked the tail entirely). Distinct head/tail
+        // glyphs let us prove the fix keeps the right *number of characters*.
+        let content = format!("{}{}{}", "甲".repeat(20), "乙".repeat(200), "丙".repeat(20));
+        let out = truncate_with_head_tail(&content, 60, 0.7, 0.2);
+
+        // Char budget is respected (the old code measured this in bytes).
+        assert!(out.chars().count() <= 60, "got {}", out.chars().count());
+        // Head keeps ~21 chars (0.7 share of ~27 usable) — all 20 leading 甲
+        // survive. The old byte-based math kept only ~7 chars of head.
+        let head_jia = out.chars().take_while(|&c| c == '甲').count();
+        assert!(
+            head_jia >= 10,
+            "expected char-based head, kept only {head_jia} 甲 (byte-based bug keeps ~7)"
+        );
+        // The tail is preserved (byte-vs-char guard no longer discards it).
+        assert!(out.ends_with('丙'), "tail glyphs must survive: {out}");
+        assert!(out.contains("truncated"));
     }
 
     #[test]
@@ -351,6 +398,8 @@ mod tests {
         assert!(notice.contains("<system-reminder>"));
         assert!(notice.contains("4096"));
         assert!(notice.contains("trimmed"));
+        // Reports the approximate token cost too (4096 / 4 = 1024).
+        assert!(notice.contains("1024"), "notice should report ~tokens: {notice}");
     }
 
     #[test]
