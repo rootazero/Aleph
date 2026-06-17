@@ -276,11 +276,11 @@
 - **打磨话术**：「agent 创建/切换 UI 工具在 `agent_manage/`；‘加载与项目覆盖’在 `agents/loader.rs`。」
 
 ### 4.7 消息流与最终答案汇总 (Message Stream & Final Answer)
-- **口语关键词**：对话消息流、StreamEvent、最终结果汇总、final_response、RunComplete、汇总打印输出
-- **代码锚点**：`src/gateway/event_emitter/`（types.rs StreamEvent、impls.rs、instant_buffer.rs）；最终答案提取 `src/teams/broadcast/mod.rs::extract_final_response()`、`src/tasks/cron/executor.rs::extract_final_response()`
-- **职责**：执行中逐步发 StreamEvent（Reasoning/ToolStart/ResponseChunk/RunComplete），`RunComplete.RunSummary.final_response` 是最终文本，broadcast/cron 从事件日志提取后投递/打印。
-- **状态**：✅ 已实现。**注意**：**最终答案没有独立的表**，靠扫描 StreamEvent 日志找 RunComplete 抽取。
-- **打磨话术**：「‘最后那段汇总输出怎么来的’= harness 发 RunComplete 事件，消费方调 `extract_final_response()` 扫事件日志。没有‘答案表’，改投递逻辑去 broadcast/cron executor。」
+- **口语关键词**：对话消息流、StreamEvent、最终结果汇总、final_response、RunComplete、汇总打印输出、instant/打字机缓冲
+- **代码锚点**：`src/gateway/event_emitter/`（types.rs StreamEvent、impls.rs `GatewayEventEmitter`、instant_buffer.rs `plan_instant`+`InstantBufferingEmitter`）；**最终答案提取单一源** `src/gateway/reply_emitter/extract.rs::extract_final_response()`（消费者：`src/teams/broadcast/mod.rs` 群聊 + `src/tasks/cron/executor.rs` cron）。
+- **职责**：执行中逐步发 StreamEvent（Reasoning/ToolStart/ResponseChunk/RunComplete），`RunComplete.RunSummary.final_response` 是最终文本；消费方调 `reply_emitter::extract_final_response()` 扫事件日志抽取（RunComplete→sanitize→ResponseChunk fallback）。instant 模式"流式文本合并成单条"由 `plan_instant` 状态机统一驱动两个 emitter。
+- **状态**：✅ 已实现。**熵减（2026-06-17）**：① 最终答案提取从 broadcast(弱版,无 sanitize/fallback)+cron(强版) **两份漂移副本**收口到 `reply_emitter::extract_final_response` 单一源（群聊顺带获得 sanitize 防 `<think>` 泄漏 + 纯流式回复 fallback）；② instant 缓冲状态机从 `GatewayEventEmitter`(内联)+`InstantBufferingEmitter`(镜像) **两份**收口到 `instant_buffer::plan_instant` sink-无关 planner（修复 seq 漂移：原两份对再发 chunk 的 seq 处理不一致）。**注意**：**最终答案没有独立的表**，靠扫描 StreamEvent 日志找 RunComplete 抽取。
+- **打磨话术**：「‘最后那段汇总输出怎么来的’= harness 发 RunComplete 事件，消费方调 `reply_emitter::extract_final_response()` 扫事件日志。没有‘答案表’。要改‘提取/sanitize/fallback 规则’改 `reply_emitter/extract.rs`（单一源，别再在消费者里手写副本）；要改‘instant 缓冲/打字机’改 `instant_buffer::plan_instant`（单一源，GatewayEventEmitter 与 InstantBufferingEmitter 都走它）。」
 
 ### 4.8 消息排队与改需求打断 (Message Queue & Steering)
 - **口语关键词**：新消息排队、插入策略、agent 执行中改需求、打断、插队、steering、lane 优先级
