@@ -33,6 +33,43 @@ use crate::tools::AlephTool;
 // Args / Output
 // =============================================================================
 
+/// A single choice offered to the user.
+///
+/// Accepts either a bare string (`"staging"`) or an object with an
+/// explanatory description (`{"label": "staging", "description": "shared QA
+/// environment"}`). The bare-string form keeps backward compatibility with
+/// the simple `choices: ["a", "b"]` shape.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum AskUserChoice {
+    /// A simple choice label (also used as the returned value).
+    Simple(String),
+    /// A labeled choice with a short description shown beside it.
+    Detailed {
+        /// The choice label (also used as the returned value).
+        label: String,
+        /// A short description helping the user choose.
+        description: String,
+    },
+}
+
+impl AskUserChoice {
+    /// The label/value the user picks and that is returned as the answer.
+    fn label(&self) -> &str {
+        match self {
+            Self::Simple(label) | Self::Detailed { label, .. } => label,
+        }
+    }
+
+    /// The optional description shown beside the label.
+    fn description(&self) -> Option<&str> {
+        match self {
+            Self::Simple(_) => None,
+            Self::Detailed { description, .. } => Some(description),
+        }
+    }
+}
+
 /// Arguments for the `ask_user` tool.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AskUserArgs {
@@ -41,9 +78,11 @@ pub struct AskUserArgs {
     pub question: String,
 
     /// Optional list of choices. When non-empty the user is asked to pick one;
-    /// their reply is matched by number, by label, or taken as free text.
+    /// their reply is matched by number, by label, or taken as free text. Each
+    /// choice may be a plain string or an object with a `label` and a short
+    /// `description` to help the user decide.
     #[serde(default)]
-    pub choices: Vec<String>,
+    pub choices: Vec<AskUserChoice>,
 }
 
 /// Output of the `ask_user` tool.
@@ -89,7 +128,7 @@ impl AskUserTool {
     fn build_request(
         request_id: &str,
         question: &str,
-        choices: &[String],
+        choices: &[AskUserChoice],
     ) -> (ClarificationRequest, String) {
         if choices.is_empty() {
             (
@@ -99,11 +138,22 @@ impl AskUserTool {
         } else {
             let options: Vec<ClarificationOption> = choices
                 .iter()
-                .map(|c| ClarificationOption::new(c, c))
+                .map(|c| {
+                    let opt = ClarificationOption::new(c.label(), c.label());
+                    match c.description() {
+                        Some(desc) => opt.with_description(desc),
+                        None => opt,
+                    }
+                })
                 .collect();
             let mut menu = String::new();
             for (i, choice) in choices.iter().enumerate() {
-                menu.push_str(&format!("{}. {}\n", i + 1, choice));
+                match choice.description().map(str::trim).filter(|d| !d.is_empty()) {
+                    Some(desc) => {
+                        menu.push_str(&format!("{}. {} — {desc}\n", i + 1, choice.label()));
+                    }
+                    None => menu.push_str(&format!("{}. {}\n", i + 1, choice.label())),
+                }
             }
             (
                 ClarificationRequest::select(request_id, question, options),
@@ -153,6 +203,8 @@ impl AlephTool for AskUserTool {
         Some(vec![
             r#"ask_user(question="Which file should I edit?")"#.to_string(),
             r#"ask_user(question="Deploy to which environment?", choices=["staging", "production"])"#
+                .to_string(),
+            r#"ask_user(question="Which migration strategy?", choices=[{"label": "in-place", "description": "faster, brief downtime"}, {"label": "blue-green", "description": "zero downtime, more resources"}])"#
                 .to_string(),
         ])
     }
@@ -317,11 +369,53 @@ mod tests {
         assert!(text_req.options.is_none());
         assert!(text_prompt.contains("Reply with your answer"));
 
-        let (select_req, select_prompt) =
-            AskUserTool::build_request("id-2", "Pick?", &["alpha".to_string(), "beta".to_string()]);
+        let (select_req, select_prompt) = AskUserTool::build_request(
+            "id-2",
+            "Pick?",
+            &[
+                AskUserChoice::Simple("alpha".to_string()),
+                AskUserChoice::Simple("beta".to_string()),
+            ],
+        );
         assert_eq!(select_req.options.as_ref().map(|o| o.len()), Some(2));
         assert!(select_prompt.contains("1. alpha"));
         assert!(select_prompt.contains("2. beta"));
+    }
+
+    #[test]
+    fn build_request_detailed_choice_renders_and_wires_description() {
+        let (req, prompt) = AskUserTool::build_request(
+            "id-3",
+            "Strategy?",
+            &[
+                AskUserChoice::Detailed {
+                    label: "in-place".to_string(),
+                    description: "brief downtime".to_string(),
+                },
+                AskUserChoice::Simple("blue-green".to_string()),
+            ],
+        );
+        // Description is wired onto the ClarificationOption, not just rendered.
+        let options = req.options.expect("select request must carry options");
+        assert_eq!(options[0].value, "in-place");
+        assert_eq!(options[0].description.as_deref(), Some("brief downtime"));
+        assert!(options[1].description.is_none());
+        // Rendered menu surfaces the description with an em dash separator.
+        assert!(prompt.contains("1. in-place — brief downtime"));
+        assert!(prompt.contains("2. blue-green\n"));
+    }
+
+    #[test]
+    fn ask_user_choice_deserializes_string_and_object_forms() {
+        // Backward-compatible bare-string form.
+        let simple: AskUserChoice = serde_json::from_str(r#""staging""#).unwrap();
+        assert_eq!(simple.label(), "staging");
+        assert!(simple.description().is_none());
+        // Richer object form.
+        let detailed: AskUserChoice =
+            serde_json::from_str(r#"{"label":"prod","description":"live traffic"}"#).unwrap();
+        assert_eq!(detailed.label(), "prod");
+        assert_eq!(detailed.description(), Some("live traffic"));
     }
 
     #[test]

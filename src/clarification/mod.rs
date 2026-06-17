@@ -67,6 +67,18 @@ impl ClarificationOption {
             description: None,
         }
     }
+
+    /// Attach an explanatory description, helping the user choose between
+    /// otherwise-terse options. An empty/whitespace description is ignored so
+    /// callers can pass through optional input without a branch.
+    #[must_use]
+    pub fn with_description(mut self, description: &str) -> Self {
+        let trimmed = description.trim();
+        if !trimmed.is_empty() {
+            self.description = Some(trimmed.to_string());
+        }
+        self
+    }
 }
 
 /// Request for user clarification through Halo overlay
@@ -210,6 +222,15 @@ mod tests {
         assert_eq!(option.value, "pro");
         assert_eq!(option.label, "Professional");
         assert!(option.description.is_none());
+    }
+
+    #[test]
+    fn test_clarification_option_with_description() {
+        let option = ClarificationOption::new("pro", "Professional").with_description("formal tone");
+        assert_eq!(option.description.as_deref(), Some("formal tone"));
+        // Blank/whitespace descriptions are ignored, keeping the field None.
+        let blank = ClarificationOption::new("pro", "Professional").with_description("   ");
+        assert!(blank.description.is_none());
     }
 
     #[test]

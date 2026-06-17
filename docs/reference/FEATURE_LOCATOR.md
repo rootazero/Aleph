@@ -52,7 +52,7 @@
 | Loop | 新消息排队 / 插入 / 改需求打断 | Message Queue & Steering | `src/gateway/inbound_router/busy_queue.rs` + `execution_engine/steering.rs` + `lane.rs` | ✅ |
 | 横切 | 安全模块 | Security Primitives | `src/security/` + `src/pii/` | ✅ |
 | 横切 | 全局/agent/channel 三级权限 | Permission Hierarchy | `src/approval/` | ✅ |
-| 横切 | LLM 与用户互动 / 确认 / 授权 | LLM-User Interaction | `src/clarification/` + `src/event/permission.rs` | ✅ |
+| 横切 | LLM 与用户互动 / 确认 / 授权 | LLM-User Interaction | `src/clarification/` + `src/builtin_tools/ask_user.rs` + `src/exec/manager.rs`(授权) | ✅ |
 | 横切 | 预设 provider/model / 别名 / 成本路由 | Provider & Model Catalog | `src/providers/presets/` `model_catalog/` | ✅ |
 | 横切 | gateway 集群 | Cluster | `src/cluster/` | ✅ |
 | 横切 | channel 与 webchat 多端同步 | Channel Sync | `src/gateway/channel_registry.rs` | ✅ |
@@ -313,11 +313,11 @@
 - **打磨话术**：「三级权限引擎在 `src/approval/`；‘通道级覆盖’在 `gateway/channel_policy.rs`；‘人工确认/集群上报’在 operator_requester/node_requester。‘工具名权限三级合并’在 `run_loop.rs`，强制在 `tools/scoped/`。**工具名权限要按家族批量配**用 glob（`tool_permissions.rs::resolve`，复用 `approval::matches_glob`，精确名优先）。」
 
 ### 5.3 LLM 与用户互动 (LLM-User Interaction)
-- **口语关键词**：确认消息、授权、clarification、ask_user、Halo 浮窗、permission request
-- **代码锚点**：`src/clarification/`（mod.rs / session.rs）、`src/event/permission.rs`、`src/builtin_tools/ask_user.rs`
-- **职责**：双路——Clarification（菜单/文本，Halo overlay）与 Permission（action 确认），均带 timeout + 默认值；用户选 Always 存规则。
-- **状态**：✅ 已实现。
-- **打磨话术**：「‘问用户选项/要信息’走 `ask_user` + `src/clarification/`；‘要授权确认’走 `event/permission.rs` + §5.2 approval。两路都在 Halo 浮窗渲染。」
+- **口语关键词**：确认消息、授权、clarification、ask_user、Halo 浮窗、permission request、选项描述
+- **代码锚点**：Clarification 侧 `src/clarification/`（mod.rs `ClarificationRequest`/`ClarificationOption` + `with_description`、session.rs `ClarificationManager`/`interpret_reply`）、`src/builtin_tools/ask_user.rs`（`AskUserChoice` = 字符串 | `{label, description}`）；reply 回流 `src/gateway/inbound_router/mod.rs::try_intercept_hitl`。Permission 侧（真实路径）`src/exec/manager.rs`（`ExecApprovalManager` + `ApprovalDecisionType` AllowOnce/Session/Always/Deny + `clamp_decision` 风险钳制）+ `src/approval/`（§5.2）；slash 解析 `inbound_router::is_slash_command`，Panel 走通知中心按钮（`interfaces/webchat/src/api/exec_approval.rs`）。
+- **职责**：双路——Clarification（菜单/文本，可带 per-option 描述）经原通道纯文本投递、reply 由 inbound router 拦截解释；Permission（action 确认）经 `ExecApprovalManager` 配对挂起/恢复，均带 timeout。
+- **状态**：✅ 已实现。**熵减（2026-06-17）**：删除被取代的旧事件驱动权限/问答死代码 `src/event/permission.rs` + `src/event/question.rs`（`PermissionRequest/Reply/Event`、`QuestionRequest/Reply/Event` 零构造零消费，真实授权用 `ApprovalDecisionType` 而非 `PermissionReply`）+ `AlephEvent`/`EventType` 7 个从未 emit 的变体 + 孤儿 `UserResponse`。**连线（2026-06-17）**：`ask_user` 接入 `AskUserChoice` 结构化选项，打通此前死字段 `ClarificationOption.description`（菜单渲染 `1. label — 描述`，向后兼容 `choices=["a","b"]`）。**细节打磨（2026-06-17）**：`ClarificationManager::register` 注册时机会性清扫过期条目（对齐孪生 `ExecApprovalManager::register_pending`）——修复被中止 run 丢弃的 `ask_user` 留下的孤儿条目泄漏（`cleanup_expired` 此前生产零调度，现经 register 重新可达）。
+- **打磨话术**：「‘问用户选项/要信息’走 `ask_user` + `src/clarification/`（要带选项说明用对象形 `{label, description}`，连线终点 `ClarificationOption.with_description`）；‘要授权确认’走 `src/exec/manager.rs` 的 `ExecApprovalManager` + §5.2 `src/approval/`，**不是** `event/permission.rs`（已删）。reply 回流统一在 `inbound_router::try_intercept_hitl`。」
 
 ### 5.4 预设 Provider 与模型路由 (Provider & Model Catalog)
 - **口语关键词**：预设 provider、模型别名、规范化、能力门控、成本路由、failover、metadata

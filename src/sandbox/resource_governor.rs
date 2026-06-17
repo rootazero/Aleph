@@ -41,10 +41,10 @@
 //! This is a *stateless ambient-load* gate: it samples OS-wide memory/CPU at
 //! admission time rather than holding a permit for the command's lifetime.
 //! That mirrors `check_and_run_cargo` (which sampled `pgrep`, held nothing)
-//! and is leak-free — there is no counter to under/over-count across the
-//! manually-fired `run_after` sites. A held-permit semaphore would be more
-//! precise under bursts but requires execution-path surgery; deferred (YAGNI)
-//! until a real burst problem is observed.
+//! and is leak-free — being stateless it holds no permit, so there is no
+//! counter that could drift. A held-permit semaphore would be more precise
+//! under bursts but requires execution-path surgery; deferred (YAGNI) until a
+//! real burst problem is observed.
 
 use std::time::Duration;
 

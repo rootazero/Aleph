@@ -219,16 +219,9 @@ impl Sandbox for WorkspaceSandbox {
                 let real_root = match tokio::fs::canonicalize(&ws.cwd).await {
                     Ok(r) => r,
                     Err(_) => {
-                        let err = SandboxError::CapabilityDenied {
+                        return Err(SandboxError::CapabilityDenied {
                             reason: "workspace root cannot be resolved".into(),
-                        };
-                        self.hooks
-                            .run_after(
-                                &SandboxHookContext::new(&cmd.program, &cmd),
-                                Err("workspace root cannot be resolved"),
-                            )
-                            .await;
-                        return Err(err);
+                        });
                     }
                 };
                 let resolved = tokio::fs::canonicalize(&normalized)
@@ -238,16 +231,9 @@ impl Sandbox for WorkspaceSandbox {
                 match resolved {
                     Some(real_cwd) => real_cwd,
                     None => {
-                        let err = SandboxError::CapabilityDenied {
+                        return Err(SandboxError::CapabilityDenied {
                             reason: "cwd outside workspace root".into(),
-                        };
-                        self.hooks
-                            .run_after(
-                                &SandboxHookContext::new(&cmd.program, &cmd),
-                                Err("cwd outside workspace root"),
-                            )
-                            .await;
-                        return Err(err);
+                        });
                     }
                 }
             }
@@ -277,12 +263,6 @@ impl Sandbox for WorkspaceSandbox {
                         "capability elevation auto-denied by denial ledger: {}",
                         reason_kind.agent_hint()
                     );
-                    self.hooks
-                        .run_after(
-                            &SandboxHookContext::new(&cmd.program, &cmd),
-                            Err("denial ledger"),
-                        )
-                        .await;
                     return Err(SandboxError::CapabilityDenied {
                         reason: format!(
                             "elevated capability previously denied this session. {}",
@@ -311,19 +291,12 @@ impl Sandbox for WorkspaceSandbox {
                             denial_ledger::DenialReason::UserRejected
                         };
                         denial_ledger::global().record_denial(&led_key, &fingerprint, reason_kind);
-                        let err = SandboxError::CapabilityDenied {
+                        return Err(SandboxError::CapabilityDenied {
                             reason: format!(
                                 "user denied elevated capability request. {}",
                                 reason_kind.agent_hint()
                             ),
-                        };
-                        self.hooks
-                            .run_after(
-                                &SandboxHookContext::new(&cmd.program, &cmd),
-                                Err("user denied"),
-                            )
-                            .await;
-                        return Err(err);
+                        });
                     }
                 }
             }
@@ -351,12 +324,6 @@ impl Sandbox for WorkspaceSandbox {
         // it's still required for `AllowAll` (no-op) and for the Linux
         // fallback path where AllowHosts goes straight to the driver.
         if let Err(e) = dns::resolve_hosts_in_capabilities(&mut cmd.capabilities).await {
-            self.hooks
-                .run_after(
-                    &SandboxHookContext::new(&cmd.program, &cmd),
-                    Err("dns resolution failed"),
-                )
-                .await;
             return Err(e);
         }
 
@@ -464,7 +431,7 @@ impl Sandbox for WorkspaceSandbox {
             )));
         }
 
-        let outcome = match &output {
+        match &output {
             Ok(out) => {
                 tracing::info!(
                     target: "capability_ledger",
@@ -476,7 +443,6 @@ impl Sandbox for WorkspaceSandbox {
                     duration_ms = out.duration_ms,
                     "sandbox.execute"
                 );
-                Ok(())
             }
             Err(e) => {
                 tracing::warn!(
@@ -487,13 +453,8 @@ impl Sandbox for WorkspaceSandbox {
                     error = %e,
                     "sandbox.execute failed"
                 );
-                Err("sandbox execution failed")
             }
-        };
-
-        self.hooks
-            .run_after(&SandboxHookContext::new(&cmd.program, &cmd), outcome)
-            .await;
+        }
 
         output
     }

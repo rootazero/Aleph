@@ -1,7 +1,7 @@
-//! `SandboxHooks` — lifecycle hooks for sandbox-backed tool execution.
+//! `SandboxHooks` — admission hooks for sandbox-backed tool execution.
 //!
-//! Hooks fire before and after sandboxed execution, enabling per-tool
-//! capability checks, audit logging, and environment preparation without
+//! Before-hooks fire ahead of sandboxed execution, enabling per-tool
+//! capability checks, rate limiting, and load-aware admission without
 //! coupling to the Sandbox implementation.
 
 use async_trait::async_trait;
@@ -46,23 +46,10 @@ pub trait SandboxBeforeHook: Send + Sync + 'static {
     async fn before(&self, ctx: SandboxHookContext<'_>) -> SandboxHookResult;
 }
 
-/// Hook executed after sandboxed tool execution completes.
-/// Fires regardless of success or failure; receives the outcome.
-#[async_trait]
-pub trait SandboxAfterHook: Send + Sync + 'static {
-    /// Name identifying this hook for logging/debugging.
-    fn name(&self) -> &'static str;
-
-    /// Called after sandboxed execution finishes.
-    async fn after(&self, ctx: SandboxHookContext<'_>, outcome: &Result<(), &str>);
-}
-
-/// Compose multiple before/after hooks into a pair for use in the sandbox
-/// execution path.
+/// Compose before-hooks for use in the sandbox execution path.
 #[derive(Default)]
 pub struct SandboxHooks {
     pub before: Vec<Arc<dyn SandboxBeforeHook>>,
-    pub after: Vec<Arc<dyn SandboxAfterHook>>,
 }
 
 impl SandboxHooks {
@@ -73,11 +60,6 @@ impl SandboxHooks {
 
     pub fn with_before(mut self, hook: Arc<dyn SandboxBeforeHook>) -> Self {
         self.before.push(hook);
-        self
-    }
-
-    pub fn with_after(mut self, hook: Arc<dyn SandboxAfterHook>) -> Self {
-        self.after.push(hook);
         self
     }
 
@@ -92,17 +74,6 @@ impl SandboxHooks {
             }
         }
         SandboxHookResult::Allow
-    }
-
-    /// Run all after hooks.
-    pub async fn run_after(&self, ctx: &SandboxHookContext<'_>, outcome: Result<(), &str>) {
-        for hook in &self.after {
-            hook.after(
-                SandboxHookContext::new(ctx.tool_name, ctx.command),
-                &outcome,
-            )
-            .await;
-        }
     }
 }
 
@@ -214,40 +185,5 @@ mod tests {
             !second_ran.load(Ordering::SeqCst),
             "second hook should not have run after first hook denied"
         );
-    }
-
-    #[tokio::test]
-    async fn test_after_hook_runs() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        let ran = Arc::new(AtomicBool::new(false));
-        let ran_clone = ran.clone();
-
-        struct CheckAfter {
-            flag: Arc<AtomicBool>,
-        }
-        #[async_trait]
-        impl SandboxAfterHook for CheckAfter {
-            fn name(&self) -> &'static str {
-                "check_after"
-            }
-            async fn after(&self, _: SandboxHookContext<'_>, _: &Result<(), &str>) {
-                self.flag.store(true, Ordering::SeqCst);
-            }
-        }
-
-        let hooks = SandboxHooks::new().with_after(Arc::new(CheckAfter { flag: ran_clone }));
-        let cmd = SandboxCommand {
-            session_id: crate::routing::session_key::SessionKey::ephemeral("test"),
-            program: "echo".into(),
-            args: vec!["hello".into()],
-            env: std::collections::HashMap::new(),
-            stdin: None,
-            cwd: None,
-            capabilities: SandboxCapabilities::default(),
-            timeout: None,
-        };
-        let ctx = SandboxHookContext::new("test_tool", &cmd);
-        hooks.run_after(&ctx, Ok(())).await;
-        assert!(ran.load(Ordering::SeqCst));
     }
 }

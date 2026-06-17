@@ -1,10 +1,14 @@
 //! Stop hooks — pluggable checks executed before the agent loop stops.
 //!
 //! Each hook implements [`StopHookHandler`] and returns a [`StopHookVerdict`].
-//! The built-in [`ShellStopHook`] runs an external shell command:
+//! The built-in [`ShellStopHook`] runs an external shell command (`sh -c` on
+//! POSIX, `cmd /C` on Windows — the same platform-aware invocation as the
+//! extension hook executor in `src/extension/hooks/executor.rs`) and maps its
+//! exit code:
 //! - exit 0: allow stop
-//! - exit 2: block stop (stdout = reason)
-//! - other: hook error (logged, does not block)
+//! - exit 2: block stop, retry the loop (stdout = reason)
+//! - exit 3: halt the loop immediately (stdout = reason)
+//! - other / killed by signal / timeout: hook error (logged, does not block)
 
 use crate::sync_primitives::Arc;
 use std::time::Duration;
@@ -275,13 +279,32 @@ fn is_shell_safe(command: &str) -> bool {
     command.chars().all(|c| SAFE.contains(c) && c != '\n' && c != '\r')
 }
 
+/// Build a platform-appropriate shell invocation for `command`.
+///
+/// POSIX uses `sh -c <command>`; Windows uses `cmd /C <command>`. This mirrors
+/// the extension hook executor (`src/extension/hooks/executor.rs`) so stop
+/// hooks and per-goal gates behave identically on every platform Aleph ships
+/// to — Windows is a first-class target (see CLAUDE.md Windows build section),
+/// where a POSIX `sh` is not guaranteed on `PATH`.
+fn shell_command(command: &str) -> tokio::process::Command {
+    use tokio::process::Command;
+    if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.args(["/C", command]);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.args(["-c", command]);
+        c
+    }
+}
+
 async fn execute_shell_hook(
     hook: &ShellStopHook,
     context_json: &str,
     cancel: &CancellationToken,
 ) -> StopHookVerdict {
     use tokio::io::AsyncWriteExt;
-    use tokio::process::Command;
 
     if hook.require_shell_safe && !is_shell_safe(&hook.command) {
         return StopHookVerdict::Error {
@@ -293,9 +316,7 @@ async fn execute_shell_hook(
         };
     }
 
-    let mut child = match Command::new("sh")
-        .arg("-c")
-        .arg(&hook.command)
+    let mut child = match shell_command(&hook.command)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -450,6 +471,24 @@ mod tests {
         assert!(result.blocking_reason().is_none());
     }
 
+    // Portable across `sh -c` and `cmd /C`: `exit 2` blocks with the default
+    // reason, exercising the cross-platform shell-dispatch path on every target.
+    #[tokio::test]
+    async fn test_hook_block_default_reason_portable() {
+        let hooks: Vec<Box<dyn StopHookHandler>> = vec![shell_hook("blocker", "exit 2")];
+        let ctx = StopHookContext {
+            final_text: None,
+            iterations: 1,
+            tool_calls_made: 0,
+            stop_reason: "end_turn".into(),
+        };
+        let cancel = CancellationToken::new();
+        let result = execute_stop_hooks(&hooks, &ctx, &cancel).await;
+        let reason = result.blocking_reason().expect("exit 2 must block");
+        assert!(reason.contains("blocked stop"), "got: {reason}");
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_hook_block() {
         let hooks: Vec<Box<dyn StopHookHandler>> =
@@ -480,6 +519,7 @@ mod tests {
         assert_eq!(result.errors().len(), 1);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_hook_timeout() {
         let hooks: Vec<Box<dyn StopHookHandler>> = vec![Box::new(
@@ -499,6 +539,7 @@ mod tests {
         assert!(errors[0].1.contains("timed out"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_hook_receives_context_json() {
         let hooks: Vec<Box<dyn StopHookHandler>> = vec![shell_hook(
@@ -516,6 +557,7 @@ mod tests {
         assert_eq!(result.blocking_reason(), Some("found end_turn"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_multiple_hooks_first_block_wins() {
         let hooks: Vec<Box<dyn StopHookHandler>> = vec![
@@ -534,6 +576,7 @@ mod tests {
         assert_eq!(result.blocking_reason(), Some("blocked"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_hook_cancel_kills_child() {
         let hooks: Vec<Box<dyn StopHookHandler>> = vec![Box::new(
