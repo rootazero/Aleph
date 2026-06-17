@@ -95,6 +95,14 @@ pub enum WorkflowArgs {
     /// List the gated `MetaSkill` proposals the dream pipeline auto-drafted from
     /// recurring skill co-occurrence. These are NOT active until accepted.
     Proposals {},
+    /// Inspect a gated `MetaSkill` proposal *before* accepting it: returns its
+    /// step definition and provenance (which skill chain, how many observations)
+    /// so the gate can be reviewed rather than accepted blind. Reads the draft
+    /// from the `proposals/` dir — plain `describe` only sees active workflows.
+    DescribeProposal {
+        /// Name of the pending proposal (see `action='proposals'`).
+        name: String,
+    },
     /// Accept (activate) a gated `MetaSkill` proposal: promote it from the
     /// `proposals/` draft dir into the active workflow store, then run it with
     /// `action='run'`. The draft is removed once accepted.
@@ -442,7 +450,7 @@ impl AlephTool for WorkflowTool {
          dependencies); running it compiles the steps into a coordination-task \
          DAG that executes concurrently where dependencies allow. \
          Actions: save / list / describe / delete / run / status / cancel / \
-         export / import / proposals / accept_proposal. \
+         export / import / proposals / describe_proposal / accept_proposal. \
          `run` returns a run_id; `status` reports the per-step task states of \
          a run (latest by default) and `cancel` aborts its unfinished steps — \
          finished steps keep their results, and a step caught mid-execution \
@@ -450,7 +458,8 @@ impl AlephTool for WorkflowTool {
          `export` renders a template to a Claude-Code-compatible .workflow.js; \
          `import` parses one back into a template. `proposals` lists MetaSkill \
          drafts the dream pipeline auto-grew from recurring skill use; \
-         `accept_proposal` activates one. For `run`, create a team first so \
+         `describe_proposal` reviews one's steps + provenance before \
+         `accept_proposal` activates it. For `run`, create a team first so \
          each step's agent resolves to a member.";
 
     type Args = WorkflowArgs;
@@ -468,6 +477,7 @@ impl AlephTool for WorkflowTool {
             "workflow(action='export', name='research-report')".into(),
             r#"workflow(action='import', source='export const meta = { name: \"x\" }\nawait agent(\"do it\")', save=true)"#.into(),
             "workflow(action='proposals')".into(),
+            "workflow(action='describe_proposal', name='metaskill-git-pr')".into(),
             "workflow(action='accept_proposal', name='metaskill-git-pr')".into(),
         ])
     }
@@ -713,13 +723,33 @@ impl AlephTool for WorkflowTool {
                     .map(|m| m.name)
                     .collect();
                 let message = format!(
-                    "{} gated MetaSkill proposal(s); describe one with action='describe' is \
-                     for active workflows — accept with action='accept_proposal'",
+                    "{} gated MetaSkill proposal(s) — inspect one with \
+                     action='describe_proposal', activate with action='accept_proposal'",
                     names.len()
                 );
                 Ok(WorkflowToolOutput {
                     names: Some(names),
                     ..WorkflowToolOutput::msg("proposals", message)
+                })
+            }
+            WorkflowArgs::DescribeProposal { name } => {
+                debug!(name = %name, "workflow: describe_proposal");
+                // Read the draft from the gated `proposals/` dir (NOT the active
+                // store `describe` uses) so the gate is reviewable before accept.
+                // The provenance — observed skill chain + count — rides in the
+                // skeleton's `description` (see `proposal::skeleton_from_chain`).
+                let manifest = workflow::proposal::load_proposal(&name)?;
+                let def = manifest.to_def();
+                let provenance = if def.description.trim().is_empty() {
+                    "(no provenance recorded)".to_string()
+                } else {
+                    def.description.clone()
+                };
+                let message =
+                    format!("proposal '{name}': {} step(s) — {provenance}", def.steps.len());
+                Ok(WorkflowToolOutput {
+                    definition: Some(def),
+                    ..WorkflowToolOutput::msg("describe_proposal", message)
                 })
             }
             WorkflowArgs::AcceptProposal { name } => {
@@ -1751,5 +1781,69 @@ mod tests {
                 None => std::env::remove_var("ALEPH_HOME"),
             }
         }
+    }
+
+    // --- proposals: the gate is reviewable before accept ---
+
+    #[tokio::test]
+    async fn describe_proposal_surfaces_steps_and_provenance() {
+        // The gate's whole point is review-before-accept. A drafted proposal
+        // lives in the `proposals/` dir, which plain `describe` (active store)
+        // cannot see — `describe_proposal` reads it and surfaces both its steps
+        // and the provenance the skeleton recorded in its description.
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let (described, missing) = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
+            // Draft a proposal exactly as the dream pipeline would.
+            let draft = workflow::proposal::skeleton_from_chain(
+                &["research".into(), "write".into()],
+                3,
+            )
+            .expect("two-skill chain drafts a skeleton");
+            let name = draft.name.clone();
+            workflow::proposal::save_proposal(&draft).expect("persist gated draft");
+
+            let described = t
+                .call(WorkflowArgs::DescribeProposal { name })
+                .await
+                .expect("describe the gated proposal");
+            // An unknown proposal name errors rather than guessing.
+            let missing = t
+                .call(WorkflowArgs::DescribeProposal {
+                    name: "metaskill-nope".into(),
+                })
+                .await;
+
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            (described, missing)
+        };
+
+        assert_eq!(described.action, "describe_proposal");
+        let def = described
+            .definition
+            .as_ref()
+            .expect("describe_proposal populates definition");
+        assert_eq!(def.steps.len(), 2, "both skills became steps");
+        // Provenance (observation count) rides in the message + description.
+        assert!(
+            described.message.contains("3 observed"),
+            "provenance surfaced: {}",
+            described.message
+        );
+        assert!(missing.is_err(), "unknown proposal errors, not guessed");
     }
 }
