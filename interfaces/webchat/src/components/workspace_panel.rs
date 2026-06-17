@@ -71,11 +71,44 @@ pub fn WorkspacePanel() -> impl IntoView {
                            min-w-[280px] basis-[66%] shrink overflow-hidden">
                 <Show
                     when=move || chat.team_id.get().is_some()
-                    fallback=move || view! {
-                        <div class="flex-1 overflow-y-auto px-4 pb-3 aleph-content-top">
-                            <ActivityTimeline />
-                        </div>
-                        <FilesDrawer />
+                    fallback=move || {
+                        // Right-pane auto-follow: stick the activity timeline to
+                        // its bottom as new steps stream in, mirroring the chat
+                        // list's stick-to-bottom (see `messages::MessageList`).
+                        // Only follows when the user is already near the bottom
+                        // (≤64px) so scrolling up to read earlier steps isn't
+                        // yanked back during a live run.
+                        let scroll_ref = NodeRef::<leptos::html::Div>::new();
+                        let stuck = RwSignal::new(true);
+                        let on_scroll = move |_ev: web_sys::Event| {
+                            if let Some(el) = scroll_ref.get() {
+                                let el: &web_sys::HtmlElement = &el;
+                                let distance = f64::from(el.scroll_height())
+                                    - f64::from(el.scroll_top())
+                                    - f64::from(el.client_height());
+                                stuck.set(distance <= 64.0);
+                            }
+                        };
+                        Effect::new(move |_| {
+                            // Re-run as steps / tool calls stream into the timeline.
+                            let _ = chat.messages.get();
+                            if let Some(el) = scroll_ref.get() {
+                                if stuck.get_untracked() {
+                                    let el: &web_sys::HtmlElement = &el;
+                                    el.set_scroll_top(el.scroll_height());
+                                }
+                            }
+                        });
+                        view! {
+                            <div
+                                node_ref=scroll_ref
+                                on:scroll=on_scroll
+                                class="flex-1 overflow-y-auto px-4 pb-3 aleph-content-top"
+                            >
+                                <ActivityTimeline />
+                            </div>
+                            <FilesDrawer />
+                        }
                     }
                 >
                     // Team-mode tab header
@@ -183,7 +216,6 @@ fn StepCard(group: StepGroup) -> impl IntoView {
 
     view! {
         <div
-            id=format!("group-{}-{}", run_id, iteration)
             class=move || {
                 let base = "rounded-lg border p-2 flex flex-col gap-2 transition-colors";
                 if focused.get() {
@@ -220,7 +252,6 @@ fn StepCard(group: StepGroup) -> impl IntoView {
             }}
             <div class="flex flex-col gap-2">
                 {tools
-                    
                     .into_iter()
                     .map(|(tool_id, tool_name)| {
                         view! {

@@ -733,11 +733,21 @@ fn MessageBubble(
 /// single summary line the user can click to expand.
 #[component]
 fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
-    // NOTE: row_key changes on each streaming token, so this remounts and resets
-    // open to !completed each update — a manually-collapsed running strip re-opens
-    // on the next token. Hoist to ChatState keyed by run_id if that ever matters.
-    // Collapsed by default once the run is complete; running runs start open.
-    let open = RwSignal::new(!completed);
+    // Default open while the run streams; collapse once it's done. The
+    // expand/collapse choice is keyed by `run_id` on `ChatState`, NOT a
+    // strip-local signal: `timeline::row_key` folds in content length, so this
+    // row remounts on every streamed token — a local signal would re-open a
+    // strip the user just collapsed mid-run. The hoisted override survives the
+    // remount (see `ChatState::strip_open`).
+    let chat = expect_context::<ChatState>();
+    let run_id = steps
+        .first()
+        .map(|m| run_id_from_message_id(&m.id))
+        .unwrap_or_default();
+    let open = {
+        let run = run_id.clone();
+        Memo::new(move |_| chat.strip_is_open(&run, !completed))
+    };
     let count = steps.len();
     let summary = format!("{count} {}", if count == 1 { "step" } else { "steps" });
 
@@ -764,7 +774,7 @@ fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
                     class="w-full flex items-center gap-2 px-3 py-1.5 text-left
                            text-[11px] uppercase tracking-wider text-text-tertiary
                            hover:text-text-secondary"
-                    on:click=move |_| open.update(|o| *o = !*o)
+                    on:click=move |_| chat.toggle_strip(&run_id, !completed)
                 >
                     <span>{summary}</span>
                     <span class="ml-auto">
