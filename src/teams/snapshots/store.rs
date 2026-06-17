@@ -150,6 +150,18 @@ impl SqliteSnapshotStore {
             .map_err(db_err)?;
         Ok(affected > 0)
     }
+
+    /// Hard-delete all snapshots for a team. Returns rows deleted.
+    pub async fn delete_team_snapshots(&self, team_id: &str) -> Result<usize> {
+        let conn = self.conn.lock().await;
+        let n = conn
+            .execute(
+                "DELETE FROM coord_team_snapshots WHERE team_id = ?1",
+                params![team_id],
+            )
+            .map_err(db_err)?;
+        Ok(n)
+    }
 }
 
 fn read_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<SnapshotMeta> {
@@ -160,4 +172,50 @@ fn read_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<SnapshotMeta> {
         created_at: row.get(3)?,
         size_bytes: row.get(4)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::teams::snapshots::TeamSnapshotPayload;
+    use crate::teams::types::{Team, TeamStatus};
+
+    fn minimal_payload(team_id: &str) -> TeamSnapshotPayload {
+        TeamSnapshotPayload {
+            team: Team {
+                id: team_id.into(),
+                name: "test".into(),
+                description: String::new(),
+                leader_id: "leader".into(),
+                status: TeamStatus::Active,
+                created_at: 0,
+                disbanded_at: None,
+                protocol: None,
+            },
+            members: vec![],
+            tasks: vec![],
+            note: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_team_snapshots_removes_team_rows() {
+        let store = SqliteSnapshotStore::new_in_memory().await;
+        // insert inserts a new row each call (not upsert), so two different
+        // team_ids → 2 rows total; delete_team_snapshots("team-A") hits 1 row.
+        store
+            .insert("team-A", "v1", &minimal_payload("team-A"))
+            .await
+            .unwrap();
+        store
+            .insert("team-B", "v1", &minimal_payload("team-B"))
+            .await
+            .unwrap();
+        let n = store.delete_team_snapshots("team-A").await.unwrap();
+        assert_eq!(n, 1);
+        // team-B row is untouched.
+        let remaining = store.list(None).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].team_id, "team-B");
+    }
 }
