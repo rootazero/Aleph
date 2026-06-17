@@ -18,6 +18,48 @@ fn target_marker() -> Option<std::path::PathBuf> {
     dirs::home_dir().map(|h| h.join(".aleph/.desktop-shell-target"))
 }
 
+/// Where the shared Gateway token for a remote target persists. The remote
+/// Panel holds the validated token in webview localStorage, but the native
+/// notification bridge runs in Rust and cannot read it (and a remote-origin
+/// Panel cannot invoke shell commands — the capability scopes IPC to loopback).
+/// So the shell captures the token from the remote URL's `?token=` query when
+/// the target is set (see [`persist_token_from_url`]) and the bridge reads it
+/// here, letting it present the same token and stay authorized on a remote
+/// token-protected Gateway (R5 — desktop banners on remote). Sibling of the
+/// other `.desktop-shell-*` markers.
+fn gateway_token_marker() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|h| h.join(".aleph/.desktop-shell-gateway-token"))
+}
+
+/// Load the persisted Gateway token, if any. Missing/unreadable/empty → None
+/// (the bridge then connects bare; correct under loopback LAN-trust, walled on
+/// a remote that requires a token until one is captured from a `?token=` URL).
+pub fn load_gateway_token() -> Option<String> {
+    let token = std::fs::read_to_string(gateway_token_marker()?).ok()?;
+    let token = token.trim();
+    (!token.is_empty()).then(|| token.to_string())
+}
+
+/// Persist a Gateway token (already trimmed non-empty by the caller). Written
+/// with the same `.aleph` directory bootstrap as the target.
+fn store_gateway_token(token: &str) -> Result<(), String> {
+    let marker = gateway_token_marker().ok_or("home directory not found")?;
+    if let Some(parent) = marker.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create .aleph dir: {e}"))?;
+    }
+    std::fs::write(&marker, token).map_err(|e| format!("write gateway token: {e}"))
+}
+
+/// Drop any persisted Gateway token. Called when switching to a target that
+/// carries no token (a different remote, or Local), so one remote's token is
+/// never presented to another or to the local daemon. Best-effort: a missing
+/// file is already the desired state.
+fn remove_gateway_token() {
+    if let Some(marker) = gateway_token_marker() {
+        let _ = std::fs::remove_file(marker);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionTarget {
     /// Launch + supervise the local daemon; webview → 127.0.0.1:18790.
@@ -175,12 +217,47 @@ pub fn get_connection_target() -> String {
 pub fn set_connection_target(app: tauri::AppHandle, raw: String) -> Result<(), String> {
     let target = ConnectionTarget::parse(&raw)?;
     save_target(&target)?;
+    // Capture (or clear) the shared Gateway token from the target so the native
+    // notification bridge can authorize against a remote token-protected
+    // Gateway too (R5 — desktop banners on remote). A QR / shared-link onboarding
+    // URL carries the token in its `?token=` query (the same query the remote
+    // Panel reads); a manual address or Local has none. Switching always
+    // re-derives it, so one remote's token is never presented to another or to
+    // the local daemon.
+    match &target {
+        ConnectionTarget::Remote(url) => persist_token_from_url(url),
+        ConnectionTarget::Local => remove_gateway_token(),
+    }
     match &target {
         ConnectionTarget::Remote(url) => crate::external_link::set_remote_host(Some(url.clone())),
         ConnectionTarget::Local => crate::external_link::set_remote_host(None),
     }
     crate::reroute_for_target(&app, target);
     Ok(())
+}
+
+/// Extract a non-empty `token` from a URL's query, if present. Pure (no I/O) so
+/// the extraction is unit-testable without touching the filesystem.
+fn token_from_url(url: &Url) -> Option<String> {
+    url.query_pairs()
+        .find(|(k, _)| k.as_ref() == "token")
+        .map(|(_, v)| v.into_owned())
+        .filter(|t| !t.is_empty())
+}
+
+/// Persist the `?token=` from a remote Gateway URL for the notification bridge,
+/// or clear the store when the URL carries none. The token only ever appears in
+/// the QR / shared-link onboarding URL (`aleph-<uuid>`, no URL-special chars);
+/// a manually typed address has no query and so clears any stale token.
+fn persist_token_from_url(url: &Url) {
+    match token_from_url(url) {
+        Some(t) => {
+            if let Err(e) = store_gateway_token(&t) {
+                tracing::warn!("could not persist Gateway token for the notification bridge: {e}");
+            }
+        }
+        None => remove_gateway_token(),
+    }
 }
 
 /// Reset to Local (launch + supervise the local daemon).
@@ -270,5 +347,19 @@ mod tests {
     fn ipv6_without_port_gets_default_port() {
         let t = ConnectionTarget::parse("http://[::1]").unwrap();
         assert_eq!(t.to_persisted(), "http://[::1]:18790");
+    }
+
+    #[test]
+    fn token_from_url_reads_the_query_token() {
+        let url = Url::parse("https://gw.example.com:8443/?token=aleph-abc123").unwrap();
+        assert_eq!(token_from_url(&url).as_deref(), Some("aleph-abc123"));
+    }
+
+    #[test]
+    fn token_from_url_none_without_token() {
+        // No query, an empty token, and an unrelated param all yield None.
+        assert!(token_from_url(&Url::parse("https://gw.example.com/").unwrap()).is_none());
+        assert!(token_from_url(&Url::parse("https://gw.example.com/?token=").unwrap()).is_none());
+        assert!(token_from_url(&Url::parse("https://gw.example.com/?foo=bar").unwrap()).is_none());
     }
 }

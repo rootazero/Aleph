@@ -444,10 +444,10 @@
 
 ### 7.5 Tauri 桌面壳 (Desktop Shell)
 - **口语关键词**：桌面 App、Tauri、托盘、系统通知、daemon 生命周期、auto-update、`aleph://` deeplink、全局唤起热键、应用菜单、连远程 core
-- **代码锚点**：`desktop/shell/`（`aleph-desktop-shell` crate）——`src/`（`main.rs`/`daemon.rs`(启动+监督 detached daemon)/`tray.rs`/`notify.rs`/`menu.rs`/`hotkey.rs`(全局唤起)/`update.rs`(后台自更新)/`deeplink.rs`+`external_link.rs`(`aleph://`)/`perm_monitor.rs`/`webview_perms.rs`/`connection.rs`+`connect_setup.rs`(连本地或远程 Gateway，target 持久化 `~/.aleph/.desktop-shell-target`)）、`tauri*.conf.json`、`build.rs`、`Info.plist`/`Entitlements.plist`；文档 `docs/reference/DESKTOP_SHELL.md`
+- **代码锚点**：`desktop/shell/`（`aleph-desktop-shell` crate）——`src/`（`main.rs`/`daemon.rs`(启动+监督 detached daemon)/`tray.rs`/`notify.rs`(EventBus→原生通知桥；远端 `connect` 经 `connection::load_gateway_token` 附带 Gateway token，握手被拒即结束 session 退避重连)/`menu.rs`/`hotkey.rs`(全局唤起)/`update.rs`(后台自更新)/`deeplink.rs`+`external_link.rs`(`aleph://`)/`perm_monitor.rs`/`webview_perms.rs`/`connection.rs`+`connect_setup.rs`(连本地或远程 Gateway，target 持久化 `~/.aleph/.desktop-shell-target`，远端 token 从 `?token=` 提取持久化 `~/.aleph/.desktop-shell-gateway-token`)）、`tauri*.conf.json`、`build.rs`、`Info.plist`/`Entitlements.plist`；文档 `docs/reference/DESKTOP_SHELL.md`
 - **职责**："最后一公里"原生外壳：把 Panel（Leptos/WASM）装进原生窗口，提供托盘/通知/自启/自更新/deeplink/热键/菜单 + daemon 生命周期。**零业务 UI、零业务逻辑**（R2/R10）——UI 在 Panel、推理在 daemon。
-- **状态**：✅ 已实现（Tauri v2）。
-- **打磨话术**：「壳是纯 I/O + OS 集成，**别往里加业务 UI/逻辑（违 R2/R10）**。改窗口/托盘/更新/热键在 `desktop/shell/src/`；‘连本地还是远程 core’在 `connection.rs`。注意 Panel 经 rust_embed 编译期嵌入 daemon，改 Panel 看不到效果是漏了重编 binary（见 CLAUDE.md 嵌入链）。」
+- **状态**：✅ 已实现（Tauri v2）。远端通知桥 token 连线已补（2026-06-17）：`set_connection_target` 从 QR/分享链接 URL 的 `?token=` 提取 token 存盘，`notify.rs` 远端 `connect` 携带之 → 远端 token 网关也能弹原生 R5 通知；并修复此前裸连被 `AUTH_REQUIRED` 拒（id 2）后静默死锁、永不重连的缺陷（`handshake_error` 结束 session→指数退避重连）。capability 仅放行 loopback，故走壳侧 URL 提取而非远端 Panel→壳 IPC。
+- **打磨话术**：「壳是纯 I/O + OS 集成，**别往里加业务 UI/逻辑（违 R2/R10）**。改窗口/托盘/更新/热键在 `desktop/shell/src/`；‘连本地还是远程 core’在 `connection.rs`。**远端原生通知**靠 `connection.rs` 从远端 URL 的 `?token=` 提取并持久化、喂给 `notify.rs` 的 `connect`（Local/loopback 不带 token）；手动输地址+登录墙输 token 的路径壳侧拿不到 token，是已知限制（桥优雅退避而非死锁）。注意 Panel 经 rust_embed 编译期嵌入 daemon，改 Panel 看不到效果是漏了重编 binary（见 CLAUDE.md 嵌入链）。」
 
 ### 7.6 核心侧连线与 daemon 消费者 (Core Wiring & Daemon Consumers)
 - **口语关键词**：桌面能力注入、per-OS 构造、单一注入点、power inhibit、防休眠、presence、麦克风电平、平台 OCR

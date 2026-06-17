@@ -69,7 +69,7 @@ async fn session(
         .map_err(|e| format!("connect failed: {e}"))?;
 
     // The Gateway rejects any first frame that is not `connect`.
-    ws.send(Message::Text(connect_request()))
+    ws.send(Message::Text(connect_request(target)))
         .await
         .map_err(|e| format!("connect send failed: {e}"))?;
     ws.send(Message::Text(subscribe_request()))
@@ -79,7 +79,23 @@ async fn session(
     while let Some(frame) = ws.next().await {
         match frame.map_err(|e| format!("stream error: {e}"))? {
             Message::Text(text) => match serde_json::from_str::<Value>(&text) {
-                Ok(value) => handle_message(app, &value),
+                Ok(value) => {
+                    // A JSON-RPC error on our own `connect`/`subscribe` means the
+                    // Gateway refused to authorize this bridge — typically a
+                    // remote token-protected Gateway we have not (yet) presented
+                    // a valid token to. End the session (Err, not a silent drop)
+                    // so the caller backs off and reconnects, re-reading the
+                    // token the Panel may have just deposited. Without this the
+                    // bridge would block forever on a walled connection and R5
+                    // banners would silently stop on remote.
+                    if let Some(reason) = handshake_error(&value) {
+                        return Err(format!(
+                            "Gateway refused the desktop notification bridge ({reason}); \
+                             present a valid Gateway token to enable desktop notifications"
+                        ));
+                    }
+                    handle_message(app, &value);
+                }
                 Err(e) => {
                     tracing::warn!(
                         "notification bridge: failed to parse JSON frame: {e}; raw={text:?}"
@@ -91,6 +107,26 @@ async fn session(
         }
     }
     Ok(())
+}
+
+/// If `msg` is a JSON-RPC error response to the bridge's own `connect` (id 1)
+/// or `events.subscribe` (id 2) request, return its message. Both ids belong to
+/// the bridge's handshake, so an error on either means the Gateway declined to
+/// authorize this connection (login wall / `AUTH_REQUIRED`). Anything else —
+/// success replies, forwarded events — yields `None`.
+fn handshake_error(msg: &Value) -> Option<String> {
+    let id = msg.get("id").and_then(Value::as_i64)?;
+    if id != 1 && id != 2 {
+        return None;
+    }
+    let error = msg.get("error")?;
+    Some(
+        error
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("authorization refused")
+            .to_string(),
+    )
 }
 
 /// Build the `EventBus` WS URL for a target. Local → the loopback default;
@@ -111,25 +147,33 @@ fn ws_url(target: &crate::connection::ConnectionTarget) -> String {
     }
 }
 
-/// Build the `connect` handshake request. The LAN-trust Gateway accepts an
-/// unauthenticated `connect` (no device tokens); the bridge connects bare and
-/// only declares its surface identity so the gateway can route `surface.notify`
-/// (audience `["desktop"]`) and `surface.approval` to this desktop surface.
-fn connect_request() -> String {
+/// Build the `connect` handshake request for `target`.
+///
+/// A Local (loopback) Gateway is operator under LAN-trust — the bridge connects
+/// bare. A Remote Gateway runs the single-tier Gateway-token model: a remote
+/// `connect` without a valid token is walled (`guest`, no scopes), so the bridge
+/// presents the shared token the Panel deposited after the user authorized
+/// (`connection::load_gateway_token`). Either way it declares its surface
+/// identity so the gateway routes `surface.notify` (audience `["desktop"]`) and
+/// `surface.approval` to this desktop surface — needed even for a remote, whose
+/// non-loopback client_ip would otherwise be labelled Unknown and receive nothing.
+fn connect_request(target: &crate::connection::ConnectionTarget) -> String {
+    let mut params = json!({
+        "device_name": "Aleph Desktop",
+        "device_type": "desktop",
+        "device_id": "aleph-desktop-shell",
+        "channel_kind": "desktop",
+    });
+    if matches!(target, crate::connection::ConnectionTarget::Remote(_)) {
+        if let Some(token) = crate::connection::load_gateway_token() {
+            params["token"] = json!(token);
+        }
+    }
     json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "connect",
-        "params": {
-            "device_name": "Aleph Desktop",
-            "device_type": "desktop",
-            "device_id": "aleph-desktop-shell",
-            // Declare the surface identity so the gateway routes `surface.notify`
-            // (audience ["desktop"]) here even when the Gateway is REMOTE — a
-            // remote client_ip is not loopback, so the fallback would otherwise
-            // label this connection Unknown and it would receive nothing.
-            "channel_kind": "desktop",
-        },
+        "params": params,
     })
     .to_string()
 }
@@ -145,27 +189,11 @@ fn subscribe_request() -> String {
     .to_string()
 }
 
-/// Route one parsed JSON-RPC frame: surface connect failures, forward events.
+/// Route one parsed JSON-RPC frame to a native notification. Handshake errors
+/// (on `connect`/`subscribe`) are intercepted earlier by the session loop via
+/// [`handshake_error`], which ends the session to reconnect — so here we only
+/// ever see forwarded events and benign non-event replies.
 fn handle_message(app: &AppHandle, msg: &Value) {
-    // An error on the `connect` request (id 1) means the Gateway refused the
-    // handshake — log one helpful line; OS notifications stay disabled.
-    if let Some(error) = msg.get("error") {
-        if msg.get("id").and_then(Value::as_i64) == Some(1) {
-            tracing::warn!(
-                "Gateway rejected the desktop shell connection ({}); \
-                 OS notifications are disabled.",
-                // A closure, not the `Value::as_str` path: inside the
-                // `tracing::warn!` expansion the bare `Value` name resolves
-                // to `tracing::Value` (a trait), not `serde_json::Value`.
-                error
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("connection error")
-            );
-        }
-        return;
-    }
-
     let Some((topic, data)) = resolve_event(msg) else {
         return;
     };
@@ -282,20 +310,51 @@ mod tests {
 
     #[test]
     fn connect_request_is_well_formed() {
-        let v: Value = serde_json::from_str(&connect_request()).unwrap();
+        let v: Value =
+            serde_json::from_str(&connect_request(&crate::connection::ConnectionTarget::Local))
+                .unwrap();
         assert_eq!(v["method"], "connect");
         assert_eq!(v["params"]["device_type"], "desktop");
         assert_eq!(v["params"]["channel_kind"], "desktop");
     }
 
     #[test]
-    fn connect_request_carries_no_credentials() {
-        // LAN-trust: the handshake is bare — no device token of any kind.
-        let v: Value = serde_json::from_str(&connect_request()).unwrap();
+    fn connect_request_local_carries_no_token() {
+        // Loopback is operator under LAN-trust: the handshake stays bare.
+        let v: Value =
+            serde_json::from_str(&connect_request(&crate::connection::ConnectionTarget::Local))
+                .unwrap();
         assert!(
-            v["params"].get("shared_token").is_none(),
-            "connect must not carry a shared_token under LAN-trust"
+            v["params"].get("token").is_none(),
+            "Local connect must not carry a token (LAN-trust)"
         );
+    }
+
+    #[test]
+    fn handshake_error_flags_connect_and_subscribe_failures() {
+        // An error on the bridge's own connect (id 1) or subscribe (id 2)
+        // means the Gateway walled the bridge — both must be flagged so the
+        // session ends and reconnects with the (possibly fresh) token.
+        for id in [1, 2] {
+            let msg = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": { "code": -32001, "message": "Not authorized" },
+            });
+            assert_eq!(handshake_error(&msg).as_deref(), Some("Not authorized"));
+        }
+    }
+
+    #[test]
+    fn handshake_error_ignores_events_and_success() {
+        // A forwarded event (no id) and an unrelated error id are not handshake
+        // failures and must not tear the session down.
+        let event = json!({ "method": "event", "params": { "topic": "x", "data": {} } });
+        assert!(handshake_error(&event).is_none());
+        let other = json!({ "id": 7, "error": { "message": "transient" } });
+        assert!(handshake_error(&other).is_none());
+        let ok = json!({ "id": 1, "result": { "authorized": true } });
+        assert!(handshake_error(&ok).is_none());
     }
 
     #[test]
