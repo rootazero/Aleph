@@ -32,6 +32,22 @@ pub enum EndpointKind {
     Cloud,
 }
 
+impl EndpointKind {
+    /// Stable, lowercase identifier for serialization / RPC surfaces.
+    ///
+    /// Mirrors [`Modality::as_str`](crate::providers::metadata::Modality::as_str):
+    /// these strings appear in the `providers.catalog` RPC and the
+    /// `list_models` tool output, so callers (panel picker, the LLM choosing a
+    /// model) can reason over "local vs cloud" without re-deriving it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Cloud => "cloud",
+        }
+    }
+}
+
 /// Classify a provider's `base_url` host as [`Local`](EndpointKind::Local) or
 /// [`Cloud`](EndpointKind::Cloud).
 ///
@@ -239,6 +255,14 @@ mod tests {
         assert_eq!(endpoint_kind_for_base_url(None), EndpointKind::Cloud);
         assert_eq!(endpoint_kind_for_base_url(Some("")), EndpointKind::Cloud);
         assert_eq!(endpoint_kind_for_base_url(Some("   ")), EndpointKind::Cloud);
+    }
+
+    #[test]
+    fn as_str_is_stable() {
+        // Lock these strings — they appear in providers.catalog RPC and the
+        // list_models tool output.
+        assert_eq!(EndpointKind::Local.as_str(), "local");
+        assert_eq!(EndpointKind::Cloud.as_str(), "cloud");
     }
 
     #[test]

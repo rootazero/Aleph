@@ -220,4 +220,11 @@ pub struct CatalogEntryView {
     /// model is not priced. Cost-at-a-glance for the model picker.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost: Option<crate::pricing::RateCard>,
+    /// Endpoint locality of this provider's `base_url`: `"local"` (on-machine
+    /// / LAN) or `"cloud"` (public API). Derived from the same classifier the
+    /// route policy uses internally; surfaced here so the picker — and the LLM
+    /// reasoning over `providers.catalog` — can prefer an on-machine model
+    /// without a side lookup. Always present (absent/unparseable `base_url`
+    /// conservatively classifies as `"cloud"`).
+    pub endpoint: String,
 }

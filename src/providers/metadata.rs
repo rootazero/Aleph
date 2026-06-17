@@ -57,10 +57,12 @@ impl Modality {
 
 /// Rich, optional metadata attached to a preset name.
 ///
-/// Stored in a parallel `Lazy<HashMap>` rather than embedded in
-/// `ProviderPreset` / `GenerationPreset` so the addition is zero-churn —
-/// existing presets keep working without any field changes, and new
-/// presets opt in by adding an entry to the metadata map.
+/// The fields below now live directly on `ProviderPreset` / `GenerationPreset`
+/// (single source of truth); `ProviderMetadata` is the projection assembled
+/// from them into the `PRESET_METADATA` / `GENERATION_METADATA` `Lazy<HashMap>`
+/// indexes, which the unified [`catalog`](crate::providers::catalog) queries
+/// (incl. by alias). Adding a new preset therefore fills these fields on the
+/// preset itself — no separate metadata table to keep in sync.
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderMetadata {
     /// Human-readable display name (e.g. `"DeepSeek"`, `"Volcengine Doubao"`).

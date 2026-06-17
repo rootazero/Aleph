@@ -317,9 +317,9 @@
 ### 5.4 预设 Provider 与模型路由 (Provider & Model Catalog)
 - **口语关键词**：预设 provider、模型别名、规范化、能力门控、成本路由、failover、metadata
 - **代码锚点**：`src/providers/presets/registry.rs`（PROFILES 单一源 + 别名展开）、`src/providers/model_catalog/`（alias.rs / endpoint.rs / 能力矩阵）、`src/providers/capability_gate.rs`、`src/providers/failover.rs`、`src/providers/metadata.rs`、`src/pricing.rs`
-- **职责**：PROFILES 驱动预设别名（Kimi=Moonshot）；model_catalog 存能力矩阵；capability_gate 做 per-model 需求匹配；failover + pricing 驱动降级/选型。
-- **状态**：✅ 已实现。
-- **打磨话术**：「加/改预设别名在 `presets/registry.rs`；‘某模型支不支持 vision/tool-use’在 `model_catalog/` + `capability_gate.rs`；‘成本’在 `pricing.rs`。」
+- **职责**：PROFILES 驱动预设别名（Kimi=Moonshot）；model_catalog 存能力矩阵 + 端点定位（`endpoint.rs` Local/Cloud）；capability_gate 做 per-model 需求匹配；failover + pricing 驱动降级/选型。能力/成本/端点定位三类参考数据统一暴露到 `providers.catalog` RPC（Panel picker）与 `list_models` 工具（LLM 选模，R8 模型可感知）。
+- **状态**：✅ 已实现。端点定位 Local/Cloud 已从 route_policy 内部连出到 catalog + list_models（`EndpointKind::as_str`）；`RateCard` 已补全 cache_creation/reasoning 费率投影。
+- **打磨话术**：「加/改预设别名在 `presets/registry.rs`；‘某模型支不支持 vision/tool-use’在 `model_catalog/capabilities.rs` + `capability_gate.rs`；‘本地还是云端模型’在 `model_catalog/endpoint.rs`（已暴露到 catalog/list_models 的 `endpoint` 字段）；‘成本’在 `pricing.rs`（`RateCard` = picker 用的费率投影）。」
 
 ### 5.5 集群 (Cluster)
 - **口语关键词**：gateway 集群、单中心非对称节点、反向 RPC、node_invoke、center approval
