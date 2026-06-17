@@ -91,7 +91,12 @@ pub struct WorkspaceState {
     /// Captured tool-call args + results keyed by `(run_id, tool_id)`.
     /// Populated by `events::subscribe_run_events`.
     pub tool_payloads: RwSignal<HashMap<(String, String), ToolPayload>>,
-    /// `tool_id`s whose activity-timeline row is expanded inline.
+    /// `tool_id`s the user toggled **away from** their kind's default open/closed
+    /// state — an override set, not an absolute "expanded" set. A card's
+    /// effective open = `kind.default_open() XOR contains(tool_id)`. Shared (vs a
+    /// card-local signal) so the chat-side and workspace-timeline cards for one
+    /// tool stay in sync and the choice survives the keyed-`<For>` remount that
+    /// fires on every streamed token.
     pub expanded_events: RwSignal<HashSet<String>>,
     /// Count of tool activities that started while the pane was not in
     /// Split — drives the toggle button's unseen-activity dot (R5: we
@@ -152,7 +157,10 @@ impl WorkspaceState {
         }
     }
 
-    /// Toggle inline expansion of one activity-timeline row.
+    /// Toggle one tool row's expand state away from / back to its kind default.
+    /// Stored as an override set keyed by `tool_id` (see [`Self::expanded_events`])
+    /// so the choice survives the keyed-`<For>` remount on every streamed token
+    /// and is shared between the chat-side and workspace-timeline cards.
     pub fn toggle_event(&self, tool_id: &str) {
         self.expanded_events.update(|set| {
             if !set.remove(tool_id) {
@@ -161,9 +169,10 @@ impl WorkspaceState {
         });
     }
 
-    /// True when the given tool row is expanded inline.
+    /// True when the user has toggled this tool row away from its kind default.
+    /// Callers XOR this with `kind.default_open()` to get effective open state.
     #[must_use]
-    pub fn is_event_expanded(&self, tool_id: &str) -> bool {
+    pub fn is_event_toggled(&self, tool_id: &str) -> bool {
         self.expanded_events.with(|set| set.contains(tool_id))
     }
 
@@ -343,12 +352,12 @@ mod tests {
         }));
 
         assert!(ws.get_tool_payload("run-1", "tool-a").is_some());
-        assert!(ws.is_event_expanded("tool-a"));
+        assert!(ws.is_event_toggled("tool-a"));
 
         ws.reset();
 
         assert!(ws.get_tool_payload("run-1", "tool-a").is_none());
-        assert!(!ws.is_event_expanded("tool-a"));
+        assert!(!ws.is_event_toggled("tool-a"));
         assert_eq!(ws.mode.get_untracked(), LayoutMode::Split);
         assert!(!ws.files_drawer_open.get_untracked());
         assert!(ws.selected_file.get_untracked().is_none());
@@ -376,15 +385,36 @@ mod tests {
     }
 
     #[test]
-    fn toggle_event_flips_membership() {
+    fn toggle_event_flips_toggle_state() {
         let owner = Owner::new();
         owner.set();
         let ws = test_ws(LayoutMode::Split);
-        assert!(!ws.is_event_expanded("t1"));
+        assert!(!ws.is_event_toggled("t1"));
         ws.toggle_event("t1");
-        assert!(ws.is_event_expanded("t1"));
+        assert!(ws.is_event_toggled("t1"));
         ws.toggle_event("t1");
-        assert!(!ws.is_event_expanded("t1"));
+        assert!(!ws.is_event_toggled("t1"));
+    }
+
+    #[test]
+    fn expand_override_drives_effective_open_per_kind_default() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = test_ws(LayoutMode::Split);
+        // Contract relied on by `ToolCard`: effective_open = default_open XOR
+        // toggled. Holding the override in `WorkspaceState` (not a card-local
+        // signal) is what lets the choice survive the per-token `<For>` remount
+        // and keeps the chat-side and workspace-side cards in sync.
+        let default_open = true; // FileEdit/Write/Patch
+        assert!(default_open ^ ws.is_event_toggled("edit-1")); // open by default
+        ws.toggle_event("edit-1");
+        assert!(!(default_open ^ ws.is_event_toggled("edit-1"))); // user collapsed
+        let default_closed = false; // Read/Search/Bash/Default
+        assert!(!(default_closed ^ ws.is_event_toggled("read-1"))); // closed by default
+        ws.toggle_event("read-1");
+        assert!(default_closed ^ ws.is_event_toggled("read-1")); // user expanded
+        // Both overrides persist independently in shared state.
+        assert!(ws.is_event_toggled("edit-1") && ws.is_event_toggled("read-1"));
     }
 
     #[test]

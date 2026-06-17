@@ -250,6 +250,7 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
     let kind = ToolKind::from_name(&tool_name);
 
     let tid_for_status = tool_id.clone();
+    let tid_for_expand = tool_id.clone();
     let status = Memo::new(move |_| {
         chat.messages
             .get()
@@ -272,7 +273,31 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
             .and_then(|ws| ws.get_tool_payload(&run_for_payload, &tid_for_payload))
     });
 
-    let expanded = RwSignal::new(kind.default_open());
+    // Expand state lives in the shared `WorkspaceState` (override set keyed by
+    // tool_id), not a card-local signal, for two reasons: (1) the keyed `<For>`
+    // rendering this card remounts on every streamed token (row_key folds in
+    // content length), which would reset a card-local signal to its default
+    // mid-run; (2) the same tool is rendered by two cards — the chat bubble and
+    // the workspace timeline — that must stay in sync. The set stores tool_ids
+    // toggled *away from* `default_open`, so default-open kinds need no seeding.
+    // Storybook (no `WorkspaceState`) falls back to a card-local signal.
+    let default_open = kind.default_open();
+    let local_toggled = RwSignal::new(false);
+    let tid_open = tid_for_expand.clone();
+    let expanded = Memo::new(move |_| {
+        let toggled = workspace.map_or_else(
+            || local_toggled.get(),
+            |ws| ws.is_event_toggled(&tid_open),
+        );
+        default_open ^ toggled
+    });
+    let on_toggle = move |_: web_sys::MouseEvent| {
+        if let Some(ws) = workspace {
+            ws.toggle_event(&tid_for_expand);
+        } else {
+            local_toggled.update(|t| *t = !*t);
+        }
+    };
 
     // diff 统计（仅 FileEdit 有意义）：从 args 的 old/new 计算。
     let diff_stat = move || {
@@ -321,7 +346,7 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
             <button
                 type="button"
                 class="w-full flex items-center gap-2 px-2 py-1 text-left"
-                on:click=move |_| expanded.update(|e| *e = !*e)
+                on:click=on_toggle
             >
                 <span class="text-sm shrink-0 leading-none">{icon}</span>
                 <span class=move || {

@@ -387,10 +387,10 @@
 
 ### 6.1 流式回显与工作区面板 (Streaming Echo & Workspace Panel)
 - **口语关键词**：流式回显、工作区面板、activity timeline、Split 布局
-- **代码锚点**：`interfaces/webchat/src/views/chat/messages.rs`（流式 echo，去 card chrome 留纯文本）、`interfaces/webchat/src/components/workspace_panel.rs`（WorkspacePanel + ActivityTimeline）、`src/gateway/event_emitter/types.rs`（StreamEvent）
+- **代码锚点**：`interfaces/webchat/src/views/chat/messages.rs`（流式 echo，去 card chrome 留纯文本）、`interfaces/webchat/src/components/workspace_panel.rs`（WorkspacePanel + ActivityTimeline）、`interfaces/webchat/src/components/tool_card.rs`（共享工具卡片，聊天侧+工作区侧同源）、`interfaces/webchat/src/state/layout.rs`（`WorkspaceState`：tool_payloads + 展开覆盖集）、`src/gateway/event_emitter/types.rs`（StreamEvent）
 - **职责**：Panel 两布局——ChatOnly（单列）/ Split（左聊天右工作区）；Split 下工作区按 iteration 显示活动卡（narrative + 工具调用，可展开看 args/result）。
-- **状态**：✅ 已实现。
-- **打磨话术**：「‘流式回显气泡’在 `views/chat/messages.rs`；‘右侧工作区时间线’在 `components/workspace_panel.rs`。这是前端 Leptos/WASM，改完要重编 binary（rust_embed，见 CLAUDE.md Panel↔Daemon 嵌入链）。」
+- **状态**：✅ 已实现。**卡片展开连线（2026-06-17）**：`ToolCard` 的展开/折叠此前用**卡内本地 `RwSignal`**，有两处缺陷——① 渲染 ToolCard 的 keyed `<For>` 因 `row_key` 折入内容长度，**每个流式 token 都 remount**，本地信号被重置回 `default_open` → 流式中用户手动折叠的卡片下一 token 又弹开；② 同一工具被聊天气泡与工作区时间线**两张卡**各自渲染、各持本地信号 → 展开不同步。同时 `WorkspaceState` 早已建好 `expanded_events` + `toggle_event`/`is_event_expanded` 却**零消费者**（死基础设施）。现把展开态连到该共享集（语义改为「相对 kind 默认的覆盖集」：`effective_open = kind.default_open() XOR contains(tool_id)`，default-open 类无需播种；`is_event_expanded`→`is_event_toggled` 正名），一次性修复两个 bug 并激活死代码；storybook 无 `WorkspaceState` 时回退卡内本地信号。顺带把 `StepStrip` 硬编码英文 `step/steps` 改为 i18n（`chat.step`/`chat.steps`，en/zh 对称）。
+- **打磨话术**：「‘流式回显气泡’在 `views/chat/messages.rs`；‘右侧工作区时间线’在 `components/workspace_panel.rs`；‘工具卡片展开/折叠’共享态在 `state/layout.rs` 的 `expanded_events`（覆盖集，`toggle_event`/`is_event_toggled`），聊天侧与工作区侧同源同步、跨流式 remount 存活——别再往 `ToolCard` 塞卡内本地展开信号。这是前端 Leptos/WASM，改完要重编 binary（rust_embed，见 CLAUDE.md Panel↔Daemon 嵌入链）。」
 
 ### 6.2 Panel 远程连接与 Gateway Token 授权 (Remote Panel Connect & Gateway-Token Auth) ✅
 - **口语关键词**：panel 远程连接、局域网连 core、Gateway token、token 授权框、二维码授权、QR 配对、壳连远程 core、授权后权限同本地、网页式登录
