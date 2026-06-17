@@ -269,6 +269,10 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // production consumer (`ExtraFilesLayer` via `build_system_prompt`).
         // Disabled / empty config keeps prompts byte-identical.
         prompt_extra_files: Some(config.prompt.extra_files.clone()),
+        // Wire `[tool_service] parallel_tool_concurrency` (default 8) so the
+        // Act-phase fast-path cap is operator-tunable instead of a hardcoded
+        // literal. `Some(8)` keeps the prior behaviour byte-identical.
+        parallel_tool_concurrency: config.tool_service.parallel_tool_concurrency_opt(),
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.

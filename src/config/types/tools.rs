@@ -23,8 +23,9 @@ use super::search::default_true;
 
 /// Runtime configuration for the Phase 2 `ToolService` decorator chain.
 ///
-/// Drives the `TimeoutLayer` default timeout and per-tool overrides. Future
-/// tunables (concurrency limits, rate caps) will live here too.
+/// Drives the `TimeoutLayer` default timeout, per-tool overrides, and the
+/// Act-phase parallel-dispatch concurrency cap. Future tunables (rate caps)
+/// will live here too.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ToolServiceConfig {
     /// Default timeout applied to every tool invocation (seconds).
@@ -34,10 +35,22 @@ pub struct ToolServiceConfig {
     /// Per-tool overrides keyed by tool name (seconds).
     #[serde(default)]
     pub per_tool_seconds: HashMap<String, u64>,
+
+    /// Max number of concurrent-safe tool calls the harness Act phase
+    /// dispatches at once within a single batch. `0` or `1` disables the
+    /// parallel fast path (every batch runs serially); `>= 2` enables it.
+    /// Unsafe tools (write/exec/send) always serialize regardless. Default
+    /// `8` mirrors the production gateway's prior hardcoded value.
+    #[serde(default = "default_parallel_tool_concurrency")]
+    pub parallel_tool_concurrency: usize,
 }
 
 pub const fn default_tool_service_timeout_seconds() -> u64 {
     60
+}
+
+pub const fn default_parallel_tool_concurrency() -> usize {
+    8
 }
 
 impl Default for ToolServiceConfig {
@@ -45,6 +58,7 @@ impl Default for ToolServiceConfig {
         Self {
             default_timeout_seconds: default_tool_service_timeout_seconds(),
             per_tool_seconds: HashMap::new(),
+            parallel_tool_concurrency: default_parallel_tool_concurrency(),
         }
     }
 }
@@ -53,6 +67,13 @@ impl ToolServiceConfig {
     /// Resolve the default timeout as a `Duration`.
     pub const fn default_timeout(&self) -> Duration {
         Duration::from_secs(self.default_timeout_seconds)
+    }
+
+    /// Resolve the Act-phase parallel-dispatch cap as the harness's
+    /// `Option<usize>` knob: `Some(n)` enables the fast path with concurrency
+    /// `n`; the harness itself treats `Some(0..=1)` as disabled.
+    pub const fn parallel_tool_concurrency_opt(&self) -> Option<usize> {
+        Some(self.parallel_tool_concurrency)
     }
 
     /// Resolve the per-tool overrides as `Duration` values.

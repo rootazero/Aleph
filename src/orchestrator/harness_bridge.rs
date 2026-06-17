@@ -199,6 +199,14 @@ pub struct AgentHarnessRunner {
     /// `[prompt.extra_files]` TOML section — `None` / disabled keeps prompts
     /// byte-identical to the prior behaviour.
     pub prompt_extra_files: Option<crate::config::PromptExtraFilesConfig>,
+
+    /// Act-phase parallel-dispatch concurrency cap, sourced from
+    /// `[tool_service] parallel_tool_concurrency`. Forwarded verbatim into
+    /// `HarnessDeps::parallel_tool_concurrency` on every `run()`. `Some(n>=2)`
+    /// groups concurrent-safe calls and dispatches up to `n` at once;
+    /// `Some(0..=1)` / `None` disables the fast path. Default `Some(8)`
+    /// (production gateway) — byte-identical to the prior hardcoded value.
+    pub parallel_tool_concurrency: Option<usize>,
 }
 
 #[async_trait]
@@ -463,14 +471,15 @@ impl HarnessRunner for AgentHarnessRunner {
                 None => std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink)
                     as std::sync::Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,
             },
-            // opencode-parity parallel-dispatch fast path. `Some(8)` mirrors
-            // opencode's `Effect.forEach({ concurrency: 10 })` default; the
+            // opencode-parity parallel-dispatch fast path. Sourced from
+            // `[tool_service] parallel_tool_concurrency` (default `Some(8)`,
+            // mirroring opencode's `Effect.forEach({ concurrency: 10 })`); the
             // harness's Act phase only takes the fast path when every call in
             // the batch is concurrent-safe, so unsafe tools (write/exec/send)
             // still serialize even when this is enabled.
             in_flight_tool_calls: crate::tools::in_flight::global_in_flight_tool_calls()
                 .map(std::sync::Arc::new),
-            parallel_tool_concurrency: Some(8),
+            parallel_tool_concurrency: self.parallel_tool_concurrency,
         };
         // Stage 7 (#12): emit init-seam visibility before the harness
         // starts its Think→Act loop. Order mirrors HarnessDeps field

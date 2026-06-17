@@ -15,7 +15,9 @@
 
 use std::path::PathBuf;
 
-use crate::context::budget::pressure::estimate_tokens_smart;
+use crate::context::budget::pressure::{
+    content_ratio_with_baseline, estimate_tokens_smart, DEFAULT_PROSE_RATIO,
+};
 use crate::context::retrieval::IndexOutcome;
 use crate::session::events::ToolImage;
 use crate::tools::result_store::{extract_persisted_ref, ToolResultStore};
@@ -258,16 +260,25 @@ pub fn truncate_with_budget(text: &str, budget_tokens: usize) -> String {
     if estimated <= budget_tokens {
         return text.to_string();
     }
-    // Roughly 4 chars per token; keep ~70 % head + 30 % tail under the budget.
-    let target_chars = budget_tokens.saturating_mul(4);
-    let head_chars = (target_chars.saturating_mul(7) / 10).min(text.len());
-    let tail_budget = target_chars.saturating_sub(head_chars);
-    let tail_chars = tail_budget.min(text.len().saturating_sub(head_chars));
+    // Content-aware char budget: invert `estimate_tokens_smart`'s own
+    // chars-per-token ratio so the kept head+tail lands at ~budget_tokens for
+    // CJK / code / prose alike. The prior fixed 4-chars/token assumption
+    // diverged from the CJK/code-aware estimator — dense code/log output (the
+    // common Bash-result case) stayed ~1.6x over budget, while CJK conflated
+    // char counts with byte offsets. All slicing is on exact char counts via
+    // `char_byte_offset`, so there is no char/byte unit mixing. Keep ~70 %
+    // head + 30 % tail.
+    let ratio = content_ratio_with_baseline(text, DEFAULT_PROSE_RATIO).max(1.0);
+    let total_chars = text.chars().count();
+    let target_chars = ((budget_tokens as f64) * ratio) as usize;
+    if target_chars >= total_chars {
+        return text.to_string();
+    }
+    let head_chars = target_chars.saturating_mul(7) / 10;
+    let tail_chars = target_chars.saturating_sub(head_chars);
 
-    let head_end = floor_char_boundary(text, head_chars);
-    let tail_start_raw = text.len().saturating_sub(tail_chars);
-    let tail_start = ceil_char_boundary(text, tail_start_raw);
-    let tail_start = tail_start.max(head_end);
+    let head_end = char_byte_offset(text, head_chars);
+    let tail_start = char_byte_offset(text, total_chars.saturating_sub(tail_chars)).max(head_end);
 
     let omitted = estimated.saturating_sub(budget_tokens);
     format!(
@@ -278,26 +289,13 @@ pub fn truncate_with_budget(text: &str, budget_tokens: usize) -> String {
     )
 }
 
-const fn floor_char_boundary(s: &str, idx: usize) -> usize {
-    if idx >= s.len() {
-        return s.len();
-    }
-    let mut i = idx;
-    while i > 0 && !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
-}
-
-const fn ceil_char_boundary(s: &str, idx: usize) -> usize {
-    if idx >= s.len() {
-        return s.len();
-    }
-    let mut i = idx;
-    while i < s.len() && !s.is_char_boundary(i) {
-        i += 1;
-    }
-    i
+/// Byte offset where the `n`-th char starts, clamped to `text.len()`. Lets the
+/// truncator slice on exact char counts without ever mixing char and byte
+/// units (the bug the old `floor`/`ceil_char_boundary` byte-index helpers hid).
+fn char_byte_offset(text: &str, n: usize) -> usize {
+    text.char_indices()
+        .nth(n)
+        .map_or(text.len(), |(byte_idx, _)| byte_idx)
 }
 
 fn parse_marker_path(line: &str) -> Option<PathBuf> {
@@ -561,5 +559,29 @@ mod tests {
             &out[out.len() - 80..]
         );
         assert!(out.contains("[output truncated"));
+    }
+
+    #[test]
+    fn truncate_is_content_aware_and_lands_near_budget() {
+        // CJK content far over budget. Because the kept head+tail is now sized
+        // from the estimator's own chars-per-token ratio (not a fixed
+        // 4-chars/token assumption), the truncated result's estimated tokens
+        // land near the budget regardless of script — never the divergence the
+        // old byte-vs-char math produced.
+        let text = "数据分析报告".repeat(3000);
+        let budget = 250;
+        let out = truncate_with_budget(&text, budget);
+        assert!(out.contains("[output truncated"), "should be truncated");
+        let kept = estimate_tokens_smart(&out);
+        assert!(
+            kept <= budget * 2,
+            "content-aware truncation kept {kept} tokens for budget {budget} (expected ~budget)"
+        );
+        assert!(
+            kept >= budget / 4,
+            "should not over-truncate to near-nothing: kept {kept}"
+        );
+        // Slicing stays on char boundaries (no panic, valid UTF-8 out).
+        assert!(out.chars().count() > 0);
     }
 }
