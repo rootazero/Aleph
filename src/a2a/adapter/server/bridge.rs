@@ -29,10 +29,10 @@ use crate::gateway::router::SessionKey;
 /// Holds references to the execution infrastructure and task management ports,
 /// translating between A2A domain concepts and Gateway execution primitives.
 pub struct AgentLoopBridge {
-    pub agent_registry: Arc<AgentRegistry>,
-    pub execution_adapter: Arc<dyn ExecutionAdapter>,
-    pub task_manager: Arc<dyn A2ATaskManager>,
-    pub streaming: Arc<dyn A2AStreamingHandler>,
+    pub(crate) agent_registry: Arc<AgentRegistry>,
+    pub(crate) execution_adapter: Arc<dyn ExecutionAdapter>,
+    pub(crate) task_manager: Arc<dyn A2ATaskManager>,
+    pub(crate) streaming: Arc<dyn A2AStreamingHandler>,
 }
 
 impl AgentLoopBridge {
@@ -105,16 +105,17 @@ impl A2AMessageHandler for AgentLoopBridge {
             Err(e) => return Err(e),
         }
 
-        // Transition to Working
-        self.task_manager
-            .update_status(task_id, TaskState::Working, None)
-            .await?;
-
-        // Get the default agent
+        // Get the default agent before marking the task Working so a missing
+        // default leaves the task in Submitted rather than stuck Working.
         let agent =
             self.agent_registry.get_default().await.ok_or_else(|| {
                 A2AError::InternalError("No default agent registered".to_string())
             })?;
+
+        // Transition to Working
+        self.task_manager
+            .update_status(task_id, TaskState::Working, None)
+            .await?;
 
         // Build and execute the run request
         let request = Self::build_run_request(task_id, &input);
@@ -175,6 +176,13 @@ impl A2AMessageHandler for AgentLoopBridge {
             Err(e) => return Err(e),
         }
 
+        // Get the default agent before subscribing / marking Working so a
+        // missing default fails fast and leaves the task in Submitted.
+        let agent =
+            self.agent_registry.get_default().await.ok_or_else(|| {
+                A2AError::InternalError("No default agent registered".to_string())
+            })?;
+
         // Subscribe to streaming updates BEFORE starting execution
         let stream = self.streaming.subscribe_all(task_id).await?;
 
@@ -198,12 +206,6 @@ impl A2AMessageHandler for AgentLoopBridge {
             .streaming
             .broadcast_status(task_id, working_event)
             .await;
-
-        // Get the default agent
-        let agent =
-            self.agent_registry.get_default().await.ok_or_else(|| {
-                A2AError::InternalError("No default agent registered".to_string())
-            })?;
 
         // Build the run request
         let request = Self::build_run_request(task_id, &input);

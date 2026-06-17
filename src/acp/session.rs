@@ -618,16 +618,26 @@ fn map_session_control_error(
     err
 }
 
-/// Map an authenticate failure to `AuthRequired` so callers know to prompt
-/// the user for a different credential. Other errors pass through.
+/// Map an ACP authenticate failure to `AuthRequired` so callers know to prompt
+/// the user for a different credential. Only protocol errors whose message
+/// indicates an authentication/authorization rejection are mapped; other
+/// protocol errors pass through unchanged.
 fn map_auth_error(err: crate::error::AlephError) -> crate::error::AlephError {
     if let crate::error::AlephError::AcpError { code, message, .. } = &err {
         if code == "protocol_error" {
-            return crate::acp::protocol::AcpOperationError::new(
-                crate::acp::protocol::AcpErrorCode::AuthRequired,
-                format!("ACP authenticate failed: {message}"),
-            )
-            .into();
+            let lower = message.to_lowercase();
+            if lower.contains("unauthorized")
+                || lower.contains("authentication")
+                || lower.contains("auth")
+                || lower.contains("credential")
+                || lower.contains("permission denied")
+            {
+                return crate::acp::protocol::AcpOperationError::new(
+                    crate::acp::protocol::AcpErrorCode::AuthRequired,
+                    format!("ACP authenticate failed: {message}"),
+                )
+                .into();
+            }
         }
     }
     err

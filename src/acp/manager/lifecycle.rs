@@ -253,15 +253,18 @@ impl AcpAdapterManager {
                                 .await;
                             }
                         } else {
-                            // Process died — evict the entry.
-                            self.sessions.write().await.remove(&key);
-                            self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                                harness_id: harness_id.to_string(),
-                                cwd: cwd.to_string(),
-                                session_name: session_name.map(str::to_string),
-                            })
-                            .await;
-                            warn!(harness_id, "ACP session died after prompt, evicted");
+                            // Process died — evict the entry only if it is still
+                            // the same session we locked (a concurrent caller may
+                            // have already respawned a replacement).
+                            if self.remove_if_same(&key, &entry).await {
+                                self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
+                                    harness_id: harness_id.to_string(),
+                                    cwd: cwd.to_string(),
+                                    session_name: session_name.map(str::to_string),
+                                })
+                                .await;
+                                warn!(harness_id, "ACP session died after prompt, evicted");
+                            }
                         }
                         Ok(text)
                     }
@@ -270,13 +273,16 @@ impl AcpAdapterManager {
                             session.kill().await;
                         }
                         drop(session);
-                        self.sessions.write().await.remove(&key);
-                        self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                            harness_id: harness_id.to_string(),
-                            cwd: cwd.to_string(),
-                            session_name: session_name.map(str::to_string),
-                        })
-                        .await;
+                        // Only remove the entry if it is still the same session
+                        // we used; a concurrent caller may have respawned it.
+                        if self.remove_if_same(&key, &entry).await {
+                            self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
+                                harness_id: harness_id.to_string(),
+                                cwd: cwd.to_string(),
+                                session_name: session_name.map(str::to_string),
+                            })
+                            .await;
+                        }
                         Err(e)
                     }
                 }
@@ -338,6 +344,21 @@ impl AcpAdapterManager {
                 )
             })?;
         entry.cancel.send_cancel().await
+    }
+
+    /// Remove `key` from the session map only if the stored entry still refers
+    /// to the same `SessionEntry` we used. This prevents a concurrent
+    /// `acquire_live_entry` respawn from being evicted after we dropped the
+    /// per-session lock.
+    async fn remove_if_same(&self, key: &SessionKey, entry: &SessionEntry) -> bool {
+        let mut sessions = self.sessions.write().await;
+        match sessions.get(key) {
+            Some(cur) if Arc::ptr_eq(&cur.session, &entry.session) => {
+                sessions.remove(key);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Run a session-control RPC against the existing session for

@@ -12,9 +12,11 @@ use super::CoordTaskStore;
 
 /// Check if adding edges `new_task_id ← blocked_by[..]` would create a cycle.
 ///
-/// Async version that uses the store trait. Kept for API compatibility.
+/// Async version that uses the store trait. Kept for API compatibility and
+/// unit tests; production code uses `check_no_cycle_sync`.
 ///
 /// Returns `Err(AlephError)` if a cycle is detected, `Ok(())` otherwise.
+#[cfg(test)]
 pub async fn check_no_cycle(
     store: &dyn CoordTaskStore,
     new_task_id: &str,

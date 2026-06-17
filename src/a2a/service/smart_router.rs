@@ -122,7 +122,7 @@ impl SmartRouter {
         None
     }
 
-    /// Tier 2: Match by skill ID or skill name.
+    /// Tier 2: Match by skill ID, skill name, or skill alias.
     ///
     /// Uses word-boundary matching to avoid false positives
     /// (e.g. "code" should not match inside "decode").
@@ -132,8 +132,16 @@ impl SmartRouter {
             for skill in &agent.card.skills {
                 let skill_id_lower = skill.id.to_lowercase();
                 let skill_name_lower = skill.name.to_lowercase();
+                let aliases_lower: Vec<String> = skill
+                    .aliases
+                    .as_ref()
+                    .map(|a| a.iter().map(|s| s.to_lowercase()).collect())
+                    .unwrap_or_default();
                 if Self::has_word_match(&intent_lower, &skill_id_lower)
                     || Self::has_word_match(&intent_lower, &skill_name_lower)
+                    || aliases_lower
+                        .iter()
+                        .any(|alias| Self::has_word_match(&intent_lower, alias))
                 {
                     return Some(RoutingDecision {
                         agent: agent.clone(),

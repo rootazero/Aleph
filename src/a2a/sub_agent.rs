@@ -406,6 +406,15 @@ pub(crate) fn emit_delegation_primitives(
     }
 }
 
+/// Return true if `name` appears inside a quoted span of `text`.
+/// Mirrors the quote styles used by `SmartRouter::try_exact_name`:
+/// double quotes (`"name"`) and Chinese quotes (`「name」`).
+fn is_quoted_substring(text: &str, name: &str) -> bool {
+    let double = format!("\"{}\"", name);
+    let chinese = format!("\u{300C}{}\u{300D}", name);
+    text.contains(&double) || text.contains(&chinese)
+}
+
 #[async_trait]
 impl SubAgent for A2ASubAgent {
     fn id(&self) -> &str {
@@ -430,7 +439,9 @@ impl SubAgent for A2ASubAgent {
             return true;
         }
 
-        // Priority 2: Check if prompt mentions any cached agent/skill name
+        // Priority 2: Check if prompt quotes any cached agent/skill name.
+        // SmartRouter.route() only resolves exact quoted names in this tier,
+        // so substring matching here would claim prompts route() cannot handle.
         let names = match self.cached_names.try_read() {
             Ok(names) => names,
             Err(_) => return false,
@@ -440,7 +451,9 @@ impl SubAgent for A2ASubAgent {
         }
 
         let prompt_lower = request.prompt.to_lowercase();
-        names.iter().any(|name| prompt_lower.contains(name))
+        names
+            .iter()
+            .any(|name| is_quoted_substring(&prompt_lower, name))
     }
 
     async fn execute(&self, request: SubAgentRequest) -> crate::error::Result<SubAgentResult> {
