@@ -141,10 +141,12 @@ impl NodeRegistry {
         }
     }
 
-    /// 在线节点的只读投影快照。
+    /// 在线节点的只读投影快照。结果按 `(name, id)` 稳定排序——`nodes_by_id` 是
+    /// `HashMap`，迭代序不定；排序后 Panel 舰队列表与模型可见的 `node_list` 不会
+    /// 每次刷新都抖动（测试也得以断言确定序）。
     pub fn list_environments(&self) -> Vec<Environment> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        inner
+        let mut envs: Vec<Environment> = inner
             .nodes_by_id
             .values()
             .map(|s| Environment {
@@ -156,13 +158,9 @@ impl NodeRegistry {
                 connected_at: s.connected_at,
                 last_seen_at: None,
             })
-            .collect()
-    }
-
-    /// 取某节点的反向 RPC 通道 clone（0c 的 `node_invoke` 用；0b 建好接口不调）。
-    pub fn get(&self, node_id: &str) -> Option<ReverseRpcChannel> {
-        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        inner.nodes_by_id.get(node_id).map(|s| s.channel.clone())
+            .collect();
+        envs.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+        envs
     }
 
     /// Resolve `(node_id, device_name)` for a connection that is a registered
@@ -376,7 +374,7 @@ mod tests {
         reg.register(session("node-a", "conn-1"));
         assert!(reg.deregister("conn-1"));
         assert!(reg.list_environments().is_empty());
-        assert!(reg.get("node-a").is_none());
+        assert!(reg.resolve("node-a").is_err());
         assert!(!reg.deregister("conn-x"));
     }
 
@@ -393,11 +391,19 @@ mod tests {
     }
 
     #[test]
-    fn get_returns_channel_for_known_node() {
+    fn list_environments_is_sorted_by_name_then_id() {
         let reg = NodeRegistry::new();
-        reg.register(session("node-a", "conn-1"));
-        assert!(reg.get("node-a").is_some());
-        assert!(reg.get("missing").is_none());
+        // Register out of name order; the projection must come back sorted so the
+        // HashMap iteration order can't leak into the Panel / node_list view.
+        reg.register(session("z-id", "c-z")); // device_name = "dev-z-id"
+        reg.register(session("a-id", "c-a")); // device_name = "dev-a-id"
+        reg.register(session("m-id", "c-m")); // device_name = "dev-m-id"
+        let names: Vec<String> = reg
+            .list_environments()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(names, vec!["dev-a-id", "dev-m-id", "dev-z-id"]);
     }
 
     #[test]

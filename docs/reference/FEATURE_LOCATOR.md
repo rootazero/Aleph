@@ -49,7 +49,7 @@
 | Loop | multi-agent / teams / 多代理 | Teams / Multi-Agent | `src/teams/` + `src/agents/` | ✅ |
 | Loop | agent 切换 | Agent Switching | `src/builtin_tools/agent_manage/` | ✅ |
 | Loop | 消息流 / 最终结果汇总打印 | Message Stream & Final Answer | `src/gateway/event_emitter/` | ✅ |
-| Loop | 新消息排队 / 插入 / 改需求打断 | Message Queue & Steering | `src/gateway/session_scheduler.rs` `lane.rs` | ✅ |
+| Loop | 新消息排队 / 插入 / 改需求打断 | Message Queue & Steering | `src/gateway/inbound_router/busy_queue.rs` + `execution_engine/steering.rs` + `lane.rs` | ✅ |
 | 横切 | 安全模块 | Security Primitives | `src/security/` + `src/pii/` | ✅ |
 | 横切 | 全局/agent/channel 三级权限 | Permission Hierarchy | `src/approval/` | ✅ |
 | 横切 | LLM 与用户互动 / 确认 / 授权 | LLM-User Interaction | `src/clarification/` + `src/event/permission.rs` | ✅ |
@@ -256,10 +256,10 @@
 
 ### 4.4 协调任务 (Coordinated Tasks)
 - **口语关键词**：task 任务管理、规划、分解、子任务分配、实施、验证、收尾、僵尸任务
-- **代码锚点**：`src/agents/swarm/tasks/`（coord_task.rs / store.rs / types.rs）、`src/teams/dispatcher/schedule.rs`（select_schedulable）、`src/teams/dispatcher/runner.rs`（execute_member_task）
-- **职责**：DAG 中每个 CoordTask 按 blocked_by 扫描依赖，上游完成→Runnable，分派器选最闲 owner 并发执行，失败重试 3 次→FailedFinal，超时→僵尸强制失败。
-- **状态**：✅ 已实现（CoordTaskState 四态 + DispatcherConfig：max_concurrent=4 / zombie_ttl=7200s / lock_ttl=900s）。**注意**：tasks 无直接用户工具，经 workflow/teams leader 间接驱动。
-- **打磨话术**：「任务调度/依赖/重试/僵尸检测在 `teams/dispatcher/`；任务数据结构在 `agents/swarm/tasks/`。」
+- **代码锚点**：`src/agents/swarm/tasks/`（mod.rs 数据模型 / store/ 持久化 / dag.rs 环检测 / acceptance.rs 验收 / **retry.rs 有界重试**）、`src/teams/dispatcher/schedule.rs`（select_schedulable + **fail_or_retry**）、`src/teams/dispatcher/runner.rs`（execute_member_task）、`src/teams/dispatcher/handoff.rs`（build_recovery_section 续做上下文）
+- **职责**：DAG 中每个 CoordTask 按 blocked_by 扫描依赖，上游完成→Runnable，分派器选最闲 owner 并发执行；失败/超时**有界自动重试**（默认 2 次=至多 3 次尝试，每次重试携带前序 recovery 上下文续做，且**指数退避**间隔），耗尽预算→FailedFinal，僵尸（worker 失联）→强制失败不重试。
+- **状态**：✅ 已实现。**重试连线（2026-06-17）**：此前 `fail_task` 失败即永久 `Failed`，文档承诺的「失败重试 3 次→FailedFinal」是空头——recovery 基础设施（`build_recovery_section`「这是第 N 次尝试」+ 退出日志续做 + `coord_task_runs` 逐次历史）全建好却只能靠 leader 手动 reset 或孤儿回收触发。现新增纯决策 `retry.rs::retry_decision`（有界计数）+ `schedule.rs::fail_or_retry`：失败时数已记录的失败 run 次数对比 `max_retries`（任务 metadata 覆盖，否则 `DispatcherConfig.default_max_retries=2`），未超限 reset `Pending`（**激活既有 recovery 注入**），超限才走 `fail_task`（终态 `Failed`=FailedFinal）。孤儿回收留 `Running` 行不计入预算；僵尸绕过重试直接 `fail_task`。per-task 覆盖经 `task_create` 的 `max_retries` 参数透传。**退避增强（2026-06-17）**：此前 reset `Pending` 后 `run_task` 结尾 `signal()` 当 tick 即重派——transient 失败（限流/过载）几十毫秒内打光重试预算。现 `fail_or_retry` 计算 `retry.rs::jittered_backoff_secs`（指数 `base*2^(n-1)` 封顶 + **equal jitter** `[delay/2,delay]`，`DispatcherConfig.retry_backoff_{base,cap}_secs` = 5s/120s），把 `retry_not_before` 戳进 metadata（复用既有通道，零 schema 漂移），`dispatch_once` 的 `is_retry_eligible` 门在 I/O 边界跳过未到期任务（`select_schedulable` 仍是纯时间无关公平函数）；并 spawn Tokio 精确延时 `signal` 唤醒，短退避不必等 60s fallback tick。jitter seed = task id 哈希（确定性、无 RNG 依赖，但逐任务相异）→ 整团同时失败的任务不再锁步重试再次踩塌恢复中的 provider（thundering herd）。`base=0` 退回即时重试（向后兼容）。**注意**：CoordTaskStatus 实为 10 态（含派生 `Blocked`/`Unsatisfiable`），无独立 `FailedFinal` 状态——`Failed` 即终态，重试期任务回 `Pending` 不落 `Failed`。tasks 无直接用户工具，经 workflow/teams leader 间接驱动。
+- **打磨话术**：「任务调度/依赖/僵尸检测在 `teams/dispatcher/`；‘失败重试几次’= 纯函数 `tasks/retry.rs::retry_decision` + 连线 `schedule.rs::fail_or_retry`，调默认改 `DispatcherConfig.default_max_retries`、按任务改 `task_create` 的 `max_retries`；‘重试间隔/退避’= `tasks/retry.rs::backoff_secs` + `DispatcherConfig.retry_backoff_{base,cap}_secs`，门在 `dispatch_once` 的 `is_retry_eligible`（`retry_not_before` metadata）；‘重试时续做而非重来’= `handoff.rs::build_recovery_section`（智慧在 prompt，R9）；任务数据结构在 `agents/swarm/tasks/`。」
 
 ### 4.5 多代理 / 团队 (Teams / Multi-Agent)
 - **口语关键词**：multi-agent、teams、多线程多任务多代理、leader、群聊广播、roster
@@ -284,11 +284,15 @@
 - **打磨话术**：「‘最后那段汇总输出怎么来的’= harness 发 RunComplete 事件，消费方调 `extract_final_response()` 扫事件日志。没有‘答案表’，改投递逻辑去 broadcast/cron executor。」
 
 ### 4.8 消息排队与改需求打断 (Message Queue & Steering)
-- **口语关键词**：新消息排队、插入策略、agent 执行中改需求、打断、插队、steering、lane 优先级
-- **代码锚点**：`src/gateway/session_scheduler.rs`（per-session FIFO + active_run_id + MAX_QUEUE_AGE=5min）、`src/gateway/inbound_router/busy_queue.rs`（per-agent FIFO + 原子 ticket，上限 32/agent）、`src/gateway/lane.rs`（Lane 分类 Query/Execute/Mutate/System + ChannelClass 优先级）、`src/gateway/resume_coordinator.rs`、`src/gateway/cancellation.rs`
-- **职责**：新消息入 SessionScheduler FIFO，空闲立即执行否则排队；agent 繁忙时入 busy_queue（限 32），仅队首尝试投递；Lane + ChannelClass 让 Panel 优先级高于 Bot；超龄任务丢弃返 429。用户执行中可调 steering 工具改目标或中止。
-- **状态**：✅ 已实现。
-- **打磨话术**：「‘用户改需求/插队/打断’的核心在 `session_scheduler.rs`（会话级 FIFO）+ `busy_queue.rs`（agent 级 FIFO）+ `lane.rs`（优先级）。要改‘改需求时是排队还是打断当前 run’就动这三处 + `cancellation.rs`。」
+- **口语关键词**：新消息排队、插入策略、agent 执行中改需求、打断、插队、steering、lane 优先级、busy-input 策略
+- **代码锚点**：
+  - **busy 排队**：`src/gateway/inbound_router/busy_queue.rs`（per-agent FIFO + 原子 ticket，上限 32/agent，`REJECT_NEWEST` 溢出）、`src/gateway/inbound_router/executor.rs`（register→is_front 轮询投递，`BUSY_QUEUE_MAX_WAIT_SECS=1800`）
+  - **改需求/打断（三态策略）**：`src/gateway/execution_engine/mod.rs`（`BusyInputMode` = Steer/Interrupt/Queue + `BUSY_INPUT_MODE_KEY`）、`src/gateway/execution_engine/execute.rs`（busy 分支按模式分流）、`src/gateway/execution_engine/steering.rs`（mid-loop 注入 + 合并去重 + `MAX_PENDING_STEERING=16` 背压 + teardown rescue）
+  - **优先级**：`src/gateway/lane.rs`（Lane 分类 Query/Execute/Mutate/System + ChannelClass 双池 Panel 优先）、`src/gateway/server/handler.rs`（按 loopback 派生 ChannelClass 并 `acquire`）
+  - **取消/续跑**：`src/gateway/cancellation.rs`、`src/gateway/resume_coordinator.rs`
+- **职责**：agent 繁忙时新消息进 `busy_queue` per-agent FIFO（上限 32，仅队首尝试投递，保到达序，超 30min 才通知失败而非静默丢弃）；同会话有活跃 run 时，按通道 `BusyInputMode` 分流——**Steer**（默认，注入 live event log 让运行中的 loop 下个轮次接住）/ **Interrupt**（取消同会话 sibling，经 busy_queue 以全上下文重启）/ **Queue**（不打扰，排队等当前 run 结束）；Lane + ChannelClass 让本地 Panel 优先于 Bot/CLI。
+- **状态**：✅ 已实现。**熵减（2026-06-17）**：删除死代码 `session_scheduler.rs`（631 行，per-session FIFO 旧版调度器，`::new`/`enqueue` 仅存在于自身测试，零生产消费者）——其职责早被 harness `try_start_run` 每-agent 闸 + `busy_queue` FIFO + `steering` 完整取代，违 R10 YAGNI 故连根清除。
+- **打磨话术**：「‘用户改需求/插队/打断’的真核心 = `busy_queue.rs`（agent 级 FIFO）+ `steering.rs`（mid-loop 注入）+ `BusyInputMode`（Steer/Interrupt/Queue 三态，在 `execution_engine/{mod,execute}.rs`）+ `lane.rs`（Panel 优先）。要改‘改需求时是排队、注入还是打断当前 run’就动 `execute.rs` 的 busy 分支 + 对应通道的 busy-input 模式 + `cancellation.rs`。**注意**：`session_scheduler.rs` 已删除——它从来不是活跃路径，别再去找它。」
 
 ---
 
@@ -323,11 +327,11 @@
 - **打磨话术**：「加/改预设别名在 `presets/registry.rs`；‘某模型支不支持 vision/tool-use’在 `model_catalog/` + `capability_gate.rs`；‘成本’在 `pricing.rs`。」
 
 ### 5.5 集群 (Cluster)
-- **口语关键词**：gateway 集群、单中心非对称节点、反向 RPC、node_invoke、center approval
-- **代码锚点**：`src/cluster/`（mod.rs / reverse_rpc.rs / registry.rs / node_approval.rs / node_runtime.rs）；文档 `docs/reference/CLUSTER.md`
-- **职责**：单中心 + 边缘节点，节点主动连中心反向 RPC，agent 经 node_invoke 跨边界执行，高风险操作回中心人工 escalation，断线 fail-fast。
-- **状态**：✅ Phase 0a（ReverseRpcChannel / NodeRegistry / CenterApprovalRequester 已实现；node_invoke 路由/环境聚合属 Phase 1+ 计划）。
-- **打磨话术**：「集群在 `src/cluster/`；‘节点怎么连中心’看 reverse_rpc.rs；信任边界=LAN，中心↔节点无认证层。」
+- **口语关键词**：gateway 集群、单中心非对称节点、反向 RPC、node_invoke、node_list、扇出、center approval、LAN-trust
+- **代码锚点**：核心 `src/cluster/`（mod.rs / reverse_rpc.rs / registry.rs / node_runtime.rs / node_file_cmd.rs / node_approval.rs）；中心侧 LLM 工具 `src/builtin_tools/{node_list,node_invoke,node_invoke_many,node_file}.rs`；中心 RPC `src/gateway/handlers/cluster.rs`（enroll/deregister/environments.list）；节点拨出运行时 `src/bin/aleph-server/commands/node.rs`；文档 `docs/reference/CLUSTER.md`。
+- **职责**：单中心 + 边缘节点，节点主动连中心反向 RPC（结构区分请求/响应，断线 `cancel_all` fail-fast）；agent 经 `node_invoke`（单节点，多级寻址 + 歧义枚举）/`node_invoke_many`（按 tag AND 并发扇出）/`node_file`（8MB + sha256 jail 传输）跨边界执行；节点侧 `CommandTable` allowlist 权威；高风险能力升级经 `CenterApprovalRequester` fail-closed 回中心人工 escalation。
+- **状态**：✅ **全量实现（含四个 LLM 工具、tag 扇出、文件传输、离线节点合并视图、确定性舰队排序）**。信任模型 = **LAN-trust**：enroll 不铸 token，节点凭 `connect` 帧参数形状（`commands`+`tags`）声明身份，已移除旧的 token/signature/pairing/`run_pairing`/`AUTH_FAILED` 机制（CLUSTER.md 已同步）。
+- **打磨话术**：「集群在 `src/cluster/`；‘节点怎么连中心’看 reverse_rpc.rs + node.rs；‘模型怎么驱动节点’看 `builtin_tools/node_*`；‘离线/在线舰队视图’看 `handlers/cluster.rs::handle_environments_list`；信任边界=LAN，无 token、无认证层。」
 
 ### 5.6 多端通道同步 (Channel Sync)
 - **口语关键词**：channel 多端同步、webchat 同步、通道注册表、统一消息总线、delivery queue、投递重试调参、发送重试上限
@@ -338,7 +342,7 @@
 
 ### 5.7 输出模式：打字机 / 即时 (Output Mode)
 - **口语关键词**：打字机模式、流式输出、即时输出、全局开关、所有 channel 同步、output_mode
-- **代码锚点**：`src/config/types/general.rs`（BehaviorConfig.output_mode + typing_speed）、`src/gateway/event_emitter/instant_buffer.rs`（instant 装饰器）、`src/gateway/handlers/agent.rs`（resolved_output_mode，每次 run fresh 读）、`src/gateway/session_scheduler.rs`、前端 `interfaces/webchat/src/components/markdown.rs`（StreamingRenderer）
+- **代码锚点**：`src/config/types/general.rs`（BehaviorConfig.output_mode + typing_speed）、`src/gateway/event_emitter/instant_buffer.rs`（instant 装饰器）、`src/gateway/handlers/agent.rs`（resolved_output_mode，每次 run fresh 读）、`src/gateway/inbound_router/executor.rs`（通道路径 fresh 读）、前端 `interfaces/webchat/src/components/markdown.rs`（StreamingRenderer）
 - **职责**：全局 `behavior.output_mode` = typewriter（逐字符，可设速度）/ instant（整体返回）；instant 是 EventEmitter 装饰器包裹任意 inner emitter；Panel run 与 inbound channel run **同源**，改配置下次运行即生效无需重启。
 - **状态**：✅ 已实现（这是真·全局开关 + 全通道同源，**与你的描述一致**）。
 - **打磨话术**：「全局开关在 `config/types/general.rs` 的 output_mode；‘所有 channel 同步’靠 `handlers/agent.rs::resolved_output_mode` 每次 run fresh 读同一配置。前端呈现在 `webchat/.../markdown.rs`。」

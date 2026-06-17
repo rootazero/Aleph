@@ -31,7 +31,7 @@
 | `src/builtin_tools/node_invoke_many.rs` | 中心侧 **LLM 工具**:按标签把命令并发扇出到一组节点 | `NodeInvokeManyTool` / `invoke_one` |
 | `src/builtin_tools/node_file.rs` | 中心侧 **LLM 工具**:node↔center 文件传输 | `NodeFileTool` |
 | `src/gateway/handlers/cluster.rs` | 中心侧 RPC:`cluster.enroll` / `cluster.deregister` / `environments.list` | `handle_cluster_enroll` / `handle_cluster_deregister` / `handle_environments_list` |
-| `src/bin/aleph-server/commands/node.rs` | `aleph-server node` 节点拨出运行时 | `handle_node` / `run_session` / `run_pairing` |
+| `src/bin/aleph-server/commands/node.rs` | `aleph-server node` 节点拨出运行时 | `handle_node` / `run_session` / `enroll_node` |
 
 ## 架构
 
@@ -66,28 +66,36 @@
   走 mpsc + writer task,`tool.call` 在 `tokio::spawn` 里分发——**长命令(等审批)
   不会阻塞读循环**(否则审批响应到不了 → 死锁)。
 
-## 节点接入(三步)
+## 节点接入(两步) — LAN-trust
 
-### 1. 登记(铸 token) — `cluster.enroll`(operator)
+> **信任模型 = 网络边界**:节点**不持 token**。信任边界即网络边界(中心默认只绑
+> `127.0.0.1`,`[gateway] host = "0.0.0.0"` 才放开 LAN)。enroll 只在中心留一条设备
+> 记录并铸一个稳定 `node_id`(UUID);连接身份由 `connect` 帧的**参数形状**
+> (`commands` + `tags`,无其他客户端会发)声明,中心据此把节点稳定键入同一 UUID
+> (修正 `touch_device` / `environments.list` / `deregister` 的记账漂移)。无 token、
+> 无配对码、无 `AUTH_FAILED`。收紧节点认证属 T6 计划。
 
-中心侧 RPC(凭证操作模式,同 `devices.*` / `pairing.*`,非 LLM 工具)。
-铸一个 `DeviceRole::Node` 设备 + token,返还操作员转交节点机:
+### 1. 登记 — `cluster.enroll`(operator)
+
+中心侧 RPC(operator 门槛,同 `devices.*`,非 LLM 工具)。写一条 `role=node` 设备
+记录,返还操作员转交节点机的 `node_id`(**不铸 token**):
 
 ```jsonc
 // → cluster.enroll  { "node_name": "worker-1" }
-// ← { "node_id": "<uuid>", "token": "<...>", "signature": "<...>" }
+// ← { "node_id": "<uuid>" }
 ```
 
 Panel 入口:设置 → **服务与集群 → Aleph 集群 → + Enroll**。
 
-> **注销** — `cluster.deregister`(operator):`{ "node": "<name|id>" }`。三步硬下线:
+> **注销** — `cluster.deregister`(operator):`{ "node": "<name|id>" }`。两步下线:
 > ① `NodeRegistry::forget` 即时驱逐在线会话(立刻从 `environments.list` 消失且不再
-> 被 `node_invoke`/`node_file` 寻址);② `revoke_device_tokens` 撤 token 阻止重连;
-> ③ `revoke_device` 抹除设备记录(enroll 的对称撤除)。返回
-> `{ node_id, evicted, device_removed }`。不强制 close 节点当前 socket——它在下一次
-> ping/idle-watchdog 到期时由传输层断开;但驱逐 + 撤 token 已令其既不可被下发命令、
-> 也无法凭旧 token 重登记。**修复了旧缺口**:`devices.revoke` 撤 token 却把在线会话
-> 留在 NodeRegistry,使被吊销节点直到 socket 自然断开前仍可被 `node_invoke` 命中。
+> 被 `node_invoke`/`node_file` 寻址);② `revoke_device`(软删,置 `revoked_at`)抹除
+> 设备记录(enroll 的对称撤除,`list_devices` 仅返 `revoked_at IS NULL` 故离线视图也
+> 随即消失)。返回 `{ node_id, evicted, device_removed }`。不强制 close 节点当前
+> socket——它在下一次 ping/idle-watchdog 到期时由传输层断开;LAN-trust 下没有 token
+> 可撤,阻止重连属网络边界(bind/origin)职责。寻址先走在线 `NodeRegistry` 多级匹配,
+> 不在线则回退 `security_store` 已登记节点(精确 id / 唯一精确 name),故
+> `environments.list` 里可见的离线节点同样可注销(此时 `evicted:false`)。
 > Panel 入口:每行节点的 **「注销」** 按钮。
 
 ### 2. 拨出 — `aleph-server node`
@@ -95,26 +103,21 @@ Panel 入口:设置 → **服务与集群 → Aleph 集群 → + Enroll**。
 ```bash
 aleph-server node \
   --center ws://<center-host>:18790 \
-  --token  <token-from-enroll> \
   --name   <node-name> \
   --tag    gpu --tag region=us      # 可重复;经 connect 帧上报,供 node_invoke_many 选择
 ```
 
-标签由 CLI 每次启动提供(经 `connect` 帧上报,出现在 `environments.list`),**不**持久化进凭证、**不**走配对帧。
+身份解析(`handle_node`):**持久化身份 > 现场 enroll**。首启无持久化身份时
+`enroll_node` 拨一条临时 WS 调 `cluster.enroll` 拿回 `node_id` 并落盘;之后每次启动
+直接复用。身份持久化在 `~/.aleph/node/<name>.json`(unix `0o600`),仅含
+`{node_id, center}`(无 bearer/token)。旧版含 `bearer` 字段的凭证文件可无损升级
+——serde 丢弃死字段、保留 `node_id`,升级后的节点不会重新 enroll。
 
-凭证解析优先级(`handle_node`):**持久化凭证 > `--token` > 交互配对**。
-凭证持久化在 `~/.aleph/node/<name>.json`(unix `0o600`),含 `{node_id, bearer,
-center}`;`bearer` = `"{token}:{signature}"`,作为 `connect` 帧的 `token` 原样发送。
+标签由 CLI 每次启动提供(经 `connect` 帧上报,出现在 `environments.list`),**不**
+持久化进身份文件。
 
 重连:断线后指数退避 `2s → 60s`(`BACKOFF_INITIAL_MS` / `BACKOFF_MAX_MS`)。
-`connect` 收到 `AUTH_FAILED (-32001)` → 清凭证 + 自动重新配对。
-
-### 3. 交互配对(省略 `--token`)
-
-无 token 时 `run_pairing`:匿名 WS → `pairing.start_node {node_name, commands}`
-→ 打印 6 位配对码 → 每 2s 轮询 `pairing.poll {code}` → operator 在中心 **Panel
-通知卡**批准后,`pairing.poll` 返回 `{status:"approved", token, device_id}` →
-落盘凭证 → 进入 `run_session`。`status` 取值:`approved|rejected|expired|pending`。
+`connect` 回复在 LAN-trust 下恒成功(无 auth 可校验),drain 后即进 `run_session`。
 
 ## 中心侧 LLM 工具
 
@@ -228,7 +231,7 @@ approve/deny → 决策作 JSON-RPC 响应下行。
 
 | 方向 | 帧 |
 |------|----|
-| node → center | `connect { token, device_name, commands, tags }` |
+| node → center | `connect { device_id, device_name, commands, tags }`(LAN-trust,无 token) |
 | center → node | 请求 `{ id, method:"tool.call", params:{ tool, args } }` |
 | node → center | 响应 `{ id, result }` / `{ id, error }` |
 | node → center | 请求 `{ id, method:"node.approval.request", params:{ tool, reason } }` |
@@ -247,10 +250,14 @@ approve/deny → 决策作 JSON-RPC 响应下行。
 `null`=登记后从未连入)。last_seen 在节点 connect/disconnect 两接缝经
 `TokenManager::touch_device` 盖章。`cluster.deregister` 寻址同样支持离线节点
 (在线 registry 多级匹配 → 回退 store 精确 id/唯一精确 name;离线注销时
-`evicted:false`,仅撤 token + 设备记录)。
-| `pairing.start_node` / `pairing.poll` | 匿名(节点配对入口) |
-| `pairing.approve` / `pairing.reject` | operator |
+`evicted:false`,仅软删设备记录)。
+
+| 方法 | 权限 |
+|------|------|
 | `exec.approval.resolve` | operator(同样裁决节点审批) |
+
+> LAN-trust 迁移后**已无** `pairing.*` 节点配对方法——节点不再凭 token/配对码接入,
+> 连接身份由 `connect` 帧参数形状声明(见上「节点接入」)。
 
 ## 相关代码与测试
 
