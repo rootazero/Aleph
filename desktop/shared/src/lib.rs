@@ -4,15 +4,21 @@
 //!
 //! ## Architecture
 //!
-//! [`DesktopPlatform`] aggregator with four capability traits:
+//! [`DesktopPlatform`] aggregator exposing eight capability traits, each an
+//! `Option<&dyn …>` so a platform returns `None` for what it can't do:
 //! - [`ScreenCapability`] — screenshot, OCR, mouse/keyboard, window management
 //! - [`PimCapability`] — Notes, Calendar, Reminders, Contacts
 //! - [`SystemCapability`] — app management, notifications, clipboard, system info
 //! - [`AutomationCapability`] — AppleScript/JXA, Shortcuts
+//! - [`PermissionCapability`] — TCC permission detection and request
+//! - [`MediaCapability`] — camera / audio device capture
+//! - [`AccessibilityCapability`] — AX tree queries (macOS only)
+//! - [`PowerCapability`] — sleep inhibition (via the `power()` accessor)
 //!
-//! Each platform crate (`desktop-macos`, `desktop-linux`, `desktop-windows`)
-//! implements [`DesktopPlatform`], returning `Some` for supported capabilities
-//! and `None` for unsupported ones.
+//! Real platform API calls never live here: each platform crate
+//! (`desktop-macos`, `desktop-linux`, `desktop-windows`) implements
+//! [`DesktopPlatform`] and reaches the OS through the [`bridge`] JSON-RPC IPC
+//! layer (R1 brain–limb separation).
 
 pub mod action;
 pub mod automation_types;
@@ -47,15 +53,6 @@ pub use traits::{
 use serde::{Deserialize, Serialize};
 
 // ── Types ────────────────────────────────────────────────────────
-
-/// A capability that this desktop implementation supports.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Capability {
-    /// Capability name (e.g. "`screen_capture`", "ocr", "`keyboard_control`").
-    pub name: String,
-    /// Capability version string.
-    pub version: String,
-}
 
 /// A rectangular region on the screen, in physical pixels.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

@@ -1,10 +1,15 @@
 //! Subprocess supervisor primitives — exponential backoff + restart window.
 //!
-//! The `SwiftBridge` client (bridge/client.rs) uses these to decide:
+//! The `SwiftBridge` client (bridge/client.rs) drives a single [`SpawnGate`],
+//! which composes two lower-level primitives to answer one question — *may we
+//! (re)spawn the helper right now?*:
 //! - How long to wait before a respawn attempt (`Backoff`).
 //! - Whether the helper has become chronically unreliable and further calls
 //!   should be short-circuited with `DesktopError::BridgeDisabled`
 //!   (`RestartWindow`). The default policy is "5 restarts in 10 minutes".
+//!
+//! [`SpawnGate`] is the single source of truth for respawn pacing: it holds the
+//! "earliest next spawn" instant so the client never has to track it separately.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -69,6 +74,82 @@ impl RestartWindow {
     }
 }
 
+/// Decision returned by [`SpawnGate::poll`] when a respawn is requested.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SpawnDecision {
+    /// Clear to attempt a spawn now.
+    Go,
+    /// A respawn was attempted too recently — hold off for `remaining`.
+    Backoff { remaining: Duration },
+}
+
+/// Single source of truth for helper respawn pacing.
+///
+/// Composes [`Backoff`] (how long to wait between attempts) and
+/// [`RestartWindow`] (when to give up entirely) and owns the "earliest next
+/// spawn" instant. The client asks [`poll`](Self::poll) before each spawn and
+/// reports the outcome via [`record_success`](Self::record_success) /
+/// [`record_failure`](Self::record_failure) — it no longer tracks delay state
+/// itself, which is what let the old backoff ladder be computed and silently
+/// discarded.
+#[derive(Debug)]
+pub struct SpawnGate {
+    backoff: Backoff,
+    window: RestartWindow,
+    /// Earliest instant a spawn may be attempted. `None` = no active backoff.
+    next_spawn_at: Option<Instant>,
+}
+
+impl SpawnGate {
+    /// Build a gate that disables the helper after `threshold` restarts within
+    /// `window`.
+    #[must_use]
+    pub const fn new(threshold: usize, window: Duration) -> Self {
+        Self {
+            backoff: Backoff { step: 0 },
+            window: RestartWindow::new(threshold, window),
+            next_spawn_at: None,
+        }
+    }
+
+    /// May a spawn proceed now? `Go` clears the gate; `Backoff` means a recent
+    /// failure is still cooling down.
+    #[must_use]
+    pub fn poll(&self) -> SpawnDecision {
+        match self.next_spawn_at {
+            Some(at) => {
+                let now = Instant::now();
+                if now >= at {
+                    SpawnDecision::Go
+                } else {
+                    SpawnDecision::Backoff {
+                        remaining: at.saturating_duration_since(now),
+                    }
+                }
+            }
+            None => SpawnDecision::Go,
+        }
+    }
+
+    /// Record a spawn failure or helper crash. Advances the backoff ladder,
+    /// arms the next-spawn gate, and returns `true` when the restart threshold
+    /// has been exceeded (caller should latch the bridge into disabled mode).
+    pub fn record_failure(&mut self) -> bool {
+        let delay = self.backoff.next_delay();
+        self.next_spawn_at = Some(Instant::now() + delay);
+        self.window.record_and_should_disable()
+    }
+
+    /// Record a successful spawn. Resets the backoff ladder and clears the
+    /// gate so an isolated later failure starts cooling from the first rung.
+    /// The restart window is intentionally *not* cleared — a flapping helper
+    /// (success → crash → success → crash) must still trip the threshold.
+    pub fn record_success(&mut self) {
+        self.backoff.reset();
+        self.next_spawn_at = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +195,50 @@ mod tests {
             !w.record_and_should_disable(),
             "aged events should have been evicted"
         );
+    }
+
+    #[test]
+    fn gate_starts_clear() {
+        let gate = SpawnGate::new(5, Duration::from_secs(600));
+        assert_eq!(gate.poll(), SpawnDecision::Go);
+    }
+
+    #[test]
+    fn gate_backs_off_after_failure() {
+        let mut gate = SpawnGate::new(5, Duration::from_secs(600));
+        assert!(!gate.record_failure());
+        // First rung is 1s — a poll immediately after must report Backoff.
+        match gate.poll() {
+            SpawnDecision::Backoff { remaining } => {
+                assert!(remaining <= Duration::from_secs(1) && remaining > Duration::ZERO);
+            }
+            SpawnDecision::Go => panic!("expected backoff immediately after failure"),
+        }
+    }
+
+    #[test]
+    fn gate_clears_on_success() {
+        let mut gate = SpawnGate::new(5, Duration::from_secs(600));
+        gate.record_failure();
+        gate.record_success();
+        assert_eq!(gate.poll(), SpawnDecision::Go, "success must clear the gate");
+    }
+
+    #[test]
+    fn gate_disables_after_threshold() {
+        let mut gate = SpawnGate::new(5, Duration::from_secs(600));
+        for _ in 0..5 {
+            assert!(!gate.record_failure());
+        }
+        assert!(gate.record_failure(), "6th failure trips disable");
+    }
+
+    #[test]
+    fn gate_backoff_window_elapses_to_go() {
+        let mut gate = SpawnGate::new(5, Duration::from_secs(600));
+        gate.record_failure();
+        // Force the gate open by rewinding the armed instant into the past.
+        gate.next_spawn_at = Some(Instant::now() - Duration::from_secs(1));
+        assert_eq!(gate.poll(), SpawnDecision::Go);
     }
 }
