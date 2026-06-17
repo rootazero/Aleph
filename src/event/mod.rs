@@ -5,15 +5,11 @@
 //! - `EventBus`: Type-safe broadcast channel for component communication
 //! - `AlephEvent`: Unified event enum for all system events
 //! - `EventHandler`: Trait for components to subscribe and handle events
-//! - `PermissionEvent`: Permission request/reply events
-//! - `QuestionEvent`: Structured user interaction events
 
 mod bus;
 pub mod filter;
 pub mod global_bus;
 mod handler;
-pub mod permission;
-pub mod question;
 mod types;
 
 #[cfg(test)]
@@ -60,17 +56,6 @@ pub use types::{
     ToolCallStarted,
     // User interaction
     UserQuestion,
-    UserResponse,
-};
-
-// Permission system events
-pub use permission::{
-    PermissionAction, PermissionEvent, PermissionReply, PermissionRequest, ToolCallRef,
-};
-
-// Question system events
-pub use question::{
-    Answer, QuestionEvent, QuestionInfo, QuestionOption, QuestionReply, QuestionRequest,
 };
 
 // Event filtering for subscription-based routing
