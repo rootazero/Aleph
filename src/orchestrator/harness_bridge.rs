@@ -764,12 +764,32 @@ pub async fn active_standing_goal(session_key: &str) -> Option<String> {
     if !goal.is_active() {
         return None;
     }
+    // Stamp the wall-clock once so the rendered deadline matches the same
+    // instant the autonomous loop's deadline check (`should_continue`) uses.
+    let now_ms = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0);
+    Some(render_goal_summary(&goal, now_ms))
+}
+
+/// Format the active-goal summary line injected as `<standing_goal>`. Pure:
+/// takes the goal plus the current wall-clock (Unix epoch ms) so it is
+/// unit-testable without the process-global `GoalStore`. Surfaces the
+/// objective plus every structural backstop the autonomous loop enforces —
+/// token budget, wall-clock deadline, and iteration pace — so the model can
+/// pace itself against each one (R9 — intelligence in the prompt). A goal with
+/// no caps renders just `"{objective} (status=active)"`, byte-identical to the
+/// pre-deadline output for the common case.
+fn render_goal_summary(goal: &crate::goal::Goal, now_ms: u64) -> String {
     let budget = match goal.token_budget {
         Some(b) => format!(", budget={b}"),
         None => String::new(),
     };
-    // Surface autonomous-pursuit pace so the model can self-budget across
-    // continuations (R9 — intelligence in the prompt).
+    // The wall-clock deadline is a hard stop the loop enforces (it Blocks the
+    // goal once exceeded), yet the model was never told it existed — surfacing
+    // the remaining time lets it triage instead of being cut off mid-thought.
+    let deadline = match goal.deadline_ms {
+        Some(d) => format!(", {}", render_deadline(d, now_ms)),
+        None => String::new(),
+    };
     let pursuit = match goal.pursuit {
         crate::goal::PursuitMode::Active { max_iterations } => {
             format!(
@@ -779,10 +799,32 @@ pub async fn active_standing_goal(session_key: &str) -> Option<String> {
         }
         crate::goal::PursuitMode::Passive => String::new(),
     };
-    Some(format!(
-        "{} (status=active{budget}{pursuit})",
+    format!(
+        "{} (status=active{budget}{deadline}{pursuit})",
         goal.objective
-    ))
+    )
+}
+
+/// Render a wall-clock deadline (absolute Unix epoch ms) as a compact
+/// remaining-time phrase relative to `now_ms`. `now_ms == 0` (no clock
+/// available, mirroring the loop's clock-less convention) degrades to a bare
+/// "deadline set" rather than a misleading countdown; an already-passed
+/// deadline reads "deadline passed" (the loop Blocks the goal on its next hook).
+fn render_deadline(deadline_ms: u64, now_ms: u64) -> String {
+    if now_ms == 0 {
+        return "deadline set".to_string();
+    }
+    if now_ms >= deadline_ms {
+        return "deadline passed".to_string();
+    }
+    let remaining_s = (deadline_ms - now_ms) / 1000;
+    if remaining_s < 60 {
+        format!("deadline in ~{remaining_s}s")
+    } else if remaining_s < 3600 {
+        format!("deadline in ~{}m", remaining_s / 60)
+    } else {
+        format!("deadline in ~{}h{}m", remaining_s / 3600, (remaining_s % 3600) / 60)
+    }
 }
 
 /// Snapshot the tool catalog's `ToolHealthCache` and convert every
@@ -1805,5 +1847,56 @@ mod tests {
             !prompt.contains("## Response Format"),
             "ResponseFormatLayer is unregistered; no path should still emit it"
         );
+    }
+
+    fn goal_for_summary() -> crate::goal::Goal {
+        // Passive, no caps → the byte-identical baseline shape.
+        crate::goal::Goal::new("sess", "Ship the deadline feature", 0, 1_000)
+    }
+
+    #[test]
+    fn goal_summary_no_caps_is_bare_objective() {
+        let g = goal_for_summary();
+        assert_eq!(
+            render_goal_summary(&g, 10_000),
+            "Ship the deadline feature (status=active)"
+        );
+    }
+
+    #[test]
+    fn goal_summary_surfaces_budget_and_iteration() {
+        let g = goal_for_summary()
+            .with_budget(Some(5_000))
+            .with_pursuit(crate::goal::PursuitMode::Active { max_iterations: 8 })
+            .spent_continuation(2_000);
+        let out = render_goal_summary(&g, 0);
+        assert!(out.contains(", budget=5000"), "got: {out}");
+        assert!(out.contains(", autonomous iteration 1/8"), "got: {out}");
+    }
+
+    #[test]
+    fn goal_summary_surfaces_deadline_remaining() {
+        // Deadline 90 min out from now_ms → "~1h30m".
+        let now_ms = 1_000_000;
+        let g = goal_for_summary().with_deadline_ms(Some(now_ms + 90 * 60 * 1_000));
+        let out = render_goal_summary(&g, now_ms);
+        assert!(out.contains(", deadline in ~1h30m"), "got: {out}");
+    }
+
+    #[test]
+    fn deadline_render_buckets_and_edges() {
+        let now = 1_000_000_u64;
+        // sub-minute → seconds
+        assert_eq!(render_deadline(now + 30_000, now), "deadline in ~30s");
+        // minutes bucket
+        assert_eq!(render_deadline(now + 5 * 60_000, now), "deadline in ~5m");
+        // hours+minutes bucket
+        assert_eq!(render_deadline(now + (2 * 3600 + 15 * 60) * 1000, now), "deadline in ~2h15m");
+        // already past → blocked next hook
+        assert_eq!(render_deadline(now - 1, now), "deadline passed");
+        // exactly now → passed (>= guard)
+        assert_eq!(render_deadline(now, now), "deadline passed");
+        // no clock available → existence only, no misleading countdown
+        assert_eq!(render_deadline(now + 60_000, 0), "deadline set");
     }
 }
