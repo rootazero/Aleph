@@ -103,16 +103,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Integration tests for forward_to_server live in tests/spec_c_cli_ipc.rs
     // because they need a real HTTP listener and a seeded security.db. Unit
     // tests here cover only the helpers that don't need a network.
-
-    #[test]
-    fn read_endpoint_path_handles_missing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = read_endpoint(dir.path()).unwrap();
-        assert!(result.is_none());
-    }
 }

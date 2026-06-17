@@ -16,14 +16,21 @@ use crate::utils::instance_lock::{self, AcquireOutcome, InstanceLock};
 pub struct LockHeldError {
     pub pid: u32,
     pub lock_path: std::path::PathBuf,
+    pub orphaned: bool,
 }
 
 impl fmt::Display for LockHeldError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let status = if self.orphaned {
+            "orphaned lock detected; no live server"
+        } else {
+            "server is running"
+        };
         write!(
             f,
-            "server is running (PID {}). This command requires \
+            "{} (PID {}). This command requires \
              exclusive access — run `aleph stop` first. Lock: {}",
+            status,
             self.pid,
             self.lock_path.display()
         )
@@ -83,10 +90,16 @@ where
 fn acquire_or_held(data_dir: &Path) -> anyhow::Result<InstanceLock> {
     match instance_lock::try_acquire(data_dir)? {
         AcquireOutcome::Acquired(lock) => Ok(lock),
-        AcquireOutcome::HeldByLive { pid, lock_path }
-        | AcquireOutcome::HeldByOrphaned { pid, lock_path } => Err(LockHeldError {
+        AcquireOutcome::HeldByLive { pid, lock_path } => Err(LockHeldError {
             pid: pid as u32,
             lock_path,
+            orphaned: false,
+        }
+        .into()),
+        AcquireOutcome::HeldByOrphaned { pid, lock_path } => Err(LockHeldError {
+            pid: pid as u32,
+            lock_path,
+            orphaned: true,
         }
         .into()),
     }

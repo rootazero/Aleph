@@ -58,7 +58,7 @@ pub struct ClarificationOption {
 }
 
 impl ClarificationOption {
-    /// Create a new option with label and value (same)
+    /// Create a new option with value and label.
     #[must_use]
     pub fn new(value: &str, label: &str) -> Self {
         Self {

@@ -2293,7 +2293,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // NOTE: SIGTERM path (setup_graceful_shutdown) calls std::process::exit
     // and bypasses this cleanup; stale file is overwritten on next start.
     if let Some(dir) = ipc_data_dir.as_deref() {
-        alephcore::cli::endpoint::remove_endpoint(dir);
+        if let Err(e) = alephcore::cli::endpoint::remove_endpoint(dir) {
+            tracing::warn!(
+                error = %e,
+                path = %dir.display(),
+                "failed to remove endpoint file during shutdown"
+            );
+        }
     }
 
     // Notify extension hooks of shutdown (best-effort; the SIGTERM path in

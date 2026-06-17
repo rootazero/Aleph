@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 const ENDPOINT_FILENAME: &str = ".ipc-endpoint.json";
+const CURRENT_ENDPOINT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IpcEndpoint {
@@ -79,14 +80,26 @@ pub fn read_endpoint(data_dir: &Path) -> std::io::Result<Option<IpcEndpoint>> {
     }
     let ep: IpcEndpoint = serde_json::from_slice(&bytes)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    if ep.version != CURRENT_ENDPOINT_VERSION {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                ".ipc-endpoint.json has unsupported version {} (expected {})",
+                ep.version, CURRENT_ENDPOINT_VERSION
+            ),
+        ));
+    }
     Ok(Some(ep))
 }
 
-pub fn remove_endpoint(data_dir: &Path) {
+pub fn remove_endpoint(data_dir: &Path) -> std::io::Result<()> {
     let path = endpoint_path(data_dir);
-    if let Err(e) = std::fs::remove_file(&path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => {
             warn!(path = %path.display(), error = %e, "failed to remove endpoint file");
+            Err(e)
         }
     }
 }
@@ -112,11 +125,18 @@ mod tests {
     }
 
     #[test]
+    fn read_endpoint_path_handles_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = read_endpoint(dir.path()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn remove_cleans_file() {
         let dir = tempfile::tempdir().unwrap();
         let ep = IpcEndpoint::current("http://x");
         write_endpoint(dir.path(), &ep).unwrap();
-        remove_endpoint(dir.path());
+        remove_endpoint(dir.path()).unwrap();
         assert!(read_endpoint(dir.path()).unwrap().is_none());
     }
 }
