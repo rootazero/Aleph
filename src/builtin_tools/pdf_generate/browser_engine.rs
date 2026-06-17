@@ -45,7 +45,7 @@ fn html_escape(s: &str) -> String {
 /// Cheap synchronous check: is the playwright-cli toolchain likely available
 /// on this system? Callers use this to short-circuit before invoking the
 /// async `generate()` path.
-pub fn is_chrome_available() -> bool {
+pub fn is_browser_engine_available() -> bool {
     which::which("playwright-cli").is_ok()
 }
 
