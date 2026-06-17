@@ -52,6 +52,23 @@ fn is_process_running(_pid: u32) -> bool {
     false
 }
 
+/// Best-effort check that the PID actually belongs to an `aleph-server` process.
+/// On Unix this inspects /proc/{pid}/cmdline; on other platforms it returns true
+/// so the caller can fall back to process-existence checks.
+#[cfg(unix)]
+fn pid_belongs_to_server(pid: u32) -> bool {
+    let path = format!("/proc/{pid}/cmdline");
+    std::fs::read_to_string(&path)
+        .ok()
+        .map(|s| s.contains("aleph-server"))
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn pid_belongs_to_server(_pid: u32) -> bool {
+    true
+}
+
 /// Send a signal to a process (Unix only)
 #[cfg(unix)]
 fn send_signal(pid: u32, signal: i32) -> bool {
@@ -227,6 +244,18 @@ pub fn stop(json: bool) -> CliResult<()> {
 
     #[cfg(unix)]
     {
+        if !pid_belongs_to_server(pid) {
+            if json {
+                output::print_json(&serde_json::json!({
+                    "status": "error",
+                    "error": format!("PID {pid} does not belong to aleph-server; refusing to signal"),
+                }));
+            } else {
+                println!("PID {pid} does not belong to aleph-server; refusing to signal");
+            }
+            return Ok(());
+        }
+
         if !json {
             println!("Sending SIGTERM to Gateway (PID {pid})...");
         }

@@ -50,8 +50,9 @@ pub fn spawn_event_collector() -> mpsc::Receiver<TermEvent> {
                 Ok(false) => {
                     // No event within timeout, continue polling
                 }
-                Err(_) => {
-                    // crossterm poll error — unlikely, but exit gracefully
+                Err(e) => {
+                    // crossterm poll error — unlikely, but log and exit gracefully
+                    tracing::warn!("Terminal event poll error: {e}; stopping event collector");
                     break;
                 }
             }

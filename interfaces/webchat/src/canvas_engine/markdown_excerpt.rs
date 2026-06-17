@@ -39,8 +39,9 @@ pub fn render_excerpt(src: &str) -> String {
             Event::Start(Tag::Strong) => out.push_str("<strong>"),
             Event::End(TagEnd::Strong) => out.push_str("</strong>"),
             Event::Start(Tag::Link { dest_url, .. }) => {
+                let safe_url = sanitize_link_url(&dest_url);
                 out.push_str("<a target=\"_blank\" rel=\"noopener\" href=\"");
-                out.push_str(&html_escape(&dest_url));
+                out.push_str(&html_escape(&safe_url));
                 out.push_str("\">");
             }
             Event::End(TagEnd::Link) => out.push_str("</a>"),
@@ -78,6 +79,21 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+/// Allow only a small set of link schemes. Reject `javascript:` and other
+/// pseudo-URL schemes to prevent XSS when the excerpt is assigned to innerHTML.
+fn sanitize_link_url(url: &str) -> String {
+    let trimmed = url.trim();
+    if let Some((scheme, _)) = trimmed.split_once(':') {
+        let scheme = scheme.to_lowercase();
+        if scheme == "http" || scheme == "https" || scheme == "mailto" {
+            return trimmed.to_string();
+        }
+        // Disallowed scheme: render as plain text instead of a link.
+        return format!("#disallowed-{}", scheme);
+    }
+    trimmed.to_string()
 }
 
 #[cfg(test)]

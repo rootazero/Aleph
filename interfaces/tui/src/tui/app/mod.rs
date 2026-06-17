@@ -294,7 +294,19 @@ impl AppState {
             .iter_mut()
             .rev()
             .find(|m| matches!(m, ChatMessage::Assistant { .. }))
-            .expect("ensure_assistant_message guarantees this exists")
+            .unwrap_or_else(|| {
+                // Defensive fallback: create an empty assistant message if the
+                // invariant is ever violated, so the UI doesn't panic.
+                self.messages.push(ChatMessage::Assistant {
+                    content: String::new(),
+                    reasoning: None,
+                    tools: Vec::new(),
+                    is_streaming: false,
+                });
+                self.messages
+                    .last_mut()
+                    .expect("just pushed assistant message")
+            })
     }
 
     /// Find a tool execution by `tool_id` in the last assistant message.

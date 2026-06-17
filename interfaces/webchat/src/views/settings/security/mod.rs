@@ -45,10 +45,13 @@ pub(super) fn validate_regex(pattern: &str) -> Result<(), String> {
     if pattern.is_empty() {
         return Ok(());
     }
-    // Use js_sys::eval to test regex validity in JS context
-    let escaped = pattern.replace('\'', "\\'");
+    // Build the JS argument with JSON.stringify so the pattern is treated as a
+    // literal string rather than JS source, preventing code injection.
+    let arg = js_sys::JSON::stringify(&pattern.into())
+        .map(|s| s.as_string().unwrap_or_default())
+        .unwrap_or_default();
     let js_code = format!(
-        "try {{ new RegExp('{escaped}'); true; }} catch(e) {{ false; }}"
+        "try {{ new RegExp({arg}); true; }} catch(e) {{ false; }}"
     );
     match js_sys::eval(&js_code) {
         Ok(result) => match result.as_bool() {

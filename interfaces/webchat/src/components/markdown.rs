@@ -60,8 +60,20 @@ fn render_markdown(content: &str) -> String {
                 code_content.push_str(text.as_ref());
             }
             other => {
-                // Render non-code events via pulldown-cmark's HTML renderer
-                pulldown_cmark::html::push_html(&mut html_output, std::iter::once(other));
+                // Render non-code events via pulldown-cmark's HTML renderer.
+                // Escape raw HTML/inline HTML so assistant markdown cannot inject
+                // scripts or event handlers into the page.
+                match other {
+                    Event::Html(text) | Event::InlineHtml(text) => {
+                        html_output.push_str(&html_escape(text.as_ref()));
+                    }
+                    _ => {
+                        pulldown_cmark::html::push_html(
+                            &mut html_output,
+                            std::iter::once(other),
+                        );
+                    }
+                }
             }
         }
     }

@@ -174,7 +174,7 @@ impl MemoryApi {
 /// Format unix timestamp (seconds) to human-readable date string
 fn format_timestamp_secs(ts: i64) -> String {
     // Simple date formatting for WASM (no chrono needed for basic display)
-    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64((ts * 1000) as f64));
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ts as f64 * 1000.0));
     let year = date.get_full_year();
     let month = date.get_month() + 1; // 0-indexed
     let day = date.get_date();

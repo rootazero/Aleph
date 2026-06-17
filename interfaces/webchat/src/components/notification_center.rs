@@ -171,8 +171,15 @@ pub fn NotificationCenter() -> impl IntoView {
                                                         on:click=move |_| {
                                                             let id = id_once.clone();
                                                             spawn_local(async move {
-                                                                let _ = ExecApprovalApi::resolve(&dashboard, id.clone(), "allow-once").await;
-                                                                dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
+                                                                match ExecApprovalApi::resolve(&dashboard, id.clone(), "allow-once"
+                                                                ).await {
+                                                                    Ok(_) => {
+                                                                        dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
+                                                                    }
+                                                                    Err(e) => {
+                                                                        tracing::warn!("Failed to resolve approval (allow-once): {e}");
+                                                                    }
+                                                                }
                                                             });
                                                         }
                                                     >
@@ -184,8 +191,16 @@ pub fn NotificationCenter() -> impl IntoView {
                                                         on:click=move |_| {
                                                             let id = id_session.clone();
                                                             spawn_local(async move {
-                                                                let _ = ExecApprovalApi::resolve(&dashboard, id.clone(), "allow-session").await;
-                                                                dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
+                                                                match ExecApprovalApi::resolve(
+                                                                    &dashboard, id.clone(), "allow-session"
+                                                                ).await {
+                                                                    Ok(_) => {
+                                                                        dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
+                                                                    }
+                                                                    Err(e) => {
+                                                                        tracing::warn!("Failed to resolve approval (allow-session): {e}");
+                                                                    }
+                                                                }
                                                             });
                                                         }
                                                     >
@@ -197,8 +212,16 @@ pub fn NotificationCenter() -> impl IntoView {
                                                         on:click=move |_| {
                                                             let id = id_deny.clone();
                                                             spawn_local(async move {
-                                                                let _ = ExecApprovalApi::resolve(&dashboard, id.clone(), "deny").await;
-                                                                dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
+                                                                match ExecApprovalApi::resolve(
+                                                                    &dashboard, id.clone(), "deny"
+                                                                ).await {
+                                                                    Ok(_) => {
+                                                                        dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
+                                                                    }
+                                                                    Err(e) => {
+                                                                        tracing::warn!("Failed to resolve approval (deny): {e}");
+                                                                    }
+                                                                }
                                                             });
                                                         }
                                                     >
