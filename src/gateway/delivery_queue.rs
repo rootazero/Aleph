@@ -43,6 +43,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use super::channel::{ChannelError, ChannelId, OutboundMessage};
@@ -78,6 +79,76 @@ impl Default for DeliveryQueueConfig {
             tick: Duration::from_secs(5),
             batch: 32,
             max_queue_len: 10_000,
+        }
+    }
+}
+
+/// TOML-facing tuning for the durable delivery queue (`[gateway.delivery_queue]`).
+///
+/// Mirrors [`DeliveryQueueConfig`] but uses plain seconds / scalars so it
+/// round-trips cleanly through TOML (the runtime struct stores [`Duration`]s and
+/// is built from this via [`to_runtime`](Self::to_runtime)). Field names and
+/// defaults match the runtime struct one-for-one, so an empty
+/// `[gateway.delivery_queue]` table (or none at all) is byte-identical to the
+/// historic hardcoded [`DeliveryQueueConfig::default`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DeliveryQueueTomlConfig {
+    /// Maximum delivery attempts before a record is permanently dropped.
+    pub max_attempts: u32,
+    /// Delay (seconds) before the first retry and floor of the backoff curve.
+    pub initial_backoff_secs: u64,
+    /// Upper bound (seconds) on a single retry delay.
+    pub max_backoff_secs: u64,
+    /// Multiplier applied per consecutive failed attempt.
+    pub backoff_factor: f64,
+    /// How often (seconds) the drain task wakes to look for due records.
+    pub tick_secs: u64,
+    /// Maximum records claimed per drain tick.
+    pub batch: usize,
+    /// Hard cap on stored records (CWE-400 defense).
+    pub max_queue_len: i64,
+}
+
+impl Default for DeliveryQueueTomlConfig {
+    fn default() -> Self {
+        let d = DeliveryQueueConfig::default();
+        Self {
+            max_attempts: d.max_attempts,
+            initial_backoff_secs: d.initial_backoff.as_secs(),
+            max_backoff_secs: d.max_backoff.as_secs(),
+            backoff_factor: d.backoff_factor,
+            tick_secs: d.tick.as_secs(),
+            batch: d.batch,
+            max_queue_len: d.max_queue_len,
+        }
+    }
+}
+
+impl DeliveryQueueTomlConfig {
+    /// Build the runtime [`DeliveryQueueConfig`], clamping every field to a sane
+    /// floor so a hostile or fat-fingered TOML cannot wedge the drain task.
+    ///
+    /// In particular `tick_secs = 0` would turn [`tokio::time::interval`] into a
+    /// busy-loop, and `initial_backoff_secs = 0` would reschedule a still-down
+    /// channel as immediately-due — both are floored to 1s. `max_backoff` is
+    /// raised to at least `initial_backoff`, `backoff_factor` to ≥ 1.0 (so the
+    /// curve never *shrinks*), and the count fields to ≥ 1.
+    #[must_use]
+    pub fn to_runtime(&self) -> DeliveryQueueConfig {
+        let initial = self.initial_backoff_secs.max(1);
+        DeliveryQueueConfig {
+            max_attempts: self.max_attempts.max(1),
+            initial_backoff: Duration::from_secs(initial),
+            max_backoff: Duration::from_secs(self.max_backoff_secs.max(initial)),
+            backoff_factor: if self.backoff_factor >= 1.0 {
+                self.backoff_factor
+            } else {
+                1.0
+            },
+            tick: Duration::from_secs(self.tick_secs.max(1)),
+            batch: self.batch.max(1),
+            max_queue_len: self.max_queue_len.max(1),
         }
     }
 }
@@ -515,6 +586,64 @@ mod tests {
             !surviving.contains(&first),
             "oldest record should be evicted"
         );
+    }
+
+    #[test]
+    fn toml_config_default_matches_runtime_default() {
+        let from_toml = DeliveryQueueTomlConfig::default().to_runtime();
+        let native = DeliveryQueueConfig::default();
+        assert_eq!(from_toml.max_attempts, native.max_attempts);
+        assert_eq!(from_toml.initial_backoff, native.initial_backoff);
+        assert_eq!(from_toml.max_backoff, native.max_backoff);
+        assert_eq!(from_toml.backoff_factor, native.backoff_factor);
+        assert_eq!(from_toml.tick, native.tick);
+        assert_eq!(from_toml.batch, native.batch);
+        assert_eq!(from_toml.max_queue_len, native.max_queue_len);
+    }
+
+    #[test]
+    fn toml_config_floors_pathological_values() {
+        // Every zero/negative must clamp so the drain task can never busy-loop
+        // or reschedule a still-down channel as immediately-due.
+        let bad = DeliveryQueueTomlConfig {
+            max_attempts: 0,
+            initial_backoff_secs: 0,
+            max_backoff_secs: 0,
+            backoff_factor: 0.0,
+            tick_secs: 0,
+            batch: 0,
+            max_queue_len: 0,
+        };
+        let rt = bad.to_runtime();
+        assert_eq!(rt.max_attempts, 1);
+        assert_eq!(rt.initial_backoff, Duration::from_secs(1));
+        // max_backoff is raised to at least initial_backoff.
+        assert_eq!(rt.max_backoff, Duration::from_secs(1));
+        assert!(rt.backoff_factor >= 1.0, "curve must never shrink");
+        assert_eq!(rt.tick, Duration::from_secs(1));
+        assert_eq!(rt.batch, 1);
+        assert_eq!(rt.max_queue_len, 1);
+    }
+
+    #[test]
+    fn toml_config_preserves_valid_overrides() {
+        let cfg = DeliveryQueueTomlConfig {
+            max_attempts: 5,
+            initial_backoff_secs: 10,
+            max_backoff_secs: 600,
+            backoff_factor: 3.0,
+            tick_secs: 15,
+            batch: 64,
+            max_queue_len: 50_000,
+        };
+        let rt = cfg.to_runtime();
+        assert_eq!(rt.max_attempts, 5);
+        assert_eq!(rt.initial_backoff, Duration::from_secs(10));
+        assert_eq!(rt.max_backoff, Duration::from_secs(600));
+        assert_eq!(rt.backoff_factor, 3.0);
+        assert_eq!(rt.tick, Duration::from_secs(15));
+        assert_eq!(rt.batch, 64);
+        assert_eq!(rt.max_queue_len, 50_000);
     }
 
     #[test]

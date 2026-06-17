@@ -2078,6 +2078,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.tool_catalog.clone(),
         args.daemon,
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
+        full_config.gateway.delivery_queue.to_runtime(),
+        full_config.gateway.send_retry.to_policy(),
     )
     .await;
 

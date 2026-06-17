@@ -330,11 +330,11 @@
 - **打磨话术**：「集群在 `src/cluster/`；‘节点怎么连中心’看 reverse_rpc.rs；信任边界=LAN，中心↔节点无认证层。」
 
 ### 5.6 多端通道同步 (Channel Sync)
-- **口语关键词**：channel 多端同步、webchat 同步、通道注册表、统一消息总线、delivery queue
-- **代码锚点**：`src/gateway/channel_registry.rs`、`src/gateway/channel.rs`、`src/gateway/delivery_queue.rs`、`src/gateway/interfaces/`（telegram/discord/wechat/matrix/signal…）
-- **职责**：中心 ChannelRegistry 管所有通道，inbound 统一广播进 event bus（所有 agent 可见），outbound 经 delivery queue（rate-limit retry ≤2 轮 cap 30s + 可选持久化）。
-- **状态**：✅ 已实现。
-- **打磨话术**：「‘消息怎么在多端同步’= inbound 广播进 event bus + outbound delivery queue。加新通道在 `gateway/interfaces/`；‘掉线重试/持久化’在 delivery_queue.rs。」
+- **口语关键词**：channel 多端同步、webchat 同步、通道注册表、统一消息总线、delivery queue、投递重试调参、发送重试上限
+- **代码锚点**：`src/gateway/channel_registry.rs`（中心注册表 + `SendRetryPolicy`/`SendRetryTomlConfig`）、`src/gateway/channel.rs`、`src/gateway/delivery_queue.rs`（durable 队列 + `DeliveryQueueConfig`/`DeliveryQueueTomlConfig`）、`src/gateway/channel_health_monitor.rs`（僵尸通道自重启）、`src/gateway/config.rs`（`[gateway]` 三个弹性子表）、`src/gateway/interfaces/`（telegram/discord/wechat/matrix/signal…）；启动连线 `src/bin/aleph-server/commands/start/builder/subsystems.rs::initialize_channels`。
+- **职责**：中心 ChannelRegistry 管所有通道，inbound 统一广播进 event bus（所有 agent 可见），outbound 经 delivery queue（rate-limit retry + 可选 SQLite 持久化）；三个弹性旋钮（健康监控/durable 队列/发送重试）现已全部配置化。
+- **状态**：✅ 已实现。**配置连线（2026-06-17）**：此前 `DeliveryQueueConfig` 与 `SendRetryPolicy` 全是硬编码 `::default()`，`with_send_retry_policy` 更是只被测试调用的**生产死接口**（违 R8 连线纪律，与 §2.2 model_thresholds / §3.11 skill prompt_budget 同型缺口）。现新增 `[gateway.delivery_queue]`（attempts/backoff/tick/queue_len）+ `[gateway.send_retry]`（retries/retry_after）两个 TOML 子表，经 seconds 基 `*TomlConfig` → `to_runtime()`/`to_policy()`（含 flooring 防御：tick=0 busyloop、backoff=0 即时重投等坏配置全部 clamp）→ `initialize_channels` 流进 store 构造与 registry，激活死接口。缺字段逐项回退内置默认（旧 TOML byte-identical 兼容）。与既有 `[gateway.channel_health]` 同源对齐。
+- **打磨话术**：「‘消息怎么在多端同步’= inbound 广播进 event bus + outbound delivery queue。加新通道在 `gateway/interfaces/`；‘掉线重试/持久化’调参在 `[gateway.delivery_queue]`，‘rate-limit 重试几轮/等多久’在 `[gateway.send_retry]`，‘僵尸通道自重启’在 `[gateway.channel_health]`——**三个都是配置项不是代码改动**，连线终点在 `initialize_channels`。坏配置由 `to_runtime/to_policy` 兜底 clamp，不会 busyloop。」
 
 ### 5.7 输出模式：打字机 / 即时 (Output Mode)
 - **口语关键词**：打字机模式、流式输出、即时输出、全局开关、所有 channel 同步、output_mode
