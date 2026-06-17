@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 
+use alephcore::cli::endpoint::{read_endpoint, remove_endpoint, IpcEndpoint};
+
 /// Expand ~ to home directory.
 /// When `dirs::home_dir()` returns `None`, falls back to a per-user scratch
 /// dir (`/tmp/.aleph-$uid` on Unix, `%TEMP%\.aleph` on Windows) to avoid
@@ -101,6 +103,7 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
                     if !is_process_running(pid) {
                         println!("Gateway stopped successfully");
                         remove_pid_file(pid_file);
+                        cleanup_endpoint_file();
                         return Ok(());
                     }
                     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -123,6 +126,7 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
                     if !is_process_running(pid) {
                         println!("Gateway stopped successfully");
                         remove_pid_file(pid_file);
+                        cleanup_endpoint_file();
                         return Ok(());
                     }
                     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -141,31 +145,142 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
         }
         println!("Gateway is not running (stale PID file)");
         remove_pid_file(pid_file);
+        cleanup_endpoint_file();
     } else {
         println!("No gateway daemon is running (no PID file found)");
     }
     Ok(())
 }
 
+/// Consolidated daemon liveness, assembled from the PID file AND the IPC
+/// endpoint discovery file (`.ipc-endpoint.json`).
+///
+/// The PID file is written only by `daemonize()` (the Unix daemon path), so it
+/// is blind to foreground (`aleph start` without `-d`) and Windows servers.
+/// The endpoint file is written on EVERY start path and carries the live PID,
+/// URL and start time — consulting it makes `status` correct everywhere and
+/// lets it surface where to connect and how long the server has been up.
+#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+pub struct StatusReport {
+    pub running: bool,
+    pub pid: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uptime_seconds: Option<u64>,
+    pub version: &'static str,
+}
+
+/// Merge the PID-file and endpoint-file signals into a single report.
+///
+/// Pure: process liveness and the wall clock are injected so the resolution
+/// logic is unit-testable without spawning real processes. A live endpoint
+/// wins over the PID file (it is the authoritative, always-written source);
+/// URL/uptime are surfaced only when the endpoint names a LIVE process, so a
+/// stale `.ipc-endpoint.json` (server crashed without cleanup) never advertises
+/// a dead URL.
+fn resolve_status(
+    pid_file_pid: Option<i32>,
+    endpoint: Option<&IpcEndpoint>,
+    now: chrono::DateTime<chrono::Utc>,
+    is_alive: impl Fn(i32) -> bool,
+) -> StatusReport {
+    let endpoint_pid = endpoint.and_then(|e| i32::try_from(e.pid).ok());
+    let endpoint_alive = endpoint_pid.is_some_and(&is_alive);
+    let pidfile_alive = pid_file_pid.is_some_and(&is_alive);
+    let running = endpoint_alive || pidfile_alive;
+
+    // Prefer a live PID for reporting; fall back to whichever stale record
+    // exists so the "not running (stale record for PID N)" message can name it.
+    let pid = if endpoint_alive {
+        endpoint_pid
+    } else if pidfile_alive {
+        pid_file_pid
+    } else {
+        endpoint_pid.or(pid_file_pid)
+    };
+
+    let (url, started_at, uptime_seconds) = match endpoint.filter(|_| endpoint_alive) {
+        Some(ep) => {
+            let uptime = chrono::DateTime::parse_from_rfc3339(&ep.started_at)
+                .ok()
+                .map(|s| (now - s.with_timezone(&chrono::Utc)).num_seconds())
+                .filter(|secs| *secs >= 0)
+                .map(|secs| secs as u64);
+            (Some(ep.url.clone()), Some(ep.started_at.clone()), uptime)
+        }
+        None => (None, None, None),
+    };
+
+    StatusReport {
+        running,
+        pid,
+        url,
+        started_at,
+        uptime_seconds,
+        version: env!("ALEPH_VERSION"),
+    }
+}
+
+/// Best-effort read of the endpoint discovery file. Returns `None` when the
+/// data dir is unresolvable or the file is absent/corrupt — status then
+/// degrades gracefully to PID-file-only behavior.
+fn read_endpoint_best_effort() -> Option<IpcEndpoint> {
+    let dir = alephcore::utils::paths::get_data_dir().ok()?;
+    read_endpoint(&dir).ok().flatten()
+}
+
+fn print_status_human(report: &StatusReport) {
+    match (report.running, report.pid) {
+        (true, Some(p)) => {
+            println!("Gateway is running (PID {p})");
+            if let Some(url) = &report.url {
+                println!("  URL:     {url}");
+            }
+            if let Some(secs) = report.uptime_seconds {
+                // Reuse the loop/cadence duration vocabulary so status uptime
+                // and loop status render identically (e.g. "1h2m3s").
+                let human = alephcore::looping::types::fmt_duration_ms(secs.saturating_mul(1_000));
+                println!("  Uptime:  {human}");
+            }
+            println!("  Version: {}", report.version);
+        }
+        (_, Some(p)) => println!("Gateway is not running (stale record for PID {p})"),
+        (_, None) => println!("Gateway is not running (no PID file or endpoint)"),
+    }
+}
+
 /// Handle status command
 pub fn handle_status(pid_file: &str, json: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let pid = read_pid_file(pid_file);
-    let running = pid.is_some_and(is_process_running);
+    let pid_file_pid = read_pid_file(pid_file);
+    let endpoint = read_endpoint_best_effort();
+    let report = resolve_status(
+        pid_file_pid,
+        endpoint.as_ref(),
+        chrono::Utc::now(),
+        is_process_running,
+    );
 
     if json {
-        let status = serde_json::json!({
-            "running": running,
-            "pid": pid,
-        });
-        println!("{}", serde_json::to_string_pretty(&status)?);
+        println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        match (pid, running) {
-            (Some(p), true) => println!("Gateway is running (PID {p})"),
-            (Some(p), false) => println!("Gateway is not running (stale PID file for PID {p})"),
-            (None, _) => println!("Gateway is not running (no PID file)"),
-        }
+        print_status_human(&report);
     }
     Ok(())
+}
+
+/// Best-effort removal of the IPC endpoint discovery file from the stop path.
+/// A foreground / Windows server writes `.ipc-endpoint.json` but no PID file;
+/// without this, `stop` would leave a stale endpoint behind (liveness probes
+/// still guard `status`, but the lingering file is misleading).
+fn cleanup_endpoint_file() {
+    if let Ok(dir) = alephcore::utils::paths::get_data_dir() {
+        if let Err(e) = remove_endpoint(&dir) {
+            tracing::debug!("failed to remove endpoint file during stop: {e}");
+        }
+    }
 }
 
 /// Daemonize the current process (Unix only)
@@ -283,4 +398,93 @@ pub fn daemonize(
     _log_file: Option<&PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     Err("Daemon mode is only supported on Unix systems".into())
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn endpoint(pid: u32, started_at: &str) -> IpcEndpoint {
+        IpcEndpoint {
+            version: 1,
+            url: "http://127.0.0.1:18790".to_string(),
+            pid,
+            started_at: started_at.to_string(),
+        }
+    }
+
+    fn at(rfc3339: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(rfc3339)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn live_endpoint_reports_url_and_uptime() {
+        let ep = endpoint(4321, "2026-06-17T00:00:00Z");
+        let report = resolve_status(
+            None,
+            Some(&ep),
+            at("2026-06-17T01:01:01Z"),
+            |p| p == 4321,
+        );
+        assert!(report.running);
+        assert_eq!(report.pid, Some(4321));
+        assert_eq!(report.url.as_deref(), Some("http://127.0.0.1:18790"));
+        assert_eq!(report.uptime_seconds, Some(3_661));
+        assert_eq!(report.started_at.as_deref(), Some("2026-06-17T00:00:00Z"));
+    }
+
+    #[test]
+    fn stale_endpoint_is_down_and_hides_url() {
+        let ep = endpoint(4321, "2026-06-17T00:00:00Z");
+        let report = resolve_status(None, Some(&ep), at("2026-06-17T01:00:00Z"), |_| false);
+        assert!(!report.running);
+        // Stale PID is still surfaced for the diagnostic message...
+        assert_eq!(report.pid, Some(4321));
+        // ...but a dead server must not advertise a URL or uptime.
+        assert!(report.url.is_none());
+        assert!(report.uptime_seconds.is_none());
+    }
+
+    #[test]
+    fn daemon_pid_file_only_runs_without_endpoint_fields() {
+        // Unix daemon path: PID file present, endpoint somehow absent.
+        let report = resolve_status(Some(99), None, chrono::Utc::now(), |p| p == 99);
+        assert!(report.running);
+        assert_eq!(report.pid, Some(99));
+        assert!(report.url.is_none());
+    }
+
+    #[test]
+    fn live_endpoint_wins_over_dead_pid_file() {
+        let ep = endpoint(4321, "2026-06-17T00:00:00Z");
+        // PID file names a dead process; the endpoint names the live one.
+        let report = resolve_status(Some(7), Some(&ep), at("2026-06-17T00:00:30Z"), |p| {
+            p == 4321
+        });
+        assert!(report.running);
+        assert_eq!(report.pid, Some(4321));
+        assert_eq!(report.uptime_seconds, Some(30));
+    }
+
+    #[test]
+    fn nothing_present_reports_down() {
+        let report = resolve_status(None, None, chrono::Utc::now(), |_| true);
+        assert!(!report.running);
+        assert_eq!(report.pid, None);
+        assert!(report.url.is_none());
+    }
+
+    #[test]
+    fn down_report_omits_optional_fields_in_json() {
+        let report = resolve_status(None, None, chrono::Utc::now(), |_| false);
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["running"], serde_json::json!(false));
+        assert_eq!(json["pid"], serde_json::Value::Null);
+        // skip_serializing_if keeps the down-state envelope minimal.
+        assert!(json.get("url").is_none());
+        assert!(json.get("uptime_seconds").is_none());
+        assert!(json.get("version").is_some());
+    }
 }
