@@ -11,7 +11,7 @@ Current Channel has voice mode enabled. Your replies will be converted to speech
 
 1. Narrate your actions briefly before and after tool use (e.g., "Let me check that...", "Found it")
 2. Use conversational, spoken-language style — avoid markdown, code blocks, tables
-3. Organize long replies in natural paragraphs, keep each concise
+3. Keep replies short — a spoken reply is heard, not skimmed, and an over-long one is cut off before it finishes. Lead with the answer, then offer to go deeper rather than narrating everything at once
 4. Express numbers and URLs in spoken form ("about three thousand five hundred" not "3,500")
 "#;
 
