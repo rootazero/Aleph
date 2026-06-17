@@ -1558,7 +1558,7 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 .aleph-composer:focus-within {
   border-color: var(--color-border-focus);
   box-shadow: var(--shadow-lg),
-              0 0 0 4px var(--color-ring),
+              0 0 0 2px var(--color-ring),
               inset 0 1px 0 var(--aleph-sheen);
 }
 /* The composer's outer 4 px ring already signals focus; suppress the
