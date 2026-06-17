@@ -234,12 +234,7 @@ English commit messages. Format: `<scope>: <description>` — Example: `gateway:
 
 Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子命令经 `with_policy` 走 IPC 或本地拿锁，不与服务竞争。`kill -9` 后可立即重启。Spec C 不变量与回归脚本详见 [PROCESS_MANAGEMENT.md](docs/reference/PROCESS_MANAGEMENT.md)。
 
-### Trust model
-
-LAN-trust：没有认证步骤，信任边界就是网络边界。默认只绑 `127.0.0.1`，
-`[gateway] host = "0.0.0.0"` 显式开放局域网；WS Origin 校验是唯一保留的
-协议护栏。完整模型见
-[docs/reference/SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)。
+> 信任模型见上文「信任模型 = 网络边界」与 [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)。
 
 ---
 
