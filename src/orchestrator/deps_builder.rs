@@ -658,25 +658,38 @@ pub fn build_context_budget_config(
     })
 }
 
-/// Build the cheap-tier summarization provider for [`ContextCompactor`] from
-/// `[context_budget] summary_model` (Reasonix `summaryModel` parity).
+/// Build the cheap-tier summarization provider for [`ContextCompactor`].
 ///
-/// Returns `Some(provider)` only when the section is enabled AND `summary_model`
-/// names a model distinct from the primary provider's own default. The cheap
-/// provider reuses the *primary* provider's full config (api key, base url,
-/// protocol, timeouts) with only `models` swapped for the summary model, so it
+/// Resolves the summary model in two tiers:
+/// 1. **Explicit** — `[context_budget] summary_model` (Reasonix `summaryModel`
+///    parity). Whatever the operator names is used verbatim.
+/// 2. **Auto** — when `summary_model` is unset/blank, fall back to the *primary*
+///    provider preset's declared cheap aux model (`default_aux_model`:
+///    openai→`gpt-5.4-mini`, anthropic→`claude-haiku-4-5`,
+///    gemini→`gemini-2.5-flash-lite`, deepseek→`deepseek-chat`). This makes the
+///    preset's long-dormant `default_aux_model` field a live routing consumer:
+///    a vendor with a declared cheap tier gets cost-efficient summarization with
+///    zero config. Only an **explicitly declared** aux model triggers this — a
+///    preset whose `default_aux_model` is `None` (or a custom/unknown provider
+///    key) keeps the legacy main-LLM path, never silently routing to a
+///    same-tier `default_model`.
+///
+/// In both tiers the cheap provider reuses the primary provider's full config
+/// (api key, base url, protocol, timeouts) with only `models` swapped, so it
 /// targets the same vendor — just a cheaper sibling.
 ///
-/// Every other case returns `None`, which keeps the compactor's legacy path:
-/// summarization reuses the main LLM. Reasons that yield `None`:
-/// - section missing / `enabled = false` / `summary_model` unset or blank;
+/// Returns `None` (→ compactor reuses the main LLM) when:
+/// - section missing / `enabled = false`;
 /// - the primary provider key has no `[providers.*]` entry to clone;
-/// - `summary_model` equals the primary's default model (a separate provider
-///   would be byte-identical — pointless);
+/// - `summary_model` unset AND the primary preset declares no cheap aux model;
+/// - the resolved model equals the primary's configured default (a separate
+///   provider would be byte-identical — pointless). Setting `summary_model` to
+///   the primary's own model is therefore the explicit opt-out from auto aux
+///   routing;
 /// - `create_provider` fails (bad protocol/preset) — logged, then degraded.
 ///
-/// Fail-soft by construction: a misconfigured `summary_model` never aborts boot
-/// and never blocks summarization (the compactor falls back to the main LLM).
+/// Fail-soft by construction: a misconfigured model never aborts boot and never
+/// blocks summarization (the compactor falls back to the main LLM).
 #[must_use]
 pub fn build_cheap_summary_provider(
     config: &Config,
@@ -686,22 +699,38 @@ pub fn build_cheap_summary_provider(
     if !cb.enabled {
         return None;
     }
-    let summary_model = cb.summary_model.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty())?;
 
     let base = config.providers.get(primary_provider_key)?;
-    // No-op when the summary model is the primary's own default model — the
-    // rebuilt provider would be byte-identical, so reuse the main LLM directly.
+
+    // Tier 1: explicit operator override. Tier 2: the primary preset's declared
+    // cheap aux model (`default_aux_model`, never the `default_model` fallback).
+    let explicit = cb
+        .summary_model
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let summary_model: String = match explicit {
+        Some(model) => model.to_string(),
+        None => crate::providers::get_preset(&primary_provider_key.to_lowercase())
+            .and_then(|p| p.default_aux_model)?
+            .to_string(),
+    };
+
+    // No-op when the resolved summary model is the primary's own default model —
+    // the rebuilt provider would be byte-identical, so reuse the main LLM.
     if base.models.first().is_some_and(|m| m.as_str() == summary_model) {
         return None;
     }
 
+    let source = if explicit.is_some() { "summary_model" } else { "preset aux_model" };
     let mut cheap_cfg = base.clone();
-    cheap_cfg.models = vec![summary_model.to_string()];
+    cheap_cfg.models = vec![summary_model.clone()];
     match create_provider(primary_provider_key, cheap_cfg) {
         Ok(provider) => {
             tracing::info!(
                 provider = %primary_provider_key,
                 summary_model = %summary_model,
+                source,
                 "context budget: routing history summarization to cheap-tier model"
             );
             Some(provider)
@@ -1334,17 +1363,24 @@ mod tests {
     // ── cheap-tier summary provider wiring (Reasonix summaryModel parity) ──
 
     /// Config with `[context_budget]` enabled, a `summary_model`, and a single
-    /// mock-protocol primary provider whose default model is `primary_model`.
-    fn cfg_summary(primary_model: &str, summary_model: Option<&str>) -> Config {
+    /// mock-protocol primary provider keyed `key` whose default model is
+    /// `primary_model`. The `key` selects which preset (if any) the auto
+    /// aux-model fallback resolves against; `"primary"` is a non-preset key.
+    fn cfg_summary_keyed(key: &str, primary_model: &str, summary_model: Option<&str>) -> Config {
         let mut primary = ProviderConfig::test_config(primary_model);
         primary.protocol = Some("mock".to_string());
-        let mut cfg = cfg_with_fallback(None, vec![("primary", primary)]);
+        let mut cfg = cfg_with_fallback(None, vec![(key, primary)]);
         cfg.context_budget = Some(ContextBudgetToml {
             enabled: true,
             summary_model: summary_model.map(str::to_string),
             ..ContextBudgetToml::default()
         });
         cfg
+    }
+
+    /// `cfg_summary_keyed` with the non-preset key `"primary"` (no aux fallback).
+    fn cfg_summary(primary_model: &str, summary_model: Option<&str>) -> Config {
+        cfg_summary_keyed("primary", primary_model, summary_model)
     }
 
     #[test]
@@ -1362,13 +1398,45 @@ mod tests {
     }
 
     #[test]
-    fn cheap_summary_none_when_model_unset_or_blank() {
-        // Unset → None.
+    fn cheap_summary_none_when_unset_and_no_preset_aux() {
+        // Key "primary" has no preset → no declared aux model → auto fallback
+        // finds nothing → main LLM. Holds for both unset and blank.
         let cfg = cfg_summary("main-model", None);
         assert!(build_cheap_summary_provider(&cfg, "primary").is_none());
-        // Whitespace-only → trimmed to empty → None.
         let cfg = cfg_summary("main-model", Some("   "));
         assert!(build_cheap_summary_provider(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_auto_falls_back_to_preset_aux_model() {
+        // summary_model unset + a preset that declares a cheap aux model
+        // (claude → claude-haiku-4-5) + a distinct configured default →
+        // auto-route summarization to the aux model. This is the dead
+        // `default_aux_model` field's live routing consumer.
+        let cfg = cfg_summary_keyed("claude", "claude-opus-4-8", None);
+        assert!(
+            build_cheap_summary_provider(&cfg, "claude").is_some(),
+            "unset summary_model must auto-fall back to the preset's declared aux model"
+        );
+    }
+
+    #[test]
+    fn cheap_summary_none_when_unset_and_preset_declares_no_aux() {
+        // A real preset whose `default_aux_model` is None (cerebras) must NOT
+        // route to its `default_model` — that would be a same-tier no-op. Auto
+        // fallback fires only for an explicitly declared cheap aux model.
+        let cfg = cfg_summary_keyed("cerebras", "some-model", None);
+        assert!(build_cheap_summary_provider(&cfg, "cerebras").is_none());
+    }
+
+    #[test]
+    fn cheap_summary_none_when_aux_equals_configured_default() {
+        // Auto fallback resolves claude's aux (claude-haiku-4-5), but the
+        // operator already runs that as the primary model → rebuilding would be
+        // byte-identical → reuse the main LLM. (Also the explicit opt-out path:
+        // setting summary_model to the primary's own model.)
+        let cfg = cfg_summary_keyed("claude", "claude-haiku-4-5", None);
+        assert!(build_cheap_summary_provider(&cfg, "claude").is_none());
     }
 
     #[test]

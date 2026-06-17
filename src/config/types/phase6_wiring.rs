@@ -124,11 +124,17 @@ pub struct ContextBudgetToml {
     /// strongest model is almost never required, so routing it here yields a
     /// large per-token cost reduction with no measurable quality regression.
     ///
-    /// `None` (default), empty, or a value equal to the primary's default model
-    /// keeps the legacy path: summarization reuses the main LLM
-    /// (`cheap_provider` stays unset on the compactor). A model id that fails to
-    /// build a provider (bad protocol/preset) also degrades silently to the
-    /// main LLM — never a hard boot failure.
+    /// **Unset / empty (default):** auto-fall back to the primary provider
+    /// preset's declared cheap aux model (`default_aux_model` — openai→
+    /// `gpt-5.4-mini`, claude→`claude-haiku-4-5`, gemini→`gemini-2.5-flash-lite`,
+    /// deepseek→`deepseek-chat`). A provider whose preset declares no cheap tier
+    /// (or a custom/unknown provider key) keeps summarization on the main LLM.
+    ///
+    /// **Opt out:** set this to the primary's own model id — the resolved model
+    /// then equals the configured default, so no separate provider is built and
+    /// summarization stays on the main LLM. A model id that fails to build a
+    /// provider (bad protocol/preset) also degrades silently to the main LLM —
+    /// never a hard boot failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary_model: Option<String>,
     /// Per-model trigger-point overrides. The compaction budget is sized for
