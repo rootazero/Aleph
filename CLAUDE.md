@@ -223,8 +223,6 @@ English commit messages. Format: `<scope>: <description>` — Example: `gateway:
 - 重大变更前先问，小优化可直接执行
 - 回复用中文，代码注释用英文，文档中英双语
 - 极度节制 cargo 调用（系统负担）—— 默认不跑全量测试，高风险合并至多一次 `cargo check --lib`
-- 单分支开发：所有工作直接在 main 分支
-- 提交信息英文，格式 `<scope>: <description>`
 
 ### Git Worktree 注意事项
 
