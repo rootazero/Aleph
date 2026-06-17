@@ -183,4 +183,25 @@ mod tests {
             assert!(parts[1].content.contains("<system-reminder>"));
         }
     }
+
+    #[test]
+    fn cached_full_prompt_carries_role_and_citation_standards() {
+        // Regression guard for the wiring fix: RoleLayer (100, Think->Act role
+        // framing) and CitationStandardsLayer (900, memory-attribution rules)
+        // are Stable, input-independent layers that MUST participate in the
+        // live `AssemblyPath::Cached` production path. They previously omitted
+        // `Cached` from `paths()` and so vanished from every main-loop prompt.
+        // This locks them into the cacheable stable prefix.
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let parts = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
+        // Both are Stable → they ride part 0 (the cacheable prefix).
+        assert!(
+            parts[0].content.contains("## Your Role"),
+            "cached Full prompt must carry the Think->Act role framing"
+        );
+        assert!(
+            parts[0].content.contains("## Citation Standards"),
+            "cached Full prompt must carry memory citation standards"
+        );
+    }
 }
