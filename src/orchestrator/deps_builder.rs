@@ -649,7 +649,10 @@ pub fn build_context_budget_config(
         critical_threshold,
         // Internal tuning — validated defaults, deliberately not exposed as
         // toml knobs (KISS: every run inherits the same compaction cadence).
-        token_estimate_ratio: 3.5,
+        // The prose anchor reuses the estimator's own canonical default rather
+        // than a duplicated literal (single source of truth); CJK/code content
+        // is auto-densified by the content-aware estimator regardless.
+        token_estimate_ratio: crate::context::budget::pressure::DEFAULT_PROSE_RATIO,
         fresh_tail_count: 6,
         circuit_breaker_max: 3,
         diminishing_window: 4,

@@ -18,7 +18,7 @@ use super::layers::{
 use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_mode::PromptMode;
-use crate::context::budget::pressure::estimate_tokens_aware;
+use crate::context::budget::pressure::{estimate_tokens_aware, DEFAULT_PROSE_RATIO};
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -262,8 +262,8 @@ impl PromptPipeline {
                         stability: layer.stability(),
                         chars: section.chars().count(),
                         bytes: section.len(),
-                        // 3.5 chars/token prose anchor; CJK/code auto-densify.
-                        tokens: estimate_tokens_aware(&section, 3.5),
+                        // Canonical prose anchor; CJK/code auto-densify.
+                        tokens: estimate_tokens_aware(&section, DEFAULT_PROSE_RATIO),
                     });
                 }
             }
