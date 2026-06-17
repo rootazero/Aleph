@@ -188,10 +188,14 @@ impl ToolQuery {
     /// Resolution precedence:
     /// 1. **Canonical name** — a tool whose `name` equals `name`.
     /// 2. **Alias** — a tool that lists `name` in its `aliases`.
+    /// 3. **Separator-tolerant** — the input's `.` normalized to `_` matches a
+    ///    canonical name or alias (mirrors the execution layer's leniency).
     ///
     /// A canonical-name hit always wins over an alias hit (so a real command
-    /// can never be shadowed by another command's alias). Within each tier,
-    /// ties break by source priority, then id, mirroring the original ordering.
+    /// can never be shadowed by another command's alias), and an exact hit in
+    /// either tier always wins over the separator-tolerant fallback. Within each
+    /// tier, ties break by source priority, then id, mirroring the original
+    /// ordering.
     fn find_best_match(
         tools: &std::collections::HashMap<String, UnifiedTool>,
         name: &str,
@@ -213,6 +217,25 @@ impl ToolQuery {
         pick(&|t| t.name.to_lowercase() == name)
             // Tier 2: alias fallback.
             .or_else(|| pick(&|t| t.aliases.iter().any(|a| a.to_lowercase() == name)))
+            // Tier 3: separator-tolerant fallback. The execution layer
+            // (`LoopToolRegistry::resolve`) already swaps `.`↔`_`, so a user or
+            // bot that types `/session.new` must resolve the same command it
+            // would execute — otherwise the slash command silently falls through
+            // to plain chat. Canonical names and aliases never carry dots, so we
+            // only normalize the *input's* `.`→`_` and re-compare. Guarded on
+            // `name.contains('.')` and chained after the exact tiers, this is
+            // strictly additive: it only adds matches the exact tiers missed and
+            // can never shadow a real command.
+            .or_else(|| {
+                if !name.contains('.') {
+                    return None;
+                }
+                let norm = name.replace('.', "_");
+                pick(&|t| {
+                    t.name.to_lowercase() == norm
+                        || t.aliases.iter().any(|a| a.to_lowercase() == norm)
+                })
+            })
     }
 
     /// Suggest up to `max` active command names closest to `needle` — an

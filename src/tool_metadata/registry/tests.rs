@@ -943,6 +943,67 @@ async fn test_resolve_command_greedy_longest_match() {
 }
 
 #[tokio::test]
+async fn test_resolve_command_dot_separator_matches_underscore() {
+    // A dotted single token (`/session.new`) must resolve to the same command
+    // the execution layer (`LoopToolRegistry::resolve`) would run for the
+    // underscore form. Without the separator-tolerant tier this silently fell
+    // through to plain chat.
+    let registry = ToolCatalog::new();
+    register_tool(&registry, "builtin:session_new", "session_new").await;
+
+    let resolved = registry.resolve_command("/session.new topic").await;
+    assert!(resolved.is_some(), "dotted command should resolve");
+    let r = resolved.unwrap();
+    assert_eq!(r.tool.name, "session_new");
+    assert_eq!(r.arguments, Some("topic".to_string()));
+}
+
+#[tokio::test]
+async fn test_resolve_command_dot_separator_prefers_specific_over_namespace() {
+    // With both `session` and `session_new` registered, `/session.new` must
+    // pick the specific `session_new` (the normalized token), never the
+    // namespace parent `session`.
+    let registry = ToolCatalog::new();
+    register_tool(&registry, "builtin:session", "session").await;
+    register_tool(&registry, "builtin:session_new", "session_new").await;
+
+    let resolved = registry.resolve_command("/session.new").await.unwrap();
+    assert_eq!(resolved.tool.name, "session_new");
+    assert!(resolved.arguments.is_none());
+}
+
+#[tokio::test]
+async fn test_resolve_command_dot_separator_unknown_is_none() {
+    // A dotted token that normalizes to no registered command must stay
+    // unresolved (returned to the caller as plain input), not match a partial.
+    let registry = ToolCatalog::new();
+    register_tool(&registry, "builtin:session_new", "session_new").await;
+
+    assert!(registry
+        .resolve_command("/session.unknown")
+        .await
+        .is_none());
+}
+
+#[tokio::test]
+async fn test_resolve_command_dot_separator_via_alias() {
+    // The separator-tolerant tier also covers aliases (symmetry with Tier 2).
+    let registry = ToolCatalog::new();
+    let tool = UnifiedTool::new(
+        "builtin:agent_switch",
+        "agent_switch",
+        "Switch the active agent",
+        ToolSource::Builtin,
+    )
+    .with_aliases(["go_agent"]);
+    registry.register_with_conflict_resolution(tool).await;
+
+    let resolved = registry.resolve_command("/go.agent now").await.unwrap();
+    assert_eq!(resolved.tool.name, "agent_switch");
+    assert_eq!(resolved.arguments, Some("now".to_string()));
+}
+
+#[tokio::test]
 async fn test_resolve_command_bot_mention_hierarchical() {
     let registry = ToolCatalog::new();
     register_tool(&registry, "builtin:session_new", "session_new").await;
