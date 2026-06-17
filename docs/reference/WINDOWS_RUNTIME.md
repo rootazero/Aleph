@@ -112,10 +112,42 @@ server binary, since the panel is `rust_embed`-baked into it).
 
 ## Build from source
 
-See [CLAUDE.md → Windows 构建](../../CLAUDE.md) for the one-time prerequisites
-(MSVC build tools, WebView2, `protoc`, the wasm target, `wasm-bindgen-cli`
-pinned to `Cargo.lock`, `cargo-tauri`, `just`, Git-for-Windows `usr\bin` on
-PATH) and `just shell-build`.
+macOS's `just shell-build` / `just shell-dev` work on Windows unchanged —
+the justfile guards macOS-only steps (Swift bridge, etc.) with
+`$OSTYPE == darwin*` and automatically appends `.exe` to artifacts. No
+separate Windows recipe is needed. The output is an NSIS `.exe` + `.msi`
+installer (`tauri.conf.json` `bundle.targets = "all"`) with `aleph-server.exe`
+bundled via `externalBin`, zero local config required.
+
+### One-time prerequisites
+
+CI runners have these pre-installed; first-time local builds require manual
+setup. The justfile recipes execute via Git Bash (`set shell := ["bash", …]`),
+so Git for Windows is required.
+
+| Dependency | How to install | Notes |
+|------------|----------------|-------|
+| MSVC C++ build tools | Visual Studio "Desktop development with C++" workload | Provides the `x86_64-pc-windows-msvc` linker |
+| WebView2 Runtime | Bundled with Windows 11 | Tauri webview host |
+| `protoc` | `scoop install protobuf` (or `choco install protoc`) | protobuf build dep for `aleph-server` (CI also installs this) |
+| wasm target | `rustup target add wasm32-unknown-unknown` | Compiles the Panel WASM |
+| `wasm-bindgen-cli` | `cargo install wasm-bindgen-cli --version 0.2.122 --locked` | **Version must exactly match the `wasm-bindgen` in `Cargo.lock`**; mismatches cause bindgen to refuse output |
+| `cargo-tauri` | `cargo install tauri-cli --version "^2.11" --locked` | Provides `cargo tauri build/dev`; major version tracks Cargo.lock `tauri` |
+| `just` | `scoop install just` (or `cargo install just`) | Runs justfile recipes |
+| Git for Windows `usr\bin` on PATH | Add `…\git\current\usr\bin` to PATH | Shebang recipes (`wasm`, etc.) need `cygpath`; scoop does not add this by default |
+| `wasm-opt` (optional) | `scoop install binaryen` | When absent, `just wasm` skips WASM compression; functionality unaffected |
+
+### Full build + run (PowerShell)
+
+```powershell
+just shell-build                          # WASM → release server → cargo tauri build
+# Installer artifacts:
+#   target\release\bundle\nsis\Aleph_<ver>_x64-setup.exe
+#   target\release\bundle\msi\Aleph_<ver>_x64_en-US.msi
+.\target\release\aleph-desktop-shell.exe  # run the packaged shell directly (aleph-server.exe in same dir); no installer needed
+```
+
+Dev mode: `just shell-dev` (debug build + staging daemon, hot-running, no installer output).
 
 ---
 
