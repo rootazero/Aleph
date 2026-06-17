@@ -762,7 +762,16 @@ impl SessionStore for FileSessionStore {
             }
 
             meta.state = Some(SessionState::Stopped);
-            let _topic = topic;
+            if let Some(t) = topic {
+                let mut identity_meta = meta
+                    .identity_meta
+                    .take()
+                    .unwrap_or_else(|| SessionIdentityMeta::from_json_str(None));
+                identity_meta
+                    .custom
+                    .insert("topic".to_string(), serde_json::json!(t));
+                meta.identity_meta = Some(identity_meta);
+            }
             self.write_metadata(&key_str, &meta).await?;
             self.emit_session_changed(&key_str, "close", Some(&meta));
         }
@@ -771,8 +780,15 @@ impl SessionStore for FileSessionStore {
 
     async fn set_topic(&self, key: &SessionKey, topic: &str) -> Result<(), SessionStoreError> {
         let key_str = key.to_key_string();
-        if let Some(meta) = self.read_metadata(&key_str).await? {
-            let _ = topic;
+        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+            let mut identity_meta = meta
+                .identity_meta
+                .take()
+                .unwrap_or_else(|| SessionIdentityMeta::from_json_str(None));
+            identity_meta
+                .custom
+                .insert("topic".to_string(), serde_json::json!(topic));
+            meta.identity_meta = Some(identity_meta);
             self.write_metadata(&key_str, &meta).await?;
         }
         Ok(())
@@ -845,6 +861,15 @@ impl SessionStore for FileSessionStore {
 
     async fn get_current_epoch(&self, base_key_pattern: &str) -> Result<u32, SessionStoreError> {
         let mut max_epoch = 0u32;
+        // Directory names are sanitized in `session_dir`; match the same
+        // sanitized form so epoch detection works on Windows (where ':' is
+        // replaced by '_') as well as POSIX.
+        let sanitized_pattern = {
+            let safe = base_key_pattern.replace(['/', '\\', '\0'], "_");
+            #[cfg(windows)]
+            let safe = safe.replace([':', '*', '?', '"', '<', '>', '|'], "_");
+            safe
+        };
         let mut entries = tokio::fs::read_dir(&self.config.base_dir)
             .await
             .map_err(|e| SessionStoreError::DatabaseError(format!("Read dir failed: {e}")))?;
@@ -854,7 +879,7 @@ impl SessionStore for FileSessionStore {
             .map_err(|e| SessionStoreError::DatabaseError(format!("Dir entry failed: {e}")))?
         {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with(base_key_pattern) {
+            if name.starts_with(&sanitized_pattern) {
                 if let Some(suffix) = name.rsplit(':').next() {
                     if let Some(n_str) = suffix.strip_prefix('s') {
                         if let Ok(n) = n_str.parse::<u32>() {

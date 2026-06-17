@@ -384,7 +384,13 @@ pub async fn handle_read_file(request: JsonRpcRequest, config: SharedConfig) -> 
 
     let truncated = bytes.len() > READ_FILE_CAP;
     let slice = if truncated {
-        &bytes[..READ_FILE_CAP]
+        // Truncate on a UTF-8 character boundary so multi-byte characters are
+        // not split and replaced with U+FFFD in the returned preview.
+        let mut cap = READ_FILE_CAP;
+        while cap > 0 && !bytes.is_char_boundary(cap) {
+            cap -= 1;
+        }
+        &bytes[..cap]
     } else {
         &bytes[..]
     };

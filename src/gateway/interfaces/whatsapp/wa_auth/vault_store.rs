@@ -91,9 +91,12 @@ impl WaAuthManager {
 
     pub fn load(&self) -> Result<WaAuthData, WaAuthError> {
         let vault = self.vault.lock().unwrap_or_else(|e| e.into_inner());
-        let entry = vault
-            .get(&self.key())
-            .map_err(|_| WaAuthError::NotFound(self.account_id.clone()))?;
+        let entry = vault.get(&self.key()).map_err(|e| match e {
+            crate::secrets::types::SecretError::NotFound(_) => {
+                WaAuthError::NotFound(self.account_id.clone())
+            }
+            _ => WaAuthError::Vault(e.to_string()),
+        })?;
 
         let bytes = if entry.nonce != [0u8; 12] {
             if let Some(ref crypto) = self.crypto {

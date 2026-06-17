@@ -376,16 +376,27 @@ mod tests {
         fs::write(path, body).unwrap();
     }
 
+    /// Isolated workspace: a tempdir with a `.git` marker so discovery treats it
+    /// as the git root and stops the ancestor walk there. Without this, on
+    /// platforms whose system temp dir lives under `$HOME` (e.g. Windows
+    /// `%LOCALAPPDATA%\Temp`), the walk would climb to the real `~/.claude/`
+    /// instruction files and pollute exact-count/content assertions.
+    fn isolated_ws() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        tmp
+    }
+
     #[test]
     fn empty_workspace_yields_nothing() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         let files = load_project_instructions(tmp.path());
         assert!(files.is_empty());
     }
 
     #[test]
     fn loads_top_level_claude_md() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "be terse");
         let files = load_project_instructions(tmp.path());
         assert_eq!(files.len(), 1);
@@ -395,7 +406,7 @@ mod tests {
 
     #[test]
     fn loads_claude_subdir_and_agents() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join(".claude/CLAUDE.md"), "rules here");
         write(&tmp.path().join("AGENTS.md"), "agents here");
         let files = load_project_instructions(tmp.path());
@@ -406,7 +417,7 @@ mod tests {
 
     #[test]
     fn walks_up_to_git_root_outermost_first() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         // git root with a CLAUDE.md, plus a nested subdir with its own.
         fs::create_dir_all(tmp.path().join(".git")).unwrap();
         write(&tmp.path().join("CLAUDE.md"), "root rules");
@@ -422,7 +433,7 @@ mod tests {
 
     #[test]
     fn skips_blank_files() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "   \n\t  ");
         let files = load_project_instructions(tmp.path());
         assert!(files.is_empty());
@@ -430,7 +441,7 @@ mod tests {
 
     #[test]
     fn caps_total_budget() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         let big = "x".repeat(PER_FILE_MAX_CHARS * 2);
         write(&tmp.path().join("CLAUDE.md"), &big);
         let files = load_project_instructions(tmp.path());
@@ -442,7 +453,7 @@ mod tests {
 
     #[test]
     fn loads_claude_local_after_base() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "base");
         write(&tmp.path().join("CLAUDE.local.md"), "local override");
         let files = load_project_instructions(tmp.path());
@@ -454,7 +465,7 @@ mod tests {
 
     #[test]
     fn globs_rule_files_in_lexical_order() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join(".claude/rules/b-style.md"), "style rule");
         write(&tmp.path().join(".claude/rules/a-arch.md"), "arch rule");
         write(&tmp.path().join(".claude/rules/notes.txt"), "ignored");
@@ -465,7 +476,7 @@ mod tests {
 
     #[test]
     fn inlines_relative_import() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "head\n@./extra.md\ntail");
         write(&tmp.path().join("extra.md"), "imported body");
         let files = load_project_instructions(tmp.path());
@@ -478,7 +489,7 @@ mod tests {
 
     #[test]
     fn inlines_inline_import_in_prose() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "see @./extra.md now");
         write(&tmp.path().join("extra.md"), "BODY");
         let files = load_project_instructions(tmp.path());
@@ -487,7 +498,7 @@ mod tests {
 
     #[test]
     fn inlines_imports_recursively() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "@./a.md");
         write(&tmp.path().join("a.md"), "A\n@./b.md");
         write(&tmp.path().join("b.md"), "B-deep");
@@ -498,7 +509,7 @@ mod tests {
 
     #[test]
     fn import_cycle_is_marked_not_infinite() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "@./a.md");
         write(&tmp.path().join("a.md"), "A\n@./b.md");
         write(&tmp.path().join("b.md"), "B\n@./a.md");
@@ -514,8 +525,8 @@ mod tests {
         write(&outside.path().join("secret.md"), "TOP SECRET");
         let abs = outside.path().join("secret.md");
 
-        let tmp = tempfile::tempdir().unwrap();
-        // No .git → boundary is the workspace itself; the absolute path escapes.
+        let tmp = isolated_ws();
+        // boundary is the git root (== workspace); the absolute path escapes it.
         write(&tmp.path().join("CLAUDE.md"), &format!("@{}", abs.display()));
         let files = load_project_instructions(tmp.path());
         assert!(!files[0].content.contains("TOP SECRET"), "{}", files[0].content);
@@ -524,7 +535,7 @@ mod tests {
 
     #[test]
     fn home_relative_import_is_skipped() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "@~/.ssh/id_rsa");
         let files = load_project_instructions(tmp.path());
         assert!(files[0].content.contains("import skipped (outside workspace)"));
@@ -532,7 +543,7 @@ mod tests {
 
     #[test]
     fn missing_import_is_marked() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "@./nope.md");
         let files = load_project_instructions(tmp.path());
         assert!(files[0].content.contains("import not found"), "{}", files[0].content);
@@ -540,7 +551,7 @@ mod tests {
 
     #[test]
     fn import_in_code_fence_not_expanded() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(
             &tmp.path().join("CLAUDE.md"),
             "intro\n```text\n@./extra.md\n```\ndone",
@@ -553,7 +564,7 @@ mod tests {
 
     #[test]
     fn inline_backtick_import_not_expanded() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "use `@./extra.md` literally");
         write(&tmp.path().join("extra.md"), "imported body");
         let files = load_project_instructions(tmp.path());
@@ -563,7 +574,7 @@ mod tests {
 
     #[test]
     fn email_is_not_treated_as_import() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "contact me@example.com for help");
         let files = load_project_instructions(tmp.path());
         // Untouched: no import marker, original text preserved.
@@ -574,7 +585,7 @@ mod tests {
 
     #[test]
     fn loads_aleph_claude_md() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join(".aleph/CLAUDE.md"), "aleph project rules");
         let files = load_project_instructions(tmp.path());
         assert_eq!(files.len(), 1);
@@ -584,7 +595,7 @@ mod tests {
 
     #[test]
     fn discover_yields_relative_labels_for_in_workspace_files() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         write(&tmp.path().join("CLAUDE.md"), "root");
         write(&tmp.path().join(".claude/CLAUDE.md"), "sub");
         let files = discover_project_instructions(tmp.path());
@@ -595,7 +606,7 @@ mod tests {
 
     #[test]
     fn discover_labels_ancestor_files_absolutely() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = isolated_ws();
         fs::create_dir_all(tmp.path().join(".git")).unwrap();
         write(&tmp.path().join("CLAUDE.md"), "root rules");
         let sub = tmp.path().join("crates/api");
@@ -605,7 +616,7 @@ mod tests {
         let files = discover_project_instructions(&sub);
         // Ancestor (git root) file labelled by absolute path; workspace file relative.
         assert_eq!(files[0].content, "root rules");
-        assert!(files[0].label.contains("CLAUDE.md") && files[0].label.starts_with('/'));
+        assert!(files[0].label.contains("CLAUDE.md") && Path::new(&files[0].label).is_absolute());
         assert_eq!(files[1].label, "CLAUDE.md");
     }
 }

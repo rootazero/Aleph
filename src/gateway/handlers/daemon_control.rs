@@ -34,17 +34,12 @@ pub async fn handle_status(request: JsonRpcRequest, start_time: Instant) -> Json
 pub async fn handle_shutdown(request: JsonRpcRequest) -> JsonRpcResponse {
     tracing::info!("Graceful shutdown requested via RPC");
 
-    // Schedule SIGTERM after response is sent
+    // Schedule shutdown after response is sent. We use process exit directly
+    // rather than libc::kill/SIGTERM so the gateway core stays platform-neutral
+    // (architecture redline R1). The binary's own SIGTERM handler does the same.
     tokio::spawn(async {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        tracing::info!("Initiating graceful shutdown via SIGTERM");
-        #[cfg(unix)]
-        // SAFETY: getpid() always returns a valid PID for the current process,
-        // and SIGTERM is a standard signal that the process handles gracefully.
-        unsafe {
-            libc::kill(libc::getpid(), libc::SIGTERM);
-        }
-        #[cfg(not(unix))]
+        tracing::info!("Initiating graceful shutdown");
         std::process::exit(0);
     });
 

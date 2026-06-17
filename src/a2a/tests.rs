@@ -906,7 +906,7 @@ async fn test_sub_agent_can_handle_cached_names() {
     let sub_agent = A2ASubAgent::new(router, pool);
 
     // Before refresh, cache is empty — should not match
-    let request = SubAgentRequest::new("ask CodeReviewer to review my PR");
+    let request = SubAgentRequest::new(r#"ask "CodeReviewer" to review my PR"#);
     assert!(
         !sub_agent.can_handle(&request),
         "Should not match before refresh_agent_names"
@@ -914,7 +914,7 @@ async fn test_sub_agent_can_handle_cached_names() {
 
     // After refresh, cached names should match
     sub_agent.refresh_agent_names().await;
-    let request = SubAgentRequest::new("ask CodeReviewer to review my PR");
+    let request = SubAgentRequest::new(r#"ask "CodeReviewer" to review my PR"#);
     assert!(
         sub_agent.can_handle(&request),
         "Should match 'CodeReviewer' in prompt after refresh"
@@ -948,11 +948,11 @@ async fn test_sub_agent_can_handle_chinese_agent_name() {
 
     sub_agent.refresh_agent_names().await;
 
-    // Chinese name in prompt should match
-    let request = SubAgentRequest::new("请使用交易助手分析黄金走势");
+    // Quoted Chinese name in prompt should match
+    let request = SubAgentRequest::new("请使用「交易助手」分析黄金走势");
     assert!(
         sub_agent.can_handle(&request),
-        "Should match Chinese agent name '交易助手' in prompt"
+        "Should match quoted Chinese agent name '交易助手' in prompt"
     );
 
     // Unrelated Chinese prompt should not match

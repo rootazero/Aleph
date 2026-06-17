@@ -615,8 +615,9 @@ mod tests {
         let sub = build_sub_agent(agents);
         sub.refresh_agent_names().await;
 
-        // Should match — prompt contains agent name
-        let request = SubAgentRequest::new("请使用交易助手agent分析黄金走势");
+        // Should match — prompt quotes the agent name (route() Tier 1 resolves
+        // only quoted names, so can_handle mirrors that).
+        let request = SubAgentRequest::new("请使用「交易助手」agent分析黄金走势");
         assert!(sub.can_handle(&request));
 
         // Should not match — unrelated prompt
@@ -658,12 +659,12 @@ mod tests {
         let sub = build_sub_agent(agents);
         sub.refresh_agent_names().await;
 
-        // Match by skill name
-        let request = SubAgentRequest::new("please do a code review on this PR");
+        // Match by quoted skill name
+        let request = SubAgentRequest::new(r#"please do a "Code Review" on this PR"#);
         assert!(sub.can_handle(&request));
 
-        // Match by alias
-        let request = SubAgentRequest::new("帮我审查代码");
+        // Match by quoted alias
+        let request = SubAgentRequest::new("帮我「审查代码」");
         assert!(sub.can_handle(&request));
     }
 
@@ -693,7 +694,7 @@ mod tests {
         let sub = build_sub_agent(agents);
         sub.refresh_agent_names().await;
 
-        let request = SubAgentRequest::new("ask CODEBOT to help");
+        let request = SubAgentRequest::new(r#"ask "CODEBOT" to help"#);
         assert!(sub.can_handle(&request));
     }
 
