@@ -217,11 +217,14 @@ English commit messages. Format: `<scope>: <description>` — Example: `gateway:
 
 **单分支开发模式**：所有开发工作直接在 main 分支进行。
 
-### 语言规范
+### My Working Style
 
-- Reply in Chinese
-- Code comments in English
-- Documentation in both
+- 先给方案再写代码；不确定时列出选项，不猜测（呼应 P1 与全局 CLAUDE.md）
+- 重大变更前先问，小优化可直接执行
+- 回复用中文，代码注释用英文，文档中英双语
+- 极度节制 cargo 调用（系统负担）—— 默认不跑全量测试，高风险合并至多一次 `cargo check --lib`
+- 单分支开发：所有工作直接在 main 分支
+- 提交信息英文，格式 `<scope>: <description>`
 
 ### Git Worktree 注意事项
 
@@ -291,15 +294,3 @@ LAN-trust：没有认证步骤，信任边界就是网络边界。默认只绑 `
 | Aleph-mcp | `/Users/zouguojun/Workspace/Aleph-mcp` | 官方 MCP 项目 |
 | Aleph-plugins | `/Users/zouguojun/Workspace/Aleph-plugins` | 官方插件 |
 | Aleph-skills | `/Users/zouguojun/Workspace/Aleph-skills` | 官方技能 |
-
----
-
-## 📝 Session Context
-
-- **项目**: 自托管个人 AI 助手，Rust Core + 多端架构
-- **核心循环**: Think → Act（极简两步循环，LLM 主权原则）
-- **语言**: 使用中文对话
-
-### Memory Prompt
-
-When token is low to 10%, summarize this session to generate a "memory prompt" for next session inheritance.
