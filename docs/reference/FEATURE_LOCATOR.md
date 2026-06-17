@@ -325,11 +325,11 @@
 - **打磨话术**：「加/改预设别名在 `presets/registry.rs`；‘某模型支不支持 vision/tool-use’在 `model_catalog/` + `capability_gate.rs`；‘成本’在 `pricing.rs`。」
 
 ### 5.5 集群 (Cluster)
-- **口语关键词**：gateway 集群、单中心非对称节点、反向 RPC、node_invoke、center approval
-- **代码锚点**：`src/cluster/`（mod.rs / reverse_rpc.rs / registry.rs / node_approval.rs / node_runtime.rs）；文档 `docs/reference/CLUSTER.md`
-- **职责**：单中心 + 边缘节点，节点主动连中心反向 RPC，agent 经 node_invoke 跨边界执行，高风险操作回中心人工 escalation，断线 fail-fast。
-- **状态**：✅ Phase 0a（ReverseRpcChannel / NodeRegistry / CenterApprovalRequester 已实现；node_invoke 路由/环境聚合属 Phase 1+ 计划）。
-- **打磨话术**：「集群在 `src/cluster/`；‘节点怎么连中心’看 reverse_rpc.rs；信任边界=LAN，中心↔节点无认证层。」
+- **口语关键词**：gateway 集群、单中心非对称节点、反向 RPC、node_invoke、node_list、扇出、center approval、LAN-trust
+- **代码锚点**：核心 `src/cluster/`（mod.rs / reverse_rpc.rs / registry.rs / node_runtime.rs / node_file_cmd.rs / node_approval.rs）；中心侧 LLM 工具 `src/builtin_tools/{node_list,node_invoke,node_invoke_many,node_file}.rs`；中心 RPC `src/gateway/handlers/cluster.rs`（enroll/deregister/environments.list）；节点拨出运行时 `src/bin/aleph-server/commands/node.rs`；文档 `docs/reference/CLUSTER.md`。
+- **职责**：单中心 + 边缘节点，节点主动连中心反向 RPC（结构区分请求/响应，断线 `cancel_all` fail-fast）；agent 经 `node_invoke`（单节点，多级寻址 + 歧义枚举）/`node_invoke_many`（按 tag AND 并发扇出）/`node_file`（8MB + sha256 jail 传输）跨边界执行；节点侧 `CommandTable` allowlist 权威；高风险能力升级经 `CenterApprovalRequester` fail-closed 回中心人工 escalation。
+- **状态**：✅ **全量实现（含四个 LLM 工具、tag 扇出、文件传输、离线节点合并视图、确定性舰队排序）**。信任模型 = **LAN-trust**：enroll 不铸 token，节点凭 `connect` 帧参数形状（`commands`+`tags`）声明身份，已移除旧的 token/signature/pairing/`run_pairing`/`AUTH_FAILED` 机制（CLUSTER.md 已同步）。
+- **打磨话术**：「集群在 `src/cluster/`；‘节点怎么连中心’看 reverse_rpc.rs + node.rs；‘模型怎么驱动节点’看 `builtin_tools/node_*`；‘离线/在线舰队视图’看 `handlers/cluster.rs::handle_environments_list`；信任边界=LAN，无 token、无认证层。」
 
 ### 5.6 多端通道同步 (Channel Sync)
 - **口语关键词**：channel 多端同步、webchat 同步、通道注册表、统一消息总线、delivery queue

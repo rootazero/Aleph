@@ -186,6 +186,16 @@ pub async fn handle_environments_list(
             "environments.list: failed to read enrolled node devices; returning online-only view"
         ),
     }
+    // Deterministic merged ordering: online first, then by name, then id. Online
+    // nodes come from a HashMap and offline from the store (created_at DESC); a
+    // stable order keeps the Panel fleet list from jittering on every refresh.
+    envs.sort_by(|a, b| {
+        let rank = |status: &str| u8::from(status != "online");
+        rank(a.status)
+            .cmp(&rank(b.status))
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.id.cmp(&b.id))
+    });
     JsonRpcResponse::success(request.id, serde_json::json!({ "environments": envs }))
 }
 
@@ -399,6 +409,47 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn environments_list_orders_online_before_offline_and_by_name() {
+        let ctx = create_test_context();
+        // One enrolled-but-offline node ("a-off" — would sort first by name).
+        handle_cluster_enroll(
+            JsonRpcRequest::with_id(
+                "cluster.enroll",
+                Some(serde_json::json!({"node_name": "a-off"})),
+                serde_json::json!(1),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        // Two live sessions registered out of name order.
+        for (id, name, conn) in [("id-z", "z-online", "c-z"), ("id-m", "m-online", "c-m")] {
+            let (tx, _rx) = tokio::sync::mpsc::channel::<String>(8);
+            let ch = crate::cluster::ReverseRpcChannel::new(tx);
+            crate::cluster::maybe_register_node(
+                &ctx.node_registry,
+                Some("node"),
+                id,
+                conn,
+                Some(&serde_json::json!({"device_name": name, "commands": []})),
+                &ch,
+            );
+        }
+        let resp = handle_environments_list(
+            JsonRpcRequest::with_id("environments.list", None, serde_json::json!(2)),
+            ctx,
+        )
+        .await;
+        let v = resp.result.unwrap();
+        let arr = v["environments"].as_array().unwrap();
+        let order: Vec<&str> = arr.iter().map(|e| e["name"].as_str().unwrap()).collect();
+        // Online first (by name: m, z), then the offline node despite its
+        // name sorting first alphabetically.
+        assert_eq!(order, vec!["m-online", "z-online", "a-off"], "{arr:?}");
+        assert_eq!(arr[0]["status"], "online");
+        assert_eq!(arr[2]["status"], "offline");
     }
 
     #[tokio::test]
