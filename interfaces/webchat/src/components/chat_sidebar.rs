@@ -890,7 +890,10 @@ pub fn ChatSidebar() -> impl IntoView {
                 // ── 群聊 (Group Chat) collapsible section ─────────────────
                 {move || {
                     // Only show active teams; disbanded ones disappear immediately.
-                    let group_list: Vec<_> = groups.get().into_iter().filter(|g| g.status == "active").collect();
+                    // Newest activity first: most recent message timestamp, falling
+                    // back to team creation time when the team has no transcript yet.
+                    let mut group_list: Vec<_> = groups.get().into_iter().filter(|g| g.status == "active").collect();
+                    group_list.sort_by_key(|g| std::cmp::Reverse(g.last_message_at.unwrap_or(g.created_at)));
                     if group_list.is_empty() {
                         return view! { <span /> }.into_any();
                     }

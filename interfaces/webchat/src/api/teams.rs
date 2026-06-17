@@ -34,6 +34,11 @@ pub struct TeamSummary {
     pub members_preview: Vec<MemberPreview>,
     #[serde(default)]
     pub last_message: Option<String>,
+    /// Unix-epoch-seconds timestamp of the most recent group message. Enriched
+    /// by `agents.teams`; `None` when the team has no transcript yet. Used to
+    /// sort the sidebar group-chat list newest-first.
+    #[serde(default)]
+    pub last_message_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

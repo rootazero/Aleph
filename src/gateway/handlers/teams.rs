@@ -378,22 +378,33 @@ pub async fn handle_agent_teams(
             Err(_) => vec![],
         };
 
-        // last_message: most recent transcript entry, truncated to 60 chars (best-effort).
+        // last_message + last_message_at: most recent transcript entry (content
+        // truncated to 60 chars) and its Unix-epoch-seconds timestamp. The panel
+        // sorts group chats newest-first on last_message_at (falling back to
+        // created_at). Both best-effort: null on per-team failure.
         // list_team_messages returns oldest-first; .pop() gives the newest.
-        let last_message: Option<String> = match msg_store.as_deref() {
-            Some(ms) => ms
-                .list_team_messages(team_id, 100)
-                .await
-                .ok()
-                .and_then(|mut v| v.pop())
-                .map(|m| m.content.chars().take(60).collect::<String>()),
-            None => None,
-        };
+        let (last_message, last_message_at): (Option<String>, Option<i64>) =
+            match msg_store.as_deref() {
+                Some(ms) => ms
+                    .list_team_messages(team_id, 100)
+                    .await
+                    .ok()
+                    .and_then(|mut v| v.pop())
+                    .map(|m| {
+                        (
+                            Some(m.content.chars().take(60).collect::<String>()),
+                            Some(m.created_at.timestamp()),
+                        )
+                    })
+                    .unwrap_or((None, None)),
+                None => (None, None),
+            };
 
         let mut obj = serde_json::to_value(&summary).unwrap_or_else(|_| json!({}));
         if let Some(map) = obj.as_object_mut() {
             map.insert("members_preview".to_string(), json!(members_preview));
             map.insert("last_message".to_string(), json!(last_message));
+            map.insert("last_message_at".to_string(), json!(last_message_at));
         }
         enriched.push(obj);
     }
