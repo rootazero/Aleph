@@ -75,12 +75,25 @@ impl ExtensionManager {
     }
 
     /// Execute a hook handler on a runtime plugin.
+    ///
+    /// Auto-loads the plugin if not already loaded (mirrors
+    /// [`Self::call_plugin_tool`]), so a hook can fire on the first event
+    /// without a prior explicit load.
     pub async fn execute_plugin_hook(
         &self,
         plugin_id: &str,
         handler: &str,
         event_data: serde_json::Value,
     ) -> ExtensionResult<serde_json::Value> {
+        // Auto-load plugin if not already loaded
+        {
+            let loader = self.plugin_loader.read().await;
+            if !loader.is_loaded(plugin_id) {
+                drop(loader);
+                self.ensure_plugin_loaded(plugin_id).await?;
+            }
+        }
+
         self.plugin_loader
             .read()
             .await

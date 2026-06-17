@@ -195,20 +195,31 @@ pub fn verify_plugin_integrity(
 
     let mut hasher = Sha256::new();
 
-    // Collect and sort files for deterministic ordering
-    let mut files: Vec<_> = walkdir::WalkDir::new(source_path)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| !e.path().components().any(|c| c.as_os_str() == ".git"))
-        .collect();
+    // Collect and sort files for deterministic ordering. A walk error
+    // (unreadable directory/entry) must FAIL the check, not be silently
+    // skipped — a dropped file would let a tampered archive pass verification.
+    let mut files = Vec::new();
+    for entry in walkdir::WalkDir::new(source_path) {
+        let entry = entry.map_err(|e| format!("Failed to walk plugin source: {e}"))?;
+        if entry.file_type().is_file()
+            && !entry.path().components().any(|c| c.as_os_str() == ".git")
+        {
+            files.push(entry);
+        }
+    }
     files.sort_by(|a, b| a.path().cmp(b.path()));
 
     for entry in files {
-        let relative = entry
-            .path()
-            .strip_prefix(source_path)
-            .unwrap_or(entry.path());
+        // Hash the path relative to the source root so the digest is
+        // reproducible across machines. A strip_prefix failure means the
+        // walk escaped `source_path` — fail rather than fold an absolute
+        // (host-specific) path into the hash.
+        let relative = entry.path().strip_prefix(source_path).map_err(|e| {
+            format!(
+                "Failed to compute relative path for {}: {e}",
+                entry.path().display()
+            )
+        })?;
         hasher.update(relative.to_string_lossy().as_bytes());
         let content = std::fs::read(entry.path())
             .map_err(|e| format!("Failed to read {}: {}", entry.path().display(), e))?;

@@ -211,8 +211,9 @@
 - **口语关键词**：plugins、插件、WASM 插件、MCP 插件、marketplace、plugin.json
 - **代码锚点**：`src/extension/`——`loader.rs`、`plugin_ops.rs`、`discovery/`、`manifest/`、`hooks/`、`marketplace/`、`capability.rs`、`types/plugins.rs`
 - **职责**：管理 Wasm/Mcp/Static 三类插件的发现/加载/注册，多源优先级（Config > Workspace > Global > Bundled）、热重载、风险扫描、marketplace 安装。
-- **状态**：✅ 已实现。**关键事实**：'plugins' 在代码里属于 **`src/extension/`**（plugin 是 extension 的一种 kind），不是独立 `src/plugins/`。
-- **打磨话术**：「插件 = extension（`src/extension/`）。三类 kind：Wasm/Mcp/Static。改‘插件优先级/发现’找 discovery，与 Skill 共享优先级解析。」
+- **状态**：✅ 已实现。**关键事实**：'plugins' 在代码里属于 **`src/extension/`**（plugin 是 extension 的一种 kind），不是独立 `src/plugins/`。**硬化（2026-06-17）**：① WASM hook 执行已连线——`loader.rs::execute_hook` 不再返回 "not yet implemented"，而是复用 WASM runtime 的 `call_tool`（hook = 导出函数），`execute_plugin_hook` 补齐 auto-load 与 `call_plugin_tool` 对称；② marketplace 完整性校验 `installer.rs::verify_plugin_integrity` 修复静默跳过——walk 错误 / `strip_prefix` 失败现在硬失败（此前 `filter_map(ok)` 会把不可读文件排除出哈希 → 篡改归档可绕过校验）。
+- **已知缺口**：插件注册的 hook（`HookRegistration.handler`）经 `sync_hooks_from_registry` 进 `HookExecutor` 时 `actions` 为空、`handler` 字段只写不读——**事件驱动的插件 hook 仍不会从真实 hook 事件触发**（需 executor 持有 loader 回调，涉跨模块循环依赖，未连）。当前 WASM hook 仅经 `ExtensionManager::execute_plugin_hook` 直调路径可达。
+- **打磨话术**：「插件 = extension（`src/extension/`）。三类 kind：Wasm/Mcp/Static。改‘插件优先级/发现’找 discovery，与 Skill 共享优先级解析。‘WASM hook 怎么跑’= `loader.rs::execute_hook` → runtime `call_tool`；‘hook 事件为何不触发插件’= executor 的 `handler` 字段未连 loader（见上‘已知缺口’）。」
 
 ### 3.11 技能系统 (Skill System)
 - **口语关键词**：skills、技能、SKILL.md、资格评估、prompt 注入、共现
