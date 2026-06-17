@@ -294,3 +294,10 @@ LAN-trust：没有认证步骤，信任边界就是网络边界。默认只绑 `
 | Aleph-mcp | `/Users/zouguojun/Workspace/Aleph-mcp` | 官方 MCP 项目 |
 | Aleph-plugins | `/Users/zouguojun/Workspace/Aleph-plugins` | 官方插件 |
 | Aleph-skills | `/Users/zouguojun/Workspace/Aleph-skills` | 官方技能 |
+
+---
+
+## 🧠 长期记忆与质量门 (Memory & Hooks)
+
+- **长期记忆**: 走全局 `~/.claude/projects/.../memory/`（跨会话、Git 不追踪）。**不在项目内另造 MEMORY.md**——避免与全局记忆双源冲突。
+- **质量门 (Hooks)**: 当前**未挂** `.claude/hooks/`。CLAUDE.md 里的规则目前靠模型遵守；未来如需"强制执行层"（如 PostToolUse → `cargo fmt`），在 `.claude/hooks/` 配置即可。
