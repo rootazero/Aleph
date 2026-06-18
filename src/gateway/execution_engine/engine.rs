@@ -98,6 +98,12 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// sink degrades to a no-op decorator. Only read when
     /// `config.scratchpad_progress_push` is enabled.
     pub(super) channel_registry: crate::tasks::shared::targets::ChannelRegistryCell,
+    /// Strategic-planner provider for the naked agent-loop StraTA planner
+    /// (round 2). The same provider the goal/loop/workflow tools use, but
+    /// gated additionally on `[strategy].plan_naked_loop`: `None` when either
+    /// `enabled` or `plan_naked_loop` is off, so the first-message planner
+    /// trigger in `execute.rs` stays dormant (fail-soft, P7).
+    pub(super) planner_provider: Option<Arc<dyn crate::providers::AiProvider>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -134,6 +140,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             orchestrator: Arc::new(std::sync::OnceLock::new()),
             continuation_deps: Arc::new(std::sync::OnceLock::new()),
             channel_registry: Arc::new(tokio::sync::OnceCell::new()),
+            planner_provider: None,
         }
     }
 
@@ -184,6 +191,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         provider: Arc<crate::thinker::MemoryContextProvider>,
     ) -> Self {
         self.memory_context_provider = Some(provider);
+        self
+    }
+
+    /// Inject the strategic-planner provider for the naked agent-loop planner.
+    /// `None` (the default) keeps the first-message planner trigger dormant.
+    #[must_use]
+    pub fn with_planner_provider(
+        mut self,
+        provider: Option<Arc<dyn crate::providers::AiProvider>>,
+    ) -> Self {
+        self.planner_provider = provider;
         self
     }
 
