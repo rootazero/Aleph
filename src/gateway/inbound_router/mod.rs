@@ -1002,6 +1002,23 @@ impl InboundMessageRouter {
             return true;
         }
 
+        // Control/built-in commands must always reach their dedicated handlers
+        // below (/stop, /new, /voice, /btw, /groupchat …). A pending `ask_user`
+        // clarification or workflow-clarify step must never swallow them —
+        // otherwise the documented "always stoppable" escape hatch breaks.
+        let is_control_command = lower == "/stop"
+            || lower == "/abort"
+            || lower == "/new"
+            || lower == "/session new"
+            || lower == "/btw"
+            || lower.starts_with("/voice")
+            || lower.starts_with("/btw ")
+            || lower.starts_with("/btw\n")
+            || lower.starts_with("/groupchat");
+        if is_control_command {
+            return false;
+        }
+
         // Clarification reply: any message while an `ask_user` is pending for
         // this session is taken as the answer.
         if let Some(ref mgr) = self.clarification_manager {

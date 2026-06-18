@@ -593,7 +593,7 @@ impl ChannelRegistry {
                 info!(
                     "[Forwarder] Forwarding message from channel {} (text: {:?})",
                     channel_id,
-                    message.text.get(..50).unwrap_or(&message.text)
+                    message.text.chars().take(50).collect::<String>()
                 );
                 if let Err(e) = inbound_tx.send(message) {
                     error!(error = ?e, "Failed to forward message — no subscribers, continuing");

@@ -73,15 +73,23 @@ impl ExtensionChangeType {
 
         // hooks.json / hooks.local.json living under a `.aleph` or `.claude`
         // directory is the user-level hook config layer (Claude Code parity).
+        // Match directory names on path components rather than slash-delimited
+        // substrings: on Windows `to_string_lossy()` yields backslashes, so
+        // `contains("/skills/")` never matches and every edit falls through to
+        // `Unknown` (forcing a full re-discovery).
+        let has_dir = |name: &str| {
+            path.components()
+                .any(|c| c.as_os_str().to_str() == Some(name))
+        };
         if matches!(file_name, "hooks.json" | "hooks.local.json")
             && (parent_name == ".aleph" || parent_name == ".claude")
         {
             Self::HooksConfig
-        } else if path_str.contains("/skills/") {
+        } else if has_dir("skills") {
             Self::Skill
-        } else if path_str.contains("/commands/") {
+        } else if has_dir("commands") {
             Self::Command
-        } else if path_str.contains("/agents/") {
+        } else if has_dir("agents") {
             Self::Agent
         } else if path_str.contains("plugin.json")
             || path_str.contains("plugin.toml")
