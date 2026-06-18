@@ -9,11 +9,83 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+/// Pure gate for the naked agent-loop strategic planner. ORIGIN/PLUMBING FACTS
+/// ONLY (R7 — never a message-content heuristic): fire only for a genuine human
+/// interactive first message. Excludes cron / group-chat member / subagent /
+/// ephemeral runs (non-interactive `SessionKey`), resume runs, and empty input.
+/// Pure ⇒ host-testable without an LLM or a live gateway.
+fn naked_loop_planner_should_fire(
+    session_key: &crate::routing::session_key::SessionKey,
+    is_first_message: bool,
+    is_resume: bool,
+    input: &str,
+) -> bool {
+    is_first_message
+        && session_key.is_interactive()
+        && !is_resume
+        && !input.trim().is_empty()
+}
+
+/// Cap the planner objective at a generous UTF-8 char boundary. Naked-loop input
+/// is raw channel text (goal/loop objectives are already tool-bounded), so a
+/// multi-KB paste must not bloat the planner prompt.
+fn bounded_objective(input: &str) -> String {
+    const MAX_OBJECTIVE_CHARS: usize = 4000;
+    match input.char_indices().nth(MAX_OBJECTIVE_CHARS) {
+        Some((byte_idx, _)) => input[..byte_idx].to_string(),
+        None => input.to_string(),
+    }
+}
+
 impl<P, R> ExecutionEngine<P, R>
 where
     P: crate::thinker::ProviderRegistry + 'static,
     R: crate::executor::ToolRegistry + 'static,
 {
+    /// Fire the tool-free strategic planner ONCE for a genuine human first
+    /// message on the naked agent loop, concurrently with the remaining
+    /// first-message setup. Returns `(store_key, handle)` the caller awaits and
+    /// stores BEFORE dispatching the harness run, so the Strategy is welded on
+    /// turn 1. Returns `None` (a no-op) when the planner is disabled
+    /// (`planner_provider` is `None` ⇒ `[strategy].enabled`/`plan_naked_loop`
+    /// off), the origin gate rejects the run, the strategy subsystem is
+    /// uninitialized, or a Strategy already exists for this session (fire-once).
+    fn spawn_naked_loop_planner(
+        &self,
+        request: &RunRequest,
+        is_first_message: bool,
+    ) -> Option<(String, tokio::task::JoinHandle<Option<crate::strategy::Strategy>>)> {
+        let provider = self.planner_provider.clone()?;
+        let is_resume = request.metadata.get("resume").map(String::as_str) == Some("true");
+        if !naked_loop_planner_should_fire(
+            &request.session_key,
+            is_first_message,
+            is_resume,
+            &request.input,
+        ) {
+            return None;
+        }
+        let store = crate::strategy::global()?;
+        let session_key_str = request.session_key.to_key_string();
+        let key = crate::strategy::session_key(&session_key_str);
+        // Fire-exactly-once: only when the slot is provably empty. `matches!`,
+        // NOT `==` (anyhow::Result<Option<_>> is not Eq); a transient Err skips
+        // so a read failure never risks a double-write (P7).
+        if !matches!(store.get(&key), Ok(None)) {
+            return None;
+        }
+        let objective = bounded_objective(&request.input);
+        let handle = tokio::spawn(async move {
+            let ctx = crate::strategy::planner::PlannerContext {
+                tool_descriptions: Vec::new(),
+                env_summary: crate::strategy::planner::env_summary(),
+                lessons: Vec::new(),
+            };
+            crate::strategy::planner::plan_strategy(&provider, &objective, &ctx, None).await
+        });
+        Some((key, handle))
+    }
+
     /// Execute a run request
     ///
     /// Returns a stream of events for the run.
@@ -235,6 +307,12 @@ where
             );
         }
 
+        // Naked agent-loop strategic planner (StraTA round 2): on a genuine
+        // human first message, plan a Strategy concurrently with the rest of
+        // first-message setup. Awaited + stored just before harness dispatch
+        // (below) so StrategyLayer welds it on turn 1. A no-op otherwise.
+        let naked_loop_planner = self.spawn_naked_loop_planner(&request, is_first_message);
+
         // Inline slash command resolution for non-router paths (Panel, CLI)
         if request.input.trim().starts_with('/')
             && !request.metadata.contains_key(SLASH_COMMAND_MODE_KEY)
@@ -381,6 +459,18 @@ where
                             trace_task_persisted,
                         )
                         .await;
+                }
+            }
+        }
+
+        // Join the naked-loop planner (started above, overlapped with setup) and
+        // store its Strategy before harness dispatch so the weld is present on
+        // turn 1. Best-effort: any failure (planner error / put error / join
+        // error) leaves the prompt byte-identical and the run proceeds (P7).
+        if let Some((key, handle)) = naked_loop_planner {
+            if let Ok(Some(strategy)) = handle.await {
+                if let Some(store) = crate::strategy::global() {
+                    let _ = store.put(&key, &strategy);
                 }
             }
         }
@@ -1226,5 +1316,51 @@ async fn stop_loop_on_failure(
         {
             warn!(channel = %ch, error = %e, "loop: failed to deliver halt notice");
         }
+    }
+}
+
+#[cfg(test)]
+mod naked_loop_planner_tests {
+    use super::*;
+    use crate::routing::session_key::SessionKey;
+
+    #[test]
+    fn gate_fires_for_human_first_message() {
+        let k = SessionKey::main("a");
+        assert!(naked_loop_planner_should_fire(&k, true, false, "research X and email Bob"));
+    }
+
+    #[test]
+    fn gate_excludes_non_first_message() {
+        let k = SessionKey::main("a");
+        assert!(!naked_loop_planner_should_fire(&k, false, false, "hi"));
+    }
+
+    #[test]
+    fn gate_excludes_automated_origins() {
+        // cron + group-chat member runs use Task keys; subagent/ephemeral too.
+        let cron = SessionKey::task("a", "cron", "job-1");
+        let team = SessionKey::task("a", "team_chat", "team-1");
+        let eph = SessionKey::ephemeral("a");
+        let sub = SessionKey::subagent(SessionKey::main("a"), "s");
+        assert!(!naked_loop_planner_should_fire(&cron, true, false, "do a thing"));
+        assert!(!naked_loop_planner_should_fire(&team, true, false, "do a thing"));
+        assert!(!naked_loop_planner_should_fire(&eph, true, false, "do a thing"));
+        assert!(!naked_loop_planner_should_fire(&sub, true, false, "do a thing"));
+    }
+
+    #[test]
+    fn gate_excludes_resume_and_empty() {
+        let k = SessionKey::main("a");
+        assert!(!naked_loop_planner_should_fire(&k, true, true, "x")); // resume
+        assert!(!naked_loop_planner_should_fire(&k, true, false, "   ")); // whitespace
+    }
+
+    #[test]
+    fn bounded_objective_caps_utf8_safely() {
+        let long = "字".repeat(5000); // multi-byte chars
+        let out = bounded_objective(&long);
+        assert_eq!(out.chars().count(), 4000);
+        assert!(out.is_char_boundary(out.len()));
     }
 }
