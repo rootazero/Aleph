@@ -22,10 +22,13 @@ impl EmailRule {
     /// Check word boundary: the match should not be part of a longer
     /// alphanumeric sequence to avoid matching substrings inside file paths
     /// or other non-email tokens.
-    fn has_word_boundary(text: &str, start: usize, end: usize) -> bool {
-        let before_ok = start == 0 || !text.as_bytes()[start - 1].is_ascii_alphanumeric();
-        let after_ok = end >= text.len() || !text.as_bytes()[end].is_ascii_alphanumeric();
-        before_ok && after_ok
+    fn has_word_boundary(text: &str, start: usize, _end: usize) -> bool {
+        // Only guard the start boundary. An email directly followed by an
+        // alphanumeric char (a digit after the TLD, e.g. `john@host.com1` — the
+        // greedy `[A-Za-z]{2,}` TLD already consumed every trailing letter) is
+        // still PII: failing an after-boundary check there dropped the match
+        // entirely and leaked the address in plaintext.
+        start == 0 || !text.as_bytes()[start - 1].is_ascii_alphanumeric()
     }
 }
 
@@ -98,12 +101,12 @@ mod tests {
     }
 
     #[test]
-    fn test_no_match_substring_in_larger_token() {
-        // Email should not match when embedded in a larger alphanumeric token.
-        // The regex may greedily consume trailing letters as part of the TLD,
-        // but word-boundary filtering must still reject emails that are
-        // immediately followed by alphanumeric characters.
+    fn test_match_email_followed_by_alnum() {
+        // An email directly followed by an alphanumeric char (a digit past the
+        // TLD) is still PII and must be redacted, not dropped — dropping it
+        // previously leaked the address in plaintext.
         let matches = rule().detect("Contact user@example.com1z");
-        assert_eq!(matches.len(), 0);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].matched_text, "user@example.com");
     }
 }

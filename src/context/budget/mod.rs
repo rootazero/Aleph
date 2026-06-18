@@ -243,6 +243,10 @@ struct DiminishingReturnsDetector {
 
 impl DiminishingReturnsDetector {
     fn new(window_size: usize, threshold: usize) -> Self {
+        // Clamp to >=1: a window of 0 would evaluate (and could fire
+        // StopDiminishing) on the very first turn, since `len() < 0` is never
+        // true. Matches the `.max(1)` idiom used elsewhere in this module.
+        let window_size = window_size.max(1);
         Self {
             window_size,
             threshold,
