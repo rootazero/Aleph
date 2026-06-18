@@ -36,6 +36,16 @@ pub fn workflow_key(run_id: &str) -> String {
     format!("workflow:{run_id}")
 }
 
+/// Composite-key prefix for a NAKED-loop (plain interactive chat) strategy,
+/// keyed by session. Lowest precedence in `active_strategy` (goal > loop >
+/// session) so an explicit `/goal` or `/loop` strategy in a reused session
+/// always wins. Pass the canonical `SessionKey::to_key_string()` form so the
+/// weld layers and the subagent weld read the same row.
+#[must_use]
+pub fn session_key(session_id: &str) -> String {
+    format!("session:{session_id}")
+}
+
 /// Process-global strategy store. Initialized once at daemon boot
 /// (`constructor.rs`); `None` until then so tests / early-boot read as "no
 /// strategy subsystem" and the prompt layers stay dormant.
@@ -84,6 +94,18 @@ mod tests {
         // CRITICAL: a session running /goal AND /loop concurrently must not
         // collide — composite keying is the whole point.
         assert_ne!(goal_key("sess-1"), loop_key("sess-1"));
+    }
+
+    #[test]
+    fn session_key_is_prefixed() {
+        assert_eq!(session_key("sess-1"), "session:sess-1");
+    }
+
+    #[test]
+    fn session_key_distinct_from_goal_and_loop() {
+        // Naked-loop key must not collide with the explicit-flow keys.
+        assert_ne!(session_key("s"), goal_key("s"));
+        assert_ne!(session_key("s"), loop_key("s"));
     }
 
     #[test]
