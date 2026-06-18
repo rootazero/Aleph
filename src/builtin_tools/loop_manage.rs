@@ -329,7 +329,9 @@ impl LoopTool {
             return;
         };
         let key = crate::strategy::loop_key(session);
-        if matches!(store.get(&key), Ok(Some(_))) {
+        // Fire-exactly-once: plan only when the slot is provably empty (Ok(None));
+        // an existing row (Ok(Some)) or a get failure (Err) both skip (P7).
+        if !matches!(store.get(&key), Ok(None)) {
             return;
         }
         let ctx = crate::strategy::planner::PlannerContext {

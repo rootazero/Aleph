@@ -160,8 +160,10 @@ impl GoalTool {
             return;
         };
         let key = crate::strategy::goal_key(session);
-        // Fire-exactly-once: a continuation / re-set must not re-plan.
-        if matches!(store.get(&key), Ok(Some(_))) {
+        // Fire-exactly-once: plan only when the slot is provably empty. A
+        // continuation / re-set (Ok(Some)) or an unreadable row (Err) both skip,
+        // so a transient get failure never risks a double-write (P7).
+        if !matches!(store.get(&key), Ok(None)) {
             return;
         }
         let ctx = crate::strategy::planner::PlannerContext {
