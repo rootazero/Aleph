@@ -181,6 +181,19 @@ pub struct ResolvedContext {
     /// the harness bridge; `None` (no active goal) emits nothing.
     #[serde(skip, default)]
     pub standing_goal: Option<String>,
+    /// Full `<strategy>` body for `StrategyLayer` (priority 70, Stable),
+    /// rendered once from the session's active `Strategy` via
+    /// `render_strategy_summary`. Populated in the harness bridge from
+    /// `active_strategy`; `None` (no planned Strategy) emits nothing, leaving
+    /// the cacheable stable prefix byte-identical.
+    #[serde(skip, default)]
+    pub strategy: Option<String>,
+    /// Guardrail lines for `StrategyPointerLayer` (priority 1756, Dynamic),
+    /// rendered from the same `Strategy` via `render_guardrails_only` and
+    /// echoed near the read head every turn to fight goal-drift. Populated in
+    /// the harness bridge; `None` emits nothing (byte-identical tail).
+    #[serde(skip, default)]
+    pub strategy_guardrails: Option<String>,
     /// Whether voice mode is active for this session, rendered by
     /// `VoiceModeLayer` (priority 1710) as the spoken-reply guidelines.
     /// Populated in the harness bridge from `voice::session_mode` (written by
@@ -264,6 +277,8 @@ impl ContextAggregator {
             sandbox_summary: None,
             execution_plan: None,
             standing_goal: None,
+            strategy: None,
+            strategy_guardrails: None,
             voice_mode_active: false,
         }
     }
@@ -466,5 +481,25 @@ mod tests {
             canvas_disabled.reason,
             DisableReason::UnsupportedByChannel
         ));
+    }
+}
+
+#[cfg(test)]
+mod strategy_field_tests {
+    use super::*;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::security_context::SecurityContext;
+
+    #[test]
+    fn resolve_defaults_strategy_fields_to_none() {
+        let ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+            &[],
+        );
+        // Both strategy surfaces default to absent so the prompt is
+        // byte-identical for sessions with no planned Strategy.
+        assert!(ctx.strategy.is_none());
+        assert!(ctx.strategy_guardrails.is_none());
     }
 }
