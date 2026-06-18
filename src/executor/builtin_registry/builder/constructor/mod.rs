@@ -721,8 +721,12 @@ impl BuiltinToolRegistry {
             // memory is unconfigured the handle is None → hook stays dormant.
             scratchpad_tool: scratchpad_tool
                 .with_session_key_handle(memory_session_key_handle.clone()),
-            goal_tool: goal_tool.with_session_key_handle(memory_session_key_handle.clone()),
-            loop_tool: loop_tool.with_session_key_handle(memory_session_key_handle.clone()),
+            goal_tool: goal_tool
+                .with_session_key_handle(memory_session_key_handle.clone())
+                .with_planner_provider(config.planner_provider.clone()),
+            loop_tool: loop_tool
+                .with_session_key_handle(memory_session_key_handle.clone())
+                .with_planner_provider(config.planner_provider.clone()),
             memory_search_tool,
             memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
             node_registry: Arc::new(tokio::sync::OnceCell::new()),
