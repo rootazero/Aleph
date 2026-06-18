@@ -119,15 +119,11 @@ pub fn ModelPicker() -> impl IntoView {
                 </svg>
             </button>
 
-            // Click-outside catcher
-            {move || open.get().then(|| view! {
-                <div class="fixed inset-0 z-40" on:click=move |_| open.set(false) />
-            })}
-
             <Show when=move || open.get()>
                 <div class="absolute bottom-full mb-2 left-0 z-50 w-80 max-h-96 overflow-y-auto
                             glass rounded-xl border border-border bg-surface-overlay/85 shadow-xl
-                            p-2 space-y-1">
+                            p-2 space-y-1"
+                    on:mouseleave=move |_| open.set(false)>
                     // Filter box — only meaningful once a non-empty catalog has
                     // loaded. Order-preserving substring filter (see
                     // `filter_catalog`), deliberately not fuzzy-ranked so the
