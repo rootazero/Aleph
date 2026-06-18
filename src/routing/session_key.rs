@@ -235,6 +235,21 @@ impl SessionKey {
         }
     }
 
+    /// True for genuine human-interactive session variants (`Main`,
+    /// `DirectMessage`, `Group`). False for automated/internal origins (`Task`
+    /// = cron/webhook/team_chat, `Subagent`, `Ephemeral`). Used by the naked
+    /// agent-loop strategic-planner gate so a cron job / group-chat member /
+    /// subagent's first turn never trips the planner (R7: an origin fact, not a
+    /// message-content heuristic). Fail-closed: any future internal variant
+    /// defaults to non-interactive.
+    #[must_use]
+    pub fn is_interactive(&self) -> bool {
+        matches!(
+            self,
+            Self::Main { .. } | Self::DirectMessage { .. } | Self::Group { .. }
+        )
+    }
+
     /// Get the main session key for this agent
     #[must_use]
     pub fn main_session_key(&self) -> Self {
@@ -1152,5 +1167,22 @@ mod tests {
         let s = key.to_key_string();
         let parsed = SessionKey::parse(&s).expect("must parse subagent");
         assert_eq!(parsed.to_key_string(), s);
+    }
+
+    #[test]
+    fn is_interactive_true_for_human_variants() {
+        // Main + DirectMessage (via the peer alias) are genuine human sessions.
+        assert!(SessionKey::main("a").is_interactive());
+        assert!(SessionKey::peer("a", "peer-1").is_interactive());
+    }
+
+    #[test]
+    fn is_interactive_false_for_automated_variants() {
+        // cron + group-chat member runs use Task keys; subagents/ephemerals too.
+        // These must never trip the naked-loop planner gate.
+        assert!(!SessionKey::task("a", "cron", "job-1").is_interactive());
+        assert!(!SessionKey::task("a", "team_chat", "team-1").is_interactive());
+        assert!(!SessionKey::ephemeral("a").is_interactive());
+        assert!(!SessionKey::subagent(SessionKey::main("a"), "sub-1").is_interactive());
     }
 }
