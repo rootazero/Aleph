@@ -13,8 +13,9 @@
 //! writer (tool, from `TURN_CONTEXT`) and reader (bridge, from its run key)
 //! agree.
 
+use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
+use std::sync::OnceLock;
 
 /// A session's LLM-chosen model, optionally pinned to a provider.
 #[derive(Clone, Debug, PartialEq, Eq)]

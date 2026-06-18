@@ -184,7 +184,7 @@ pub(crate) fn parse_gemini_sse_chunk(
         let cached: Option<u32> = usage
             .get("cachedContentTokenCount")
             .and_then(|v| v.as_u64())
-            .map(|v| v as u32);
+            .and_then(|v| v.try_into().ok());
         // Gemini's `promptTokenCount` *includes* the implicitly cached portion
         // (`cachedContentTokenCount`). Aleph's pricing bills `input` and
         // `cache_read` additively (disjoint, Anthropic-shaped), so report the
@@ -209,7 +209,7 @@ pub(crate) fn parse_gemini_sse_chunk(
             thinking_tokens: usage
                 .get("thoughtsTokenCount")
                 .and_then(|v| v.as_u64())
-                .map(|v| v as u32),
+                .and_then(|v| v.try_into().ok()),
             cost: None,
         }));
 

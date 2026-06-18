@@ -71,10 +71,14 @@ pub fn check_path_escalation(
                 if approved.ends_with("/*") {
                     let prefix = approved.trim_end_matches("/*");
                     let resolved_prefix = resolve_path_with_symlinks(&PathBuf::from(prefix));
-                    path.starts_with(&resolved_prefix) || path.starts_with(Path::new(prefix))
+                    // Compare only canonical (symlink-resolved) forms on both
+                    // sides — accepting the raw approved prefix would let a
+                    // symlinked approved dir match a request whose resolved path
+                    // lives elsewhere, undoing the TOCTOU canonicalization.
+                    path.starts_with(&resolved_prefix)
                 } else {
                     let resolved_approved = resolve_path_with_symlinks(&PathBuf::from(approved));
-                    path == resolved_approved || path == Path::new(approved.as_str())
+                    path == resolved_approved
                 }
             });
 
