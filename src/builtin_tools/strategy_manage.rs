@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::error::{AlephError, Result};
-use crate::strategy::{goal_key, loop_key, Strategy, StrategyStore};
+use crate::strategy::{goal_key, loop_key, session_key, Strategy, StrategyStore};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -100,6 +100,13 @@ impl StrategyTool {
         let lk = loop_key(session);
         if self.store.get(&lk).map_err(|e| e.to_string())?.is_some() {
             return Ok(Some(lk));
+        }
+        // Naked-loop (plain interactive chat) strategy — lowest precedence so a
+        // /goal or /loop strategy in a reused session always wins. Lets
+        // `strategy show`/`revise` operate in a naked-loop session.
+        let sk = session_key(session);
+        if self.store.get(&sk).map_err(|e| e.to_string())?.is_some() {
+            return Ok(Some(sk));
         }
         Ok(None)
     }
@@ -237,7 +244,7 @@ impl AlephTool for StrategyTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::strategy::{goal_key, loop_key, Strategy, StrategyStore};
+    use crate::strategy::{goal_key, loop_key, session_key, Strategy, StrategyStore};
     use crate::sync_primitives::Arc;
     use tokio::sync::RwLock;
 
@@ -371,5 +378,42 @@ mod tests {
             "got: {}",
             out.message
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_key_returns_session_when_only_session_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(StrategyStore::open(&dir.path().join("s.db")).unwrap());
+        let strat = Strategy {
+            objective: "obj".into(),
+            approach: "appr".into(),
+            phases: vec![],
+            guardrails: vec!["avoid X".into()],
+            success_criteria: "done when Y".into(),
+            goal_id: None,
+        };
+        store.put(&session_key("sess-1"), &strat).unwrap();
+        let tool = StrategyTool::new(store).with_session_for_test("sess-1");
+        let key = tool.resolve_key("sess-1").unwrap();
+        assert_eq!(key.as_deref(), Some("session:sess-1"));
+    }
+
+    #[tokio::test]
+    async fn resolve_key_goal_beats_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(StrategyStore::open(&dir.path().join("s.db")).unwrap());
+        let strat = Strategy {
+            objective: "obj".into(),
+            approach: "appr".into(),
+            phases: vec![],
+            guardrails: vec!["avoid X".into()],
+            success_criteria: "done when Y".into(),
+            goal_id: None,
+        };
+        store.put(&session_key("sess-1"), &strat).unwrap();
+        store.put(&goal_key("sess-1"), &strat).unwrap();
+        let tool = StrategyTool::new(store).with_session_for_test("sess-1");
+        let key = tool.resolve_key("sess-1").unwrap();
+        assert_eq!(key.as_deref(), Some("goal:sess-1"));
     }
 }

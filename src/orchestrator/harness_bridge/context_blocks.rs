@@ -56,7 +56,17 @@ pub async fn active_strategy(session_key: &str) -> Option<crate::strategy::Strat
     if let Some(s) = store.get(&crate::strategy::goal_key(session_key)).ok().flatten() {
         return Some(s);
     }
-    store.get(&crate::strategy::loop_key(session_key)).ok().flatten()
+    if let Some(s) = store.get(&crate::strategy::loop_key(session_key)).ok().flatten() {
+        return Some(s);
+    }
+    // Naked-loop (plain interactive chat) strategy — lowest precedence so an
+    // explicit /goal or /loop strategy in a reused session always wins. This
+    // is also the read used by the subagent weld (run_loop/inner.rs), so a
+    // naked-loop session's subagents inherit the session Strategy (intended).
+    store
+        .get(&crate::strategy::session_key(session_key))
+        .ok()
+        .flatten()
 }
 
 /// Format the active-goal summary line injected as `<standing_goal>`. Pure:
