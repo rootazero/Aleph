@@ -15,6 +15,7 @@
 //! the cacheable prefix byte-identical for sessions with no Strategy.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 
 pub struct StrategyLayer;
 
@@ -41,6 +42,15 @@ impl PromptLayer for StrategyLayer {
         // The welded Strategy is minted once per task and held verbatim across
         // every turn — Stable so it rides the cached stable prefix.
         LayerStability::Stable
+    }
+
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        // The full <strategy> body is operational steering, not core framing —
+        // drop it from the bare Minimal prompt, matching StrategyPointerLayer
+        // (which echoes the same plan's guardrails) so the two strategy
+        // surfaces stay symmetric: both present in Full/Compact, both absent in
+        // Minimal. (Mirrors StandingGoal / ExecutionPlan.)
+        mode != PromptMode::Minimal
     }
 
     fn inject(&self, output: &mut String, input: &LayerInput) {
