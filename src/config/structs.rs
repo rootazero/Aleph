@@ -231,6 +231,15 @@ pub struct Config {
     /// hard-failing on a provider context-length error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_budget: Option<ContextBudgetToml>,
+    /// Opt-in (default **on**) strategic-planner welding for the three long-task
+    /// flows (`/goal`, `/loop`, `/workflow`). When `Some` and `enabled = true`
+    /// (the default when the section is present), the start path builds a
+    /// one-shot planner that welds a short `Strategy` into the cacheable
+    /// system-prompt prefix. Absent section ⇒ `None` ⇒ planner uses the executor
+    /// provider with the feature defaulting on; `enabled = false` is the
+    /// off-switch. Fully fail-soft: any failure leaves prompts byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<crate::config::types::phase6_wiring::StrategyToml>,
     /// Mid-run trajectory resume — boot-scan auto-resume of interrupted runs.
     #[serde(default)]
     pub resume: crate::config::types::ResumeConfig,
