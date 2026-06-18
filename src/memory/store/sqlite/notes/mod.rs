@@ -15,12 +15,11 @@
 mod helpers;
 mod store_impl;
 
-// Re-export the crate-visible helpers at the module path so existing callers
-// (and `tests.rs` via `super::super::body_text_sha256`) keep their paths.
-pub(crate) use helpers::{
-    body_text_sha256, collect_edges_between, load_note_content_from_disk,
-    provenance_origin_from_str, provenance_origin_to_str, row_to_entry,
-};
+// `store_impl` imports helpers directly from `helpers`; the only consumer of a
+// re-export at this module path is `tests.rs` (`super::super::body_text_sha256`),
+// so re-export just that one, gated to test builds.
+#[cfg(test)]
+pub(crate) use helpers::body_text_sha256;
 
 #[cfg(test)]
 mod tests;

@@ -84,6 +84,11 @@ fn persist_gateway_token(token: &str) {
 /// Drop the `token=` pair from a `?…` query string, returning the remaining
 /// query (no leading `?`); empty when `token` was the only param. Inverse of
 /// `parse_query_token` — machine-format, regex-free (P8). Host-testable.
+///
+/// Only consumed by the wasm-only `scrub_token_from_url` and the host test
+/// suite, so gate it to those targets to avoid a dead-code warning on host
+/// non-test builds.
+#[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn strip_token_param(search: &str) -> String {
     let q = search.strip_prefix('?').unwrap_or(search);
     q.split('&')

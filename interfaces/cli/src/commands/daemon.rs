@@ -53,8 +53,8 @@ fn is_process_running(_pid: u32) -> bool {
 }
 
 /// Best-effort check that the PID actually belongs to an `aleph-server` process.
-/// On Unix this inspects /proc/{pid}/cmdline; on other platforms it returns true
-/// so the caller can fall back to process-existence checks.
+/// Inspects /proc/{pid}/cmdline; the sole caller is Unix-gated (signal-based
+/// stop), so no non-Unix variant is needed.
 #[cfg(unix)]
 fn pid_belongs_to_server(pid: u32) -> bool {
     let path = format!("/proc/{pid}/cmdline");
@@ -62,11 +62,6 @@ fn pid_belongs_to_server(pid: u32) -> bool {
         .ok()
         .map(|s| s.contains("aleph-server"))
         .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn pid_belongs_to_server(_pid: u32) -> bool {
-    true
 }
 
 /// Send a signal to a process (Unix only)

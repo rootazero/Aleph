@@ -16,11 +16,12 @@ mod tool_registry_impl;
 
 pub use struct_def::BuiltinToolRegistry;
 
-// Re-exported so existing paths keep working:
-// - `super::registry::resolve_plugin_handler_from_sources` (used by the
-//   parent module's tests).
-// - `registry::parse_caller_agent_id` (used by this module's tests).
+// Re-exported so existing paths keep working. Both consumers are test-only
+// (the parent module's tests reach `super::registry::resolve_plugin_handler_from_sources`,
+// and this module's tests use `parse_caller_agent_id`), so gate to test builds.
+#[cfg(test)]
 pub(crate) use free_fns::resolve_plugin_handler_from_sources;
+#[cfg(test)]
 pub(super) use free_fns::parse_caller_agent_id;
 
 #[cfg(test)]

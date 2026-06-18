@@ -149,10 +149,10 @@ mod tests {
             ("m4".to_string(), Some("b".to_string())), // b again after gap → header
         ];
         let map = attribution_map(&msgs);
-        assert_eq!(map["m0"], true);
-        assert_eq!(map["m1"], false);
-        assert_eq!(map["m2"], true);
-        assert_eq!(map["m3"], false);
-        assert_eq!(map["m4"], true);
+        assert!(map["m0"]);
+        assert!(!map["m1"]);
+        assert!(map["m2"]);
+        assert!(!map["m3"]);
+        assert!(map["m4"]);
     }
 }

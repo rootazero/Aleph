@@ -156,7 +156,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut compression_out: Option<
         std::sync::Arc<alephcore::memory::compression::CompressionService>,
     > = None;
-    let mut multi_reg: Option<Arc<alephcore::MultiProviderRegistry>> = None;
+    // Assigned unconditionally below (from `build_multi_provider_registry`)
+    // before any read, so deferred init keeps the dead initial value out.
+    let multi_reg: Option<Arc<alephcore::MultiProviderRegistry>>;
     let mut channel_reg_cell: Option<
         Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>,
     > = None;

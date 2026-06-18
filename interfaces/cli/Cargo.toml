@@ -65,15 +65,15 @@ pulldown-cmark = { version = "0.12", default-features = false }
 # CJK / wide-character aware display widths for aligned table/detail output
 unicode-width = "0.2"
 
-# Unix process management (signals)
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
 # Plugin packaging
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Base64 encoding for shipping local plugin zips to the daemon over JSON-RPC
 base64 = "0.22"
+
+# Unix process management (signals)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.8"

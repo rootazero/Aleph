@@ -166,9 +166,13 @@ async fn test_runtime_escalation() {
     assert_eq!(trigger.reason, EscalationReason::PathOutOfScope);
     // The escalation resolves symlinks via `std::fs::canonicalize`, so the
     // requested path comes back canonical (e.g. /etc → /private/etc on macOS).
-    // Canonicalize the expected value the same way to stay platform-agnostic.
-    let expected_path = std::fs::canonicalize("/etc/passwd").unwrap();
-    assert_eq!(trigger.requested_path, Some(expected_path));
+    // `/etc/passwd` only exists on Unix, so this exact-path comparison is
+    // Unix-only; the escalation-triggered assertions above run on all platforms.
+    #[cfg(unix)]
+    {
+        let expected_path = std::fs::canonicalize("/etc/passwd").unwrap();
+        assert_eq!(trigger.requested_path, Some(expected_path));
+    }
 
     // Step 4: Record user decision in audit log
     let execution_id = "exec_escalation_001";
