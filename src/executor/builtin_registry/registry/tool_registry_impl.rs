@@ -70,17 +70,28 @@ impl ToolRegistry for BuiltinToolRegistry {
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
         debug!(tool = tool_name, "Executing builtin tool");
 
-        // Enforce per-agent tool policy.
-        // Uses try_read() (non-blocking) since this is a synchronous function.
-        // Contention is extremely unlikely — policy is rarely written.
+        // Enforce per-agent tool policy. Uses try_read() (non-blocking) since
+        // this is a synchronous function. Fail CLOSED on lock contention: a
+        // writer racing the read (e.g. an agent_switch/policy update) makes
+        // try_read() return Err, and skipping the check would let a denied tool
+        // (bash, file_write, code_exec) run — a security fail-open.
         if let Some(ref policy_handle) = self.tool_policy_handle {
-            if let Ok(policy) = policy_handle.try_read() {
-                if !policy.is_allowed(tool_name) {
+            match policy_handle.try_read() {
+                Ok(policy) if policy.is_allowed(tool_name) => {}
+                Ok(_) => {
                     let msg = format!(
                         "Tool '{tool_name}' is not allowed for the current agent. \
                          Use agent.list to check available tools, or switch to an agent that has access."
                     );
                     return Box::pin(async move { Err(AlephError::tool(msg)) });
+                }
+                Err(_) => {
+                    return Box::pin(async move {
+                        Err(AlephError::tool(
+                            "Tool policy is temporarily unavailable (lock contention); \
+                             denied to fail closed. Retry shortly.",
+                        ))
+                    });
                 }
             }
         }
