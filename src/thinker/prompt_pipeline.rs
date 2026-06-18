@@ -12,8 +12,8 @@ use super::layers::{
     ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
     RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
     SessionResumeLayer, SkillInstructionsLayer, SkillModeLayer, SoulLayer, SpecialActionsLayer,
-    StandingGoalLayer, ThinkingGuidanceLayer, ToolRuntimeStateLayer, ToolUsageGrammarLayer,
-    ToolsLayer, VoiceModeLayer,
+    StandingGoalLayer, StrategyLayer, StrategyPointerLayer, ThinkingGuidanceLayer,
+    ToolRuntimeStateLayer, ToolUsageGrammarLayer, ToolsLayer, VoiceModeLayer,
 };
 use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
@@ -279,6 +279,7 @@ impl PromptPipeline {
     ///   50  `SoulLayer`
     ///   55  `AgentRoleLayer`
     ///   60  `CuratedMemoryLayer`
+    ///   70  `StrategyLayer`
     ///   75  `ProfileLayer`
     ///  100  `RoleLayer`
     ///  300  `EnvironmentLayer`
@@ -314,6 +315,7 @@ impl PromptPipeline {
     /// 1745  `MemoryProtocolLayer`
     /// 1750  `SessionContextGuideLayer`
     /// 1755  `ExecutionPlanLayer`
+    /// 1756  `StrategyPointerLayer`
     /// 1760  `SessionResumeLayer`
     #[must_use]
     pub fn default_layers() -> Self {
@@ -321,6 +323,7 @@ impl PromptPipeline {
             Box::new(SoulLayer),
             Box::new(AgentRoleLayer),
             Box::new(CuratedMemoryLayer),
+            Box::new(StrategyLayer),
             Box::new(InboundContextLayer),
             Box::new(ChainContextLayer),
             Box::new(McpInstructionsLayer),
@@ -358,6 +361,7 @@ impl PromptPipeline {
             Box::new(MemoryProtocolLayer),
             Box::new(SessionContextGuideLayer),
             Box::new(StandingGoalLayer),
+            Box::new(StrategyPointerLayer),
             Box::new(ExecutionPlanLayer),
             Box::new(SessionResumeLayer),
             Box::new(LanguageLayer),
@@ -554,7 +558,10 @@ mod tests {
         // scratchpad plan per turn) → 39 (StandingGoalLayer re-surfaces the
         // active standing goal per turn, 2026-06-08) → 40 (ExtraFilesLayer
         // renders `[prompt.extra_files]`, 2026-06-10). See `default_layers`.
-        assert_eq!(pipeline.layer_count(), 40);
+        // → 42 (StrategyLayer @70 Stable + StrategyPointerLayer @1756 Dynamic
+        // weld the StraTA plan into the cacheable head + per-turn tail,
+        // 2026-06-18). See `default_layers`.
+        assert_eq!(pipeline.layer_count(), 42);
     }
 
     #[test]
@@ -927,10 +934,13 @@ mod stability_tests {
         // ExtraFilesLayer renders user-configured `[prompt.extra_files]`
         // content, re-read off disk per prompt build — naturally dynamic.
         assert!(dynamic_names.contains(&"extra_files"));
+        // StrategyPointerLayer echoes the Strategy guardrails near the read
+        // head per turn — Dynamic. (StrategyLayer @70 is Stable, not counted.)
+        assert!(dynamic_names.contains(&"strategy_pointer"));
         assert_eq!(
             dynamic_names.len(),
-            14,
-            "Exactly 14 dynamic layers expected"
+            15,
+            "Exactly 15 dynamic layers expected"
         );
     }
 
