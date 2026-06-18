@@ -101,6 +101,11 @@ pub struct SubagentTool {
     /// `new()` default) keeps subagents unguarded, matching a main harness
     /// that has no registry configured.
     pub(super) guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
+    /// Welded strategy `<strategy>` body for the parent run. Threaded into
+    /// every child `AgentRuntime` via `build_runtime` so spawned subagents
+    /// share the run-global strategy. `None` (the `new()` default) keeps
+    /// subagents strategy-free, byte-identical to the pre-strategy build.
+    pub(super) strategy: Option<String>,
 }
 
 impl SubagentTool {
@@ -146,6 +151,7 @@ impl SubagentTool {
             turn_timeout: None,
             provider_overrides: HashMap::new(),
             guardrails: None,
+            strategy: None,
         }
     }
 
@@ -260,6 +266,15 @@ impl SubagentTool {
     #[must_use]
     pub fn with_cancel_token(mut self, token: CancellationToken) -> Self {
         self.parent_cancel = Some(token);
+        self
+    }
+
+    /// Wire the parent run's welded strategy `<strategy>` body so every
+    /// spawned subagent's inline prompt carries it. `None` keeps subagents
+    /// strategy-free.
+    #[must_use]
+    pub fn with_strategy(mut self, strategy: String) -> Self {
+        self.strategy = Some(strategy);
         self
     }
 }

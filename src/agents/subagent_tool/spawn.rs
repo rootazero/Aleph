@@ -101,6 +101,7 @@ impl SubagentTool {
                 context_summary,
                 model,
                 timeout_secs,
+                strategy: None,
             };
             let result = AssertUnwindSafe(runtime.run(runtime_config))
                 .catch_unwind()
@@ -222,6 +223,9 @@ impl SubagentTool {
         // wired downstream) actually receives a registry to inherit.
         if let Some(g) = self.guardrails.clone() {
             runtime = runtime.with_guardrails(g);
+        }
+        if let Some(s) = self.strategy.clone() {
+            runtime = runtime.with_strategy(s);
         }
         runtime
     }

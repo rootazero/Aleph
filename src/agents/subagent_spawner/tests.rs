@@ -317,6 +317,7 @@ mod tests {
             timeout_secs: 5,
             cancel: CancellationToken::new(),
             isolation: None,
+            strategy: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -357,6 +358,7 @@ mod tests {
             timeout_secs: 5,
             cancel: CancellationToken::new(),
             isolation: None,
+            strategy: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -393,6 +395,7 @@ mod tests {
                     timeout_secs: 5,
                     cancel: CancellationToken::new(),
                     isolation: None,
+                    strategy: None,
                 },
             ),
         )
@@ -416,6 +419,7 @@ mod tests {
                     timeout_secs: 5,
                     cancel: CancellationToken::new(),
                     isolation: None,
+                    strategy: None,
                 },
             ),
         )
@@ -456,6 +460,7 @@ mod tests {
             timeout_secs: 5,
             cancel: CancellationToken::new(),
             isolation: None,
+            strategy: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -483,6 +488,7 @@ mod tests {
             timeout_secs: 10,
             cancel: CancellationToken::new(),
             isolation: None,
+            strategy: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -506,6 +512,7 @@ mod tests {
             timeout_secs: 1,
             cancel: CancellationToken::new(),
             isolation: None,
+            strategy: None,
         };
 
         let err = spawn(&base, req).await.expect_err("spawn should time out");
@@ -539,6 +546,7 @@ mod tests {
             timeout_secs: 5,
             cancel: CancellationToken::new(),
             isolation: None,
+            strategy: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -587,6 +595,7 @@ mod tests {
             timeout_secs: 5,
             cancel: CancellationToken::new(),
             isolation: None,
+            strategy: None,
         };
 
         spawn(&base, req).await.expect("spawn ok");
@@ -655,6 +664,7 @@ mod tests {
             timeout_secs: 5,
             cancel: CancellationToken::new(),
             isolation: None,
+            strategy: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -681,6 +691,7 @@ mod tests {
             timeout_secs: 1,
             cancel,
             isolation: None,
+            strategy: None,
         };
         assert!(req.isolation.is_none());
     }
@@ -817,6 +828,7 @@ mod tests {
             timeout_secs: 5,
             cancel,
             isolation: None,
+            strategy: None,
         };
         let err = spawn(&base, req).await.expect_err("must fail loud");
         assert!(
@@ -890,6 +902,7 @@ mod tests {
             timeout_secs: 5,
             cancel: CancellationToken::new(),
             isolation: None,
+            strategy: None,
         };
 
         spawn(&base, req).await.expect("spawn ok");
@@ -943,5 +956,79 @@ mod tests {
             build_effective_task(None, ContextMode::Summary, "just this"),
             "just this"
         );
+    }
+
+    // -- E1: strategy weld reaches the inline system prompt ------------------
+
+    /// Provider that records the system prompt of the first request, then
+    /// returns a terminal text response so the harness stops after one turn.
+    struct SystemPromptCapture(Mutex<Option<String>>);
+
+    impl AiProvider for SystemPromptCapture {
+        fn process<'a>(
+            &'a self,
+            payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            {
+                let mut g = self.0.lock().unwrap();
+                if g.is_none() {
+                    *g = Some(payload.system_prompt.unwrap_or_default().to_string());
+                }
+            }
+            Box::pin(async move { Ok(ProviderResponse::text_only("done".to_string())) })
+        }
+
+        fn name(&self) -> &str {
+            "capture"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_request_strategy_reaches_inline_system_prompt() {
+        let provider = Arc::new(SystemPromptCapture(Mutex::new(None)));
+        let base = make_base(provider.clone());
+        let agent = agent_with_allowed("explore", vec![]);
+
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "do the thing",
+            context_summary: None,
+            model: None,
+            timeout_secs: 30,
+            cancel: CancellationToken::new(),
+            isolation: None,
+            strategy: Some("Objective: weld it.\nGuardrails:\n- no shortcuts"),
+        };
+        let _ = spawn(&base, req).await.expect("spawn ok");
+
+        let captured = provider.0.lock().unwrap().clone().expect("captured prompt");
+        assert!(captured.contains("<strategy>"));
+        assert!(captured.contains("weld it."));
+    }
+
+    #[tokio::test]
+    async fn spawn_request_without_strategy_omits_block() {
+        let provider = Arc::new(SystemPromptCapture(Mutex::new(None)));
+        let base = make_base(provider.clone());
+        let agent = agent_with_allowed("explore", vec![]);
+
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "do the thing",
+            context_summary: None,
+            model: None,
+            timeout_secs: 30,
+            cancel: CancellationToken::new(),
+            isolation: None,
+            strategy: None,
+        };
+        let _ = spawn(&base, req).await.expect("spawn ok");
+
+        let captured = provider.0.lock().unwrap().clone().expect("captured prompt");
+        assert!(!captured.contains("<strategy>"));
     }
 }

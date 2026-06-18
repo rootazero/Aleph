@@ -116,6 +116,10 @@ pub struct SpawnRequest<'a> {
     /// `HarnessDeps` (legacy / default). `Some(IsolationMode::Worktree)`
     /// will provision a detached-HEAD git worktree in Task 9.
     pub isolation: Option<crate::agents::IsolationMode>,
+    /// Welded strategy `<strategy>` body inherited from the parent run.
+    /// Injected into the inline `PromptBuilder` so the spawned agent shares
+    /// the run-global strategy. `None` keeps the child prompt byte-identical.
+    pub strategy: Option<&'a str>,
 }
 
 /// Build a child ephemeral session, run the harness, and synthesize the
@@ -266,13 +270,16 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         //    tool_use. The descended `child_chain` is passed in so
         //    `ChainContextLayer` can tell the spawned agent it is nested
         //    and how much delegation budget remains.
-        let system_prompt = PromptBuilder::new(PromptConfig {
+        let mut builder = PromptBuilder::new(PromptConfig {
             native_tools_enabled: true,
             ..PromptConfig::default()
         })
         .with_agent(req.agent_def.clone())
-        .with_chain_context(child_chain.clone())
-        .build_system_prompt(&[]);
+        .with_chain_context(child_chain.clone());
+        if let Some(strategy) = req.strategy {
+            builder = builder.with_strategy(strategy.to_string());
+        }
+        let system_prompt = builder.build_system_prompt(&[]);
 
         // 5. Resolve the model override: explicit > model_hint > native.
         let resolved_model: Option<String> = req

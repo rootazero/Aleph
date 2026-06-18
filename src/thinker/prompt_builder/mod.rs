@@ -189,6 +189,13 @@ pub struct PromptBuilder {
     /// by the harness bridge. Threaded into every `LayerInput` so
     /// `ExtraFilesLayer` can render each file as a named section.
     extra_files: Option<Vec<crate::thinker::prompt_layer::ExtraPromptFile>>,
+    /// Welded strategy `<strategy>` body for the subagent inline prompt seam.
+    /// The subagent prompt builds on the `Basic` path with no `ResolvedContext`,
+    /// so `StrategyLayer` (which reads `ResolvedContext.strategy`) never fires
+    /// here. When set, `build_system_prompt` appends the wrapped block
+    /// post-pipeline, byte-for-byte matching the `StrategyLayer` wrap. `None`
+    /// leaves the prompt byte-identical to the pre-strategy build.
+    strategy: Option<String>,
 }
 
 impl PromptBuilder {
@@ -209,6 +216,7 @@ impl PromptBuilder {
             provider_protocol: None,
             iteration_cap: None,
             extra_files: None,
+            strategy: None,
         }
     }
 
@@ -326,6 +334,16 @@ impl PromptBuilder {
         self
     }
 
+    /// Attach a welded strategy `<strategy>` body for the subagent inline
+    /// prompt. The body is the inner text (no tags); `build_system_prompt`
+    /// wraps it in `<strategy> … </strategy>` exactly like `StrategyLayer`.
+    /// Threaded in by `subagent_spawner::spawn` from `SpawnRequest.strategy`.
+    #[must_use]
+    pub fn with_strategy(mut self, strategy: String) -> Self {
+        self.strategy = Some(strategy);
+        self
+    }
+
     /// Build the system prompt
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
         let (path, input) = match &self.soul {
@@ -356,7 +374,16 @@ impl PromptBuilder {
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
         let input = input.with_iteration_cap_opt(self.iteration_cap);
         maybe_trace_prompt_size(&self.pipeline, path, &input);
-        self.pipeline.execute_cached(path, &input)
+        let mut prompt = self.pipeline.execute_cached(path, &input);
+        // Subagent strategy weld: appended post-pipeline because the Basic-path
+        // inline prompt threads no `ResolvedContext` for `StrategyLayer` to read.
+        // Wrap mirrors `StrategyLayer` byte-for-byte: `<strategy>\n{body}\n</strategy>\n\n`.
+        if let Some(body) = self.strategy.as_deref() {
+            prompt.push_str("<strategy>\n");
+            prompt.push_str(body);
+            prompt.push_str("\n</strategy>\n\n");
+        }
+        prompt
     }
 
     /// Build system prompt with hydrated tools from semantic retrieval

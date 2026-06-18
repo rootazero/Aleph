@@ -57,6 +57,10 @@ pub struct AgentRuntimeConfig {
     pub model: Option<String>,
     /// Timeout in seconds for the entire run.
     pub timeout_secs: u64,
+    /// Welded strategy `<strategy>` body inherited from the parent run.
+    /// Threaded into `SpawnRequest.strategy` → the child's inline prompt.
+    /// `None` leaves the child prompt byte-identical to the pre-strategy build.
+    pub strategy: Option<String>,
 }
 
 // =============================================================================
@@ -141,6 +145,10 @@ pub struct AgentRuntime {
     /// Phase 3 — `provider_hint` → pinned-then-fall-through provider. An empty
     /// map (the `new()` default) means every spawn uses `provider`.
     provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
+    /// Welded strategy `<strategy>` body applied to every spawn's
+    /// `AgentRuntimeConfig`. `None` (the `new()` default) keeps the legacy
+    /// no-strategy path.
+    strategy: Option<String>,
 }
 
 impl AgentRuntime {
@@ -173,7 +181,15 @@ impl AgentRuntime {
             subagent_semaphore: None,
             plugin_registry: None,
             provider_overrides: HashMap::new(),
+            strategy: None,
         }
+    }
+
+    /// Wire the welded strategy `<strategy>` body inherited by every spawn.
+    #[must_use]
+    pub fn with_strategy(mut self, strategy: String) -> Self {
+        self.strategy = Some(strategy);
+        self
     }
 
     /// Phase 3 — wire the per-`provider_hint` override registry. Each spawn
@@ -442,6 +458,7 @@ impl AgentRuntime {
             timeout_secs: config.timeout_secs,
             cancel: self.cancel_token.clone(),
             isolation: config.agent_def.isolation.clone(),
+            strategy: self.strategy.as_deref().or(config.strategy.as_deref()),
         };
         spawn(&base, req).await
     }
@@ -555,6 +572,7 @@ mod tests {
             context_summary: Some("Parent context".to_string()),
             model: Some("claude-sonnet".to_string()),
             timeout_secs: 60,
+            strategy: None,
         };
 
         assert_eq!(config.task, "Do something");

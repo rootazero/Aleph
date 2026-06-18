@@ -526,6 +526,7 @@ impl LoopTool for SubagentTool {
                         context_summary: args.context_summary.clone(),
                         model,
                         timeout_secs: timeout,
+                        strategy: None,
                     };
 
                     let runtime = self
@@ -639,6 +640,7 @@ impl LoopTool for SubagentTool {
                         context_summary: args.context_summary.clone(),
                         model: args.aggregator_model.clone().or_else(|| args.model.clone()),
                         timeout_secs: args.timeout_secs,
+                        strategy: None,
                     };
                     let runtime = self
                         .build_runtime(child_chain.clone(), self.cancel_for_child_with(&cancel));
@@ -783,6 +785,7 @@ impl LoopTool for SubagentTool {
                 context_summary: args.context_summary,
                 model: args.model,
                 timeout_secs: args.timeout_secs,
+                strategy: None,
             };
 
             let runtime = self.build_runtime(child_chain, self.cancel_for_child_with(&cancel));

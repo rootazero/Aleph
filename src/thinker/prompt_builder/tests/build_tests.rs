@@ -516,6 +516,56 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
 }
 
 #[test]
+fn with_strategy_appends_welded_strategy_block() {
+    let agent = crate::agents::AgentDef::new("explore", crate::agents::AgentMode::SubAgent);
+    let body = "Objective: ship the parser.\nGuardrails:\n- no network calls";
+
+    let builder = PromptBuilder::new(PromptConfig {
+        native_tools_enabled: true,
+        ..PromptConfig::default()
+    })
+    .with_agent(agent.clone());
+    let without = builder.build_system_prompt(&[]);
+
+    let builder_s = PromptBuilder::new(PromptConfig {
+        native_tools_enabled: true,
+        ..PromptConfig::default()
+    })
+    .with_agent(agent)
+    .with_strategy(body.to_string());
+    let with = builder_s.build_system_prompt(&[]);
+
+    // The welded block is present and wrapped exactly like StrategyLayer.
+    assert!(with.contains("<strategy>\n"));
+    assert!(with.contains("</strategy>\n"));
+    assert!(with.contains("ship the parser."));
+    // The strategy block is appended; the body without it is a strict prefix.
+    assert!(with.starts_with(&without));
+    assert_eq!(
+        &with[without.len()..],
+        &format!("<strategy>\n{body}\n</strategy>\n\n")
+    );
+}
+
+#[test]
+fn without_strategy_is_byte_identical() {
+    let agent = crate::agents::AgentDef::new("explore", crate::agents::AgentMode::SubAgent);
+    let a = PromptBuilder::new(PromptConfig {
+        native_tools_enabled: true,
+        ..PromptConfig::default()
+    })
+    .with_agent(agent.clone())
+    .build_system_prompt(&[]);
+    let b = PromptBuilder::new(PromptConfig {
+        native_tools_enabled: true,
+        ..PromptConfig::default()
+    })
+    .with_agent(agent)
+    .build_system_prompt(&[]);
+    assert_eq!(a, b);
+}
+
+#[test]
 fn test_interactive_prompt_minimal_token_overhead() {
     use crate::thinker::context::ContextAggregator;
     use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
