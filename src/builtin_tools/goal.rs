@@ -378,6 +378,16 @@ token_budget. \
             }
             GoalAction::Clear => {
                 self.store.delete(&session)?;
+                // Clear the goal-welded Strategy in lockstep with the
+                // authoritative goal deletion (spec §6 lifecycle). Best-effort:
+                // a missing global / corrupt row is a no-op, never fails the
+                // user's clear. The loop-keyed Strategy (if any) is untouched.
+                if let Some(strat) = crate::strategy::global() {
+                    if let Err(e) = strat.delete(&crate::strategy::goal_key(&session)) {
+                        info!(session = %session, error = %e,
+                            "goal clear: failed to delete welded strategy (ignored)");
+                    }
+                }
                 Ok(GoalOutput {
                     success: true,
                     message: "Standing goal cleared.".to_string(),
@@ -962,5 +972,42 @@ mod tests {
                 .is_none(),
             "no provider => no Strategy"
         );
+    }
+
+    #[tokio::test]
+    async fn clear_deletes_goal_keyed_strategy_but_not_loop_keyed() {
+        use crate::strategy::{goal_key, loop_key, Strategy, StrategyStore};
+        use crate::sync_primitives::Arc;
+
+        let sdir = tempfile::tempdir().unwrap();
+        let sstore = Arc::new(StrategyStore::open(&sdir.path().join("s.db")).unwrap());
+        crate::strategy::set_global_for_test(sstore.clone());
+
+        let concrete = Strategy {
+            objective: "o".into(),
+            approach: "a".into(),
+            phases: vec![],
+            guardrails: vec!["do not touch unrelated code".into()],
+            success_criteria: "ok".into(),
+            goal_id: None,
+        };
+        sstore.put(&goal_key("sess-clear-strat"), &concrete).unwrap();
+        sstore.put(&loop_key("sess-clear-strat"), &concrete).unwrap();
+
+        let (tool, _d) = tool_with_session("sess-clear-strat");
+        tool.call(GoalArgs {
+            objective: Some("x".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        tool.call(GoalArgs { ..args(GoalAction::Clear) })
+            .await
+            .unwrap();
+
+        // Goal Clear removes the goal-keyed strategy...
+        assert!(sstore.get(&goal_key("sess-clear-strat")).unwrap().is_none());
+        // ...but leaves a co-existing loop-keyed strategy untouched.
+        assert!(sstore.get(&loop_key("sess-clear-strat")).unwrap().is_some());
     }
 }

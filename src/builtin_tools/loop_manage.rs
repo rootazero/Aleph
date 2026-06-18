@@ -235,6 +235,15 @@ impl LoopTool {
                         .with_status(LoopStatus::Stopped)
                         .with_stop_reason(Some("Stopped by user request.".to_string())),
                 );
+                // Clear the loop-welded Strategy in lockstep with the
+                // authoritative loop stop (spec §6 lifecycle). Best-effort; the
+                // goal-keyed Strategy (if any) is untouched.
+                if let Some(strat) = crate::strategy::global() {
+                    if let Err(e) = strat.delete(&crate::strategy::loop_key(session)) {
+                        info!(session = %session, error = %e,
+                            "loop stop: failed to delete welded strategy (ignored)");
+                    }
+                }
                 Ok(LoopOutput {
                     success: true,
                     message: "Loop stopped.".to_string(),
@@ -777,5 +786,50 @@ mod tests {
                 .is_none(),
             "no provider => no Strategy"
         );
+    }
+
+    #[tokio::test]
+    async fn stop_deletes_loop_keyed_strategy_but_not_goal_keyed() {
+        use crate::strategy::{goal_key, loop_key, Strategy, StrategyStore};
+
+        let sdir = tempfile::tempdir().unwrap();
+        let sstore = std::sync::Arc::new(StrategyStore::open(&sdir.path().join("s.db")).unwrap());
+        crate::strategy::set_global_for_test(sstore.clone());
+
+        let concrete = Strategy {
+            objective: "o".into(),
+            approach: "a".into(),
+            phases: vec![],
+            guardrails: vec!["stay on the watch target".into()],
+            success_criteria: "ok".into(),
+            goal_id: None,
+        };
+        sstore.put(&loop_key("sess-loop-stop"), &concrete).unwrap();
+        sstore.put(&goal_key("sess-loop-stop"), &concrete).unwrap();
+
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        reg.put(crate::looping::LoopState::new(
+            "sess-loop-stop",
+            "p",
+            crate::looping::Cadence::Fixed { interval_ms: 1000 },
+            0,
+        ));
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("sess-loop-stop");
+        tool.run(LoopArgs {
+            action: LoopAction::Stop,
+            interval: None,
+            prompt: None,
+            max_iterations: None,
+            timeout_minutes: None,
+            token_budget: None,
+            next_wake: None,
+        })
+        .await
+        .unwrap();
+
+        // Loop stop removes the loop-keyed strategy...
+        assert!(sstore.get(&loop_key("sess-loop-stop")).unwrap().is_none());
+        // ...but leaves a co-existing goal-keyed strategy untouched.
+        assert!(sstore.get(&goal_key("sess-loop-stop")).unwrap().is_some());
     }
 }

@@ -702,6 +702,22 @@ where
                                             } else {
                                                 info!(session = %session_key_str,
                                                     "goal pursuit: objective gate passed, goal verified complete");
+                                                // Gate-confirmed complete is an
+                                                // authoritative end-point: clear
+                                                // the welded Strategy so it does
+                                                // not bleed into a later plain
+                                                // turn in this reused session
+                                                // (spec §6). Best-effort.
+                                                if let Some(strat) = crate::strategy::global() {
+                                                    if let Err(e) = strat.delete(
+                                                        &crate::strategy::goal_key(
+                                                            &session_key_str,
+                                                        ),
+                                                    ) {
+                                                        warn!(error = %e, session = %session_key_str,
+                                                            "goal pursuit: failed to clear welded strategy on complete (ignored)");
+                                                    }
+                                                }
                                             }
                                         }
                                         Some(reason) => {
