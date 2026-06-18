@@ -227,6 +227,13 @@ pub struct StrategyToml {
     /// cheap-tier auto-fallback (that would silently downgrade the strategist).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planner_model: Option<String>,
+    /// Whether the strategic planner also fires for a NAKED agent-loop first
+    /// message (a plain complex request that did NOT use /goal·/loop·/workflow).
+    /// Default **true** (gated under `enabled`). Set `false` to keep planning
+    /// only on the three explicit long-task flows and spare ordinary chat the
+    /// turn-1 planner latency. The planner still self-gates trivial messages.
+    #[serde(default = "strategy_plan_naked_loop_default")]
+    pub plan_naked_loop: bool,
 }
 
 /// serde default for `StrategyToml::enabled` — the planner is on unless an
@@ -235,11 +242,18 @@ fn strategy_enabled_default() -> bool {
     true
 }
 
+/// serde default for `StrategyToml::plan_naked_loop` — naked-loop planning is
+/// on unless an operator explicitly flips it off.
+fn strategy_plan_naked_loop_default() -> bool {
+    true
+}
+
 impl Default for StrategyToml {
     fn default() -> Self {
         Self {
             enabled: strategy_enabled_default(),
             planner_model: None,
+            plan_naked_loop: strategy_plan_naked_loop_default(),
         }
     }
 }
@@ -539,5 +553,20 @@ model = "claude"
         let p: Probe = toml::from_str("[strategy]\nenabled = false\n").expect("toml parses");
         let s = p.strategy.expect("section present");
         assert!(!s.enabled);
+    }
+
+    #[test]
+    fn strategy_plan_naked_loop_defaults_true() {
+        // Section present but field omitted ⇒ default true.
+        let s: StrategyToml = toml::from_str("enabled = true").unwrap();
+        assert!(s.plan_naked_loop);
+        // Default impl ⇒ true.
+        assert!(StrategyToml::default().plan_naked_loop);
+    }
+
+    #[test]
+    fn strategy_plan_naked_loop_parses_false() {
+        let s: StrategyToml = toml::from_str("plan_naked_loop = false").unwrap();
+        assert!(!s.plan_naked_loop);
     }
 }
