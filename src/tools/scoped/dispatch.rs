@@ -102,6 +102,16 @@ impl ScopedToolService {
         input: Value,
         cancel: CancellationToken,
     ) -> Result<ToolOutput, ToolError> {
+        // Canonicalize the emitted name to the registered tool name BEFORE any
+        // gate. resolve()/execute() swap `.`↔`_`, so a denied / operator-only
+        // tool can otherwise be reached by emitting the alias form
+        // (`file.delete` for a denied `file_delete`): the permission/operator
+        // gates match the literal name and miss, then routing resolves the
+        // alias to the real tool and runs it. Evaluate every gate against the
+        // canonical name the registry will actually execute.
+        let canonical = self.inner.resolve(name).map(|t| t.name().to_string());
+        let name: &str = canonical.as_deref().unwrap_or(name);
+
         // Enforce allowed filter.
         if !self.is_allowed(name) {
             return Err(ToolError::NotFound {
