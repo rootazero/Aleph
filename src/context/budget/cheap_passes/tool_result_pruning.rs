@@ -71,7 +71,7 @@ impl crate::context::budget::preflight::PreflightStage for ToolResultPruningStag
         if messages.len() <= fresh_tail_count {
             return 0;
         }
-        let cut_end = messages.len() - fresh_tail_count;
+        let cut_end = messages.len().saturating_sub(fresh_tail_count);
         let mut total_freed: usize = 0;
 
         for msg in messages.iter_mut().take(cut_end) {

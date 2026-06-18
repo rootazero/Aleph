@@ -279,7 +279,10 @@ impl SessionEventStore for SqliteEventStore {
         to: Option<EventSeq>,
     ) -> Result<Vec<SessionEventRecord>, SessionError> {
         let session_key = session_id_to_string(session_id)?;
-        let from_val = i64::try_from(from.unwrap_or(0)).unwrap_or(0);
+        // An out-of-range `from` (> i64::MAX) must not silently fall back to 0,
+        // which would widen the lower bound and return events earlier than requested.
+        // Saturate to i64::MAX so an overflowing lower bound matches no rows instead.
+        let from_val = i64::try_from(from.unwrap_or(0)).unwrap_or(i64::MAX);
         let to_val = to.and_then(|v| i64::try_from(v).ok()).unwrap_or(i64::MAX);
 
         let conn = self.conn.lock().await;

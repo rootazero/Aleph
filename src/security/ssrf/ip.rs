@@ -118,8 +118,10 @@ fn extract_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
 
     // ::x.x.x.x — IPv4-compatible (deprecated, RFC 4291 section 2.5.5.1)
     // First 96 bits (segments 0–5) are zero; last 32 bits (segments 6–7) hold the IPv4.
-    // segments[6] != 0 excludes :: and ::1, which are handled by is_loopback / is_unspecified.
-    if segments[0..6] == [0, 0, 0, 0, 0, 0] && segments[6] != 0 {
+    // The trailing != 0 guard excludes :: and ::1, which are handled by
+    // is_loopback / is_unspecified; checking both low segments ensures forms like
+    // ::0.0.x.y (segments[6] == 0, segments[7] != 0) are still extracted.
+    if segments[0..6] == [0, 0, 0, 0, 0, 0] && (segments[6] != 0 || segments[7] != 0) {
         return Some(Ipv4Addr::new(
             octets[12], octets[13], octets[14], octets[15],
         ));

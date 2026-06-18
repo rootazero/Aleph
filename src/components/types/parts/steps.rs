@@ -74,7 +74,9 @@ impl StepTokenUsage {
     /// Total tokens used
     #[must_use]
     pub const fn total(&self) -> u64 {
-        self.input_tokens + self.output_tokens
+        // Fields are deserialized from untrusted JSON; saturate so a crafted
+        // pair of near-`u64::MAX` values cannot wrap.
+        self.input_tokens.saturating_add(self.output_tokens)
     }
 }
 
