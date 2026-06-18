@@ -13,6 +13,7 @@ use tracing::info;
 
 use crate::error::{AlephError, Result};
 use crate::looping::{Cadence, LoopRegistry, LoopState, LoopStatus};
+use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -103,6 +104,8 @@ fn now_ms() -> u64 {
 pub struct LoopTool {
     registry: Arc<LoopRegistry>,
     session_key: Option<Arc<RwLock<String>>>,
+    /// Tool-free planner provider; `None` → no Strategy on `start`.
+    planner_provider: Option<Arc<dyn AiProvider>>,
     #[cfg(test)]
     test_session: Option<String>,
 }
@@ -113,9 +116,16 @@ impl LoopTool {
         Self {
             registry,
             session_key: None,
+            planner_provider: None,
             #[cfg(test)]
             test_session: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_planner_provider(mut self, provider: Option<Arc<dyn AiProvider>>) -> Self {
+        self.planner_provider = provider;
+        self
     }
 
     #[must_use]
@@ -664,5 +674,28 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(reg.get("s").unwrap().max_iterations, Some(1000));
+    }
+
+    #[tokio::test]
+    async fn with_planner_provider_builds_and_still_starts_loop() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let provider: crate::sync_primitives::Arc<dyn crate::providers::AiProvider> =
+            crate::sync_primitives::Arc::new(crate::providers::MockProvider::new("not json"));
+        let tool = LoopTool::new(reg.clone())
+            .with_session_for_test("sess-lp")
+            .with_planner_provider(Some(provider));
+        let out = tool
+            .run(LoopArgs {
+                action: LoopAction::Start,
+                interval: Some("5m".to_string()),
+                prompt: Some("watch".to_string()),
+                max_iterations: None,
+                timeout_minutes: None,
+                token_budget: None,
+                next_wake: None,
+            })
+            .await
+            .unwrap();
+        assert!(out.success);
     }
 }

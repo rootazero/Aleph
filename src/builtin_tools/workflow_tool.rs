@@ -19,6 +19,7 @@ use crate::agents::swarm::tasks::{
     CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate,
 };
 use crate::error::{AlephError, Result};
+use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use crate::tools::turn_context::current_turn_context;
 use crate::tools::AlephTool;
@@ -189,6 +190,8 @@ pub struct WorkflowTool {
     /// check is skipped (the dispatcher still fail-fasts any doomed task with a
     /// clear reason, just asynchronously).
     team_store: Option<Arc<dyn crate::teams::TeamStore>>,
+    /// Tool-free planner provider; `None` → no Strategy minted on `run`.
+    planner_provider: Option<Arc<dyn AiProvider>>,
 }
 
 impl WorkflowTool {
@@ -200,7 +203,14 @@ impl WorkflowTool {
             coord_store,
             dispatch_signal,
             team_store: None,
+            planner_provider: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_planner_provider(mut self, provider: Option<Arc<dyn AiProvider>>) -> Self {
+        self.planner_provider = provider;
+        self
     }
 
     /// Wire the team roster so `run` can pre-flight team coverage. Builder form
@@ -1845,5 +1855,16 @@ mod tests {
             described.message
         );
         assert!(missing.is_err(), "unknown proposal errors, not guessed");
+    }
+
+    #[test]
+    fn with_planner_provider_builds() {
+        // SqliteCoordTaskStore has no open(path) — use the same in-memory
+        // pattern as setup_store() above (no migration needed for a build test).
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let store = SqliteCoordTaskStore::new(conn);
+        let provider: Arc<dyn crate::providers::AiProvider> =
+            Arc::new(crate::providers::MockProvider::new("x"));
+        let _tool = WorkflowTool::new(Arc::new(store), None).with_planner_provider(Some(provider));
     }
 }

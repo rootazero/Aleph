@@ -14,6 +14,7 @@ use tracing::info;
 
 use crate::error::{AlephError, Result};
 use crate::goal::{Goal, GoalStatus, GoalStore, PursuitMode};
+use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -80,14 +81,24 @@ pub struct GoalOutput {
 pub struct GoalTool {
     store: Arc<GoalStore>,
     session_key: Option<Arc<RwLock<String>>>,
+    /// Tool-free planner provider; `None` → no Strategy is minted on `set`
+    /// (byte-identical to today). Injected at the construction site.
+    planner_provider: Option<Arc<dyn AiProvider>>,
 }
 
 impl GoalTool {
-    pub const fn new(store: Arc<GoalStore>) -> Self {
+    pub fn new(store: Arc<GoalStore>) -> Self {
         Self {
             store,
             session_key: None,
+            planner_provider: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_planner_provider(mut self, provider: Option<Arc<dyn AiProvider>>) -> Self {
+        self.planner_provider = provider;
+        self
     }
 
     #[must_use]
@@ -804,5 +815,26 @@ mod tests {
             "stale note kept: {}",
             out.message
         );
+    }
+
+    #[tokio::test]
+    async fn with_planner_provider_builds_and_still_sets_goal() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
+        let handle = Arc::new(RwLock::new("sess-planner".to_string()));
+        let provider: Arc<dyn crate::providers::AiProvider> =
+            Arc::new(crate::providers::MockProvider::new("not json"));
+        let tool = GoalTool::new(store)
+            .with_session_key_handle(Some(handle))
+            .with_planner_provider(Some(provider));
+        // Provider present but unparseable → planner self-fails → goal Set still OK.
+        let out = tool
+            .call(GoalArgs {
+                objective: Some("Provider-present goal".into()),
+                ..args(GoalAction::Set)
+            })
+            .await
+            .unwrap();
+        assert!(out.success);
     }
 }
