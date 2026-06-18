@@ -100,6 +100,14 @@ fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+/// Light env summary for the planner (OS + cwd), never failing.
+fn planner_env_summary() -> String {
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    format!("os={} cwd={}", std::env::consts::OS, cwd)
+}
+
 #[derive(Clone)]
 pub struct LoopTool {
     registry: Arc<LoopRegistry>,
@@ -157,7 +165,16 @@ impl LoopTool {
         let session = self.session().await;
         info!(session = %session, action = ?args.action, "loop operation");
         match args.action {
-            LoopAction::Start => self.start(&session, args),
+            LoopAction::Start => {
+                // Capture the watch prompt before `start` consumes `args` so the
+                // planner can plan over the loop's objective.
+                let objective = args.prompt.clone().unwrap_or_default();
+                let out = self.start(&session, args)?;
+                if out.success {
+                    self.maybe_plan_strategy(&session, &objective).await;
+                }
+                Ok(out)
+            }
             LoopAction::Stop => self.stop(&session),
             LoopAction::Status => self.status(&session),
             LoopAction::Update => self.update(&session, args),
@@ -299,6 +316,32 @@ impl LoopTool {
             success: true,
             message: "Loop updated.".to_string(),
         })
+    }
+
+    /// Fire the tool-free planner ONCE for this session's loop, fail-soft.
+    /// No-op when no provider is injected, no global StrategyStore exists, a
+    /// Strategy already exists for the key, or the planner self-gates/errs.
+    async fn maybe_plan_strategy(&self, session: &str, objective: &str) {
+        let Some(provider) = &self.planner_provider else {
+            return;
+        };
+        let Some(store) = crate::strategy::global() else {
+            return;
+        };
+        let key = crate::strategy::loop_key(session);
+        if matches!(store.get(&key), Ok(Some(_))) {
+            return;
+        }
+        let ctx = crate::strategy::planner::PlannerContext {
+            tool_descriptions: Vec::new(),
+            env_summary: planner_env_summary(),
+            lessons: Vec::new(),
+        };
+        if let Some(strategy) =
+            crate::strategy::planner::plan_strategy(provider, objective, &ctx, None).await
+        {
+            let _ = store.put(&key, &strategy);
+        }
     }
 }
 
@@ -697,5 +740,38 @@ mod tests {
             .await
             .unwrap();
         assert!(out.success);
+    }
+
+    /// Provider = None → loop `start` still succeeds and stores NO Strategy.
+    #[tokio::test]
+    async fn loop_start_with_no_provider_succeeds_without_strategy() {
+        use crate::strategy::{loop_key, StrategyStore};
+        let sdir = tempfile::tempdir().unwrap();
+        crate::strategy::set_global_for_test(
+            StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+        );
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(reg).with_session_for_test("sess-lp-noprov");
+        let out = tool
+            .run(LoopArgs {
+                action: LoopAction::Start,
+                interval: Some("5m".to_string()),
+                prompt: Some("watch".to_string()),
+                max_iterations: None,
+                timeout_minutes: None,
+                token_budget: None,
+                next_wake: None,
+            })
+            .await
+            .unwrap();
+        assert!(out.success);
+        assert!(
+            crate::strategy::global()
+                .unwrap()
+                .get(&loop_key("sess-lp-noprov"))
+                .unwrap()
+                .is_none(),
+            "no provider => no Strategy"
+        );
     }
 }

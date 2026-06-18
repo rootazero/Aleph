@@ -148,6 +148,39 @@ impl GoalTool {
         }
         s
     }
+
+    /// Fire the tool-free planner ONCE for this session's goal, fail-soft.
+    /// No-op when no provider is injected, no global StrategyStore exists, a
+    /// Strategy already exists for the key, or the planner self-gates/errs.
+    async fn maybe_plan_strategy(&self, session: &str, goal: &Goal) {
+        let Some(provider) = &self.planner_provider else {
+            return;
+        };
+        let Some(store) = crate::strategy::global() else {
+            return;
+        };
+        let key = crate::strategy::goal_key(session);
+        // Fire-exactly-once: a continuation / re-set must not re-plan.
+        if matches!(store.get(&key), Ok(Some(_))) {
+            return;
+        }
+        let ctx = crate::strategy::planner::PlannerContext {
+            tool_descriptions: Vec::new(),
+            env_summary: planner_env_summary(),
+            lessons: goal.lessons.clone(),
+        };
+        if let Some(strategy) = crate::strategy::planner::plan_strategy(
+            provider,
+            &goal.objective,
+            &ctx,
+            Some(goal.id.clone()),
+        )
+        .await
+        {
+            // Best-effort: a put failure must not fail the goal command.
+            let _ = store.put(&key, &strategy);
+        }
+    }
 }
 
 /// Hard ceiling on autonomous continuations a single goal may request,
@@ -178,6 +211,14 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// Light env summary for the planner (OS + cwd), never failing.
+fn planner_env_summary() -> String {
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    format!("os={} cwd={}", std::env::consts::OS, cwd)
 }
 
 #[async_trait]
@@ -259,6 +300,7 @@ token_budget. \
                     goal = goal.with_deadline_ms(Some(deadline_from_minutes(now, minutes)));
                 }
                 self.store.put(&goal)?;
+                self.maybe_plan_strategy(&session, &goal).await;
                 Ok(GoalOutput {
                     success: true,
                     message: format!("Set. {}", Self::render(&goal)),
@@ -836,5 +878,83 @@ mod tests {
             .await
             .unwrap();
         assert!(out.success);
+    }
+
+    /// With a planner provider that returns a concrete Strategy, goal `set` mints
+    /// and stores it under goal_key(session); a second `set` does NOT re-plan
+    /// (fire-once guard: the existing row is left intact).
+    #[tokio::test]
+    async fn goal_set_fires_planner_once_and_stores_strategy() {
+        use crate::strategy::{goal_key, StrategyStore};
+        let sdir = tempfile::tempdir().unwrap();
+        crate::strategy::set_global_for_test(
+            StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
+        let handle = Arc::new(RwLock::new("sess-fire".to_string()));
+        let json = r#"{"objective":"o","approach":"a","phases":["p"],
+            "guardrails":["do not touch the cache layer"],"success_criteria":"done"}"#;
+        let provider: Arc<dyn crate::providers::AiProvider> =
+            Arc::new(crate::providers::MockProvider::new(json));
+        let tool = GoalTool::new(store)
+            .with_session_key_handle(Some(handle))
+            .with_planner_provider(Some(provider));
+
+        tool.call(GoalArgs {
+            objective: Some("First obj".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        let stored = crate::strategy::global()
+            .unwrap()
+            .get(&goal_key("sess-fire"))
+            .unwrap()
+            .expect("a Strategy was minted");
+        assert_eq!(stored.guardrails, vec!["do not touch the cache layer".to_string()]);
+
+        // Re-set: the fire-once guard must skip planning, leaving the first row.
+        tool.call(GoalArgs {
+            objective: Some("Second obj".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        let after = crate::strategy::global()
+            .unwrap()
+            .get(&goal_key("sess-fire"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.guardrails, stored.guardrails, "fire-once: row not re-planned");
+    }
+
+    /// Provider = None → goal `set` still succeeds and stores NO Strategy.
+    #[tokio::test]
+    async fn goal_set_with_no_provider_succeeds_without_strategy() {
+        use crate::strategy::{goal_key, StrategyStore};
+        let sdir = tempfile::tempdir().unwrap();
+        crate::strategy::set_global_for_test(
+            StrategyStore::open(&sdir.path().join("s2.db")).unwrap(),
+        );
+
+        let (tool, _d) = tool_with_session("sess-noprov");
+        let out = tool
+            .call(GoalArgs {
+                objective: Some("Plain goal".into()),
+                ..args(GoalAction::Set)
+            })
+            .await
+            .unwrap();
+        assert!(out.success);
+        assert!(
+            crate::strategy::global()
+                .unwrap()
+                .get(&goal_key("sess-noprov"))
+                .unwrap()
+                .is_none(),
+            "no provider => no Strategy"
+        );
     }
 }
