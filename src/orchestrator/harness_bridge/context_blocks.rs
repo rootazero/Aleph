@@ -43,6 +43,22 @@ pub async fn active_standing_goal(session_key: &str) -> Option<String> {
     Some(render_goal_summary(&goal, now_ms))
 }
 
+/// Fetch the session's welded Strategy for the prompt weld. Returns the
+/// `Strategy` struct (the caller renders both the `<strategy>` body and the
+/// guardrail echo from it). Resolution mirrors the StraTA composite key: try
+/// `goal_key(session)` first (a `/goal` Strategy takes precedence), else
+/// `loop_key(session)` (a `/loop` Strategy). Returns `None` (→ both Strategy
+/// layers emit nothing) when the strategy subsystem is uninitialized or no
+/// Strategy is stored for either key. Fail-soft on store error. Mirrors
+/// `active_standing_goal`.
+pub async fn active_strategy(session_key: &str) -> Option<crate::strategy::Strategy> {
+    let store = crate::strategy::global()?;
+    if let Some(s) = store.get(&crate::strategy::goal_key(session_key)).ok().flatten() {
+        return Some(s);
+    }
+    store.get(&crate::strategy::loop_key(session_key)).ok().flatten()
+}
+
 /// Format the active-goal summary line injected as `<standing_goal>`. Pure:
 /// takes the goal plus the current wall-clock (Unix epoch ms) so it is
 /// unit-testable without the process-global `GoalStore`. Surfaces the
@@ -147,4 +163,15 @@ pub fn compute_runtime_state_blocks(
             crate::tools::runtime_state::RuntimeStateFragment::unavailable(label, reason)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod active_strategy_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn returns_none_when_store_uninitialized() {
+        let out = active_strategy("session-with-no-store").await;
+        assert!(out.is_none());
+    }
 }
