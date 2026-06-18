@@ -307,12 +307,6 @@ where
             );
         }
 
-        // Naked agent-loop strategic planner (StraTA round 2): on a genuine
-        // human first message, plan a Strategy concurrently with the rest of
-        // first-message setup. Awaited + stored just before harness dispatch
-        // (below) so StrategyLayer welds it on turn 1. A no-op otherwise.
-        let naked_loop_planner = self.spawn_naked_loop_planner(&request, is_first_message);
-
         // Inline slash command resolution for non-router paths (Panel, CLI)
         if request.input.trim().starts_with('/')
             && !request.metadata.contains_key(SLASH_COMMAND_MODE_KEY)
@@ -323,6 +317,24 @@ where
                     .insert(SLASH_COMMAND_MODE_KEY.to_string(), mode_json);
             }
         }
+
+        // Naked agent-loop strategic planner (StraTA round 2): on a genuine
+        // human first message that is NOT a slash command, plan a Strategy
+        // concurrently with the remaining first-message setup. Placed AFTER
+        // slash resolution so the SLASH_COMMAND_MODE_KEY plumbing flag (set
+        // just above) lets us skip slash commands: /goal·/loop·/workflow run
+        // their OWN planner, and fast-path commands return before the await
+        // below, so spawning for them would burn a detached planner LLM call
+        // whose result is silently discarded (dropping a tokio JoinHandle
+        // detaches the task; it does not cancel it). Skipping on the plumbing
+        // flag — not a message-content heuristic — keeps this R7-clean.
+        // Awaited + stored just before harness dispatch so StrategyLayer welds
+        // it on turn 1. A no-op otherwise.
+        let naked_loop_planner = if request.metadata.contains_key(SLASH_COMMAND_MODE_KEY) {
+            None
+        } else {
+            self.spawn_naked_loop_planner(&request, is_first_message)
+        };
 
         // Propagate session context BEFORE fast path so agent management
         // tools (agent_create, agent_delete) can resolve the session correctly.
