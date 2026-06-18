@@ -149,7 +149,14 @@ impl ClaudeVisionProvider {
                     "png" => "image/png",
                     "jpg" | "jpeg" => "image/jpeg",
                     "webp" => "image/webp",
-                    _ => "image/png",
+                    "gif" => "image/gif",
+                    other => {
+                        // Don't mislabel an unrecognized extension as PNG — the
+                        // API rejects the mismatched bytes with an opaque error.
+                        return Err(VisionError::ImageError(format!(
+                            "unsupported image extension: {other}"
+                        )));
+                    }
                 };
                 Ok(ContentBlock::Image {
                     source: ImageSource {
