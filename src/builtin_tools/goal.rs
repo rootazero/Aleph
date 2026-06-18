@@ -168,7 +168,7 @@ impl GoalTool {
         }
         let ctx = crate::strategy::planner::PlannerContext {
             tool_descriptions: Vec::new(),
-            env_summary: planner_env_summary(),
+            env_summary: crate::strategy::planner::env_summary(),
             lessons: goal.lessons.clone(),
         };
         if let Some(strategy) = crate::strategy::planner::plan_strategy(
@@ -213,14 +213,6 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
-}
-
-/// Light env summary for the planner (OS + cwd), never failing.
-fn planner_env_summary() -> String {
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
-    format!("os={} cwd={}", std::env::consts::OS, cwd)
 }
 
 #[async_trait]
@@ -918,10 +910,13 @@ mod tests {
     }
 
     /// With a planner provider that returns a concrete Strategy, goal `set` mints
-    /// and stores it under goal_key(session); a second `set` does NOT re-plan
-    /// (fire-once guard: the existing row is left intact).
+    /// and stores it under goal_key(session). A second `set` with a *changed*
+    /// objective invalidates the stale row (F4) and the planner re-fires; the
+    /// constant mock returns identical guardrails, so the re-planned row matches.
+    /// (Pure fire-once skip on an *unchanged* objective — no re-plan — is covered
+    /// by `set_with_same_objective_keeps_strategy`.)
     #[tokio::test]
-    async fn goal_set_fires_planner_once_and_stores_strategy() {
+    async fn goal_set_mints_strategy_and_replans_on_changed_objective() {
         use crate::strategy::{goal_key, StrategyStore};
         let sdir = tempfile::tempdir().unwrap();
         crate::strategy::set_global_for_test(
@@ -954,7 +949,8 @@ mod tests {
             .expect("a Strategy was minted");
         assert_eq!(stored.guardrails, vec!["do not touch the cache layer".to_string()]);
 
-        // Re-set: the fire-once guard must skip planning, leaving the first row.
+        // Re-set with a CHANGED objective: F4 invalidates the stale row, then the
+        // planner re-fires; the constant mock yields the same guardrails.
         tool.call(GoalArgs {
             objective: Some("Second obj".into()),
             ..args(GoalAction::Set)
@@ -966,7 +962,7 @@ mod tests {
             .get(&goal_key("sess-fire"))
             .unwrap()
             .unwrap();
-        assert_eq!(after.guardrails, stored.guardrails, "fire-once: row not re-planned");
+        assert_eq!(after.guardrails, stored.guardrails, "re-planned row carries the mock's guardrails");
     }
 
     /// Provider = None → goal `set` still succeeds and stores NO Strategy.

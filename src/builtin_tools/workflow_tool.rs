@@ -367,12 +367,9 @@ impl WorkflowTool {
         } else {
             input.to_string()
         };
-        let cwd = std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
         let ctx = crate::strategy::planner::PlannerContext {
             tool_descriptions: Vec::new(),
-            env_summary: format!("os={} cwd={}", std::env::consts::OS, cwd),
+            env_summary: crate::strategy::planner::env_summary(),
             lessons: Vec::new(),
         };
         crate::strategy::planner::plan_strategy(provider, &objective, &ctx, None).await

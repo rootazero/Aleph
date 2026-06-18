@@ -361,8 +361,8 @@ impl PromptPipeline {
             Box::new(MemoryProtocolLayer),
             Box::new(SessionContextGuideLayer),
             Box::new(StandingGoalLayer),
-            Box::new(StrategyPointerLayer),
             Box::new(ExecutionPlanLayer),
+            Box::new(StrategyPointerLayer),
             Box::new(SessionResumeLayer),
             Box::new(LanguageLayer),
         ])

@@ -100,14 +100,6 @@ fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
-/// Light env summary for the planner (OS + cwd), never failing.
-fn planner_env_summary() -> String {
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
-    format!("os={} cwd={}", std::env::consts::OS, cwd)
-}
-
 #[derive(Clone)]
 pub struct LoopTool {
     registry: Arc<LoopRegistry>,
@@ -345,7 +337,7 @@ impl LoopTool {
         }
         let ctx = crate::strategy::planner::PlannerContext {
             tool_descriptions: Vec::new(),
-            env_summary: planner_env_summary(),
+            env_summary: crate::strategy::planner::env_summary(),
             lessons: Vec::new(),
         };
         if let Some(strategy) =

@@ -95,7 +95,6 @@ impl StrategyStore {
 mod tests {
     use super::*;
     use crate::strategy::{goal_key, loop_key};
-    use crate::strategy::types::Strategy;
 
     fn temp_store() -> (StrategyStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();

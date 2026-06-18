@@ -16,10 +16,20 @@ use crate::strategy::Strategy;
 /// *descriptions* available to this run, a light env summary (OS / cwd), and —
 /// for `/goal` — the existing goal lessons. It is told these are the only
 /// capabilities and must not name specific tool calls.
+#[derive(Debug)]
 pub struct PlannerContext {
     pub tool_descriptions: Vec<String>,
     pub env_summary: String,
     pub lessons: Vec<String>,
+}
+
+/// Light env summary for the planner (OS + cwd), never failing. Single source
+/// of truth shared by the goal / loop / workflow planner call sites.
+pub fn env_summary() -> String {
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    format!("os={} cwd={}", std::env::consts::OS, cwd)
 }
 
 /// System prompt enforcing the §3 content contract and §4 tool-free rules.
