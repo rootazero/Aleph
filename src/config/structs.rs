@@ -451,6 +451,7 @@ impl Default for Config {
             stability: None,
             fallback_provider: None,
             context_budget: None,
+            strategy: None,
             resume: crate::config::types::ResumeConfig::default(),
             projects: crate::config::types::ProjectsConfig::default(),
             desktop: crate::config::types::desktop::DesktopDaemonConfig::default(),
