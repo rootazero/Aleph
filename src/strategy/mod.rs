@@ -3,6 +3,7 @@
 //! persistently, and pinned into every downstream execution prompt. Distinct
 //! from the standing `goal` (objective) and the per-task `scratchpad`.
 
+pub mod planner;
 pub mod render;
 pub mod store;
 pub mod types;
