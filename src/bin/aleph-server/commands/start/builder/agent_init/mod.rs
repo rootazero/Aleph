@@ -385,6 +385,23 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             None
         };
 
+        // Round 2: the engine's copy of the planner provider is additionally
+        // gated on [strategy].plan_naked_loop (default true). `None` here ⇒ the
+        // naked agent-loop first-message planner trigger in execute.rs stays
+        // dormant, while goal/loop/workflow tools keep their (enabled-gated)
+        // planner_provider. Cloned BEFORE planner_provider is moved into
+        // tool_config below (E0382 guard). `enabled` is already folded in:
+        // planner_provider is None when [strategy].enabled = false.
+        let naked_loop_planner_provider = if app_config
+            .strategy
+            .as_ref()
+            .map_or(true, |s| s.plan_naked_loop)
+        {
+            planner_provider.clone()
+        } else {
+            None
+        };
+
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
             memory_db: Some(memory_db.clone()),
@@ -721,6 +738,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         if let Some(ref wm) = workspace_manager {
             engine = engine.with_workspace_manager(wm.clone());
         }
+        engine = engine.with_planner_provider(naked_loop_planner_provider);
 
         // Create event-sourced memory command handler (requires state_db + memory_db)
         let command_handler: Option<
