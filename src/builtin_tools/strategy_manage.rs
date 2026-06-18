@@ -47,7 +47,7 @@ pub struct StrategyOutput {
 
 #[derive(Clone)]
 pub struct StrategyTool {
-    pub store: Arc<StrategyStore>,
+    store: Arc<StrategyStore>,
     session_key: Option<Arc<RwLock<String>>>,
     #[cfg(test)]
     test_session: Option<String>,
