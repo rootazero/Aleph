@@ -46,6 +46,10 @@ pub use standing_goal::StandingGoalLayer;
 mod strategy;
 pub use strategy::StrategyLayer;
 
+// --- Strategy pointer layer (guardrail echo, Dynamic, prio 1756) ---
+mod strategy_pointer;
+pub use strategy_pointer::StrategyPointerLayer;
+
 // --- Context layers ---
 mod chain_context;
 mod environment;
