@@ -200,6 +200,12 @@ impl BuiltinToolRegistry {
         );
         reg(
             tools,
+            "strategy",
+            crate::builtin_tools::StrategyTool::DESCRIPTION,
+            schema::<crate::builtin_tools::strategy_manage::StrategyArgs>("strategy"),
+        );
+        reg(
+            tools,
             "clawhub",
             crate::builtin_tools::clawhub::ClawHubTool::DESCRIPTION,
             schema::<crate::builtin_tools::clawhub::ClawHubArgs>("clawhub"),

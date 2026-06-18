@@ -268,6 +268,20 @@ impl BuiltinToolRegistry {
         crate::looping::init_global(loop_registry.clone());
         let loop_tool = crate::builtin_tools::LoopTool::new(loop_registry);
 
+        // Strategy store: session-keyed SQLite DB under the data dir (mirrors
+        // the goal store). Globalized so the harness bridge and lifecycle clears
+        // share one store.
+        let strategy_store = Arc::new(
+            crate::strategy::StrategyStore::open(
+                &crate::utils::paths::get_data_dir()
+                    .map_err(|e| AlephError::other(format!("strategy store data dir: {e}")))?
+                    .join("strategy.db"),
+            )
+            .map_err(|e| AlephError::other(format!("strategy store open: {e}")))?,
+        );
+        crate::strategy::init_global(strategy_store.clone());
+        let strategy_tool = crate::builtin_tools::StrategyTool::new(strategy_store);
+
         // Browser tools — always available, use ProfileManager from config or create default
         let browser_profile_manager = config.browser_profile_manager.clone().unwrap_or_else(|| {
             Arc::new(crate::browser::manager::ProfileManager::new(
@@ -727,6 +741,8 @@ impl BuiltinToolRegistry {
             loop_tool: loop_tool
                 .with_session_key_handle(memory_session_key_handle.clone())
                 .with_planner_provider(config.planner_provider.clone()),
+            strategy_tool: strategy_tool
+                .with_session_key_handle(memory_session_key_handle.clone()),
             memory_search_tool,
             memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
             node_registry: Arc::new(tokio::sync::OnceCell::new()),

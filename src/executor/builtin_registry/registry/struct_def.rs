@@ -109,6 +109,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) goal_tool: crate::builtin_tools::GoalTool,
     /// Loop tool instance (in-session timer loop, R8). In-memory only.
     pub(crate) loop_tool: crate::builtin_tools::LoopTool,
+    /// Strategy tool instance (persistent planner output, R8).
+    pub(crate) strategy_tool: crate::builtin_tools::StrategyTool,
     /// Memory search tool instance (optional - requires `memory_db` + embedder)
     pub(crate) memory_search_tool: Option<crate::builtin_tools::MemorySearchTool>,
     /// Memory context provider — used by the `remember` tool to resolve the

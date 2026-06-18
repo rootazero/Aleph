@@ -265,6 +265,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
             "goal" => Box::pin(async move { self.goal_tool.call_json(arguments).await }),
             "loop" => Box::pin(async move { self.loop_tool.call_json(arguments).await }),
+            "strategy" => Box::pin(async move { self.strategy_tool.call_json(arguments).await }),
 
             // Memory tools - search and browse personal memory
             "memory_search" => Box::pin(async move {

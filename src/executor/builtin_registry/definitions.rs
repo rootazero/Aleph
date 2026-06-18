@@ -1060,6 +1060,11 @@ pub fn create_tool_boxed(
         // (init_global at boot). None before boot, same as goal.
         "loop" => crate::looping::global()
             .map(|reg| Box::new(crate::builtin_tools::LoopTool::new(reg)) as Box<dyn AlephToolDyn>),
+        // Strategy tool — backed by the process-global StrategyStore
+        // (init_global at boot). None before boot, same as goal/loop.
+        "strategy" => crate::strategy::global().map(|store| {
+            Box::new(crate::builtin_tools::StrategyTool::new(store)) as Box<dyn AlephToolDyn>
+        }),
         // Memory lifecycle & knowledge-wiki tools require a memory backend / wiki /
         // profile synthesizer + per-session context — built dynamically in
         // BuiltinToolRegistry::with_config(), same as note_manage below.
@@ -1096,6 +1101,16 @@ pub fn is_builtin_tool(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strategy_tool_is_listed_in_a_group() {
+        // The `strategy` builtin must be discoverable via the category groups
+        // (same surface as goal/loop), or the LLM never sees it.
+        let listed = crate::executor::builtin_registry::groups::TOOL_CATEGORIES
+            .iter()
+            .any(|cat| cat.tools.contains(&"strategy"));
+        assert!(listed, "strategy tool must appear in a tool category group");
+    }
 
     #[test]
     fn test_all_tools_defined() {

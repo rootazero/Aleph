@@ -110,6 +110,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "media",
             "goal",
             "loop",
+            "strategy",
         ],
     },
     ToolCategory {
