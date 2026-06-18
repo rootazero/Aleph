@@ -14,6 +14,8 @@
 //! // => "## Runtime Environment\nos=macos | arch=aarch64 | shell=zsh | cwd=/workspace | model=claude-opus-4-6 | host=MacBook-Pro"
 //! ```
 
+use crate::sync_primitives::Mutex;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -88,7 +90,7 @@ impl RuntimeContext {
             })
         };
 
-        let repo_root = cached_repo_root(&working_dir).cloned();
+        let repo_root = cached_repo_root(&working_dir);
 
         Self {
             os,
@@ -135,17 +137,25 @@ impl RuntimeContext {
     }
 }
 
-/// Process-lifetime cache for the detected repository root.
+/// Process-lifetime cache for the detected repository root, keyed by working
+/// directory.
 ///
-/// Detection cost is one to a few `fs::exists` syscalls on the first call;
-/// subsequent calls return the cached `Option<PathBuf>`. `None` is also cached,
-/// so non-repo working directories never re-walk.
-static REPO_ROOT_CACHE: OnceLock<Option<PathBuf>> = OnceLock::new();
+/// Detection cost is one to a few `fs::exists` syscalls on the first call for a
+/// given `working_dir`; subsequent calls with the same directory return the
+/// cached `Option<PathBuf>` (`None` is cached too, so non-repo dirs never
+/// re-walk). Keying by `working_dir` is required: a daemon serving runs from
+/// different cwds must not return the first caller's repo root for all of them.
+static REPO_ROOT_CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<PathBuf>>>> = OnceLock::new();
 
-fn cached_repo_root(working_dir: &Path) -> Option<&'static PathBuf> {
-    REPO_ROOT_CACHE
-        .get_or_init(|| detect_repo_root(working_dir))
-        .as_ref()
+fn cached_repo_root(working_dir: &Path) -> Option<PathBuf> {
+    let cache = REPO_ROOT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(cached) = map.get(working_dir) {
+        return cached.clone();
+    }
+    let detected = detect_repo_root(working_dir);
+    map.insert(working_dir.to_path_buf(), detected.clone());
+    detected
 }
 
 /// Walk upward from `start` looking for a `.git` entry. Returns the first
