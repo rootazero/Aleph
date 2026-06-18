@@ -101,10 +101,8 @@ pub fn TeamsSidebar() -> impl IntoView {
 
     view! {
         <div class="flex flex-col h-full">
-            <div class="px-4 py-3">
-                <h2 class="text-xs font-medium text-text-tertiary uppercase tracking-wider">
-                    {move || t_string!(i18n, nav.teams).to_string()}
-                </h2>
+            <div class="px-3 py-3">
+                <components::team_selector::TeamSelector />
             </div>
             <nav class="flex-1 overflow-y-auto px-3 space-y-1">
                 <SubTabButton
@@ -133,9 +131,6 @@ pub fn TeamsSidebar() -> impl IntoView {
                     target=TeamsSubTab::Workers
                 />
             </nav>
-            <div class="px-3 py-3 border-t border-border">
-                <components::team_selector::TeamSelector />
-            </div>
         </div>
     }
 }

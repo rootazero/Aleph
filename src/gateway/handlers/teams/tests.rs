@@ -159,6 +159,10 @@ async fn team_store() -> Arc<dyn crate::teams::TeamStore> {
     Arc::new(store)
 }
 
+fn test_event_bus() -> Arc<crate::gateway::event_bus::GatewayEventBus> {
+    Arc::new(crate::gateway::event_bus::GatewayEventBus::new())
+}
+
 fn create_team_req(params: serde_json::Value) -> JsonRpcRequest {
     JsonRpcRequest {
         jsonrpc: "2.0".to_string(),
@@ -177,7 +181,7 @@ async fn handle_create_persists_team_with_leader_and_members() {
         "leader_id": "agent-main",
         "members": [{"agent_id": "agent-alice", "role": "researcher"}]
     }));
-    let resp = handle_create(req, store.clone()).await;
+    let resp = handle_create(req, store.clone(), test_event_bus()).await;
     assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
 
     let team_id = resp
@@ -204,7 +208,7 @@ async fn handle_create_persists_team_with_leader_and_members() {
 async fn handle_create_rejects_empty_name() {
     let store = team_store().await;
     let resp =
-        handle_create(create_team_req(json!({"name": "", "leader_id": "a"})), store).await;
+        handle_create(create_team_req(json!({"name": "", "leader_id": "a"})), store, test_event_bus()).await;
     let err = resp.error.expect("expected error");
     assert_eq!(err.code, INVALID_PARAMS);
 }
@@ -219,6 +223,7 @@ async fn handle_create_deduplicates_leader_in_members_list() {
             "members": [{"agent_id": "bot", "role": "worker"}]
         })),
         store.clone(),
+        test_event_bus(),
     )
     .await;
     assert!(resp.error.is_none());
@@ -238,7 +243,7 @@ async fn handle_create_deduplicates_leader_in_members_list() {
 async fn handle_create_with_auto_name_sets_flag() {
     let store = team_store().await;
     let req = create_team_req(json!({ "name": "新群聊", "leader_id": "main", "auto_name": true }));
-    let resp = handle_create(req, Arc::clone(&store)).await;
+    let resp = handle_create(req, Arc::clone(&store), test_event_bus()).await;
     assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
     let team_id = resp
         .result
@@ -254,7 +259,7 @@ async fn handle_create_with_auto_name_sets_flag() {
 async fn handle_create_without_auto_name_leaves_flag_off() {
     let store = team_store().await;
     let req = create_team_req(json!({ "name": "My Team", "leader_id": "main" }));
-    let resp = handle_create(req, Arc::clone(&store)).await;
+    let resp = handle_create(req, Arc::clone(&store), test_event_bus()).await;
     assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
     let team_id = resp
         .result
@@ -516,7 +521,7 @@ async fn handle_rename_updates_name() {
         .unwrap();
 
     let req = rename_req(json!({ "team_id": team.id, "name": "Renamed" }));
-    let resp = handle_rename(req, Arc::clone(&store)).await;
+    let resp = handle_rename(req, Arc::clone(&store), test_event_bus()).await;
     assert!(resp.error.is_none(), "rename should succeed: {resp:?}");
 
     let got = store.get_team(&team.id).await.unwrap().unwrap();
@@ -527,8 +532,47 @@ async fn handle_rename_updates_name() {
 async fn handle_rename_rejects_blank_name() {
     let store = team_store().await;
     let req = rename_req(json!({ "team_id": "t", "name": "   " }));
-    let resp = handle_rename(req, store).await;
+    let resp = handle_rename(req, store, test_event_bus()).await;
     assert!(resp.error.is_some(), "blank name must be rejected");
+}
+
+/// Regression: disbanding a team must publish a `team.changed` frame. The
+/// group-chat sidebar and the teams tab both re-fetch on this topic; without
+/// the frame the two views drift apart (sidebar hides the disbanded team,
+/// teams tab keeps showing it as active until a manual refresh).
+#[tokio::test]
+async fn handle_disband_emits_team_changed() {
+    use crate::gateway::events::{ChangeKind, GatewayEventFrame};
+
+    let store = team_store().await;
+    let team = store
+        .create_team(crate::teams::NewTeam {
+            name: "Doomed".into(),
+            description: String::new(),
+            leader_id: "main".into(),
+        })
+        .await
+        .unwrap();
+
+    let bus = test_event_bus();
+    let mut rx = bus.subscribe_typed();
+
+    let req = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        method: "teams.disband".to_string(),
+        params: Some(json!({ "team_id": team.id })),
+        id: Some(json!(1)),
+    };
+    let resp = handle_disband(req, Arc::clone(&store), Arc::clone(&bus)).await;
+    assert!(resp.error.is_none(), "disband should succeed: {resp:?}");
+
+    match rx.try_recv() {
+        Ok(GatewayEventFrame::TeamChanged { team_id, change }) => {
+            assert_eq!(team_id, team.id);
+            assert_eq!(change, ChangeKind::Updated);
+        }
+        other => panic!("expected a TeamChanged frame, got {other:?}"),
+    }
 }
 }
 

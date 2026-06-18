@@ -199,15 +199,18 @@ pub(in crate::commands::start) fn register_teams_handlers(
     artifact_store: Option<&Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
     msg_store: Option<Arc<dyn alephcore::teams::messages::MessageStore>>,
     agent_manager: Option<Arc<alephcore::AgentManager>>,
+    event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
 ) {
     use alephcore::gateway::handlers::teams;
 
     // NOTE: teams.chat.send is registered in agent_init/mod.rs (it needs the execution context, unlike these store-only handlers).
     register_handler!(server, "teams.list", teams::handle_list, store);
     register_handler!(server, "teams.get", teams::handle_get, store, coord_store);
-    register_handler!(server, "teams.create", teams::handle_create, store);
-    register_handler!(server, "teams.rename", teams::handle_rename, store);
-    register_handler!(server, "teams.disband", teams::handle_disband, store);
+    // create / rename / disband publish `team.changed` so the group-chat sidebar
+    // and the teams tab stay in sync without a manual refresh.
+    register_handler!(server, "teams.create", teams::handle_create, store, event_bus);
+    register_handler!(server, "teams.rename", teams::handle_rename, store, event_bus);
+    register_handler!(server, "teams.disband", teams::handle_disband, store, event_bus);
     // teams.delete — cascade when all four subordinate stores are configured;
     // fall back to single-store delete (legacy behavior) otherwise.
     match (
@@ -223,6 +226,7 @@ pub(in crate::commands::start) fn register_teams_handlers(
             let snap_c = Arc::clone(snap);
             let art_c = Arc::clone(art);
             let msg_c = Arc::clone(&msg);
+            let bus_c = Arc::clone(event_bus);
             server.handlers_mut().register("teams.delete", move |req| {
                 let store_c = Arc::clone(&store_c);
                 let coord_c = Arc::clone(&coord_c);
@@ -230,15 +234,17 @@ pub(in crate::commands::start) fn register_teams_handlers(
                 let snap_c = Arc::clone(&snap_c);
                 let art_c = Arc::clone(&art_c);
                 let msg_c = Arc::clone(&msg_c);
+                let bus_c = Arc::clone(&bus_c);
                 async move {
-                    teams::handle_delete(req, store_c, coord_c, msg_c, ev_c, art_c, snap_c).await
+                    teams::handle_delete(req, store_c, coord_c, msg_c, ev_c, art_c, snap_c, bus_c)
+                        .await
                 }
             });
         }
         _ => {
             // Fallback: TeamStore-only delete (old behavior); subordinate store
             // absence is acceptable in simulated / test configurations.
-            register_handler!(server, "teams.delete", teams::handle_delete_basic, store);
+            register_handler!(server, "teams.delete", teams::handle_delete_basic, store, event_bus);
         }
     }
 

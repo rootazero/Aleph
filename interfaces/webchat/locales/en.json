@@ -1485,6 +1485,9 @@
     "kanban": {
       "selector_label": "Active Team",
       "selector_placeholder": "Choose a team",
+      "filter_placeholder": "Filter teams…",
+      "empty_teams": "No teams yet",
+      "no_match": "No matching team",
       "columns": {
         "pending": "Pending",
         "blocked": "Blocked",

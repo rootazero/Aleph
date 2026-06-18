@@ -11,7 +11,20 @@ use crate::teams::{NewTeam, NewTeamMember, TeamStore};
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
 };
+use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::events::{ChangeKind, GatewayEventFrame};
 use crate::gateway::handlers::parse_params;
+
+/// Emit a `team.changed` frame so every subscribed surface re-fetches: the
+/// group-chat sidebar (`agents.teams`) and the teams tab (`teams.list`) both
+/// listen on this topic. Without it the two views drift apart until a manual
+/// refresh. Best-effort — a serialization failure must not fail the RPC.
+fn notify_team_changed(event_bus: &Arc<GatewayEventBus>, team_id: &str, change: ChangeKind) {
+    let _ = event_bus.publish_frame(&GatewayEventFrame::TeamChanged {
+        team_id: team_id.to_string(),
+        change,
+    });
+}
 
 #[derive(Debug, Deserialize)]
 pub struct TeamIdParams {
@@ -107,7 +120,11 @@ pub async fn handle_get(
 }
 
 /// Handle teams.disband — mark a team as disbanded
-pub async fn handle_disband(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -> JsonRpcResponse {
+pub async fn handle_disband(
+    request: JsonRpcRequest,
+    store: Arc<dyn TeamStore>,
+    event_bus: Arc<GatewayEventBus>,
+) -> JsonRpcResponse {
     debug!("Handling teams.disband request");
 
     let params: TeamIdParams = match parse_params(&request) {
@@ -116,7 +133,10 @@ pub async fn handle_disband(request: JsonRpcRequest, store: Arc<dyn TeamStore>) 
     };
 
     match store.disband_team(&params.team_id).await {
-        Ok(()) => JsonRpcResponse::success(request.id, json!({ "success": true })),
+        Ok(()) => {
+            notify_team_changed(&event_bus, &params.team_id, ChangeKind::Updated);
+            JsonRpcResponse::success(request.id, json!({ "success": true }))
+        }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -140,6 +160,7 @@ pub async fn handle_delete(
     event_store: Arc<dyn crate::teams::events::EventLogStore>,
     artifact_store: Arc<dyn crate::teams::artifacts::ArtifactStore>,
     snapshot_store: Arc<crate::teams::SqliteSnapshotStore>,
+    event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.delete request (cascade)");
     let params: TeamIdParams = match parse_params(&request) {
@@ -189,6 +210,7 @@ pub async fn handle_delete(
         warn!("teams.delete: event cleanup failed for {team_id}: {e}");
     }
 
+    notify_team_changed(&event_bus, &team_id, ChangeKind::Deleted);
     JsonRpcResponse::success(request.id, json!({ "success": true }))
 }
 
@@ -197,13 +219,17 @@ pub async fn handle_delete(
 pub async fn handle_delete_basic(
     request: JsonRpcRequest,
     store: Arc<dyn TeamStore>,
+    event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: TeamIdParams = match parse_params(&request) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
     match store.delete_team(&params.team_id).await {
-        Ok(()) => JsonRpcResponse::success(request.id, json!({ "success": true })),
+        Ok(()) => {
+            notify_team_changed(&event_bus, &params.team_id, ChangeKind::Deleted);
+            JsonRpcResponse::success(request.id, json!({ "success": true }))
+        }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -247,7 +273,11 @@ pub struct CreateTeamParams {
 /// Thin I/O: only wraps `TeamStore::create_team` + `add_member`, no orchestration
 /// or business logic (R4/R10). Leader is auto-enrolled with role="leader";
 /// members duplicating the leader are skipped.
-pub async fn handle_create(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -> JsonRpcResponse {
+pub async fn handle_create(
+    request: JsonRpcRequest,
+    store: Arc<dyn TeamStore>,
+    event_bus: Arc<GatewayEventBus>,
+) -> JsonRpcResponse {
     debug!("Handling teams.create request");
 
     let params: CreateTeamParams = match parse_params(&request) {
@@ -328,6 +358,7 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -
         }
     }
 
+    notify_team_changed(&event_bus, &team.id, ChangeKind::Created);
     JsonRpcResponse::success(
         request.id,
         json!({ "team_id": team.id, "name": team.name, "leader_id": team.leader_id }),
@@ -346,7 +377,11 @@ pub struct RenameTeamParams {
 
 /// teams.rename — rename a team. Thin I/O: validates non-blank name, delegates
 /// to `TeamStore::rename_team`. Used by the Panel sidebar inline-edit.
-pub async fn handle_rename(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -> JsonRpcResponse {
+pub async fn handle_rename(
+    request: JsonRpcRequest,
+    store: Arc<dyn TeamStore>,
+    event_bus: Arc<GatewayEventBus>,
+) -> JsonRpcResponse {
     debug!("Handling teams.rename request");
     let params: RenameTeamParams = match parse_params(&request) {
         Ok(p) => p,
@@ -361,7 +396,10 @@ pub async fn handle_rename(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -
         );
     }
     match store.rename_team(&params.team_id, name).await {
-        Ok(()) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
+        Ok(()) => {
+            notify_team_changed(&event_bus, &params.team_id, ChangeKind::Updated);
+            JsonRpcResponse::success(request.id, json!({ "ok": true }))
+        }
         Err(e) => JsonRpcResponse::error(request.id, RESOURCE_NOT_FOUND, format!("{e}")),
     }
 }
