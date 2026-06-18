@@ -213,6 +213,9 @@ pub fn ChatSidebar() -> impl IntoView {
     let is_loading = RwSignal::new(false);
     // Which agent is selected in the dropdown (synced with chat.agent_id)
     let selected_agent = RwSignal::new(Option::<String>::None);
+    // Agent picker popover visibility — closes on mouse-leave to match the
+    // model picker / project menu affordances (see model_picker.rs).
+    let agent_picker_open = RwSignal::new(false);
     // Team compose popover visibility
     let show_compose = RwSignal::new(false);
 
@@ -490,23 +493,6 @@ pub fn ChatSidebar() -> impl IntoView {
         chat.active_project_name.set(restored_name);
 
         leptos::task::spawn_local(hydrate_session_history(dash, chat, workspace, key));
-    };
-
-    // Handle agent dropdown change — opens or focuses that agent's tab.
-    // Don't clear session here: SessionMap.activate restores the tab's
-    // snapshot (including its session_key), so the user picks up where
-    // they left off in that agent's conversation.
-    let on_agent_change = move |ev: web_sys::Event| {
-        let val = event_target_value(&ev);
-        if !val.is_empty() {
-            selected_agent.set(Some(val.clone()));
-            session_map.activate(chat, &val);
-            // Switching to another agent's tab swaps the chat snapshot but
-            // the workspace pane is global — drop its stale tool-detail.
-            if let Some(ws) = workspace {
-                ws.reset();
-            }
-        }
     };
 
     // Enter team chat mode: fetch detail, build roster, replay history.
@@ -809,33 +795,113 @@ pub fn ChatSidebar() -> impl IntoView {
 
                 // ── Normal chat: agent picker + new chat ────────────────
                 <div class="flex items-center gap-2">
-                    <select
-                        class="flex-1 min-w-0 px-3 py-1.5 rounded-lg bg-surface-sunken border border-border
-                               text-sm text-text-primary focus:outline-none focus:ring-2
-                               focus:ring-primary/30 focus:border-primary truncate"
-                        on:change=on_agent_change
-                    >
-                        {move || {
-                            let agent_list = agents.get();
-                            let sel = selected_agent.get();
-                            agent_list
-                                .into_iter()
-                                .map(|agent| {
-                                    let id = agent.id.clone();
-                                    let name = agent
-                                        .name
-                                        .clone()
-                                        .unwrap_or_else(|| agent.id.clone());
-                                    let is_selected = sel.as_deref() == Some(&id);
-                                    view! {
-                                        <option value={id} selected=is_selected>
-                                            {name}
-                                        </option>
+                    // Agent picker — custom popover that closes on mouse-leave,
+                    // mirroring the model picker / section switcher affordances
+                    // (see model_picker.rs / nav_menu.rs). Replaces the former
+                    // native <select> so its dismissal matches the rest of the
+                    // composer/sidebar pickers.
+                    <div class="relative flex-1 min-w-0">
+                        <button
+                            type="button"
+                            class="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-sunken \
+                                   border border-border text-sm text-text-primary hover:border-primary/60 \
+                                   focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
+                            on:click=move |_| agent_picker_open.update(|v| *v = !*v)
+                        >
+                            <span class="flex-1 min-w-0 truncate text-left">
+                                {move || {
+                                    let sel = selected_agent.get();
+                                    let list = agents.get();
+                                    match sel.as_deref() {
+                                        Some(id) => list
+                                            .iter()
+                                            .find(|a| a.id == id)
+                                            .map(|a| a.name.clone().unwrap_or_else(|| a.id.clone()))
+                                            .unwrap_or_else(|| id.to_string()),
+                                        None => "—".to_string(),
                                     }
-                                })
-                                .collect::<Vec<_>>()
-                        }}
-                    </select>
+                                }}
+                            </span>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+                                 class=move || {
+                                     if agent_picker_open.get() {
+                                         "flex-shrink-0 text-text-tertiary rotate-180 transition-transform"
+                                     } else {
+                                         "flex-shrink-0 text-text-tertiary transition-transform"
+                                     }
+                                 }
+                            >
+                                <polyline points="18 15 12 9 6 15" />
+                            </svg>
+                        </button>
+
+                        <Show when=move || agent_picker_open.get()>
+                            <div class="glass animate-pop-in absolute bottom-full left-0 right-0 mb-2 z-50 \
+                                        max-h-72 overflow-y-auto rounded-xl border border-border \
+                                        bg-surface-overlay/85 shadow-xl p-1.5 space-y-0.5"
+                                on:mouseleave=move |_| agent_picker_open.set(false)>
+                                {move || {
+                                    let sel = selected_agent.get();
+                                    agents
+                                        .get()
+                                        .into_iter()
+                                        .map(|agent| {
+                                            let id = agent.id.clone();
+                                            let id_for_click = id.clone();
+                                            let name = agent
+                                                .name
+                                                .clone()
+                                                .unwrap_or_else(|| agent.id.clone());
+                                            let emoji = agent.emoji.clone().unwrap_or_default();
+                                            let is_selected = sel.as_deref() == Some(&id);
+                                            view! {
+                                                <button
+                                                    type="button"
+                                                    class=move || {
+                                                        let base = "w-full flex items-center gap-2 px-3 py-2 \
+                                                                    rounded-lg text-sm text-left";
+                                                        if is_selected {
+                                                            format!("{base} nav-tile-active")
+                                                        } else {
+                                                            format!("{base} nav-tile")
+                                                        }
+                                                    }
+                                                    // Switch to that agent's tab. Don't clear the session:
+                                                    // SessionMap.activate restores the tab's snapshot so the
+                                                    // user resumes where they left off. The workspace pane is
+                                                    // global — drop its stale tool-detail on switch.
+                                                    on:click=move |_| {
+                                                        let val = id_for_click.clone();
+                                                        agent_picker_open.set(false);
+                                                        if val.is_empty() {
+                                                            return;
+                                                        }
+                                                        selected_agent.set(Some(val.clone()));
+                                                        session_map.activate(chat, &val);
+                                                        if let Some(ws) = workspace {
+                                                            ws.reset();
+                                                        }
+                                                    }
+                                                >
+                                                    <span class="text-base">{emoji}</span>
+                                                    <span class="flex-1 min-w-0 truncate">{name}</span>
+                                                    {is_selected.then(|| view! {
+                                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                                             stroke="currentColor" stroke-width="3"
+                                                             stroke-linecap="round" stroke-linejoin="round"
+                                                             class="flex-shrink-0 text-primary">
+                                                            <polyline points="20 6 9 17 4 12" />
+                                                        </svg>
+                                                    })}
+                                                </button>
+                                            }
+                                        })
+                                        .collect::<Vec<_>>()
+                                }}
+                            </div>
+                        </Show>
+                    </div>
                     <button
                         class="w-9 h-9 shrink-0 flex items-center justify-center rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
                         title=move || t_string!(i18n, chat.new).to_string()

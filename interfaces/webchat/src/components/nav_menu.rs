@@ -117,15 +117,12 @@ pub fn NavMenu() -> impl IntoView {
                 </svg>
             </button>
 
-            // Click-outside catcher
-            {move || open.get().then(|| view! {
-                <div class="fixed inset-0 z-40" on:click=move |_| open.set(false) />
-            })}
-
-            // Popup — opens upward
+            // Popup — opens upward. Closes on mouse-leave, matching the model
+            // picker / project menu affordances (see model_picker.rs).
             <Show when=move || open.get()>
                 <div class="glass animate-pop-in absolute bottom-full left-2 right-2 mb-2 z-50
-                            rounded-xl border border-border bg-surface-overlay/85 shadow-xl p-1.5 space-y-0.5">
+                            rounded-xl border border-border bg-surface-overlay/85 shadow-xl p-1.5 space-y-0.5"
+                    on:mouseleave=move |_| open.set(false)>
                     {ALL_MODES.into_iter().map(|m| {
                         let route = route_of(m);
                         let nav = navigate.clone();
