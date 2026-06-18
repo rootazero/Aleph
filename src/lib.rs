@@ -101,6 +101,7 @@ pub mod runtimes;
 pub mod sandbox;
 pub mod search;
 pub mod session;
+pub mod strategy;
 pub mod skill;
 pub mod tool_metadata;
 
