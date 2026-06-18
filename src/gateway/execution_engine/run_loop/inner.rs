@@ -805,6 +805,23 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         mb.clone() as Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>
                     );
                 }
+                // Weld the run-global Strategy into every spawned subagent's
+                // inline prompt (StraTA spec §7). A subagent is a downstream
+                // execution node, so it must carry the same system-level
+                // Strategy the parent run's prompt does. Mirror the main
+                // harness's goal-then-loop precedence (`active_strategy`) and
+                // the exact body `StrategyLayer` emits (`render_strategy_summary`,
+                // the same string fed into `ResolvedContext.strategy`), so the
+                // child's inline `<strategy>` weld is byte-identical to the
+                // parent's cached layer. Fail-soft: no Strategy → no call → the
+                // child prompt stays byte-identical to the pre-feature baseline.
+                if let Some(s) = crate::orchestrator::harness_bridge::active_strategy(
+                    &request.session_key.to_key_string(),
+                )
+                .await
+                {
+                    t = t.with_strategy(crate::strategy::render_strategy_summary(&s));
+                }
                 Arc::new(t)
             };
 
