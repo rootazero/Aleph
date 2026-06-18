@@ -332,6 +332,9 @@ fn macos_window_list() -> Result<Vec<WindowInfo>> {
     let values = list.get_all_values();
 
     for ptr in &values {
+        // SAFETY: `*ptr` is a `CFDictionaryRef` element of the CFArray returned
+        // by `copy_window_info`; `wrap_under_get_rule` retains it, so it stays
+        // valid for the lifetime of `entry`.
         let entry: core_foundation::dictionary::CFDictionary<
             CFString,
             core_foundation::base::CFType,
@@ -340,6 +343,9 @@ fn macos_window_list() -> Result<Vec<WindowInfo>> {
         };
 
         let get_str = |key: core_foundation::string::CFStringRef| -> String {
+            // SAFETY: `key` is one of the `kCGWindow*` framework constant
+            // `CFStringRef`s, valid for the process lifetime; `wrap_under_get_rule`
+            // retains it correctly.
             unsafe {
                 let key_cf = CFString::wrap_under_get_rule(key);
                 entry
@@ -351,6 +357,9 @@ fn macos_window_list() -> Result<Vec<WindowInfo>> {
         };
 
         let get_i64 = |key: core_foundation::string::CFStringRef| -> i64 {
+            // SAFETY: `key` is one of the `kCGWindow*` framework constant
+            // `CFStringRef`s, valid for the process lifetime; `wrap_under_get_rule`
+            // retains it correctly.
             unsafe {
                 let key_cf = CFString::wrap_under_get_rule(key);
                 entry

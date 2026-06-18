@@ -46,7 +46,15 @@ fn strip_date_suffix(s: &str) -> Option<&str> {
     if s.len() < 11 {
         return None;
     }
-    let tail = &s[s.len() - 11..];
+    let split = s.len() - 11;
+    // `s` is a provider/config-supplied model id. The `-YYYY-MM-DD` suffix is
+    // pure ASCII, so a non-char-boundary at `split` means the tail contains a
+    // multi-byte char and cannot match the pattern. Bail instead of slicing on
+    // a non-boundary, which would panic.
+    if !s.is_char_boundary(split) {
+        return None;
+    }
+    let tail = &s[split..];
     // Pattern: '-' DDDD '-' DD '-' DD
     let pat = ['-', 'd', 'd', 'd', 'd', '-', 'd', 'd', '-', 'd', 'd'];
     let mut chars = tail.chars();
@@ -60,7 +68,7 @@ fn strip_date_suffix(s: &str) -> Option<&str> {
             return None;
         }
     }
-    Some(&s[..s.len() - 11])
+    Some(&s[..split])
 }
 
 /// Parse the minor version `n` from `gpt-5.<n>` ids (`None` for plain `gpt-5`).

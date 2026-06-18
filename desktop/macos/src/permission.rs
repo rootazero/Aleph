@@ -158,6 +158,8 @@ fn request_screen_recording() -> PermissionStatus {
 }
 
 fn request_camera() -> PermissionStatus {
+    // SAFETY: reads the `AVMediaTypeVideo` framework constant; the generated
+    // binding is `Option`, so a null/unavailable symbol is handled explicitly.
     let media_type = unsafe {
         match AVMediaTypeVideo {
             Some(mt) => mt,
@@ -170,6 +172,9 @@ fn request_camera() -> PermissionStatus {
         let _ = tx.send(granted.as_bool());
     });
 
+    // SAFETY: `media_type` is a valid framework constant. The completion
+    // handler is an `RcBlock` (reference-counted), so AVFoundation retains it
+    // for the lifetime of the async request even after this `&block` borrow ends.
     unsafe {
         AVCaptureDevice::requestAccessForMediaType_completionHandler(media_type, &block);
     }
@@ -182,6 +187,8 @@ fn request_camera() -> PermissionStatus {
 }
 
 fn request_microphone() -> PermissionStatus {
+    // SAFETY: reads the `AVMediaTypeAudio` framework constant; the generated
+    // binding is `Option`, so a null/unavailable symbol is handled explicitly.
     let media_type = unsafe {
         match AVMediaTypeAudio {
             Some(mt) => mt,
@@ -194,6 +201,9 @@ fn request_microphone() -> PermissionStatus {
         let _ = tx.send(granted.as_bool());
     });
 
+    // SAFETY: `media_type` is a valid framework constant. The completion
+    // handler is an `RcBlock` (reference-counted), so AVFoundation retains it
+    // for the lifetime of the async request even after this `&block` borrow ends.
     unsafe {
         AVCaptureDevice::requestAccessForMediaType_completionHandler(media_type, &block);
     }
@@ -211,6 +221,9 @@ fn request_speech_recognition() -> PermissionStatus {
         let _ = tx.send(status);
     });
 
+    // SAFETY: the completion handler is an `RcBlock` (reference-counted), so
+    // Speech.framework retains it for the lifetime of the async authorization
+    // request even after this `&block` borrow ends.
     unsafe {
         SFSpeechRecognizer::requestAuthorization(&block);
     }
@@ -232,6 +245,8 @@ fn request_accessibility() -> PermissionStatus {
 
     let options = CFDictionary::from_CFType_pairs(&[(key, value)]);
 
+    // SAFETY: `options` is a live `CFDictionary` owned by this scope; we pass a
+    // borrowed `CFTypeRef` that stays valid for the duration of the call.
     let trusted = unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) };
 
     if trusted {

@@ -266,18 +266,20 @@ impl CgroupV2Scope {
         }
         let pid = std::process::id();
         let mut pid_buf = [0u8; 16];
+        // The kernel expects "<pid>\n"; the newline must trail the digits.
+        // Reserve index 15 for it and write decimal digits LSB-first from 14.
+        pid_buf[15] = b'\n';
         let mut n = pid;
         let mut i = 0;
         loop {
-            pid_buf[15 - i] = b'0' + (n % 10) as u8;
+            pid_buf[14 - i] = b'0' + (n % 10) as u8;
             n /= 10;
             i += 1;
             if n == 0 {
                 break;
             }
         }
-        pid_buf[15 - i] = b'\n';
-        let pid_slice = &pid_buf[15 - i..16];
+        let pid_slice = &pid_buf[14 - (i - 1)..16];
         let mut written = 0;
         while written < pid_slice.len() {
             let ret = unsafe {
