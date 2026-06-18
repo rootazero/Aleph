@@ -49,48 +49,18 @@ use helpers::{
 mod runtime_warmup;
 use runtime_warmup::runtime_startup_warmup;
 
+mod bootstrap_factories;
+use bootstrap_factories::{build_desktop_platform, build_task_delivery_engine};
+
 // ── (subsystem initializer helpers extracted to start/helpers.rs) ────────────
 
-/// Build the shared task-result delivery engine with all built-in targets
-/// (Webhook / Gateway / Memory) registered.
-///
-/// Used by **both** the cron and heartbeat timer loops so every task type
-/// resolves the same target set — previously each subsystem registered the
-/// targets inline, and the cron alert path skipped the engine entirely
-/// (silently dropping `Webhook` / `Memory` failure-alert targets). Centralising
-/// it here keeps the registration single-source.
-fn build_task_delivery_engine(
-    channel_cell: alephcore::tasks::shared::targets::ChannelRegistryCell,
-    memory_store: Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
-    ssrf_policy: alephcore::security::ssrf::SsrfPolicy,
-) -> Arc<alephcore::tasks::shared::delivery::DeliveryEngine> {
-    use alephcore::tasks::shared::delivery::DeliveryEngine;
-    use alephcore::tasks::shared::targets::{GatewayDeliveryTarget, MemoryDeliveryTarget};
-
-    let mut engine = DeliveryEngine::new();
-    engine.register(Arc::new(
-        alephcore::tasks::cron::webhook_target::WebhookTarget::new(ssrf_policy),
-    ));
-    engine.register(Arc::new(GatewayDeliveryTarget::new(channel_cell)));
-    engine.register(Arc::new(MemoryDeliveryTarget::new(memory_store)));
-    Arc::new(engine)
-}
-
-/// Build the platform-specific `DesktopPlatform` instance.
-fn build_desktop_platform() -> Arc<dyn aleph_desktop::DesktopPlatform> {
-    #[cfg(target_os = "macos")]
-    {
-        Arc::new(aleph_desktop_macos::MacOSPlatform::new())
-    }
-    #[cfg(target_os = "linux")]
-    {
-        Arc::new(aleph_desktop_linux::LinuxPlatform::new())
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Arc::new(aleph_desktop_windows::WindowsPlatform::new())
-    }
-}
+// NOTE: `start_server` below is a single ~2270-line monolithic bootstrap
+// sequence. Its hundreds of locals (shared mutable handles, config, server,
+// monitors) are threaded through sequential phases and consumed at the tail,
+// so the body cannot be split into helper fns without changing data flow.
+// Per the module-split method, a giant fn that can't be cleanly carved stays
+// whole. The only behavior-preserving mechanical extractions are the two
+// self-contained free fns now in `start/bootstrap_factories.rs`.
 
 /// Start the gateway server
 pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {

@@ -1,0 +1,747 @@
+//! The [`FailoverProvider`] decorator and its [`AiProvider`] failover walk.
+
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Instant;
+
+use crate::config::types::{LoadBalanceStrategy, RouteMode};
+use crate::error::{AlephError, Result};
+use crate::providers::adapter::{ProviderResponse, RequestPayload};
+use crate::providers::capability_gate::{retain_capable_models, RequestRequirements};
+use crate::providers::llm_retry::{backoff_delay, is_transient_overload};
+use crate::providers::load_stats::LoadStats;
+use crate::providers::route_handle::RouteHandle;
+use crate::providers::route_policy::{
+    classify_candidate, order_candidates, order_candidates_balanced, CandidateAction, EndpointTier,
+    RateLimits, RouteTargets,
+};
+use crate::providers::{AiProvider, DefaultProviderHandle};
+use crate::sandbox::exec_approval::gate::ApprovalRequester;
+use crate::sync_primitives::Arc;
+
+use super::decision::{decide, Decision, FailureKind};
+use super::health::{CircuitState, FailoverHealth, ModelCooldown, ProviderCooldown};
+use super::{
+    FailoverConfig, FailoverNode, CIRCUIT_OPEN_THRESHOLD, DEFAULT_MODEL_COOLDOWN, MAX_COOLDOWN,
+    MAX_OVERLOAD_RETRY_DELAY, MAX_RETRY_DELAY,
+};
+
+/// An `AiProvider` that fails over across an ordered provider/model chain.
+pub struct FailoverProvider {
+    /// Live primary slot. `current()` is read on every call so a UI
+    /// `set_default` swap takes effect on the next turn (hot-reload).
+    primary: Arc<dyn DefaultProviderHandle>,
+    /// Static fallback chain, tried after the primary in order.
+    fallbacks: Vec<FailoverNode>,
+    /// Provider name → model list. Boot snapshot; lets the live primary
+    /// resolve its model list by name.
+    model_catalog: HashMap<String, Vec<String>>,
+    /// Shared circuit-breaker state.
+    health: FailoverHealth,
+    config: FailoverConfig,
+    /// Local/cloud route preference. `Auto` (default) is a no-op — candidates
+    /// keep their configured order (byte-identical to pre-route failover).
+    route_mode: RouteMode,
+    /// In `AlwaysLocal`, whether a cloud candidate may be tried as an
+    /// approval-gated terminal fallback ("borrow cloud").
+    allow_cloud_escalation: bool,
+    /// Gate consulted before dialing an approval-gated cross-tier candidate.
+    /// `None` (the default) fails escalation closed.
+    approval: Option<Arc<dyn ApprovalRequester>>,
+    /// Live route preference. When `Some`, it overrides the boot-snapshot
+    /// `route_mode` / `allow_cloud_escalation` fields on *every* request, so a
+    /// mode switch hot-applies with no rebuild. `None` (tests, `new()`) keeps
+    /// the snapshot fields — byte-identical to pre-handle behaviour.
+    route_handle: Option<Arc<RouteHandle>>,
+    /// Endpoint tier of the primary slot. `Unknown` (the default) is the
+    /// operator's configured default — always allowed, so route mode only ever
+    /// shapes the *fallbacks* around it. A *pinned* chain (an explicit
+    /// `select_model` / agent `provider_hint` override) sets this to the pinned
+    /// provider's real tier so a hard-guardrail route mode (`AlwaysLocal`) can
+    /// gate or skip an explicit cross-tier pin via the borrow-cloud approval —
+    /// the dynamic pick stops silently overriding the operator's policy.
+    primary_tier: EndpointTier,
+    /// Shared runtime load registry driving the load-balancing strategy. `None`
+    /// (tests, `new()`) disables balancing entirely — the chain keeps configured
+    /// order, byte-identical to pre-balance failover. Shared (`Arc`) across the
+    /// global chain and every per-hint override, like [`FailoverHealth`], so one
+    /// endpoint's in-flight/latency picture is visible to every chain.
+    load: Option<Arc<LoadStats>>,
+    /// Shared per-model rate-limit cooldown. `None` (tests, `new()`) disables
+    /// cooldown entirely — the chain keeps every model, byte-identical to
+    /// pre-cooldown failover. Shared across the global chain and every per-hint
+    /// override (like [`FailoverHealth`]) so one model's throttle is visible
+    /// everywhere.
+    model_cooldown: Option<ModelCooldown>,
+    /// Shared per-provider rate-limit cooldown gate. `None` (tests, `new()`)
+    /// disables proactive pacing entirely — byte-identical to pre-gate failover.
+    /// Wired only in production (`build_failover_chain`), one registry cloned
+    /// across all chains like [`FailoverHealth`].
+    provider_cooldown: Option<ProviderCooldown>,
+}
+
+impl FailoverProvider {
+    /// Build a failover chain.
+    ///
+    /// * `primary` — the live primary slot; `current()` is read per call.
+    /// * `fallbacks` — the static fallback chain.
+    /// * `model_catalog` — provider name → model list; lets the live primary
+    ///   resolve its model list by name.
+    /// * `health` — shared circuit-breaker state (clone it to share across
+    ///   per-agent chains).
+    pub fn new(
+        primary: Arc<dyn DefaultProviderHandle>,
+        fallbacks: Vec<FailoverNode>,
+        model_catalog: HashMap<String, Vec<String>>,
+        health: FailoverHealth,
+        config: FailoverConfig,
+    ) -> Self {
+        Self {
+            primary,
+            fallbacks,
+            model_catalog,
+            health,
+            config,
+            route_mode: RouteMode::Auto,
+            allow_cloud_escalation: false,
+            approval: None,
+            route_handle: None,
+            primary_tier: EndpointTier::Unknown,
+            load: None,
+            model_cooldown: None,
+            provider_cooldown: None,
+        }
+    }
+
+    /// Attach a local/cloud route preference and the escalation approval gate.
+    ///
+    /// `new()` alone stays `Auto` + no-gate (today's behaviour). In `Auto` the
+    /// `approval` gate is never consulted. In `AlwaysLocal` with
+    /// `allow_cloud_escalation`, the gate authorises borrowing a cloud
+    /// endpoint as a terminal fallback; absent a gate, escalation fails closed.
+    #[must_use]
+    pub fn with_route(
+        mut self,
+        mode: RouteMode,
+        allow_cloud_escalation: bool,
+        approval: Option<Arc<dyn ApprovalRequester>>,
+    ) -> Self {
+        self.route_mode = mode;
+        self.allow_cloud_escalation = allow_cloud_escalation;
+        self.approval = approval;
+        self
+    }
+
+    /// Attach a live [`RouteHandle`] so the route preference is read fresh on
+    /// every request instead of frozen at boot. The handle overrides the
+    /// snapshot set by [`with_route`](Self::with_route); the approval gate is
+    /// still supplied via `with_route`. Wired only in production
+    /// (`build_failover_chain`); tests omit it and keep the boot snapshot.
+    pub fn with_route_live(mut self, handle: Arc<RouteHandle>) -> Self {
+        self.route_handle = Some(handle);
+        self
+    }
+
+    /// Tag the primary slot with a concrete endpoint tier so a hard-guardrail
+    /// route mode can gate it. Used by `build_failover_chain` for the per-pin
+    /// override chains (an explicit `select_model` / agent `provider_hint`
+    /// target): the pinned provider's real tier makes `AlwaysLocal` route a
+    /// cloud pin through the borrow-cloud approval instead of silently allowing
+    /// it. The global default chain omits this — its primary stays `Unknown`
+    /// (the operator's configured default is always allowed).
+    #[must_use]
+    pub const fn with_primary_tier(mut self, tier: EndpointTier) -> Self {
+        self.primary_tier = tier;
+        self
+    }
+
+    /// Attach the shared runtime load registry that drives the load-balancing
+    /// strategy. Wired only in production (`build_failover_chain`) with one
+    /// registry cloned across all chains; tests omit it and keep the configured
+    /// order (byte-identical to pre-balance failover).
+    pub fn with_load_stats(mut self, load: Arc<LoadStats>) -> Self {
+        self.load = Some(load);
+        self
+    }
+
+    /// Attach the shared per-model rate-limit cooldown registry. Wired only in
+    /// production (`build_failover_chain`) with one registry cloned across all
+    /// chains; tests omit it and keep no cooldown (byte-identical to before).
+    #[must_use]
+    pub fn with_model_cooldown(mut self, cooldown: ModelCooldown) -> Self {
+        self.model_cooldown = Some(cooldown);
+        self
+    }
+
+    /// Attach the shared per-provider rate-limit cooldown gate. Wired only in
+    /// production (`build_failover_chain`) with one registry cloned across all
+    /// chains; tests omit it and keep no pacing (byte-identical to before).
+    #[must_use]
+    pub fn with_provider_cooldown(mut self, cooldown: ProviderCooldown) -> Self {
+        self.provider_cooldown = Some(cooldown);
+        self
+    }
+
+    /// Drop models currently in rate-limit cooldown for `provider`, so the walk
+    /// prefers a healthy sibling. Fail-open: if *every* model is cooling the
+    /// original list is kept (better to re-probe a throttled model than to empty
+    /// the candidate). `None` registry (tests) is a no-op.
+    async fn drop_cooling_models(
+        &self,
+        provider: &str,
+        models: Vec<Option<String>>,
+    ) -> Vec<Option<String>> {
+        let Some(cd) = &self.model_cooldown else {
+            return models;
+        };
+        let mut kept = Vec::with_capacity(models.len());
+        for m in &models {
+            let cooling = match m {
+                // An unnamed default model can't be sidelined by name.
+                Some(name) => cd.is_cooling(provider, name).await,
+                None => false,
+            };
+            if !cooling {
+                kept.push(m.clone());
+            }
+        }
+        if kept.is_empty() {
+            models
+        } else {
+            kept
+        }
+    }
+
+    /// The load-balancing strategy to apply *now*: the live handle if attached,
+    /// else the safe no-op [`LoadBalanceStrategy::Ordered`] (tests / `new()`).
+    fn route_load_balance(&self) -> LoadBalanceStrategy {
+        self.route_handle
+            .as_ref()
+            .map(|h| h.load_balance())
+            .unwrap_or_default()
+    }
+
+    /// The route preference to apply *now*: the live handle if attached, else
+    /// the boot snapshot.
+    fn route_preference(&self) -> (RouteMode, bool) {
+        match &self.route_handle {
+            Some(h) => h.load(),
+            None => (self.route_mode, self.allow_cloud_escalation),
+        }
+    }
+
+    /// The operator's provider pins to apply *now*: the live handle if attached,
+    /// else empty (no promotion). Pins only ever enter via the boot-wired handle,
+    /// so `new()`/tests see an empty set — byte-identical to unpinned ordering.
+    fn route_targets(&self) -> Arc<RouteTargets> {
+        match &self.route_handle {
+            Some(h) => h.targets(),
+            None => Arc::new(RouteTargets::default()),
+        }
+    }
+
+    /// The operator's per-provider rate ceilings to apply *now*: the live handle
+    /// if attached, else empty (no rate awareness). Limits only ever enter via
+    /// the boot-wired handle, so `new()`/tests see an empty set — byte-identical
+    /// to pre-usage ordering.
+    fn route_limits(&self) -> Arc<RateLimits> {
+        match &self.route_handle {
+            Some(h) => h.limits(),
+            None => Arc::new(RateLimits::default()),
+        }
+    }
+
+    /// Whether a cloud-borrow escalation for `name` is authorised right now.
+    ///
+    /// Fails closed: no gate wired → denied (a warn is logged). Mirrors the
+    /// sandbox escalation contract — the money-spending action is gated at the
+    /// moment it would happen, not at config-write time.
+    async fn escalation_allowed(&self, name: &str) -> bool {
+        match self.approval.clone() {
+            Some(gate) => {
+                let reason = format!(
+                    "Route mode is AlwaysLocal; borrow cloud provider '{name}' \
+                     for this request?"
+                );
+                gate.request_approval("__route_escalate_cloud", &reason)
+                    .await
+                    .is_approved()
+            }
+            None => {
+                tracing::warn!(
+                    provider = %name,
+                    "route: cloud escalation requested but no approval gate wired; denying"
+                );
+                false
+            }
+        }
+    }
+
+    /// Build the ordered candidate list for one request: the primary slot
+    /// first, then each fallback whose name differs from the primary's, shaped
+    /// by the route policy (tier ordering + cross-tier gating).
+    ///
+    /// The primary slot keeps its position 0 but is **classified in place** by
+    /// the route policy:
+    ///
+    /// * the global default chain tags it [`EndpointTier::Unknown`] — its
+    ///   `base_url` is not resolvable from the live `DefaultProviderHandle` and
+    ///   it is the operator's configured default, so it always classifies to
+    ///   [`Allow`](CandidateAction::Allow) (byte-identical to before);
+    /// * a *pinned* override chain tags it with the pin's real tier (via
+    ///   [`with_primary_tier`](Self::with_primary_tier)), so a hard-guardrail
+    ///   `AlwaysLocal` can turn an explicit cloud pin into a
+    ///   [`CrossTier`](CandidateAction::CrossTier) (borrow-cloud approval) or a
+    ///   [`Skip`](CandidateAction::Skip) (escalation off) — the dynamic pick no
+    ///   longer bypasses the operator's policy.
+    ///
+    /// The primary is never reordered below its own fallbacks (it is the
+    /// operator default or the explicitly-chosen provider); only the *fallback*
+    /// list is run through [`order_candidates`] for local-first ordering, pin
+    /// promotion and tier gating. Each pair carries the [`CandidateAction`] the
+    /// walk must enforce.
+    fn candidates(&self) -> Vec<(FailoverNode, CandidateAction)> {
+        let primary = self.primary.current();
+        let primary_name = primary.name().to_string();
+        let primary_models = self
+            .model_catalog
+            .get(&primary_name)
+            .cloned()
+            .unwrap_or_default();
+        let primary_node = FailoverNode {
+            name: primary_name.clone(),
+            models: primary_models,
+            provider: primary,
+            tier: self.primary_tier,
+        };
+        let mut fallbacks: Vec<FailoverNode> = Vec::with_capacity(self.fallbacks.len());
+        for fb in &self.fallbacks {
+            if fb.name == primary_name {
+                continue; // dedup: the primary slot already covers it
+            }
+            fallbacks.push(fb.clone());
+        }
+        let (mode, allow_escalation) = self.route_preference();
+        let targets = self.route_targets();
+
+        // Classify the primary in place. A `Skip` (a hard-guardrail mode with
+        // escalation off, on a cross-tier pin) drops it so the chain falls
+        // straight through to the fallbacks; `Allow`/`CrossTier` keep it first.
+        let mut out: Vec<(FailoverNode, CandidateAction)> = Vec::with_capacity(fallbacks.len() + 1);
+        match classify_candidate(mode, primary_node.tier, allow_escalation) {
+            CandidateAction::Skip => {}
+            action => out.push((primary_node, action)),
+        }
+        // Order the fallback pool. The balanced path runs when there is a load
+        // registry AND either a non-`Ordered` strategy (sort by live signals) or
+        // configured rate limits (the over-limit gate must deprioritise
+        // saturated providers even under `Ordered`); otherwise the
+        // configured-order path stays byte-identical to before.
+        let strategy = self.route_load_balance();
+        let limits = self.route_limits();
+        let needs_balance = strategy != LoadBalanceStrategy::Ordered || !limits.is_empty();
+        let ordered = match &self.load {
+            Some(load) if needs_balance => {
+                // One rotation tick per request drives RoundRobin; the sort
+                // strategies ignore it.
+                let rr_base = load.next_round_robin();
+                order_candidates_balanced(
+                    fallbacks,
+                    mode,
+                    allow_escalation,
+                    &targets,
+                    |n| n.tier,
+                    |n| n.name.as_str(),
+                    strategy,
+                    rr_base,
+                    // Fold each provider's live window counts against its
+                    // configured ceiling into the derived utilisation/over-limit
+                    // scalars. The ordering logic stays limit-blind (R7: pure
+                    // infrastructure) — the policy never sees the config.
+                    |name| {
+                        let mut m = load.metric(name);
+                        let (util, over) = limits.assess(name, m.rpm_used, m.tpm_used);
+                        m.utilization_permille = util;
+                        m.over_limit = over;
+                        m
+                    },
+                )
+            }
+            _ => order_candidates(
+                fallbacks,
+                mode,
+                allow_escalation,
+                &targets,
+                |n| n.tier,
+                |n| n.name.as_str(),
+            ),
+        };
+        out.extend(ordered);
+        out
+    }
+
+    /// Whether `name` may be tried now. Transitions `Open → HalfOpen` when the
+    /// cooldown has elapsed (allowing exactly one probe).
+    async fn circuit_allows(&self, name: &str) -> bool {
+        let mut map = self.health.0.write().await;
+        let st = map.entry(name.to_string()).or_default();
+        match st.circuit {
+            CircuitState::Closed | CircuitState::HalfOpen => true,
+            CircuitState::Open => match st.last_failure {
+                Some(at) if at.elapsed() >= st.cooldown => {
+                    st.circuit = CircuitState::HalfOpen;
+                    true
+                }
+                _ => false,
+            },
+        }
+    }
+
+    /// Record a successful call — close the circuit and reset the cooldown.
+    async fn mark_healthy(&self, name: &str) {
+        let mut map = self.health.0.write().await;
+        let st = map.entry(name.to_string()).or_default();
+        st.circuit = CircuitState::Closed;
+        st.failure_count = 0;
+        st.last_error = None;
+        st.cooldown = self.config.unhealthy_cooldown;
+    }
+
+    /// Record a provider-level failure and advance the circuit breaker.
+    ///
+    /// `kind` shapes how fast the circuit trips: a [`FailureKind::Permanent`]
+    /// failure (revoked/misconfigured credential) opens the circuit on the
+    /// first strike with a long cooldown so the hot path stops re-dialing a
+    /// known-dead provider; a [`FailureKind::Transient`] failure keeps the
+    /// 3-strike threshold so a brief blip does not evict a healthy provider.
+    async fn mark_unhealthy(&self, name: &str, error: String, kind: FailureKind) {
+        let mut map = self.health.0.write().await;
+        let st = map.entry(name.to_string()).or_default();
+        st.last_failure = Some(Instant::now());
+        st.failure_count += 1;
+        st.last_error = Some(error);
+        match st.circuit {
+            // A probe failed → re-open with a doubled cooldown.
+            CircuitState::HalfOpen => {
+                st.cooldown = (st.cooldown * 2).min(MAX_COOLDOWN);
+                st.circuit = CircuitState::Open;
+            }
+            CircuitState::Closed => {
+                let should_open = match kind {
+                    FailureKind::Permanent => true,
+                    FailureKind::Transient => st.failure_count >= CIRCUIT_OPEN_THRESHOLD,
+                };
+                if should_open {
+                    st.circuit = CircuitState::Open;
+                    // A dead credential recovers on the scale of minutes-to-hours
+                    // (operator rotates the key), not seconds — probe sparingly
+                    // by starting at the cooldown ceiling instead of the base.
+                    if matches!(kind, FailureKind::Permanent) {
+                        st.cooldown = MAX_COOLDOWN;
+                    }
+                }
+            }
+            CircuitState::Open => {}
+        }
+    }
+
+    /// Whether `name`'s circuit is currently open. Diagnostic accessor used by
+    /// tests; the provider-health status surface is [`FailoverHealth::snapshot`]
+    /// (rendered by `route_observe` for the `route_status` tool action).
+    pub async fn circuit_open(&self, name: &str) -> bool {
+        self.health
+            .0
+            .read()
+            .await
+            .get(name)
+            .is_some_and(|h| h.circuit == CircuitState::Open)
+    }
+}
+
+impl AiProvider for FailoverProvider {
+    fn process<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        // Own every borrowed field so the payload can be rebuilt per attempt.
+        let messages = payload.messages.to_vec();
+        let system_prompt = payload.system_prompt.map(str::to_string);
+        let tools = payload.tools.map(<[_]>::to_vec);
+        let think_level = payload.think_level;
+        let temperature = payload.temperature;
+        let max_tokens = payload.max_tokens;
+        let tool_choice = payload.tool_choice.clone();
+        let req_model = payload.model.clone();
+        let metadata = payload.metadata.clone();
+        // C floor: derive the request's structural capability requirements once
+        // (image blocks → vision, tools array → tool-calling, text size →
+        // context window). Prompt-blind; shapes the candidate model set below.
+        let reqs = RequestRequirements::from_request(
+            &messages,
+            tools.as_ref().is_some_and(|t| !t.is_empty()),
+        );
+
+        Box::pin(async move {
+            let candidates = self.candidates();
+            let total = candidates.len();
+            let mut last_error: Option<AlephError> = None;
+
+            for (idx, (cand, action)) in candidates.into_iter().enumerate() {
+                // Route gate: an approval-gated cross-tier candidate (borrow
+                // cloud under AlwaysLocal) is skipped unless the user approves
+                // — fail-closed, exactly like an open circuit. Cloud→local
+                // degrade is `CrossTier{requires_approval:false}` and is never
+                // gated (degrading to local spends nothing).
+                if let CandidateAction::CrossTier {
+                    requires_approval: true,
+                } = action
+                {
+                    if !self.escalation_allowed(&cand.name).await {
+                        tracing::warn!(
+                            provider = %cand.name,
+                            "route: cloud escalation denied, skipping candidate"
+                        );
+                        last_error.get_or_insert_with(|| {
+                            AlephError::provider(format!(
+                                "route: cloud escalation to '{}' not approved",
+                                cand.name
+                            ))
+                        });
+                        continue;
+                    }
+                }
+
+                // The circuit breaker may skip a candidate only while a later
+                // one remains; the final candidate is always attempted so a
+                // transient outage cannot hard-fail every request behind an
+                // open circuit. `circuit_allows` still runs for its
+                // `Open → HalfOpen` bookkeeping.
+                let circuit_ok = self.circuit_allows(&cand.name).await;
+                if !circuit_ok && idx + 1 < total {
+                    tracing::debug!(provider = %cand.name, "failover: circuit open, skipping");
+                    continue;
+                }
+
+                // Model-list resolution, in precedence:
+                //
+                // 1. An *explicitly pinned* request model on the primary/default
+                //    slot (tier `Unknown`). This is the dynamic-routing model
+                //    directive — a `select_model` pick, an agent `model_hint`,
+                //    or a `BrainRef::Strict` model — that `ModelOverrideProvider`
+                //    stamped onto `payload.model`. It targets the operator's
+                //    configured default endpoint, so it overrides that slot's
+                //    static catalog walk (otherwise the catalog silently
+                //    discarded the model the LLM/agent explicitly chose). Still
+                //    passed through the C floor (fail-open) for consistency.
+                //    Fallback slots keep their own catalog — the pinned model
+                //    belongs to the default endpoint, not its cross-provider
+                //    safety net.
+                // 2. Empty catalog → a single attempt with the caller's model
+                //    (or the provider's own default when that is `None` too).
+                // 3. Otherwise the C floor drops models that structurally cannot
+                //    serve this request (no vision / no tools / over context
+                //    window), failing open so the chain is never emptied.
+                let models: Vec<Option<String>> = match (cand.tier, &req_model) {
+                    (EndpointTier::Unknown, Some(pinned)) => {
+                        retain_capable_models(vec![pinned.clone()], &reqs)
+                            .into_iter()
+                            .map(Some)
+                            .collect()
+                    }
+                    _ if cand.models.is_empty() => vec![req_model.clone()],
+                    _ => retain_capable_models(cand.models.clone(), &reqs)
+                        .into_iter()
+                        .map(Some)
+                        .collect(),
+                };
+                // Sideline models still cooling from an earlier 429, preferring a
+                // healthy sibling (fail-open if all are cooling).
+                let models = self.drop_cooling_models(&cand.name, models).await;
+
+                // Proactive rate-limit pacing: if this provider 429'd recently
+                // and is still inside its recorded cooldown, wait out the
+                // *remaining* window before re-dialing it instead of eating a
+                // fresh 429. Only the candidate we are about to try is paced
+                // (skipped candidates `continue` above). Keeps a single paid
+                // primary (e.g. Kimi) in use rather than bouncing to a fallback
+                // every turn; capped so a turn never blocks unboundedly (the
+                // harness per-turn watchdog is the outer bound). Mirrors hermes'
+                // `nous_rate_limit_remaining()` pre-request wait.
+                if let Some(pc) = &self.provider_cooldown {
+                    if let Some(remaining) = pc.remaining(&cand.name).await {
+                        let wait = remaining.min(MAX_OVERLOAD_RETRY_DELAY);
+                        tracing::warn!(
+                            provider = %cand.name,
+                            wait_ms = wait.as_millis() as u64,
+                            "failover: provider cooling from a recent 429, pacing before re-request",
+                        );
+                        tokio::time::sleep(wait).await;
+                    }
+                }
+
+                let mut tripped: Option<FailureKind> = None;
+                'model: for model in models {
+                    let mut attempt: u32 = 0;
+                    loop {
+                        let inner = RequestPayload {
+                            messages: &messages,
+                            system_prompt: system_prompt.as_deref(),
+                            system_blocks: None,
+                            tools: tools.as_deref(),
+                            think_level,
+                            temperature,
+                            max_tokens,
+                            tool_choice: tool_choice.clone(),
+                            model: model.clone(),
+                            metadata: metadata.clone(),
+                        };
+                        // Count this attempt as in-flight for the duration of
+                        // the await (RAII: decremented on Ok, Err, retry, and
+                        // panic alike). `None` load → no-op, zero overhead.
+                        let _load_guard = self.load.as_ref().map(|l| l.begin(&cand.name));
+                        let started = Instant::now();
+                        match cand.provider.process(inner).await {
+                            Ok(resp) => {
+                                // Feed the successful round-trip into the EWMA so
+                                // LatencyAware ordering reflects reality, and the
+                                // token usage into the rolling rate window so
+                                // UsageBased / the over-limit gate see real TPM.
+                                if let Some(g) = &_load_guard {
+                                    g.record_latency(started.elapsed());
+                                    if let Some(u) = &resp.usage {
+                                        g.record_tokens(
+                                            u64::from(u.input_tokens) + u64::from(u.output_tokens),
+                                        );
+                                    }
+                                }
+                                self.mark_healthy(&cand.name).await;
+                                return Ok(resp);
+                            }
+                            Err(e) => match decide(&e, attempt, self.config.max_retries) {
+                                Decision::RetrySame(delay) => {
+                                    // Grow the wait exponentially per in-place
+                                    // attempt (capped at MAX_RETRY_DELAY), then
+                                    // jitter. The exponential growth mirrors
+                                    // `llm_retry::retry_async` so a stubborn
+                                    // throttle is ridden out instead of hammered
+                                    // at a flat interval; D3: the jitter keeps
+                                    // concurrent agents hitting the same
+                                    // overloaded provider from retrying in
+                                    // lockstep and reigniting the spike.
+                                    // A transient server overload may carry a
+                                    // server `Retry-After` larger than the 30s
+                                    // blip cap; honor it up to the overload
+                                    // ceiling so a paid primary that asks to
+                                    // wait 60s is waited out, not clamped to 30s
+                                    // and abandoned. Plain network blips keep the
+                                    // tighter cap.
+                                    let cap =
+                                        if is_transient_overload(&e.to_string().to_lowercase()) {
+                                            MAX_OVERLOAD_RETRY_DELAY
+                                        } else {
+                                            MAX_RETRY_DELAY
+                                        };
+                                    let backed_off = backoff_delay(delay, attempt, cap);
+                                    let jittered =
+                                        crate::providers::retry::apply_jitter(backed_off, 0.25);
+                                    tracing::warn!(
+                                        provider = %cand.name, model = ?model, attempt,
+                                        delay_ms = jittered.as_millis() as u64,
+                                        error = %e, "failover: transient, retrying in place",
+                                    );
+                                    tokio::time::sleep(jittered).await;
+                                    attempt += 1;
+                                    continue;
+                                }
+                                Decision::NextModel => {
+                                    tracing::warn!(
+                                        provider = %cand.name, model = ?model, error = %e,
+                                        "failover: model unavailable, trying next model",
+                                    );
+                                    last_error = Some(e);
+                                    continue 'model;
+                                }
+                                Decision::RateLimited(hint) => {
+                                    // Cool this specific model (server Retry-After
+                                    // if given, else default; capped) and prefer a
+                                    // sibling model before giving up on the
+                                    // provider. `tripped` is set transient so the
+                                    // provider's circuit still trips IF every model
+                                    // ends up exhausted (single-model providers
+                                    // behave exactly as before); it is discarded the
+                                    // moment a sibling model succeeds.
+                                    let dur =
+                                        hint.unwrap_or(DEFAULT_MODEL_COOLDOWN).min(MAX_COOLDOWN);
+                                    if let (Some(cd), Some(m)) = (&self.model_cooldown, &model) {
+                                        cd.cool(&cand.name, m, dur).await;
+                                    }
+                                    // Also park the provider so the *next* turn
+                                    // paces itself before re-dialing it (the
+                                    // proactive gate above), instead of eating a
+                                    // fresh 429 and bouncing to a fallback. For a
+                                    // single-model primary (Kimi) this is exactly
+                                    // "wait out the provider's stated cooldown";
+                                    // for a multi-model provider the brief pace is
+                                    // harmless and self-corrects as the window
+                                    // elapses.
+                                    if let Some(pc) = &self.provider_cooldown {
+                                        pc.cool(&cand.name, dur).await;
+                                    }
+                                    tracing::warn!(
+                                        provider = %cand.name, model = ?model, error = %e,
+                                        "failover: model rate-limited, cooling down; trying next model",
+                                    );
+                                    last_error = Some(e);
+                                    tripped = Some(FailureKind::Transient);
+                                    continue 'model;
+                                }
+                                Decision::NextProvider(kind) => {
+                                    tracing::warn!(
+                                        provider = %cand.name, ?kind, error = %e,
+                                        "failover: provider unavailable, advancing chain",
+                                    );
+                                    last_error = Some(e);
+                                    tripped = Some(kind);
+                                    break 'model;
+                                }
+                                Decision::Stop => {
+                                    tracing::warn!(
+                                        provider = %cand.name, error = %e,
+                                        "failover: unrecoverable error, aborting",
+                                    );
+                                    return Err(e);
+                                }
+                            },
+                        }
+                    }
+                }
+
+                if let Some(kind) = tripped {
+                    let reason = last_error
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    self.mark_unhealthy(&cand.name, reason, kind).await;
+                }
+            }
+
+            Err(last_error.unwrap_or_else(|| {
+                AlephError::provider(format!("all {total} failover candidates failed"))
+            }))
+        })
+    }
+
+    fn name(&self) -> &str {
+        "failover"
+    }
+
+    fn color(&self) -> &str {
+        "#6366f1"
+    }
+
+    // The wrapper should look like its live primary for behavior-resolution.
+    fn supports_native_tools(&self) -> bool {
+        self.primary.current().supports_native_tools()
+    }
+}

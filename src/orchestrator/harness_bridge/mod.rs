@@ -1,0 +1,225 @@
+//! Bridge between the Phase 5 Orchestrator and the Phase 4 `AgentHarness`.
+//!
+//! `AgentHarnessRunner` implements [`HarnessRunner`] by:
+//!   1. Verifying `spec.agent` is registered in the [`AgentRegistry`].
+//!   2. Picking an `Arc<dyn AiProvider>` from [`BrainRef`].
+//!   3. Seeding the session with the [`FlowInput`] as a `UserMessage` event.
+//!   4. Running the inner `AgentHarness` loop to completion.
+//!   5. Extracting the last `AssistantMessage.text` as `final_text`.
+//!
+//! # Phase 6 follow-ups
+//! * Thread `AgentDef` + `FlowOverrides` (`max_iterations`, `extra_system_prompt`,
+//!   `context_mode`) into `HarnessDeps`. Requires widening the Phase 4 API.
+//! * Honour [`BrainRef::Strict`] model selection — `AiProvider` does not
+//!   expose `select_model` at this layer yet.
+
+use crate::sync_primitives::Arc;
+use std::collections::HashMap;
+
+use crate::agents::AgentRegistry;
+use crate::context::budget::ContextBudgetConfig;
+use crate::mcp::manager::McpManagerHandle;
+use crate::memory::store::MemoryBackend;
+use crate::providers::{AiProvider, DefaultProviderHandle};
+use crate::session::service::SessionService;
+use crate::tools::service::ToolService;
+use crate::verification::VerifierChain;
+
+// Original inline submodules (files already live in this directory).
+mod callback;
+mod error;
+mod llm;
+mod session_seed;
+
+// New siblings carved out of the former single-file module.
+mod context_blocks;
+mod prompt_build;
+mod runner_impl;
+
+#[cfg(test)]
+mod tests;
+
+// Re-export every item that was `pub` / `pub(crate)` at the old path so
+// external callers (`...::harness_bridge::X`) keep working unchanged.
+pub use context_blocks::{
+    active_execution_plan, active_standing_goal, compute_runtime_state_blocks,
+};
+// Crate-internal helpers tests reach via the parent path (`super::X`); keep
+// them addressable at the module root after the split.
+pub(crate) use prompt_build::{
+    agent_identity_dir_exists, last_user_query, resolve_max_iterations,
+};
+
+/// Stage 7 (#12): emit one `TraceSink::on_init_seam` event per Stage 1-6
+/// seam. Extracted from `AgentHarnessRunner::run` so tests can assert the
+/// eight-event contract without a full runner fixture. `configured = false`
+/// distinguishes a deliberate `None` path (Phase-6 stub) from a missing
+/// wiring; `PromptBuilder` and `ChainContext` are always configured because
+/// the gateway path constructs them unconditionally.
+pub(crate) fn emit_init_seams(
+    sink: &dyn crate::harness::TraceSink,
+    guardrails_configured: bool,
+    verifier_chain_configured: bool,
+    stall_config_configured: bool,
+    consecutive_failure_cap_configured: bool,
+    turn_timeout_configured: bool,
+) {
+    sink.on_init_seam("stage3-prompt", "PromptBuilder", true);
+    sink.on_init_seam("stage4-chain", "ChainContext", true);
+    sink.on_init_seam(
+        "stage5a-guardrails",
+        "GuardrailRegistry",
+        guardrails_configured,
+    );
+    sink.on_init_seam(
+        "stage6a-verifier",
+        "VerifierChain",
+        verifier_chain_configured,
+    );
+    sink.on_init_seam("p0-rescue-stall", "StallConfig", stall_config_configured);
+    sink.on_init_seam(
+        "p0-rescue-cap",
+        "ConsecutiveFailureCap",
+        consecutive_failure_cap_configured,
+    );
+    sink.on_init_seam("p0-rescue-timeout", "TurnTimeout", turn_timeout_configured);
+}
+
+/// Concrete [`HarnessRunner`] that dispatches to the Phase 4 `AgentHarness`.
+pub struct AgentHarnessRunner {
+    pub agent_registry: Arc<AgentRegistry>,
+    pub session_service: Arc<dyn SessionService>,
+    pub tool_service: Arc<dyn ToolService>,
+    /// Live default-provider resolver. Each `pick_llm` call asks the handle
+    /// for the current default so UI-driven `set_default` takes effect on the
+    /// next turn (Step 5 hot-reload). Replaces the boot-time `Arc<dyn AiProvider>`
+    /// snapshot that previously required a restart.
+    pub default_provider: Arc<dyn DefaultProviderHandle>,
+    /// Named providers keyed by `ProviderId`. Wired from `AuthProfileRegistry`
+    /// by Task 9; empty in early boot.
+    pub named_providers: HashMap<String, Arc<dyn AiProvider>>,
+
+    // -- Task 10 (6b) optional collaborators ---------------------------------
+    //
+    // Injected at orchestrator boot; forwarded into `HarnessDeps` on every
+    // `run()` so each `AgentHarness` instance sees the same pressure sensor
+    // / compactor / hook set.
+    pub verifier_chain: Option<Arc<VerifierChain>>,
+    /// Opt-in mid-run context management (`[context_budget]`). Held as the
+    /// *config*, not a live `ContextBudget`: `run()` constructs a fresh
+    /// `ContextBudget` per call because its circuit-breaker /
+    /// diminishing-returns state must never be shared across concurrent
+    /// sessions. `None` disables mid-run compaction entirely.
+    pub context_budget_config: Option<ContextBudgetConfig>,
+    /// Shared v2 `SkillSystem`. When `Some`, `build_system_prompt` injects the
+    /// eligible-skill `<available_skills>` block into the system prompt.
+    pub skill_system: Option<crate::skill::SkillSystem>,
+
+    // -- Stage 7 (init audit) — production wiring for the Stage 5a guardrail +
+    //    P0 rescue seams. Each field defaults to None on the gateway path;
+    //    PHASE-6 will load values from `aleph.toml` and wire them here so
+    //    HarnessDeps receives the configured impls instead of hardcoded None.
+    pub guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
+    pub stall_config: Option<crate::harness::deps::StallConfig>,
+    pub consecutive_failure_cap: Option<usize>,
+    pub turn_timeout: Option<std::time::Duration>,
+
+    /// Layer 3 of the tool-result budget (per-turn aggregate spill).
+    /// `None` disables Layer 3; Layer 2 still runs inside
+    /// `ScopedToolService` independently.
+    pub turn_budget: Option<Arc<crate::tools::turn_budget::TurnResultBudget>>,
+    /// Shared `ToolResultStore` used by Layer 3 spills; should be the
+    /// same `Arc` injected into `ScopedToolService::with_result_store`
+    /// at boot so persisted markers all land in one session directory.
+    pub result_store: Option<Arc<crate::tools::result_store::ToolResultStore>>,
+
+    /// Boot-time default for the harness Think→Act iteration cap, sourced from
+    /// `[execution] max_iterations`. A per-flow `FlowOverrides.max_iterations`
+    /// overrides it on a run-by-run basis. The harness loop is never left
+    /// uncapped — see [`resolve_max_iterations`].
+    pub default_max_iterations: usize,
+
+    /// Boot-time system-prompt verbosity tier, sourced from
+    /// `[execution] prompt_mode`. Threaded into `build_system_prompt` so the
+    /// cache-aware assembly can shed heavy guidance layers in `Compact` /
+    /// `Minimal` deployments. Defaults to [`PromptMode::Full`] — byte-identical
+    /// to the prior always-Full behaviour.
+    pub default_prompt_mode: crate::thinker::prompt_mode::PromptMode,
+
+    /// Platform-specific power-management capability. Injected at boot so the
+    /// core never directly imports platform crates (R1: Brain–Limb separation).
+    pub power: Option<Arc<dyn aleph_desktop::traits::PowerCapability>>,
+
+    /// Phase 6 follow-up — closes the BUG-2/BUG-3 gap where the gateway path
+    /// was constructing `HarnessDeps { system_prompt: None }` and bypassing
+    /// curated/hybrid memory entirely. When `Some`, `run()` invokes
+    /// `build_curated_message` + `build_memory_user_message` and threads the
+    /// rendered envelopes through `PromptBuilder` so the system prompt carries
+    /// per-agent curated memory plus retrieval hits. `None` preserves the old
+    /// behaviour (boot path for tests / env without a memory backend).
+    pub memory_context_provider:
+        Option<Arc<crate::thinker::memory_context_provider::MemoryContextProvider>>,
+
+    /// `SQLite` memory backend, threaded into the per-run `ContextCompactor` so
+    /// it can reuse the hierarchical session summaries written by
+    /// `SessionCompactor` for zero-API-cost compaction. `None` (tests / boot
+    /// without a memory backend) keeps the LLM summarization path.
+    pub memory_backend: Option<MemoryBackend>,
+
+    /// Tool catalog — owns the `ToolHealthCache` whose
+    /// snapshots drive the `<tool_runtime_state>` block emitted by
+    /// `ToolRuntimeStateLayer` @502. `None` in test/early-boot paths keeps
+    /// `runtime_state_blocks` empty (the layer then renders nothing).
+    pub tool_catalog: Option<Arc<crate::tool_metadata::ToolCatalog>>,
+
+    /// Gateway session-epoch registrar for compaction-driven session-split.
+    /// When `Some`, the harness can mint child sessions at the next epoch and
+    /// make them visible to epoch resolution. `None` degrades gracefully —
+    /// the split budget directive falls back to `FinalReply` (see `HarnessDeps`).
+    pub session_epoch_registrar:
+        Option<Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>>,
+
+    /// Cheap-tier provider for side-channel summarization (Reasonix parity).
+    ///
+    /// When set, `ContextCompactor::call_llm` routes its summarization call
+    /// to this provider instead of the main LLM. Recommended target: a
+    /// flash-tier alias of the same provider family (e.g. Haiku for Claude,
+    /// `deepseek-v4-flash` for `DeepSeek`). `None` preserves the legacy
+    /// behaviour of reusing the main LLM for summarization.
+    pub cheap_provider: Option<Arc<dyn AiProvider>>,
+
+    /// Live MCP manager handle. When `Some`, `build_system_prompt` aggregates
+    /// each connected server's advertised `instructions` and threads them into
+    /// `PromptConfig.mcp_instructions`, activating `McpInstructionsLayer`. This
+    /// is the only consumer of the server-instruction channel on the prompt
+    /// path. `None` (tests / boot without MCP) keeps the layer silent. The
+    /// handle is a cheap clone of channel senders, so holding it here adds no
+    /// per-turn cost beyond one actor round-trip during prompt assembly.
+    pub mcp_handle: Option<McpManagerHandle>,
+
+    /// Boot-time `[prompt.extra_files]` config. When enabled with non-empty
+    /// paths, `build_system_prompt` loads each file (size-capped) and threads
+    /// it through `PromptBuilder` so `ExtraFilesLayer` renders it into the
+    /// system prompt. This is the production consumer of the documented
+    /// `[prompt.extra_files]` TOML section — `None` / disabled keeps prompts
+    /// byte-identical to the prior behaviour.
+    pub prompt_extra_files: Option<crate::config::PromptExtraFilesConfig>,
+
+    /// Act-phase parallel-dispatch concurrency cap, sourced from
+    /// `[tool_service] parallel_tool_concurrency`. Forwarded verbatim into
+    /// `HarnessDeps::parallel_tool_concurrency` on every `run()`. `Some(n>=2)`
+    /// groups concurrent-safe calls and dispatches up to `n` at once;
+    /// `Some(0..=1)` / `None` disables the fast path. Default `Some(8)`
+    /// (production gateway) — byte-identical to the prior hardcoded value.
+    pub parallel_tool_concurrency: Option<usize>,
+}
+
+/// Hard fallback iteration cap — used only when both the per-flow override
+/// and the boot-configured default are absent or zero. The harness Think→Act
+/// loop must never run uncapped: a model that keeps emitting tool calls would
+/// otherwise loop (and bill) forever.
+///
+/// Kept numerically equal to `config::types::execution::default_max_iterations()`
+/// (the `[execution] max_iterations` default) — both express "the default
+/// per-run cap"; update them together.
+pub(crate) const FALLBACK_MAX_ITERATIONS: usize = 200;

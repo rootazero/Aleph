@@ -1,14 +1,16 @@
-//! Agent loop execution and streaming callback.
+//! Inner think→act loop body (`run_agent_loop_inner`).
 //!
-//! Contains `run_agent_loop` (the think-act two-step loop).
+//! Carved verbatim from the original `run_loop.rs`; behavior unchanged.
+//! `run_agent_loop` (in the parent module) wraps this with the
+//! `BeforeAgentStart` / `AgentEnd` lifecycle hooks.
 
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::sync_primitives::Arc;
 
-use super::{ExecutionError, RunRequest};
-use crate::extension::hooks::{HookContext, HookExecutor};
+use super::super::{ExecutionError, RunRequest};
+use crate::extension::hooks::HookExecutor;
 use crate::extension::HookEvent;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
@@ -16,186 +18,25 @@ use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 
-use super::engine::ExecutionEngine;
+use super::super::engine::ExecutionEngine;
 
-// Re-export submodules for internal use
-pub(super) use super::callback::{CallbackStateFlushHandle, StreamCallbackState, TracePersistence};
-pub(super) use super::history::build_loop_history;
-pub(super) use super::tool_refresh::{active_plugin_tools_for_agent, ExtensionToolRefreshSource};
+// Submodule helpers used by the loop body.
+use super::super::callback::{CallbackStateFlushHandle, StreamCallbackState, TracePersistence};
+use super::super::history::build_loop_history;
+use super::super::tool_refresh::{active_plugin_tools_for_agent, ExtensionToolRefreshSource};
 
-// ============================================================================
-// Agent loop execution
-// ============================================================================
+// Free helpers carved into the sibling project_context module.
+use super::project_context::{
+    collect_project_context_blocks, collect_project_skill_block, lifecycle_hook_context,
+    workspace_directive,
+};
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
-    /// Run the agent loop (think->act two-step, Claude Code-inspired).
-    ///
-    /// Uses the flat `LoopToolRegistry`; tool permissions are enforced by
-    /// `ScopedToolService` (merged global → agent → channel policy).
-    #[allow(clippy::too_many_arguments)]
-    pub(super) async fn run_agent_loop<E: EventEmitter + Send + Sync + 'static>(
-        &self,
-        run_id: &str,
-        request: &RunRequest,
-        agent: Arc<AgentInstance>,
-        emitter: Arc<E>,
-        deadline: Arc<tokio::sync::Mutex<tokio::time::Instant>>,
-        trace_task_id: Option<String>,
-        cancel_token: CancellationToken,
-    ) -> Result<String, ExecutionError> {
-        // Resolve the extension manager + snapshot its HookExecutor once for
-        // the whole run. Both flow into `run_agent_loop_inner` so tool
-        // dispatch and history compaction can fire hooks without
-        // re-snapshotting per turn.
-        let extension_manager: Option<Arc<crate::extension::ExtensionManager>> =
-            crate::gateway::handlers::plugins::get_extension_manager()
-                .ok()
-                .map(Arc::clone);
-        if let Some(ext_manager) = extension_manager.as_ref() {
-            if let Err(e) = ext_manager.ensure_loaded().await {
-                warn!("Failed to ensure extension manager is loaded: {}", e);
-            }
-        }
-        let hook_executor = if let Some(ext_manager) = extension_manager.as_ref() {
-            let snapshot = ext_manager.hook_executor_snapshot().await;
-            (snapshot.hook_count() > 0).then(|| Arc::new(snapshot))
-        } else {
-            None
-        };
-        let hook_session_id = request.session_key.to_key_string();
-
-        // BeforeAgentStart — interceptor-kind hooks may abort the run before
-        // any provider call; observer-kind hooks just witness the start.
-        if let Some(executor) = hook_executor.as_ref() {
-            let ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
-            match executor
-                .execute_interceptors(HookEvent::BeforeAgentStart, ctx)
-                .await
-            {
-                Ok((_ctx, hr)) if hr.denied || hr.blocked => {
-                    let reason = hr
-                        .deny_reason
-                        .or(hr.block_reason)
-                        .unwrap_or_else(|| "agent start blocked by hook".to_string());
-                    warn!(
-                        run_id = run_id,
-                        reason = %reason,
-                        "BeforeAgentStart hook aborted the run"
-                    );
-                    return Err(ExecutionError::Failed(format!(
-                        "BeforeAgentStart hook aborted the run: {reason}"
-                    )));
-                }
-                // Graceful stop (Claude-Code `continue: false`): the hook
-                // decided the agent should not start, but this is NOT an error
-                // — the run did exactly what the hook asked. Surface the hook's
-                // message as the run output instead of failing.
-                Ok((_ctx, hr)) if hr.prevent_continuation => {
-                    let stop_msg = hr.messages.first().cloned().unwrap_or_else(|| {
-                        "Run halted by BeforeAgentStart hook (prevent_continuation).".to_string()
-                    });
-                    warn!(
-                        run_id = run_id,
-                        "BeforeAgentStart hook requested prevent_continuation; stopping run"
-                    );
-                    return Ok(stop_msg);
-                }
-                Ok(_) => {}
-                Err(e) => warn!(run_id = run_id, error = %e, "BeforeAgentStart hook failed"),
-            }
-        }
-
-        // Publish the project root as a task-local for the duration of the
-        // think→act loop so child runs spawned mid-loop (session.send, team
-        // dispatcher worker tasks, etc.) inherit the project context.
-        // `None` is also published explicitly so a nested run cannot leak
-        // an outer scope's project into a non-project agent.
-        //
-        // Alongside it, publish the per-run `FsScope` carrying this run's
-        // workspace artifact dir (`<workspace>/output/documents`, the same
-        // value `ToolContext::from_workspace` derives). File tools prefer the
-        // task-local over the shared `ToolContextHandle`, so a concurrent run
-        // rewriting the handle mid-run no longer redirects THIS run's
-        // relative-path writes into the other run's workspace. Mirrors the
-        // `effective_workspace` fallback inside `run_agent_loop_inner`
-        // (override > agent workspace); validation of the override stays in
-        // the inner fn — a vanished dir still fails the run there.
-        let scope_workspace = request
-            .workspace_override
-            .clone()
-            .unwrap_or_else(|| agent.workspace().to_path_buf());
-        // Team-worktree runs (dispatcher members) carry the parent repo root
-        // in metadata: build a rebasing worktree scope so the member's file
-        // tools anchor at the worktree root AND parent-repo absolute paths
-        // are redirected into the checkout — the same semantics the subagent
-        // spawner publishes for `IsolationMode::Worktree`. Everything else
-        // gets the plain workspace artifact scope.
-        let fs_scope = match request.metadata.get("team_worktree_repo_root") {
-            Some(repo_root) if request.workspace_override.is_some() => {
-                let wt = scope_workspace
-                    .canonicalize()
-                    .unwrap_or_else(|_| scope_workspace.clone());
-                let repo = std::path::PathBuf::from(repo_root);
-                let repo = repo.canonicalize().unwrap_or(repo);
-                crate::tools::fs_scope::FsScope::worktree(wt, repo)
-            }
-            _ => {
-                crate::tools::fs_scope::FsScope::workspace(scope_workspace.join("output/documents"))
-            }
-        };
-        let mut result = crate::projects::with_project_root(
-            request.workspace_override.clone(),
-            crate::tools::fs_scope::with_fs_scope(
-                Some(fs_scope),
-                self.run_agent_loop_inner(
-                    run_id,
-                    request,
-                    agent.clone(),
-                    emitter,
-                    deadline,
-                    trace_task_id,
-                    cancel_token,
-                    extension_manager,
-                    hook_executor.clone(),
-                    hook_session_id.clone(),
-                ),
-            ),
-        )
-        .await;
-
-        // AgentEnd — observers witness the end; Interceptor-kind hooks may
-        // rewrite the final assistant text via `update_output:` (hermes
-        // `transform_llm_output` parity). This reuses the exact `updated_output`
-        // seam already honored on the AfterToolCall path — no new protocol.
-        // block / deny are meaningless post-hoc (the run is over) and ignored.
-        if let Some(executor) = hook_executor.as_ref() {
-            let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
-            ctx = ctx.with_env("AGENT_OUTCOME", if result.is_ok() { "ok" } else { "error" });
-            match &result {
-                Ok(text) => ctx = ctx.with_tool_output(text.clone()),
-                Err(e) => ctx = ctx.with_env("AGENT_ERROR", e.to_string()),
-            }
-            executor.execute_observers(HookEvent::AgentEnd, &ctx).await;
-            // Only the success path carries a final text to transform.
-            if let Ok(ref mut text) = result {
-                if let Ok((_ctx, hr)) = executor
-                    .execute_interceptors(HookEvent::AgentEnd, ctx)
-                    .await
-                {
-                    if let Some(new_text) = hr.updated_output {
-                        *text = new_text;
-                    }
-                }
-            }
-        }
-        result
-    }
-
     /// Inner body of the think→act loop. `run_agent_loop` wraps this with the
     /// `BeforeAgentStart` / `AgentEnd` lifecycle hooks and supplies the
     /// pre-resolved extension manager + hook executor snapshot.
     #[allow(clippy::too_many_arguments)]
-    async fn run_agent_loop_inner<E: EventEmitter + Send + Sync + 'static>(
+    pub(crate) async fn run_agent_loop_inner<E: EventEmitter + Send + Sync + 'static>(
         &self,
         run_id: &str,
         request: &RunRequest,
@@ -382,7 +223,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 &self.global_tool_permissions,
                 &agent.config().tool_permissions(),
             );
-            if let Some(raw) = request.metadata.get(super::CHANNEL_TOOL_PERMISSIONS_KEY) {
+            if let Some(raw) = request.metadata.get(super::super::CHANNEL_TOOL_PERMISSIONS_KEY) {
                 match serde_json::from_str::<ToolPermissionsConfig>(raw) {
                     Ok(channel_perms) => {
                         merged = ToolPermissionsConfig::merge(&merged, &channel_perms)
@@ -729,7 +570,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // plus the slash-skill whitelist when one restricted this run
             // (re-parsed from metadata — see the restriction block above).
             // Existing names are never overwritten (builtins win collisions).
-            if let Some(mcp_registry) = super::tool_service_builder::mcp_tool_registry() {
+            if let Some(mcp_registry) = super::super::tool_service_builder::mcp_tool_registry() {
                 let skill_whitelist: Option<std::collections::HashSet<&str>> = request
                     .metadata
                     .get("slash_skill_allowed_tools")
@@ -794,7 +635,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     as Arc<dyn crate::tools::refresh::ToolRefreshSource>);
             }
             refresh_sources.push(Arc::new(
-                super::markdown_skill_refresh::MarkdownSkillRefreshSource::new(),
+                super::super::markdown_skill_refresh::MarkdownSkillRefreshSource::new(),
             )
                 as Arc<dyn crate::tools::refresh::ToolRefreshSource>);
             let tool_refresh: Option<Arc<dyn crate::tools::refresh::ToolRefreshSource>> = Some(
@@ -805,7 +646,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             // Build parent view ToolService WITHOUT the subagent tool
             let parent_view_for_children: Arc<dyn crate::tools::service::ToolService> =
-                super::build_request_tool_service(
+                super::super::build_request_tool_service(
                     loop_registry.clone(),
                     allowed_names.clone(),
                     None,
@@ -822,7 +663,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // same gateway sink as the main runner, and the background path's
             // ForwardingTraceSink populates check_status progress.
             let trace_sink: Arc<dyn crate::harness::TraceSink> =
-                Arc::new(super::GatewayTraceSink::new(Arc::new(
+                Arc::new(super::super::GatewayTraceSink::new(Arc::new(
                     CallbackStateFlushHandle::new(callback_state.clone()),
                 )));
 
@@ -834,7 +675,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let trace_sink: Arc<dyn crate::harness::TraceSink> =
                 if self.config.scratchpad_progress_push && !turn_context.channel_id.is_empty() {
                     match self.channel_registry.get() {
-                        Some(registry) => Arc::new(super::ScratchpadProgressSink::new(
+                        Some(registry) => Arc::new(super::super::ScratchpadProgressSink::new(
                             trace_sink,
                             registry.clone(),
                             turn_context.channel_id.clone(),
@@ -852,7 +693,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // Outermost wrap: it sees every event and forwards to the inner
             // (persistence + scratchpad) sink unchanged.
             let trace_sink: Arc<dyn crate::harness::TraceSink> =
-                Arc::new(super::AgentTraceEmitSink::new(
+                Arc::new(super::super::AgentTraceEmitSink::new(
                     trace_sink,
                     emitter.clone() as Arc<dyn crate::gateway::event_emitter::EventEmitter>,
                     run_id.to_string(),
@@ -863,7 +704,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // persistence / the channel push / the WebSocket. Outermost wrap so
             // it sees every event first; attended runs are never wrapped.
             let trace_sink: Arc<dyn crate::harness::TraceSink> = if unattended {
-                Arc::new(super::UnattendedRedactingSink::new(trace_sink))
+                Arc::new(super::super::UnattendedRedactingSink::new(trace_sink))
             } else {
                 trace_sink
             };
@@ -964,7 +805,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Arc::new(t)
             };
 
-            let tool_service = super::build_request_tool_service(
+            let tool_service = super::super::build_request_tool_service(
                 loop_registry,
                 allowed_names,
                 Some(subagent_tool),
@@ -983,7 +824,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let flow_input = if request.metadata.get("resume").map(String::as_str) == Some("true") {
                 crate::orchestrator::FlowInput::Resume
             } else {
-                super::helpers::history_to_flow_input(history.clone(), effective_user_input.clone())
+                super::super::helpers::history_to_flow_input(history.clone(), effective_user_input.clone())
             };
 
             // Phase 4 (F4): derive the channel's InteractionManifest from
@@ -1045,7 +886,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let emitter_dyn: Arc<dyn crate::gateway::event_emitter::EventEmitter> =
                 emitter.clone() as Arc<dyn crate::gateway::event_emitter::EventEmitter>;
 
-            let dispatch_result = super::helpers::run_dispatch_and_drain_classified(
+            let dispatch_result = super::super::helpers::run_dispatch_and_drain_classified(
                 orchestrator,
                 req,
                 emitter_dyn,
@@ -1071,7 +912,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     );
                     return Ok(response);
                 }
-                Err(super::helpers::DispatchFailure::Cancelled) => {
+                Err(super::super::helpers::DispatchFailure::Cancelled) => {
                     if multimodal_messages.is_some() {
                         if let Some(mp) = self.media_processor.as_ref() {
                             mp.cleanup(&request.session_key.to_key_string());
@@ -1079,7 +920,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     }
                     return Err(ExecutionError::Cancelled);
                 }
-                Err(super::helpers::DispatchFailure::Transient {
+                Err(super::super::helpers::DispatchFailure::Transient {
                     provider: prov_name,
                     message,
                 }) if attempt < MAX_FALLBACK_ATTEMPTS => {
@@ -1129,7 +970,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         .await;
                     continue;
                 }
-                Err(super::helpers::DispatchFailure::Transient {
+                Err(super::super::helpers::DispatchFailure::Transient {
                     provider: prov_name,
                     message,
                 }) => {
@@ -1155,7 +996,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         "provider {prov_name} transient: {message}"
                     )));
                 }
-                Err(super::helpers::DispatchFailure::Fatal(msg)) => {
+                Err(super::super::helpers::DispatchFailure::Fatal(msg)) => {
                     if multimodal_messages.is_some() {
                         if let Some(mp) = self.media_processor.as_ref() {
                             mp.cleanup(&request.session_key.to_key_string());
@@ -1171,426 +1012,5 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
             }
         }
-    }
-}
-
-/// Build a `HookContext` for an agent/session lifecycle event. Carries the
-/// session id plus `RUN_ID` / `AGENT_ID` env vars so command hooks have
-/// correlation handles. Lifecycle events have no tool, so the tool fields
-/// stay unset.
-fn lifecycle_hook_context(session_id: &str, run_id: &str, agent: &AgentInstance) -> HookContext {
-    HookContext::new(session_id)
-        .with_env("RUN_ID", run_id)
-        .with_env("AGENT_ID", agent.id())
-}
-
-/// Upper bound on how many project-local skills are advertised in the
-/// `<project_skills>` reminder. A folder with hundreds of skills would
-/// otherwise crowd out the prompt; the model can still enumerate the full
-/// set via the `skill_list` tool.
-const PROJECT_SKILLS_MAX: usize = 50;
-
-/// Per-skill description cap (chars) inside the advertisement block so one
-/// verbose frontmatter line cannot dominate the listing.
-const PROJECT_SKILL_DESC_MAX_CHARS: usize = 200;
-
-/// Build the working-directory directive surfaced to the model on every turn.
-///
-/// The effective workspace (project override or the agent's stable
-/// `~/.aleph/workspaces/{agent_id}` directory) is already resolved before the
-/// loop runs, but nothing told the model what it was — so when asked to "save a
-/// file" the model would invent a plausible absolute path under the user's home
-/// (e.g. `/Users/<u>/paris-riot-timeline/index.html`) and write outside the
-/// workspace. This directive closes that gap by naming the directory and asking
-/// the model to default to it. It steers (R7: no hard jail) — an explicit
-/// user-named location still wins.
-fn workspace_directive(workspace: &std::path::Path) -> String {
-    format!(
-        "Working directory: `{}`\n\
-         Save any files you create or generate here — use a relative path, or \
-         this directory as the base for an absolute path. Only write to a \
-         different location when the user explicitly asks for one.",
-        workspace.display()
-    )
-}
-
-/// Legacy gateway-path presenter for project context. Delegates discovery to
-/// `thinker::project_instructions::discover_project_instructions` (the single
-/// source of truth — ancestor walk to git root, `CLAUDE.md` / `AGENTS.md` /
-/// `.aleph/CLAUDE.md` / `CLAUDE.local.md` / rules / `@import`, with the shared
-/// budget) and formats the result as one ancestor-first → project-last block
-/// for per-turn `<system-reminder>` injection. Empty when no files exist.
-fn collect_project_context_blocks(workspace: &std::path::Path) -> Vec<String> {
-    // Single discovery source of truth shared with the orchestrator path
-    // (`thinker::project_instructions`): same file set, `@import` expansion,
-    // `CLAUDE.local.md` / `.aleph` rules, ancestor walk, and budget — so the
-    // legacy gateway path and the orchestrator path never drift in what project
-    // context they surface. This presenter only differs in *formatting*: a
-    // per-turn `<system-reminder>` block instead of a cached `ExtraFilesLayer`.
-    let files = crate::thinker::project_instructions::discover_project_instructions(workspace);
-    if files.is_empty() {
-        return Vec::new();
-    }
-
-    let header = format!(
-        "Active project: `{}`. The following project files describe \
-        local conventions, scope, and constraints — treat them as \
-        durable context for this conversation. Files are listed from the \
-        outermost ancestor (`<dir>/...`) down to the project root; later \
-        entries override earlier ones on conflict.",
-        workspace.display()
-    );
-
-    let mut body = String::new();
-    body.push_str(&header);
-    body.push_str("\n\n");
-    for file in &files {
-        body.push_str(&format!("### {}\n\n", file.label));
-        body.push_str(file.content.trim_end());
-        body.push_str("\n\n");
-    }
-
-    vec![body]
-}
-
-/// Advertise the project's own skills to the model (round 3).
-///
-/// `skill_read` / `skill_list` are wired to discover `<project>/.aleph/skills`
-/// and `<project>/.claude/skills` (walked to the git root) when a project run
-/// is active, but the model only invokes them if it knows those skills exist.
-/// This block enumerates the project-local skills (id + name + short
-/// description) so the model can proactively `skill_read` them — mirroring
-/// Claude Code, where project skills are surfaced as available capabilities.
-///
-/// The listed set is exactly the **project** subset of
-/// [`crate::utils::paths::get_all_skills_dirs`] (global `~/.aleph` / `~/.claude`
-/// skills are excluded — those are already covered by the global skill
-/// snapshot), so anything advertised here is guaranteed loadable via
-/// `skill_read`. Returns `None` when the project ships no skills.
-fn collect_project_skill_block(workspace: &std::path::Path) -> Option<String> {
-    let dirs = crate::utils::paths::get_all_skills_dirs(Some(workspace)).ok()?;
-    let home = crate::utils::paths::get_home_dir().ok();
-    let is_global = |dir: &std::path::Path| -> bool {
-        home.as_ref().is_some_and(|h| {
-            dir.starts_with(h.join(".aleph")) || dir.starts_with(h.join(".claude"))
-        })
-    };
-
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut lines: Vec<String> = Vec::new();
-
-    'outer: for dir in dirs.iter().filter(|d| !is_global(d)) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let skill_dir = entry.path();
-            if !skill_dir.is_dir() {
-                continue;
-            }
-            let Some(id) = skill_dir.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            if id.starts_with('.') || seen.contains(id) {
-                continue;
-            }
-            let skill_md = skill_dir.join("SKILL.md");
-            let Ok(content) = std::fs::read_to_string(&skill_md) else {
-                continue;
-            };
-            let Ok(manifest) = crate::skill::parse_skill_content(
-                &content,
-                crate::domain::skill::SkillSource::Workspace,
-            ) else {
-                continue;
-            };
-            seen.insert(id.to_string());
-            let mut desc = manifest.description().trim().replace(['\n', '\r'], " ");
-            if desc.chars().count() > PROJECT_SKILL_DESC_MAX_CHARS {
-                desc = desc
-                    .chars()
-                    .take(PROJECT_SKILL_DESC_MAX_CHARS)
-                    .collect::<String>()
-                    + "…";
-            }
-            let name = manifest.name().trim();
-            lines.push(if desc.is_empty() {
-                format!("- `{id}` — {name}")
-            } else {
-                format!("- `{id}` — {name}: {desc}")
-            });
-            if lines.len() >= PROJECT_SKILLS_MAX {
-                break 'outer;
-            }
-        }
-    }
-
-    if lines.is_empty() {
-        return None;
-    }
-    lines.sort();
-    Some(format!(
-        "Project-local skills (under `.aleph/skills` / `.claude/skills`). Each is \
-        a task directive available through the `skill_read` tool — call \
-        `skill_read(skill_id=\"<id>\")` to load its full instructions, then follow \
-        them. Use `skill_list` to see the complete set including global skills.\n\n{}",
-        lines.join("\n")
-    ))
-}
-
-
-#[cfg(test)]
-mod project_context_tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    /// Mark `dir` as a `.git` boundary so the discovery walk halts there.
-    /// Tests build their workspaces inside a tempdir and would otherwise
-    /// walk up to whichever directory holds the test runner — sometimes a
-    /// user's real `~/.aleph/...` layout — and pick up files that pollute
-    /// assertions. Calling this on the workspace root keeps the walk
-    /// confined to the tempdir.
-    fn anchor(dir: &std::path::Path) {
-        std::fs::create_dir_all(dir.join(".git")).unwrap();
-    }
-
-    #[test]
-    fn workspace_directive_names_the_effective_directory() {
-        // The directive must always carry the resolved path verbatim so the
-        // model writes there instead of inventing one. Holds for the default
-        // `~/.aleph/workspaces/{id}` path and for a project override alike —
-        // it is the same helper fed by `effective_workspace` in both modes.
-        let default_ws = std::path::Path::new("/home/u/.aleph/workspaces/main");
-        let d = workspace_directive(default_ws);
-        assert!(d.contains("/home/u/.aleph/workspaces/main"));
-        assert!(d.to_lowercase().contains("working directory"));
-
-        let project_ws = std::path::Path::new("/home/u/projects/paris-riot-timeline");
-        let p = workspace_directive(project_ws);
-        assert!(p.contains("/home/u/projects/paris-riot-timeline"));
-    }
-
-    #[test]
-    fn returns_nothing_when_no_project_files() {
-        let dir = tempdir().unwrap();
-        anchor(dir.path());
-        let blocks = collect_project_context_blocks(dir.path());
-        assert!(blocks.is_empty());
-    }
-
-    #[test]
-    fn reads_agents_md_when_present() {
-        let dir = tempdir().unwrap();
-        anchor(dir.path());
-        std::fs::write(
-            dir.path().join("AGENTS.md"),
-            "# Project rules\nNo force push.\n",
-        )
-        .unwrap();
-        let blocks = collect_project_context_blocks(dir.path());
-        assert_eq!(blocks.len(), 1);
-        assert!(blocks[0].contains("Active project"));
-        assert!(blocks[0].contains("### AGENTS.md"));
-        assert!(blocks[0].contains("No force push"));
-    }
-
-    #[test]
-    fn includes_both_agents_and_claude_md_when_both_present() {
-        let dir = tempdir().unwrap();
-        anchor(dir.path());
-        std::fs::write(dir.path().join("AGENTS.md"), "# Aleph rules").unwrap();
-        std::fs::write(dir.path().join("CLAUDE.md"), "# CC rules").unwrap();
-        let blocks = collect_project_context_blocks(dir.path());
-        assert_eq!(blocks.len(), 1);
-        assert!(blocks[0].contains("### AGENTS.md"));
-        assert!(blocks[0].contains("### CLAUDE.md"));
-    }
-
-    #[test]
-    fn ignores_whitespace_only_files() {
-        let dir = tempdir().unwrap();
-        anchor(dir.path());
-        std::fs::write(dir.path().join("AGENTS.md"), "   \n\n\t\n").unwrap();
-        let blocks = collect_project_context_blocks(dir.path());
-        assert!(blocks.is_empty());
-    }
-
-    #[test]
-    fn truncates_oversized_files() {
-        let dir = tempdir().unwrap();
-        anchor(dir.path());
-        // Larger than the shared per-file char cap (20k) so discovery truncates.
-        let big = "x".repeat(40_000);
-        std::fs::write(dir.path().join("AGENTS.md"), &big).unwrap();
-        let blocks = collect_project_context_blocks(dir.path());
-        // Unified truncation marker from `truncate_with_head_tail`.
-        assert!(blocks[0].contains("truncated"));
-        assert!(blocks[0].len() < big.len());
-    }
-
-    #[test]
-    fn loads_claude_md_in_subdir() {
-        let dir = tempdir().unwrap();
-        anchor(dir.path());
-        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
-        std::fs::write(dir.path().join(".claude/CLAUDE.md"), "# CC sub").unwrap();
-        let blocks = collect_project_context_blocks(dir.path());
-        assert!(blocks[0].contains(".claude/CLAUDE.md"));
-        assert!(blocks[0].contains("# CC sub"));
-    }
-
-    #[test]
-    fn loads_aleph_claude_md_in_subdir() {
-        let dir = tempdir().unwrap();
-        anchor(dir.path());
-        std::fs::create_dir_all(dir.path().join(".aleph")).unwrap();
-        std::fs::write(dir.path().join(".aleph/CLAUDE.md"), "# Aleph sub").unwrap();
-        let blocks = collect_project_context_blocks(dir.path());
-        assert!(blocks[0].contains(".aleph/CLAUDE.md"));
-        assert!(blocks[0].contains("# Aleph sub"));
-    }
-
-    /// Walk-up: parent CLAUDE.md is included, and parent appears BEFORE
-    /// the project root's so the LLM reads parent first → project last
-    /// (last-wins ordering).
-    #[test]
-    fn walks_up_to_ancestor_claude_md_until_git_boundary() {
-        let root = tempdir().unwrap();
-        anchor(root.path()); // `.git` lives on the outer dir (the repo root)
-        std::fs::write(root.path().join("CLAUDE.md"), "# outer").unwrap();
-        let inner = root.path().join("packages").join("svc");
-        std::fs::create_dir_all(&inner).unwrap();
-        std::fs::write(inner.join("CLAUDE.md"), "# inner").unwrap();
-
-        let blocks = collect_project_context_blocks(&inner);
-        assert_eq!(blocks.len(), 1);
-        let body = &blocks[0];
-        let outer_pos = body
-            .find("# outer")
-            .expect("outer CLAUDE.md must be injected");
-        let inner_pos = body
-            .find("# inner")
-            .expect("inner CLAUDE.md must be injected");
-        assert!(
-            outer_pos < inner_pos,
-            "ancestor must appear before project root so last-wins ordering holds"
-        );
-    }
-
-    /// Walk-up halts at `.git`: a CLAUDE.md sitting above the boundary is
-    /// NOT injected, even if it physically exists on disk.
-    #[test]
-    fn walk_stops_at_git_boundary() {
-        let outer = tempdir().unwrap();
-        std::fs::write(outer.path().join("CLAUDE.md"), "# above boundary").unwrap();
-        let project = outer.path().join("project");
-        std::fs::create_dir_all(&project).unwrap();
-        anchor(&project); // `.git` lives ON the project root → stops walk there
-        std::fs::write(project.join("CLAUDE.md"), "# project").unwrap();
-
-        let blocks = collect_project_context_blocks(&project);
-        assert!(blocks[0].contains("# project"));
-        assert!(
-            !blocks[0].contains("# above boundary"),
-            "files above the .git boundary must NOT leak into project context"
-        );
-    }
-
-    #[test]
-    fn loads_claude_rules_glob() {
-        let dir = tempdir().unwrap();
-        anchor(dir.path());
-        let rules = dir.path().join(".claude").join("rules");
-        std::fs::create_dir_all(&rules).unwrap();
-        std::fs::write(rules.join("a.md"), "rule alpha").unwrap();
-        std::fs::write(rules.join("b.md"), "rule beta").unwrap();
-        std::fs::write(rules.join("ignored.txt"), "not a rule").unwrap();
-        let blocks = collect_project_context_blocks(dir.path());
-        assert!(blocks[0].contains("rule alpha"));
-        assert!(blocks[0].contains("rule beta"));
-        assert!(!blocks[0].contains("not a rule"));
-        // a.md should appear before b.md (sort order).
-        assert!(blocks[0].find("rule alpha").unwrap() < blocks[0].find("rule beta").unwrap());
-    }
-
-    /// Aggregate-size cap: a deep tree with many ancestors and big files
-    /// stays within the shared discovery budget plus block overhead.
-    #[test]
-    fn enforces_total_context_cap() {
-        let outer = tempdir().unwrap();
-        anchor(outer.path());
-        // 7 ancestor dirs each with a 32 KB CLAUDE.md — total raw input
-        // would be ~224 KB, well above the 128 KB cap.
-        let mut cur = outer.path().to_path_buf();
-        for i in 0..7 {
-            cur = cur.join(format!("lvl{i}"));
-            std::fs::create_dir_all(&cur).unwrap();
-            std::fs::write(cur.join("CLAUDE.md"), "x".repeat(40_000)).unwrap();
-        }
-        let blocks = collect_project_context_blocks(&cur);
-        // Shared discovery budget is 32k chars; allow header + block overhead.
-        let allowed = 64 * 1024;
-        assert!(
-            blocks[0].len() <= allowed,
-            "context body {} exceeds allowed budget {}",
-            blocks[0].len(),
-            allowed
-        );
-    }
-
-    /// Write a minimal valid `<dir>/SKILL.md` with the given name/description.
-    fn write_skill(dir: &std::path::Path, name: &str, description: &str) {
-        std::fs::create_dir_all(dir).unwrap();
-        std::fs::write(
-            dir.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: {description}\n---\nbody\n"),
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn project_skill_block_lists_project_skills() {
-        let tmp = tempdir().unwrap();
-        let project = tmp.path();
-        anchor(project);
-        write_skill(
-            &project.join(".aleph").join("skills").join("refine-text"),
-            "Refine Text",
-            "Polish prose without changing meaning",
-        );
-        write_skill(
-            &project.join(".claude").join("skills").join("translate"),
-            "Translate",
-            "Translate text to another language",
-        );
-
-        let block = collect_project_skill_block(project).expect("project skills present");
-        assert!(block.contains("`refine-text` — Refine Text:"));
-        assert!(block.contains("`translate` — Translate:"));
-        assert!(block.contains("skill_read"));
-    }
-
-    #[test]
-    fn project_skill_block_none_when_no_project_skills() {
-        let tmp = tempdir().unwrap();
-        anchor(tmp.path());
-        assert!(collect_project_skill_block(tmp.path()).is_none());
-    }
-
-    #[test]
-    fn project_skill_block_skips_dirs_without_manifest() {
-        let tmp = tempdir().unwrap();
-        let project = tmp.path();
-        anchor(project);
-        // A subdir with no SKILL.md must not appear.
-        std::fs::create_dir_all(project.join(".aleph").join("skills").join("empty-dir")).unwrap();
-        write_skill(
-            &project.join(".aleph").join("skills").join("real"),
-            "Real Skill",
-            "A genuine skill",
-        );
-        let block = collect_project_skill_block(project).expect("one real skill");
-        assert!(block.contains("`real` — Real Skill:"));
-        assert!(!block.contains("empty-dir"));
     }
 }

@@ -13,27 +13,30 @@
 //! - [`generation_init`] — generation provider registry + hot-reload
 //! - this module — orchestration + signature
 
+mod common_handlers;
 mod coord_stores;
 mod generation_init;
+mod provider_registry;
+mod tool_catalog_init;
 
+use common_handlers::{register_common_handlers, register_trace_handlers};
 use coord_stores::{
     build_team_components, init_coord_and_snapshot, init_team_store, init_teams_evolution_stores,
 };
 use generation_init::init_generation_registry;
+use provider_registry::build_multi_provider_registry;
+use tool_catalog_init::init_tool_catalog;
 
 use alephcore::sync_primitives::{Arc, RwLock};
 
 use alephcore::executor::BuiltinToolRegistry;
-use alephcore::gateway::handlers::agent::{
-    self as agent_handlers, handle_cancel as handle_agent_cancel, handle_respond_to_input,
-    handle_run, handle_status as handle_agent_status, AgentRunManager,
-};
+use alephcore::gateway::handlers::agent::{handle_run, AgentRunManager};
 use alephcore::gateway::handlers::chat as chat_handlers;
 use alephcore::gateway::router::AgentRouter;
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{
-    available_provider_from_env, can_create_provider_from_env, create_provider_registry_from_env,
-    AgentRegistry, ExecutionEngine, ExecutionEngineConfig, GatewayConfig as FullGatewayConfig,
+    available_provider_from_env, AgentRegistry, ExecutionEngine, ExecutionEngineConfig,
+    GatewayConfig as FullGatewayConfig,
 };
 use alephcore::ProviderRegistry;
 
@@ -221,144 +224,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         daemon,
     );
 
-    // Build MultiProviderRegistry: register ALL configured providers.
-    //
-    // ProviderConfig.api_key is #[serde(skip)] and never lives on disk — keys live
-    // in the vault under "ai:{provider_name}". We must inject from vault before
-    // calling create_provider, otherwise the runtime provider has no key and chat
-    // requests fail with "API key is required" (test path resolves vault separately,
-    // hence the test/runtime asymmetry users hit on Telegram/Feishu paths).
-    let provider_registry = {
-        use alephcore::providers::create_provider;
-
-        // Read api_key from vault for a given provider name
-        let vault_key_for = |name: &str| format!("ai:{name}");
-        let vault_lookup = |name: &str| -> Option<String> {
-            match shared_token_mgr.get_secret(&vault_key_for(name)) {
-                Ok(Some(secret)) => Some(secret.expose().to_string()),
-                _ => None,
-            }
-        };
-        // Hydrate a ProviderConfig clone with its vault api_key (if present)
-        let hydrate = |name: &str, cfg: &alephcore::ProviderConfig| -> alephcore::ProviderConfig {
-            let mut c = cfg.clone();
-            if c.api_key.as_ref().is_none_or(std::string::String::is_empty) {
-                c.api_key = vault_lookup(name);
-            }
-            c
-        };
-        let has_key = |name: &str, cfg: &alephcore::ProviderConfig| -> bool {
-            cfg.api_key.as_ref().is_some_and(|k| !k.is_empty()) || vault_lookup(name).is_some()
-        };
-
-        // Determine default provider name. When no explicit default is
-        // configured, pick the first enabled+keyed provider in NAME ORDER —
-        // `providers` is a HashMap, so iterating it directly would pick a
-        // different default across restarts (non-deterministic routing).
-        let default_name = app_config.general.default_provider.clone().or_else(|| {
-            let mut candidates: Vec<(&String, &alephcore::ProviderConfig)> =
-                app_config.providers.iter().collect();
-            candidates.sort_by(|a, b| a.0.cmp(b.0));
-            candidates
-                .into_iter()
-                .find(|(name, cfg)| cfg.enabled && has_key(name, cfg))
-                .map(|(name, _)| name.clone())
-        });
-
-        // Try env vars first for the initial provider
-        let env_provider = if can_create_provider_from_env() {
-            create_provider_registry_from_env().ok().map(|reg| {
-                let p = reg.default_provider();
-                let name = available_provider_from_env().unwrap_or("env");
-                (name, p)
-            })
-        } else {
-            None
-        };
-
-        // Build multi-provider registry
-        if let Some((env_name, env_prov)) = env_provider {
-            let registry = Arc::new(alephcore::MultiProviderRegistry::new(
-                env_name.to_string(),
-                env_prov,
-            ));
-            // Also register all config providers
-            for (name, provider_cfg) in &app_config.providers {
-                if !provider_cfg.enabled || name.as_str() == env_name {
-                    continue;
-                }
-                if !has_key(name, provider_cfg) {
-                    continue;
-                }
-                let hydrated = hydrate(name, provider_cfg);
-                if let Ok(p) = create_provider(name, hydrated) {
-                    registry.register(name.clone(), p);
-                    tracing::info!(provider = %name, "Registered provider from config");
-                }
-            }
-            // An env key seeded the registry's initial default. If the operator
-            // configured an explicit default_provider that is actually
-            // registered, honor it — otherwise the env provider silently wins
-            // over the configured choice.
-            if let Some(cfg_default) = app_config.general.default_provider.as_deref() {
-                if registry
-                    .list_providers()
-                    .iter()
-                    .any(|p| p.as_str() == cfg_default)
-                {
-                    let _ = registry.set_default(cfg_default);
-                }
-            }
-            multi_reg = Some(registry.clone());
-            if !daemon {
-                println!(
-                    "  Providers: {} registered",
-                    registry.list_providers().len()
-                );
-            }
-            Some(registry as Arc<alephcore::MultiProviderRegistry>)
-        } else if let Some(def_name) = default_name {
-            // No env provider — create from config
-            if let Some(provider_cfg) = app_config.providers.get(&def_name) {
-                let default_hydrated = hydrate(&def_name, provider_cfg);
-                if let Ok(default_prov) = create_provider(&def_name, default_hydrated) {
-                    let registry = Arc::new(alephcore::MultiProviderRegistry::new(
-                        def_name.clone(),
-                        default_prov,
-                    ));
-                    // Register remaining providers
-                    for (name, pcfg) in &app_config.providers {
-                        if !pcfg.enabled || name == &def_name {
-                            continue;
-                        }
-                        if !has_key(name, pcfg) {
-                            continue;
-                        }
-                        let hydrated = hydrate(name, pcfg);
-                        if let Ok(p) = create_provider(name, hydrated) {
-                            registry.register(name.clone(), p);
-                            tracing::info!(provider = %name, "Registered provider from config");
-                        }
-                    }
-                    multi_reg = Some(registry.clone());
-                    if !daemon {
-                        println!(
-                            "  Providers: {} registered (default: {})",
-                            registry.list_providers().len(),
-                            def_name
-                        );
-                    }
-                    Some(registry as Arc<alephcore::MultiProviderRegistry>)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    };
+    // Build MultiProviderRegistry: register ALL configured providers (vault
+    // key hydration, deterministic default selection). The returned registry
+    // (if any) is also published through the outer `multi_reg` Option, which
+    // downstream wiring (`fallback_providers`) and the final
+    // `AgentHandlersResult` both read. See `provider_registry.rs`.
+    let provider_registry =
+        build_multi_provider_registry(app_config, &shared_token_mgr, daemon);
+    multi_reg = provider_registry.clone();
 
     // Wire global fallback provider chain from config
     if let Some(ref registry) = multi_reg {
@@ -1323,60 +1196,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         });
 
-        // Phase-2 always overrides phase-1 to guarantee a deterministic response.
-        // When state DB is absent, the override returns SERVICE_UNAVAILABLE with
-        // a tighter, environment-specific reason — never the phase-1 generic.
-        if let Some(trace_db) = resilience_db.clone() {
-            let trace_list_db = trace_db.clone();
-            server.handlers_mut().register("trace.list", move |req| {
-                let db = trace_list_db.clone();
-                async move {
-                    alephcore::gateway::handlers::trace_replay::handle_list(req, db).await
-                }
-            });
-
-            let trace_get_db = trace_db.clone();
-            server.handlers_mut().register("trace.get", move |req| {
-                let db = trace_get_db.clone();
-                async move { alephcore::gateway::handlers::trace_replay::handle_get(req, db).await }
-            });
-
-            let trace_by_runs_db = trace_db;
-            server.handlers_mut().register("trace.by_runs", move |req| {
-                let db = trace_by_runs_db.clone();
-                async move {
-                    alephcore::gateway::handlers::trace_replay::handle_by_runs(req, db).await
-                }
-            });
-        } else {
-            server
-                .handlers_mut()
-                .register("trace.list", |req| async move {
-                    alephcore::gateway::protocol::JsonRpcResponse::error(
-                        req.id,
-                        alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
-                        "trace.list disabled: no state_database configured".to_string(),
-                    )
-                });
-            server
-                .handlers_mut()
-                .register("trace.get", |req| async move {
-                    alephcore::gateway::protocol::JsonRpcResponse::error(
-                        req.id,
-                        alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
-                        "trace.get disabled: no state_database configured".to_string(),
-                    )
-                });
-            server
-                .handlers_mut()
-                .register("trace.by_runs", |req| async move {
-                    alephcore::gateway::protocol::JsonRpcResponse::error(
-                        req.id,
-                        alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
-                        "trace.by_runs disabled: no state_database configured".to_string(),
-                    )
-                });
-        }
+        // trace.list / trace.get / trace.by_runs — replay durable traces when a
+        // state DB exists, else SERVICE_UNAVAILABLE. See `common_handlers.rs`.
+        register_trace_handlers(server, resilience_db.clone());
 
         // Capture for inbound router
         let engine_arc: Arc<dyn alephcore::gateway::ExecutionAdapter> = engine;
@@ -1628,560 +1450,36 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             });
     }
 
-    // Create unified dispatch registry (command discovery + resolution)
-    // This is independent of the AI provider — it only maps command names to metadata.
-    {
-        use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
-        use alephcore::tool_metadata::ToolCatalog;
+    // Create unified dispatch registry (command discovery + resolution).
+    // AI-provider-independent — maps command names to metadata, registers the
+    // command/tool RPC handlers, spawns the memory producer scheduler, and
+    // threads the memory extension registry into the ExtensionManager. See
+    // `tool_catalog_init.rs`. `tool_reg_out` is `None` in simulated mode.
+    tool_catalog_out = Some(
+        init_tool_catalog(
+            server,
+            &generation_registry,
+            app_config,
+            tool_reg_out.clone(),
+            &command_parser_cell,
+            memory_db,
+            &memory_ext_registry,
+            daemon,
+        )
+        .await,
+    );
 
-        let tool_catalog = Arc::new(ToolCatalog::new());
-
-        // Register builtin tools (generate_image, generate_speech, read_skill, list_skills, snapshot)
-        tool_catalog.register_builtin_tools().await;
-
-        // Also register executor builtin tools as commands (search, screenshot, ocr, etc.)
-        for def in BUILTIN_TOOL_DEFINITIONS {
-            use alephcore::tool_metadata::{
-                ToolSource as DToolSource, UnifiedTool as DUnifiedTool,
-            };
-            let tool = DUnifiedTool::new(
-                format!("builtin:{}", def.name),
-                def.name,
-                def.description,
-                DToolSource::Builtin,
-            );
-            tool_catalog.register_with_conflict_resolution(tool).await;
-        }
-
-        // ── Capability health probes (hermes-style runtime gating) ──────────
-        // Attach probes to the catalog's shared `ToolHealthCache` so the LLM
-        // tool list — and the `<tool_runtime_state>` hints — reflect live
-        // capability, not just boot-time registration. This cache is the same
-        // one `ScopedToolService` consults via `is_healthy`, and probes are
-        // refreshed off the registered-probe set (`trigger_health_refresh`),
-        // so a probe keyed by the executor's LLM-facing tool name fires even
-        // when the catalog stores a different slash-command name.
-        {
-            use alephcore::generation::GenerationType;
-            use alephcore::tools::probes::browser::BrowserRuntimeProbe;
-            use alephcore::tools::probes::generation::GenerationProbe;
-
-            // Browser: one shared probe (reuses `find_chromium`, with an `npx`
-            // fallback for the Playwright-managed backend) gates the whole
-            // `browser_*` family. Without any browser runtime the LLM no
-            // longer sees ~24 unusable browser tools.
-            let browser_probe = Arc::new(BrowserRuntimeProbe::new());
-            for def in BUILTIN_TOOL_DEFINITIONS {
-                if def.name.starts_with("browser_") {
-                    tool_catalog.register_health_probe(def.name, browser_probe.clone());
-                }
-            }
-
-            // Generation: gate each media tool on a live provider for its
-            // type. Only register a probe when a provider exists at boot —
-            // mirroring the static registration gate in `optional_tools`, so a
-            // never-configured capability stays silent while a provider removed
-            // mid-session is still caught at runtime by the probe.
-            for (tool_name, gen_type) in [
-                ("image_generate", GenerationType::Image),
-                ("speech_generate", GenerationType::Speech),
-                ("audio_generate", GenerationType::Audio),
-                ("video_generate", GenerationType::Video),
-            ] {
-                let has_provider = {
-                    let reg = generation_registry
-                        .read()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    !reg.providers_for_type(gen_type).is_empty()
-                };
-                if has_provider {
-                    tool_catalog.register_health_probe(
-                        tool_name,
-                        Arc::new(GenerationProbe::new(generation_registry.clone(), gen_type)),
-                    );
-                }
-            }
-
-            if !daemon {
-                println!("  Capability probes: browser + generation wired to health cache");
-            }
-        }
-
-        // Register custom commands from config routing rules
-        if !app_config.rules.is_empty() {
-            tool_catalog
-                .register_custom_commands(&app_config.rules)
-                .await;
-        }
-
-        // Register skills and plugin tools from ExtensionManager (if initialized)
-        {
-            use alephcore::domain::Entity;
-            use alephcore::gateway::handlers::plugins::get_extension_manager;
-            if let Ok(ext_manager) = get_extension_manager() {
-                // Ensure extensions are discovered and loaded (skills + plugins)
-                if let Err(e) = ext_manager.ensure_loaded().await {
-                    tracing::warn!("Failed to load extensions: {}", e);
-                }
-
-                {
-                    let skill_manifests = ext_manager.skill_system().list_skills().await;
-                    let skill_infos: Vec<alephcore::skill::SkillInfo> = skill_manifests
-                        .iter()
-                        .filter(|s| s.is_user_invocable())
-                        .map(|s| alephcore::skill::SkillInfo {
-                            id: s.id().as_str().to_string(),
-                            name: s.name().to_string(),
-                            description: s.description().to_string(),
-                            ecosystem: "aleph".to_string(),
-                        })
-                        .collect();
-                    tool_catalog.register_skills(&skill_infos).await;
-                    if !daemon {
-                        println!(
-                            "  Dispatch registry: {} skills registered",
-                            skill_infos.len()
-                        );
-                    }
-                }
-
-                // Register plugin commands (from CC-format plugins' commands/ directories)
-                {
-                    let commands = ext_manager.get_all_commands().await;
-                    let command_skill_infos: Vec<alephcore::skill::SkillInfo> = commands
-                        .iter()
-                        .filter(|cmd| cmd.plugin_name.is_some())
-                        .map(|cmd| {
-                            let id = if let Some(ref plugin) = cmd.plugin_name {
-                                format!("{}:{}", plugin, cmd.name)
-                            } else {
-                                cmd.name.clone()
-                            };
-                            alephcore::skill::SkillInfo {
-                                id,
-                                name: cmd.name.clone(),
-                                description: cmd.description.clone(),
-                                ecosystem: "plugin".to_string(),
-                            }
-                        })
-                        .collect();
-
-                    if !command_skill_infos.is_empty() {
-                        tool_catalog.register_skills(&command_skill_infos).await;
-                        if !daemon {
-                            println!(
-                                "  Dispatch registry: {} plugin commands registered",
-                                command_skill_infos.len()
-                            );
-                        }
-                    }
-                }
-
-                // Register plugin tools from discovered manifests
-                {
-                    let registry = ext_manager.get_plugin_registry().await;
-                    let plugin_tools: Vec<(String, String, String)> = registry
-                        .list_plugins()
-                        .into_iter()
-                        .filter(|p| p.status.is_active())
-                        .flat_map(|plugin| {
-                            match alephcore::extension::manifest::parse_manifest_from_dir_sync(
-                                &plugin.root_dir,
-                            ) {
-                                Ok(manifest) => manifest
-                                    .tools_v2
-                                    .unwrap_or_default()
-                                    .into_iter()
-                                    .map(|t| {
-                                        (
-                                            plugin.id.clone(),
-                                            t.name.clone(),
-                                            t.description.unwrap_or_default(),
-                                        )
-                                    })
-                                    .collect::<Vec<_>>(),
-                                Err(_) => Vec::new(),
-                            }
-                        })
-                        .collect();
-
-                    if !plugin_tools.is_empty() {
-                        tool_catalog.register_plugin_tools(&plugin_tools).await;
-                        if !daemon {
-                            println!(
-                                "  Dispatch registry: {} plugin tools registered",
-                                plugin_tools.len()
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        if !daemon {
-            println!("  Dispatch registry initialized");
-        }
-
-        // Wire commands.list to use unified dispatch registry instead of hardcoded builtins
-        {
-            let reg = tool_catalog.clone();
-            server.handlers_mut().register("commands.list", move |req| {
-                let registry = reg.clone();
-                async move {
-                    alephcore::gateway::handlers::commands::handle_list_from_registry(
-                        req, &registry,
-                    )
-                    .await
-                }
-            });
-            if !daemon {
-                println!("  commands.list: wired to unified dispatch registry");
-            }
-        }
-
-        // Wire tools.catalog to return all active tools grouped by source
-        {
-            let reg = tool_catalog.clone();
-            server.handlers_mut().register("tools.catalog", move |req| {
-                let registry = reg.clone();
-                async move {
-                    alephcore::gateway::handlers::tools_visibility::handle_catalog(req, &registry)
-                        .await
-                }
-            });
-            if !daemon {
-                println!("  tools.catalog: wired to unified dispatch registry");
-            }
-        }
-
-        // Wire tools.invoke to execute a single builtin tool directly,
-        // bypassing the LLM agent loop. Intended for E2E test harnesses
-        // (note_layer probes, deterministic tool exercising). Production
-        // callers should still go through agent.run.
-        //
-        // D2/P3 fix: pass the live AgentRegistry so handle_invoke can apply
-        // the same allowlist that the LLM faces — preventing arbitrary
-        // operators from bypassing per-agent tool scoping.
-        //
-        // Only wire when a real BuiltinToolRegistry is present (real mode);
-        // in simulated mode the SERVICE_UNAVAILABLE placeholder from
-        // HandlerRegistry::new remains.
-        if let Some(reg) = tool_reg_out.clone() {
-            let agents_for_invoke: std::sync::Arc<alephcore::agents::AgentRegistry> = {
-                let r = std::sync::Arc::new(alephcore::agents::AgentRegistry::with_builtins());
-                let aleph_home = alephcore::discovery::aleph_home_dir().ok();
-                let project_dir = std::env::current_dir().ok();
-                if let Some(home) = aleph_home.as_deref() {
-                    if let Err(e) = r.register_from_dirs(home, project_dir.as_deref()) {
-                        tracing::warn!(
-                            error = %e,
-                            "tools.invoke: failed to load user agent defs; allowlist degrades to builtins-only"
-                        );
-                    }
-                }
-                r
-            };
-            server.handlers_mut().register("tools.invoke", move |req| {
-                let registry = reg.clone();
-                let agents = Some(agents_for_invoke.clone());
-                async move {
-                    alephcore::gateway::handlers::tools_invoke::handle_invoke(req, registry, agents)
-                        .await
-                }
-            });
-            if !daemon {
-                println!("  tools.invoke: wired with agent allowlist gating");
-            }
-        }
-
-        // Wire tools.effective to return tools available to a specific agent.
-        // D1 fix: previously rebuilt a builtins-only AgentRegistry per call,
-        // hiding user-customized agents. Mirror the orchestrator's setup
-        // (mod.rs ~1112 + orchestrator_init.rs:70) by loading user/project
-        // AgentDefs from filesystem so the visibility surface matches what
-        // the agent loop actually sees.
-        {
-            let reg = tool_catalog.clone();
-            let agent_def_registry = {
-                let r = std::sync::Arc::new(alephcore::agents::AgentRegistry::with_builtins());
-                let aleph_home = alephcore::discovery::aleph_home_dir().ok();
-                let project_dir = std::env::current_dir().ok();
-                if let Some(home) = aleph_home.as_deref() {
-                    match r.register_from_dirs(home, project_dir.as_deref()) {
-                        Ok(shadows) => {
-                            if !daemon && !shadows.is_empty() {
-                                println!(
-                                    "  tools.effective: loaded user agents (+{} shadow overrides)",
-                                    shadows.len()
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "tools.effective: failed to load user agent defs; \
-                                 falling back to builtins-only"
-                            );
-                        }
-                    }
-                }
-                r
-            };
-            server
-                .handlers_mut()
-                .register("tools.effective", move |req| {
-                    let registry = reg.clone();
-                    let agents = agent_def_registry.clone();
-                    async move {
-                        let agent_id = req
-                            .params
-                            .as_ref()
-                            .and_then(|p| p.get("agent_id"))
-                            .and_then(|v| v.as_str())
-                            .map(std::string::ToString::to_string);
-                        let agent_def = match &agent_id {
-                            Some(id) => agents.get(id),
-                            None => agents.get("main"),
-                        };
-                        alephcore::gateway::handlers::tools_visibility::handle_effective(
-                            req,
-                            &registry,
-                            agent_def.as_ref(),
-                        )
-                        .await
-                    }
-                });
-            if !daemon {
-                println!("  tools.effective: wired to unified dispatch registry + agent defs");
-            }
-        }
-
-        // Wire tools.cancel_call + tools.in_flight against the process-wide
-        // in-flight registry installed in `start/mod.rs` Gap-B-follow-up boot
-        // path. `tools.cancel_call` fires the harness-issued per-call
-        // CancellationToken keyed by `tool_call_id`; `tools.in_flight` lists
-        // every live registration for CLI / panel diagnostics.
-        if let Some(reg) = alephcore::tools::in_flight::global_in_flight_tool_calls() {
-            let reg_cancel = reg.clone();
-            server
-                .handlers_mut()
-                .register("tools.cancel_call", move |req| {
-                    let r = reg_cancel.clone();
-                    async move {
-                        alephcore::gateway::handlers::tools_cancel::handle_cancel(req, r).await
-                    }
-                });
-            let reg_list = reg;
-            server
-                .handlers_mut()
-                .register("tools.in_flight", move |req| {
-                    let r = reg_list.clone();
-                    async move {
-                        alephcore::gateway::handlers::tools_cancel::handle_in_flight(req, r).await
-                    }
-                });
-            if !daemon {
-                println!("  tools.cancel_call + tools.in_flight: wired to in-flight registry");
-            }
-        }
-
-        // Wire command.execute to resolve slash commands via CommandParser + ToolRegistry
-        {
-            let parser = Arc::new(alephcore::command::CommandParser::new(tool_catalog.clone()));
-
-            // Inject parser into chat.send handler (created earlier, uses deferred cell)
-            {
-                let mut cell = command_parser_cell.write().await;
-                *cell = Some(parser.clone());
-            }
-
-            let reg = tool_catalog.clone();
-            server
-                .handlers_mut()
-                .register("command.execute", move |req| {
-                    let p = parser.clone();
-                    let r = reg.clone();
-                    async move {
-                        alephcore::gateway::handlers::commands::handle_execute(req, p, r).await
-                    }
-                });
-            if !daemon {
-                println!("  command.execute: wired to unified command parser + registry");
-            }
-        }
-
-        tool_catalog_out = Some(tool_catalog);
-
-        // ── Spec 4 Task 11: spawn MemoryProducerScheduler ────────────────────
-        {
-            use alephcore::memory::extensions::MemoryProducerScheduler;
-            let raw_store: std::sync::Arc<
-                dyn alephcore::memory::store::raw_memory::RawMemoryStore,
-            > = memory_db.clone();
-            let scheduler = std::sync::Arc::new(MemoryProducerScheduler::new(
-                memory_ext_registry.clone(),
-                raw_store,
-            ));
-            let _scheduler_handle = scheduler.spawn();
-            // JoinHandle intentionally leaked here — the task runs for the
-            // server lifetime. Shutdown via process exit.
-            if !daemon {
-                println!("  MemoryProducerScheduler: spawned");
-            }
-        }
-
-        // ── Spec 4 Task 11: wire memory_registry into ExtensionManager ───────
-        // After the registry is constructed we inject it into the global
-        // ExtensionManager so any plugin loaded at runtime via
-        // `load_runtime_plugin` / `ensure_plugin_loaded` also gets
-        // `load_plugin_with_memory` (MCP memory extension auto-registration).
-        {
-            use alephcore::gateway::handlers::plugins::get_extension_manager;
-            if let Ok(ext_manager) = get_extension_manager() {
-                // ExtensionManager is stored behind Arc; we can only thread the
-                // registry through the methods that take `&self`.
-                // Inject via set_memory_registry if available (no-op if the
-                // Arc is already shared across threads).
-                ext_manager.set_memory_registry(memory_ext_registry.clone());
-            }
-        }
-    }
-
-    // Register status/cancel (work for both real and simulated modes)
-    if let Some(ref rm) = run_manager {
-        let rm_status = rm.clone();
-        server.handlers_mut().register("agent.status", move |req| {
-            let manager = rm_status.clone();
-            async move { handle_agent_status(req, manager).await }
-        });
-
-        let rm_cancel = rm.clone();
-        server.handlers_mut().register("agent.cancel", move |req| {
-            let manager = rm_cancel.clone();
-            async move { handle_agent_cancel(req, manager).await }
-        });
-
-        // Register chat handlers (abort, history, clear work for both real and simulated)
-        let rm_abort = rm.clone();
-        server.handlers_mut().register("chat.abort", move |req| {
-            let manager = rm_abort.clone();
-            async move { chat_handlers::handle_abort(req, manager).await }
-        });
-    }
-
-    let sm_history = session_store.clone();
-    server.handlers_mut().register("chat.history", move |req| {
-        let manager = sm_history.clone();
-        async move { chat_handlers::handle_history(req, manager).await }
-    });
-
-    let sm_clear = session_store;
-    server.handlers_mut().register("chat.clear", move |req| {
-        let manager = sm_clear.clone();
-        async move { chat_handlers::handle_clear(req, manager).await }
-    });
-
-    // agent.respondToInput is stateless (no context args)
-    server
-        .handlers_mut()
-        .register("agent.respondToInput", |req| async move {
-            handle_respond_to_input(req).await
-        });
-
-    // agent.list — returns available agents from the router
-    {
-        let router_list = router.clone();
-        server.handlers_mut().register("agent.list", move |req| {
-            let r = router_list.clone();
-            async move { agent_handlers::handle_list(req, r).await }
-        });
-    }
-
-    if !daemon {
-        println!("Agent control methods:");
-        println!("  - agent.run            : Execute agent request with streaming");
-        println!("  - agent.status         : Query run status by run_id");
-        println!("  - agent.cancel         : Cancel an active run");
-        println!("  - agent.list           : List available agents");
-        println!("  - agent.respondToInput : Respond to user input request");
-        println!("  - chat.send            : Send chat message (wraps agent.run)");
-        println!("  - chat.abort           : Abort message generation");
-        println!("  - chat.history         : Get chat history");
-        println!("  - chat.clear           : Clear chat history");
-        println!();
-    }
-
-    // G4: register gateway.identity.get with a small captured snapshot.
-    // The snapshot deliberately omits Arc<GatewaySharedState> — capturing
-    // the handler-registry Arc here would make this very handlers_mut()
-    // call (which uses Arc::get_mut) panic.
-    {
-        use alephcore::gateway::handlers::gateway_identity::{
-            handle_gateway_identity_get, GatewayIdentitySnapshot,
-        };
-        // +1 accounts for the gateway.identity.get handler itself, which
-        // is registered immediately after this count is taken.
-        let method_count = server.handlers_mut().len() + 1;
-        let identity_snapshot = GatewayIdentitySnapshot {
-            instance_id: server.instance_id.clone(),
-            started_at_unix: server.started_at_unix,
-            state_versions: server.state_versions.clone(),
-            method_count,
-        };
-        server
-            .handlers_mut()
-            .register("gateway.identity.get", move |req| {
-                let snap = identity_snapshot.clone();
-                async move { handle_gateway_identity_get(req, snap).await }
-            });
-        if !daemon {
-            println!("  gateway.identity.get: wired");
-        }
-    }
-
-    // G4b: register gateway.metrics.lanes with the live LaneManager.
-    // Cloning Arc<LaneManager> is cheap; the handler reads available_permits()
-    // off the underlying tokio::Semaphore — racy by design (gauge, not txn).
-    {
-        use alephcore::gateway::handlers::gateway_metrics::handle_gateway_metrics_lanes;
-        let lane_mgr = server.lane_manager.clone();
-        server
-            .handlers_mut()
-            .register("gateway.metrics.lanes", move |req| {
-                let mgr = lane_mgr.clone();
-                async move { handle_gateway_metrics_lanes(req, mgr).await }
-            });
-        if !daemon {
-            println!("  gateway.metrics.lanes: wired");
-        }
-    }
-
-    // G4c: register gateway.credentials with a snapshot of the live
-    // GatewayServerConfig. Cloning the config into an Arc once at boot is
-    // cheap and avoids holding the FullGatewayConfig across the handler.
-    {
-        use alephcore::gateway::handlers::gateway_credentials::handle_gateway_credentials;
-        let gateway_cfg = std::sync::Arc::new(full_config.gateway.clone());
-        server
-            .handlers_mut()
-            .register("gateway.credentials", move |req| {
-                let cfg = gateway_cfg.clone();
-                async move { handle_gateway_credentials(req, cfg).await }
-            });
-        if !daemon {
-            println!("  gateway.credentials: wired");
-        }
-    }
-
-    // G2: signal readiness. /ready returns 200 from this point onward;
-    // before this, it returns 503 so proxies don't route to a gateway
-    // whose handler tree is still being wired.
-    server
-        .ready
-        .store(true, std::sync::atomic::Ordering::Release);
-    if !daemon {
-        println!("  Gateway readiness: signaled (ready=true)");
-    }
+    // Register status/cancel/chat/agent.list/gateway.* handlers shared by both
+    // execution modes, then signal readiness. `session_store` is moved here.
+    // See `common_handlers.rs`.
+    register_common_handlers(
+        server,
+        &run_manager,
+        session_store,
+        &router,
+        full_config,
+        daemon,
+    );
 
     Ok(AgentHandlersResult {
         _run_manager: run_manager
