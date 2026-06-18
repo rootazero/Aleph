@@ -352,6 +352,31 @@ impl WorkflowTool {
         });
         Ok((selected, tasks))
     }
+
+    /// Tool-free planner for a workflow run, fail-soft. Returns `None` when no
+    /// provider is injected or the planner self-gates/errs. The objective is the
+    /// run input (the user's request for this workflow execution).
+    async fn plan_workflow_strategy(
+        &self,
+        def: &WorkflowDef,
+        input: &str,
+    ) -> Option<crate::strategy::Strategy> {
+        let provider = self.planner_provider.as_ref()?;
+        let objective = if input.trim().is_empty() {
+            format!("Run workflow '{}'", def.name)
+        } else {
+            input.to_string()
+        };
+        let cwd = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let ctx = crate::strategy::planner::PlannerContext {
+            tool_descriptions: Vec::new(),
+            env_summary: format!("os={} cwd={}", std::env::consts::OS, cwd),
+            lessons: Vec::new(),
+        };
+        crate::strategy::planner::plan_strategy(provider, &objective, &ctx, None).await
+    }
 }
 
 /// Assign each task a topological rank within `tasks`: a task's rank is one
@@ -576,6 +601,10 @@ impl AlephTool for WorkflowTool {
                         conversation_id: t.conversation_id.clone(),
                         session_key: t.session_key.to_string(),
                     });
+                // Plan ONCE before materialisation: the planner sees the run
+                // input + WorkflowDef and produces a run-global Strategy. It does
+                // not need the run_id (minted inside materialize). Fail-soft.
+                let strategy = self.plan_workflow_strategy(&def, &input).await;
                 let mat = workflow::materialize(
                     &def,
                     &input,
@@ -583,9 +612,20 @@ impl AlephTool for WorkflowTool {
                     self.coord_store.as_ref(),
                     clarify_ctx.as_ref(),
                     (!models.is_empty()).then_some(&models),
-                    None,
+                    strategy.as_ref(),
                 )
                 .await?;
+                // Persist under the now-known run_id so continuations read it via
+                // active_strategy/workflow_key. Best-effort; write only when the
+                // slot is provably empty (Ok(None)) — never on Ok(Some)/Err (P7).
+                if let Some(strategy) = &strategy {
+                    if let Some(store) = crate::strategy::global() {
+                        let key = crate::strategy::workflow_key(&mat.run_id);
+                        if matches!(store.get(&key), Ok(None)) {
+                            let _ = store.put(&key, strategy);
+                        }
+                    }
+                }
                 if let Some(signal) = &self.dispatch_signal {
                     signal.notify_one();
                 }
@@ -1867,5 +1907,25 @@ mod tests {
         let provider: Arc<dyn crate::providers::AiProvider> =
             Arc::new(crate::providers::MockProvider::new("x"));
         let _tool = WorkflowTool::new(Arc::new(store), None).with_planner_provider(Some(provider));
+    }
+
+    #[tokio::test]
+    async fn workflow_no_provider_plans_no_strategy() {
+        let store = setup_store().await;
+        let t = tool(store, None); // no planner provider injected
+        let strategy = t.plan_workflow_strategy(&linear_def(), "do the thing").await;
+        assert!(strategy.is_none(), "no provider => no strategy planned");
+    }
+
+    #[tokio::test]
+    async fn workflow_with_provider_plans_concrete_strategy() {
+        let store = setup_store().await;
+        let json = r#"{"objective":"o","approach":"a","phases":["p"],
+            "guardrails":["do not touch the billing module"],"success_criteria":"done"}"#;
+        let provider: Arc<dyn crate::providers::AiProvider> =
+            Arc::new(crate::providers::MockProvider::new(json));
+        let t = tool(store, None).with_planner_provider(Some(provider));
+        let strategy = t.plan_workflow_strategy(&linear_def(), "do the thing").await;
+        assert!(strategy.is_some(), "provider + concrete guardrail => Some(strategy)");
     }
 }
