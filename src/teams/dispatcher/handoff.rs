@@ -178,6 +178,24 @@ pub async fn build_handoff_context(
     }
     out.push('\n');
 
+    // --- Global Strategy (workflow run-global frame) ---
+    // Stamped by `workflow::materialize` under `WORKFLOW_STRATEGY_KEY`: the
+    // run-global objective + cross-cutting guardrails (no phases — the DAG is
+    // the phase structure). Placed AFTER the task so the per-node task
+    // description stays the authoritative local instruction; this is context.
+    // Absent for plain team tasks and pre-strategy runs (byte-identical).
+    if let Some(frame) = task
+        .metadata
+        .get(crate::workflow::WORKFLOW_STRATEGY_KEY)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        out.push_str("\n## Global Strategy (context — your specific task is below)\n");
+        out.push_str(&truncate_utf8(frame, MAX_SECTION_BYTES));
+        out.push('\n');
+    }
+
     // --- Acceptance criteria (the task's definition of done) ---
     // Read straight from the metadata channel and rendered as a checklist so
     // the member knows the completion bar before starting. Empty for tasks that
@@ -588,5 +606,42 @@ mod tests {
         assert!(t.ends_with("(truncated)"));
         // Must not panic on a multi-byte boundary.
         let _ = truncate_utf8(s, 2);
+    }
+
+    #[tokio::test]
+    async fn global_strategy_section_renders_after_task_when_stamped() {
+        let cs = coord_store().await;
+        let ts = team_store().await;
+        let mut nt = plain_task("Implement the parser");
+        nt.description = "Write the recursive-descent parser for the grammar.".into();
+        nt.metadata = serde_json::json!({
+            crate::workflow::WORKFLOW_STRATEGY_KEY:
+                "Objective: ship a correct parser.\nGuardrails:\n- no panics on malformed input",
+        });
+        let task = cs.create_task(nt).await.unwrap();
+
+        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+
+        // Labeled global-frame block is present...
+        assert!(ctx.contains("## Global Strategy (context — your specific task is below)"));
+        assert!(ctx.contains("ship a correct parser."));
+        // ...and it comes AFTER the ## Task block (task stays authoritative).
+        let task_pos = ctx.find("## Task").unwrap();
+        let strat_pos = ctx.find("## Global Strategy").unwrap();
+        assert!(task_pos < strat_pos, "strategy must follow the task block");
+        // The per-node description is present and precedes the strategy.
+        let desc_pos = ctx.find("recursive-descent parser").unwrap();
+        assert!(desc_pos < strat_pos);
+    }
+
+    #[tokio::test]
+    async fn no_global_strategy_section_when_metadata_absent() {
+        let cs = coord_store().await;
+        let ts = team_store().await;
+        let task = cs.create_task(plain_task("Plain task")).await.unwrap();
+
+        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+        // Byte-identical to the legacy envelope: no global-strategy heading.
+        assert!(!ctx.contains("## Global Strategy"));
     }
 }

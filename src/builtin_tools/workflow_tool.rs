@@ -583,6 +583,7 @@ impl AlephTool for WorkflowTool {
                     self.coord_store.as_ref(),
                     clarify_ctx.as_ref(),
                     (!models.is_empty()).then_some(&models),
+                    None,
                 )
                 .await?;
                 if let Some(signal) = &self.dispatch_signal {
@@ -1071,7 +1072,7 @@ mod tests {
         def: &WorkflowDef,
         team: &str,
     ) -> (String, Vec<String>) {
-        let mat = workflow::materialize(def, "x", team, t.coord_store.as_ref(), None, None)
+        let mat = workflow::materialize(def, "x", team, t.coord_store.as_ref(), None, None, None)
             .await
             .expect("materialise");
         (mat.run_id, mat.task_ids)

@@ -16,11 +16,11 @@
 
 use serde_json::json;
 
-use crate::agents::swarm::tasks::acceptance::LEAD_REVIEW_METADATA_KEY;
 use crate::agents::swarm::tasks::{
     CoordTaskId, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority,
 };
 use crate::error::Result;
+use crate::strategy::{render_workflow_global_frame, Strategy};
 use crate::teams::dispatcher::{MANAGED_BY_DISPATCHER, MANAGED_BY_KEY};
 use crate::workflow::clarify::{ClarifyContext, ClarifyTaskMeta, CLARIFY_META_KEY, CLARIFY_OWNER};
 use crate::workflow::def::{render_prompt, WorkflowDef};
@@ -39,6 +39,14 @@ pub const WORKFLOW_RUN_ID_KEY: &str = "workflow_run_id";
 /// the requested model — the executable wiring of the manifest's `model` field.
 /// Absent on steps with no override (byte-identical legacy rows).
 pub const WORKFLOW_MODEL_KEY: &str = "workflow_model";
+/// Metadata key carrying the run-global welded strategy frame on every
+/// materialised **agent** step. Stamped once per run (beside [`WORKFLOW_RUN_ID_KEY`])
+/// from the planned [`Strategy`](crate::strategy::Strategy) via
+/// [`render_workflow_global_frame`](crate::strategy::render_workflow_global_frame);
+/// `build_handoff_context` renders it as a `## Global Strategy` section after the
+/// task block. Absent when no strategy was planned (byte-identical legacy rows).
+/// Clarify steps run no agent, so they are never stamped.
+pub const WORKFLOW_STRATEGY_KEY: &str = "workflow_strategy";
 
 /// Read a step's per-step model override off its materialised `coord_task`
 /// metadata and build a [`ModelOverride`](crate::gateway::model_override::ModelOverride).
@@ -106,6 +114,7 @@ pub async fn materialize(
     store: &dyn CoordTaskStore,
     clarify_ctx: Option<&ClarifyContext>,
     models: Option<&std::collections::HashMap<String, String>>,
+    strategy: Option<&Strategy>,
 ) -> Result<MaterializedWorkflow> {
     def.validate()?;
     let order = def.topo_order()?;
@@ -113,6 +122,11 @@ pub async fn materialize(
     // One identity per materialisation: stamped into every task so the run
     // can be observed and cancelled as a unit after the launching turn ends.
     let run_id = uuid::Uuid::new_v4().to_string();
+
+    // Run-wide welded strategy frame, rendered once and stamped onto every
+    // agent step's metadata. `None` (no planned strategy) leaves rows
+    // byte-identical to the legacy materialisation.
+    let strategy_frame: Option<String> = strategy.map(render_workflow_global_frame);
 
     // step-local id → freshly-minted coord_task id.
     let mut id_map: std::collections::HashMap<&str, CoordTaskId> =
@@ -192,6 +206,14 @@ pub async fn materialize(
             {
                 if let Some(obj) = meta.as_object_mut() {
                     obj.insert(WORKFLOW_MODEL_KEY.to_string(), json!(model));
+                }
+            }
+            // Run-global strategy frame: the same welded objective + cross-cutting
+            // guardrails on every agent step (the DAG itself is the phase
+            // structure, so no phase list). Absent when no strategy was planned.
+            if let Some(frame) = strategy_frame.as_deref() {
+                if let Some(obj) = meta.as_object_mut() {
+                    obj.insert(WORKFLOW_STRATEGY_KEY.to_string(), json!(frame));
                 }
             }
             (step.agent.clone(), meta)
@@ -296,7 +318,7 @@ mod tests {
     #[tokio::test]
     async fn materialize_creates_one_task_per_step() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "the topic", "team-1", &store, None, None)
+        let mat = materialize(&linear_def(), "the topic", "team-1", &store, None, None, None)
             .await
             .expect("materialise");
         assert_eq!(mat.task_ids.len(), 2);
@@ -310,6 +332,7 @@ mod tests {
             "quantum computing",
             "team-1",
             &store,
+            None,
             None,
             None,
         )
@@ -333,7 +356,7 @@ mod tests {
     #[tokio::test]
     async fn materialize_stamps_one_run_id_on_every_task() {
         let store = setup_store().await;
-        let first = materialize(&linear_def(), "x", "team-1", &store, None, None)
+        let first = materialize(&linear_def(), "x", "team-1", &store, None, None, None)
             .await
             .unwrap();
         assert!(!first.run_id.is_empty(), "run id is minted");
@@ -348,7 +371,7 @@ mod tests {
             );
         }
         // A second run of the same template mints a distinct identity.
-        let second = materialize(&linear_def(), "x", "team-1", &store, None, None)
+        let second = materialize(&linear_def(), "x", "team-1", &store, None, None, None)
             .await
             .unwrap();
         assert_ne!(first.run_id, second.run_id, "runs are distinguishable");
@@ -357,7 +380,7 @@ mod tests {
     #[tokio::test]
     async fn materialize_wires_dependency_so_dependent_is_blocked() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "x", "team-1", &store, None, None)
+        let mat = materialize(&linear_def(), "x", "team-1", &store, None, None, None)
             .await
             .unwrap();
 
@@ -398,7 +421,7 @@ mod tests {
             description: String::new(),
             steps: vec![step("a", "w", &[]), step("b", "w", &["a", "a"])],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None)
+        let mat = materialize(&def, "x", "t", &store, None, None, None)
             .await
             .expect("duplicate dep collapses instead of aborting");
         assert_eq!(mat.task_ids.len(), 2);
@@ -412,7 +435,7 @@ mod tests {
         let store = setup_store().await;
         let mut def = linear_def();
         def.steps[1].depends_on = vec!["ghost".into()];
-        assert!(materialize(&def, "x", "team-1", &store, None, None)
+        assert!(materialize(&def, "x", "team-1", &store, None, None, None)
             .await
             .is_err());
     }
@@ -430,7 +453,7 @@ mod tests {
                 step("d", "w", &["b", "c"]),
             ],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None)
+        let mat = materialize(&def, "x", "t", &store, None, None, None)
             .await
             .unwrap();
         assert_eq!(mat.task_ids.len(), 4);
@@ -461,7 +484,7 @@ mod tests {
             conversation_id: "user-1".into(),
             session_key: "telegram:bot:1:user-1".into(),
         };
-        let mat = materialize(&def, "us-east", "team-1", &store, Some(&ctx), None)
+        let mat = materialize(&def, "us-east", "team-1", &store, Some(&ctx), None, None)
             .await
             .unwrap();
 
@@ -487,7 +510,7 @@ mod tests {
         let store = setup_store().await;
         let mut def = linear_def();
         def.steps[1].review = true;
-        let mat = materialize(&def, "x", "team-1", &store, None, None)
+        let mat = materialize(&def, "x", "team-1", &store, None, None, None)
             .await
             .unwrap();
 
@@ -514,7 +537,7 @@ mod tests {
             description: String::new(),
             steps: vec![clarify_step("ask", "Which file?", &[], &[])],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None)
+        let mat = materialize(&def, "x", "t", &store, None, None, None)
             .await
             .unwrap();
         let ask = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
@@ -531,7 +554,7 @@ mod tests {
         let store = setup_store().await;
         let mut models = std::collections::HashMap::new();
         models.insert("gather".to_string(), "opus".to_string());
-        let mat = materialize(&linear_def(), "x", "team-1", &store, None, Some(&models))
+        let mat = materialize(&linear_def(), "x", "team-1", &store, None, Some(&models), None)
             .await
             .unwrap();
 
@@ -574,5 +597,56 @@ mod tests {
         // Missing / empty → None (run stays on the default model).
         assert!(workflow_model_override(&json!({})).is_none());
         assert!(workflow_model_override(&json!({ WORKFLOW_MODEL_KEY: "  " })).is_none());
+    }
+
+    #[tokio::test]
+    async fn materialize_stamps_strategy_frame_on_agent_steps_only() {
+        let store = setup_store().await;
+        let strategy = crate::strategy::Strategy {
+            objective: "ship the pipeline".into(),
+            approach: "incremental".into(),
+            phases: vec!["phase a".into(), "phase b".into()],
+            guardrails: vec!["no network in tests".into()],
+            success_criteria: "all green".into(),
+            goal_id: None,
+        };
+        let mut def = linear_def();
+        def.steps.push(clarify_step("ask", "which mode?", &["A", "B"], &["gather"]));
+
+        let mat = materialize(&def, "x", "team-1", &store, None, None, Some(&strategy))
+            .await
+            .unwrap();
+
+        let mut saw_agent_stamp = false;
+        let mut saw_clarify_stamp = false;
+        for id in &mat.task_ids {
+            let task = store.get_task(id).await.unwrap().unwrap();
+            let stamped = task
+                .metadata
+                .get(WORKFLOW_STRATEGY_KEY)
+                .and_then(|v| v.as_str());
+            if task.owner.as_deref() == Some(CLARIFY_OWNER) {
+                saw_clarify_stamp = stamped.is_some();
+            } else if let Some(frame) = stamped {
+                saw_agent_stamp = true;
+                // Global frame = objective + guardrails, NO phase list.
+                assert!(frame.contains("ship the pipeline"));
+                assert!(!frame.contains("phase a"));
+            }
+        }
+        assert!(saw_agent_stamp, "agent steps must carry the strategy frame");
+        assert!(!saw_clarify_stamp, "clarify steps must NOT be stamped");
+    }
+
+    #[tokio::test]
+    async fn materialize_without_strategy_is_byte_identical() {
+        let store = setup_store().await;
+        let mat = materialize(&linear_def(), "x", "team-1", &store, None, None, None)
+            .await
+            .unwrap();
+        for id in &mat.task_ids {
+            let task = store.get_task(id).await.unwrap().unwrap();
+            assert!(task.metadata.get(WORKFLOW_STRATEGY_KEY).is_none());
+        }
     }
 }
