@@ -1485,6 +1485,9 @@
     "kanban": {
       "selector_label": "当前团队",
       "selector_placeholder": "选择团队",
+      "filter_placeholder": "过滤团队…",
+      "empty_teams": "暂无团队",
+      "no_match": "无匹配团队",
       "columns": {
         "pending": "待办",
         "blocked": "阻塞",

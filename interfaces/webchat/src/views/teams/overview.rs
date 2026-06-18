@@ -62,6 +62,36 @@ pub fn OverviewView() -> impl IntoView {
         }
     });
 
+    // Live cross-view sync: any surface that creates / renames / disbands /
+    // deletes a team makes the gateway emit `team.changed`. Re-fetch so this
+    // tab never lags behind the group-chat sidebar (e.g. a team disbanded from
+    // the sidebar must immediately show "disbanded" here, not "active").
+    let reload_on_event = reload;
+    let sub_id = state.subscribe_events(move |event| {
+        if event.topic == "team.changed" {
+            reload_on_event();
+        }
+    });
+    // Ensure the gateway pushes the topic to this client even if the sidebar
+    // (which also subscribes) is not mounted.
+    let topic_state = state;
+    spawn_local(async move {
+        for _ in 0..50 {
+            if topic_state.is_connected.get_untracked() {
+                break;
+            }
+            gloo_timers::future::TimeoutFuture::new(100).await;
+        }
+        if let Err(e) = topic_state.subscribe_topic("team.changed").await {
+            web_sys::console::error_1(
+                &format!("Failed to subscribe to team.changed: {e}").into(),
+            );
+        }
+    });
+    on_cleanup(move || {
+        state.unsubscribe_events(sub_id);
+    });
+
     // --- toggle_expand ---
     let toggle_expand = move |team_id: String| {
         let current = expanded_id.get_untracked();
