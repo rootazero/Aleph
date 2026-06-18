@@ -302,6 +302,31 @@ token_budget. \
                     goal = goal.with_deadline_ms(Some(deadline_from_minutes(now, minutes)));
                 }
                 self.store.put(&goal)?;
+                // Objective-change auto-invalidation (spec §6): if a welded
+                // Strategy exists for this session and it cross-references a
+                // DIFFERENT goal id than the one we just minted, the objective
+                // changed under it — drop the stale map (BEFORE the planner fires
+                // below) so the planner re-mints a fresh map for the new
+                // objective. A Strategy with no cross-ref (goal_id None) or a
+                // matching id is left intact.
+                if let Some(strat_store) = crate::strategy::global() {
+                    let key = crate::strategy::goal_key(&session);
+                    match strat_store.get(&key) {
+                        Ok(Some(existing)) => {
+                            if existing.goal_id.as_deref().is_some_and(|old| old != goal.id) {
+                                if let Err(e) = strat_store.delete(&key) {
+                                    info!(session = %session, error = %e,
+                                        "goal set: failed to invalidate stale strategy (ignored)");
+                                }
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            info!(session = %session, error = %e,
+                                "goal set: failed to read strategy for invalidation (ignored)");
+                        }
+                    }
+                }
                 self.maybe_plan_strategy(&session, &goal).await;
                 Ok(GoalOutput {
                     success: true,
@@ -1014,5 +1039,105 @@ mod tests {
         assert!(sstore.get(&goal_key("sess-clear-strat")).unwrap().is_none());
         // ...but leaves a co-existing loop-keyed strategy untouched.
         assert!(sstore.get(&loop_key("sess-clear-strat")).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn set_with_changed_objective_invalidates_stale_strategy() {
+        use crate::strategy::{goal_key, Strategy, StrategyStore};
+        use crate::sync_primitives::Arc;
+
+        let sdir = tempfile::tempdir().unwrap();
+        crate::strategy::set_global_for_test(Arc::new(
+            StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+        ));
+        // set_global_for_test is OnceCell-once; another test in this binary may
+        // have set the global first. Seed + assert through the ACTUAL global the
+        // tool's Set operates on (the unique session key avoids collision).
+        let sstore = crate::strategy::global().expect("strategy global set");
+
+        let (tool, _d) = tool_with_session("sess-objchg");
+        // First Set — no planner provider, so no strategy is auto-minted.
+        tool.call(GoalArgs {
+            objective: Some("Migrate auth to v2".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        // Confirm nothing was seeded automatically.
+        assert!(sstore.get(&goal_key("sess-objchg")).unwrap().is_none());
+        // Retrieve the first goal's id, then hand-seed a strategy that
+        // cross-references it (simulating a previously-welded plan).
+        let first_goal_id = tool
+            .store
+            .get("sess-objchg")
+            .unwrap()
+            .unwrap()
+            .id
+            .clone();
+        let strat = Strategy {
+            objective: "Migrate auth to v2".into(),
+            approach: "incremental".into(),
+            phases: vec![],
+            guardrails: vec!["do not break existing sessions".into()],
+            success_criteria: "tests green".into(),
+            goal_id: Some(first_goal_id),
+        };
+        sstore.put(&goal_key("sess-objchg"), &strat).unwrap();
+
+        // Re-set with a DIFFERENT objective -> new goal.id -> stale strategy gone.
+        tool.call(GoalArgs {
+            objective: Some("Rewrite the billing pipeline".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        assert!(
+            sstore.get(&goal_key("sess-objchg")).unwrap().is_none(),
+            "changed objective must invalidate the stale welded strategy"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_with_same_objective_keeps_strategy() {
+        use crate::strategy::{goal_key, Strategy, StrategyStore};
+        use crate::sync_primitives::Arc;
+
+        let sdir = tempfile::tempdir().unwrap();
+        crate::strategy::set_global_for_test(Arc::new(
+            StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+        ));
+        // set_global_for_test is OnceCell-once; another test in this binary may
+        // have set the global first. Seed + assert through the ACTUAL global.
+        let sstore = crate::strategy::global().expect("strategy global set");
+
+        let (tool, _d) = tool_with_session("sess-same");
+        tool.call(GoalArgs {
+            objective: Some("Keep me".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        let gid = tool.store.get("sess-same").unwrap().unwrap().id.clone();
+        let strat = Strategy {
+            objective: "Keep me".into(),
+            approach: "a".into(),
+            phases: vec![],
+            guardrails: vec!["one concrete guardrail".into()],
+            success_criteria: "ok".into(),
+            goal_id: Some(gid),
+        };
+        sstore.put(&goal_key("sess-same"), &strat).unwrap();
+
+        // Same objective => same goal.id => strategy preserved.
+        tool.call(GoalArgs {
+            objective: Some("Keep me".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        assert!(
+            sstore.get(&goal_key("sess-same")).unwrap().is_some(),
+            "unchanged objective must keep the welded strategy"
+        );
     }
 }
