@@ -793,8 +793,13 @@ mod tests {
         use crate::strategy::{goal_key, loop_key, Strategy, StrategyStore};
 
         let sdir = tempfile::tempdir().unwrap();
-        let sstore = std::sync::Arc::new(StrategyStore::open(&sdir.path().join("s.db")).unwrap());
-        crate::strategy::set_global_for_test(sstore.clone());
+        crate::strategy::set_global_for_test(std::sync::Arc::new(
+            StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+        ));
+        // set_global_for_test is OnceCell-once; another test in this binary may
+        // have set the global first. Seed + assert through the ACTUAL global the
+        // tool's stop operates on (the unique session key avoids collision).
+        let sstore = crate::strategy::global().expect("strategy global set");
 
         let concrete = Strategy {
             objective: "o".into(),
