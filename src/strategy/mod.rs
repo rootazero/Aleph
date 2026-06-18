@@ -3,9 +3,11 @@
 //! persistently, and pinned into every downstream execution prompt. Distinct
 //! from the standing `goal` (objective) and the per-task `scratchpad`.
 
+pub mod render;
 pub mod store;
 pub mod types;
 
+pub use render::{render_guardrails_only, render_strategy_summary, render_workflow_global_frame};
 pub use store::StrategyStore;
 pub use types::Strategy;
 
