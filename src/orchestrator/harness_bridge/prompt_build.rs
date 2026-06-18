@@ -378,19 +378,32 @@ impl AgentHarnessRunner {
         // active plan with pending work) leaves the prompt byte-identical;
         // `ExecutionPlanLayer` @1755 renders it as `<execution_plan>`.
         //
-        // The execution-plan and standing-goal lookups are independent
-        // session-keyed reads (a scratchpad file read + a goal-store read with
-        // a wall-clock stamp). Run them concurrently with `tokio::join!` so
-        // prompt assembly — on the hot per-turn path — pays the max of the two
-        // latencies, not their sum. `join!` polls both on the current task, so
-        // there is no spawn cost and no extra `Send` bound; both futures take a
-        // shared `&session_key_str` borrow, which co-exist fine.
-        let (exec_plan, standing) = tokio::join!(
+        // The execution-plan, standing-goal, and strategy lookups are
+        // independent session-keyed reads (a scratchpad file read, a goal-store
+        // read with a wall-clock stamp, and a strategy-store read). Run them
+        // concurrently with `tokio::join!` so prompt assembly — on the hot
+        // per-turn path — pays the max of the three latencies, not their sum.
+        // `join!` polls all on the current task, so there is no spawn cost and
+        // no extra `Send` bound; all futures take a shared `&session_key_str`
+        // borrow, which co-exist fine.
+        let (exec_plan, standing, strategy) = tokio::join!(
             active_execution_plan(&session_key_str),
             active_standing_goal(&session_key_str),
+            active_strategy(&session_key_str),
         );
         resolved_context.execution_plan = exec_plan;
         resolved_context.standing_goal = standing;
+        // Render the welded Strategy into its two prompt surfaces: the full
+        // `<strategy>` body for the Stable `StrategyLayer` (cacheable head) and
+        // the guardrail-only echo for the Dynamic `StrategyPointerLayer` (per-
+        // turn tail near the read head). Both renders are pure/deterministic
+        // (no timestamps). `None` Strategy leaves both fields `None`, so both
+        // layers emit nothing and the prompt is byte-identical.
+        if let Some(s) = strategy {
+            resolved_context.strategy = Some(crate::strategy::render_strategy_summary(&s));
+            resolved_context.strategy_guardrails =
+                Some(crate::strategy::render_guardrails_only(&s));
+        }
         // Voice mode: read the session-keyed flag the gateway inbound router set
         // for this turn so `VoiceModeLayer` (priority 1710) injects the
         // spoken-reply guidelines. Mirrors `execution_plan` / `standing_goal` —
