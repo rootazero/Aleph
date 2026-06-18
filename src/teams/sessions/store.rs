@@ -367,7 +367,7 @@ impl SessionStore for SqliteSessionStore {
                 |row| row.get(0),
             )
             .map_err(db_err)?;
-        let turn_number = max_turn + 1;
+        let turn_number = max_turn.saturating_add(1);
 
         if turn_number > max_rounds {
             return Err(AlephError::ConfigError {
