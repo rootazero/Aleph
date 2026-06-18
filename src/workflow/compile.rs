@@ -19,6 +19,7 @@ use serde_json::json;
 use crate::agents::swarm::tasks::{
     CoordTaskId, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority,
 };
+use crate::agents::swarm::tasks::acceptance::LEAD_REVIEW_METADATA_KEY;
 use crate::error::Result;
 use crate::strategy::{render_workflow_global_frame, Strategy};
 use crate::teams::dispatcher::{MANAGED_BY_DISPATCHER, MANAGED_BY_KEY};
@@ -626,7 +627,7 @@ mod tests {
                 .get(WORKFLOW_STRATEGY_KEY)
                 .and_then(|v| v.as_str());
             if task.owner.as_deref() == Some(CLARIFY_OWNER) {
-                saw_clarify_stamp = stamped.is_some();
+                saw_clarify_stamp |= stamped.is_some();
             } else if let Some(frame) = stamped {
                 saw_agent_stamp = true;
                 // Global frame = objective + guardrails, NO phase list.
