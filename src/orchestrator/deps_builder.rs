@@ -862,11 +862,88 @@ pub fn build_cheap_summary_provider(
     }
 }
 
+/// Build the optional dedicated provider for the strategic-planner node
+/// (`[strategy] planner_model`). Mirrors [`build_cheap_summary_provider`]'s
+/// vendor-cloning approach — clone the primary provider's config, swap only the
+/// `models` vec — but with **two deliberate differences** (spec §4/§9):
+///
+/// 1. **No tier-2 `default_aux_model` fallback.** Planning is reasoning-heavy,
+///    so an unset/blank `planner_model` must NOT silently downgrade the
+///    strategist to a flash-tier sibling. Unset ⇒ `None` ⇒ the planner reuses
+///    the executor's main provider.
+/// 2. The section defaults to enabled, but is still honoured as an off-switch.
+///
+/// Returns `None` (planner reuses the executor provider) when:
+/// - `[strategy]` is absent, or `enabled = false`;
+/// - `planner_model` is unset or blank;
+/// - the primary provider key has no `[providers.*]` entry to clone;
+/// - the resolved model equals the primary's configured default (a separate
+///   provider would be byte-identical — pointless);
+/// - `create_provider` fails (bad protocol/preset) — logged, then degraded.
+///
+/// Fail-soft by construction: a misconfigured model never aborts boot. Total
+/// failure ⇒ the planner runs on the main provider; if the planner call itself
+/// fails, no Strategy is stored and the command proceeds with a byte-identical
+/// prompt.
+#[must_use]
+pub fn build_strategy_planner_provider(
+    config: &Config,
+    primary_provider_key: &str,
+) -> Option<Arc<dyn AiProvider>> {
+    let strategy = config.strategy.as_ref()?;
+    if !strategy.enabled {
+        return None;
+    }
+
+    let base = config.providers.get(primary_provider_key)?;
+
+    // Tier 1 only: explicit operator override. No `default_aux_model` tier-2 —
+    // an unset/blank planner_model reuses the executor provider (return None).
+    let planner_model: String = strategy
+        .planner_model
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())?
+        .to_string();
+
+    // No-op when the resolved planner model is the primary's own default model —
+    // the rebuilt provider would be byte-identical, so reuse the main LLM.
+    if base
+        .models
+        .first()
+        .is_some_and(|m| m.as_str() == planner_model)
+    {
+        return None;
+    }
+
+    let mut planner_cfg = base.clone();
+    planner_cfg.models = vec![planner_model.clone()];
+    match create_provider(primary_provider_key, planner_cfg) {
+        Ok(provider) => {
+            tracing::info!(
+                provider = %primary_provider_key,
+                planner_model = %planner_model,
+                "strategy: routing strategic-planner node to a dedicated model"
+            );
+            Some(provider)
+        }
+        Err(e) => {
+            tracing::warn!(
+                provider = %primary_provider_key,
+                planner_model = %planner_model,
+                error = %e,
+                "strategy: planner provider build failed — planner will use the main LLM"
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::{ContextBudgetToml, FallbackProviderToml, ProviderConfig, StabilityToml};
+    use crate::{ContextBudgetToml, FallbackProviderToml, ProviderConfig, StabilityToml, StrategyToml};
 
     fn cfg_with_context_budget(cb: Option<ContextBudgetToml>) -> Config {
         Config {
@@ -1707,5 +1784,96 @@ mod tests {
         // warning — the predicate guards the division-by-intent.
         assert!(!chain_min_materially_undercuts_primary(0, 0));
         assert!(!chain_min_materially_undercuts_primary(50_000, 0));
+    }
+
+    // ── strategy planner provider wiring (tier-1 only, no aux fallback) ──
+
+    /// Config with `[strategy]` enabled, an optional `planner_model`, and a
+    /// single mock-protocol primary provider keyed `key` whose default model is
+    /// `primary_model`. Mirrors `cfg_summary_keyed`, but the planner builder
+    /// reads `config.strategy` and has NO `default_aux_model` tier-2 fallback —
+    /// so the `key` preset is irrelevant to its resolution.
+    fn cfg_strategy_keyed(
+        key: &str,
+        primary_model: &str,
+        planner_model: Option<&str>,
+    ) -> Config {
+        let mut primary = ProviderConfig::test_config(primary_model);
+        primary.protocol = Some("mock".to_string());
+        let mut cfg = cfg_with_fallback(None, vec![(key, primary)]);
+        cfg.strategy = Some(StrategyToml {
+            enabled: true,
+            planner_model: planner_model.map(str::to_string),
+            ..StrategyToml::default()
+        });
+        cfg
+    }
+
+    /// `cfg_strategy_keyed` with the non-preset key `"primary"`.
+    fn cfg_strategy(primary_model: &str, planner_model: Option<&str>) -> Config {
+        cfg_strategy_keyed("primary", primary_model, planner_model)
+    }
+
+    #[test]
+    fn strategy_planner_none_when_section_missing() {
+        // No `[strategy]` at all → no separate planner provider (the planner
+        // reuses the executor's main provider).
+        let cfg = Config::default();
+        assert!(build_strategy_planner_provider(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn strategy_planner_none_when_disabled() {
+        let mut cfg = cfg_strategy("main-model", Some("planner-model"));
+        cfg.strategy.as_mut().unwrap().enabled = false;
+        assert!(build_strategy_planner_provider(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn strategy_planner_none_when_unset_or_blank() {
+        // planner_model unset/blank → reuse the executor provider (None). Unlike
+        // summary_model there is NO cheap-tier auto-fallback to downgrade to.
+        let cfg = cfg_strategy("main-model", None);
+        assert!(build_strategy_planner_provider(&cfg, "primary").is_none());
+        let cfg = cfg_strategy("main-model", Some("   "));
+        assert!(build_strategy_planner_provider(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn strategy_planner_none_even_with_preset_aux_model() {
+        // A preset that declares a cheap aux model (claude → claude-haiku-4-5)
+        // must NOT trigger an aux fallback here — the planner is reasoning-heavy,
+        // so unset planner_model reuses the executor, never the flash sibling.
+        let cfg = cfg_strategy_keyed("claude", "claude-opus-4-8", None);
+        assert!(
+            build_strategy_planner_provider(&cfg, "claude").is_none(),
+            "unset planner_model must reuse the executor, never auto-downgrade to aux"
+        );
+    }
+
+    #[test]
+    fn strategy_planner_none_when_equals_primary_default() {
+        // A planner model identical to the primary's default would rebuild a
+        // byte-identical provider — pointless, so reuse the main LLM.
+        let cfg = cfg_strategy("same-model", Some("same-model"));
+        assert!(build_strategy_planner_provider(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn strategy_planner_none_when_primary_key_absent() {
+        // planner_model set but the named primary has no [providers.*] entry.
+        let cfg = cfg_strategy("main-model", Some("planner-model"));
+        assert!(build_strategy_planner_provider(&cfg, "does-not-exist").is_none());
+    }
+
+    #[test]
+    fn strategy_planner_some_when_distinct_model_builds() {
+        // Enabled + a distinct, buildable planner model → a planner provider
+        // that targets the primary vendor (mock protocol) with the swapped model.
+        let cfg = cfg_strategy("main-model", Some("planner-model"));
+        assert!(
+            build_strategy_planner_provider(&cfg, "primary").is_some(),
+            "enabled + distinct buildable planner model must yield a planner provider"
+        );
     }
 }

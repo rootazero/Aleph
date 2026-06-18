@@ -19,7 +19,7 @@ pub mod summary_format;
 
 pub use deps_builder::{
     build_cheap_summary_provider, build_context_budget_config, build_failover_chain,
-    build_stability_triple, ProviderChain, StabilityTriple,
+    build_stability_triple, build_strategy_planner_provider, ProviderChain, StabilityTriple,
 };
 
 pub use dispatch::{
