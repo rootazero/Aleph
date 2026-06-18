@@ -204,4 +204,49 @@ mod tests {
             "cached Full prompt must carry memory citation standards"
         );
     }
+
+    #[test]
+    fn cached_full_prompt_welds_strategy_into_stable_and_dynamic() {
+        // Regression guard mirroring the role/citation vanish test: with a
+        // Strategy present, the full `<strategy>` body MUST land in the stable
+        // cacheable prefix (StrategyLayer @70, Stable) and the guardrail echo
+        // in the dynamic suffix (StrategyPointerLayer @1756, Dynamic). Catches
+        // both a missing `Cached` path (silent vanish) and a wrong `stability()`.
+        use crate::thinker::context::{ContextAggregator, ResolvedContext};
+        use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+        use crate::thinker::security_context::SecurityContext;
+
+        let mut ctx: ResolvedContext = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+            &[],
+        );
+        ctx.strategy = Some(
+            "Objective: ship the strategic planner\nApproach: plan-first, adapt as you learn"
+                .to_string(),
+        );
+        ctx.strategy_guardrails =
+            Some("- don't refactor unrelated modules\n- don't add speculative config".to_string());
+
+        let builder =
+            PromptBuilder::new(PromptConfig::default()).with_resolved_context(ctx);
+        let parts = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
+
+        // Stable prefix (part 0) carries the full `<strategy>` body.
+        assert!(
+            parts[0].content.contains("<strategy>"),
+            "cached Full prompt must weld the <strategy> body into the stable prefix"
+        );
+        assert!(parts[0].content.contains("ship the strategic planner"));
+        // Dynamic suffix (part 1) carries the guardrail echo.
+        assert!(
+            parts[1].content.contains("<strategy_reminder>"),
+            "cached Full prompt must echo guardrails in the dynamic suffix"
+        );
+        assert!(parts[1].content.contains("don't refactor unrelated modules"));
+        // The `<strategy>` body must NOT leak into the dynamic suffix, and the
+        // reminder must NOT leak into the stable prefix.
+        assert!(!parts[1].content.contains("<strategy>"));
+        assert!(!parts[0].content.contains("<strategy_reminder>"));
+    }
 }
