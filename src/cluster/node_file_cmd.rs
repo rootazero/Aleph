@@ -132,10 +132,13 @@ impl NodeCommand for FileReadCommand {
         if !src.exists() {
             return Err("file.read: not found".to_string());
         }
+        // Compare the raw u64 before any cast: `len() as usize` truncates on a
+        // 32-bit node, letting a huge file whose size mod 2^32 is under the cap
+        // pass the check and then OOM in std::fs::read below.
         let size = std::fs::metadata(&src)
             .map_err(|e| format!("file.read: {e}"))?
-            .len() as usize;
-        if size > MAX_FILE_BYTES {
+            .len();
+        if size > MAX_FILE_BYTES as u64 {
             return Err(format!(
                 "file.read: {size} bytes exceeds {MAX_FILE_BYTES} cap"
             ));

@@ -212,7 +212,9 @@ impl NoteManageTool {
         let Some(note_path) = result.note_path.as_deref() else {
             return;
         };
-        let agent = self.resolve_agent_id(args);
+        let Ok(agent) = self.resolve_agent_id(args) else {
+            return;
+        };
         let outcome = match &args.action {
             NoteManageAction::Create => {
                 let note_type = args
@@ -285,13 +287,29 @@ impl NoteManageTool {
     ///   Outside a project — or with the feature off — the base id is returned
     ///   unchanged. This is the only path callers should use when they need an
     ///   agent-scoped operation.
-    fn resolve_agent_id(&self, args: &NoteManageArgs) -> String {
+    fn resolve_agent_id(&self, args: &NoteManageArgs) -> Result<String> {
+        if let Some(id) = args.agent_id.as_deref() {
+            // `agent_id` is untrusted LLM input that is joined directly into a
+            // filesystem path (memory_dir/<agent_id>/<category>/<file>.md).
+            // Reject traversal and separators so it cannot escape the vault.
+            if id.is_empty()
+                || id.contains("..")
+                || id.contains('/')
+                || id.contains('\\')
+                || id.starts_with('.')
+            {
+                return Err(AlephError::tool(format!(
+                    "invalid agent_id `{id}`: must not be empty, start with '.', \
+                     or contain '..', '/', or '\\'"
+                )));
+            }
+        }
         let base = args.agent_id.as_deref().unwrap_or_else(|| self.agent_id());
-        crate::memory::project_scope::scoped_or_base(
+        Ok(crate::memory::project_scope::scoped_or_base(
             base,
             self.project_scoped,
             crate::projects::current_project_root().as_deref(),
-        )
+        ))
     }
 
     // -------------------------------------------------------------------------
@@ -299,7 +317,7 @@ impl NoteManageTool {
     // -------------------------------------------------------------------------
 
     async fn handle_create(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
 
         let category = args
@@ -460,7 +478,7 @@ impl NoteManageTool {
     }
 
     async fn handle_update(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
 
         let category = args
@@ -550,7 +568,7 @@ impl NoteManageTool {
     }
 
     async fn handle_append(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
 
         let category = args
@@ -597,7 +615,7 @@ impl NoteManageTool {
     }
 
     async fn handle_query(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
 
         let query = args
@@ -664,7 +682,7 @@ impl NoteManageTool {
     }
 
     async fn handle_list(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
         let limit = args.limit.unwrap_or(100);
 
@@ -711,7 +729,7 @@ impl NoteManageTool {
     }
 
     async fn handle_delete(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
 
         let category = args
@@ -773,7 +791,7 @@ impl NoteManageTool {
     /// `GraphRecomputeStage` during dreaming, so an empty result simply means the
     /// graph has not been recomputed yet rather than an error.
     async fn handle_insights(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
         let rows = self
             .indexer
@@ -808,7 +826,7 @@ impl NoteManageTool {
         use crate::memory::dreaming::evolution::GateOutcome;
         use crate::memory::dreaming::{EventLog, GateDecision};
 
-        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
         let agent_dir = self.indexer.memory_dir().join(agent_id);
         let events = EventLog::new(&agent_dir)

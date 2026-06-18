@@ -467,7 +467,10 @@ impl AlephTool for TeamCreateTool {
                     role: role.clone(),
                     kind: crate::teams::types::TeamMemberKind::AcpSession,
                     acp_harness_id: Some(member_ref.harness_id.clone()),
-                    acp_cwd: None,
+                    // No cwd in the `acp:` ref; the dispatcher force-fails an
+                    // ACP member with no cwd, so default to the active project
+                    // root (then the server cwd) to keep it dispatchable.
+                    acp_cwd: Some(super::acp_default_cwd()),
                     acp_session_name: member_ref.session_name.clone(),
                 }
             } else {

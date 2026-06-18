@@ -138,9 +138,15 @@ impl ActionResult {
     #[must_use]
     pub fn is_success(&self) -> bool {
         match self {
-            Self::ToolResults { results } => results
-                .iter()
-                .all(|r| matches!(r.result, SingleToolResult::Success { .. })),
+            // An empty result set is not a success (`all` is vacuously true):
+            // a batch that produced no results — e.g. all calls cancelled —
+            // must not be reported as a clean success.
+            Self::ToolResults { results } => {
+                !results.is_empty()
+                    && results
+                        .iter()
+                        .all(|r| matches!(r.result, SingleToolResult::Success { .. }))
+            }
             Self::UserResponse { .. } | Self::UserResponseRich { .. } => true,
             Self::Completed => true,
             Self::Failed => false,

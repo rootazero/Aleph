@@ -191,7 +191,9 @@ pub fn resolve_retry_delay(
 
     if let Some(value) = headers.get("retry-after").and_then(|v| v.to_str().ok()) {
         if let Ok(secs) = value.parse::<u64>() {
-            return Duration::from_secs(secs).min(max_delay);
+            // Floor at base_delay: a `Retry-After: 0` (some throttles send it)
+            // must not produce a zero sleep that hot-loops the retry budget.
+            return Duration::from_secs(secs).max(base_delay).min(max_delay);
         }
         if let Ok(dt) = httpdate::parse_http_date(value) {
             if let Ok(duration) = dt.duration_since(now) {

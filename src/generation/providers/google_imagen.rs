@@ -276,6 +276,22 @@ impl GoogleImagenProvider {
                 return GenerationError::invalid_parameters(message, None);
             }
 
+            // Google returns a parseable JSON error body for 401/403/429/404
+            // too — route by the embedded code before the generic fallback,
+            // otherwise an auth/rate-limit error is mis-classified as a generic
+            // provider error and never reaches the status-code match below.
+            match code {
+                Some(401 | 403) => {
+                    return GenerationError::authentication(
+                        "Invalid API key or unauthorized",
+                        "google-imagen",
+                    );
+                }
+                Some(429) => return GenerationError::rate_limit(message, None),
+                Some(404) => return GenerationError::model_not_found(DEFAULT_MODEL, "google-imagen"),
+                _ => {}
+            }
+
             return GenerationError::provider(message, code.map(|c| c as u16), "google-imagen");
         }
 

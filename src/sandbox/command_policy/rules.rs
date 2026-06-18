@@ -108,19 +108,19 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
             name: "dd_to_block_device",
             description: "dd writing directly to a raw block device (disk-wipe / overwrite)",
             action: Block,
-            pattern: r"\bdd\b[^\n]*\bof\s*=\s*/dev/(sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)",
+            pattern: r#"\bdd\b[^\n]*\bof\s*=\s*["']?/dev/(sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)"#,
         },
         PolicyRule {
             name: "mkfs_device",
             description: "mkfs formatting a device node (destroys an existing filesystem)",
             action: Block,
-            pattern: r"\bmkfs(\.\w+)?\b[^\n]*\s/dev/",
+            pattern: r#"\bmkfs(\.\w+)?\b[^\n]*\s["']?/dev/"#,
         },
         PolicyRule {
             name: "redirect_to_block_device",
             description: "shell redirect overwriting a raw block device",
             action: Block,
-            pattern: r">\s*/dev/(sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)",
+            pattern: r#">\s*["']?/dev/(sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)"#,
         },
         PolicyRule {
             name: "device_wipe_tools",
@@ -131,7 +131,7 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
             // file-shredder (`shred -u secret.txt`), so it is catastrophic only
             // when its target is a raw device — hence the explicit `/dev/<class>`
             // requirement keeps file-level `shred` off the floor.
-            pattern: r"\b(?:wipefs|blkdiscard)\b[^\n]*\s/dev/(?:sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)|\bshred\b[^\n]*\s/dev/(?:sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)",
+            pattern: r#"\b(?:wipefs|blkdiscard)\b[^\n]*\s["']?/dev/(?:sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)|\bshred\b[^\n]*\s["']?/dev/(?:sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)"#,
         },
         // --- Windows catastrophic shapes (cmd.exe / PowerShell) -------------
         // The Unix floor above does not cover the native Windows command
@@ -156,7 +156,7 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
             // (`C:\`, `C:`, `C:\*`) — a recursive delete of a *subdir*
             // (`C:\Users\me\build`) does not match because the char after the
             // drive root must be a terminator, not another path segment.
-            pattern: r"(?:^|[\s;&|(])(?:del|erase|rd|rmdir)\b[^\n]*\s/s\b[^\n]*\s[a-z]:\\?(?:\*|\s|\x22|$)",
+            pattern: r"(?:^|[\s;&|(])(?:del|erase|rd|rmdir)\b[^\n]*\s/s\b[^\n]*[\s\x22\x27][a-z]:\\?(?:\*|\s|\x22|$)",
         },
         PolicyRule {
             name: "win_powershell_recursive_root_delete",

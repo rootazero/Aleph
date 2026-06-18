@@ -324,7 +324,11 @@ impl ToolRegistrar {
                 continue;
             }
 
-            let id = format!("custom:{command_name}");
+            // Include rule_index in the id (custom:{index}:{name}) like
+            // ToolSource::format_tool_id everywhere else — two rules resolving
+            // to the same command name would otherwise collide on `custom:{name}`
+            // and the second silently overwrite the first.
+            let id = ToolSource::Custom { rule_index: index }.format_tool_id(&command_name);
 
             // Use system_prompt as description if available, otherwise generic
             let description = rule.system_prompt.as_ref().map_or_else(

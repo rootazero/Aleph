@@ -134,7 +134,11 @@ pub fn mark_profile_failure(
         stats.disabled_until = Some(now + backoff_ms);
         stats.disabled_reason = Some(AuthProfileFailureReason::Billing);
     } else {
-        let backoff_ms = calculate_cooldown_ms(next_error_count);
+        // Size the cooldown from this reason's own failure count (mirrors the
+        // billing branch) — not the cross-reason total, which over-escalates a
+        // first rate-limit after an unrelated earlier failure.
+        let reason_count = failure_counts.get(&reason).copied().unwrap_or(1);
+        let backoff_ms = calculate_cooldown_ms(reason_count);
         stats.cooldown_until = Some(now + backoff_ms);
     }
 }

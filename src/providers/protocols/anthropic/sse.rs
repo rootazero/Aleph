@@ -45,6 +45,12 @@ pub(crate) fn parse_anthropic_sse_event(
             let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
             if block_type == "tool_use" {
                 let id = block.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                if id.is_empty() {
+                    // A tool_use block with no id is malformed — bail rather
+                    // than tracking an empty id, which downstream matches by
+                    // value and would drop or cross-wire streamed arguments.
+                    return;
+                }
                 let wire_name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 // Map sanitized → original so the tool layer receives the
                 // tool name as it was registered (round-trip from build_request).

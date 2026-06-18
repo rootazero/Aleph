@@ -139,7 +139,9 @@ pub fn calculate_delay(
         } else {
             RETRY_MAX_DELAY_NO_HEADERS_MS
         };
-        return Duration::from_millis(ms.min(max_delay));
+        // Floor at the initial delay: a `Retry-After: 0` must not collapse the
+        // backoff to a zero sleep that immediately re-hammers the provider.
+        return Duration::from_millis(ms.max(RETRY_INITIAL_DELAY_MS).min(max_delay));
     }
 
     // Exponential backoff: initial * factor^(attempt-1)

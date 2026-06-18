@@ -81,7 +81,32 @@ pub fn decisions_for_risk(risk: RiskLevel) -> Vec<ApprovalDecisionType> {
 /// threading extra state through the record types.
 #[must_use]
 pub fn assess_command_decisions(command: &str) -> Vec<ApprovalDecisionType> {
-    decisions_for_risk(SecurityKernel::new().assess(command))
+    let kernel = SecurityKernel::new();
+    // Assess the whole command (preserves operator-spanning patterns such as
+    // `curl ... | sh`) AND each chain/pipe segment. Most danger patterns are
+    // `^`-anchored, so a destructive command can otherwise be hidden behind a
+    // safe one — `ls && rm -rf .` would assess as Safe on the raw string. Each
+    // segment is assessed independently and the max (most restrictive) risk is
+    // taken, so this can only tighten, never loosen, classification.
+    let mut risk = kernel.assess(command);
+    for segment in risk_segments(command) {
+        risk = risk.max(kernel.assess(segment));
+    }
+    decisions_for_risk(risk)
+}
+
+/// Split a command line into chain/pipeline segments for risk assessment.
+///
+/// Conservative and quote-naive: over-splitting only ever raises the assessed
+/// risk (segments are assessed independently and the max is taken), so a
+/// quoted operator can at worst yield an extra approval prompt — never a missed
+/// danger classification.
+fn risk_segments(command: &str) -> Vec<&str> {
+    command
+        .split(|c| c == ';' || c == '\n' || c == '|' || c == '&')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 #[cfg(test)]

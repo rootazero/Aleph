@@ -46,7 +46,15 @@ impl CancellationToken {
     /// The returned receiver will receive `()` exactly once when `cancel` is called.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<()> {
-        self.cancel_broadcast.subscribe()
+        let rx = self.cancel_broadcast.subscribe();
+        // Close the lost-wakeup gap: a one-shot `broadcast::send` in `cancel()`
+        // is only delivered to subscribers that existed at send time. If
+        // cancellation already fired, re-emit so this freshly created receiver
+        // observes it (cancellation is idempotent, so re-notifying is safe).
+        if self.is_cancelled() {
+            let _ = self.cancel_broadcast.send(());
+        }
+        rx
     }
 }
 

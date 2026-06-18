@@ -40,11 +40,13 @@ pub fn parse_error_response(status: reqwest::StatusCode, body: &str) -> Generati
             .unwrap_or_else(|| "Unknown error".to_string());
         let code = error_response.error.code;
 
-        // Check for specific error types
-        if message.to_lowercase().contains("safety") || message.contains("blocked") {
+        // Check for specific error types (case-insensitive: Google returns
+        // capitalized messages like "Blocked" / "Quota exceeded").
+        let lower = message.to_lowercase();
+        if lower.contains("safety") || lower.contains("blocked") {
             return GenerationError::content_filtered(message, Some("safety".to_string()));
         }
-        if message.contains("quota") || message.contains("limit") {
+        if lower.contains("quota") || lower.contains("limit") {
             return GenerationError::quota_exceeded(message, None);
         }
 

@@ -261,8 +261,15 @@ impl Config {
             config.ssrf.allow_private_network = v;
         }
         if let Some(v) = ssrf.get("max_redirects").and_then(|v| v.as_integer()) {
-            if let Ok(n) = u8::try_from(v.clamp(0, i64::from(u8::MAX))) {
-                config.ssrf.max_redirects = n;
+            // Validate rather than silently clamp: a 9999 (or negative) value
+            // was previously coerced to 255/0 and accepted, defeating the
+            // SSRF redirect bound instead of rejecting the bad config.
+            match u8::try_from(v) {
+                Ok(n) => config.ssrf.max_redirects = n,
+                Err(_) => tracing::warn!(
+                    value = v,
+                    "security.ssrf.max_redirects out of range (0-255), ignoring"
+                ),
             }
         }
         if let Some(arr) = ssrf.get("allowed_hosts").and_then(|v| v.as_array()) {

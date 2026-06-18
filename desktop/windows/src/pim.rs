@@ -53,11 +53,14 @@ impl PimCapability for WindowsPim {
             try {
                 $outlook = New-Object -ComObject Outlook.Application
                 $ns = $outlook.GetNamespace("MAPI")
-                $folders = @()
+                $script:folders = @()
                 function Get-Folders($folder, $path) {
                     $fullPath = if ($path) { "$path\$($folder.Name)" } else { $folder.Name }
                     $count = $folder.Items.Count
-                    $folders += [PSCustomObject]@{id=$fullPath;name=$folder.Name;count=$count}
+                    # Use $script: scope: PowerShell `+=` inside a function reads
+                    # the enclosing var but assigns to a new function-local copy,
+                    # so a plain `$folders +=` discarded every append on return.
+                    $script:folders += [PSCustomObject]@{id=$fullPath;name=$folder.Name;count=$count}
                     foreach ($sub in $folder.Folders) {
                         Get-Folders $sub $fullPath
                     }
@@ -65,7 +68,7 @@ impl PimCapability for WindowsPim {
                 foreach ($store in $ns.Folders) {
                     Get-Folders $store ""
                 }
-                $folders | ConvertTo-Json -Compress
+                $script:folders | ConvertTo-Json -Compress
             } catch {
                 Write-Error "Outlook error: $_"
                 exit 1

@@ -114,7 +114,8 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                         items.push(InputItem::FunctionCall {
                             call_id: id.clone(),
                             name: sanitize_tool_name_pub(name),
-                            arguments: serde_json::to_string(arguments).unwrap_or_default(),
+                            arguments: serde_json::to_string(arguments)
+                                .unwrap_or_else(|_| "{}".to_string()),
                         });
                     }
                 }

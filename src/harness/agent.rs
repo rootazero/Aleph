@@ -674,6 +674,31 @@ impl Harness for AgentHarness {
                             tracker.record_activity().await;
                         }
                         iterations = iterations.saturating_add(1);
+                        // Re-check the iteration cap here too: the follow-up
+                        // continuation bumps `iterations` and loops, so without
+                        // this a steering message arriving each final turn drives
+                        // the run past `max_iterations` (and past hit_limit /
+                        // HitMaxIterations accounting). Mirror the Continue arm.
+                        if let Some(limit) = cap {
+                            if iterations >= limit {
+                                self.hit_limit.store(true, Ordering::Relaxed);
+                                self.set_terminate_reason(TerminateReason::HitMaxIterations {
+                                    used: iterations.try_into().unwrap_or(u32::MAX),
+                                });
+                                self.fire_boundary_grace_turn(
+                                    &current_session,
+                                    callback,
+                                    iterations,
+                                    crate::harness::agent::think::GraceReason::MaxIterations,
+                                    cancel,
+                                )
+                                .await;
+                                callback.on_complete();
+                                break Ok(
+                                    crate::harness::trace::LoopTraceSessionOutcome::HitLimit,
+                                );
+                            }
+                        }
                         continue;
                     }
                     callback.on_complete();
@@ -696,13 +721,18 @@ impl Harness for AgentHarness {
             .ok()
             .and_then(|events| {
                 events.iter().rev().find_map(|r| match &r.event {
-                    SessionEvent::AssistantMessage { content, .. } => {
-                        if content.text.is_empty() {
-                            content.thinking.clone()
-                        } else {
-                            Some(content.text.clone())
-                        }
-                    }
+                    // Stop at the genuine last assistant turn: returning `None`
+                    // when both text and thinking are empty made find_map walk
+                    // back and surface an older turn's text as this run's
+                    // final_text. Always resolve at the first one encountered.
+                    SessionEvent::AssistantMessage { content, .. } => Some(if content
+                        .text
+                        .is_empty()
+                    {
+                        content.thinking.clone().unwrap_or_default()
+                    } else {
+                        content.text.clone()
+                    }),
                     _ => None,
                 })
             });
