@@ -46,9 +46,7 @@ pub use context_blocks::{
 };
 // Crate-internal helpers tests reach via the parent path (`super::X`); keep
 // them addressable at the module root after the split.
-pub(crate) use prompt_build::{
-    agent_identity_dir_exists, last_user_query, resolve_max_iterations,
-};
+pub(crate) use prompt_build::{agent_identity_dir_exists, last_user_query, resolve_max_iterations};
 
 /// Stage 7 (#12): emit one `TraceSink::on_init_seam` event per Stage 1-6
 /// seam. Extracted from `AgentHarnessRunner::run` so tests can assert the

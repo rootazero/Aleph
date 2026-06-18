@@ -154,25 +154,29 @@ pub async fn usage(server_url: &str, key: &str, config: &CliConfig, json: bool) 
                 "Total Tokens",
                 result
                     .get("tokens")
-                    .and_then(serde_json::Value::as_u64).map_or_else(|| "-".to_string(), |n| n.to_string()),
+                    .and_then(serde_json::Value::as_u64)
+                    .map_or_else(|| "-".to_string(), |n| n.to_string()),
             ),
             (
                 "Input Tokens",
                 result
                     .get("input_tokens")
-                    .and_then(serde_json::Value::as_u64).map_or_else(|| "-".to_string(), |n| n.to_string()),
+                    .and_then(serde_json::Value::as_u64)
+                    .map_or_else(|| "-".to_string(), |n| n.to_string()),
             ),
             (
                 "Output Tokens",
                 result
                     .get("output_tokens")
-                    .and_then(serde_json::Value::as_u64).map_or_else(|| "-".to_string(), |n| n.to_string()),
+                    .and_then(serde_json::Value::as_u64)
+                    .map_or_else(|| "-".to_string(), |n| n.to_string()),
             ),
             (
                 "Messages",
                 result
                     .get("messages")
-                    .and_then(serde_json::Value::as_u64).map_or_else(|| "-".to_string(), |n| n.to_string()),
+                    .and_then(serde_json::Value::as_u64)
+                    .map_or_else(|| "-".to_string(), |n| n.to_string()),
             ),
             (
                 "Created",
@@ -220,10 +224,12 @@ pub async fn truncate(
     } else {
         let kept = result
             .get("kept")
-            .and_then(serde_json::Value::as_u64).map_or_else(|| keep.to_string(), |n| n.to_string());
+            .and_then(serde_json::Value::as_u64)
+            .map_or_else(|| keep.to_string(), |n| n.to_string());
         let removed = result
             .get("removed")
-            .and_then(serde_json::Value::as_u64).map_or_else(|| "-".into(), |n| n.to_string());
+            .and_then(serde_json::Value::as_u64)
+            .map_or_else(|| "-".into(), |n| n.to_string());
         println!("✓ session {key} truncated");
         println!("  kept   : {kept}");
         println!("  removed: {removed}");
@@ -308,7 +314,10 @@ pub async fn export(
     match output_path {
         Some(path) => {
             std::fs::write(path, &rendered)?;
-            let count = result.get("count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            let count = result
+                .get("count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
             println!("✓ exported {count} messages from session '{key}' → {path}");
         }
         None => println!("{rendered}"),
@@ -323,7 +332,10 @@ pub async fn export(
 /// Pure function (no I/O) so it can be unit-tested independently of the RPC
 /// transport. Unknown/missing fields degrade gracefully to placeholders.
 fn render_markdown(key: &str, history: &Value) -> String {
-    let count = history.get("count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+    let count = history
+        .get("count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
     let mut out = String::new();
     out.push_str(&format!("# Session `{key}`\n\n"));
     out.push_str(&format!("> Exported by aleph · {count} messages\n\n"));

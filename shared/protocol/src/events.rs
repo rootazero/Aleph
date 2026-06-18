@@ -378,7 +378,10 @@ pub enum AgentTraceEvent {
     /// Purely mechanical — no LLM judgment (R7/R10). Surfacing it lets the user
     /// see *why* the run kept going instead of an unexplained extra turn. See
     /// `verification::scratchpad_goal_verifier`.
-    VerifierVeto { iteration: usize, reason: String },
+    VerifierVeto {
+        iteration: usize,
+        reason: String,
+    },
 }
 
 impl AgentTraceEvent {

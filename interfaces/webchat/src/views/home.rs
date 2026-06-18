@@ -1,5 +1,5 @@
 use crate::api::{MemoryApi, MemoryStats, SystemApi, SystemInfo};
-use crate::components::ui::{Button, ButtonVariant, Card, BadgeVariant, Badge};
+use crate::components::ui::{Badge, BadgeVariant, Button, ButtonVariant, Card};
 use crate::context::{DashboardState, GatewayEvent};
 use crate::i18n::{t_string, use_i18n};
 use leptos::prelude::*;

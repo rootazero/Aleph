@@ -212,4 +212,3 @@ pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
     dot / (na.sqrt() * nb.sqrt())
 }
-

@@ -356,9 +356,7 @@ fn TokenSection(
                         .to_string();
 
                     let avatar_url = if !avatar.is_empty() && !id.is_empty() {
-                        format!(
-                            "https://cdn.discordapp.com/avatars/{id}/{avatar}.png?size=128"
-                        )
+                        format!("https://cdn.discordapp.com/avatars/{id}/{avatar}.png?size=128")
                     } else {
                         String::new()
                     };
@@ -512,9 +510,7 @@ fn GuildSection(
                                 .to_string(),
                             icon_url: g.get("icon").and_then(|v| v.as_str()).map(|icon| {
                                 let gid = g.get("id").and_then(|v| v.as_str()).unwrap_or("0");
-                                format!(
-                                    "https://cdn.discordapp.com/icons/{gid}/{icon}.png?size=64"
-                                )
+                                format!("https://cdn.discordapp.com/icons/{gid}/{icon}.png?size=64")
                             }),
                             member_count: g
                                 .get("approximate_member_count")
@@ -556,7 +552,10 @@ fn GuildSection(
                                 .unwrap_or("unknown")
                                 .to_string(),
                             kind: {
-                                let kind_val = c.get("type").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                                let kind_val = c
+                                    .get("type")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0);
                                 match kind_val {
                                     0 => "Text".to_string(),
                                     2 => "Voice".to_string(),

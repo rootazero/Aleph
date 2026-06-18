@@ -168,7 +168,8 @@ fn scratchpad_preview(input: &Value) -> String {
         "start_item" | "complete_item" => {
             let idx = input
                 .get("item_index")
-                .and_then(Value::as_u64).map_or_else(|| "?".into(), |i| i.to_string());
+                .and_then(Value::as_u64)
+                .map_or_else(|| "?".into(), |i| i.to_string());
             format!("{action} #{idx}")
         }
         "set_objective" | "initialize" => {
@@ -373,7 +374,11 @@ pub fn render_compaction_notice(token_gap: Option<usize>, succeeded: bool) -> St
     } else {
         format!("{glyph} context full{gap}: compaction retry failed")
     };
-    let style = if succeeded { Style::Warning } else { Style::Error };
+    let style = if succeeded {
+        Style::Warning
+    } else {
+        Style::Error
+    };
     format!("  {}", paint(style, &msg))
 }
 

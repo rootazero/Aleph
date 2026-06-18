@@ -8,10 +8,10 @@ use super::crud::TeamIdParams;
 use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStore};
 use crate::sync_primitives::Arc;
 
+use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
 };
-use crate::gateway::handlers::parse_params;
 
 // =============================================================================
 // Kanban-facing handlers (task list / task update)

@@ -4,7 +4,7 @@
 
 use crate::api::EmbeddingProvidersApi;
 use crate::context::DashboardState;
-use crate::i18n::{t_string, t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -41,10 +41,13 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                         if let Some(total) = data.get("total").and_then(serde_json::Value::as_u64) {
                             set_progress_total.set(total as usize);
                         }
-                        if let Some(completed) = data.get("completed").and_then(serde_json::Value::as_u64) {
+                        if let Some(completed) =
+                            data.get("completed").and_then(serde_json::Value::as_u64)
+                        {
                             set_progress_completed.set(completed as usize);
                         }
-                        if let Some(failed) = data.get("failed").and_then(serde_json::Value::as_u64) {
+                        if let Some(failed) = data.get("failed").and_then(serde_json::Value::as_u64)
+                        {
                             set_progress_failed.set(failed as usize);
                         }
                     }

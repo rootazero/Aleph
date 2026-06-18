@@ -57,10 +57,7 @@ impl ToolKind {
     /// 卡片默认是否展开内容：文件改动类默认展开，其余默认折叠。
     #[must_use]
     pub const fn default_open(self) -> bool {
-        matches!(
-            self,
-            Self::FileEdit | Self::FileWrite | Self::ApplyPatch
-        )
+        matches!(self, Self::FileEdit | Self::FileWrite | Self::ApplyPatch)
     }
 }
 
@@ -285,10 +282,8 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
     let local_toggled = RwSignal::new(false);
     let tid_open = tid_for_expand.clone();
     let expanded = Memo::new(move |_| {
-        let toggled = workspace.map_or_else(
-            || local_toggled.get(),
-            |ws| ws.is_event_toggled(&tid_open),
-        );
+        let toggled =
+            workspace.map_or_else(|| local_toggled.get(), |ws| ws.is_event_toggled(&tid_open));
         default_open ^ toggled
     });
     let on_toggle = move |_: web_sys::MouseEvent| {

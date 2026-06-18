@@ -321,7 +321,9 @@ fn validate_plugin_dir(plugin_dir: &Path) -> CliResult<PluginValidation> {
     };
 
     // Check [plugin] section
-    let plugin = if let Some(p) = toml.get("plugin") { p } else {
+    let plugin = if let Some(p) = toml.get("plugin") {
+        p
+    } else {
         result.errors.push("Missing [plugin] section".to_string());
         return Ok(result);
     };
@@ -350,9 +352,9 @@ fn validate_plugin_dir(plugin_dir: &Path) -> CliResult<PluginValidation> {
     if let Some(entry) = plugin.get("entry").and_then(|v| v.as_str()) {
         let entry_path = plugin_dir.join(entry);
         if !entry_path.exists() {
-            result.warnings.push(format!(
-                "Entry file not found: {entry} (run build first?)"
-            ));
+            result
+                .warnings
+                .push(format!("Entry file not found: {entry} (run build first?)"));
         }
     }
 
@@ -491,12 +493,10 @@ fn check_wasm_target() -> DoctorCheck {
     let result = std::process::Command::new("rustup")
         .args(["target", "list", "--installed"])
         .output();
-    let has_wasi = result
-        .as_ref()
-        .is_ok_and(|o| {
-            let output = String::from_utf8_lossy(&o.stdout);
-            output.contains("wasm32-wasi") || output.contains("wasm32-wasip1")
-        });
+    let has_wasi = result.as_ref().is_ok_and(|o| {
+        let output = String::from_utf8_lossy(&o.stdout);
+        output.contains("wasm32-wasi") || output.contains("wasm32-wasip1")
+    });
     DoctorCheck {
         name: "wasm-target".into(),
         description: "WASM compilation target (for WASM plugins)".into(),
@@ -585,7 +585,10 @@ pub fn pack(plugin_dir: &Path, output: Option<&Path>) -> CliResult<()> {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("plugin");
-    let output_path = output.map_or_else(|| plugin_dir.join(format!("{plugin_name}.aleph-plugin.zip")), std::path::Path::to_path_buf);
+    let output_path = output.map_or_else(
+        || plugin_dir.join(format!("{plugin_name}.aleph-plugin.zip")),
+        std::path::Path::to_path_buf,
+    );
 
     // 3. Create zip
     let file = std::fs::File::create(&output_path).map_err(CliError::Io)?;
@@ -600,8 +603,7 @@ pub fn pack(plugin_dir: &Path, output: Option<&Path>) -> CliResult<()> {
         .map_err(|e| CliError::Other(format!("Failed to finalize zip: {e}")))?;
 
     println!("Packed plugin to: {}", output_path.display());
-    let size = std::fs::metadata(&output_path)
-        .map_or(0, |m| m.len());
+    let size = std::fs::metadata(&output_path).map_or(0, |m| m.len());
     println!("Archive size: {size} bytes");
 
     Ok(())

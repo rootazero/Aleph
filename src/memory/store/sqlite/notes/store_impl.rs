@@ -24,7 +24,6 @@ use super::helpers::{
     provenance_origin_from_str, provenance_origin_to_str, row_to_entry,
 };
 
-
 macro_rules! lock_conn {
     ($self:expr) => {
         $self
@@ -1524,10 +1523,12 @@ impl NoteStore for SqliteMemoryBackend {
         // (note_path, query_hash, day_bucket, channel) via INSERT OR IGNORE.
         let recall_hits: Vec<super::super::recall_signals::RecallHit> = hits
             .iter()
-            .map(|(note_path, score)| super::super::recall_signals::RecallHit {
-                note_path: note_path.clone(),
-                score: f64::from(*score),
-            })
+            .map(
+                |(note_path, score)| super::super::recall_signals::RecallHit {
+                    note_path: note_path.clone(),
+                    score: f64::from(*score),
+                },
+            )
             .collect();
         self.record_signals(query, channel, &recall_hits, None, namespace)
     }

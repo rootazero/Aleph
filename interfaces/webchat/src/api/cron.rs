@@ -163,8 +163,8 @@ impl CronApi {
         state: &DashboardState,
         patch: UpdateCronJob,
     ) -> Result<CronJobInfo, String> {
-        let params = serde_json::to_value(&patch)
-            .map_err(|e| format!("Failed to serialize patch: {e}"))?;
+        let params =
+            serde_json::to_value(&patch).map_err(|e| format!("Failed to serialize patch: {e}"))?;
 
         let result = state.rpc_call("cron.update", params).await?;
 
@@ -219,8 +219,7 @@ impl CronApi {
 
         let result = state.rpc_call("cron.toggle", params).await?;
 
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse toggled cron job: {e}"))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse toggled cron job: {e}"))
     }
 
     /// Trigger an immediate run of a cron job

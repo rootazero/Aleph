@@ -4,8 +4,8 @@
 
 use leptos::prelude::*;
 
-use crate::context::{DashboardState, GatewayEvent};
 use super::state::{ChatMessage, ChatState, MemberStatus};
+use crate::context::{DashboardState, GatewayEvent};
 
 /// Stable per-agent color by roster slot index. Used by the workspace
 /// deliverables panel (`workspace_panel.rs`) where only the roster position is
@@ -13,7 +13,9 @@ use super::state::{ChatMessage, ChatState, MemberStatus};
 /// (id-hashed, session-stable).
 #[must_use]
 pub fn agent_color(index: usize) -> &'static str {
-    const PALETTE: [&str; 6] = ["#7c9cff", "#4ec9b0", "#e0a458", "#c586c0", "#4fc1ff", "#d16969"];
+    const PALETTE: [&str; 6] = [
+        "#7c9cff", "#4ec9b0", "#e0a458", "#c586c0", "#4fc1ff", "#d16969",
+    ];
     PALETTE[index % PALETTE.len()]
 }
 

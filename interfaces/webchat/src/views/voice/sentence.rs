@@ -96,9 +96,14 @@ impl SentenceSplitter {
                 let end = i + ch.len_utf8();
                 // Don't split "3.5" style decimals: '.' flanked by ascii digits.
                 if ch == '.' {
-                    let prev_digit =
-                        new[..i].chars().next_back().is_some_and(|c| c.is_ascii_digit());
-                    let next_digit = new[end..].chars().next().is_some_and(|c| c.is_ascii_digit());
+                    let prev_digit = new[..i]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| c.is_ascii_digit());
+                    let next_digit = new[end..]
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_digit());
                     if prev_digit && next_digit {
                         continue;
                     }
@@ -142,7 +147,11 @@ impl SentenceSplitter {
         }
         // First chunk stays small (fast first audio); later chunks merge forward
         // until they reach MERGE_CHARS, so a long reply is fewer, larger requests.
-        let threshold = if self.emitted_any { MERGE_CHARS } else { FIRST_CHUNK_CHARS };
+        let threshold = if self.emitted_any {
+            MERGE_CHARS
+        } else {
+            FIRST_CHUNK_CHARS
+        };
         if trimmed.chars().count() < threshold {
             // Too short on its own — hold and merge it into the next segment.
             self.pending = candidate;
@@ -162,7 +171,10 @@ mod tests {
     fn emits_sentence_on_terminal_punct() {
         let mut sp = SentenceSplitter::default();
         assert!(sp.push("今天有 3 个安排").is_empty());
-        assert_eq!(sp.push("今天有 3 个安排。第一个"), vec!["今天有 3 个安排。"]);
+        assert_eq!(
+            sp.push("今天有 3 个安排。第一个"),
+            vec!["今天有 3 个安排。"]
+        );
     }
 
     #[test]
@@ -181,7 +193,10 @@ mod tests {
         let mut sp = SentenceSplitter::default();
         // "好。" alone is below FIRST_CHUNK_CHARS — held and merged with the next.
         assert!(sp.push("好。").is_empty());
-        assert_eq!(sp.push("好。我马上安排今天的事项。"), vec!["好。我马上安排今天的事项。"]);
+        assert_eq!(
+            sp.push("好。我马上安排今天的事项。"),
+            vec!["好。我马上安排今天的事项。"]
+        );
     }
 
     #[test]
@@ -194,7 +209,10 @@ mod tests {
         assert!(sp.push("我们开始吧。好。").is_empty());
         assert!(sp.push("我们开始吧。好。行。").is_empty());
         // The held chunk flushes at stream end, so nothing is ever lost.
-        assert_eq!(sp.finish_with("我们开始吧。好。行。"), Some("好。行。".to_string()));
+        assert_eq!(
+            sp.finish_with("我们开始吧。好。行。"),
+            Some("好。行。".to_string())
+        );
     }
 
     #[test]
@@ -232,7 +250,10 @@ mod tests {
         );
         // Authoritative final text replaces the preview, shorter than `consumed`.
         assert!(sp.push("好的，没问题。").is_empty());
-        assert_eq!(sp.finish_with("好的，没问题。"), Some("好的，没问题。".to_string()));
+        assert_eq!(
+            sp.finish_with("好的，没问题。"),
+            Some("好的，没问题。".to_string())
+        );
     }
 
     #[test]
@@ -253,7 +274,12 @@ mod tests {
     fn incremental_pushes_never_duplicate() {
         let mut sp = SentenceSplitter::default();
         let mut all = Vec::new();
-        for cut in ["你好。", "你好。今天", "你好。今天天气很好。", "你好。今天天气很好。出门记得带伞。"] {
+        for cut in [
+            "你好。",
+            "你好。今天",
+            "你好。今天天气很好。",
+            "你好。今天天气很好。出门记得带伞。",
+        ] {
             all.extend(sp.push(cut));
         }
         // The short lead "你好。" merges into the first chunk; the trailing short

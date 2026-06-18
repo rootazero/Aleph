@@ -43,13 +43,19 @@ impl TeamChatApi {
         message: &str,
     ) -> Result<TeamChatSendResponse, String> {
         let result = state
-            .rpc_call("teams.chat.send", json!({ "team_id": team_id, "message": message }))
+            .rpc_call(
+                "teams.chat.send",
+                json!({ "team_id": team_id, "message": message }),
+            )
             .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
     /// Replay the durable group-chat transcript as bubbles, chronologically.
-    pub async fn history(state: &DashboardState, team_id: &str) -> Result<Vec<TeamMessageItem>, String> {
+    pub async fn history(
+        state: &DashboardState,
+        team_id: &str,
+    ) -> Result<Vec<TeamMessageItem>, String> {
         let result = state
             .rpc_call("teams.chat.history", json!({ "team_id": team_id }))
             .await?;
@@ -73,7 +79,8 @@ mod tests {
 
     #[test]
     fn deserializes_history_item() {
-        let j = r#"{"from_agent":"risk_analyst","content":"hi","msg_type":"message","created_at":123}"#;
+        let j =
+            r#"{"from_agent":"risk_analyst","content":"hi","msg_type":"message","created_at":123}"#;
         let it: TeamMessageItem = serde_json::from_str(j).unwrap();
         assert_eq!(it.from_agent, "risk_analyst");
         assert_eq!(it.created_at, 123);

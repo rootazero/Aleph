@@ -17,7 +17,6 @@ use crate::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
 use tokio::sync::RwLock;
 
-
 /// Registry of builtin tools for Agent Loop
 ///
 /// Holds instances of builtin tools and provides direct invocation capabilities.

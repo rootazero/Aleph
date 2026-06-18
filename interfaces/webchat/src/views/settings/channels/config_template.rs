@@ -96,8 +96,7 @@ pub fn ChannelConfigTemplate(
                     }
                     Err(e) => {
                         web_sys::console::warn_1(
-                            &format!("Failed to load config for {channel_id_for_load}: {e}")
-                                .into(),
+                            &format!("Failed to load config for {channel_id_for_load}: {e}").into(),
                         );
                         loading.set(false);
                     }

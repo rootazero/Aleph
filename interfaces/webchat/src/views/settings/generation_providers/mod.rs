@@ -109,18 +109,23 @@ pub fn GenerationProvidersView() -> impl IntoView {
                     .filter(|p| p.effective_generation_type() == Some(cat))
                     .find(|p| !p.is_default_for.is_empty())
                     .or_else(|| {
-                        prov.iter().find(|p| p.effective_generation_type() == Some(cat))
+                        prov.iter()
+                            .find(|p| p.effective_generation_type() == Some(cat))
                     })
                     .map(|p| p.name.clone())
                     .or_else(|| {
-                        catalog.get_untracked().by_category(cat).first().map(|first| {
-                            let id = first.id.clone();
-                            if prov.iter().any(|p| p.name == id) {
-                                id
-                            } else {
-                                format!("__preset__{id}")
-                            }
-                        })
+                        catalog
+                            .get_untracked()
+                            .by_category(cat)
+                            .first()
+                            .map(|first| {
+                                let id = first.id.clone();
+                                if prov.iter().any(|p| p.name == id) {
+                                    id
+                                } else {
+                                    format!("__preset__{id}")
+                                }
+                            })
                     });
                 if let Some(sel) = pick {
                     set_selected_provider_id.set(Some(sel));

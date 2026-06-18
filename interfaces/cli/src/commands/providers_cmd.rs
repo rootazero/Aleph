@@ -76,14 +76,15 @@ pub async fn get(server_url: &str, name: &str, json: bool) -> CliResult<()> {
         ),
         (
             "Models",
-            result
-                .get("models")
-                .and_then(|v| v.as_array()).map_or_else(|| "-".to_string(), |arr| {
+            result.get("models").and_then(|v| v.as_array()).map_or_else(
+                || "-".to_string(),
+                |arr| {
                     arr.iter()
                         .filter_map(|m| m.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
-                }),
+                },
+            ),
         ),
     ];
 

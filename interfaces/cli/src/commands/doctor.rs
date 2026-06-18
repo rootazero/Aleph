@@ -385,13 +385,9 @@ fn render_human(checks: &[DoctorCheck]) {
     if failed == 0 && warned == 0 {
         println!("All checks passed.");
     } else if failed == 0 {
-        println!(
-            "All required checks passed. {warned} optional warning(s)."
-        );
+        println!("All required checks passed. {warned} optional warning(s).");
     } else {
-        println!(
-            "{failed} required check(s) failed, {warned} optional warning(s)."
-        );
+        println!("{failed} required check(s) failed, {warned} optional warning(s).");
     }
 }
 
@@ -575,9 +571,7 @@ async fn check_gateway_reachable(server_url: &str) -> DoctorCheck {
             "gateway",
             "Aleph Gateway daemon (JSON-RPC over WS)",
             false,
-            format!(
-                "cannot reach {server_url}: {e} (start with `aleph daemon start`)"
-            ),
+            format!("cannot reach {server_url}: {e} (start with `aleph daemon start`)"),
         ),
         Err(_) => DoctorCheck::fail(
             "runtime",
@@ -677,7 +671,10 @@ fn provider_row_to_check(row: &Value) -> DoctorCheck {
         .get("skipped")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let ok = row.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let ok = row
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let desc = "LLM provider connectivity";
 
     if skipped {

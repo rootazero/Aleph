@@ -25,7 +25,8 @@ pub async fn run(
     config.device_name = device_name.to_string();
 
     let role = {
-        let _spin = (!json).then(|| output::Spinner::start(format!("Connecting as '{device_name}'")));
+        let _spin =
+            (!json).then(|| output::Spinner::start(format!("Connecting as '{device_name}'")));
         let result = client.handshake(&config).await;
         if let Some(s) = _spin {
             s.stop().await;

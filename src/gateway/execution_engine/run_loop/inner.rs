@@ -223,7 +223,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 &self.global_tool_permissions,
                 &agent.config().tool_permissions(),
             );
-            if let Some(raw) = request.metadata.get(super::super::CHANNEL_TOOL_PERMISSIONS_KEY) {
+            if let Some(raw) = request
+                .metadata
+                .get(super::super::CHANNEL_TOOL_PERMISSIONS_KEY)
+            {
                 match serde_json::from_str::<ToolPermissionsConfig>(raw) {
                     Ok(channel_perms) => {
                         merged = ToolPermissionsConfig::merge(&merged, &channel_perms)
@@ -824,7 +827,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let flow_input = if request.metadata.get("resume").map(String::as_str) == Some("true") {
                 crate::orchestrator::FlowInput::Resume
             } else {
-                super::super::helpers::history_to_flow_input(history.clone(), effective_user_input.clone())
+                super::super::helpers::history_to_flow_input(
+                    history.clone(),
+                    effective_user_input.clone(),
+                )
             };
 
             // Phase 4 (F4): derive the channel's InteractionManifest from

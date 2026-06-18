@@ -8,10 +8,10 @@ use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStore};
 use crate::sync_primitives::Arc;
 use crate::teams::TeamStore;
 
+use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
 };
-use crate::gateway::handlers::parse_params;
 
 // =============================================================================
 // Workflow Canvas — DAG ↔ Obsidian JSON Canvas bridge
@@ -331,7 +331,11 @@ pub async fn handle_chat_send(
     // The flag is a one-shot gate (atomic take-and-clear), so this fires
     // exactly once — on the first send — and never overrides explicit names.
     if let (Some(provider), Some(bus)) = (topic_provider.as_ref(), event_bus.as_ref()) {
-        if store.take_auto_name_flag(&params.team_id).await.unwrap_or(false) {
+        if store
+            .take_auto_name_flag(&params.team_id)
+            .await
+            .unwrap_or(false)
+        {
             let provider = Arc::clone(provider);
             let bus = Arc::clone(bus);
             let store = Arc::clone(&store);
@@ -352,7 +356,9 @@ pub async fn handle_chat_send(
                             },
                         );
                     }
-                    Err(e) => warn!(team_id = %team_id, error = %e, "team auto-name: rename failed"),
+                    Err(e) => {
+                        warn!(team_id = %team_id, error = %e, "team auto-name: rename failed")
+                    }
                 }
             });
         }

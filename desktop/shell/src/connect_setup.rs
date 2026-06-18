@@ -244,7 +244,9 @@ mod tests {
     #[tokio::test]
     async fn probe_reachable_true_when_listener_present() {
         // Bind an ephemeral listener and confirm the probe sees it.
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let port = listener.local_addr().unwrap().port();
         let reachable = probe_reachable("127.0.0.1", port, Duration::from_millis(500)).await;
         assert!(reachable);

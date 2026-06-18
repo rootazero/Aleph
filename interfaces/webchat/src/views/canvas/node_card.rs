@@ -118,9 +118,8 @@ pub fn NodeCard(
                 )
             };
 
-            let stripe_bar_style = format!(
-                "height: 3px; background-color: {stripe}; border-radius: 6px 6px 0 0;"
-            );
+            let stripe_bar_style =
+                format!("height: 3px; background-color: {stripe}; border-radius: 6px 6px 0 0;");
 
             view! {
                 <div

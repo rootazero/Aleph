@@ -1,4 +1,6 @@
-use crate::canvas_engine::adapter::{GraphQueryResponse, GraphNeighborsResponse, NoteDetailResponse, GraphSearchResponse};
+use crate::canvas_engine::adapter::{
+    GraphNeighborsResponse, GraphQueryResponse, GraphSearchResponse, NoteDetailResponse,
+};
 use crate::context::DashboardState;
 use serde_json::json;
 
@@ -34,8 +36,7 @@ impl GraphApi {
             "limit": limit,
         });
         let result = state.rpc_call("graph.neighbors", params).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse graph.neighbors: {e}"))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse graph.neighbors: {e}"))
     }
 
     pub async fn node_detail(

@@ -310,9 +310,10 @@ mod tests {
 
     #[test]
     fn connect_request_is_well_formed() {
-        let v: Value =
-            serde_json::from_str(&connect_request(&crate::connection::ConnectionTarget::Local))
-                .unwrap();
+        let v: Value = serde_json::from_str(&connect_request(
+            &crate::connection::ConnectionTarget::Local,
+        ))
+        .unwrap();
         assert_eq!(v["method"], "connect");
         assert_eq!(v["params"]["device_type"], "desktop");
         assert_eq!(v["params"]["channel_kind"], "desktop");
@@ -321,9 +322,10 @@ mod tests {
     #[test]
     fn connect_request_local_carries_no_token() {
         // Loopback is operator under LAN-trust: the handshake stays bare.
-        let v: Value =
-            serde_json::from_str(&connect_request(&crate::connection::ConnectionTarget::Local))
-                .unwrap();
+        let v: Value = serde_json::from_str(&connect_request(
+            &crate::connection::ConnectionTarget::Local,
+        ))
+        .unwrap();
         assert!(
             v["params"].get("token").is_none(),
             "Local connect must not carry a token (LAN-trust)"

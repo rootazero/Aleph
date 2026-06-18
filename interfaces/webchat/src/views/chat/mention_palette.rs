@@ -33,7 +33,10 @@ pub fn active_mention_query(text: &str, caret: usize) -> Option<String> {
         }
     }
     let token = &head[at + 1..];
-    if token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if token
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         Some(token.to_string())
     } else {
         None
@@ -53,7 +56,10 @@ pub fn mention_at_offset(text: &str, caret: usize) -> Option<usize> {
         }
     }
     let token = &head[at + 1..];
-    if token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if token
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         Some(at)
     } else {
         None

@@ -479,9 +479,13 @@ pub fn ChatSidebar() -> impl IntoView {
             .iter()
             .find(|s| s.key == key)
             .and_then(|s| s.project_root.clone());
-        let restored_name = restored_root
-            .as_deref()
-            .map(|p| p.trim_end_matches('/').rsplit('/').next().unwrap_or(p).to_string());
+        let restored_name = restored_root.as_deref().map(|p| {
+            p.trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or(p)
+                .to_string()
+        });
         chat.active_project_root.set(restored_root);
         chat.active_project_name.set(restored_name);
 
@@ -515,9 +519,7 @@ pub fn ChatSidebar() -> impl IntoView {
             let detail = match TeamsApi::get(&dash, &team_id).await {
                 Ok(d) => d,
                 Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("teams.get failed: {e}").into(),
-                    );
+                    web_sys::console::error_1(&format!("teams.get failed: {e}").into());
                     return;
                 }
             };
@@ -561,9 +563,7 @@ pub fn ChatSidebar() -> impl IntoView {
                     chat.messages.set(messages);
                 }
                 Err(e) => {
-                    web_sys::console::warn_1(
-                        &format!("teams.chat.history failed: {e}").into(),
-                    );
+                    web_sys::console::warn_1(&format!("teams.chat.history failed: {e}").into());
                 }
             }
         });

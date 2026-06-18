@@ -91,8 +91,11 @@ impl BuiltinToolRegistry {
             use crate::builtin_tools::agent_manage;
             let ctx = agent_manage::new_session_context_handle();
             let create = {
-                let tool =
-                    agent_manage::AgentCreateTool::new(Arc::clone(ar), Arc::clone(wm), Arc::clone(sm));
+                let tool = agent_manage::AgentCreateTool::new(
+                    Arc::clone(ar),
+                    Arc::clone(wm),
+                    Arc::clone(sm),
+                );
                 if let Some(ref am) = config.agent_manager {
                     tool.with_agent_manager(Arc::clone(am))
                 } else {
@@ -136,7 +139,13 @@ impl BuiltinToolRegistry {
             info!(
                 "Registered agent management tools (agent.create, agent.list, agent.delete, agent.switch)"
             );
-            (Some(create), Some(list), Some(delete), Some(switch), Some(ctx))
+            (
+                Some(create),
+                Some(list),
+                Some(delete),
+                Some(switch),
+                Some(ctx),
+            )
         } else {
             if config.agent_registry.is_some() && config.workspace_manager.is_some() {
                 warn!("Agent management tools disabled: SessionManager not available");

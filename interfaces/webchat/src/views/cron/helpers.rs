@@ -167,7 +167,10 @@ pub(super) fn extract_schedule_from_kind(
             (kind.to_string(), expr.to_string(), None, stagger)
         }
         "every" => {
-            let every_ms = obj.get("every_ms").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            let every_ms = obj
+                .get("every_ms")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
             let anchor = obj
                 .get("anchor_ms")
                 .and_then(serde_json::Value::as_i64)
@@ -176,7 +179,10 @@ pub(super) fn extract_schedule_from_kind(
         }
         "at" => {
             // Backend stores ms; convert to local datetime string for the form
-            let at_ms = obj.get("at").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            let at_ms = obj
+                .get("at")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
             let dt_str = ms_to_datetime_local(at_ms);
             (kind.to_string(), dt_str, None, None)
         }
@@ -268,9 +274,13 @@ pub(super) fn parse_interval_to_ms(s: &str) -> Option<u64> {
     } else if let Some(rest) = trimmed.strip_suffix('m') {
         rest.parse::<u64>().ok().and_then(|v| v.checked_mul(60_000))
     } else if let Some(rest) = trimmed.strip_suffix('h') {
-        rest.parse::<u64>().ok().and_then(|v| v.checked_mul(3_600_000))
+        rest.parse::<u64>()
+            .ok()
+            .and_then(|v| v.checked_mul(3_600_000))
     } else if let Some(rest) = trimmed.strip_suffix('d') {
-        rest.parse::<u64>().ok().and_then(|v| v.checked_mul(86_400_000))
+        rest.parse::<u64>()
+            .ok()
+            .and_then(|v| v.checked_mul(86_400_000))
     } else {
         None
     }

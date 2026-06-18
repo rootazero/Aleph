@@ -3,7 +3,7 @@
 use super::helpers::{format_relative_time, format_schedule_summary};
 use crate::api::cron::{CreateCronJob, CronApi, CronJobInfo};
 use crate::context::DashboardState;
-use crate::i18n::{t_string, t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 

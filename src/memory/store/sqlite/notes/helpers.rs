@@ -64,7 +64,10 @@ pub(crate) fn provenance_origin_from_str(s: &str) -> ProvenanceOrigin {
 }
 
 /// Load note markdown content from disk given index metadata and `agent_id`.
-pub(crate) async fn load_note_content_from_disk(entry: &NoteIndexEntry, agent_id: &str) -> Option<String> {
+pub(crate) async fn load_note_content_from_disk(
+    entry: &NoteIndexEntry,
+    agent_id: &str,
+) -> Option<String> {
     let memory_dir = crate::utils::paths::get_note_memory_dir().ok()?;
     let file_path = memory_dir.join(agent_id).join(&entry.category).join(
         crate::memory::notes::store::note_md_filename(&entry.filename),

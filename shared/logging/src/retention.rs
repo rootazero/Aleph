@@ -23,7 +23,9 @@ pub fn cleanup_old_logs(
     let retention_days = retention_days.clamp(1, 30);
 
     let cutoff = SystemTime::now()
-        .checked_sub(Duration::from_secs(u64::from(retention_days) * 24 * 60 * 60))
+        .checked_sub(Duration::from_secs(
+            u64::from(retention_days) * 24 * 60 * 60,
+        ))
         .ok_or("Failed to calculate cutoff time")?;
 
     let mut deleted_count = 0;

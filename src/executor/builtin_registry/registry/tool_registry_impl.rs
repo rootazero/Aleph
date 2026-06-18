@@ -23,7 +23,6 @@ use crate::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
 use tokio::sync::RwLock;
 
-
 use super::super::ToolRegistry;
 use super::BuiltinToolRegistry;
 

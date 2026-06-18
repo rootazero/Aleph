@@ -1,13 +1,13 @@
 //! Team compose popover: leader = current active agent, multi-select members
 //! from existing agents, "Start" → TeamsApi::create → enter team chat mode.
 
-use leptos::prelude::*;
-use leptos::task::spawn_local;
+use super::state::{ChatState, MemberStatus, TeamMemberView};
 use crate::api::agents::AgentsApi;
 use crate::api::teams::TeamsApi;
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
-use super::state::{ChatState, MemberStatus, TeamMemberView};
+use leptos::prelude::*;
+use leptos::task::spawn_local;
 
 /// Validation outcome for the team-compose form. Modeled as semantic variants
 /// (not localized strings) so this pure check stays host-testable while the
@@ -146,9 +146,7 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
                         "{}{e}",
                         t_string!(i18n, chat.team_create_failed)
                     )));
-                    web_sys::console::error_1(
-                        &format!("teams.create failed: {e}").into(),
-                    );
+                    web_sys::console::error_1(&format!("teams.create failed: {e}").into());
                 }
             }
         });

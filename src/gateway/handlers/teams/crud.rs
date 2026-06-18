@@ -8,10 +8,10 @@ use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStore};
 use crate::sync_primitives::Arc;
 use crate::teams::{NewTeam, NewTeamMember, TeamStore};
 
+use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
 };
-use crate::gateway::handlers::parse_params;
 
 #[derive(Debug, Deserialize)]
 pub struct TeamIdParams {
@@ -418,9 +418,9 @@ pub async fn handle_agent_teams(
                         .as_ref()
                         .and_then(|d| d.name.clone())
                         .unwrap_or_else(|| mem.agent_id.clone());
-                    let emoji = def.as_ref().and_then(|d| {
-                        d.identity.as_ref().and_then(|i| i.emoji.clone())
-                    });
+                    let emoji = def
+                        .as_ref()
+                        .and_then(|d| d.identity.as_ref().and_then(|i| i.emoji.clone()));
                     json!({ "id": mem.agent_id, "name": name, "emoji": emoji })
                 })
                 .collect(),
@@ -460,4 +460,3 @@ pub async fn handle_agent_teams(
 
     JsonRpcResponse::success(request.id, json!({ "teams": enriched }))
 }
-

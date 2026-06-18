@@ -1,8 +1,8 @@
 //! Unit tests for the registry free functions (`parse_caller_agent_id`).
 #![allow(unused_imports)]
 
-use super::*;
 use super::free_fns::*;
+use super::*;
 
 use super::parse_caller_agent_id;
 

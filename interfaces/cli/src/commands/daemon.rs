@@ -200,9 +200,7 @@ pub fn start(
             } else {
                 eprintln!("Failed to start Gateway: {e}");
                 eprintln!("Binary: {}", binary.display());
-                eprintln!(
-                    "Hint: set {SERVER_BINARY_ENV} to override the binary path"
-                );
+                eprintln!("Hint: set {SERVER_BINARY_ENV} to override the binary path");
             }
             Err(CliError::Other(format!(
                 "failed to spawn {}: {}",
@@ -215,7 +213,9 @@ pub fn start(
 
 /// Stop the Gateway server
 pub fn stop(json: bool) -> CliResult<()> {
-    let pid = if let Some(p) = read_pid_file() { p } else {
+    let pid = if let Some(p) = read_pid_file() {
+        p
+    } else {
         if json {
             output::print_json(&serde_json::json!({"status": "not_running"}));
         } else {

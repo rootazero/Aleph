@@ -69,13 +69,16 @@ pub async fn run(
                 .as_array()
                 .and_then(|arr| arr.first())
                 .and_then(|first| {
-                    first.as_str().map(std::string::ToString::to_string).or_else(|| {
-                        first
-                            .get("name")
-                            .or_else(|| first.get("id"))
-                            .and_then(|v| v.as_str())
-                            .map(std::string::ToString::to_string)
-                    })
+                    first
+                        .as_str()
+                        .map(std::string::ToString::to_string)
+                        .or_else(|| {
+                            first
+                                .get("name")
+                                .or_else(|| first.get("id"))
+                                .and_then(|v| v.as_str())
+                                .map(std::string::ToString::to_string)
+                        })
                 })
                 // Also try object format: {"models": [...]}
                 .or_else(|| {
@@ -84,13 +87,16 @@ pub async fn run(
                         .and_then(|v| v.as_array())
                         .and_then(|arr| arr.first())
                         .and_then(|first| {
-                            first.as_str().map(std::string::ToString::to_string).or_else(|| {
-                                first
-                                    .get("name")
-                                    .or_else(|| first.get("id"))
-                                    .and_then(|v| v.as_str())
-                                    .map(std::string::ToString::to_string)
-                            })
+                            first
+                                .as_str()
+                                .map(std::string::ToString::to_string)
+                                .or_else(|| {
+                                    first
+                                        .get("name")
+                                        .or_else(|| first.get("id"))
+                                        .and_then(|v| v.as_str())
+                                        .map(std::string::ToString::to_string)
+                                })
                         })
                 })
                 .unwrap_or_else(|| "unknown".to_string())
@@ -616,10 +622,7 @@ fn handle_palette_key(state: &mut AppState, key: KeyEvent) -> Action {
             Action::PaletteConfirm
         }
         KeyCode::Backspace => {
-            let is_empty = state
-                .palette
-                .as_ref()
-                .is_none_or(|p| p.input.is_empty());
+            let is_empty = state.palette.as_ref().is_none_or(|p| p.input.is_empty());
             if is_empty {
                 // If inside a namespace, go back one level
                 if state.palette_go_back() {

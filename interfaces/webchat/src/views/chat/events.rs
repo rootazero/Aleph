@@ -136,7 +136,10 @@ pub(crate) fn apply_trace_event(
                 .get("reason")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            append_reasoning(chat, &format!("🔁 收尾被拦截（清单仍有未完成项）：{reason}"));
+            append_reasoning(
+                chat,
+                &format!("🔁 收尾被拦截（清单仍有未完成项）：{reason}"),
+            );
             workspace.note_activity();
         }
         _ => {}
@@ -309,7 +312,10 @@ pub fn subscribe_run_events(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let attempt = data.get("attempt").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32;
+                let attempt = data
+                    .get("attempt")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as u32;
                 let max_attempts = data
                     .get("max_attempts")
                     .and_then(serde_json::Value::as_u64)

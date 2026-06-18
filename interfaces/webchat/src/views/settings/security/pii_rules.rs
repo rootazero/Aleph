@@ -185,12 +185,7 @@ pub(super) fn CustomPiiRulesSubsection(
 #[component]
 pub(super) fn CustomPiiRulesSection(config: RwSignal<Option<SecurityConfig>>) -> impl IntoView {
     let i18n = use_i18n();
-    let custom_rules = RwSignal::new(
-        config
-            .get()
-            .map(|c| c.custom_pii_rules)
-            .unwrap_or_default(),
-    );
+    let custom_rules = RwSignal::new(config.get().map(|c| c.custom_pii_rules).unwrap_or_default());
     let pattern_errors = RwSignal::new(Vec::<(usize, String)>::new());
 
     let save = move |_| {

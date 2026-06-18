@@ -86,12 +86,19 @@ pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
             println!("\nSystem");
             println!("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
 
-            if let Some(cpu) = system.get("cpu_usage_percent").and_then(serde_json::Value::as_f64) {
+            if let Some(cpu) = system
+                .get("cpu_usage_percent")
+                .and_then(serde_json::Value::as_f64)
+            {
                 println!("{:<14}{:.1}%", "CPU:", cpu);
             }
 
-            let mem_used = system.get("memory_used_bytes").and_then(serde_json::Value::as_u64);
-            let mem_total = system.get("memory_total_bytes").and_then(serde_json::Value::as_u64);
+            let mem_used = system
+                .get("memory_used_bytes")
+                .and_then(serde_json::Value::as_u64);
+            let mem_total = system
+                .get("memory_total_bytes")
+                .and_then(serde_json::Value::as_u64);
             if let (Some(used), Some(total)) = (mem_used, mem_total) {
                 println!(
                     "{:<14}{} / {}",
@@ -101,8 +108,12 @@ pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
                 );
             }
 
-            let disk_used = system.get("disk_used_bytes").and_then(serde_json::Value::as_u64);
-            let disk_total = system.get("disk_total_bytes").and_then(serde_json::Value::as_u64);
+            let disk_used = system
+                .get("disk_used_bytes")
+                .and_then(serde_json::Value::as_u64);
+            let disk_total = system
+                .get("disk_total_bytes")
+                .and_then(serde_json::Value::as_u64);
             if let (Some(used), Some(total)) = (disk_used, disk_total) {
                 println!(
                     "{:<14}{} / {}",
@@ -112,7 +123,10 @@ pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
                 );
             }
 
-            if let Some(uptime) = system.get("uptime_secs").and_then(serde_json::Value::as_u64) {
+            if let Some(uptime) = system
+                .get("uptime_secs")
+                .and_then(serde_json::Value::as_u64)
+            {
                 println!("{:<14}{}", "Uptime:", format_uptime(uptime));
             }
         }

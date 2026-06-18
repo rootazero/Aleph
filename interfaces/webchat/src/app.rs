@@ -1,4 +1,4 @@
-use crate::i18n::{t_string, I18nContextProvider, use_i18n};
+use crate::i18n::{t_string, use_i18n, I18nContextProvider};
 use crate::state::memory::MemoryState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -14,7 +14,13 @@ use crate::views::home::Home;
 use crate::views::logs::Logs;
 use crate::views::memory::Memory;
 use crate::views::runtimes::RuntimesView;
-use crate::views::settings::{Settings, GeneralView, AppearanceView, BehaviorView, SearchView, ProvidersView, EmbeddingProvidersView, RerankingProvidersView, GenerationProvidersView, RouteView, MemoryView, BrowserView, NetworkView, RoutingRulesView, McpView, PluginsView, SkillsView, ClawHubView, AcpHarnessesView, SecurityView, PoliciesView, ExecutionView, ChannelsOverview, ChannelPlatformPage};
+use crate::views::settings::{
+    AcpHarnessesView, AppearanceView, BehaviorView, BrowserView, ChannelPlatformPage,
+    ChannelsOverview, ClawHubView, EmbeddingProvidersView, ExecutionView, GeneralView,
+    GenerationProvidersView, McpView, MemoryView, NetworkView, PluginsView, PoliciesView,
+    ProvidersView, RerankingProvidersView, RouteView, RoutingRulesView, SearchView, SecurityView,
+    Settings, SkillsView,
+};
 use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
 use crate::views::usage::UsageView;
@@ -122,9 +128,7 @@ fn AppContent() -> impl IntoView {
                     }
                 }
                 Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("Failed to connect to Gateway: {e}").into(),
-                    );
+                    web_sys::console::error_1(&format!("Failed to connect to Gateway: {e}").into());
                 }
             }
         });

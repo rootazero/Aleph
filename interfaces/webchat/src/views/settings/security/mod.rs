@@ -30,7 +30,7 @@ use leptos::task::spawn_local;
 
 use crate::api::{SearchConfig, SearchConfigApi, SecurityConfig, SecurityConfigApi};
 use crate::context::DashboardState;
-use crate::i18n::{t_string, t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 
 use gateway::NetworkAccessSection;
 use gateway_token::GatewayTokenSection;
@@ -50,9 +50,7 @@ pub(super) fn validate_regex(pattern: &str) -> Result<(), String> {
     let arg = js_sys::JSON::stringify(&pattern.into())
         .map(|s| s.as_string().unwrap_or_default())
         .unwrap_or_default();
-    let js_code = format!(
-        "try {{ new RegExp({arg}); true; }} catch(e) {{ false; }}"
-    );
+    let js_code = format!("try {{ new RegExp({arg}); true; }} catch(e) {{ false; }}");
     match js_sys::eval(&js_code) {
         Ok(result) => match result.as_bool() {
             Some(true) => Ok(()),

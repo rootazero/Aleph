@@ -27,13 +27,9 @@ pub(super) async fn init_tool_catalog(
     generation_registry: &Arc<RwLock<alephcore::generation::GenerationProviderRegistry>>,
     app_config: &alephcore::Config,
     tool_reg_out: Option<Arc<BuiltinToolRegistry>>,
-    command_parser_cell: &Arc<
-        tokio::sync::RwLock<Option<Arc<alephcore::command::CommandParser>>>,
-    >,
+    command_parser_cell: &Arc<tokio::sync::RwLock<Option<Arc<alephcore::command::CommandParser>>>>,
     memory_db: &alephcore::memory::store::MemoryBackend,
-    memory_ext_registry: &std::sync::Arc<
-        alephcore::memory::extensions::MemoryExtensionRegistry,
-    >,
+    memory_ext_registry: &std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>,
     daemon: bool,
 ) -> Arc<alephcore::tool_metadata::ToolCatalog> {
     use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;

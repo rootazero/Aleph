@@ -139,14 +139,13 @@ impl MicError {
     /// remediation for a denial (OS TCC vs. browser per-site permission).
     pub(crate) fn caption(&self, native: bool) -> String {
         match self {
-            Self::Denied if native => {
-                "需要麦克风权限：系统设置 → 隐私与安全 → 麦克风".to_string()
-            }
+            Self::Denied if native => "需要麦克风权限：系统设置 → 隐私与安全 → 麦克风".to_string(),
             // Browser: the block is the site permission, not the OS — sending the
             // user to macOS Settings (where the browser is already allowed) is the
             // dead end they reported.
             Self::Denied => {
-                "麦克风被浏览器拒绝：点击地址栏的权限图标，把本站麦克风改为「允许」，然后刷新页面".to_string()
+                "麦克风被浏览器拒绝：点击地址栏的权限图标，把本站麦克风改为「允许」，然后刷新页面"
+                    .to_string()
             }
             Self::NotFound => "未检测到麦克风设备".to_string(),
             Self::NotReadable => {
@@ -665,7 +664,12 @@ impl TtsPlayer {
     /// Returns `true` once playback is armed (the source's `ended` handler pumps
     /// the next clip); `false` if decode/setup failed so the caller can fall
     /// back. Leaves `playing` set on success.
-    async fn play_buffer(self: &Rc<Self>, dash: DashboardState, bytes: &[u8], my_epoch: u64) -> bool {
+    async fn play_buffer(
+        self: &Rc<Self>,
+        dash: DashboardState,
+        bytes: &[u8],
+        my_epoch: u64,
+    ) -> bool {
         let Some(g) = self.graph.as_ref() else {
             return false;
         };

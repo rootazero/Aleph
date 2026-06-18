@@ -115,7 +115,9 @@ pub fn trigger_condition_to_form(v: &Value) -> String {
         ),
         "GreaterThan" => format!(
             ">{}",
-            v.get("value").and_then(serde_json::Value::as_f64).unwrap_or(0.0)
+            v.get("value")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0)
         ),
         _ => "always".to_string(),
     }

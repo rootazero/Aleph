@@ -143,7 +143,8 @@ fn VoiceSession() -> impl IntoView {
     // barge-in / stale audio), the tick loop, and `on_cleanup`. It therefore
     // lives in a shared LocalStorage slot, populated once construction
     // completes. `on_cleanup`'s `Send + Sync` bound rules out a plain `Rc`.
-    let player_slot: StoredValue<Option<Rc<TtsPlayer>>, LocalStorage> = StoredValue::new_local(None);
+    let player_slot: StoredValue<Option<Rc<TtsPlayer>>, LocalStorage> =
+        StoredValue::new_local(None);
     let dispatch = move |ev: VoiceEvent| {
         let (next, action) = on_event(phase.get_untracked(), ev);
         phase.set(next);
@@ -192,9 +193,8 @@ fn VoiceSession() -> impl IntoView {
             // Drop deltas that belong to a previous utterance's stream so stale
             // text from a just-closed stream can't bleed into the new one.
             let ev_sid = event.data.get("stream_id").and_then(|s| s.as_str());
-            let matches = stream_id.with_value(|cur| {
-                cur.as_deref().is_some_and(|cur| Some(cur) == ev_sid)
-            });
+            let matches =
+                stream_id.with_value(|cur| cur.as_deref().is_some_and(|cur| Some(cur) == ev_sid));
             if !matches {
                 return;
             }
@@ -226,7 +226,8 @@ fn VoiceSession() -> impl IntoView {
     // Mic open + 50 ms VAD tick loop. Async because getUserMedia awaits a
     // permission grant; the interval handle is stashed (LocalStorage, same
     // reason as `mic`) for cleanup.
-    let tick_handle: StoredValue<Option<IntervalHandle>, LocalStorage> = StoredValue::new_local(None);
+    let tick_handle: StoredValue<Option<IntervalHandle>, LocalStorage> =
+        StoredValue::new_local(None);
     {
         let vad = Rc::clone(&vad);
         let barge = Rc::clone(&barge);
@@ -253,7 +254,13 @@ fn VoiceSession() -> impl IntoView {
             // phase-watching Effect below (the mic slot is populated by then, so
             // that Effect handles re-entries; this one-shot covers the very first
             // entry, which fires before the mic is ready).
-            start_listening_stream(Rc::clone(&session), dash, stream_id, stream_gen, caption_state);
+            start_listening_stream(
+                Rc::clone(&session),
+                dash,
+                stream_id,
+                stream_gen,
+                caption_state,
+            );
 
             let handle = set_interval_with_handle(
                 move || {
@@ -343,8 +350,8 @@ fn VoiceSession() -> impl IntoView {
                                         let splitter = Rc::clone(&splitter);
                                         let speak_gen = Rc::clone(&speak_gen);
                                         spawn_local(send_utterance(
-                                            raw, dash, chat, dispatch, player, splitter,
-                                            speak_run, speak_gen,
+                                            raw, dash, chat, dispatch, player, splitter, speak_run,
+                                            speak_gen,
                                         ));
                                         // 3) close the stream (its delta pump exits)
                                         spawn_local(async move {
@@ -389,9 +396,7 @@ fn VoiceSession() -> impl IntoView {
                                                 });
                                             if let Some(p) = polished {
                                                 caption_state.update(|s| {
-                                                    if s.locked
-                                                        && s.committed == raw_for_format
-                                                    {
+                                                    if s.locked && s.committed == raw_for_format {
                                                         apply_formatted(s, &p);
                                                     }
                                                 });
@@ -535,7 +540,8 @@ fn VoiceSession() -> impl IntoView {
     // Mic-open failure replaces the phase hint. A permission denial becomes a
     // click-through to the OS privacy pane (settings_url); other failures (busy
     // device, insecure context) render as plain, honest text.
-    let mic_hint = move || match mic_error.get() {
+    let mic_hint = move || {
+        match mic_error.get() {
         None => view! { {status_text} }.into_any(),
         Some(e) => match e.settings_url(native) {
             Some(url) => view! {
@@ -550,6 +556,7 @@ fn VoiceSession() -> impl IntoView {
             .into_any(),
             None => view! { {e.caption(native)} }.into_any(),
         },
+    }
     };
     // Caption renderer. `Live` (streaming) renders the two-stage transcript from
     // `caption_state` — committed (solid `.voice-committed`) + interim (gray
@@ -624,7 +631,10 @@ fn start_listening_stream(
     if let Some(stale) = stream_id.try_update_value(Option::take).flatten() {
         spawn_local(async move {
             let _ = dash
-                .rpc_call("voice.stream.stop", serde_json::json!({ "stream_id": stale }))
+                .rpc_call(
+                    "voice.stream.stop",
+                    serde_json::json!({ "stream_id": stale }),
+                )
                 .await;
         });
     }
@@ -633,10 +643,12 @@ fn start_listening_stream(
     // yet. Only the open whose generation is still the latest installs its
     // stream; an open that was superseded mid-flight closes the stream it just
     // opened instead of overwriting (and leaking) the newer one.
-    let my_gen = stream_gen.try_update_value(|g| {
-        *g += 1;
-        *g
-    }).unwrap_or(0);
+    let my_gen = stream_gen
+        .try_update_value(|g| {
+            *g += 1;
+            *g
+        })
+        .unwrap_or(0);
     spawn_local(async move {
         let resp = dash
             .rpc_call(
@@ -644,9 +656,11 @@ fn start_listening_stream(
                 serde_json::json!({ "language": Option::<String>::None }),
             )
             .await;
-        let sid = resp
-            .ok()
-            .and_then(|v| v.get("stream_id").and_then(|s| s.as_str()).map(str::to_string));
+        let sid = resp.ok().and_then(|v| {
+            v.get("stream_id")
+                .and_then(|s| s.as_str())
+                .map(str::to_string)
+        });
         let still_current = stream_gen.try_with_value(|g| *g == my_gen).unwrap_or(false);
         if still_current {
             stream_id.set_value(sid.clone());
@@ -731,7 +745,10 @@ fn handle_utterance(
         };
         *consecutive_errors.borrow_mut() = 0;
         caption.set(Caption::User(text.clone()));
-        send_utterance(text, dash, chat, dispatch, player, splitter, speak_run, speak_gen).await;
+        send_utterance(
+            text, dash, chat, dispatch, player, splitter, speak_run, speak_gen,
+        )
+        .await;
     });
 }
 
@@ -845,7 +862,10 @@ mod drive_tests {
         let mut sp = SentenceSplitter::default();
         let full = "你好！我能听到你说话。有什么我可以帮你的吗？";
         let (out, fin) = drive_step(&mut sp, full, false);
-        assert_eq!(out, vec!["你好！我能听到你说话。", "有什么我可以帮你的吗？"]);
+        assert_eq!(
+            out,
+            vec!["你好！我能听到你说话。", "有什么我可以帮你的吗？"]
+        );
         assert!(fin);
     }
 }

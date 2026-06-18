@@ -168,7 +168,10 @@ pub async fn remove(
     if json_out {
         output::print_json(&result);
     } else {
-        let removed = result.get("removed").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let removed = result
+            .get("removed")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
         println!(
             "✓ Removed {removed} hook entr{}",
             if removed == 1 { "y" } else { "ies" }

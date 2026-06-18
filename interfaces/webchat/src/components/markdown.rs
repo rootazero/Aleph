@@ -68,10 +68,7 @@ fn render_markdown(content: &str) -> String {
                         html_output.push_str(&html_escape(text.as_ref()));
                     }
                     _ => {
-                        pulldown_cmark::html::push_html(
-                            &mut html_output,
-                            std::iter::once(other),
-                        );
+                        pulldown_cmark::html::push_html(&mut html_output, std::iter::once(other));
                     }
                 }
             }

@@ -96,7 +96,11 @@ pub(crate) fn render_deadline(deadline_ms: u64, now_ms: u64) -> String {
     } else if remaining_s < 3600 {
         format!("deadline in ~{}m", remaining_s / 60)
     } else {
-        format!("deadline in ~{}h{}m", remaining_s / 3600, (remaining_s % 3600) / 60)
+        format!(
+            "deadline in ~{}h{}m",
+            remaining_s / 3600,
+            (remaining_s % 3600) / 60
+        )
     }
 }
 

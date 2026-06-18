@@ -5,9 +5,9 @@
 //! the directory split, `super` only reaches `mod.rs`, so the production
 //! symbols the tests reference are imported explicitly below.
 
-use super::*;
 use super::helpers::{build_user_prompt, candidate_dedup_text, cosine_similarity};
 use super::plan_parse::{infer_op_kind, parse_plan_lenient, repair_kind_tags, summary_from_report};
+use super::*;
 
 use crate::error::AlephError;
 use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
@@ -18,7 +18,6 @@ use crate::memory::store::SqliteMemoryBackend;
 use crate::providers::recording_mock::RecordingMockProvider;
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
-
 
 struct StubIngestor;
 
@@ -605,8 +604,7 @@ async fn ingest_batch_pushes_and_flushes_embedding() {
 
     // Seat a Mock provider on the manager so flush_pending writes vectors.
     let mgr = Arc::new(EmbeddingManager::new(EmbeddingSettings::default()));
-    let mock: Arc<dyn EmbeddingProvider> =
-        Arc::new(MockEmbeddingProvider::new(1024, "mock-1024"));
+    let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-1024"));
     mgr.install_provider_for_test(mock).await;
 
     let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new(
@@ -722,10 +720,9 @@ async fn end_to_end_append_on_existing() {
         .unwrap();
     assert_eq!(r2.appended, 1);
 
-    let body =
-        tokio::fs::read_to_string(dir.path().join("note/default/learning/rust-async.md"))
-            .await
-            .unwrap();
+    let body = tokio::fs::read_to_string(dir.path().join("note/default/learning/rust-async.md"))
+        .await
+        .unwrap();
     assert!(body.contains("Futures are lazy"));
     assert!(body.contains("tokio is the runtime"));
 }

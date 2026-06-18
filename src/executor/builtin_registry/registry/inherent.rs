@@ -18,7 +18,6 @@ use crate::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
 use tokio::sync::RwLock;
 
-
 use super::super::BuiltinToolConfig;
 use super::free_fns::{parse_caller_agent_id, resolve_plugin_handler_from_sources};
 use super::BuiltinToolRegistry;

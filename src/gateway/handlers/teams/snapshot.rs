@@ -10,10 +10,10 @@ use crate::sync_primitives::Arc;
 use crate::teams::snapshots::{capture_snapshot, restore_snapshot, SqliteSnapshotStore};
 use crate::teams::TeamStore;
 
+use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
 };
-use crate::gateway::handlers::parse_params;
 
 #[derive(Debug, Deserialize)]
 pub struct SnapshotCreateParams {

@@ -525,4 +525,3 @@ pub(crate) fn agent_identity_dir_exists(agent_id: &str) -> bool {
         .map(|dir| dir.join(agent_id).is_dir())
         .unwrap_or(false)
 }
-

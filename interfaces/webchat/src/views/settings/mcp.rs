@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::api::{McpConfigApi, McpServerConfig, McpServerInfo};
 use crate::context::DashboardState;
-use crate::i18n::{t_string, t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 
 /// Load MCP servers list from Gateway
 fn load_servers(
@@ -190,7 +190,11 @@ fn McpServerCard(
         format!("{} {}", server.command, server.args.join(" "))
     };
 
-    let env_count = server.env.as_ref().map(std::collections::HashMap::len).unwrap_or(0);
+    let env_count = server
+        .env
+        .as_ref()
+        .map(std::collections::HashMap::len)
+        .unwrap_or(0);
 
     view! {
         <div class="p-4 bg-surface-raised border border-border rounded">

@@ -15,7 +15,12 @@ pub(crate) struct VadConfig {
 
 impl Default for VadConfig {
     fn default() -> Self {
-        Self { start_rms: 0.06, end_silence_ms: 700, min_speech_ms: 300, frame_ms: 50 }
+        Self {
+            start_rms: 0.06,
+            end_silence_ms: 700,
+            min_speech_ms: 300,
+            frame_ms: 50,
+        }
     }
 }
 
@@ -23,7 +28,10 @@ impl Default for VadConfig {
 pub(crate) enum VadState {
     #[default]
     Quiet,
-    Speech { speech_ms: u32, silence_ms: u32 },
+    Speech {
+        speech_ms: u32,
+        silence_ms: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,15 +48,24 @@ pub(crate) fn vad_step(state: VadState, rms: f32, cfg: &VadConfig) -> (VadState,
     let loud = rms >= cfg.start_rms;
     match state {
         VadState::Quiet if loud => (
-            VadState::Speech { speech_ms: cfg.frame_ms, silence_ms: 0 },
+            VadState::Speech {
+                speech_ms: cfg.frame_ms,
+                silence_ms: 0,
+            },
             Some(VadEvent::SpeechStart),
         ),
         VadState::Quiet => (VadState::Quiet, None),
         VadState::Speech { speech_ms, .. } if loud => (
-            VadState::Speech { speech_ms: speech_ms + cfg.frame_ms, silence_ms: 0 },
+            VadState::Speech {
+                speech_ms: speech_ms + cfg.frame_ms,
+                silence_ms: 0,
+            },
             None,
         ),
-        VadState::Speech { speech_ms, silence_ms } => {
+        VadState::Speech {
+            speech_ms,
+            silence_ms,
+        } => {
             let silence_ms = silence_ms + cfg.frame_ms;
             if silence_ms >= cfg.end_silence_ms {
                 let ev = if speech_ms >= cfg.min_speech_ms {
@@ -58,7 +75,13 @@ pub(crate) fn vad_step(state: VadState, rms: f32, cfg: &VadConfig) -> (VadState,
                 };
                 (VadState::Quiet, Some(ev))
             } else {
-                (VadState::Speech { speech_ms, silence_ms }, None)
+                (
+                    VadState::Speech {
+                        speech_ms,
+                        silence_ms,
+                    },
+                    None,
+                )
             }
         }
     }
@@ -161,12 +184,7 @@ mod tests {
 
     /// Feed n frames of constant (rms, output_level) through the barge detector;
     /// return (final state, number of fires).
-    fn feed_barge(
-        mut st: BargeState,
-        rms: f32,
-        out: f32,
-        n: u32,
-    ) -> (BargeState, u32) {
+    fn feed_barge(mut st: BargeState, rms: f32, out: f32, n: u32) -> (BargeState, u32) {
         let mut fires = 0;
         for _ in 0..n {
             let (next, fire) = barge_step(st, rms, out, &BARGE);

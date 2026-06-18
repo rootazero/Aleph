@@ -1,7 +1,9 @@
 use crate::api::{CompressedFact, MemoryApi, MemoryStats, RawMemory};
-use crate::components::ui::{Card, BadgeVariant, Badge, ConfirmButton, Button, ButtonVariant, ButtonSize};
+use crate::components::ui::{
+    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Card, ConfirmButton,
+};
 use crate::context::DashboardState;
-use crate::i18n::{t_string, t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 
 /// Fixed number of entries shown per page in both memory tabs.

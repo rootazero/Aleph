@@ -51,7 +51,9 @@ pub(crate) fn summary_from_report(
 /// (the old behaviour) discarded knowledge the model had already extracted, so
 /// instead we recover the label it forgot. Checked most-specific field first so
 /// the mapping stays unambiguous. Returns `None` when no variant fits.
-pub(crate) fn infer_op_kind(op: &serde_json::Map<String, serde_json::Value>) -> Option<&'static str> {
+pub(crate) fn infer_op_kind(
+    op: &serde_json::Map<String, serde_json::Value>,
+) -> Option<&'static str> {
     if op.contains_key("from") && op.contains_key("to") {
         return Some("link");
     }

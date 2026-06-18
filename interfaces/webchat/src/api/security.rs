@@ -187,8 +187,7 @@ impl SecurityConfigApi {
             .rpc_call("security_config.get", serde_json::Value::Null)
             .await?;
 
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse security config: {e}"))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse security config: {e}"))
     }
 
     /// Update security configuration. Returns `true` when the daemon reports

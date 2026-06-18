@@ -59,8 +59,7 @@ pub struct AcpApi;
 impl AcpApi {
     pub async fn list(state: &DashboardState) -> Result<Vec<AcpHarnessInfo>, String> {
         let result = state.rpc_call("acp.list", Value::Null).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse ACP harness list: {e}"))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse ACP harness list: {e}"))
     }
 
     pub async fn get(state: &DashboardState, id: &str) -> Result<AcpHarnessInfo, String> {
@@ -133,8 +132,7 @@ impl AcpApi {
 
     pub async fn presets_meta(state: &DashboardState) -> Result<Vec<AcpPresetMeta>, String> {
         let result = state.rpc_call("acp.presets_meta", Value::Null).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse preset metadata: {e}"))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse preset metadata: {e}"))
     }
 
     /// Get the top-level ACP enabled state from config.

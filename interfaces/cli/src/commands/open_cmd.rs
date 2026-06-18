@@ -112,7 +112,10 @@ mod tests {
 
     #[test]
     fn wss_url_becomes_https_panel_root() {
-        assert_eq!(panel_url("wss://example.com:443/ws"), "https://example.com:443/");
+        assert_eq!(
+            panel_url("wss://example.com:443/ws"),
+            "https://example.com:443/"
+        );
     }
 
     #[test]
@@ -141,7 +144,10 @@ mod tests {
 
     #[test]
     fn trailing_slash_without_ws_path_normalizes() {
-        assert_eq!(panel_url("ws://127.0.0.1:18790/"), "http://127.0.0.1:18790/");
+        assert_eq!(
+            panel_url("ws://127.0.0.1:18790/"),
+            "http://127.0.0.1:18790/"
+        );
         assert_eq!(
             panel_url("https://example.com:8443/"),
             "https://example.com:8443/"

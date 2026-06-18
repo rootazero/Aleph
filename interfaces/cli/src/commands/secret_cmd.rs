@@ -81,7 +81,10 @@ pub async fn verify(server_url: &str, name: &str, json: bool) -> CliResult<()> {
     if json {
         output::print_json(&result);
     } else {
-        let bytes = result.get("bytes").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let bytes = result
+            .get("bytes")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
         println!("Secret '{name}' is available ({bytes} bytes, value redacted)");
     }
     client.close().await?;

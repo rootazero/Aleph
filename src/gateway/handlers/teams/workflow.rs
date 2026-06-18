@@ -12,10 +12,10 @@ use crate::agents::swarm::tasks::{
 use crate::sync_primitives::Arc;
 use crate::teams::{NewTeamMember, TeamMemberKind, TeamStore};
 
+use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
 };
-use crate::gateway::handlers::parse_params;
 
 // =============================================================================
 // teams.list_templates — discover available team templates (built-in + user)

@@ -44,9 +44,13 @@ fn parse_interval_to_ms(s: &str) -> Option<u64> {
     } else if let Some(rest) = trimmed.strip_suffix('m') {
         rest.parse::<u64>().ok().and_then(|v| v.checked_mul(60_000))
     } else if let Some(rest) = trimmed.strip_suffix('h') {
-        rest.parse::<u64>().ok().and_then(|v| v.checked_mul(3_600_000))
+        rest.parse::<u64>()
+            .ok()
+            .and_then(|v| v.checked_mul(3_600_000))
     } else if let Some(rest) = trimmed.strip_suffix('d') {
-        rest.parse::<u64>().ok().and_then(|v| v.checked_mul(86_400_000))
+        rest.parse::<u64>()
+            .ok()
+            .and_then(|v| v.checked_mul(86_400_000))
     } else {
         None
     }

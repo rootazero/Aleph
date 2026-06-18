@@ -36,7 +36,10 @@ pub struct Updater {
 impl Updater {
     /// Hand the background checker the tray item it should relabel.
     pub fn attach_tray_item(&self, item: MenuItem<Wry>) {
-        *self.tray_item.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(item);
+        *self
+            .tray_item
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(item);
     }
 }
 

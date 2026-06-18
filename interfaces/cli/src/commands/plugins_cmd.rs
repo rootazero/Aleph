@@ -401,7 +401,11 @@ pub async fn info(server_url: &str, name: &str, json: bool) -> CliResult<()> {
                     p.get(key)
                         .and_then(|v| v.as_array())
                         .map(std::vec::Vec::len)
-                        .or_else(|| p.get(key).and_then(serde_json::Value::as_u64).map(|n| n as usize))
+                        .or_else(|| {
+                            p.get(key)
+                                .and_then(serde_json::Value::as_u64)
+                                .map(|n| n as usize)
+                        })
                         .unwrap_or(0)
                 };
 

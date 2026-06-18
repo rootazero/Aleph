@@ -514,8 +514,12 @@ fn MessageBubble(
             .filter(|e| !e.is_empty());
         let color = crate::views::chat::agent_identity::agent_color_for_id(aid);
 
-        let show_header = use_context::<AttributionMap>()
-            .is_none_or(|m| m.0.get_untracked().get(&message.id).copied().unwrap_or(true));
+        let show_header = use_context::<AttributionMap>().is_none_or(|m| {
+            m.0.get_untracked()
+                .get(&message.id)
+                .copied()
+                .unwrap_or(true)
+        });
         (name, emoji, color, show_header)
     });
 
@@ -568,9 +572,15 @@ fn MessageBubble(
 
     // Decompose layout_a so values can be used in a single view! without double-move.
     let is_team_msg = layout_a.is_some();
-    let team_name = layout_a.as_ref().map(|(n, ..)| n.clone()).unwrap_or_default();
+    let team_name = layout_a
+        .as_ref()
+        .map(|(n, ..)| n.clone())
+        .unwrap_or_default();
     let team_emoji = layout_a.as_ref().and_then(|(_, e, _, _)| e.clone());
-    let team_color = layout_a.as_ref().map(|(_, _, c, _)| *c).unwrap_or("#7c9cff");
+    let team_color = layout_a
+        .as_ref()
+        .map(|(_, _, c, _)| *c)
+        .unwrap_or("#7c9cff");
     let team_show_header = layout_a.map(|(_, _, _, s)| s).unwrap_or(false);
     // Avatar glyph: agent emoji if present, else a name monogram (first char
     // uppercased). Mirrors `agent_identity`'s emoji → monogram fallback.

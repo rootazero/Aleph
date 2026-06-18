@@ -146,7 +146,10 @@ mod macos {
                 stdout.trim() == "granted"
             }
             Ok(out) => {
-                tracing::warn!("perm-check failed: {}", String::from_utf8_lossy(&out.stderr));
+                tracing::warn!(
+                    "perm-check failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
                 false
             }
             Err(e) => {

@@ -8,13 +8,13 @@
 use alephcore::sync_primitives::Arc;
 
 use alephcore::gateway::handlers::agent::{
-    self as agent_handlers, handle_cancel as handle_agent_cancel, handle_status as handle_agent_status,
-    AgentRunManager,
+    self as agent_handlers, handle_cancel as handle_agent_cancel,
+    handle_status as handle_agent_status, AgentRunManager,
 };
 use alephcore::gateway::handlers::chat as chat_handlers;
 use alephcore::gateway::router::AgentRouter;
-use alephcore::gateway::GatewayServer;
 use alephcore::gateway::GatewayConfig as FullGatewayConfig;
+use alephcore::gateway::GatewayServer;
 
 /// Register `trace.list` / `trace.get` / `trace.by_runs`. When a state database
 /// is present they replay durable traces; otherwise they return
@@ -31,9 +31,7 @@ pub(super) fn register_trace_handlers(
         let trace_list_db = trace_db.clone();
         server.handlers_mut().register("trace.list", move |req| {
             let db = trace_list_db.clone();
-            async move {
-                alephcore::gateway::handlers::trace_replay::handle_list(req, db).await
-            }
+            async move { alephcore::gateway::handlers::trace_replay::handle_list(req, db).await }
         });
 
         let trace_get_db = trace_db.clone();
@@ -45,9 +43,7 @@ pub(super) fn register_trace_handlers(
         let trace_by_runs_db = trace_db;
         server.handlers_mut().register("trace.by_runs", move |req| {
             let db = trace_by_runs_db.clone();
-            async move {
-                alephcore::gateway::handlers::trace_replay::handle_by_runs(req, db).await
-            }
+            async move { alephcore::gateway::handlers::trace_replay::handle_by_runs(req, db).await }
         });
     } else {
         server

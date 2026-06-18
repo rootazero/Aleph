@@ -56,8 +56,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // AgentDef here, but its identity loads from disk by agent_id (see
         // `build_system_prompt`). Trust the gateway: reject only when neither an
         // AgentDef nor an on-disk `~/.aleph/agents/<id>/` identity directory exists.
-        if self.agent_registry.get(&spec.agent).is_none()
-            && !agent_identity_dir_exists(&spec.agent)
+        if self.agent_registry.get(&spec.agent).is_none() && !agent_identity_dir_exists(&spec.agent)
         {
             return Err(FlowError::UnknownAgent(spec.agent.clone()));
         }

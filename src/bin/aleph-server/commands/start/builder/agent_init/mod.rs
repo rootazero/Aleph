@@ -231,8 +231,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // (if any) is also published through the outer `multi_reg` Option, which
     // downstream wiring (`fallback_providers`) and the final
     // `AgentHandlersResult` both read. See `provider_registry.rs`.
-    let provider_registry =
-        build_multi_provider_registry(app_config, &shared_token_mgr, daemon);
+    let provider_registry = build_multi_provider_registry(app_config, &shared_token_mgr, daemon);
     multi_reg = provider_registry.clone();
 
     // Wire global fallback provider chain from config

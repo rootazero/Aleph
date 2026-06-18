@@ -43,9 +43,7 @@ pub fn init_component_logging(
     retention_days: u32,
     default_filter: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let result = GUARD.get_or_init(|| {
-        setup_logging(component, retention_days, default_filter)
-    });
+    let result = GUARD.get_or_init(|| setup_logging(component, retention_days, default_filter));
 
     match result {
         Ok(_) => Ok(()),

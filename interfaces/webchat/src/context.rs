@@ -362,7 +362,9 @@ impl DashboardState {
         F: Fn(GatewayEvent) + Send + Sync + 'static,
     {
         let handlers = self.event_handlers.with_value(std::clone::Clone::clone);
-        let mut handlers = handlers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut handlers = handlers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = handlers.len();
         handlers.push(Arc::new(handler));
         id
@@ -371,7 +373,9 @@ impl DashboardState {
     /// Unsubscribe from events
     pub fn unsubscribe_events(&self, id: usize) {
         let handlers = self.event_handlers.with_value(std::clone::Clone::clone);
-        let mut handlers = handlers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut handlers = handlers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if id < handlers.len() {
             // Replace with a no-op handler instead of removing to preserve indices
             handlers[id] = Arc::new(|_| {});
@@ -401,7 +405,9 @@ impl DashboardState {
     /// Dispatch event to all subscribers
     fn dispatch_event(&self, event: GatewayEvent) {
         let handlers = self.event_handlers.with_value(std::clone::Clone::clone);
-        let handlers = handlers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let handlers = handlers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for handler in handlers.iter() {
             handler(event.clone());
         }
@@ -436,7 +442,9 @@ impl DashboardState {
         // Generate unique ID
         let id = {
             let next_id = self.next_id.with_value(std::clone::Clone::clone);
-            let mut id_gen = next_id.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut id_gen = next_id
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let id = *id_gen;
             *id_gen += 1;
             id.to_string()
@@ -959,7 +967,10 @@ impl DashboardState {
         // Fetch memory status
         match self.rpc_call("memory.stats", serde_json::json!({})).await {
             Ok(result) => {
-                if let Some(db_size) = result.get("databaseSizeMb").and_then(serde_json::Value::as_f64) {
+                if let Some(db_size) = result
+                    .get("databaseSizeMb")
+                    .and_then(serde_json::Value::as_f64)
+                {
                     // Warn if database is larger than 100MB
                     if db_size > 100.0 {
                         let alert = crate::components::sidebar::SystemAlert {
@@ -1061,10 +1072,7 @@ mod tests {
     fn strip_token_keeps_other_params() {
         assert_eq!(strip_token_param("?token=aleph-abc&view=chat"), "view=chat");
         assert_eq!(strip_token_param("?view=chat&token=aleph-abc"), "view=chat");
-        assert_eq!(
-            strip_token_param("?a=1&token=aleph-abc&b=2"),
-            "a=1&b=2"
-        );
+        assert_eq!(strip_token_param("?a=1&token=aleph-abc&b=2"), "a=1&b=2");
     }
 
     #[test]

@@ -28,10 +28,10 @@ use crate::session::service::{SessionId, SessionService};
 use crate::tools::service::ToolService;
 use crate::verification::VerifierChain;
 
-use super::*;
-use super::runner_impl::*;
 use super::context_blocks::*;
 use super::prompt_build::*;
+use super::runner_impl::*;
+use super::*;
 
 use crate::orchestrator::flow_spec::FlowHistoryTurn;
 use crate::session::events::MessageContent;
@@ -189,13 +189,9 @@ fn fresh_service() -> std::sync::Arc<dyn SessionService> {
 async fn seed_session_prompt_emits_one_user_message() {
     let service = fresh_service();
     let sid = SessionKey::ephemeral("seed-prompt");
-    super::session_seed::seed_session(
-        service.as_ref(),
-        &sid,
-        FlowInput::Prompt("hello".into()),
-    )
-    .await
-    .expect("seed Prompt");
+    super::session_seed::seed_session(service.as_ref(), &sid, FlowInput::Prompt("hello".into()))
+        .await
+        .expect("seed Prompt");
 
     let events = service.get_events(&sid, None, None).await.unwrap();
     let user_count = events
@@ -535,7 +531,10 @@ fn deadline_render_buckets_and_edges() {
     // minutes bucket
     assert_eq!(render_deadline(now + 5 * 60_000, now), "deadline in ~5m");
     // hours+minutes bucket
-    assert_eq!(render_deadline(now + (2 * 3600 + 15 * 60) * 1000, now), "deadline in ~2h15m");
+    assert_eq!(
+        render_deadline(now + (2 * 3600 + 15 * 60) * 1000, now),
+        "deadline in ~2h15m"
+    );
     // already past → blocked next hook
     assert_eq!(render_deadline(now - 1, now), "deadline passed");
     // exactly now → passed (>= guard)

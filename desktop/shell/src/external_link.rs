@@ -43,7 +43,9 @@ pub fn set_remote_host(url: Option<Url>) {
         u.host_str()
             .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_string())
     });
-    *REMOTE_HOST.write().unwrap_or_else(std::sync::PoisonError::into_inner) = host;
+    *REMOTE_HOST
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = host;
 }
 
 /// Injected into every document: redirect `target="_blank"` anchor clicks

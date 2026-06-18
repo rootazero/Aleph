@@ -429,7 +429,10 @@ impl ChatState {
     /// Clear the retry notice once the provider responds or the run settles.
     /// Cheap no-op when nothing is set (called from the per-chunk hot path).
     pub fn clear_provider_retry(&self) {
-        if self.provider_retry.with_untracked(std::option::Option::is_some) {
+        if self
+            .provider_retry
+            .with_untracked(std::option::Option::is_some)
+        {
             self.provider_retry.set(None);
         }
     }
@@ -1143,7 +1146,8 @@ mod step_tests {
     fn chat_message_roundtrips_agent_id() {
         let msg: ChatMessage = serde_json::from_value(serde_json::json!({
             "id": "m", "role": "assistant", "content": "x", "agent_id": "alice"
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(msg.agent_id.as_deref(), Some("alice"));
         let v = serde_json::to_value(&msg).unwrap();
         assert_eq!(v.get("agent_id").and_then(|a| a.as_str()), Some("alice"));

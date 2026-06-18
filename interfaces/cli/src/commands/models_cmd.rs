@@ -22,7 +22,8 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
             let provider = m.get("provider").and_then(|v| v.as_str()).unwrap_or("-");
             let context_window = m
                 .get("context_window")
-                .and_then(serde_json::Value::as_u64).map_or_else(|| "-".to_string(), |v| v.to_string());
+                .and_then(serde_json::Value::as_u64)
+                .map_or_else(|| "-".to_string(), |v| v.to_string());
             rows.push(vec![id.to_string(), provider.to_string(), context_window]);
         }
     }
@@ -67,7 +68,8 @@ pub async fn get(server_url: &str, model_id: &str, json: bool) -> CliResult<()> 
             "Context Window",
             result
                 .get("context_window")
-                .and_then(serde_json::Value::as_u64).map_or_else(|| "-".to_string(), |v| v.to_string()),
+                .and_then(serde_json::Value::as_u64)
+                .map_or_else(|| "-".to_string(), |v| v.to_string()),
         ),
     ];
 

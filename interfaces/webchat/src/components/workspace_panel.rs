@@ -456,12 +456,19 @@ fn TeamDeliverablesView() -> impl IntoView {
     // MVP-acceptable (localhost, idempotent set); future: gate on Done/Error
     // transitions or debounce.
     Effect::new(move |_| {
-        let Some(team_id) = chat.team_id.get() else { return; };
+        let Some(team_id) = chat.team_id.get() else {
+            return;
+        };
         // Re-fetch when roster status changes (a member finishing likely produced output).
         let _ = chat.team_members.get();
         spawn_local(async move {
             if let Ok(thread) = crate::api::team_chat::TeamChatApi::thread(&dash, &team_id).await {
-                items.set(thread.into_iter().filter(|i| i.kind == "artifact").collect::<Vec<_>>());
+                items.set(
+                    thread
+                        .into_iter()
+                        .filter(|i| i.kind == "artifact")
+                        .collect::<Vec<_>>(),
+                );
             }
         });
     });
@@ -505,7 +512,9 @@ fn TeamTasksView() -> impl IntoView {
     // Extracted fetch closure — reused by the team_members Effect and the
     // topic-event handler so the fetch logic stays DRY.
     let refetch_tasks = move || {
-        let Some(team_id) = chat.team_id.get_untracked() else { return; };
+        let Some(team_id) = chat.team_id.get_untracked() else {
+            return;
+        };
         spawn_local(async move {
             if let Ok(detail) = crate::api::teams::TeamsApi::get(&dash, &team_id).await {
                 tasks.set(detail.tasks);
@@ -517,7 +526,9 @@ fn TeamTasksView() -> impl IntoView {
     // MVP-acceptable (localhost, idempotent set); future: gate on Done/Error
     // transitions or debounce.
     Effect::new(move |_| {
-        let Some(_team_id) = chat.team_id.get() else { return; };
+        let Some(_team_id) = chat.team_id.get() else {
+            return;
+        };
         let _ = chat.team_members.get();
         refetch_tasks();
     });

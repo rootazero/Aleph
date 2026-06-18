@@ -37,7 +37,13 @@ mod tests {
     #[test]
     fn delta_updates_committed_and_interim() {
         let mut s = CaptionState::default();
-        apply_delta(&mut s, Delta { committed: "你好".into(), interim: "世".into() });
+        apply_delta(
+            &mut s,
+            Delta {
+                committed: "你好".into(),
+                interim: "世".into(),
+            },
+        );
         assert_eq!(s.committed, "你好");
         assert_eq!(s.interim, "世");
         assert!(!s.locked);
@@ -46,7 +52,13 @@ mod tests {
     #[test]
     fn lock_drops_interim_and_marks_locked() {
         let mut s = CaptionState::default();
-        apply_delta(&mut s, Delta { committed: "你好世界".into(), interim: "吗".into() });
+        apply_delta(
+            &mut s,
+            Delta {
+                committed: "你好世界".into(),
+                interim: "吗".into(),
+            },
+        );
         lock(&mut s);
         assert_eq!(s.committed, "你好世界");
         assert_eq!(s.interim, "");
@@ -56,7 +68,13 @@ mod tests {
     #[test]
     fn formatted_replaces_committed_after_lock() {
         let mut s = CaptionState::default();
-        apply_delta(&mut s, Delta { committed: "额我想问下本地语音释放".into(), interim: String::new() });
+        apply_delta(
+            &mut s,
+            Delta {
+                committed: "额我想问下本地语音释放".into(),
+                interim: String::new(),
+            },
+        );
         lock(&mut s);
         apply_formatted(&mut s, "请问如何实现本地语音模型的内存释放？");
         assert_eq!(s.committed, "请问如何实现本地语音模型的内存释放？");

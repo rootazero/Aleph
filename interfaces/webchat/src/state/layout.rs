@@ -199,7 +199,8 @@ impl WorkspaceState {
     /// payload. Layout mode (the user's pane preference) is preserved.
     pub fn reset(&self) {
         self.tool_payloads.update(std::collections::HashMap::clear);
-        self.expanded_events.update(std::collections::HashSet::clear);
+        self.expanded_events
+            .update(std::collections::HashSet::clear);
         self.unseen_activity.set(0);
         self.files_drawer_open.set(false);
         self.selected_file.set(None);
@@ -413,7 +414,7 @@ mod tests {
         assert!(!(default_closed ^ ws.is_event_toggled("read-1"))); // closed by default
         ws.toggle_event("read-1");
         assert!(default_closed ^ ws.is_event_toggled("read-1")); // user expanded
-        // Both overrides persist independently in shared state.
+                                                                 // Both overrides persist independently in shared state.
         assert!(ws.is_event_toggled("edit-1") && ws.is_event_toggled("read-1"));
     }
 

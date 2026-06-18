@@ -12,13 +12,13 @@ mod palette;
 mod queue_bar;
 mod voice;
 
+use super::mention_palette::{update_mention_palette, MentionPaletteView};
 use attachments::{read_file_list_into, AttachmentPreviewBar};
 use palette::{
     build_palette_entries, parse_command_info, CommandInfo, PaletteEntry, PaletteLabels,
     SlashPaletteView,
 };
 use queue_bar::QueuedPromptBar;
-use super::mention_palette::{update_mention_palette, MentionPaletteView};
 
 use super::project_menu::ProjectMenu;
 use super::state::{ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt, TeamMemberView};
@@ -494,8 +494,7 @@ pub(super) fn InputArea() -> impl IntoView {
                     "ArrowDown" => {
                         ev.prevent_default();
                         if count > 0 {
-                            mention_selected
-                                .set((mention_selected.get_untracked() + 1) % count);
+                            mention_selected.set((mention_selected.get_untracked() + 1) % count);
                         }
                     }
                     "ArrowUp" => {

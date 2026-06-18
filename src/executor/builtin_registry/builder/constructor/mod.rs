@@ -596,7 +596,6 @@ impl BuiltinToolRegistry {
             &user_profile_tool,
         );
 
-
         // Agent-management, ACP, and A2A tools (extracted to agent_acp_tools.rs).
         let (
             agent_info_tool,

@@ -9,7 +9,7 @@ use leptos::task::spawn_local;
 
 use crate::api::trace::TraceApi;
 use crate::context::{DashboardState, GatewayEvent};
-use crate::i18n::{t_string, t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 use crate::models::{TraceNode, TraceStatus};
 use crate::views::agent_trace_model::{
     trace_node_from_event, trace_nodes_from_replay, TraceLabels,
@@ -69,14 +69,12 @@ pub fn AgentTrace() -> impl IntoView {
             }
             // Try to parse the agent_trace event from data
             if let Ok(trace_event) = serde_json::from_value::<AgentTraceEvent>(
-                event
-                    .data
-                    .get("event")
-                    .cloned()
-                    .unwrap_or(event.data),
+                event.data.get("event").cloned().unwrap_or(event.data),
             ) {
                 let step = {
-                    let mut c = counter.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let mut c = counter
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let s = *c;
                     *c += 1;
                     s
@@ -131,7 +129,9 @@ pub fn AgentTrace() -> impl IntoView {
         is_playing.set(false);
         current_step.set(0);
         let counter = step_counter.get_value();
-        let mut c = counter.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut c = counter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *c = 0;
     };
 

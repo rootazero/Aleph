@@ -203,7 +203,9 @@ fn main() {
     app.run(|_app_handle, event| match event {
         // A window-close-driven exit is vetoed (stay in the tray); an
         // explicit "Quit" calls `app.exit(code)` and is allowed.
-        RunEvent::ExitRequested { code: None, api, .. } => {
+        RunEvent::ExitRequested {
+            code: None, api, ..
+        } => {
             api.prevent_exit();
         }
         // macOS only: closing the window hides it (see `on_window_event`)

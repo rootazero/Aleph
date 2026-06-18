@@ -113,10 +113,7 @@ impl CommandEntry {
     }
 
     /// Flatten children of a namespace into display entries.
-    pub fn namespace_display_entries(
-        namespace: &Self,
-        namespace_path: &str,
-    ) -> Vec<DisplayEntry> {
+    pub fn namespace_display_entries(namespace: &Self, namespace_path: &str) -> Vec<DisplayEntry> {
         namespace
             .children
             .iter()

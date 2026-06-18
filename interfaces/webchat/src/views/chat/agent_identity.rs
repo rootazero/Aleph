@@ -9,7 +9,9 @@ use std::collections::HashMap;
 
 /// 6-slot palette shared with the roster rail. Slot chosen by id hash so a
 /// given agent keeps its color regardless of roster order.
-const PALETTE: [&str; 6] = ["#7c9cff", "#4ec9b0", "#e0a458", "#c586c0", "#4fc1ff", "#d16969"];
+const PALETTE: [&str; 6] = [
+    "#7c9cff", "#4ec9b0", "#e0a458", "#c586c0", "#4fc1ff", "#d16969",
+];
 
 /// Stable color for an agent, hashed from its id (FNV-1a 32-bit). Deterministic
 /// across sessions, independent of roster membership/order.
@@ -29,7 +31,7 @@ pub fn agent_color_for_id(agent_id: &str) -> &'static str {
 #[must_use]
 pub fn should_show_attribution(prev: Option<&str>, this: Option<&str>) -> bool {
     match this {
-        None => false,            // own / single-agent message: never a team header
+        None => false, // own / single-agent message: never a team header
         Some(id) => prev != Some(id),
     }
 }
@@ -72,7 +74,11 @@ pub fn agent_identity(agent_id: &str, agents: &HashMap<String, AgentSummary>) ->
         .and_then(|s| s.emoji.clone())
         .filter(|e| !e.is_empty())
         .unwrap_or_else(|| monogram(&name));
-    AgentIdentityView { name, avatar, color: agent_color_for_id(agent_id) }
+    AgentIdentityView {
+        name,
+        avatar,
+        color: agent_color_for_id(agent_id),
+    }
 }
 
 /// First character of `source`, uppercased, as a monogram avatar. Empty → "?".
@@ -103,7 +109,10 @@ mod tests {
 
     #[test]
     fn color_is_stable_per_id_and_in_palette() {
-        assert_eq!(agent_color_for_id("risk_analyst"), agent_color_for_id("risk_analyst"));
+        assert_eq!(
+            agent_color_for_id("risk_analyst"),
+            agent_color_for_id("risk_analyst")
+        );
         assert!(PALETTE.contains(&agent_color_for_id("anything")));
     }
 
