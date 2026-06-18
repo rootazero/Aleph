@@ -42,6 +42,10 @@ pub use execution_plan::ExecutionPlanLayer;
 mod standing_goal;
 pub use standing_goal::StandingGoalLayer;
 
+// --- Strategy layer (welded <strategy> envelope, Stable prefix, prio 70) ---
+mod strategy;
+pub use strategy::StrategyLayer;
+
 // --- Context layers ---
 mod chain_context;
 mod environment;
