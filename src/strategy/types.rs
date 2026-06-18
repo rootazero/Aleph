@@ -5,12 +5,16 @@
 //! Immutable by construction (CLAUDE.md coding-style §不可变性): the planner
 //! mints a `Strategy`, the store overwrites the row; nothing mutates in place.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A lightly-structured strategy. The `guardrails` field is the StraTA secret
 /// sauce and carries the fine resolution; `phases` stay coarse and
 /// outcome-phrased (never tool names / arg shapes).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+///
+/// `JsonSchema` is derived so the `strategy` builtin tool can accept a full
+/// `Strategy` as a `revise` argument (its `StrategyArgs` derives `JsonSchema`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct Strategy {
     /// One-line north star — restates the user's end goal.
     pub objective: String,
