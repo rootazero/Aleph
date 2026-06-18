@@ -1,5 +1,16 @@
 //! Team management tools.
 
+/// Default working directory for an ACP team member enrolled via the
+/// `acp:<harness>[/<session>]` reference syntax, which carries no cwd. The
+/// dispatcher force-fails any ACP member with no cwd, so prefer the active
+/// project root, then the server's cwd, then `.`.
+pub(crate) fn acp_default_cwd() -> String {
+    crate::projects::current_project_root()
+        .or_else(|| std::env::current_dir().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".".to_string())
+}
+
 pub mod acp_member;
 mod create;
 mod delegate;

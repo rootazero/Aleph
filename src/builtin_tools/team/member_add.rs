@@ -151,7 +151,11 @@ impl AlephTool for TeamMemberAddTool {
                 role: args.role.clone(),
                 kind: crate::teams::types::TeamMemberKind::AcpSession,
                 acp_harness_id: Some(member_ref.harness_id.clone()),
-                acp_cwd: None,
+                // The `acp:<harness>[/<session>]` ref carries no cwd, but the
+                // dispatcher force-fails any ACP member with no cwd. Default to
+                // the active project root (then the server cwd) so the member is
+                // dispatchable; use `team_acp_member` to set an explicit cwd.
+                acp_cwd: Some(super::acp_default_cwd()),
                 acp_session_name: member_ref.session_name.clone(),
             }
         } else {

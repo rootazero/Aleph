@@ -147,6 +147,21 @@ async fn stream_message_send(
         }
     };
 
+    // Enforce the same File-part invariant the sync path checks: a peer must
+    // not send a File part carrying both `bytes`/`uri` or neither. Without this
+    // the streaming endpoint accepted malformed parts the sync path rejects.
+    for part in &message.parts {
+        if let crate::a2a::domain::Part::File { file, .. } = part {
+            if let Err(e) = file.validate() {
+                return sse_error(JsonRpcResponse::error(
+                    request.id.clone(),
+                    -32602,
+                    &format!("Invalid params: {e}"),
+                ));
+            }
+        }
+    }
+
     let task_id = request
         .params
         .get("taskId")

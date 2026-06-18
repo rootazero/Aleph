@@ -28,7 +28,7 @@
 //! - **Cooperative shutdown**: respects `tokio::select!` on a shutdown
 //!   signal so the daemon exits cleanly with the rest of `aleph-server`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use crate::sync_primitives::{AtomicBool, Ordering};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
