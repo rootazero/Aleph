@@ -310,7 +310,9 @@ fn apply_line_window(content: &str, line: Option<u64>, limit: Option<u64>) -> St
     // `saturating_add` so an attacker-supplied huge `limit` can't overflow
     // `usize` (a debug-build panic in this "never panics" handler).
     let end = match limit {
-        Some(n) => start.saturating_add(n as usize).min(lines.len()),
+        Some(n) => start
+            .saturating_add(usize::try_from(n).unwrap_or(usize::MAX))
+            .min(lines.len()),
         None => lines.len(),
     };
     lines[start..end].join("\n")

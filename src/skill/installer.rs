@@ -122,10 +122,17 @@ impl InstallExecutor {
             }
         };
 
+        // Pick the platform shell — `sh` does not exist on Windows by default,
+        // so hardcoding it broke install on this project's primary platform.
+        let (shell, flag) = if cfg!(windows) {
+            ("cmd", "/C")
+        } else {
+            ("sh", "-c")
+        };
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(300),
-            tokio::process::Command::new("sh")
-                .arg("-c")
+            tokio::process::Command::new(shell)
+                .arg(flag)
                 .arg(&cmd_str)
                 .kill_on_drop(true)
                 .output(),
