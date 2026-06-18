@@ -198,6 +198,52 @@ impl ContextBudgetToml {
     }
 }
 
+/// `[strategy]` — opt-in (default **on**) strategic-planner welding for the
+/// three long-task entry points (`/goal`, `/loop`, `/workflow`). When enabled,
+/// a one-shot tool-free LLM planning node mints a short `Strategy` that is
+/// welded into the cacheable system-prompt prefix of every downstream turn, so
+/// a long task stays anchored to its objective and a small set of concrete
+/// anti-distraction guardrails. The planner fires **once per task** (above the
+/// Think→Act loop), is fully fail-soft, and self-gates: a trivial task or any
+/// failure stores no Strategy and leaves the prompt byte-identical.
+///
+/// Unlike `[context_budget]`, this section defaults to **enabled = true**: the
+/// welded Strategy is a model-independent context-engineering win (KV-cache
+/// prefix reuse + attention anchoring), so it ships on. `enabled = false` is the
+/// one-flip A/B + Future-Proof escape valve (spec §2): if a future model shows
+/// zero goal-drift on these flows, the feature retires via config, no code
+/// change.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct StrategyToml {
+    /// Master switch. Default **true** (on). Set `false` to fully disable the
+    /// planner — no extra LLM call, no welded prefix, byte-identical prompts.
+    #[serde(default = "strategy_enabled_default")]
+    pub enabled: bool,
+    /// Optional planner model id. When set, the planning call routes to a
+    /// provider built from the *primary* provider's config (same vendor / API
+    /// key / endpoint / protocol) with this model substituted. Unset (default)
+    /// ⇒ the planner reuses the executor's main provider — planning is
+    /// reasoning-heavy, so unlike `[context_budget].summary_model` there is no
+    /// cheap-tier auto-fallback (that would silently downgrade the strategist).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planner_model: Option<String>,
+}
+
+/// serde default for `StrategyToml::enabled` — the planner is on unless an
+/// operator explicitly flips it off.
+fn strategy_enabled_default() -> bool {
+    true
+}
+
+impl Default for StrategyToml {
+    fn default() -> Self {
+        Self {
+            enabled: strategy_enabled_default(),
+            planner_model: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +258,8 @@ mod tests {
         fallback_provider: Option<FallbackProviderToml>,
         #[serde(default)]
         context_budget: Option<ContextBudgetToml>,
+        #[serde(default)]
+        strategy: Option<StrategyToml>,
     }
 
     #[test]
@@ -225,6 +273,7 @@ mod tests {
         assert!(p.stability.is_none());
         assert!(p.fallback_provider.is_none());
         assert!(p.context_budget.is_none());
+        assert!(p.strategy.is_none());
     }
 
     #[test]
@@ -451,5 +500,44 @@ model = "claude"
         assert!(none
             .threshold_override_for(Some("kimi-k2"), "moonshot")
             .is_none());
+    }
+
+    #[test]
+    fn strategy_section_defaults_to_enabled() {
+        // `[strategy]` present but `enabled` omitted → enabled = true, so the
+        // feature is on by default (opt-out off-switch, not opt-in). This is the
+        // one deviation from `[context_budget]`, which defaults to disabled.
+        let p: Probe = toml::from_str("[strategy]\n").expect("toml parses");
+        let s = p.strategy.expect("section present");
+        assert!(s.enabled);
+        // Planner model is opt-in — unset by default → planner reuses executor.
+        assert!(s.planner_model.is_none());
+    }
+
+    #[test]
+    fn strategy_default_is_enabled() {
+        // `StrategyToml::default()` (used by `..StrategyToml::default()` in test
+        // literals and by the absent-field path) must also yield enabled = true.
+        let s = StrategyToml::default();
+        assert!(s.enabled);
+        assert!(s.planner_model.is_none());
+    }
+
+    #[test]
+    fn strategy_planner_model_parses() {
+        let toml_str = "[strategy]\nenabled = true\nplanner_model = \"claude-opus-4-8\"\n";
+        let p: Probe = toml::from_str(toml_str).expect("toml parses");
+        let s = p.strategy.expect("section present");
+        assert!(s.enabled);
+        assert_eq!(s.planner_model.as_deref(), Some("claude-opus-4-8"));
+    }
+
+    #[test]
+    fn strategy_enabled_false_parses() {
+        // The off-switch: explicitly disable the planner without removing the
+        // section (A/B + Future-Proof escape valve, spec §2/§9).
+        let p: Probe = toml::from_str("[strategy]\nenabled = false\n").expect("toml parses");
+        let s = p.strategy.expect("section present");
+        assert!(!s.enabled);
     }
 }
