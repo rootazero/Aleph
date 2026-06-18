@@ -14,6 +14,8 @@ pub use types::Strategy;
 
 use once_cell::sync::OnceCell;
 
+use crate::sync_primitives::Arc;
+
 /// Composite-key prefix for a `/goal`-flow strategy, keyed by session.
 #[must_use]
 pub fn goal_key(session_id: &str) -> String {
@@ -37,22 +39,24 @@ pub fn workflow_key(run_id: &str) -> String {
 /// Process-global strategy store. Initialized once at daemon boot
 /// (`constructor.rs`); `None` until then so tests / early-boot read as "no
 /// strategy subsystem" and the prompt layers stay dormant.
-static GLOBAL: OnceCell<StrategyStore> = OnceCell::new();
+static GLOBAL: OnceCell<Arc<StrategyStore>> = OnceCell::new();
 
 /// Install the global store at boot. Idempotent: a second call is ignored.
-pub fn init_global(store: StrategyStore) {
+/// Holds an `Arc` (mirroring `goal::init_global`) so the boot constructor, the
+/// `strategy` tool, and the lifecycle clears all share one store instance.
+pub fn init_global(store: Arc<StrategyStore>) {
     let _ = GLOBAL.set(store);
 }
 
-/// Read the global store, if initialized.
+/// Read the global store, if initialized (a cheap `Arc` clone).
 #[must_use]
-pub fn global() -> Option<&'static StrategyStore> {
-    GLOBAL.get()
+pub fn global() -> Option<Arc<StrategyStore>> {
+    GLOBAL.get().cloned()
 }
 
 /// Test-only override. In production `init_global` is the only writer.
 #[cfg(test)]
-pub fn set_global_for_test(store: StrategyStore) {
+pub fn set_global_for_test(store: Arc<StrategyStore>) {
     let _ = GLOBAL.set(store);
 }
 
@@ -85,7 +89,7 @@ mod tests {
     #[test]
     fn init_then_global_returns_store() {
         let dir = tempfile::tempdir().unwrap();
-        let store = StrategyStore::open(&dir.path().join("strat.db")).unwrap();
+        let store = Arc::new(StrategyStore::open(&dir.path().join("strat.db")).unwrap());
         set_global_for_test(store);
         assert!(global().is_some());
     }

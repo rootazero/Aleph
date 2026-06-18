@@ -750,7 +750,9 @@ mod tests {
         use crate::strategy::{loop_key, StrategyStore};
         let sdir = tempfile::tempdir().unwrap();
         crate::strategy::set_global_for_test(
-            StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+            crate::sync_primitives::Arc::new(
+                StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+            ),
         );
         let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
         let tool = LoopTool::new(reg).with_session_for_test("sess-lp-noprov");

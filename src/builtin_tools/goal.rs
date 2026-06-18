@@ -890,7 +890,9 @@ mod tests {
         use crate::strategy::{goal_key, StrategyStore};
         let sdir = tempfile::tempdir().unwrap();
         crate::strategy::set_global_for_test(
-            StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+            crate::sync_primitives::Arc::new(
+                StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+            ),
         );
 
         let dir = tempfile::tempdir().unwrap();
@@ -938,7 +940,9 @@ mod tests {
         use crate::strategy::{goal_key, StrategyStore};
         let sdir = tempfile::tempdir().unwrap();
         crate::strategy::set_global_for_test(
-            StrategyStore::open(&sdir.path().join("s2.db")).unwrap(),
+            crate::sync_primitives::Arc::new(
+                StrategyStore::open(&sdir.path().join("s2.db")).unwrap(),
+            ),
         );
 
         let (tool, _d) = tool_with_session("sess-noprov");
