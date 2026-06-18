@@ -147,4 +147,11 @@ pub struct BuiltinToolConfig {
     /// tool partitions notes by the active project directory. Default `false`
     /// (single-namespace, pre-feature behaviour).
     pub memory_project_scoped: bool,
+
+    /// Optional provider for the strategic-planner node, resolved ONCE at
+    /// startup (above the Think→Act loop, R10). `Some` ⇒ planner enabled (a
+    /// dedicated `[strategy] planner_model` provider, or the executor's main
+    /// provider as fallback); `None` ⇒ planner disabled. Read by the goal/loop/
+    /// workflow tools in the registry constructor.
+    pub planner_provider: Option<Arc<dyn crate::providers::AiProvider>>,
 }

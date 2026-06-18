@@ -362,6 +362,29 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             })
         };
 
+        // Strategic planner provider — resolved ONCE here, above the Think→Act
+        // loop (R10). Default-on: absent [strategy] ⇒ enabled. The builder
+        // returns None for BOTH "disabled" and "no planner_model set"; None means
+        // "use the executor's model", so when enabled we fall back to the default
+        // provider (else the planner would never fire in the default config).
+        // enabled=false is the only off switch.
+        let planner_provider = if app_config.strategy.as_ref().map_or(true, |s| s.enabled) {
+            let primary_provider_key = app_config
+                .general
+                .default_provider
+                .clone()
+                .unwrap_or_default();
+            Some(
+                alephcore::orchestrator::build_strategy_planner_provider(
+                    app_config,
+                    &primary_provider_key,
+                )
+                .unwrap_or_else(|| provider_registry.default_provider()),
+            )
+        } else {
+            None
+        };
+
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
             memory_db: Some(memory_db.clone()),
@@ -423,6 +446,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // out-of-core plugin process; core only relays JSON-RPC to it).
             google_meet_bridge: alephcore::builtin_tools::google_meet::GoogleMeetBridge::from_env()
                 .map(std::sync::Arc::new),
+            planner_provider,
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await?;
