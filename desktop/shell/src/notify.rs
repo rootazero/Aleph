@@ -250,6 +250,7 @@ fn decide_notification(topic: &str, data: &Value, focused: bool) -> Option<Prepa
             title: data
                 .get("title")
                 .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
                 .unwrap_or("Aleph")
                 .to_string(),
             body: data

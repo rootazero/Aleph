@@ -29,13 +29,13 @@ fn get_patterns() -> &'static PiiPatterns {
         phone: Regex::new(r"\b(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b").unwrap(),
         ssn: Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap(),
         credit_card: Regex::new(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b").unwrap(),
-        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|Bearer\s+[a-zA-Z0-9._\-]{20,})\b").unwrap(),
+        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|Bearer\s+[a-zA-Z0-9._\-]{8,})\b").unwrap(),
         // Catch arbitrary secrets assigned to a credential-like key, regardless of
         // vendor prefix: `password=...`, `api_key: ...`, `token = "..."`, etc.
         // Preserves the key name; redacts only the value. Conservative over-match
         // is acceptable (this module favours false positives over leaks).
         generic_secret: Regex::new(
-            r#"(?i)(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|authorization)(\s*[:=]\s*)("?)([^\s",}]+)"#,
+            r#"(?i)(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|authorization)(\s*[:=]\s*)("?)((?:\w+[ \t]+)?[^\s",}]+)"#,
         )
         .unwrap(),
         china_mobile: Regex::new(r"\b1[3-9]\d{9}\b").unwrap(),

@@ -62,8 +62,10 @@ pub fn render_tool_block(
     // Top border: ┌ tool_name ─────────── status ┐
     let name_part = format!(" {} ", tool.name);
     let status_part = format!(" {status_char} ");
-    let name_len = name_part.len();
-    let status_len = status_part.len();
+    // Display columns, not UTF-8 bytes: tool name/status may contain CJK/emoji,
+    // and `.len()` (bytes) overshoots the column budget so the border collapses.
+    let name_len = unicode_width::UnicodeWidthStr::width(name_part.as_str());
+    let status_len = unicode_width::UnicodeWidthStr::width(status_part.as_str());
     let dash_count = inner_width.saturating_sub(name_len + status_len);
     let dashes = "\u{2500}".repeat(dash_count);
 
@@ -77,7 +79,8 @@ pub fn render_tool_block(
 
     // Content line: │ params │
     let params_display = truncate_to_width(&tool.params, inner_width.saturating_sub(2));
-    let pad = inner_width.saturating_sub(params_display.len() + 1);
+    let pad = inner_width
+        .saturating_sub(unicode_width::UnicodeWidthStr::width(params_display.as_str()) + 1);
     lines.push(Line::from(vec![
         Span::styled("\u{2502} ".to_string(), border_style),
         Span::styled(params_display, param_style),
@@ -92,7 +95,8 @@ pub fn render_tool_block(
             let max_err_len = inner_width.saturating_sub(error_prefix.len() + 2);
             let error_display = truncate_to_width(err, max_err_len);
             let error_full = format!("{error_prefix}{error_display}");
-            let err_pad = inner_width.saturating_sub(error_full.len() + 1);
+            let err_pad = inner_width
+                .saturating_sub(unicode_width::UnicodeWidthStr::width(error_full.as_str()) + 1);
             lines.push(Line::from(vec![
                 Span::styled("\u{2502} ".to_string(), border_style),
                 Span::styled(error_full, Style::default().fg(DEFAULT_THEME.error)),
