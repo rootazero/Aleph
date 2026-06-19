@@ -25,6 +25,7 @@ pub const CATEGORY_DIRS: &[&str] = &[
     "personal",
     "tool",
     "lesson",
+    "goal-lessons", // GoalLessonsPromoteStage: per-goal lessons appended by the dream stage
     "skill",
     "reference",
     "feedback", // user-taught corrections distilled by FeedbackDistill

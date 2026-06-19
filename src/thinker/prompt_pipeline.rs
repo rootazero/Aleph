@@ -314,6 +314,7 @@ impl PromptPipeline {
     /// 1740  `MemoryAugmentationLayer`
     /// 1745  `MemoryProtocolLayer`
     /// 1750  `SessionContextGuideLayer`
+    /// 1754  `StandingGoalLayer`
     /// 1755  `ExecutionPlanLayer`
     /// 1756  `StrategyPointerLayer`
     /// 1760  `SessionResumeLayer`

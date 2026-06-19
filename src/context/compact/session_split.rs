@@ -64,6 +64,27 @@ pub async fn perform_session_split(
     // bad index to "no fresh tail" (everything summarized) instead of a panic.
     let tail_start = tail_start.min(events.len());
 
+    // Tool-pair snap (P7 + Anthropic API safety): advance the fresh-tail
+    // boundary forward past any leading ToolResult/ToolError run so the child
+    // session is never seeded with a verbatim tool result whose originating
+    // tool_use was summarized away into the SystemMessage. A tool_result with no
+    // preceding tool_use is rejected by Anthropic-compatible backends (HTTP 400)
+    // on the child's first turn. Mirrors the in-place compactor's
+    // `snap_boundary_forward` guard, applied here at the event level
+    // (`SessionEventRecord`) rather than on `UnifiedMessage`s.
+    let tail_start = {
+        let mut ts = tail_start;
+        while ts < events.len()
+            && matches!(
+                events[ts].event,
+                SessionEvent::ToolResult { .. } | SessionEvent::ToolError { .. }
+            )
+        {
+            ts += 1;
+        }
+        ts
+    };
+
     // 2. Summarize events[..tail_start].
     let summary_text = summarize_pretail(compactor, events, tail_start)
         .await
@@ -197,7 +218,26 @@ fn event_to_message(event: &SessionEvent) -> Option<UnifiedMessage> {
             Some(UnifiedMessage::user(content.text.clone()))
         }
         SessionEvent::AssistantMessage { content, .. } => {
-            Some(UnifiedMessage::assistant(content.text.clone()))
+            // A pure tool-call assistant turn carries empty `text` with the
+            // action in `content.blocks` (tool_use). Synthesize a deterministic
+            // line naming the tools invoked so the session-split seed summary
+            // preserves *what the agent did*, not just what the tools returned —
+            // this is the heavy-compaction path where the action thread is most
+            // at risk of being abstracted away. Deterministic rendering of
+            // already-decided calls only; no LLM judgement (R7/R10-safe).
+            let mut text = content.text.clone();
+            if text.is_empty() {
+                let names: Vec<&str> = content
+                    .blocks
+                    .iter()
+                    .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+                    .filter_map(|b| b.get("name").and_then(|n| n.as_str()))
+                    .collect();
+                if !names.is_empty() {
+                    text = format!("[called tools: {}]", names.join(", "));
+                }
+            }
+            Some(UnifiedMessage::assistant(text))
         }
         SessionEvent::SystemMessage { content, .. } => {
             // Treat prior system messages (e.g., earlier summaries) as user

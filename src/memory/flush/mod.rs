@@ -25,16 +25,23 @@ pub fn global_registry() -> FlushRegistry {
     REG.get_or_init(FlushRegistry::new).clone()
 }
 
-/// Run an immediate compress→link flush for `agent`, guarded in `reg` so a
-/// follow-on session can await readiness. Intended to be `tokio::spawn`ed at
-/// session conclude (async, non-blocking). Failures are logged, never
-/// propagated — a flush is best-effort consolidation, never gating.
+/// Run an immediate compress→link flush for `agent`, holding `guard` (acquired
+/// from [`FlushRegistry::begin`]) for the flush duration so a follow-on session
+/// can await readiness.
+///
+/// The guard MUST be acquired synchronously at the call site — *before* this
+/// future is spawned — so the registry entry is observable the instant the
+/// session closes. Acquiring it inside the spawned task (the previous shape)
+/// raced a back-to-back `await_ready`: `tokio::spawn` returns before the task is
+/// polled, so the waiter could observe an empty registry and silently no-op the
+/// readiness gate. Failures are logged, never propagated — a flush is
+/// best-effort consolidation, never gating.
 pub async fn session_end_flush(
-    reg: FlushRegistry,
+    guard: FlushGuard,
     agent: String,
     compression: Arc<CompressionService>,
 ) {
-    let _guard = reg.begin(&agent);
+    let _guard = guard;
     if let Err(e) = compression.compress_to_notes(&agent).await {
         warn!(agent = %agent, error = %e, "session_end_flush: compress_to_notes failed");
     }
@@ -108,7 +115,9 @@ mod tests {
             "precondition: one pending raw memory"
         );
 
-        session_end_flush(FlushRegistry::new(), "default".into(), Arc::new(service)).await;
+        let reg = FlushRegistry::new();
+        let guard = reg.begin("default");
+        session_end_flush(guard, "default".into(), Arc::new(service)).await;
 
         assert_eq!(
             database.count_unprocessed("default").await.unwrap(),

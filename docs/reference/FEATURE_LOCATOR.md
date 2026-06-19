@@ -131,7 +131,7 @@
 > 三支柱是 Aleph 长期记忆的工程纪律，落在不同文件，分开描述更精准。
 
 **① 关键词链接地基 (Note Keyword Linking)** ✅
-- 锚点：`src/memory/notes/mod.rs`（frontmatter aliases/keywords）、`src/memory/notes/graph/relevance.rs`（四信号打分：相似度/引用频率/编辑模式/时间接近）、`src/memory/notes/graph/mod.rs`（community detection）
+- 锚点：`src/memory/notes/mod.rs`（frontmatter aliases/keywords；**注**：`aliases` 目前仅用于 Obsidian round-trip，未参与链接解析）、`src/memory/notes/graph/relevance.rs`（四信号打分：直接链接 ×3 / IDF 衰减来源重叠 ×4 / Adamic-Adar 共同邻居 ×1.5 / 类型亲和 ×1）、`src/memory/notes/graph/mod.rs`（community detection）
 - 话术：「记忆链接地基 = 笔记 frontmatter 的 aliases/keywords + Note Graph 四信号相关性 + ingest 时自动 peer 链接。」
 
 **② 会话结束实时 flush (Session-End Flush)** ✅
@@ -141,7 +141,7 @@
 **③ 纠正/教训即时沉淀 (Correction & Lesson Sedimentation)** ✅（G6 已查证 2026-06-16）
 - **写入**：`src/builtin_tools/flag_user_correction.rs`（LLM 调的工具，写 `RawMemorySource::Correction` 到 `aleph://correction/{id}`）；构造于 `src/executor/builtin_registry/builder/constructor.rs:1793`（**有 `memory_db` 即注册，非死代码**），prompt 引导在 `src/thinker/layers/special_actions.rs`。
 - **蒸馏**：`src/memory/dreaming/stages/feedback_distill.rs`（按 `aleph://correction/` 前缀 + watermark 幂等读 → LLM 蒸馏成 `feedback/` note），调度于 `src/memory/dreaming/mod.rs:172,218`（**Consolidate 每日 + Synthesize 两条 dream path 都挂**）。
-- **召回**：`feedback/` note 由 assembler 表面化（`src/memory/assembler/gather.rs:284` / `envelope.rs:34`）；goal 教训另有 `GoalLessonsPromoteStage` → `lesson/` note。
+- **召回**：`feedback/` note 由 assembler 表面化（`src/memory/assembler/gather.rs:284` / `envelope.rs:34`）；goal 教训另有 `GoalLessonsPromoteStage` → `goal-lessons/` note（类别 `goal-lessons`，已补入 indexer `CATEGORY_DIRS`）。
 - **状态**：✅ 端到端已连且生产存活（写入工具注册 + distill 双路调度 + 召回消费者，逐跳有单测）。
 - **设计边界（重要）**：沉淀是 **LLM/工具驱动**（R8 工具即一切 / R7 LLM 主权）——LLM 判断"这值得记"才调 `flag_user_correction`。**没有也不应有**"每次工具失败自动写 raw memory"的 harness 错误 hook（违 R10「不做错误恢复」+ R7，且会用瞬时报错噪声淹没记忆）。
 - 话术：「‘错误/纠正沉淀’走 `flag_user_correction` + `FeedbackDistill`，已全连且存活。想要‘自动捕获工具失败 → 教训’——**这是故意不做的设计边界**（R7/R10），别加 harness 错误 hook；要让 LLM 多记教训就强化 prompt 引导它调工具。」

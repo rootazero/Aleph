@@ -170,22 +170,54 @@ pub(crate) fn candidate_dedup_text(title: &str, summary: &str, facts: &[String])
     s
 }
 
-/// Split free text into a handful of significant lowercase keyword terms for
-/// per-keyword FTS probing. Mirrors `note_manage::related_keywords`: skip short
-/// words (<4 chars), dedup, cap at a few terms. `search_notes_fts` treats its
-/// whole query as one FTS5 phrase, so a multi-word blob would require an exact
-/// phrase hit and never match — probe per significant keyword instead.
+/// Split free text into a handful of significant keyword terms for per-keyword
+/// FTS probing. `search_notes_fts` treats its whole query as one FTS5 phrase, so
+/// a multi-word blob would require an exact phrase hit and never match — probe
+/// per significant term instead.
+///
+/// Latin words are lowercased, length-gated (≥4 chars), and deduped. CJK runs
+/// need their own branch: CJK ideographs are Unicode-alphanumeric, so the
+/// char-class split keeps a space-free run (`深色编辑器主题`) as ONE token — and
+/// the FTS `unicode61` tokenizer keeps it as one token too, so that giant phrase
+/// never matches a peer note, leaving CJK notes as orphan islands. For CJK
+/// tokens we instead emit adjacent 2-gram windows (`深色`/`色编`/`编辑`/`辑器`/…),
+/// which DO match peer notes under `unicode61`. Total terms are capped so a long
+/// run cannot explode into dozens of `search_notes_fts` round-trips. This only
+/// widens deterministic FTS candidate recall; the primary linker is still the
+/// LLM `extract_keywords`, so it stays R7/P8-safe.
 pub(crate) fn keyword_query_terms(text: &str) -> Vec<String> {
+    /// CJK ideograph test for the common ranges.
+    fn is_cjk(c: char) -> bool {
+        matches!(c,
+            '\u{4E00}'..='\u{9FFF}'    // CJK Unified Ideographs
+            | '\u{3400}'..='\u{4DBF}'  // CJK Extension A
+            | '\u{F900}'..='\u{FAFF}'  // CJK Compatibility Ideographs
+        )
+    }
+
+    const MAX_TERMS: usize = 8;
     let mut out: Vec<String> = Vec::new();
     for word in text.split(|c: char| !c.is_alphanumeric()) {
-        if word.chars().count() < 4 {
-            continue;
+        if out.len() >= MAX_TERMS {
+            break;
         }
-        let lower = word.to_lowercase();
-        if !out.contains(&lower) {
-            out.push(lower);
-            if out.len() >= 4 {
-                break;
+        if word.chars().any(is_cjk) {
+            // A 2-char CJK term carries about as much signal as a 4-char Latin
+            // word; emit adjacent 2-gram windows of the run as FTS probes.
+            let chars: Vec<char> = word.chars().collect();
+            for w in chars.windows(2) {
+                if out.len() >= MAX_TERMS {
+                    break;
+                }
+                let gram: String = w.iter().collect();
+                if !out.contains(&gram) {
+                    out.push(gram);
+                }
+            }
+        } else if word.chars().count() >= 4 {
+            let lower = word.to_lowercase();
+            if !out.contains(&lower) {
+                out.push(lower);
             }
         }
     }
