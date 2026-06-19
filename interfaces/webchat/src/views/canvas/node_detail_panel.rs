@@ -7,7 +7,7 @@ use crate::canvas_engine::category_color::category_color;
 use crate::canvas_engine::markdown_excerpt::render_excerpt;
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
-use crate::state::memory::MemoryState;
+use crate::state::memory::{MemoryState, MemoryView};
 
 /// Pre-fetched body excerpt for a single node.
 #[derive(Clone)]
@@ -107,6 +107,7 @@ fn DetailFor(
     let breadcrumb = excerpt.breadcrumb.clone();
     let tags = excerpt.tags.clone();
     let node_id = excerpt.id.clone();
+    let node_id_for_list = excerpt.id.clone();
     let title = excerpt.name.clone();
     let body_markdown = excerpt.body_markdown;
 
@@ -176,6 +177,16 @@ fn DetailFor(
             <h3 style="color:var(--text-title);font-size:14px;font-weight:600;line-height:1.3;margin:0 0 6px">
                 {title}
             </h3>
+            <button
+                class="node-detail-btn"
+                style="margin:0 0 8px"
+                on:click=move |_| {
+                    mem.highlight_note_id.set(Some(node_id_for_list.clone()));
+                    mem.memory_view.set(MemoryView::Table);
+                }
+            >
+                {t!(i18n, memory.view_in_list)}
+            </button>
             {move || if is_editing.get() {
                 let save = save_edit.clone();
                 let cancel = cancel_edit;
