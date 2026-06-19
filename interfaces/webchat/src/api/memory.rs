@@ -13,6 +13,11 @@ pub struct RawMemory {
     pub content: String,
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Vector similarity score when this row came from a search query
+    /// (`None` in browse mode). Surfaced in the detail drawer for retrieval
+    /// transparency.
+    #[serde(default)]
+    pub similarity: Option<f32>,
 }
 
 /// Compressed fact entry (Layer 2 — extracted from raw memories by compression)
@@ -35,15 +40,13 @@ struct BackendListFactsResponse {
     facts: Vec<CompressedFact>,
 }
 
-/// Backend memory search result entry (matches handler `MemoryEntry`)
-#[allow(dead_code)]
+/// Backend memory search result entry (matches handler `MemoryEntry`).
+/// Extra backend fields (e.g. `window_title`) are ignored by serde.
 #[derive(Debug, Clone, Deserialize)]
 struct BackendMemoryEntry {
     id: String,
     #[serde(default)]
     agent_id: String,
-    #[serde(default)]
-    window_title: String,
     #[serde(default)]
     user_input: String,
     #[serde(default)]
@@ -127,6 +130,7 @@ impl MemoryApi {
                     agent_id: entry.agent_id,
                     content,
                     created_at,
+                    similarity: entry.similarity_score,
                 }
             })
             .collect();
