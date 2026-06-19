@@ -3,16 +3,15 @@ use crate::state::memory::MemoryState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::Router;
-use leptos_router::hooks::use_location;
+use leptos_router::hooks::{use_location, use_navigate};
 
 // Views
 use crate::views::agent_trace::AgentTrace;
-use crate::views::canvas::CanvasView;
 use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
 use crate::views::home::Home;
 use crate::views::logs::Logs;
-use crate::views::memory::Memory;
+use crate::views::memory_hub::MemoryHub;
 use crate::views::runtimes::RuntimesView;
 use crate::views::settings::{
     AcpHarnessesView, AppearanceView, BehaviorView, BrowserView, ChannelPlatformPage,
@@ -365,7 +364,7 @@ fn MainContent() -> impl IntoView {
             <DashboardRouter />
         </div>
         <div style:display=move || if mode.get() == PanelMode::Memory { "contents" } else { "none" }>
-            <CanvasView />
+            <MemoryHub />
         </div>
         <div style:display=move || if mode.get() == PanelMode::Agents { "contents" } else { "none" }>
             <AgentsRouter />
@@ -388,7 +387,7 @@ fn DashboardRouter() -> impl IntoView {
         let path = location.pathname.get();
         match path.as_str() {
             "/dashboard" => view! { <Home /> }.into_any(),
-            "/dashboard/memory" => view! { <Memory /> }.into_any(),
+            "/dashboard/memory" => view! { <MemoryVaultRedirect /> }.into_any(),
             "/dashboard/cron" => view! { <CronView /> }.into_any(),
             "/dashboard/tasks" => view! { <TasksView /> }.into_any(),
             "/dashboard/logs" => view! { <Logs /> }.into_any(),
@@ -473,4 +472,15 @@ fn AgentsRouter() -> impl IntoView {
             ().into_any()
         }
     }
+}
+
+/// Back-compat redirect: the Vault now lives inside the Memory Hub. Anyone
+/// hitting the old `/dashboard/memory` is sent to `/memory?view=table`.
+#[component]
+fn MemoryVaultRedirect() -> impl IntoView {
+    let navigate = use_navigate();
+    Effect::new(move |_| {
+        navigate("/memory?view=table", leptos_router::NavigateOptions::default());
+    });
+    ().into_any()
 }
