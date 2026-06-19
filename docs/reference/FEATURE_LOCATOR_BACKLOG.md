@@ -119,5 +119,31 @@
 1. ~~**先 G6**（验证，可能零成本）~~ → ✅ **G6 已完成（零代码，链路已通）**。
 2. ~~**G4**（per-model 压缩阈值，新增配置）~~ → ✅ **G4 已实现 2026-06-16**。~~**G1**（doctor LLM 修复 + `f` 入口）~~ → ✅ **G1 已实现 2026-06-16**（纯前端 `f` 入口，doctor 后端零改动）。下一步 **G5**（命名澄清，无需开发）/ **G2+G3**（需架构决策）。
 3. ~~**G5** 只在文档/沟通层澄清，不进开发队列。~~ → ✅ **G5 已澄清 2026-06-16**（零代码，FEATURE_LOCATOR 四处区分"工具并发群分"vs"任务 DAG"）。
-4. ~~**G2+G3** 单独拉一次架构决策会（信任模型）。~~ → 双层 2026-06-16 实现，**2026-06-17 被单层 Gateway-token 取代**（远程授权后权限即同本地，无 Chat/Config 子层；两层 tier 文件已删，见 §6.2）。**Backlog 全部清空。**
+4. ~~**G2+G3** 单独拉一次架构决策会（信任模型）。~~ → 双层 2026-06-16 实现，**2026-06-17 被单层 Gateway-token 取代**（远程授权后权限即同本地，无 Chat/Config 子层；两层 tier 文件已删，见 §6.2）。**G1–G6 全部清空。**
+
+---
+
+## 2026-06-19 扫描新增待办（Harness 3.2 / 3.9 / 3.10 / 3.11）
+
+> 来源：对 harness 子系统 3.2/3.9/3.10/3.11 的串行深度审计（每条均逐跳读码核验）。
+> **已就地修复（本批，非待办）**：① §3.10 事件驱动插件 hook 派发断裂（`HookAction::Plugin` 连线，见 [FEATURE_LOCATOR §3.10](FEATURE_LOCATOR.md)）；② §3.2 `act.rs::apply_turn_budget` 的 `already_persisted` 字节 0 误判（改 `lines().any`）。
+> 下列 **H1–H11 为已核验、暂缓**项——多为"删死代码 vs 补连线"二选一，需一次 `cargo` 编译验证后落地（盲删导出类型/重连 MCP 传输风险高），故留作可排期待办而非本批盲改。
+
+| # | 项目 | 模块 | 类型 | 工作量 | 严重度/置信 | 决策点 |
+|---|------|------|------|--------|-----------|--------|
+| H1 | 插件 bundled `.mcp.json` 被解析后丢弃（非 MCP-kind 插件的 `CapabilityDeclaration::McpServer` 在 `dispatch` 被 no-op，loader 仅对 `PluginKind::Mcp` 读 `.mcp.json`） | 3.10 | broken-wiring | M | **High / 0.9** | 连线进 loader/manager **或** 停止非 MCP-kind 适配器发该 cap |
+| H2 | `parse_mcp_config_file` 丢弃 server-name map key → 无名 `McpServerConfig`（无法按名注册/拆卸） | 3.10 | dead-field | S | Med / 0.85 | 随 H1，把 name 带进声明 |
+| H3 | MCP `ApprovalHandler` 全子系统零消费者（`client.rs` 仅派发 `sampling/createMessage`，其余 server 请求丢弃） | 3.9 | dead/unwired | M | Med / 0.9 | 接入 `client.rs` request_handler **或** YAGNI 删 `approval.rs`+协议类型 |
+| H4 | `McpResourceManager`/`McpPromptManager` 仅测试构造（live 路径走 `McpReadResourceTool`/`McpGetPromptTool` 直连 handle） | 3.9 | dead-abstraction | S | Med / 0.92 | 删两 struct（P6 YAGNI）**或** builtins 改走 manager 单点 |
+| H5 | Resource subscribe/unsubscribe 死路（`client.subscribe_resource` 无非测试 caller）+ `resources/updated` 通知未路由（`classify_list_change` 只映 `*_list_changed`） | 3.9 | broken-wiring | M | Med / 0.88 | 补 `resources/updated` 臂并发事件 **或** 删订阅管线 |
+| H6 | `read_resource` 永不产 `ResourceContent::Image`（image-mime blob 被标 `binary`，消费侧 Image 臂死） | 3.9 | dead-field | S | Low / 0.85 | Blob 臂按 `mime.starts_with("image/")` 分流 **或** 删 Image 变体 |
+| H7 | `read_resource` 静默丢弃首项外的所有 content（`contents.into_iter().next()`，无 log/marker；对照 `tools/call` 有省略标记） | 3.9 | silent-swallow | S | Low / 0.8 | 映射全部 items **或** `len()>1` 时 warn |
+| H8 | HTTP/Auto 传输收不到 server 发起的 sampling（`set_request_handler` 仅装在 SSE 分支，`HttpTransport` 无 request-handler 支持） | 3.9 | broken-wiring | M | Low / 0.7 | 给 HttpTransport 补 request-handler **或** 文档化"sampling 仅 SSE" |
+| H9 | Skill `${ALEPH_SESSION_ID}` 生产永不解析（`with_session` 仅单测调；`read.rs:298` 用 `new()` 未线 session id） | 3.11 | broken-wiring | S | Med / 0.9 | `read.rs` 线入 session id **或** 删 session_id/with_session/token 死面 |
+| H10 | `InvocationPolicy.command_dispatch`（`DispatchSpec`/`ArgMode`）只写 `None`、解析器无字段可填、零读者 | 3.11 | dead-field | S | Low / 0.95 | 接 frontmatter `command-dispatch` 键 **或** YAGNI 删整套 |
+| H11 | `SkillId::new` 无校验：纯标点/空格名（`"---"`/`"   "`）塌缩为空 id，registry 以空键存、不可寻址 | 3.11 | edge-case | S | Low / 0.6 | 空 id 兜底 slug 或 parse 期 reject |
+
+**附带（同类 bug，越界 §3.2→§2 Context，未改）**：`src/context/budget/cheap_passes/tool_result_pruning.rs:88` 的 `original_text.starts_with("[Full output persisted: ")` 与本批 act.rs 修复同源——同样应改为按行扫描。属 Context 层，留待用户裁定是否一并修。
+
+> **执行建议**：H1（High，真功能断裂）优先；H3/H4/H10 是 YAGNI 删除候选（确认零消费者后一次 cargo 验证落地）；H6/H7 是小而独立的健壮性补；H9 是一行连线。**全部需一次 `cargo check` 兜底**，符合"用户统一 cargo 验证"节奏。
 </content>

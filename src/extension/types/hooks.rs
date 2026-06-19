@@ -266,6 +266,15 @@ pub enum HookAction {
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         headers: HashMap<String, String>,
     },
+    /// Invoke a runtime plugin's exported hook handler (WASM). Carries the
+    /// plugin id + export name; the executor resolves the process-global
+    /// `ExtensionManager` and calls `execute_plugin_hook`, so an event-driven
+    /// plugin hook actually fires. This is what `sync_hooks_from_registry`
+    /// emits for `HookRegistration` entries — previously they were synced with
+    /// an empty `actions` list, so the handler name lived on the `HookConfig`
+    /// but was never dispatched (a registered plugin hook silently no-op'd).
+    /// Mechanical dispatch only — no reasoning (R7/R10).
+    Plugin { plugin_id: String, handler: String },
 }
 
 /// Hook configuration - defines when and how a hook executes
