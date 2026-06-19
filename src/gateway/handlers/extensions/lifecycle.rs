@@ -110,9 +110,25 @@ pub async fn handle_uninstall(
     }
 }
 
+/// A plugin id is joined onto the plugins directory and `remove_dir_all`'d, so
+/// it must be a single normal path component — no separators, no `..`, not
+/// absolute. Otherwise a crafted `local:plugin:../../x` id could escape the
+/// plugins directory. Mirrors `plugins::handlers::manage::is_safe_plugin_name`.
+fn is_safe_plugin_id(id: &str) -> bool {
+    use std::path::Component;
+    let mut comps = std::path::Path::new(id).components();
+    matches!(
+        (comps.next(), comps.next()),
+        (Some(Component::Normal(_)), None)
+    )
+}
+
 /// Tear down the plugin runtime then delete its directory, mirroring the
 /// existing `plugins.uninstall` handler (stop services before removing files).
 async fn uninstall_plugin(plugin_id: &str) -> Result<(), String> {
+    if !is_safe_plugin_id(plugin_id) {
+        return Err(format!("invalid plugin id: {plugin_id}"));
+    }
     let dir = crate::extension::default_plugins_dir().join(plugin_id);
     if !dir.exists() {
         return Err(format!("plugin not found: {plugin_id}"));
@@ -145,5 +161,16 @@ mod tests {
     fn handles_backend_ids_with_colons() {
         // split_once stops at the first ':', so a backend id may itself contain ':'.
         assert_eq!(parse_local_id("local:skill:my:skill"), Some(("skill", "my:skill")));
+    }
+
+    #[test]
+    fn plugin_uninstall_id_guard_blocks_traversal() {
+        // Regression: a crafted `local:plugin:..` id must never reach remove_dir_all.
+        assert!(!is_safe_plugin_id("../../../.ssh"));
+        assert!(!is_safe_plugin_id("a/b"));
+        assert!(!is_safe_plugin_id("/abs"));
+        assert!(!is_safe_plugin_id(".."));
+        assert!(!is_safe_plugin_id(""));
+        assert!(is_safe_plugin_id("my-plugin"));
     }
 }
