@@ -94,6 +94,19 @@ impl HealthCheck for ProvidersConnectivityCheck {
             )];
         }
 
+        // Count providers that will actually be probed (enabled AND whose
+        // preset opts in to `/models` health probing) up-front — `probes` is
+        // consumed below. The post-join total-outage gate keys off this so a
+        // fleet of OAuth-only / placeholder providers that all SKIP probing is
+        // never mistaken for a total outage.
+        let probed_count = probes
+            .iter()
+            .filter(|(name, enabled, _)| {
+                *enabled
+                    && crate::providers::presets::get_preset(name)
+                        .map_or(true, |p| p.supports_health_check)
+            })
+            .count();
         let futures = probes
             .into_iter()
             .map(|(name, enabled, runtime)| async move {
@@ -102,6 +115,20 @@ impl HealthCheck for ProvidersConnectivityCheck {
                         ID,
                         format!("{name}: disabled"),
                         "Provider is disabled; not probed.",
+                    );
+                }
+                // Honor the preset's `supports_health_check` opt-out: OAuth-only
+                // or placeholder-URL providers 404 / rate-limit on `/models`, so
+                // probing them yields a false `unreachable`. Report `skipped`
+                // (Info) instead — and the outage gate ignores them.
+                if !crate::providers::presets::get_preset(&name)
+                    .map_or(true, |p| p.supports_health_check)
+                {
+                    return Finding::ok(
+                        ID,
+                        format!("{name}: probe skipped"),
+                        "Preset opts out of /models health probing (OAuth-only or \
+                         placeholder endpoint); credentials not verifiable here.",
                     );
                 }
                 match tokio::time::timeout(PROBE_TIMEOUT, probe_provider(&name, runtime)).await {
@@ -133,6 +160,31 @@ impl HealthCheck for ProvidersConnectivityCheck {
 
         let mut findings = join_all(futures).await;
         findings.sort_by(|a, b| a.title.cmp(&b.title));
+
+        // Total-outage gate: if every PROBED provider failed (no `: reachable`
+        // finding emitted) the operator has zero working LLM access — a
+        // doctor-gating Error, not a pile of per-provider Warnings whose
+        // aggregate still exits `ok`. Disabled and probe-skipped providers
+        // short-circuit before the probe, so the absence of any `: reachable`
+        // finding when at least one provider was actually probed means a
+        // complete outage. Matched on the `: reachable` suffix (not `contains`)
+        // so `unreachable` titles do not count as reachable.
+        if probed_count > 0 && !findings.iter().any(|f| f.title.ends_with(": reachable")) {
+            findings.insert(
+                0,
+                Finding::problem(
+                    ID,
+                    Severity::Error,
+                    "No providers reachable",
+                    "Every enabled LLM provider failed its connectivity probe — \
+                     the agent has no working model access.",
+                )
+                .with_fix_hint(
+                    "Restore at least one provider: refresh its key with vault_store \
+                     or fix its `providers.*` section via self_config, then re-run doctor.",
+                ),
+            );
+        }
         findings
     }
 }

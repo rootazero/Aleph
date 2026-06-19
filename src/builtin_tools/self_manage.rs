@@ -92,12 +92,30 @@ impl AlephTool for SelfManageTool {
                         }
                     }
                     Err(e) => {
-                        let msg = format!("Failed to read self-management skill: {e}");
-                        notify_tool_result(Self::NAME, &msg, false);
+                        // A read failure (transient I/O, permissions) means the
+                        // full manual is unavailable — exactly like a missing
+                        // SKILL.md. Degrade to the same fallback guidance instead
+                        // of hard-failing the tool, so the agent still gets a
+                        // usable next step rather than a dead end.
+                        let fallback = concat!(
+                            "Self-management skill not found. Basic guidance:\n\n",
+                            "1. Configuration file: ~/.aleph/config.toml (hot-reload)\n",
+                            "2. API keys: use vault_store tool (never write to config)\n",
+                            "3. Detailed guides: call read_config_guide(topic) for domain-specific help\n",
+                            "4. Topics: overview, providers, generation, channels, agents, skills, mcp, general, cron\n",
+                        );
+                        notify_tool_result(
+                            Self::NAME,
+                            &format!("using fallback guidance (SKILL.md read failed: {e})"),
+                            true,
+                        );
                         return Ok(SelfManageOutput {
-                            success: false,
-                            manual: String::new(),
-                            hint: msg,
+                            success: true,
+                            manual: fallback.to_string(),
+                            hint: format!(
+                                "Now use read_config_guide(topic) for details about: {}",
+                                args.intent
+                            ),
                         });
                     }
                 }

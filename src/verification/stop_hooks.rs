@@ -92,14 +92,16 @@ impl StopHookHandler for ShellStopHook {
 /// hook stage entirely; otherwise returns `Some(Arc<Vec<...>>)` ready to
 /// hand to the harness.
 ///
-/// Always emits an INFO log (`Stop hooks registered count=N`) so harness
-/// scenario S1.4 has a passive wiring proof regardless of whether any hooks
-/// are configured.
+/// Always emits an INFO log so harness scenario S1.4 has a passive wiring
+/// proof regardless of whether any hooks are configured — but the message
+/// distinguishes the disabled (no config) path from the registered
+/// (`count=N`) path, so a missing config is never confused with a healthy one.
 pub fn build_from_config(cfgs: &[StopHookConfig]) -> Option<Arc<Vec<Arc<dyn StopHookHandler>>>> {
-    tracing::info!(count = cfgs.len(), "Stop hooks configuration checked");
     if cfgs.is_empty() {
+        tracing::info!("Stop hooks: none configured (verifier stage disabled)");
         return None;
     }
+    tracing::info!(count = cfgs.len(), "Stop hooks registered");
     let hooks: Vec<Arc<dyn StopHookHandler>> = cfgs
         .iter()
         .map(|c| {

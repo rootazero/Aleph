@@ -200,7 +200,7 @@ impl NodeRegistry {
             .nodes_by_id
             .values()
             .filter(|s| {
-                (q.len() >= 4 && s.node_id.starts_with(q))
+                (q.len() >= 4 && s.node_id.to_ascii_lowercase().starts_with(&ql))
                     || s.device_name.to_ascii_lowercase().contains(&ql)
             })
             .collect();

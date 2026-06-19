@@ -81,13 +81,15 @@ pub fn read_endpoint(data_dir: &Path) -> std::io::Result<Option<IpcEndpoint>> {
     let ep: IpcEndpoint = serde_json::from_slice(&bytes)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     if ep.version != CURRENT_ENDPOINT_VERSION {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                ".ipc-endpoint.json has unsupported version {} (expected {})",
-                ep.version, CURRENT_ENDPOINT_VERSION
-            ),
-        ));
+        // A version bump makes an old endpoint file unreadable, not invalid:
+        // treat it as "no endpoint" so the next `start` recreates it cleanly,
+        // instead of hard-erroring every status/IPC call during an upgrade.
+        tracing::debug!(
+            found = ep.version,
+            expected = CURRENT_ENDPOINT_VERSION,
+            ".ipc-endpoint.json has unsupported version; treating as missing"
+        );
+        return Ok(None);
     }
     Ok(Some(ep))
 }
