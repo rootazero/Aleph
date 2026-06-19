@@ -708,6 +708,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Read artifacts submitted for a task",
         requires_config: true,
     },
+    BuiltinToolDefinition {
+        name: "task_review",
+        description: "Leader accepts/rejects a member's submitted task (approve→completed, reject→in_progress)",
+        requires_config: true,
+    },
     // Collaborative session tools — require SessionCoordinator / SessionStore
     BuiltinToolDefinition {
         name: "session_collaborate",
@@ -985,6 +990,7 @@ pub fn create_tool_boxed(
         // Task artifact tools require ArtifactStore + current_agent_id at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "task_submit" | "task_read_artifact" => None,
+        "task_review" => None,
         // Session collaboration tools require SessionCoordinator / SessionStore at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "session_collaborate" | "session_turn" | "session_read" => None,

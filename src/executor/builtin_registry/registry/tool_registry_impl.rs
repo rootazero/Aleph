@@ -953,6 +953,14 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
+            "task_review" => Box::pin(async move {
+                let tool = self.task_review_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "task_review not available: requires CoordTaskStore + TeamStore",
+                    )
+                })?;
+                tool.call_json(arguments).await
+            }),
 
             // Channel pairing tool (deferred — ChannelRegistry injected after construction)
             "channel_pairing" => Box::pin(async move {

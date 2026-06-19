@@ -32,6 +32,7 @@ impl BuiltinToolRegistry {
         Option<crate::builtin_tools::team::LifecycleResolveShutdownTool>,
         Option<crate::builtin_tools::team::TaskSubmitTool>,
         Option<crate::builtin_tools::team::TaskReadArtifactTool>,
+        Option<crate::builtin_tools::team::TaskReviewTool>,
         Option<crate::builtin_tools::team::SessionCollaborateTool>,
         Option<crate::builtin_tools::team::SessionTurnTool>,
         Option<crate::builtin_tools::team::SessionReadTool>,
@@ -247,6 +248,35 @@ impl BuiltinToolRegistry {
             } else {
                 (None, None)
             };
+
+        // Leader task-review tool (strategy round 2) — needs a CoordTaskStore
+        // (to flip task status) AND a TeamStore (soft leader authz).
+        let task_review_tool = if let (Some(coord_store), Some(team_store)) =
+            (&config.coord_task_store, &config.team_store)
+        {
+            use crate::builtin_tools::team::TaskReviewTool;
+            let tool = TaskReviewTool::new(
+                Arc::clone(coord_store),
+                Arc::clone(team_store),
+                current_agent_id.to_string(),
+            );
+            {
+                use crate::tools::AlephTool;
+                let td = tool.definition();
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered task_review tool (leader acceptance)");
+            Some(tool)
+        } else {
+            None
+        };
 
         // Add collaborative session tools (if SessionCoordinator / SessionStore are available)
         let (session_collaborate_tool, session_turn_tool, session_read_tool) = {
@@ -514,6 +544,7 @@ impl BuiltinToolRegistry {
             lifecycle_resolve_shutdown_tool,
             task_submit_tool,
             task_read_artifact_tool,
+            task_review_tool,
             session_collaborate_tool,
             session_turn_tool,
             session_read_tool,

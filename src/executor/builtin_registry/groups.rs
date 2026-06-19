@@ -199,6 +199,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "team_task_control",
             "task_exit_journal",
             "task_submit",
+            "task_review",
             "task_read_artifact",
             "session_collaborate",
             "session_turn",

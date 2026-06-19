@@ -232,6 +232,9 @@ pub struct BuiltinToolRegistry {
     /// Task artifact tools (optional — require `ArtifactStore`)
     pub(crate) task_submit_tool: Option<crate::builtin_tools::team::TaskSubmitTool>,
     pub(crate) task_read_artifact_tool: Option<crate::builtin_tools::team::TaskReadArtifactTool>,
+    /// Leader task acceptance/verification (strategy round 2 — group chat).
+    /// Optional because it requires both a `CoordTaskStore` and a `TeamStore`.
+    pub(crate) task_review_tool: Option<crate::builtin_tools::team::TaskReviewTool>,
     /// Team management tools (optional — require `TeamStore`)
     pub(crate) team_create_tool: Option<crate::builtin_tools::team::TeamCreateTool>,
     pub(crate) team_delegate_tool: Option<crate::builtin_tools::team::TeamDelegateTool>,
