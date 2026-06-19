@@ -137,7 +137,16 @@ impl GoalTool {
             }
         }
         if goal.gate_command.is_some() {
-            s.push_str("\ngate: per-goal command set");
+            // The gate is only evaluated for autonomous (Active pursuit) goals —
+            // a Passive/interactive goal's `complete` terminates immediately and
+            // the gate never runs. Say so instead of advertising it as live.
+            if matches!(goal.pursuit, PursuitMode::Active { .. }) {
+                s.push_str("\ngate: per-goal command set");
+            } else {
+                s.push_str(
+                    "\ngate: per-goal command set (inactive — gate only runs for autonomous goals)",
+                );
+            }
         }
         if !goal.lessons.is_empty() {
             s.push_str(&format!(

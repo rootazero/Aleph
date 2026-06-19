@@ -5,6 +5,7 @@
 use crate::config::types::{
     AcpConfig, AgentsConfig, BehaviorConfig, ContextBudgetToml, CoworkConfigToml,
     DispatcherConfigToml, EvolutionConfig, ExecutionConfig, FallbackProviderToml, GeneralConfig,
+    TeamDispatcherConfigToml,
     GenerationConfig, GroupChatConfig, GuardrailsToml, McpConfig, MediaConfig, MemoryConfig,
     OrchestratorConfig, PersonaConfig, PoliciesConfig, PrivacyConfig, ProfileConfig,
     PromptSectionConfig, ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, SearchConfig,
@@ -240,6 +241,13 @@ pub struct Config {
     /// off-switch. Fully fail-soft: any failure leaves prompts byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy: Option<crate::config::types::phase6_wiring::StrategyToml>,
+    /// Team `TeamDispatcher` tunables (`[team_dispatcher]`): retry budget,
+    /// backoff, zombie TTL, concurrency, per-owner fairness cap. Absent ⇒
+    /// `teams::dispatcher::DispatcherConfig::default()` at the boot site
+    /// (byte-identical prior behaviour). Distinct from the L3-Cortex
+    /// `dispatcher` field above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_dispatcher: Option<TeamDispatcherConfigToml>,
     /// Mid-run trajectory resume — boot-scan auto-resume of interrupted runs.
     #[serde(default)]
     pub resume: crate::config::types::ResumeConfig,
@@ -452,6 +460,7 @@ impl Default for Config {
             fallback_provider: None,
             context_budget: None,
             strategy: None,
+            team_dispatcher: None,
             resume: crate::config::types::ResumeConfig::default(),
             projects: crate::config::types::ProjectsConfig::default(),
             desktop: crate::config::types::desktop::DesktopDaemonConfig::default(),

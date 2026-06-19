@@ -687,6 +687,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let engine_config = ExecutionEngineConfig {
             default_timeout_secs: app_config.execution.default_timeout_secs,
             scratchpad_progress_push: app_config.execution.progress_push,
+            mid_turn_steering: app_config.execution.mid_turn_steering,
             ..Default::default()
         };
         let resilience_db: Option<Arc<alephcore::resilience::StateDatabase>> = {
@@ -1161,14 +1162,20 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 agent_registry
                     .register_config(config, session_store.clone())
                     .await;
-                // Emit lifecycle event
+                // Emit lifecycle event. Wrap in TopicEvent so the WS forwarder's
+                // topic filter delivers it — a bare publish_json is topic-less and
+                // dropped by concrete subscriptions (same fix as switch/delete).
                 let lifecycle_event =
                     alephcore::gateway::agent_lifecycle::AgentLifecycleEvent::Registered {
                         agent_id: agent_id.clone(),
                         workspace: agent_workspace,
                         model: agent_model,
                     };
-                if let Err(e) = event_bus.publish_json(&lifecycle_event) {
+                let topic_event = alephcore::gateway::event_bus::TopicEvent::new(
+                    lifecycle_event.topic(),
+                    serde_json::to_value(&lifecycle_event).unwrap_or_default(),
+                );
+                if let Err(e) = event_bus.publish_json(&topic_event) {
                     tracing::warn!("Failed to publish agent lifecycle event: {}", e);
                 }
                 if !daemon {
@@ -1336,13 +1343,49 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     }
                     Arc::new(p)
                 });
+                // Map the optional [team_dispatcher] TOML onto the runtime config.
+                // Each field falls back to the live DispatcherConfig::default()
+                // (no default duplication / drift). zombie_ttl is clamped to never
+                // drop below task_timeout_secs, per the field's own safety note.
+                let dispatcher_cfg = {
+                    let d = DispatcherConfig::default();
+                    match &app_config.team_dispatcher {
+                        None => d,
+                        Some(t) => {
+                            let task_timeout_secs =
+                                t.task_timeout_secs.unwrap_or(d.task_timeout_secs);
+                            DispatcherConfig {
+                                max_concurrent: t.max_concurrent.unwrap_or(d.max_concurrent),
+                                lock_ttl_secs: t.lock_ttl_secs.unwrap_or(d.lock_ttl_secs),
+                                task_timeout_secs,
+                                fallback_tick_secs: t
+                                    .fallback_tick_secs
+                                    .unwrap_or(d.fallback_tick_secs),
+                                zombie_ttl_secs: t
+                                    .zombie_ttl_secs
+                                    .unwrap_or(d.zombie_ttl_secs)
+                                    .max(task_timeout_secs),
+                                max_per_owner: t.max_per_owner.unwrap_or(d.max_per_owner),
+                                default_max_retries: t
+                                    .default_max_retries
+                                    .unwrap_or(d.default_max_retries),
+                                retry_backoff_base_secs: t
+                                    .retry_backoff_base_secs
+                                    .unwrap_or(d.retry_backoff_base_secs),
+                                retry_backoff_cap_secs: t
+                                    .retry_backoff_cap_secs
+                                    .unwrap_or(d.retry_backoff_cap_secs),
+                            }
+                        }
+                    }
+                };
                 let mut dispatcher = TeamDispatcher::new(
                     cs,
                     ts,
                     artifact_store.clone(),
                     inbox_provider,
                     (*gateway_ctx).clone(),
-                    DispatcherConfig::default(),
+                    dispatcher_cfg,
                     dispatch_signal.clone(),
                 );
                 // Wire the channel-registry cell so workflow `clarify` steps can

@@ -9,7 +9,6 @@ pub mod broadcast;
 pub mod context;
 pub mod dispatcher;
 pub mod events;
-pub mod leader_prompt;
 pub mod messages;
 pub mod notifier;
 pub mod plans;

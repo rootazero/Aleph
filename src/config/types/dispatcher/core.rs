@@ -109,6 +109,66 @@ impl Default for DispatcherConfigToml {
     }
 }
 
+// =============================================================================
+// TeamDispatcherConfigToml — `[team_dispatcher]`
+// =============================================================================
+
+/// Operator tunables for the **team** `TeamDispatcher` loop (multi-agent
+/// coordinated-task scheduling), distinct from the L3-Cortex
+/// [`DispatcherConfigToml`] above.
+///
+/// Each field is `Option`: an absent key falls back to the live
+/// `teams::dispatcher::DispatcherConfig::default()` at the boot site, so an
+/// unconfigured deployment is byte-identical to prior behaviour and the
+/// authoritative defaults never drift (they are read from the runtime struct,
+/// not duplicated here). Closes the wiring gap where every dispatcher tunable
+/// the runtime documented as operator-adjustable (`default_max_retries`,
+/// `retry_backoff_*`, `zombie_ttl_secs`, …) was permanently pinned to its
+/// default because the dispatcher was always built with `::default()`.
+///
+/// # Example TOML
+///
+/// ```toml
+/// [team_dispatcher]
+/// default_max_retries = 3
+/// retry_backoff_base_secs = 10
+/// zombie_ttl_secs = 1800   # 30 min — short-task workload
+/// max_per_owner = 2
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct TeamDispatcherConfigToml {
+    /// Max member tasks executing concurrently across the process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent: Option<usize>,
+    /// A task lock older than this (seconds) is considered stale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_ttl_secs: Option<u64>,
+    /// Per-task execution timeout (seconds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_timeout_secs: Option<u64>,
+    /// Fallback wake interval (seconds) — catches any missed signal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_tick_secs: Option<u64>,
+    /// `InProgress` longer than this (seconds) and not running here ⇒ zombie,
+    /// force-failed. Clamped at the boot site to never drop below
+    /// `task_timeout_secs` (else healthy long-running tasks get clobbered).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zombie_ttl_secs: Option<u64>,
+    /// Max concurrent tasks a single owner may hold. `0` disables the hard cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_per_owner: Option<usize>,
+    /// Auto-retry budget for a failed/timed-out task before terminal `Failed`.
+    /// `0` = first failure is terminal. Default `2` (3 total attempts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_max_retries: Option<u32>,
+    /// Base delay (seconds) for exponential retry backoff. `0` disables backoff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_backoff_base_secs: Option<u64>,
+    /// Upper bound (seconds) on a single retry's backoff delay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_backoff_cap_secs: Option<u64>,
+}
+
 impl DispatcherConfigToml {
     /// Validate the configuration values
     ///
