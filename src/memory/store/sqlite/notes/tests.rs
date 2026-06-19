@@ -196,6 +196,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn alias_resolves_wikilink_to_aliased_note() {
+        let backend = make_backend();
+
+        // Target note titled "Bob Smith" carrying frontmatter alias "Bob".
+        let mut target = make_note("Bob Smith", "people");
+        target.aliases = vec!["Bob".to_string()];
+        // Source links to the bare name [[Bob]] (no slash, not a filename).
+        let mut source = make_note("source", "people");
+        source.links = vec!["Bob".to_string()];
+
+        // Target indexed first so the alias is present at resolution time.
+        backend
+            .index_note(&target, "agent1", "people")
+            .await
+            .unwrap();
+        backend
+            .index_note(&source, "agent1", "people")
+            .await
+            .unwrap();
+
+        let edges = backend
+            .get_outgoing_links("people/source", "agent1")
+            .await
+            .unwrap();
+        assert_eq!(edges.len(), 1);
+        // [[Bob]] resolved through the alias to the "Bob Smith" note path.
+        assert_eq!(edges[0], "people/Bob Smith");
+    }
+
+    #[tokio::test]
     async fn get_incoming_links_finds_backlinks() {
         let backend = make_backend();
         let mut note1 = make_note("source", "backlinks");
