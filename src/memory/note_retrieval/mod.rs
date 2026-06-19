@@ -7,9 +7,12 @@
 pub mod expansion;
 pub mod hybrid;
 pub mod scoring;
+pub mod trace;
 
 use std::collections::HashMap;
 
+use self::trace::{StageTrace, TraceSink};
+use std::time::Instant;
 use crate::config::types::memory::{ExpansionConfig, RetrievalScoringConfig};
 use crate::error::AlephError;
 use crate::memory::context::{MemoryFact, NoteType};
