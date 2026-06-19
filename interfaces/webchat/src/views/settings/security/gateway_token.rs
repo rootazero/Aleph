@@ -13,6 +13,7 @@ use leptos::task::spawn_local;
 use serde_json::json;
 
 use crate::context::DashboardState;
+use crate::i18n::{t, t_string, use_i18n};
 
 /// Build the LAN authorization URL `http(s)://<host>/?token=<token>` from the
 /// current page origin (the same origin the Panel is served from).
@@ -55,6 +56,7 @@ fn qr_svg(url: &str) -> Option<String> {
 #[must_use]
 pub fn GatewayTokenSection() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let token = RwSignal::new(String::new());
     let revealed = RwSignal::new(false);
     let error = RwSignal::new(Option::<String>::None);
@@ -110,12 +112,9 @@ pub fn GatewayTokenSection() -> impl IntoView {
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
-            <h2 class="text-lg font-semibold mb-2">"Gateway token"</h2>
+            <h2 class="text-lg font-semibold mb-2">{t!(i18n, common.gateway_token_title)}</h2>
             <p class="text-sm text-text-secondary mb-4">
-                "Remote devices authorize with this shared token — paste it into the device's login \
-                 box, or scan the QR / open the link below (both carry the token). Anyone with the \
-                 token gets the same access as this machine. Rotate to revoke every authorized device \
-                 at once."
+                {t!(i18n, common.gateway_token_desc)}
             </p>
             {move || error.get().map(|e| view! {
                 <div class="p-2 mb-3 bg-danger-subtle text-danger rounded text-sm">{e}</div>
@@ -128,13 +127,17 @@ pub fn GatewayTokenSection() -> impl IntoView {
                     class="text-xs px-3 py-2 rounded border border-border hover:bg-surface"
                     on:click=move |_| revealed.update(|r| *r = !*r)
                 >
-                    {move || if revealed.get() { "Hide" } else { "Reveal" }}
+                    {move || if revealed.get() {
+                        t_string!(i18n, common.gateway_token_hide).to_string()
+                    } else {
+                        t_string!(i18n, common.gateway_token_reveal).to_string()
+                    }}
                 </button>
                 <button
                     class="text-xs px-3 py-2 rounded border border-border text-danger hover:bg-danger-subtle"
                     on:click=rotate
                 >
-                    "Rotate"
+                    {t!(i18n, common.gateway_token_rotate)}
                 </button>
             </div>
             {move || {

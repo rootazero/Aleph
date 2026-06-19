@@ -581,7 +581,11 @@ impl DashboardState {
                             msg = stream.select_next_some() => {
                                 match msg {
                                     Ok(value) => {
-                                        web_sys::console::log_1(&format!("Received message: {value:?}").into());
+                                        // Topic/id-level breadcrumb only — never dump the full
+                                        // message: RPC responses (e.g. gateway.token.current) and
+                                        // event payloads carry secrets/content that must not leak
+                                        // into the browser console.
+                                        web_sys::console::log_1(&"Received WS message".into());
 
                                         // Check if this is an RPC response (has 'id' field)
                                         if let Some(id) = value.get("id").and_then(|id| id.as_str()) {
@@ -611,7 +615,7 @@ impl DashboardState {
                                                                 data,
                                                             };
 
-                                                            web_sys::console::log_1(&format!("Event: {} - {:?}", event.topic, event.data).into());
+                                                            web_sys::console::log_1(&format!("Event: {}", event.topic).into());
 
                                                             // Dispatch event to subscribers
                                                             state.dispatch_event(event);
@@ -626,7 +630,7 @@ impl DashboardState {
                                                         topic,
                                                         data,
                                                     };
-                                                    web_sys::console::log_1(&format!("Stream event: {} - {:?}", event.topic, event.data).into());
+                                                    web_sys::console::log_1(&format!("Stream event: {}", event.topic).into());
                                                     state.dispatch_event(event);
                                                 }
                                             }

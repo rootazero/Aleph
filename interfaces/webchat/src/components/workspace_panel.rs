@@ -63,6 +63,7 @@ pub fn WorkspacePanel() -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
     let chat = expect_context::<ChatState>();
     let active_tab = RwSignal::new(0u8); // 0 = 交付物, 1 = 任务
+    let i18n = use_i18n();
 
     view! {
         // Always mounted so collapse/expand can EASE via a CSS transition
@@ -129,7 +130,7 @@ pub fn WorkspacePanel() -> impl IntoView {
                                 }
                             }
                             on:click=move |_| active_tab.set(0)
-                        >"交付物"</button>
+                        >{t!(i18n, common.team_deliverables)}</button>
                         <button
                             class=move || {
                                 if active_tab.get() == 1 {
@@ -139,7 +140,7 @@ pub fn WorkspacePanel() -> impl IntoView {
                                 }
                             }
                             on:click=move |_| active_tab.set(1)
-                        >"任务"</button>
+                        >{t!(i18n, common.team_tasks)}</button>
                     </div>
                     // Team-mode tab body
                     <div class="flex-1 overflow-y-auto px-3 py-2">
@@ -452,6 +453,7 @@ fn TeamDeliverablesView() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let dash = expect_context::<DashboardState>();
     let items = RwSignal::new(Vec::new());
+    let i18n = use_i18n();
     // TODO(perf): refetches on every team_members change (each .activity event).
     // MVP-acceptable (localhost, idempotent set); future: gate on Done/Error
     // transitions or debounce.
@@ -476,7 +478,7 @@ fn TeamDeliverablesView() -> impl IntoView {
         {move || {
             let data = items.get();
             if data.is_empty() {
-                view! { <div class="text-xs text-text-tertiary py-2">"暂无交付物"</div> }.into_any()
+                view! { <div class="text-xs text-text-tertiary py-2">{t!(i18n, common.team_no_deliverables)}</div> }.into_any()
             } else {
                 // Color each artifact by its producing agent's roster slot, so
                 // the deliverable accent matches the chat attribution color.
@@ -508,6 +510,7 @@ fn TeamTasksView() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let dash = expect_context::<DashboardState>();
     let tasks = RwSignal::new(Vec::new());
+    let i18n = use_i18n();
 
     // Extracted fetch closure — reused by the team_members Effect and the
     // topic-event handler so the fetch logic stays DRY.
@@ -556,7 +559,7 @@ fn TeamTasksView() -> impl IntoView {
         {move || {
             let data = tasks.get();
             if data.is_empty() {
-                view! { <div class="text-xs text-text-tertiary py-2">"暂无任务"</div> }.into_any()
+                view! { <div class="text-xs text-text-tertiary py-2">{t!(i18n, common.team_no_tasks)}</div> }.into_any()
             } else {
                 data.into_iter().map(|t| view! {
                     <div class="text-xs py-1 flex justify-between gap-2 border-b border-border/40">
