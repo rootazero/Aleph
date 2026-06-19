@@ -89,6 +89,9 @@ pub struct McpManagerActor {
     cmd_tx: mpsc::Sender<McpCommand>,
     /// Stored sampling callback for new servers
     sampling_callback: Option<Arc<crate::mcp::sampling::SamplingCallback>>,
+    /// Optional resolver for `{{secret:NAME}}` env references, applied
+    /// per-server at spawn so secrets reach only that child's environment.
+    secret_resolver: Option<Arc<dyn crate::secrets::AsyncSecretResolver>>,
 }
 
 impl McpManagerActor {
@@ -131,6 +134,7 @@ impl McpManagerActor {
             cmd_rx,
             cmd_tx,
             sampling_callback: None,
+            secret_resolver: None,
         };
 
         Ok((actor, handle))
@@ -142,6 +146,20 @@ impl McpManagerActor {
     #[must_use]
     pub fn handle(&self) -> McpManagerHandle {
         McpManagerHandle::new(self.cmd_tx.clone(), self.event_tx.clone())
+    }
+
+    /// Install a secret resolver used to resolve `{{secret:NAME}}` env
+    /// references into each MCP child's environment at spawn time.
+    ///
+    /// Must be set before `run()` so persisted vault-backed servers that
+    /// auto-start at boot can resolve their secrets.
+    #[must_use]
+    pub fn with_secret_resolver(
+        mut self,
+        resolver: Arc<dyn crate::secrets::AsyncSecretResolver>,
+    ) -> Self {
+        self.secret_resolver = Some(resolver);
+        self
     }
 
     /// Run the actor's main loop
@@ -642,11 +660,19 @@ impl McpManagerActor {
                     format!("No command specified for stdio server: {}", config.id)
                 })?;
 
+                // Resolve `{{secret:NAME}}` env references into this child's
+                // env only — never the daemon's own process env.
+                let resolved_env = super::secret_resolver::resolve_secret_env(
+                    &config.env,
+                    self.secret_resolver.as_deref(),
+                )
+                .await;
+
                 let external_config = ExternalServerConfig {
                     name: config.id.clone(),
                     command: command.clone(),
                     args: config.args.clone(),
-                    env: config.env.clone(),
+                    env: resolved_env,
                     cwd: None,
                     requires_runtime: config.requires_runtime.clone(),
                     timeout_seconds: config.timeout_seconds,

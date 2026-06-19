@@ -216,29 +216,27 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         });
     }
 
-    // MCP: spawn the manager actor here so dependent handlers can resolve
-    // `mcp_handle` below. The tool bridge is spawned later — after
-    // `agent_result` materialises — so it can carry the tool catalog's
-    // `ToolHealthCache` handle for `McpServerProbe` registration.
+    // MCP: build the manager actor here so dependent handlers can resolve
+    // `mcp_handle` below, but defer `actor.run()` until after the vault is
+    // initialized so a secret resolver can be injected before any persisted
+    // `{{secret:..}}`-bearing server auto-starts. The tool bridge is spawned
+    // later — after `agent_result` materialises — so it can carry the tool
+    // catalog's `ToolHealthCache` handle for `McpServerProbe` registration.
     // Warn-only on failure — a missing or malformed MCP config must never
     // abort boot.
-    let mcp_handle: Option<alephcore::mcp::McpManagerHandle> =
-        match alephcore::mcp::McpManagerActor::new(None).await {
-            Ok((actor, handle)) => {
-                tokio::spawn(actor.run());
-                if !args.daemon {
-                    println!("MCP Manager spawned");
-                }
-                Some(handle)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "MCP Manager failed to start — external MCP servers unavailable this run"
-                );
-                None
-            }
-        };
+    let (mcp_handle, mcp_actor_pending): (
+        Option<alephcore::mcp::McpManagerHandle>,
+        Option<alephcore::mcp::McpManagerActor>,
+    ) = match alephcore::mcp::McpManagerActor::new(None).await {
+        Ok((actor, handle)) => (Some(handle), Some(actor)),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "MCP Manager failed to start — external MCP servers unavailable this run"
+            );
+            (None, None)
+        }
+    };
 
     // Phase 3 Task 7: compose the shared `Arc<dyn Sandbox>` once at boot.
     //
@@ -412,6 +410,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Publish the vault handle (also installs the process-global used by
     // vault consumers outside the request path).
     server.set_shared_token_manager(auth_bundle.auth_ctx.shared_token_mgr.clone());
+
+    // Now spawn the deferred MCP manager, injecting a vault-backed secret
+    // resolver so `{{secret:NAME}}` env references resolve per-server into the
+    // child process only (never the daemon's own env).
+    if let Some(actor) = mcp_actor_pending {
+        let resolver = std::sync::Arc::new(alephcore::secrets::VaultSecretResolver::new(
+            auth_bundle.auth_ctx.shared_token_mgr.clone(),
+        ));
+        tokio::spawn(actor.with_secret_resolver(resolver).run());
+        if !args.daemon {
+            println!("MCP Manager spawned");
+        }
+    }
 
     // Gateway-token RPCs: read the shared token (display / QR) and rotate it
     // (revoke all authorized remotes). Authorized-only — the WS login wall
