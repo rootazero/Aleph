@@ -254,8 +254,12 @@ async fn ensure_capability_recursive(
 fn runtime_error(capability: &str, reason: &str, stderr: Option<&str>) -> AlephError {
     use crate::runtimes::find_spec;
 
+    // Prefer a concrete manual-install command (`install_hint`) over the usage
+    // description (`llm_hint`): this is the last-resort "Install manually"
+    // guidance, so it must say how to *install*, not how to *use*. Falls back to
+    // `llm_hint` for any spec without a dedicated install hint.
     let hint = find_spec(capability)
-        .and_then(|s| s.llm_hint)
+        .and_then(|s| s.install_hint.or(s.llm_hint))
         .unwrap_or("(no hint available — check the runtime's documentation)");
 
     let stderr_block = stderr

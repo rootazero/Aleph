@@ -249,9 +249,26 @@ impl AgentHarnessRunner {
             None => None,
         };
 
+        // Surface the persisted runtime capability ledger so
+        // `RuntimeCapabilitiesLayer` (priority 400) can tell the model which
+        // managed runtimes are installed and their absolute executable paths —
+        // letting it invoke `uv run` / a managed interpreter instead of bare
+        // `python3`/`node`, which a GUI-launched daemon's minimal PATH may lack.
+        // Best-effort: any IO error (or an empty ledger) leaves this `None` and
+        // the layer emits nothing. Mirrors `ledger::build_enhanced_path`'s
+        // on-disk load — pure data wiring, no cognition (R10-safe).
+        let runtime_capabilities = crate::runtimes::get_runtimes_dir()
+            .ok()
+            .map(|dir| {
+                let ledger =
+                    crate::runtimes::CapabilityLedger::load_or_create(dir.join("ledger.json"));
+                crate::runtimes::format_entries_for_prompt(&ledger.list_ready())
+            })
+            .filter(|s| !s.is_empty());
+
         // Skip prompt assembly entirely when there is nothing to inject:
         // no memory, no AgentDef, no eligible skills, no identity files, no
-        // extra files, and no MCP server instructions.
+        // extra files, no MCP server instructions, and no runtime capabilities.
         if curated_text.is_none()
             && memory_text.is_none()
             && agent_def.is_none()
@@ -259,6 +276,7 @@ impl AgentHarnessRunner {
             && !has_identity
             && extra_files.is_none()
             && mcp_instructions.is_none()
+            && runtime_capabilities.is_none()
         {
             return None;
         }
@@ -282,6 +300,7 @@ impl AgentHarnessRunner {
             eligible_skills,
             skill_prompt_budget,
             mcp_instructions,
+            runtime_capabilities,
             ..PromptConfig::default()
         });
         let role_present = agent_def.is_some();

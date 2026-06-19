@@ -12,6 +12,12 @@ pub struct RuntimeSpec {
     pub install: &'static [OsInstall],
     pub post_install: &'static [PostInstallAction],
     pub llm_hint: Option<&'static str>,
+    /// Concrete manual-install command(s), surfaced as the "Install manually"
+    /// fix option when auto-install fails. `None` falls back to `llm_hint` —
+    /// which is *usage* guidance, not an install command. Phrased for the user
+    /// to copy-paste; Aleph never runs this string (the `install` strategies
+    /// above are the real ones).
+    pub install_hint: Option<&'static str>,
 }
 
 pub struct OsInstall {
@@ -57,18 +63,32 @@ pub const SPECS: &[RuntimeSpec] = &[
             OsInstall {
                 os: TargetOs::AnyUnix,
                 strategy: InstallStrategy::Shell(
-                    "curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell",
+                    // Pin --install-dir so the binary lands in the exact dir the
+                    // re-probe (enrich_path_for_reprobe) and cold-probe candidate
+                    // sets look in (`$HOME/.fnm`). Without the pin the installer's
+                    // XDG default (`~/.local/share/fnm`) diverges from those, so
+                    // `which fnm` fails post-install → spurious "binary not found".
+                    "curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell --install-dir \"$HOME/.fnm\"",
                 ),
             },
             OsInstall {
                 os: TargetOs::Windows,
                 strategy: InstallStrategy::PowerShell(
-                    "winget install Schniz.fnm --silent --accept-source-agreements",
+                    // --accept-package-agreements is required alongside the source
+                    // flag: without it winget can prompt for the package license
+                    // even under --silent, and there is no TTY here (run via
+                    // `powershell -Command` + cmd.output()), so it would hang until
+                    // the 600s bootstrap timeout. Mirrors the cargo/git specs.
+                    "winget install Schniz.fnm --silent --accept-package-agreements --accept-source-agreements",
                 ),
             },
         ],
         post_install: &[],
         llm_hint: Some("Node version manager (fnm). Used implicitly by `node`."),
+        install_hint: Some(
+            "macOS/Linux: `curl -fsSL https://fnm.vercel.app/install | bash`. \
+             Windows: `winget install Schniz.fnm`.",
+        ),
     },
     RuntimeSpec {
         name: "node",
@@ -88,6 +108,7 @@ pub const SPECS: &[RuntimeSpec] = &[
         llm_hint: Some(
             "Node.js runtime. Use via `fnm exec --using lts -- node <script.js>`.",
         ),
+        install_hint: Some("Install fnm first, then `fnm install --lts`."),
     },
     RuntimeSpec {
         name: "uv",
@@ -117,6 +138,10 @@ pub const SPECS: &[RuntimeSpec] = &[
         llm_hint: Some(
             "Python package manager (uv). Run scripts via `uv run <file.py>`; install packages via `uv pip install <pkg>`.",
         ),
+        install_hint: Some(
+            "macOS/Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh`. \
+             Windows: `irm https://astral.sh/uv/install.ps1 | iex`.",
+        ),
     },
     RuntimeSpec {
         name: "playwright-cli",
@@ -145,6 +170,7 @@ pub const SPECS: &[RuntimeSpec] = &[
         llm_hint: Some(
             "Browser automation CLI. Use `playwright-cli -s=<session> <command>`.",
         ),
+        install_hint: Some("Requires Node, then `npm install -g @playwright/cli@latest`."),
     },
     // Cargo / Rust toolchain. Detection-first: if `cargo` is on PATH (user
     // installed rustup themselves, distro `rust` package, or `nix-shell`), we
@@ -175,6 +201,10 @@ pub const SPECS: &[RuntimeSpec] = &[
         post_install: &[],
         llm_hint: Some(
             "Rust toolchain (cargo). Use `cargo <subcommand>` (build, test, run, fmt, clippy). Installed via rustup; binaries land in `~/.cargo/bin`.",
+        ),
+        install_hint: Some(
+            "macOS/Linux: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`. \
+             Windows: `winget install Rustlang.Rustup`.",
         ),
     },
     // Git — version control. Detection-first: respects any pre-existing system
@@ -222,7 +252,13 @@ pub const SPECS: &[RuntimeSpec] = &[
         ],
         post_install: &[],
         llm_hint: Some(
-            "Git — version control. Use `git <subcommand>` (clone, status, diff, commit, log). Auto-installed via the platform's native package manager when missing.",
+            "Git — version control. Use `git <subcommand>` (clone, status, diff, commit, log).",
+        ),
+        install_hint: Some(
+            "macOS: `brew install git`, or `xcode-select --install` then finish the \
+             Command Line Tools dialog and retry (don't re-run while it downloads). \
+             Linux: `sudo apt-get install -y git` (or your distro's package manager: \
+             dnf / pacman / apk / zypper). Windows: `winget install Git.Git`.",
         ),
     },
 ];

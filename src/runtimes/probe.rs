@@ -170,6 +170,10 @@ fn install_dir_candidates() -> Vec<PathBuf> {
         let home = PathBuf::from(h);
         dirs.push(home.join(".cargo").join("bin"));
         dirs.push(home.join(".local").join("bin"));
+        // fnm's own binary lands here (pinned `--install-dir "$HOME/.fnm"`);
+        // mirrors bootstrap::enrich_path_for_reprobe so a cold probe of `fnm`
+        // finds it without an FNM_DIR env var.
+        dirs.push(home.join(".fnm"));
     }
     if let Some(d) = fnm_node_bin_dir() {
         dirs.push(d);
@@ -204,12 +208,12 @@ fn install_dir_candidates() -> Vec<PathBuf> {
 /// Resolve the fnm-managed node bin dir *without invoking fnm* (fnm itself may
 /// be off PATH). fnm keeps the active node under
 /// `$FNM_DIR/aliases/{default,lts}/bin` (Unix) — default `$FNM_DIR` is
-/// `~/.local/share/fnm`. On Windows `node.exe` sits directly in the alias dir.
+/// `~/.local/share/fnm`. On Windows `node.exe` sits directly in the alias dir
+/// and the default data dir is `%LOCALAPPDATA%\fnm`.
 fn fnm_node_bin_dir() -> Option<PathBuf> {
-    let fnm_dir = std::env::var_os("FNM_DIR").map(PathBuf::from).or_else(|| {
-        let home = std::env::var_os("HOME")?;
-        Some(PathBuf::from(home).join(".local").join("share").join("fnm"))
-    })?;
+    let fnm_dir = std::env::var_os("FNM_DIR")
+        .map(PathBuf::from)
+        .or_else(default_fnm_data_dir)?;
     for alias in ["default", "lts"] {
         let alias_dir = fnm_dir.join("aliases").join(alias);
         // Unix: node lives under <alias>/bin; Windows: directly in <alias>.
@@ -222,6 +226,26 @@ fn fnm_node_bin_dir() -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// fnm's default data dir when `FNM_DIR` is unset. The layout differs per OS,
+/// and a service-launched Windows daemon has no `HOME` (only `USERPROFILE`), so
+/// the old bare-`HOME` fallback returned `None` on Windows and pointed at the
+/// Unix path elsewhere. Windows winget builds use `%LOCALAPPDATA%\fnm` (legacy
+/// `%USERPROFILE%\.fnm`); Unix uses the XDG default `~/.local/share/fnm`.
+fn default_fnm_data_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(|p| PathBuf::from(p).join("fnm"))
+            .or_else(|| std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join(".fnm")))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(|h| PathBuf::from(h).join(".local").join("share").join("fnm"))
+    }
 }
 
 static REGEX_CACHE: Lazy<Mutex<HashMap<&'static str, Regex>>> =
