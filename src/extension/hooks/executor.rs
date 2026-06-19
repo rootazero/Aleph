@@ -409,10 +409,10 @@ impl HookExecutor {
                 self.execute_http(url, headers, context, plugin_root, event, timeout_override)
                     .await
             }
-            HookAction::Plugin {
-                plugin_id,
-                handler,
-            } => self.execute_plugin(plugin_id, handler, context, event).await,
+            HookAction::Plugin { plugin_id, handler } => {
+                self.execute_plugin(plugin_id, handler, context, event)
+                    .await
+            }
         }
     }
 
@@ -438,14 +438,15 @@ impl HookExecutor {
             return Ok(ActionResult {
                 success: false,
                 output: None,
-                error: Some(
-                    "extension manager not initialized; plugin hook skipped".to_string(),
-                ),
+                error: Some("extension manager not initialized; plugin hook skipped".to_string()),
                 exit_code: None,
             });
         };
         let payload = build_event_payload_value(event, context);
-        match manager.execute_plugin_hook(plugin_id, handler, payload).await {
+        match manager
+            .execute_plugin_hook(plugin_id, handler, payload)
+            .await
+        {
             Ok(value) => Ok(ActionResult {
                 success: true,
                 // Surface the structured return as text so interceptor/resolver
@@ -1041,10 +1042,7 @@ mod tests {
         assert!(json.contains("\"type\":\"plugin\""), "got: {json}");
         let back: HookAction = serde_json::from_str(&json).unwrap();
         match back {
-            HookAction::Plugin {
-                plugin_id,
-                handler,
-            } => {
+            HookAction::Plugin { plugin_id, handler } => {
                 assert_eq!(plugin_id, "demo");
                 assert_eq!(handler, "onEvent");
             }

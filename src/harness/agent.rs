@@ -694,9 +694,7 @@ impl Harness for AgentHarness {
                                 )
                                 .await;
                                 callback.on_complete();
-                                break Ok(
-                                    crate::harness::trace::LoopTraceSessionOutcome::HitLimit,
-                                );
+                                break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                             }
                         }
                         continue;
@@ -725,14 +723,13 @@ impl Harness for AgentHarness {
                     // when both text and thinking are empty made find_map walk
                     // back and surface an older turn's text as this run's
                     // final_text. Always resolve at the first one encountered.
-                    SessionEvent::AssistantMessage { content, .. } => Some(if content
-                        .text
-                        .is_empty()
-                    {
-                        content.thinking.clone().unwrap_or_default()
-                    } else {
-                        content.text.clone()
-                    }),
+                    SessionEvent::AssistantMessage { content, .. } => {
+                        Some(if content.text.is_empty() {
+                            content.thinking.clone().unwrap_or_default()
+                        } else {
+                            content.text.clone()
+                        })
+                    }
                     _ => None,
                 })
             });

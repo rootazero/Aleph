@@ -208,9 +208,27 @@ pub(in crate::commands::start) fn register_teams_handlers(
     register_handler!(server, "teams.get", teams::handle_get, store, coord_store);
     // create / rename / disband publish `team.changed` so the group-chat sidebar
     // and the teams tab stay in sync without a manual refresh.
-    register_handler!(server, "teams.create", teams::handle_create, store, event_bus);
-    register_handler!(server, "teams.rename", teams::handle_rename, store, event_bus);
-    register_handler!(server, "teams.disband", teams::handle_disband, store, event_bus);
+    register_handler!(
+        server,
+        "teams.create",
+        teams::handle_create,
+        store,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "teams.rename",
+        teams::handle_rename,
+        store,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "teams.disband",
+        teams::handle_disband,
+        store,
+        event_bus
+    );
     // teams.delete — cascade when all four subordinate stores are configured;
     // fall back to single-store delete (legacy behavior) otherwise.
     match (
@@ -244,7 +262,13 @@ pub(in crate::commands::start) fn register_teams_handlers(
         _ => {
             // Fallback: TeamStore-only delete (old behavior); subordinate store
             // absence is acceptable in simulated / test configurations.
-            register_handler!(server, "teams.delete", teams::handle_delete_basic, store, event_bus);
+            register_handler!(
+                server,
+                "teams.delete",
+                teams::handle_delete_basic,
+                store,
+                event_bus
+            );
         }
     }
 

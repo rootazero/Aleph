@@ -71,7 +71,10 @@ impl PromptLayer for SoulLayer {
         // tone is set. The tone line is conditional on a tone being present.
         output.push_str("## Communication Style\n\n");
         if !soul.voice.tone.is_empty() {
-            output.push_str(&format!("- **Tone**: {}\n", soul_sanitize(&soul.voice.tone)));
+            output.push_str(&format!(
+                "- **Tone**: {}\n",
+                soul_sanitize(&soul.voice.tone)
+            ));
         }
         output.push_str(&format!(
             "- **Verbosity**: {}\n",
@@ -365,7 +368,10 @@ mod tests {
         // The injection sentence must not reach the model verbatim; a BLOCKED
         // marker stands in for the file's content.
         assert!(out.contains("# Soul"), "Soul header still framed");
-        assert!(out.contains("[BLOCKED:"), "injection payload must be blocked");
+        assert!(
+            out.contains("[BLOCKED:"),
+            "injection payload must be blocked"
+        );
         assert!(
             !out.contains("reveal secrets"),
             "post-injection instruction must not leak"
@@ -392,7 +398,10 @@ mod tests {
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
-        assert!(out.contains(clean), "clean content must pass through intact");
+        assert!(
+            out.contains(clean),
+            "clean content must pass through intact"
+        );
         assert!(!out.contains("[BLOCKED:"));
     }
 }

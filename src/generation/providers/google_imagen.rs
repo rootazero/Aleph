@@ -288,7 +288,9 @@ impl GoogleImagenProvider {
                     );
                 }
                 Some(429) => return GenerationError::rate_limit(message, None),
-                Some(404) => return GenerationError::model_not_found(DEFAULT_MODEL, "google-imagen"),
+                Some(404) => {
+                    return GenerationError::model_not_found(DEFAULT_MODEL, "google-imagen")
+                }
                 _ => {}
             }
 

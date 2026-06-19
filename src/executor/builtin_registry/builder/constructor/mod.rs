@@ -751,8 +751,7 @@ impl BuiltinToolRegistry {
             loop_tool: loop_tool
                 .with_session_key_handle(memory_session_key_handle.clone())
                 .with_planner_provider(config.planner_provider.clone()),
-            strategy_tool: strategy_tool
-                .with_session_key_handle(memory_session_key_handle.clone()),
+            strategy_tool: strategy_tool.with_session_key_handle(memory_session_key_handle.clone()),
             memory_search_tool,
             memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
             node_registry: Arc::new(tokio::sync::OnceCell::new()),

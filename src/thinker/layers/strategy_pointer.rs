@@ -117,7 +117,8 @@ mod tests {
 
     #[test]
     fn guardrails_render_inside_tag() {
-        let guardrails = "- don't refactor unrelated modules\n- don't add config beyond what's asked";
+        let guardrails =
+            "- don't refactor unrelated modules\n- don't add config beyond what's asked";
         let out = render(&ctx_with_guardrails(Some(guardrails)));
         assert!(out.starts_with("<strategy_reminder>\n"));
         assert!(out.contains("don't refactor unrelated modules"));

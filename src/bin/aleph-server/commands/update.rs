@@ -23,8 +23,7 @@ const LATEST_API: &str = "https://api.github.com/repos/rootazero/Aleph/releases/
 #[cfg(not(windows))]
 const INSTALL_SH: &str = "https://github.com/rootazero/Aleph/releases/latest/download/install.sh";
 #[cfg(windows)]
-const INSTALL_PS1: &str =
-    "https://github.com/rootazero/Aleph/releases/latest/download/install.ps1";
+const INSTALL_PS1: &str = "https://github.com/rootazero/Aleph/releases/latest/download/install.ps1";
 
 /// Handle `aleph-server update [--check]`.
 pub fn handle_update(check_only: bool) -> Result<(), Box<dyn Error>> {
@@ -77,7 +76,10 @@ fn fetch_latest_version() -> Result<String, Box<dyn Error>> {
 /// (`YY.M.D`), which is valid SemVer; fall back to string inequality if either
 /// fails to parse so a malformed tag never silently blocks a real update.
 fn is_newer(latest: &str, current: &str) -> bool {
-    match (semver::Version::parse(latest), semver::Version::parse(current)) {
+    match (
+        semver::Version::parse(latest),
+        semver::Version::parse(current),
+    ) {
         (Ok(l), Ok(c)) => l > c,
         _ => latest != current,
     }

@@ -53,7 +53,11 @@ mod tests {
         Strategy {
             objective: "Migrate auth to new API".into(),
             approach: "Incremental, behind a feature flag".into(),
-            phases: vec!["understand the failure".into(), "implement".into(), "verify".into()],
+            phases: vec![
+                "understand the failure".into(),
+                "implement".into(),
+                "verify".into(),
+            ],
             guardrails: vec!["do not refactor unrelated modules".into()],
             success_criteria: "gate command passes and old callers unaffected".into(),
             goal_id: Some("goal-deadbeef".into()),

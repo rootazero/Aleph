@@ -196,7 +196,8 @@ mod tests {
         // The exec patterns use a hyphen-free body (`sk-[a-zA-Z0-9]{20,}`), so a
         // false positive needs "·sk-" followed by 20+ CONTIGUOUS alnum — e.g. a
         // URL slug "elon-musk-<run>" or "disk-<run>".
-        let benign = "see elon-musk-teslarobotaxiupdate2025q3report and disk-cleanuputility1234567890";
+        let benign =
+            "see elon-musk-teslarobotaxiupdate2025q3report and disk-cleanuputility1234567890";
         let real = "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234";
 
         let leak = leak_detector_assets();

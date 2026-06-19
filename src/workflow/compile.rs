@@ -16,10 +16,10 @@
 
 use serde_json::json;
 
+use crate::agents::swarm::tasks::acceptance::LEAD_REVIEW_METADATA_KEY;
 use crate::agents::swarm::tasks::{
     CoordTaskId, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority,
 };
-use crate::agents::swarm::tasks::acceptance::LEAD_REVIEW_METADATA_KEY;
 use crate::error::Result;
 use crate::strategy::{render_workflow_global_frame, Strategy};
 use crate::teams::dispatcher::{MANAGED_BY_DISPATCHER, MANAGED_BY_KEY};
@@ -319,9 +319,17 @@ mod tests {
     #[tokio::test]
     async fn materialize_creates_one_task_per_step() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "the topic", "team-1", &store, None, None, None)
-            .await
-            .expect("materialise");
+        let mat = materialize(
+            &linear_def(),
+            "the topic",
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("materialise");
         assert_eq!(mat.task_ids.len(), 2);
     }
 
@@ -555,9 +563,17 @@ mod tests {
         let store = setup_store().await;
         let mut models = std::collections::HashMap::new();
         models.insert("gather".to_string(), "opus".to_string());
-        let mat = materialize(&linear_def(), "x", "team-1", &store, None, Some(&models), None)
-            .await
-            .unwrap();
+        let mat = materialize(
+            &linear_def(),
+            "x",
+            "team-1",
+            &store,
+            None,
+            Some(&models),
+            None,
+        )
+        .await
+        .unwrap();
 
         let gather = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
         assert_eq!(
@@ -612,7 +628,8 @@ mod tests {
             goal_id: None,
         };
         let mut def = linear_def();
-        def.steps.push(clarify_step("ask", "which mode?", &["A", "B"], &["gather"]));
+        def.steps
+            .push(clarify_step("ask", "which mode?", &["A", "B"], &["gather"]));
 
         let mat = materialize(&def, "x", "team-1", &store, None, None, Some(&strategy))
             .await

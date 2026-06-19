@@ -228,8 +228,7 @@ mod tests {
         ctx.strategy_guardrails =
             Some("- don't refactor unrelated modules\n- don't add speculative config".to_string());
 
-        let builder =
-            PromptBuilder::new(PromptConfig::default()).with_resolved_context(ctx);
+        let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(ctx);
         let parts = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
 
         // Stable prefix (part 0) carries the full `<strategy>` body.
@@ -243,7 +242,9 @@ mod tests {
             parts[1].content.contains("<strategy_reminder>"),
             "cached Full prompt must echo guardrails in the dynamic suffix"
         );
-        assert!(parts[1].content.contains("don't refactor unrelated modules"));
+        assert!(parts[1]
+            .content
+            .contains("don't refactor unrelated modules"));
         // The `<strategy>` body must NOT leak into the dynamic suffix, and the
         // reminder must NOT leak into the stable prefix.
         assert!(!parts[1].content.contains("<strategy>"));

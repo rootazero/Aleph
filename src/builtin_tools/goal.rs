@@ -314,7 +314,11 @@ token_budget. \
                     let key = crate::strategy::goal_key(&session);
                     match strat_store.get(&key) {
                         Ok(Some(existing)) => {
-                            if existing.goal_id.as_deref().is_some_and(|old| old != goal.id) {
+                            if existing
+                                .goal_id
+                                .as_deref()
+                                .is_some_and(|old| old != goal.id)
+                            {
                                 if let Err(e) = strat_store.delete(&key) {
                                     info!(session = %session, error = %e,
                                         "goal set: failed to invalidate stale strategy (ignored)");
@@ -928,11 +932,9 @@ mod tests {
     async fn goal_set_mints_strategy_and_replans_on_changed_objective() {
         use crate::strategy::{goal_key, StrategyStore};
         let sdir = tempfile::tempdir().unwrap();
-        crate::strategy::set_global_for_test(
-            crate::sync_primitives::Arc::new(
-                StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
-            ),
-        );
+        crate::strategy::set_global_for_test(crate::sync_primitives::Arc::new(
+            StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+        ));
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
@@ -956,7 +958,10 @@ mod tests {
             .get(&goal_key("sess-fire"))
             .unwrap()
             .expect("a Strategy was minted");
-        assert_eq!(stored.guardrails, vec!["do not touch the cache layer".to_string()]);
+        assert_eq!(
+            stored.guardrails,
+            vec!["do not touch the cache layer".to_string()]
+        );
 
         // Re-set with a CHANGED objective: F4 invalidates the stale row, then the
         // planner re-fires; the constant mock yields the same guardrails.
@@ -971,7 +976,10 @@ mod tests {
             .get(&goal_key("sess-fire"))
             .unwrap()
             .unwrap();
-        assert_eq!(after.guardrails, stored.guardrails, "re-planned row carries the mock's guardrails");
+        assert_eq!(
+            after.guardrails, stored.guardrails,
+            "re-planned row carries the mock's guardrails"
+        );
     }
 
     /// Provider = None → goal `set` still succeeds and stores NO Strategy.
@@ -979,11 +987,9 @@ mod tests {
     async fn goal_set_with_no_provider_succeeds_without_strategy() {
         use crate::strategy::{goal_key, StrategyStore};
         let sdir = tempfile::tempdir().unwrap();
-        crate::strategy::set_global_for_test(
-            crate::sync_primitives::Arc::new(
-                StrategyStore::open(&sdir.path().join("s2.db")).unwrap(),
-            ),
-        );
+        crate::strategy::set_global_for_test(crate::sync_primitives::Arc::new(
+            StrategyStore::open(&sdir.path().join("s2.db")).unwrap(),
+        ));
 
         let (tool, _d) = tool_with_session("sess-noprov");
         let out = tool
@@ -1026,8 +1032,12 @@ mod tests {
             success_criteria: "ok".into(),
             goal_id: None,
         };
-        sstore.put(&goal_key("sess-clear-strat"), &concrete).unwrap();
-        sstore.put(&loop_key("sess-clear-strat"), &concrete).unwrap();
+        sstore
+            .put(&goal_key("sess-clear-strat"), &concrete)
+            .unwrap();
+        sstore
+            .put(&loop_key("sess-clear-strat"), &concrete)
+            .unwrap();
 
         let (tool, _d) = tool_with_session("sess-clear-strat");
         tool.call(GoalArgs {
@@ -1036,9 +1046,11 @@ mod tests {
         })
         .await
         .unwrap();
-        tool.call(GoalArgs { ..args(GoalAction::Clear) })
-            .await
-            .unwrap();
+        tool.call(GoalArgs {
+            ..args(GoalAction::Clear)
+        })
+        .await
+        .unwrap();
 
         // Goal Clear removes the goal-keyed strategy...
         assert!(sstore.get(&goal_key("sess-clear-strat")).unwrap().is_none());
@@ -1072,13 +1084,7 @@ mod tests {
         assert!(sstore.get(&goal_key("sess-objchg")).unwrap().is_none());
         // Retrieve the first goal's id, then hand-seed a strategy that
         // cross-references it (simulating a previously-welded plan).
-        let first_goal_id = tool
-            .store
-            .get("sess-objchg")
-            .unwrap()
-            .unwrap()
-            .id
-            .clone();
+        let first_goal_id = tool.store.get("sess-objchg").unwrap().unwrap().id.clone();
         let strat = Strategy {
             objective: "Migrate auth to v2".into(),
             approach: "incremental".into(),

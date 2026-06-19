@@ -1910,7 +1910,9 @@ mod tests {
     async fn workflow_no_provider_plans_no_strategy() {
         let store = setup_store().await;
         let t = tool(store, None); // no planner provider injected
-        let strategy = t.plan_workflow_strategy(&linear_def(), "do the thing").await;
+        let strategy = t
+            .plan_workflow_strategy(&linear_def(), "do the thing")
+            .await;
         assert!(strategy.is_none(), "no provider => no strategy planned");
     }
 
@@ -1922,7 +1924,12 @@ mod tests {
         let provider: Arc<dyn crate::providers::AiProvider> =
             Arc::new(crate::providers::MockProvider::new(json));
         let t = tool(store, None).with_planner_provider(Some(provider));
-        let strategy = t.plan_workflow_strategy(&linear_def(), "do the thing").await;
-        assert!(strategy.is_some(), "provider + concrete guardrail => Some(strategy)");
+        let strategy = t
+            .plan_workflow_strategy(&linear_def(), "do the thing")
+            .await;
+        assert!(
+            strategy.is_some(),
+            "provider + concrete guardrail => Some(strategy)"
+        );
     }
 }

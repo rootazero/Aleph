@@ -49,34 +49,60 @@ mod tests {
     #[test]
     fn member_prompt_has_identity_and_obey_contract() {
         let out = build_member_input(
-            "team-xyz", "alice", "researcher",
+            "team-xyz",
+            "alice",
+            "researcher",
             "bob (writer), leader (leader)",
             "[user]: @alice 查下 X",
             false,
-            "Squad", None, "查下 X",
+            "Squad",
+            None,
+            "查下 X",
         );
         assert!(out.contains("alice"));
         assert!(out.contains("team-xyz"));
         assert!(out.contains("[user]: @alice 查下 X"));
         assert!(out.contains("团队纪律"), "member gets the obey contract");
-        assert!(!out.contains("你是团队「Squad」的 leader"), "member has no leader contract");
-        assert!(out.contains("task_submit"), "member told to submit via task_submit");
+        assert!(
+            !out.contains("你是团队「Squad」的 leader"),
+            "member has no leader contract"
+        );
+        assert!(
+            out.contains("task_submit"),
+            "member told to submit via task_submit"
+        );
     }
 
     #[test]
     fn leader_prompt_uses_strong_orchestration_contract() {
         let out = build_member_input(
-            "team-xyz", "leader", "leader",
+            "team-xyz",
+            "leader",
+            "leader",
             "alice (researcher)",
             "[user]: 这事谁跟进",
             true,
-            "Squad", Some("Be concise"), "做个调研",
+            "Squad",
+            Some("Be concise"),
+            "做个调研",
         );
-        assert!(out.contains("你是团队「Squad」的 leader"), "leader contract present");
-        assert!(out.contains("task_create"), "leader told to decompose with task_create");
+        assert!(
+            out.contains("你是团队「Squad」的 leader"),
+            "leader contract present"
+        );
+        assert!(
+            out.contains("task_create"),
+            "leader told to decompose with task_create"
+        );
         assert!(out.contains("不要自己闷头做完"), "anti-pattern present");
         assert!(out.contains("做个调研"), "user request surfaced to leader");
-        assert!(out.contains("task_review"), "leader told to accept/reject via task_review");
-        assert!(out.contains("task_id"), "leader told to name the task_id when assigning");
+        assert!(
+            out.contains("task_review"),
+            "leader told to accept/reject via task_review"
+        );
+        assert!(
+            out.contains("task_id"),
+            "leader told to name the task_id when assigning"
+        );
     }
 }

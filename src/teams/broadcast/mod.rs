@@ -27,6 +27,7 @@ pub const RESERVED_USER_HANDLE: &str = "user";
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskStore};
 use crate::gateway::context::GatewayContext;
 use crate::gateway::event_emitter::team_fanout::{team_event_bus, TeamFanoutEmitter};
 use crate::gateway::event_emitter::{CollectingEventEmitter, EventEmitter};
@@ -34,7 +35,6 @@ use crate::gateway::execution_engine::RunRequest;
 use crate::gateway::reply_emitter::extract_final_response;
 use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Arc;
-use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskStore};
 use crate::teams::messages::{MessageStore, MessageType, NewMessage};
 use crate::teams::TeamStore;
 
@@ -83,7 +83,10 @@ fn build_team_planner_objective(user_request: &str, roster_label: &str) -> Strin
 /// turn. Pure / host-testable.
 #[must_use]
 fn newly_waiting_review(pre: &[String], post: &[String]) -> Vec<String> {
-    post.iter().filter(|id| !pre.contains(id)).cloned().collect()
+    post.iter()
+        .filter(|id| !pre.contains(id))
+        .cloned()
+        .collect()
 }
 
 /// 群聊广播编排器。无状态:每次 dispatch 现场拉 team/roster/transcript。
@@ -224,11 +227,8 @@ impl GroupChatBroadcaster {
                 leader_first,
             );
             if leader_first && user_triggered && content.contains('@') {
-                self.post_system(
-                    &team_id,
-                    "已交由 leader 统筹:先规划任务分配,再分派给成员。",
-                )
-                .await;
+                self.post_system(&team_id, "已交由 leader 统筹:先规划任务分配,再分派给成员。")
+                    .await;
             }
             if targets.is_empty() {
                 return; // 链自然停
@@ -449,8 +449,16 @@ impl GroupChatBroadcaster {
 
         // 回流:解析回复里的@,递归(agent 触发→没@不兜底)。深度+1。
         // dispatch 返回显式 boxed future(打破 async 递归的 opaque 类型循环)。
-        self.dispatch(team_id, reply, agent_id, chain_depth + 1, false, false, budget)
-            .await;
+        self.dispatch(
+            team_id,
+            reply,
+            agent_id,
+            chain_depth + 1,
+            false,
+            false,
+            budget,
+        )
+        .await;
     }
 
     async fn post_system(&self, team_id: &str, text: &str) {
@@ -476,7 +484,8 @@ mod tests {
 
     #[test]
     fn team_planner_objective_includes_request_and_roster() {
-        let o = super::build_team_planner_objective("做个市场调研", "alice (researcher), bob (writer)");
+        let o =
+            super::build_team_planner_objective("做个市场调研", "alice (researcher), bob (writer)");
         assert!(o.contains("做个市场调研"));
         assert!(o.contains("alice (researcher), bob (writer)"));
     }
@@ -524,7 +533,10 @@ mod tests {
     fn newly_waiting_review_is_post_minus_pre() {
         let pre = vec!["a".to_string(), "b".to_string()];
         let post = vec!["a".to_string(), "b".to_string(), "c".to_string()];
-        assert_eq!(super::newly_waiting_review(&pre, &post), vec!["c".to_string()]);
+        assert_eq!(
+            super::newly_waiting_review(&pre, &post),
+            vec!["c".to_string()]
+        );
         // nothing new
         assert!(super::newly_waiting_review(&post, &post).is_empty());
         // a task leaving WaitingReview is not "new"

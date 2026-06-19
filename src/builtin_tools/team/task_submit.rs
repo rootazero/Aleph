@@ -5,9 +5,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::agents::swarm::tasks::{CoordTaskStatus, CoordTaskStore, CoordTaskUpdate};
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
-use crate::agents::swarm::tasks::{CoordTaskStatus, CoordTaskStore, CoordTaskUpdate};
 use crate::teams::artifacts::{ArtifactStore, ArtifactType, NewArtifact, TaskStatus};
 use crate::tools::AlephTool;
 
@@ -117,7 +117,13 @@ impl AlephTool for TaskSubmitTool {
         // WaitingReview for the leader's task_review. Graceful no-op when the
         // id is freeform (not a coord_task) or no CoordTaskStore is wired (P7).
         if let Some(coord_store) = &self.coord_store {
-            if coord_store.get_task(&args.task_id).await.ok().flatten().is_some() {
+            if coord_store
+                .get_task(&args.task_id)
+                .await
+                .ok()
+                .flatten()
+                .is_some()
+            {
                 let _ = coord_store
                     .update_task(
                         &args.task_id,
@@ -150,7 +156,11 @@ mod tests {
     #[test]
     fn new_takes_optional_coord_store() {
         fn assert_3_arg(
-            f: impl Fn(Arc<dyn ArtifactStore>, Option<Arc<dyn CoordTaskStore>>, String) -> TaskSubmitTool,
+            f: impl Fn(
+                Arc<dyn ArtifactStore>,
+                Option<Arc<dyn CoordTaskStore>>,
+                String,
+            ) -> TaskSubmitTool,
         ) {
             let _ = f;
         }

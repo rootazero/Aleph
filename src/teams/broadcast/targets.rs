@@ -32,7 +32,11 @@ pub fn resolve_targets(
     // `leader_first` is false and the equal-broadcast below resumes.
     if user_triggered && leader_first {
         let leader = leader_id.to_string();
-        return if leader != sender { vec![leader] } else { Vec::new() };
+        return if leader != sender {
+            vec![leader]
+        } else {
+            Vec::new()
+        };
     }
 
     let mentions = extract_mentions(content);
@@ -113,7 +117,14 @@ mod tests {
     #[test]
     fn drops_self_mention_and_reserved_user() {
         // alice 回复里 @ 自己 + @user + @bob → 只剩 bob
-        let t = resolve_targets("@alice @user @bob", "alice", "leader", &roster(), false, false);
+        let t = resolve_targets(
+            "@alice @user @bob",
+            "alice",
+            "leader",
+            &roster(),
+            false,
+            false,
+        );
         assert_eq!(t, vec!["bob".to_string()], "去掉自@和@user");
     }
 
@@ -127,7 +138,11 @@ mod tests {
     fn leader_first_overrides_explicit_mention() {
         // hard gate ON + user message that @-named alice → still routes to leader only
         let t = resolve_targets("@alice 看下", "user", "leader", &roster(), true, true);
-        assert_eq!(t, vec!["leader".to_string()], "leader_first ignores the user @");
+        assert_eq!(
+            t,
+            vec!["leader".to_string()],
+            "leader_first ignores the user @"
+        );
     }
 
     #[test]

@@ -150,7 +150,10 @@ mod tests {
         let b = render_strategy_summary(&s);
         assert_eq!(a, b, "render must be byte-identical for identical input");
         // No timestamp / clock leak: there must be no digits-bearing "ms" stamp.
-        assert!(!a.contains("ms"), "no timestamp may appear in the stable body");
+        assert!(
+            !a.contains("ms"),
+            "no timestamp may appear in the stable body"
+        );
     }
 
     #[test]
@@ -163,7 +166,10 @@ mod tests {
             !out.contains("Migrate auth to the new API"),
             "guardrail tail omits the objective to avoid reminder-blindness"
         );
-        assert!(!out.contains("understand the current failure"), "no phases in tail");
+        assert!(
+            !out.contains("understand the current failure"),
+            "no phases in tail"
+        );
     }
 
     #[test]
@@ -175,7 +181,10 @@ mod tests {
         let out = render_guardrails_only(&s);
         assert!(out.contains("keep the change surgical"));
         // Blank guardrails are dropped, not rendered as empty bullets.
-        assert!(!out.contains("- \n"), "no empty bullet for a blank guardrail");
+        assert!(
+            !out.contains("- \n"),
+            "no empty bullet for a blank guardrail"
+        );
     }
 
     #[test]
@@ -189,8 +198,14 @@ mod tests {
         // The DAG *is* the phase structure — the per-node weld drops the phase
         // list and welds only the run-global objective + cross-cutting guardrails.
         let out = render_workflow_global_frame(&sample());
-        assert!(out.contains("Migrate auth to the new API"), "objective present");
-        assert!(out.contains("do not refactor the unrelated parser"), "guardrails present");
+        assert!(
+            out.contains("Migrate auth to the new API"),
+            "objective present"
+        );
+        assert!(
+            out.contains("do not refactor the unrelated parser"),
+            "guardrails present"
+        );
         assert!(
             !out.contains("understand the current failure"),
             "phase 1 must not leak into the workflow global frame"
@@ -208,6 +223,9 @@ mod tests {
     #[test]
     fn workflow_global_frame_is_deterministic() {
         let s = sample();
-        assert_eq!(render_workflow_global_frame(&s), render_workflow_global_frame(&s));
+        assert_eq!(
+            render_workflow_global_frame(&s),
+            render_workflow_global_frame(&s)
+        );
     }
 }
