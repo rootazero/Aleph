@@ -78,6 +78,14 @@ fn build_team_planner_objective(user_request: &str, roster_label: &str) -> Strin
     )
 }
 
+/// Set-difference for the WaitingReview snapshot diff: ids present in `post`
+/// but not in `pre` — i.e. tasks this member just moved into WaitingReview this
+/// turn. Pure / host-testable.
+#[must_use]
+fn newly_waiting_review(pre: &[String], post: &[String]) -> Vec<String> {
+    post.iter().filter(|id| !pre.contains(id)).cloned().collect()
+}
+
 /// 群聊广播编排器。无状态:每次 dispatch 现场拉 team/roster/transcript。
 #[derive(Clone)]
 pub struct GroupChatBroadcaster {
@@ -337,6 +345,25 @@ impl GroupChatBroadcaster {
             None => collector.clone(),
         };
 
+        // F2-retrigger: snapshot this member's WaitingReview tasks before the
+        // turn so we can detect fresh submissions afterward. Skipped for the
+        // leader (a self-review needs no @leader nudge) and when no coord store
+        // is wired.
+        let review_pre: Vec<String> = match (&self.coord_task_store, is_leader) {
+            (Some(cs), false) => cs
+                .list_tasks(CoordTaskFilter {
+                    team_id: Some(team_id.clone()),
+                    status: Some(CoordTaskStatus::WaitingReview),
+                    owner: Some(agent_id.clone()),
+                })
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|t| t.id)
+                .collect(),
+            _ => Vec::new(),
+        };
+
         let run_id = uuid::Uuid::new_v4().to_string();
         let metadata = member_run_metadata(&team_id, chain_depth);
         let req = RunRequest {
@@ -361,6 +388,37 @@ impl GroupChatBroadcaster {
         {
             tracing::warn!(team_id = %team_id, agent_id = %agent_id, error = %e, "group-chat member run failed");
             return;
+        }
+
+        // F2-retrigger: any task this member just moved into WaitingReview ⇒
+        // synthetically @-nudge the leader to review it. Goes through `dispatch`
+        // directly (an inert team_messages row would never re-trigger anyone),
+        // carrying the live budget + depth. Skipped for the leader (self-review).
+        if let (Some(cs), false) = (&self.coord_task_store, is_leader) {
+            let review_post: Vec<String> = cs
+                .list_tasks(CoordTaskFilter {
+                    team_id: Some(team_id.clone()),
+                    status: Some(CoordTaskStatus::WaitingReview),
+                    owner: Some(agent_id.clone()),
+                })
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|t| t.id)
+                .collect();
+            for new_id in newly_waiting_review(&review_pre, &review_post) {
+                self.clone()
+                    .dispatch(
+                        team_id.clone(),
+                        format!("@{leader_id} task `{new_id}` 已提交,待你 review(用 task_review 验收)。"),
+                        agent_id.clone(),
+                        chain_depth + 1,
+                        false,
+                        false,
+                        budget.clone(),
+                    )
+                    .await;
+            }
         }
 
         let Some(reply) = extract_final_response(&collector.events().await) else {
@@ -460,6 +518,17 @@ mod tests {
         assert_eq!(m.get("platform").map(String::as_str), Some("webchat"));
         assert_eq!(m.get("team_id").map(String::as_str), Some("team-x"));
         assert_eq!(m.get("chain_depth").map(String::as_str), Some("2"));
+    }
+
+    #[test]
+    fn newly_waiting_review_is_post_minus_pre() {
+        let pre = vec!["a".to_string(), "b".to_string()];
+        let post = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        assert_eq!(super::newly_waiting_review(&pre, &post), vec!["c".to_string()]);
+        // nothing new
+        assert!(super::newly_waiting_review(&post, &post).is_empty());
+        // a task leaving WaitingReview is not "new"
+        assert!(super::newly_waiting_review(&post, &pre).is_empty());
     }
 
     #[test]
