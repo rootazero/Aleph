@@ -7,6 +7,7 @@ use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 
 mod data;
+mod drawer;
 mod facets;
 
 /// Fixed number of entries shown per page in both memory tabs.
