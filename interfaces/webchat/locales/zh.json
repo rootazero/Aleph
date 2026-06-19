@@ -775,7 +775,12 @@
       "command_label": "命令",
       "args_label": "参数",
       "env_label": "环境变量",
-      "env_hint": "每行一个，格式：KEY=value",
+      "env_hint": "密钥类变量的值默认隐藏，点击眼睛图标可显示。",
+      "env_add": "+ 添加变量",
+      "env_key_placeholder": "变量名",
+      "env_value_placeholder": "值",
+      "env_value_saved": "已保存 — 留空保持不变",
+      "env_remove": "移除",
       "cancel": "取消"
     },
     "plugins": {

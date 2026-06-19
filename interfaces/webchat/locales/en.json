@@ -775,7 +775,12 @@
       "command_label": "Command",
       "args_label": "Arguments",
       "env_label": "Environment Variables",
-      "env_hint": "One per line, format: KEY=value",
+      "env_hint": "Values for secret-like keys are masked — click the eye to reveal.",
+      "env_add": "+ Add variable",
+      "env_key_placeholder": "KEY",
+      "env_value_placeholder": "value",
+      "env_value_saved": "saved — leave blank to keep",
+      "env_remove": "Remove",
       "cancel": "Cancel"
     },
     "plugins": {

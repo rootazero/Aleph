@@ -56,6 +56,56 @@ pub struct McpServerConfigJson {
 }
 
 // ============================================================================
+// Secret env redaction (stable-echo at the trust boundary)
+// ============================================================================
+
+/// Env var names matching these substrings (case-insensitive) are treated as
+/// secrets: their values are redacted on read and preserved on blank update.
+/// Mirrors the Panel's `is_secret_env_key` so masking is consistent both ways.
+fn is_secret_env_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    ["KEY", "SECRET", "TOKEN", "PASSWORD", "PASS", "CREDENTIAL"]
+        .iter()
+        .any(|needle| upper.contains(needle))
+}
+
+/// Redact secret env values before sending to the Panel: secret-looking keys
+/// keep their name but their value is blanked, so the stored secret never leaves
+/// the host. Non-secret values (e.g. `DOMAIN`, `SERVICE_ID`) pass through.
+fn redact_secret_env(env: &HashMap<String, String>) -> HashMap<String, String> {
+    env.iter()
+        .map(|(k, v)| {
+            if is_secret_env_key(k) {
+                (k.clone(), String::new())
+            } else {
+                (k.clone(), v.clone())
+            }
+        })
+        .collect()
+}
+
+/// Merge an incoming env (from the Panel) with the stored env: a secret-looking
+/// key whose incoming value is blank keeps the previously stored value (stable
+/// echo — blank means "unchanged"). A non-blank value replaces it (rotation),
+/// and non-secret keys pass through as sent.
+fn merge_secret_env(
+    incoming: HashMap<String, String>,
+    existing: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    incoming
+        .into_iter()
+        .map(|(k, v)| {
+            if v.is_empty() && is_secret_env_key(&k) {
+                if let Some(prev) = existing.get(&k) {
+                    return (k, prev.clone());
+                }
+            }
+            (k, v)
+        })
+        .collect()
+}
+
+// ============================================================================
 // List
 // ============================================================================
 
@@ -72,7 +122,7 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -
                 name: name.clone(),
                 command: cfg.command.clone(),
                 args: cfg.args.clone(),
-                env: cfg.env.clone(),
+                env: redact_secret_env(&cfg.env),
                 enabled: cfg.enabled,
                 requires_runtime: cfg.requires_runtime.clone(),
                 cwd: cfg.cwd.clone(),
@@ -88,7 +138,7 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -
                 name: cfg.name.clone(),
                 command: cfg.command.clone(),
                 args: cfg.args.clone(),
-                env: cfg.env.clone(),
+                env: redact_secret_env(&cfg.env),
                 enabled: true, // Legacy servers don't have enabled field
                 requires_runtime: cfg.requires_runtime.clone(),
                 cwd: cfg.cwd.clone(),
@@ -125,7 +175,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
                 name: params.name.clone(),
                 command: cfg.command.clone(),
                 args: cfg.args.clone(),
-                env: cfg.env.clone(),
+                env: redact_secret_env(&cfg.env),
                 enabled: cfg.enabled,
                 requires_runtime: cfg.requires_runtime.clone(),
                 cwd: cfg.cwd.clone(),
@@ -270,11 +320,13 @@ pub async fn handle_update(
         Err(e) => return e,
     };
 
-    // Convert JSON config to McpServerConfig
-    let server_config = McpServerConfig {
+    // Convert JSON config to McpServerConfig. The env is merged with the stored
+    // env inside the lock so blanked secrets keep their previous value.
+    let incoming_env = params.config.env;
+    let mut server_config = McpServerConfig {
         command: params.config.command.clone(),
         args: params.config.args,
-        env: params.config.env,
+        env: HashMap::new(),
         cwd: params.config.cwd,
         requires_runtime: params.config.requires_runtime,
         timeout_seconds: params.config.timeout_seconds.unwrap_or(30),
@@ -292,14 +344,20 @@ pub async fn handle_update(
         }
 
         if let Some(ref mut unified) = cfg.unified_tools {
-            // Check if server exists
-            if !unified.mcp.contains_key(&params.name) {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("MCP server not found: {}", params.name),
-                );
-            }
+            // Check if server exists, capturing its stored env for stable-echo merge.
+            let existing_env = match unified.mcp.get(&params.name) {
+                Some(existing) => existing.env.clone(),
+                None => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        format!("MCP server not found: {}", params.name),
+                    );
+                }
+            };
+
+            // Blank secret values keep the stored secret; new values rotate it.
+            server_config.env = merge_secret_env(incoming_env, &existing_env);
 
             // Update server
             unified.mcp.insert(params.name.clone(), server_config);
@@ -410,4 +468,69 @@ pub async fn handle_delete(
 
     info!(name = %params.name, "MCP server deleted");
     JsonRpcResponse::success(request.id, json!({ "ok": true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn secret_keys_detected_case_insensitively() {
+        assert!(is_secret_env_key("VOLCENGINE_ACCESS_KEY"));
+        assert!(is_secret_env_key("VOLCENGINE_SECRET_KEY"));
+        assert!(is_secret_env_key("api_token"));
+        assert!(is_secret_env_key("DB_PASSWORD"));
+        assert!(!is_secret_env_key("SERVICE_ID"));
+        assert!(!is_secret_env_key("DOMAIN"));
+    }
+
+    #[test]
+    fn redact_blanks_secrets_keeps_keys_and_nonsecrets() {
+        let input = env(&[
+            ("VOLCENGINE_ACCESS_KEY", "ak-real"),
+            ("SECRET_KEY", "sk-real"),
+            ("SERVICE_ID", "svc-123"),
+            ("DOMAIN", "img.example.com"),
+        ]);
+        let out = redact_secret_env(&input);
+        assert_eq!(out.get("VOLCENGINE_ACCESS_KEY"), Some(&String::new()));
+        assert_eq!(out.get("SECRET_KEY"), Some(&String::new()));
+        assert_eq!(out.get("SERVICE_ID"), Some(&"svc-123".to_string()));
+        assert_eq!(out.get("DOMAIN"), Some(&"img.example.com".to_string()));
+        // Keys are preserved so the Panel still shows the var is configured.
+        assert_eq!(out.len(), 4);
+    }
+
+    #[test]
+    fn merge_blank_secret_keeps_stored_value() {
+        let existing = env(&[("ACCESS_KEY", "ak-stored"), ("SERVICE_ID", "old")]);
+        // Panel echoes back a blanked secret + an edited non-secret.
+        let incoming = env(&[("ACCESS_KEY", ""), ("SERVICE_ID", "new")]);
+        let merged = merge_secret_env(incoming, &existing);
+        assert_eq!(merged.get("ACCESS_KEY"), Some(&"ak-stored".to_string()));
+        assert_eq!(merged.get("SERVICE_ID"), Some(&"new".to_string()));
+    }
+
+    #[test]
+    fn merge_nonblank_secret_rotates() {
+        let existing = env(&[("ACCESS_KEY", "ak-old")]);
+        let incoming = env(&[("ACCESS_KEY", "ak-new")]);
+        let merged = merge_secret_env(incoming, &existing);
+        assert_eq!(merged.get("ACCESS_KEY"), Some(&"ak-new".to_string()));
+    }
+
+    #[test]
+    fn merge_blank_secret_without_existing_stays_blank() {
+        let existing = env(&[]);
+        let incoming = env(&[("NEW_TOKEN", "")]);
+        let merged = merge_secret_env(incoming, &existing);
+        assert_eq!(merged.get("NEW_TOKEN"), Some(&String::new()));
+    }
 }

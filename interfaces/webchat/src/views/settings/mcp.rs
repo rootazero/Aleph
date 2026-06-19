@@ -10,8 +10,29 @@ use leptos::task::spawn_local;
 use std::collections::HashMap;
 
 use crate::api::{McpConfigApi, McpServerConfig, McpServerInfo};
+use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
+
+/// One editable environment-variable row with a stable id for keyed iteration.
+#[derive(Clone, Copy)]
+struct EnvRow {
+    id: usize,
+    key: RwSignal<String>,
+    value: RwSignal<String>,
+    /// True if this secret was already configured on the server (loaded with its
+    /// value redacted). Drives the "saved — blank keeps it" placeholder.
+    configured: bool,
+}
+
+/// Heuristic: does this env var name look like it holds a secret?
+/// Drives whether the value field is masked (provider-grade key UX).
+fn is_secret_env_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    ["KEY", "SECRET", "TOKEN", "PASSWORD", "PASS", "CREDENTIAL"]
+        .iter()
+        .any(|needle| upper.contains(needle))
+}
 
 /// Load MCP servers list from Gateway
 fn load_servers(
@@ -293,7 +314,8 @@ fn EditMcpServerDialog(
     let name = RwSignal::new(String::new());
     let command = RwSignal::new(String::new());
     let args = RwSignal::new(String::new());
-    let env = RwSignal::new(String::new());
+    let env_rows = RwSignal::new(Vec::<EnvRow>::new());
+    let next_env_id = StoredValue::new(0usize);
     let saving = RwSignal::new(false);
     let dialog_error = RwSignal::new(Option::<String>::None);
     let is_new = editing_server.get().is_none();
@@ -308,12 +330,26 @@ fn EditMcpServerDialog(
                     command.set(server.command);
                     args.set(server.args.join(" "));
                     if let Some(env_map) = server.env {
-                        let env_str = env_map
-                            .iter()
-                            .map(|(k, v)| format!("{k}={v}"))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        env.set(env_str);
+                        // Sort for stable ordering (HashMap iteration is unordered).
+                        let mut entries: Vec<(String, String)> = env_map.into_iter().collect();
+                        entries.sort_by(|a, b| a.0.cmp(&b.0));
+                        let mut id = next_env_id.get_value();
+                        let rows: Vec<EnvRow> = entries
+                            .into_iter()
+                            .map(|(k, v)| {
+                                let configured = is_secret_env_key(&k);
+                                let row = EnvRow {
+                                    id,
+                                    configured,
+                                    key: RwSignal::new(k),
+                                    value: RwSignal::new(v),
+                                };
+                                id += 1;
+                                row
+                            })
+                            .collect();
+                        next_env_id.set_value(id);
+                        env_rows.set(rows);
                     }
                 }
                 Err(e) => {
@@ -336,16 +372,20 @@ fn EditMcpServerDialog(
             .map(std::string::ToString::to_string)
             .collect();
 
-        let server_env = if env.get().trim().is_empty() {
-            None
-        } else {
+        let server_env = {
             let mut env_map = HashMap::new();
-            for line in env.get().lines() {
-                if let Some((k, v)) = line.split_once('=') {
-                    env_map.insert(k.trim().to_string(), v.trim().to_string());
+            for row in env_rows.get() {
+                let k = row.key.get().trim().to_string();
+                if k.is_empty() {
+                    continue;
                 }
+                env_map.insert(k, row.value.get().trim().to_string());
             }
-            Some(env_map)
+            if env_map.is_empty() {
+                None
+            } else {
+                Some(env_map)
+            }
         };
 
         let config = McpServerConfig {
@@ -425,13 +465,84 @@ fn EditMcpServerDialog(
 
                     <div>
                         <label class="block text-sm font-medium text-text-secondary mb-2">{t!(i18n, settings.mcp.env_label)}</label>
-                        <textarea
-                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm font-mono"
-                            rows="4"
-                            placeholder="KEY=value\nANOTHER_KEY=another_value"
-                            prop:value=move || env.get()
-                            on:input=move |ev| env.set(event_target_value(&ev))
-                        />
+                        <div class="space-y-2">
+                            <For
+                                each=move || env_rows.get()
+                                key=|row| row.id
+                                children=move |row| {
+                                    let key_sig = row.key;
+                                    let val_sig = row.value;
+                                    let configured = row.configured;
+                                    view! {
+                                        <div class="flex items-center gap-2">
+                                            <input
+                                                type="text"
+                                                class="w-2/5 px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm font-mono"
+                                                placeholder=t_string!(i18n, settings.mcp.env_key_placeholder).to_string()
+                                                value=move || key_sig.get()
+                                                on:input=move |ev| key_sig.set(event_target_value(&ev))
+                                            />
+                                            <div class="flex-1">
+                                                {move || {
+                                                    if is_secret_env_key(&key_sig.get()) {
+                                                        view! {
+                                                            <SecretInput
+                                                                value=val_sig.into()
+                                                                on_change=move |v| val_sig.set(v)
+                                                                placeholder=if configured {
+                                                                    t_string!(i18n, settings.mcp.env_value_saved).to_string()
+                                                                } else {
+                                                                    t_string!(i18n, settings.mcp.env_value_placeholder).to_string()
+                                                                }
+                                                                monospace=true
+                                                            />
+                                                        }.into_any()
+                                                    } else {
+                                                        view! {
+                                                            <input
+                                                                type="text"
+                                                                class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm font-mono"
+                                                                placeholder=t_string!(i18n, settings.mcp.env_value_placeholder).to_string()
+                                                                value=move || val_sig.get()
+                                                                on:input=move |ev| val_sig.set(event_target_value(&ev))
+                                                            />
+                                                        }.into_any()
+                                                    }
+                                                }}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                class="p-1.5 text-danger hover:bg-danger-subtle rounded flex-shrink-0"
+                                                title=t_string!(i18n, settings.mcp.env_remove).to_string()
+                                                on:click=move |_| {
+                                                    env_rows.update(|rows| rows.retain(|r| r.id != row.id));
+                                                }
+                                            >
+                                                "🗑️"
+                                            </button>
+                                        </div>
+                                    }
+                                }
+                            />
+                            <button
+                                type="button"
+                                class="text-sm text-primary hover:text-primary-hover"
+                                on:click=move |_| {
+                                    let id = next_env_id.get_value();
+                                    next_env_id.set_value(id + 1);
+                                    env_rows.update(|rows| {
+                                        rows.push(EnvRow {
+                                            id,
+                                            configured: false,
+                                            key: RwSignal::new(String::new()),
+                                            value: RwSignal::new(String::new()),
+                                        });
+                                    });
+                                }
+                            >
+                                {t!(i18n, settings.mcp.env_add)}
+                            </button>
+                        </div>
                         <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.mcp.env_hint)}</p>
                     </div>
 
