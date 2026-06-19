@@ -61,6 +61,26 @@ impl StrategyStore {
         Ok(())
     }
 
+    /// Insert the strategy for `key` ONLY if no row exists yet, atomically.
+    /// Returns `true` when this call inserted the row, `false` when a row was
+    /// already present (left untouched). Unlike `put` (which upserts), this is
+    /// the race-safe fire-once primitive for the team planner: two concurrent
+    /// first messages both reach here, but exactly one inserts — `put`'s
+    /// last-write-wins would otherwise let both pay for + store a plan.
+    pub fn put_if_absent(&self, key: &str, strategy: &Strategy) -> anyhow::Result<bool> {
+        let json = serde_json::to_string(strategy)
+            .map_err(|e| AlephError::other(format!("strategy serialize: {e}")))?;
+        let rows = self
+            .lock()
+            .execute(
+                "INSERT INTO strategies (key, json) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO NOTHING",
+                rusqlite::params![key, json],
+            )
+            .map_err(|e| AlephError::other(format!("strategy put_if_absent: {e}")))?;
+        Ok(rows == 1)
+    }
+
     /// Fetch the strategy for `key`, if any. A missing row is `Ok(None)`;
     /// corrupt JSON is also `Ok(None)` (fail-safe: a bad row must never wedge
     /// prompt assembly). Real DB errors propagate via `?` rather than being
@@ -178,5 +198,27 @@ mod tests {
         store.put(&k, &sample("x")).unwrap();
         store.delete(&k).unwrap();
         assert!(store.get(&k).unwrap().is_none());
+    }
+
+    #[test]
+    fn put_if_absent_inserts_once_then_no_ops() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = StrategyStore::open(&dir.path().join("s.db")).unwrap();
+        let s1 = Strategy {
+            objective: "first".into(),
+            approach: "a".into(),
+            phases: vec![],
+            guardrails: vec!["avoid X".into()],
+            success_criteria: "done".into(),
+            goal_id: None,
+        };
+        let s2 = Strategy { objective: "second".into(), ..s1.clone() };
+        assert!(store.put_if_absent("team:t1", &s1).unwrap(), "first call inserts");
+        assert!(!store.put_if_absent("team:t1", &s2).unwrap(), "second call is a no-op");
+        assert_eq!(
+            store.get("team:t1").unwrap().unwrap().objective,
+            "first",
+            "the original row is preserved (NOT upserted)"
+        );
     }
 }
