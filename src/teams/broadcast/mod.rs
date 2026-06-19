@@ -64,12 +64,30 @@ fn member_run_metadata(
     metadata
 }
 
+/// Fold the user's request + the team roster into the planner objective. The
+/// planner is tool-free; the "capability surface" it reasons about for a team
+/// is the member roster, so we surface it here (PlannerContext has no roster
+/// field). Pure / host-testable.
+#[must_use]
+fn build_team_planner_objective(user_request: &str, roster_label: &str) -> String {
+    format!(
+        "你在为一个 agent 团队制定整体战略,团队要完成下面的用户请求。\n\
+         团队成员名册(agent_id (role)):{roster_label}\n\
+         用户请求:{user_request}"
+    )
+}
+
 /// 群聊广播编排器。无状态:每次 dispatch 现场拉 team/roster/transcript。
 #[derive(Clone)]
 pub struct GroupChatBroadcaster {
     ctx: Arc<GatewayContext>,
     team_store: Arc<dyn TeamStore>,
     msg_store: Arc<dyn MessageStore>,
+    /// Strategic-planner provider for the StraTA team planner (round 2). `None`
+    /// (default config off, or `[strategy].plan_team=false`) keeps the
+    /// first-message team planner + leader-first hard gate dormant — group chat
+    /// behaves exactly as before. Gated to `Some` at boot in agent_init.
+    planner_provider: Option<Arc<dyn crate::providers::AiProvider>>,
 }
 
 impl GroupChatBroadcaster {
@@ -78,12 +96,58 @@ impl GroupChatBroadcaster {
         ctx: Arc<GatewayContext>,
         team_store: Arc<dyn TeamStore>,
         msg_store: Arc<dyn MessageStore>,
+        planner_provider: Option<Arc<dyn crate::providers::AiProvider>>,
     ) -> Self {
         Self {
             ctx,
             team_store,
             msg_store,
+            planner_provider,
         }
+    }
+
+    /// Fire-once team planner. Returns `true` iff THIS call minted + stored a
+    /// non-empty team Strategy (⇒ the leader should run first this turn). Returns
+    /// `false` when the planner is disabled, the slot is already filled, or the
+    /// plan self-gated to nothing. Fail-soft throughout (P7): any miss ⇒ false ⇒
+    /// today's equal-broadcast. Plumbing only — the strategy CONTENT is the LLM's.
+    async fn maybe_plan_team_strategy(&self, team_id: &str, content: &str) -> bool {
+        let Some(provider) = self.planner_provider.clone() else {
+            return false;
+        };
+        let Some(store) = crate::strategy::global() else {
+            return false;
+        };
+        let norm = crate::routing::session_key::normalize_agent_id(team_id);
+        let key = crate::strategy::team_key(&norm);
+        // Cheap fast-path: already planned ⇒ no paid LLM call, no leader-first.
+        if store.get(&key).ok().flatten().is_some() {
+            return false;
+        }
+        let members = self
+            .team_store
+            .get_members(team_id)
+            .await
+            .unwrap_or_default();
+        let roster_label = members
+            .iter()
+            .map(|m| format!("{} ({})", m.agent_id, m.role))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let objective = build_team_planner_objective(content, &roster_label);
+        let ctx = crate::strategy::planner::PlannerContext {
+            tool_descriptions: Vec::new(),
+            env_summary: crate::strategy::planner::env_summary(),
+            lessons: Vec::new(),
+        };
+        let Some(strategy) =
+            crate::strategy::planner::plan_strategy(&provider, &objective, &ctx, None).await
+        else {
+            return false;
+        };
+        // Atomic guard against concurrent first messages: only the winner stores
+        // (and reports leader_first); the loser's plan is discarded.
+        store.put_if_absent(&key, &strategy).unwrap_or(false)
     }
 
     /// 入口:用户消息触发(没@时 leader 兜底)。假定 user 消息已由调用方存进 `msg_store`。
@@ -91,6 +155,7 @@ impl GroupChatBroadcaster {
     /// 每次用户触发新建一个 fan-out 树的全局唤醒计数器(`MAX_TOTAL_ACTIVATIONS` 闸),
     /// 计数器随这棵树的整条递归共享、用完即弃,确保上限是"每条用户消息"而非"进程累计"。
     pub async fn dispatch_user(&self, team_id: String, content: String) {
+        let leader_first = self.maybe_plan_team_strategy(&team_id, &content).await;
         let budget = Arc::new(AtomicUsize::new(0));
         self.clone()
             .dispatch(
@@ -99,7 +164,7 @@ impl GroupChatBroadcaster {
                 RESERVED_USER_HANDLE.to_string(),
                 0,
                 true,
-                false,
+                leader_first,
                 budget,
             )
             .await;
@@ -342,6 +407,13 @@ impl GroupChatBroadcaster {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn team_planner_objective_includes_request_and_roster() {
+        let o = super::build_team_planner_objective("做个市场调研", "alice (researcher), bob (writer)");
+        assert!(o.contains("做个市场调研"));
+        assert!(o.contains("alice (researcher), bob (writer)"));
+    }
 
     #[test]
     fn chain_depth_guard_blocks_at_max() {

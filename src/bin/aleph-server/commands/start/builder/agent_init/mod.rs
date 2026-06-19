@@ -402,6 +402,21 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             None
         };
 
+        // Round 2 (teams): the team-chat planner provider, gated additionally on
+        // [strategy].plan_team (default true). `None` ⇒ the first-message team
+        // planner + leader-first hard gate in the broadcaster stay dormant.
+        // Cloned BEFORE planner_provider is moved into tool_config (E0382).
+        // `enabled` already folded in (planner_provider is None when disabled).
+        let team_planner_provider = if app_config
+            .strategy
+            .as_ref()
+            .map_or(true, |s| s.plan_team)
+        {
+            planner_provider.clone()
+        } else {
+            None
+        };
+
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
             memory_db: Some(memory_db.clone()),
@@ -1400,6 +1415,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     topic_provider_registry
                         .get("haiku")
                         .or_else(|| Some(topic_provider_registry.default_provider()));
+                let chat_team_planner = team_planner_provider.clone();
                 let chat_event_bus = event_bus.clone();
                 server
                     .handlers_mut()
@@ -1408,6 +1424,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         let ctx = chat_ctx.clone();
                         let msg_store = chat_msg_store.clone();
                         let provider = chat_topic_provider.clone();
+                        let planner = chat_team_planner.clone();
                         let bus = chat_event_bus.clone();
                         async move {
                             alephcore::gateway::handlers::teams::handle_chat_send(
@@ -1416,6 +1433,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                                 msg_store,
                                 ctx,
                                 provider,
+                                planner,
                                 Some(bus),
                             )
                             .await
