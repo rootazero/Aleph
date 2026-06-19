@@ -53,16 +53,35 @@ pub async fn active_standing_goal(session_key: &str) -> Option<String> {
 /// `active_standing_goal`.
 pub async fn active_strategy(session_key: &str) -> Option<crate::strategy::Strategy> {
     let store = crate::strategy::global()?;
+    resolve_active_strategy(&store, session_key)
+}
+
+/// Resolve the welded Strategy for a session key against an explicit store
+/// (sync; the global accessor lives in `active_strategy`, keeping this
+/// unit-testable). Precedence: goal → loop → **team** → session. The team tier
+/// fires only for a `team_chat` Task key — it recovers the (already-normalized)
+/// team id and reads the leader-minted team-wide row, so every member welds the
+/// same plan (strategy round 2). Above `session_key` so a member's own
+/// `/goal`/`/loop` still wins; below `loop_key` for the same reason.
+fn resolve_active_strategy(
+    store: &crate::strategy::StrategyStore,
+    session_key: &str,
+) -> Option<crate::strategy::Strategy> {
     if let Some(s) = store.get(&crate::strategy::goal_key(session_key)).ok().flatten() {
         return Some(s);
     }
     if let Some(s) = store.get(&crate::strategy::loop_key(session_key)).ok().flatten() {
         return Some(s);
     }
-    // Naked-loop (plain interactive chat) strategy — lowest precedence so an
-    // explicit /goal or /loop strategy in a reused session always wins. This
-    // is also the read used by the subagent weld (run_loop/inner.rs), so a
-    // naked-loop session's subagents inherit the session Strategy (intended).
+    if let Some(crate::routing::session_key::SessionKey::Task { task_type, task_id, .. }) =
+        crate::routing::session_key::SessionKey::parse(session_key)
+    {
+        if task_type == "team_chat" {
+            if let Some(s) = store.get(&crate::strategy::team_key(&task_id)).ok().flatten() {
+                return Some(s);
+            }
+        }
+    }
     store
         .get(&crate::strategy::session_key(session_key))
         .ok()
@@ -183,5 +202,42 @@ mod active_strategy_tests {
     async fn returns_none_when_store_uninitialized() {
         let out = active_strategy("session-with-no-store").await;
         assert!(out.is_none());
+    }
+
+    fn mk_strategy(objective: &str) -> crate::strategy::Strategy {
+        crate::strategy::Strategy {
+            objective: objective.into(),
+            approach: "a".into(),
+            phases: vec![],
+            guardrails: vec!["g".into()],
+            success_criteria: "s".into(),
+            goal_id: None,
+        }
+    }
+
+    #[test]
+    fn resolve_active_strategy_team_tier_and_precedence() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strategy::StrategyStore::open(&dir.path().join("s.db")).unwrap();
+        // A team-chat member session key: agent:alice:team_chat:squad
+        let sk = crate::routing::session_key::SessionKey::task("alice", "team_chat", "squad")
+            .to_key_string();
+
+        // team tier resolves the team-wide row
+        store.put(&crate::strategy::team_key("squad"), &mk_strategy("team-obj")).unwrap();
+        assert_eq!(
+            resolve_active_strategy(&store, &sk).map(|s| s.objective),
+            Some("team-obj".to_string())
+        );
+
+        // a member's own /goal still wins over the team frame
+        store.put(&crate::strategy::goal_key(&sk), &mk_strategy("goal-obj")).unwrap();
+        assert_eq!(
+            resolve_active_strategy(&store, &sk).map(|s| s.objective),
+            Some("goal-obj".to_string())
+        );
+
+        // a non-team session never hits the team tier
+        assert!(resolve_active_strategy(&store, "agent:bob:main").is_none());
     }
 }
