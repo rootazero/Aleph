@@ -85,6 +85,10 @@ mod tests {
         assert_eq!(layer.name(), "doctor_repair_hint");
         assert_eq!(layer.priority(), 1120);
         assert!(matches!(layer.stability(), LayerStability::Dynamic));
+        // Guards the "dead on the cached path" regression class: a layer that
+        // drops `Cached` from `paths()` silently vanishes in production while
+        // every other test stays green (see RoleLayer/CitationStandardsLayer).
+        assert!(layer.paths().contains(&AssemblyPath::Cached));
     }
 
     #[test]
