@@ -77,12 +77,12 @@ Every task implicitly includes these. Exact values, copied from the spec:
 |---|---|---|---|---|
 | **P0 Foundations** | `…-p0-foundations.md` | Store types + rusqlite cache + installed reconciliation + `extensions.*` façade (catalog from cache, installed, toggle, uninstall) | — | `extensions.installed` returns the user's real installed MCP/plugins/skills as unified `ExtensionEntry`s; toggle/uninstall delegate correctly |
 | **P1 Source layer** | `…-p1-source-layer.md` | `SourceProvider` + `ProviderRegistry` + 3 providers + background sync into cache | P0 | `extensions.catalog` returns real entries fetched from the MCP registry / Docker / marketplaces, cached and browsable offline |
-| **P2 Trust rails + install** | `…-p2-trust-install.md` (later) | Trust tiers, disclosure payload, keychain secrets, pin+re-gate, deterministic install routing, injection scan | P0,P1 | `extensions.install` installs a clean-spec extension after a disclosure gate; secrets land in keychain; SHA256 verified |
+| **P2 Trust rails + install** | `…-p2-trust-install.md` ✅ detailed | Trust disclosure payload, injection scan, vault secrets (no OS keychain — corrected), per-server MCP secret injection at spawn, deterministic install routing, trust-gated `extensions.install`/`configure`, post-install verify | P0,P1 | `extensions.install` installs a clean-spec extension after a disclosure+ack gate; secrets land in the encrypted vault and inject per-server; SHA256 verified; OCI deferred |
 | **P3 Store UI** | `…-p3-store-ui.md` (later) | Top-level Extensions mode, functional-category browse, detail drawer, config wizard (`json_schema_form`), installed view, install-guard | P0,P1,P2 | User browses by category, installs with wizard, returns to chat; mockup realized in Leptos |
 | **P4 Store Agent** | `…-p4-store-agent.md` (later) | Built-in non-deletable `store` agent, private tools, background curation (categories/blurbs/featured), install ownership + verify, long-tail URL install | P0–P3 | Store Agent curates the catalog and drives installs end-to-end; cannot be deleted |
 | **P5 Migration & i18n** | `…-p5-migration-i18n.md` (later) | Demote MCP/Plugins/Skills settings panels to "Advanced", remove ClawHub menu, en/zh strings | P3 | Old panels relabeled Advanced; ClawHub menu gone; store fully localized |
 
-**Authoring policy:** P0 and P1 are written in full bite-sized detail now. P2–P5 are detailed when their predecessors land, re-grounded against the real interfaces P0/P1 establish (prevents drift). Each phase plan ends with working, independently testable software.
+**Authoring policy:** P0, P1, and P2 are written in full bite-sized detail (P2 re-grounded against real P0/P1 interfaces + interface research that corrected the spec: no OS keychain → encrypted vault, OCI install deferred, per-server MCP secret injection). P3–P5 are detailed when their predecessors land. Each phase plan ends with working, independently testable software.
 
 ---
 
