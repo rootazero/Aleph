@@ -19,17 +19,6 @@ pub enum Severity {
     Error,
 }
 
-impl Severity {
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Info => "info",
-            Self::Warning => "warning",
-            Self::Error => "error",
-        }
-    }
-}
-
 /// Result of a repair attempt, attached to a `Finding` after the engine
 /// runs in `Fix` posture. Absent in `Inspect`/`Lint`.
 #[derive(Debug, Clone, Serialize)]

@@ -428,7 +428,7 @@ impl ConfigPatcher {
     }
 
     /// Validate a JSON value against the Config JSON Schema.
-    pub fn validate_schema(&self, config_json: &serde_json::Value) -> Result<()> {
+    pub(crate) fn validate_schema(&self, config_json: &serde_json::Value) -> Result<()> {
         let schema_json = cached_config_schema();
 
         let validator = jsonschema::validator_for(schema_json)
@@ -450,7 +450,7 @@ impl ConfigPatcher {
     }
 
     /// Check for external modifications by comparing file mtime.
-    pub async fn check_conflict(&self) -> Result<()> {
+    pub(crate) async fn check_conflict(&self) -> Result<()> {
         let stored = *self.last_known_mtime.lock().await;
         let stored_mtime = match stored {
             Some(t) => t,

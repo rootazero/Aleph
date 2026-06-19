@@ -78,11 +78,6 @@ impl DiagnosticEngine {
         self
     }
 
-    #[must_use]
-    pub fn check_count(&self) -> usize {
-        self.checks.len()
-    }
-
     /// Run every check concurrently and collect a report.
     pub async fn run(&self, posture: Posture) -> DiagnosticReport {
         let futures = self.checks.iter().map(|c| c.run(posture));

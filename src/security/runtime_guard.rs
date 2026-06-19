@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::exec::leak_detector::{LeakAction, LeakDetector as ExecLeakDetector};
+use crate::exec::leak_detector::LeakDetector as ExecLeakDetector;
 use crate::exec::SecretMasker;
 use crate::pii::engine::{FilterResult, PiiEngine};
 use crate::secrets::injection::{AsyncSecretResolver, InjectedSecret};
@@ -30,7 +30,6 @@ pub struct SecurityGuardConfig {
     pub content_sanitization: bool,
     pub leak_detection: bool,
     pub secret_injection: bool,
-    pub default_action_on_leak: LeakAction,
     pub audit_enabled: bool,
     /// Custom leak detection patterns (additive to built-ins)
     pub custom_leak_patterns: Vec<crate::config::types::CustomLeakPattern>,
@@ -43,7 +42,6 @@ impl Default for SecurityGuardConfig {
             content_sanitization: true,
             leak_detection: true,
             secret_injection: true,
-            default_action_on_leak: LeakAction::Block,
             audit_enabled: true,
             custom_leak_patterns: Vec::new(),
         }
