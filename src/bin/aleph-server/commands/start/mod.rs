@@ -28,7 +28,8 @@ use builder::{
     initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
     register_agent_handlers, register_agents_handlers, register_arena_handlers,
     register_config_handlers, register_core_handlers, register_cron_handlers,
-    register_daemon_handlers, register_fs_handlers, register_graph_handlers,
+    register_daemon_handlers, register_extensions_handlers, register_fs_handlers,
+    register_graph_handlers,
     register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
     register_mcp_handlers, register_memory_handlers, register_oauth_handlers,
     register_projects_handlers, register_session_handlers, register_teams_handlers,
@@ -1255,6 +1256,27 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         register_mcp_handlers(&mut server, h);
         if !args.daemon {
             println!("  MCP management handlers registered (mcp.*)");
+        }
+    }
+
+    // Unified Extensions Store — `extensions.*` façade over MCP/plugins/skills,
+    // backed by a local rusqlite catalog cache opened at ~/.aleph.
+    {
+        let catalog_path = alephcore::discovery::aleph_home_dir()
+            .map(|d| d.join("store_catalog.db"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("store_catalog.db"));
+        match alephcore::store::cache::CatalogCache::open(&catalog_path) {
+            Ok(cache) => {
+                register_extensions_handlers(
+                    &mut server,
+                    mcp_handle.clone(),
+                    std::sync::Arc::new(cache),
+                );
+                if !args.daemon {
+                    println!("  Extensions store handlers registered (extensions.*)");
+                }
+            }
+            Err(e) => tracing::warn!("Failed to open store catalog cache: {e}"),
         }
     }
 

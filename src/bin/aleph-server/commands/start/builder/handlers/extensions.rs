@@ -1,0 +1,46 @@
+//! Registration for the unified Extensions Store façade (`extensions.*`).
+//!
+//! Skills and plugins are reached through process-wide accessors inside the
+//! handlers, so only the optional MCP handle and the shared catalog cache are
+//! captured here.
+
+use alephcore::gateway::handlers::extensions;
+use alephcore::gateway::GatewayServer;
+use alephcore::mcp::manager::McpManagerHandle;
+use alephcore::store::cache::CatalogCache;
+use std::sync::Arc;
+
+pub(in crate::commands::start) fn register_extensions_handlers(
+    server: &mut GatewayServer,
+    mcp: Option<McpManagerHandle>,
+    cache: Arc<CatalogCache>,
+) {
+    {
+        let cache = cache.clone();
+        server.handlers_mut().register("extensions.catalog", move |req| {
+            let cache = cache.clone();
+            async move { extensions::catalog::handle_catalog(req, cache).await }
+        });
+    }
+    {
+        let mcp = mcp.clone();
+        server.handlers_mut().register("extensions.installed", move |req| {
+            let mcp = mcp.clone();
+            async move { extensions::catalog::handle_installed(req, mcp).await }
+        });
+    }
+    {
+        let mcp = mcp.clone();
+        server.handlers_mut().register("extensions.toggle", move |req| {
+            let mcp = mcp.clone();
+            async move { extensions::lifecycle::handle_toggle(req, mcp).await }
+        });
+    }
+    {
+        let mcp = mcp.clone();
+        server.handlers_mut().register("extensions.uninstall", move |req| {
+            let mcp = mcp.clone();
+            async move { extensions::lifecycle::handle_uninstall(req, mcp).await }
+        });
+    }
+}
