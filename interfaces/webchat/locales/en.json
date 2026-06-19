@@ -5,6 +5,7 @@
     "agents": "Agents",
     "memory": "Memory",
     "teams": "Teams",
+    "extensions": "Extensions",
     "settings": "Settings"
   },
   "session": {
@@ -1284,6 +1285,40 @@
       "rpm": "Requests / min",
       "tpm": "Tokens / min",
       "unlimited": "Unlimited"
+    }
+  },
+  "extensions": {
+    "title": "Extensions",
+    "subtitle": "Curated by your Store Agent",
+    "back_to_chat": "← Back to chat",
+    "cat": {
+      "search": "Search & Web",
+      "developer": "Developer",
+      "data": "Data & Databases",
+      "productivity": "Productivity",
+      "writing": "Writing",
+      "communication": "Communication",
+      "knowledge": "Knowledge",
+      "files": "Files",
+      "design": "Design & Media",
+      "automation": "Automation",
+      "finance": "Finance",
+      "utilities": "Utilities",
+      "other": "Other",
+      "featured": "Featured",
+      "all": "All"
+    },
+    "kind": {
+      "skill": "Skill",
+      "plugin": "Plugin",
+      "mcp": "MCP",
+      "other": "Ext"
+    },
+    "trust": {
+      "official": "Official",
+      "verified": "Verified",
+      "community": "Community",
+      "unverified": "Unverified"
     }
   },
   "agents": {

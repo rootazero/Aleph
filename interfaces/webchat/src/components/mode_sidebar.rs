@@ -26,6 +26,7 @@ pub enum PanelMode {
     Memory,
     Agents,
     Teams,
+    Extensions,
     Settings,
 }
 
@@ -39,6 +40,8 @@ impl PanelMode {
             Self::Agents
         } else if path.starts_with("/teams") {
             Self::Teams
+        } else if path.starts_with("/extensions") {
+            Self::Extensions
         } else if path.starts_with("/dashboard") {
             Self::Dashboard
         } else if path.starts_with("/settings") {
@@ -68,6 +71,7 @@ pub fn ModeSidebar() -> impl IntoView {
                     PanelMode::Agents => view! { <AgentsSidebar /> }.into_any(),
                     PanelMode::Memory => view! { <MemorySidebar /> }.into_any(),
                     PanelMode::Teams => view! { <crate::views::teams::TeamsSidebar /> }.into_any(),
+                    PanelMode::Extensions => view! { <crate::views::extensions::ExtensionsSidebar /> }.into_any(),
                     PanelMode::Settings => view! { <SettingsSidebar /> }.into_any(),
                 }}
             </div>

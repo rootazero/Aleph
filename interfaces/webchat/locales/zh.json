@@ -5,6 +5,7 @@
     "agents": "智能体",
     "memory": "记忆",
     "teams": "团队",
+    "extensions": "扩展",
     "settings": "设置"
   },
   "session": {
@@ -1284,6 +1285,40 @@
       "rpm": "请求/分钟",
       "tpm": "Token/分钟",
       "unlimited": "不限"
+    }
+  },
+  "extensions": {
+    "title": "扩展",
+    "subtitle": "由你的商店智能体策展",
+    "back_to_chat": "← 返回聊天",
+    "cat": {
+      "search": "搜索与网络",
+      "developer": "开发",
+      "data": "数据与数据库",
+      "productivity": "效率",
+      "writing": "写作",
+      "communication": "沟通",
+      "knowledge": "知识",
+      "files": "文件",
+      "design": "设计与媒体",
+      "automation": "自动化",
+      "finance": "财务",
+      "utilities": "工具",
+      "other": "其他",
+      "featured": "精选",
+      "all": "全部"
+    },
+    "kind": {
+      "skill": "技能",
+      "plugin": "插件",
+      "mcp": "MCP",
+      "other": "扩展"
+    },
+    "trust": {
+      "official": "官方",
+      "verified": "已验证",
+      "community": "社区",
+      "unverified": "未验证"
     }
   },
   "agents": {

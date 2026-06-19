@@ -21,6 +21,7 @@ use crate::views::settings::{
     ProvidersView, RerankingProvidersView, RouteView, RoutingRulesView, SearchView, SecurityView,
     Settings, SkillsView,
 };
+use crate::views::extensions::ExtensionsView;
 use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
 use crate::views::usage::UsageView;
@@ -372,6 +373,9 @@ fn MainContent() -> impl IntoView {
         </div>
         <div style:display=move || if mode.get() == PanelMode::Teams { "contents" } else { "none" }>
             <TeamsView />
+        </div>
+        <div style:display=move || if mode.get() == PanelMode::Extensions { "contents" } else { "none" }>
+            <ExtensionsView />
         </div>
         <div style:display=move || if mode.get() == PanelMode::Settings { "block" } else { "none" }>
             <SettingsRouter />
