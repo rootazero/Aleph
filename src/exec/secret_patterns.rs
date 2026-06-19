@@ -25,11 +25,11 @@ pub struct LeakDetectorAssets {
 pub fn secret_masker_patterns() -> Vec<SecretPattern> {
     vec![
         SecretPattern {
-            regex: Regex::new(r"sk-[a-zA-Z0-9]{20,}").unwrap(),
+            regex: Regex::new(r"\bsk-[a-zA-Z0-9]{20,}").unwrap(),
             replacement: "sk-***REDACTED***",
         },
         SecretPattern {
-            regex: Regex::new(r"sk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
+            regex: Regex::new(r"\bsk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
             replacement: "sk-ant-***REDACTED***",
         },
         SecretPattern {
@@ -108,12 +108,12 @@ pub fn leak_detector_assets() -> LeakDetectorAssets {
     let patterns = vec![
         LeakPatternDef {
             name: "openai_key",
-            regex: Regex::new(r"sk-[a-zA-Z0-9]{20,}").unwrap(),
+            regex: Regex::new(r"\bsk-[a-zA-Z0-9]{20,}").unwrap(),
             action: super::leak_detector::LeakAction::Block,
         },
         LeakPatternDef {
             name: "anthropic_key",
-            regex: Regex::new(r"sk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
+            regex: Regex::new(r"\bsk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
             action: super::leak_detector::LeakAction::Block,
         },
         LeakPatternDef {
@@ -185,6 +185,47 @@ mod tests {
             .iter()
             .any(|mp| mp.regex.as_str() == openai.regex.as_str());
         assert!(found, "openai_key regex should be identical in both");
+    }
+
+    #[test]
+    fn openai_key_ignores_word_internal_sk() {
+        // Regression: "task-<uuid>" / "elon-musk-..." contain "sk-" mid-word and
+        // must NOT be treated as an OpenAI key by either the masker or the leak
+        // detector (the latter's openai_key action is Block). Real keys at a
+        // boundary still match.
+        // The exec patterns use a hyphen-free body (`sk-[a-zA-Z0-9]{20,}`), so a
+        // false positive needs "·sk-" followed by 20+ CONTIGUOUS alnum — e.g. a
+        // URL slug "elon-musk-<run>" or "disk-<run>".
+        let benign = "see elon-musk-teslarobotaxiupdate2025q3report and disk-cleanuputility1234567890";
+        let real = "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234";
+
+        let leak = leak_detector_assets();
+        let openai = leak
+            .patterns
+            .iter()
+            .find(|p| p.name == "openai_key")
+            .unwrap();
+        assert!(
+            !openai.regex.is_match(benign),
+            "leak openai_key false-matched a word-internal sk-"
+        );
+        assert!(
+            openai.regex.is_match(real),
+            "leak openai_key missed a real boundary key"
+        );
+
+        let masker_openai = secret_masker_patterns()
+            .into_iter()
+            .find(|p| p.replacement == "sk-***REDACTED***")
+            .unwrap();
+        assert!(
+            !masker_openai.regex.is_match(benign),
+            "masker openai pattern false-matched a word-internal sk-"
+        );
+        assert!(
+            masker_openai.regex.is_match(real),
+            "masker openai pattern missed a real boundary key"
+        );
     }
 
     #[test]

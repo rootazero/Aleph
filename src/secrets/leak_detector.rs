@@ -48,12 +48,15 @@ impl LeakDecision {
 /// command printing a classic `sk-…`, `AIza…`, or PEM key to stdout was
 /// returned to the model un-redacted.
 pub const SECRET_PATTERN_SOURCES: &[(&str, &str)] = &[
-    ("sk_proj", r"sk-proj-[A-Za-z0-9_\-]{20,}"),
-    ("sk_ant", r"sk-ant-[A-Za-z0-9_\-]{20,}"),
+    // `\b` left word-boundary: the `sk-` family must not match inside ordinary
+    // words that merely contain the substring "sk-" (e.g. "elon-mu`sk-`tesla…",
+    // "ta`sk-`<uuid>"). Mirrors pii/rules/api_key.rs.
+    ("sk_proj", r"\bsk-proj-[A-Za-z0-9_\-]{20,}"),
+    ("sk_ant", r"\bsk-ant-[A-Za-z0-9_\-]{20,}"),
     ("aws_akia", r"AKIA[0-9A-Z]{16}"),
     ("github_pat", r"ghp_[A-Za-z0-9]{20,}"),
     ("gitlab_pat", r"glpat-[A-Za-z0-9_\-]{20,}"),
-    ("openai_sk", r"sk-[a-zA-Z0-9\-]{20,}"),
+    ("openai_sk", r"\bsk-[a-zA-Z0-9\-]{20,}"),
     ("google_api", r"AIza[a-zA-Z0-9_\-]{35}"),
     ("private_key", r"-----BEGIN [A-Z ]+ PRIVATE KEY-----"),
 ];
@@ -115,11 +118,12 @@ static LEAK_PATTERNS: Lazy<Vec<(&str, Regex)>> = Lazy::new(|| {
     let mut patterns = vec![
         (
             "Anthropic API Key",
-            Regex::new(r"sk-ant-[a-zA-Z0-9\-]{20,}").expect("static Anthropic pattern compiles"),
+            // `\b` left-anchor — see SECRET_PATTERN_SOURCES note above.
+            Regex::new(r"\bsk-ant-[a-zA-Z0-9\-]{20,}").expect("static Anthropic pattern compiles"),
         ),
         (
             "OpenAI API Key",
-            Regex::new(r"sk-[a-zA-Z0-9\-]{20,}").expect("static OpenAI pattern compiles"),
+            Regex::new(r"\bsk-[a-zA-Z0-9\-]{20,}").expect("static OpenAI pattern compiles"),
         ),
         (
             "Google API Key",
@@ -348,6 +352,49 @@ mod tests {
         let content = "Please search for 'rust async programming'";
         let decision = detector.scan_outbound(content);
         assert!(!decision.is_blocked());
+    }
+
+    #[test]
+    fn test_outbound_allows_word_internal_sk_substring() {
+        // Regression (real production trigger): a CNBC "elon-musk-..." article
+        // URL and a "task-<uuid>" coordination id both contain "sk-" mid-word.
+        // The OpenAI-key pattern must be left-anchored (`\b`) so these are NOT
+        // flagged as API keys — otherwise the ENTIRE outbound LLM request is
+        // blocked. Mirrors the existing fix in pii/rules/api_key.rs
+        // (test_no_match_sk_inside_larger_token).
+        let detector = LeakDetector::new();
+        let content = "See https://www.cnbc.com/2025/12/08/elon-musk-tesla-robotaxi.html \
+                       and coordination id task-d537438a-f1a7-46ec-9e6f-4b1fb20d8233";
+        assert!(
+            !detector.scan_outbound(content).is_blocked(),
+            "word-internal 'sk-' (musk-/task-) must not be flagged as an API key"
+        );
+    }
+
+    #[test]
+    fn test_byte_patterns_allow_word_internal_sk_substring() {
+        // Same regression for the byte-level sandbox scrubber sources
+        // (SECRET_PATTERN_SOURCES → default_patterns_bytes): "musk-"/"task-" in
+        // raw command stdout must not be redacted as a secret, while a real key
+        // at a boundary still is.
+        let pats = default_patterns_bytes();
+        let sk_family: Vec<_> = pats
+            .iter()
+            .filter(|(n, _)| n.starts_with("sk") || *n == "openai_sk")
+            .collect();
+        assert!(!sk_family.is_empty(), "sk-family byte patterns must exist");
+        let benign = b"elon-musk-tesla-robotaxi-update and task-d537438a-f1a7-46ec-9e6f";
+        for (name, re) in &sk_family {
+            assert!(
+                !re.is_match(benign),
+                "byte pattern {name} false-matched a word-internal 'sk-' substring"
+            );
+        }
+        let real = b"OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234";
+        assert!(
+            sk_family.iter().any(|(_, re)| re.is_match(real)),
+            "a real sk- key at a boundary must still be detected"
+        );
     }
 
     #[test]
