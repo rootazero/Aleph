@@ -31,6 +31,14 @@ const ISSUES_URL: &str = "https://github.com/rootazero/Aleph/issues/new";
 
 /// Build the macOS app menu: Aleph / Edit / View / Window / Help.
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
+    // Dual-purpose, mirroring the tray: a manual update check until an update
+    // is found, then the button to apply it. Registered with the updater so it
+    // is relabeled (alongside the tray item) once an update is staged.
+    let update_item =
+        MenuItem::with_id(app, ID_CHECK_UPDATE, "Check for Updates…", true, None::<&str>)?;
+    app.state::<crate::update::Updater>()
+        .attach_update_item(update_item.clone());
+
     let app_menu = Submenu::with_items(
         app,
         "Aleph",
@@ -48,13 +56,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 None::<&str>,
             )?,
             &MenuItem::with_id(app, ID_CONNECT_LOCAL, "Back to Local", true, None::<&str>)?,
-            &MenuItem::with_id(
-                app,
-                ID_CHECK_UPDATE,
-                "Check for Updates…",
-                true,
-                None::<&str>,
-            )?,
+            &update_item,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::hide(app, None)?,
             &PredefinedMenuItem::hide_others(app, None)?,
@@ -172,7 +174,15 @@ pub fn on_event(app: &AppHandle, id: &str) {
         ID_CONNECT_LOCAL => {
             let _ = crate::connection::clear_connection_target(app.clone());
         }
-        ID_CHECK_UPDATE => crate::update::check_now(app),
+        // Apply a staged update, or trigger a fresh check if none — mirrors
+        // the tray so the notification's "or the Aleph menu" is truthful.
+        ID_CHECK_UPDATE => {
+            if crate::update::has_staged_update(app) {
+                crate::update::apply_staged_update(app);
+            } else {
+                crate::update::check_now(app);
+            }
+        }
         ID_QUIT => app.exit(0),
         ID_QUIT_STOP => {
             // Full app only: stop the bundled daemon before quitting. The

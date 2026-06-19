@@ -14,6 +14,7 @@ pub mod prompt_size;
 pub mod sandbox_debug;
 pub mod secret;
 pub mod start;
+pub mod update;
 
 // Re-export commonly used items
 pub use audit::*;
@@ -25,3 +26,4 @@ pub use plugins::*;
 pub use sandbox_debug::handle_sandbox_debug;
 pub use secret::*;
 pub use start::*;
+pub use update::handle_update;

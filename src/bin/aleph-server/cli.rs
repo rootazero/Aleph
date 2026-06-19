@@ -144,6 +144,17 @@ pub enum Command {
     /// Print the shared Gateway token (authorizes a remote Panel: paste into the
     /// token box or encode in a QR / LAN URL `http://<ip>:<port>/?token=<token>`)
     BootstrapToken,
+    /// Check for a newer Aleph release and update the standalone server.
+    ///
+    /// Queries GitHub for the latest published release and compares it with
+    /// the running version. Without `--check`, re-runs the official installer
+    /// (install.sh / install.ps1) to download and install the correct binary
+    /// for this platform. The desktop app self-updates separately (Tauri).
+    Update {
+        /// Only report whether an update is available; do not install.
+        #[arg(long)]
+        check: bool,
+    },
     /// SP-2 internal: apply landlock + seccomp then exec target. Invoked
     /// by `BubblewrapDriver` inside the bwrap namespace; not for users.
     #[command(hide = true)]
@@ -749,6 +760,24 @@ mod tests {
         match cli.command {
             Some(Command::Node { tags, .. }) => assert!(tags.is_empty()),
             _ => panic!("Expected Node command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_update_check_flag() {
+        let args = Args::try_parse_from(["aleph-server", "update", "--check"]).unwrap();
+        match args.command {
+            Some(Command::Update { check }) => assert!(check),
+            _ => panic!("Expected Update command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_update_defaults_to_install() {
+        let args = Args::try_parse_from(["aleph-server", "update"]).unwrap();
+        match args.command {
+            Some(Command::Update { check }) => assert!(!check),
+            _ => panic!("Expected Update command"),
         }
     }
 

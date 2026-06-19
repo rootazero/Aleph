@@ -22,24 +22,48 @@ const FIRST_CHECK_DELAY: Duration = Duration::from_secs(90);
 /// Interval between background checks for a long-running shell.
 const CHECK_INTERVAL: Duration = Duration::from_hours(6);
 
+/// Where to send users whose install can't self-update (Linux package
+/// installs): the GitHub releases page.
+const RELEASES_URL: &str = "https://github.com/rootazero/Aleph/releases/latest";
+
 /// Shared update state, managed by Tauri so the background checker, the
 /// tray, and the macOS menu agree on whether an update is waiting.
 #[derive(Default)]
 pub struct Updater {
     /// The version of a found-but-not-yet-applied update, if any.
     staged: Mutex<Option<String>>,
-    /// The tray's update menu item, registered by `tray.rs` so the checker
-    /// can relabel it once an update is staged.
-    tray_item: Mutex<Option<MenuItem<Wry>>>,
+    /// The update menu items (tray, and the macOS app menu) registered by
+    /// their builders so the checker can relabel them once an update is
+    /// staged. Both surfaces stay in sync.
+    update_items: Mutex<Vec<MenuItem<Wry>>>,
 }
 
 impl Updater {
-    /// Hand the background checker the tray item it should relabel.
-    pub fn attach_tray_item(&self, item: MenuItem<Wry>) {
-        *self
-            .tray_item
+    /// Register an update menu item to be relabeled once an update is staged.
+    /// Called by both the tray and the macOS app menu.
+    pub fn attach_update_item(&self, item: MenuItem<Wry>) {
+        self.update_items
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(item);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(item);
+    }
+}
+
+/// Whether Tauri's bundled updater can self-install on this platform/install.
+///
+/// Tauri's Linux updater only supports the AppImage format — it replaces the
+/// running AppImage in place, keyed off the `APPIMAGE` env var the AppImage
+/// runtime sets. A package-manager install (.deb / .rpm) has no `APPIMAGE`
+/// and must be updated through the package manager instead. macOS and Windows
+/// always self-install.
+fn updater_can_self_install() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var_os("APPIMAGE").is_some()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
     }
 }
 
@@ -78,6 +102,20 @@ pub fn check_now(app: &AppHandle) {
 pub fn apply_staged_update(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        // Package-manager installs (Linux .deb / .rpm) can't be self-installed
+        // by Tauri's updater — point the user at the right path instead of
+        // attempting a download_and_install that would fail.
+        if !updater_can_self_install() {
+            notify(
+                &app,
+                "Update via your package manager",
+                &format!(
+                    "Aleph was installed with your system package manager. Update \
+                     with apt / dnf, or download the latest release from {RELEASES_URL}."
+                ),
+            );
+            return;
+        }
         notify(
             &app,
             "Updating Aleph",
@@ -140,15 +178,27 @@ async fn check(app: &AppHandle, announce: Announce) {
         Ok(Some(update)) => {
             tracing::info!("update available: v{}", update.version);
             stage(app, &update.version);
-            notify(
-                app,
-                "Update available",
-                &format!(
-                    "Aleph v{} is ready — choose \"Restart to update\" from the tray \
-                     or the Aleph menu.",
-                    update.version
-                ),
-            );
+            if updater_can_self_install() {
+                notify(
+                    app,
+                    "Update available",
+                    &format!(
+                        "Aleph v{} is ready — choose \"Restart to update\" from the tray \
+                         or the Aleph menu.",
+                        update.version
+                    ),
+                );
+            } else {
+                notify(
+                    app,
+                    "Update available",
+                    &format!(
+                        "Aleph v{} is available. You installed Aleph via your package \
+                         manager — update with apt / dnf, or download it from {RELEASES_URL}.",
+                        update.version
+                    ),
+                );
+            }
         }
         Ok(None) => {
             tracing::debug!("no update available");
@@ -173,41 +223,56 @@ async fn check(app: &AppHandle, announce: Announce) {
     }
 }
 
-/// Record a staged update and relabel the tray's update item.
+/// Record a staged update and relabel every registered update item.
 fn stage(app: &AppHandle, version: &str) {
     *app.state::<Updater>()
         .staged
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(version.to_string());
-    set_tray_update_label(app, staged_tray_label(version));
+    relabel_update_items(app, staged_label(version));
 }
 
-/// Relabel the tray's update item on the main thread — macOS menu mutation
-/// must not happen off the UI thread.
-fn set_tray_update_label(app: &AppHandle, label: String) {
+/// Relabel the registered update items (tray + macOS menu) on the main
+/// thread — menu mutation must not happen off the UI thread.
+fn relabel_update_items(app: &AppHandle, label: String) {
     let app = app.clone();
     let dispatch = app.run_on_main_thread({
         let app = app.clone();
         move || {
-            if let Some(item) = app
-                .state::<Updater>()
-                .tray_item
+            let updater = app.state::<Updater>();
+            let items = updater
+                .update_items
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_ref()
-            {
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for item in items.iter() {
                 let _ = item.set_text(&label);
             }
         }
     });
     if let Err(e) = dispatch {
-        tracing::debug!("could not relabel the tray update item: {e}");
+        tracing::debug!("could not relabel the update menu items: {e}");
     }
 }
 
-/// The tray item's label once an update is staged.
-fn staged_tray_label(version: &str) -> String {
+/// The update item's label once an update is staged. Installs that can
+/// self-update offer the restart-to-apply action; package-manager installs
+/// (which can't) are pointed at how to update instead.
+fn staged_label(version: &str) -> String {
+    if updater_can_self_install() {
+        restart_label(version)
+    } else {
+        manual_update_label(version)
+    }
+}
+
+/// Label for the apply-and-restart action (self-installing platforms).
+fn restart_label(version: &str) -> String {
     format!("Restart to update to v{version}")
+}
+
+/// Label for installs that must update via their package manager.
+fn manual_update_label(version: &str) -> String {
+    format!("Update v{version} available — how to update")
 }
 
 /// Raise a desktop notification, best-effort.
@@ -222,10 +287,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn staged_tray_label_names_the_version() {
+    fn restart_label_names_the_version() {
+        assert_eq!(restart_label("26.5.30"), "Restart to update to v26.5.30");
+    }
+
+    #[test]
+    fn manual_update_label_names_the_version() {
         assert_eq!(
-            staged_tray_label("26.5.30"),
-            "Restart to update to v26.5.30"
+            manual_update_label("26.5.30"),
+            "Update v26.5.30 available — how to update"
         );
     }
 }

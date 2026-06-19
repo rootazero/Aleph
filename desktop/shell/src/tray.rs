@@ -17,7 +17,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let update_item = MenuItem::with_id(app, "update", "Check for Updates…", true, None::<&str>)?;
     // Let the auto-updater relabel this item once an update is staged.
     app.state::<crate::update::Updater>()
-        .attach_tray_item(update_item.clone());
+        .attach_update_item(update_item.clone());
     // Connection-target entry points: switch the shell between the bundled
     // local daemon and a remote Gateway. "Connect to Remote…" opens the
     // bundled connection page; "Back to Local" resets to the local daemon.
