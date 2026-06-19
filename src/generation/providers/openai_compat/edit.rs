@@ -11,6 +11,7 @@ use crate::generation::{
     GenerationResult, GenerationType,
 };
 
+use super::helpers::normalize_image_ref;
 use super::provider::OpenAiCompatProvider;
 use super::types::{ImageGenerationResponse, DEFAULT_TIMEOUT_SECS};
 
@@ -25,6 +26,13 @@ pub(crate) async fn edit_image_impl(
             request.generation_type.to_string(),
             &provider.name,
         ));
+    }
+
+    // Volcengine Ark exposes image-to-image (and inpainting) on the unified
+    // `/images/generations` JSON endpoint, not the OpenAI multipart
+    // `/images/edits` endpoint — route it to a dedicated path.
+    if provider.is_ark_protocol() {
+        return ark_edit_image_impl(provider, request).await;
     }
 
     // Require reference image
@@ -268,6 +276,172 @@ pub(crate) async fn edit_image_impl(
             })
             .collect();
 
+        if !additional.is_empty() {
+            output = output.with_additional_outputs(additional);
+        }
+    }
+
+    Ok(output)
+}
+
+/// Volcengine Ark image-to-image / inpainting.
+///
+/// Ark reuses the unified `/images/generations` JSON endpoint: image-to-image
+/// adds an `image` field, and inpainting additionally supplies a `mask`
+/// (passed through `params.extra["mask"]`). The response shares the standard
+/// generations format, so parsing mirrors the synchronous generate path.
+async fn ark_edit_image_impl(
+    provider: &OpenAiCompatProvider,
+    request: GenerationRequest,
+) -> GenerationResult<GenerationOutput> {
+    let reference_image = request.params.reference_image.as_ref().ok_or_else(|| {
+        GenerationError::invalid_parameters(
+            "reference_image is required for image editing",
+            Some("reference_image".to_string()),
+        )
+    })?;
+
+    let start_time = Instant::now();
+    let request_id = request.request_id.clone();
+    let model = request
+        .params
+        .model
+        .clone()
+        .unwrap_or_else(|| provider.model.clone());
+
+    debug!(
+        provider = %provider.name,
+        prompt = %request.prompt,
+        model = %model,
+        "Starting Volcengine Ark image-to-image"
+    );
+
+    // Build the JSON body for the unified generations endpoint.
+    let mut body = serde_json::json!({
+        "model": model,
+        "prompt": request.prompt,
+        "image": normalize_image_ref(reference_image),
+        "response_format": "url",
+    });
+    if let (Some(w), Some(h)) = (request.params.width, request.params.height) {
+        body["size"] = serde_json::json!(format!("{w}x{h}"));
+    }
+    if let Some(n) = request.params.n {
+        body["n"] = serde_json::json!(n);
+    }
+    if let Some(user) = &request.user_id {
+        body["user"] = serde_json::json!(user);
+    }
+    // Inpainting: optional mask (URL / data URL / base64) via extra params.
+    if let Some(mask) = request.params.extra.get("mask").and_then(|v| v.as_str()) {
+        body["mask"] = serde_json::json!(normalize_image_ref(mask));
+    }
+
+    let url = provider.generations_url();
+    debug!(url = %url, "Sending Ark image-to-image request");
+
+    let response = provider
+        .client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", provider.api_key))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            } else if e.is_connect() {
+                GenerationError::network(format!("Connection failed: {e}"))
+            } else {
+                GenerationError::network(e.to_string())
+            }
+        })?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| GenerationError::network(format!("Failed to read response body: {e}")))?;
+
+    if !status.is_success() {
+        error!(
+            provider = %provider.name,
+            status = %status,
+            body = %response_text,
+            "Ark image-to-image request failed"
+        );
+        return Err(provider.parse_error_response(status, &response_text));
+    }
+
+    let api_response: ImageGenerationResponse =
+        serde_json::from_str(&response_text).map_err(|e| {
+            error!(error = %e, body = %response_text, "Failed to parse Ark image-to-image response");
+            GenerationError::serialization(format!("Failed to parse response: {e}"))
+        })?;
+
+    let first_image = api_response
+        .data
+        .first()
+        .ok_or_else(|| GenerationError::provider("No images in response", None, &provider.name))?;
+
+    let data = if let Some(url) = &first_image.url {
+        GenerationData::url(url.clone())
+    } else if let Some(b64) = &first_image.b64_json {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| GenerationError::serialization(format!("Failed to decode base64: {e}")))?;
+        GenerationData::bytes(bytes)
+    } else {
+        return Err(GenerationError::provider(
+            "Response contains neither URL nor base64 data",
+            None,
+            &provider.name,
+        ));
+    };
+
+    let duration = start_time.elapsed();
+    let mut metadata = GenerationMetadata::new()
+        .with_provider(&provider.name)
+        .with_model(model)
+        .with_duration(duration);
+    if let Some(revised) = &first_image.revised_prompt {
+        metadata = metadata.with_revised_prompt(revised.clone());
+    }
+    if let (Some(w), Some(h)) = (request.params.width, request.params.height) {
+        metadata = metadata.with_dimensions(w, h);
+    }
+
+    info!(
+        provider = %provider.name,
+        duration_ms = duration.as_millis(),
+        "Ark image-to-image completed"
+    );
+
+    let mut output = GenerationOutput::new(request.generation_type, data).with_metadata(metadata);
+    if let Some(id) = request_id {
+        output = output.with_request_id(id);
+    }
+
+    // Additional images (multi-output / sequential generation).
+    if api_response.data.len() > 1 {
+        let additional: Vec<GenerationData> = api_response
+            .data
+            .iter()
+            .skip(1)
+            .filter_map(|img| {
+                if let Some(url) = &img.url {
+                    Some(GenerationData::url(url.clone()))
+                } else if let Some(b64) = &img.b64_json {
+                    base64::engine::general_purpose::STANDARD
+                        .decode(b64)
+                        .ok()
+                        .map(GenerationData::bytes)
+                } else {
+                    None
+                }
+            })
+            .collect();
         if !additional.is_empty() {
             output = output.with_additional_outputs(additional);
         }

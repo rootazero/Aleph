@@ -565,6 +565,7 @@ mod tests {
         let request = ImageGenerationRequest {
             model: "dall-e-3".to_string(),
             prompt: "A test prompt".to_string(),
+            image: None,
             size: None,
             quality: None,
             style: None,
@@ -590,6 +591,7 @@ mod tests {
         let request = ImageGenerationRequest {
             model: "dall-e-3".to_string(),
             prompt: "A test prompt".to_string(),
+            image: None,
             size: Some("1024x1024".to_string()),
             quality: Some("hd".to_string()),
             style: Some("vivid".to_string()),
@@ -733,5 +735,199 @@ mod tests {
             result,
             Err(GenerationError::UnsupportedGenerationTypeError { .. })
         ));
+    }
+
+    // === Volcengine Ark protocol tests ===
+
+    use types::{AsyncTaskPollResponse, AsyncTaskSubmitResponse, VideoContentPart};
+
+    fn ark_image_provider() -> OpenAiCompatProvider {
+        OpenAiCompatProvider::new(
+            "seedream",
+            "key",
+            "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+            Some("doubao-seedream-4-0-250828".to_string()),
+        )
+        .unwrap()
+    }
+
+    fn ark_video_provider() -> OpenAiCompatProvider {
+        OpenAiCompatProvider::builder(
+            "seedance",
+            "key",
+            "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+        )
+        .model("doubao-seedance-2-0-260128")
+        .supported_types(vec![GenerationType::Video])
+        .build()
+        .unwrap()
+    }
+
+    #[test]
+    fn test_is_ark_protocol() {
+        assert!(ark_image_provider().is_ark_protocol());
+        assert!(ark_video_provider().is_ark_protocol());
+
+        let openai =
+            OpenAiCompatProvider::new("proxy", "key", "https://api.example.com", None).unwrap();
+        assert!(!openai.is_ark_protocol());
+    }
+
+    #[test]
+    fn test_ark_image_request_carries_reference_image() {
+        let provider = ark_image_provider();
+        let request = GenerationRequest::image("a cat in a hat").with_params(
+            GenerationParams::builder()
+                .reference_image("https://example.com/cat.png")
+                .build(),
+        );
+
+        let body = provider.build_request_body(&request);
+        assert_eq!(body.image, Some("https://example.com/cat.png".to_string()));
+        assert_eq!(body.model, "doubao-seedream-4-0-250828");
+    }
+
+    #[test]
+    fn test_non_ark_image_request_omits_reference_image() {
+        // OpenAI-style providers route edits through multipart, never the
+        // JSON `image` field.
+        let provider =
+            OpenAiCompatProvider::new("proxy", "key", "https://api.example.com", None).unwrap();
+        let request = GenerationRequest::image("a cat").with_params(
+            GenerationParams::builder()
+                .reference_image("https://example.com/cat.png")
+                .build(),
+        );
+
+        assert!(provider.build_request_body(&request).image.is_none());
+    }
+
+    #[test]
+    fn test_ark_bare_base64_reference_wrapped_as_data_url() {
+        let provider = ark_image_provider();
+        let request = GenerationRequest::image("edit").with_params(
+            GenerationParams::builder()
+                .reference_image("iVBORw0KGgo=")
+                .build(),
+        );
+
+        let body = provider.build_request_body(&request);
+        assert_eq!(
+            body.image,
+            Some("data:image/jpeg;base64,iVBORw0KGgo=".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_video_task_body_text_and_flags() {
+        let provider = ark_video_provider();
+        let request = GenerationRequest::video("a drone shot over a city").with_params(
+            GenerationParams::builder()
+                .aspect_ratio("16:9")
+                .height(1080)
+                .duration_seconds(5.0)
+                .seed(42)
+                .build(),
+        );
+
+        let body = provider.build_video_task_body(&request);
+        assert_eq!(body.model, "doubao-seedance-2-0-260128");
+        assert_eq!(body.content.len(), 1);
+        match &body.content[0] {
+            VideoContentPart::Text { text } => {
+                assert!(text.starts_with("a drone shot over a city"));
+                assert!(text.contains("--ratio 16:9"));
+                assert!(text.contains("--resolution 1080p"));
+                assert!(text.contains("--duration 5"));
+                assert!(text.contains("--seed 42"));
+            }
+            VideoContentPart::ImageUrl { .. } => panic!("expected text part first"),
+        }
+    }
+
+    #[test]
+    fn test_build_video_task_body_with_reference_image() {
+        let provider = ark_video_provider();
+        let request = GenerationRequest::video("animate this").with_params(
+            GenerationParams::builder()
+                .reference_image("https://example.com/frame.png")
+                .build(),
+        );
+
+        let body = provider.build_video_task_body(&request);
+        assert_eq!(body.content.len(), 2);
+        match &body.content[1] {
+            VideoContentPart::ImageUrl { image_url } => {
+                assert_eq!(image_url.url, "https://example.com/frame.png");
+            }
+            VideoContentPart::Text { .. } => panic!("expected image part second"),
+        }
+    }
+
+    #[test]
+    fn test_video_task_body_serialization_shape() {
+        let provider = ark_video_provider();
+        let request = GenerationRequest::video("hello");
+        let body = provider.build_video_task_body(&request);
+        let json = serde_json::to_string(&body).unwrap();
+
+        assert!(json.contains("\"model\":\"doubao-seedance-2-0-260128\""));
+        assert!(json.contains("\"type\":\"text\""));
+        assert!(json.contains("\"content\":["));
+    }
+
+    #[test]
+    fn test_submit_response_accepts_id_alias() {
+        // Volcengine returns `id`; generic proxies return `task_id`.
+        let ark: AsyncTaskSubmitResponse = serde_json::from_str(r#"{"id":"cgt-abc123"}"#).unwrap();
+        assert_eq!(ark.task_id, "cgt-abc123");
+
+        let generic: AsyncTaskSubmitResponse =
+            serde_json::from_str(r#"{"task_id":"task-xyz"}"#).unwrap();
+        assert_eq!(generic.task_id, "task-xyz");
+    }
+
+    #[test]
+    fn test_poll_response_volcengine_succeeded() {
+        let json = r#"{
+            "id": "cgt-abc",
+            "status": "succeeded",
+            "content": { "video_url": "https://example.com/out.mp4" }
+        }"#;
+        let resp: AsyncTaskPollResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.status, "succeeded");
+        assert_eq!(
+            resp.data.and_then(|d| d.output_url().map(str::to_string)),
+            Some("https://example.com/out.mp4".to_string())
+        );
+    }
+
+    #[test]
+    fn test_poll_response_volcengine_failed_surfaces_error_message() {
+        let json = r#"{
+            "id": "cgt-abc",
+            "status": "failed",
+            "error": { "code": "InternalError", "message": "content moderation failed" }
+        }"#;
+        let resp: AsyncTaskPollResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.status, "failed");
+        assert_eq!(
+            resp.error.map(|e| e.message),
+            Some("content moderation failed".to_string())
+        );
+    }
+
+    #[test]
+    fn test_poll_response_generic_proxy_still_parses() {
+        // Legacy `{task_id-style}` task payload with `data.output`.
+        let json = r#"{
+            "status": "SUCCESS",
+            "data": { "output": "https://example.com/legacy.mp4" }
+        }"#;
+        let resp: AsyncTaskPollResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            resp.data.and_then(|d| d.output_url().map(str::to_string)),
+            Some("https://example.com/legacy.mp4".to_string())
+        );
     }
 }

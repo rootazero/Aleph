@@ -83,12 +83,12 @@ const PROFILES: &[(&str, GenerationPreset)] = &[
         "bytedance-seedream",
         GenerationPreset::new(
             "openai_compat",
-            "doubao-seedream-3-0-t2i-250415",
+            "doubao-seedream-4-5-251128",
             Some("https://ark.cn-beijing.volces.com/api/v3/images/generations"),
         )
         .with_modalities(IMAGE)
         .with_display("ByteDance Seedream / 即梦图像")
-        .with_description("Volcengine Ark image endpoint")
+        .with_description("Volcengine Ark Seedream 4.5 — text-to-image + image-to-image")
         .with_homepage("https://www.volcengine.com/docs/82379")
         .with_signup("https://console.volcengine.com/ark"),
     ),
@@ -114,6 +114,19 @@ const PROFILES: &[(&str, GenerationPreset)] = &[
             .with_signup("https://docs.bfl.ai"),
     ),
     // ─── Video ────────────────────────────────────────────────────────────────
+    (
+        "bytedance-seedance",
+        GenerationPreset::new(
+            "openai_compat",
+            "doubao-seedance-2-0-260128",
+            Some("https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"),
+        )
+        .with_modalities(VIDEO)
+        .with_display("ByteDance Seedance / 即梦视频")
+        .with_description("Volcengine Ark Seedance 2.0 — text/image-to-video (async task)")
+        .with_homepage("https://www.volcengine.com/docs/82379/1366799")
+        .with_signup("https://console.volcengine.com/ark"),
+    ),
     (
         "google-veo",
         GenerationPreset::new("google_veo", "veo-2.0-generate-001", None)

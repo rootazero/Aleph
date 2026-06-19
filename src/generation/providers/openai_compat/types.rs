@@ -21,6 +21,12 @@ pub struct ImageGenerationRequest {
     pub model: String,
     /// The prompt to generate an image from
     pub prompt: String,
+    /// Reference image for image-to-image (Volcengine Ark unified
+    /// `/images/generations` endpoint: a URL or `data:`/base64 string).
+    /// OpenAI-style providers use the multipart `/images/edits` endpoint
+    /// instead and never set this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     /// Image size (e.g., "1024x1024")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<String>,
@@ -70,24 +76,46 @@ pub const POLL_INTERVAL_SECS: u64 = 3;
 pub const MAX_POLL_ATTEMPTS: u32 = 200;
 
 /// Async task submit response (e.g., video generation APIs that return a `task_id`)
+///
+/// Field name varies by vendor: generic proxies use `task_id`, while the
+/// Volcengine Ark video task API (`/contents/generations/tasks`) returns `id`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AsyncTaskSubmitResponse {
-    /// Task ID for polling
+    /// Task ID for polling (accepts `id` as used by Volcengine Ark)
+    #[serde(alias = "id")]
     pub task_id: String,
 }
 
 /// Async task poll response
 #[derive(Debug, Clone, Deserialize)]
 pub struct AsyncTaskPollResponse {
-    /// Task status: typically `NOT_START`, `IN_PROGRESS`, SUCCESS, FAILURE
+    /// Task status. Generic proxies use `NOT_START`/`IN_PROGRESS`/`SUCCESS`/
+    /// `FAILURE`; Volcengine Ark uses `queued`/`running`/`succeeded`/`failed`/
+    /// `cancelled` (matched case-insensitively downstream).
     #[serde(default)]
     pub status: String,
-    /// Failure reason
+    /// Failure reason (generic proxies)
     pub fail_reason: Option<String>,
+    /// Structured error object (Volcengine Ark returns `{code, message}`)
+    pub error: Option<TaskError>,
     /// Progress (e.g., "50%")
     pub progress: Option<String>,
-    /// Result data
+    /// Result data. Volcengine Ark nests the result under `content`, so that
+    /// key is aliased onto the same field.
+    #[serde(alias = "content")]
     pub data: Option<AsyncTaskData>,
+}
+
+/// Structured task error (Volcengine Ark failure payload)
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskError {
+    /// Human-readable error message
+    #[serde(default)]
+    pub message: String,
+    /// Machine-readable error code
+    #[serde(default)]
+    #[allow(dead_code)] // deserialized from API response; surfaced via message
+    pub code: Option<String>,
 }
 
 /// Async task result data
@@ -97,13 +125,50 @@ pub struct AsyncTaskData {
     pub output: Option<String>,
     /// Alternative: URL field
     pub url: Option<String>,
+    /// Volcengine Ark video result URL (under `content.video_url`)
+    pub video_url: Option<String>,
 }
 
 impl AsyncTaskData {
     /// Get the output URL from whichever field is present
     pub fn output_url(&self) -> Option<&str> {
-        self.output.as_deref().or(self.url.as_deref())
+        self.output
+            .as_deref()
+            .or(self.url.as_deref())
+            .or(self.video_url.as_deref())
     }
+}
+
+/// Request body for the Volcengine Ark video task API
+/// (`POST /api/v3/contents/generations/tasks`).
+///
+/// Unlike the OpenAI image format, the Ark video API takes a `content` array
+/// of typed parts (a text prompt plus optional reference images).
+#[derive(Debug, Clone, Serialize)]
+pub struct VideoTaskRequest {
+    /// Model to use (e.g., "doubao-seedance-2-0-260128")
+    pub model: String,
+    /// Ordered content parts (text prompt + optional reference images)
+    pub content: Vec<VideoContentPart>,
+}
+
+/// A single content part in a video task request.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+pub enum VideoContentPart {
+    /// Text prompt (Seedance encodes params as `--flag value` suffixes)
+    #[serde(rename = "text")]
+    Text { text: String },
+    /// Reference image (image-to-video / first-frame control)
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrlRef },
+}
+
+/// Image reference wrapper (`{ "url": "..." }`).
+#[derive(Debug, Clone, Serialize)]
+pub struct ImageUrlRef {
+    /// HTTP(S) URL or `data:` URL of the reference image
+    pub url: String,
 }
 
 /// `OpenAI` API error response format

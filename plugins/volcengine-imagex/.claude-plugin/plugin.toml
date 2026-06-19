@@ -1,0 +1,9 @@
+name = "volcengine-imagex"
+version = "0.1.0"
+description = "Volcengine veImageX MCP — text-to-image, super-resolution repair (image enhancement), comic/style transfer, image quality assessment, OCR"
+
+[aleph]
+runtime = "mcp"
+
+[aleph.permissions]
+network = true

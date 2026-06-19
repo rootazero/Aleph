@@ -48,8 +48,25 @@ impl GenerationProvider for OpenAiCompatProvider {
                 "Starting OpenAI-compatible image generation"
             );
 
-            // Build request body
-            let body = self.build_request_body(&request);
+            // Build request body. Video uses the Ark task API shape (a
+            // `content` array); image uses the OpenAI generations shape.
+            let (body_value, model_label) = if request.generation_type == GenerationType::Video {
+                let body = self.build_video_task_body(&request);
+                let value = serde_json::to_value(&body).map_err(|e| {
+                    GenerationError::serialization(format!(
+                        "Failed to serialize video task request: {e}"
+                    ))
+                })?;
+                (value, body.model)
+            } else {
+                let body = self.build_request_body(&request);
+                let value = serde_json::to_value(&body).map_err(|e| {
+                    GenerationError::serialization(format!(
+                        "Failed to serialize image request: {e}"
+                    ))
+                })?;
+                (value, body.model)
+            };
             let url = self.generations_url();
 
             debug!(url = %url, "Sending request to OpenAI-compatible API");
@@ -60,7 +77,7 @@ impl GenerationProvider for OpenAiCompatProvider {
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .header("Content-Type", "application/json")
-                .json(&body)
+                .json(&body_value)
                 .send()
                 .await
                 .map_err(|e| {
@@ -97,7 +114,12 @@ impl GenerationProvider for OpenAiCompatProvider {
                 GenerationError::serialization(format!("Failed to parse response: {e}"))
             })?;
 
-            let data = if parsed.get("task_id").is_some() {
+            // Async task APIs return a bare task handle (`task_id` for generic
+            // proxies, `id` for Volcengine Ark) with no `data` array; the
+            // OpenAI sync image response always carries `data`.
+            let is_async_task = (parsed.get("task_id").is_some() || parsed.get("id").is_some())
+                && parsed.get("data").is_none();
+            let data = if is_async_task {
                 // === Async polling mode ===
                 let submit: AsyncTaskSubmitResponse =
                     serde_json::from_value(parsed).map_err(|e| {
@@ -138,13 +160,13 @@ impl GenerationProvider for OpenAiCompatProvider {
             let duration = start_time.elapsed();
             let metadata = GenerationMetadata::new()
                 .with_provider(&self.name)
-                .with_model(body.model.clone())
+                .with_model(model_label.clone())
                 .with_duration(duration);
 
             info!(
                 provider = %self.name,
                 duration_ms = duration.as_millis(),
-                model = %body.model,
+                model = %model_label,
                 "Generation completed"
             );
 
@@ -252,8 +274,10 @@ impl OpenAiCompatProvider {
                 GenerationError::serialization(format!("Failed to parse poll response: {e}"))
             })?;
 
+            // Generic proxies use SUCCESS/FAILURE; Volcengine Ark uses
+            // succeeded/failed/cancelled (upper-cased here for matching).
             match task.status.to_uppercase().as_str() {
-                "SUCCESS" => {
+                "SUCCESS" | "SUCCEEDED" => {
                     info!(
                         provider = %self.name,
                         attempt = attempt,
@@ -275,9 +299,11 @@ impl OpenAiCompatProvider {
 
                     return Ok(GenerationData::url(output_url.to_string()));
                 }
-                "FAILURE" | "FAILED" => {
+                "FAILURE" | "FAILED" | "CANCELLED" | "CANCELED" => {
                     let reason = task
                         .fail_reason
+                        .or_else(|| task.error.map(|e| e.message))
+                        .filter(|m| !m.is_empty())
                         .unwrap_or_else(|| "Unknown error".to_string());
                     error!(provider = %self.name, reason = %reason, "Async task failed");
                     return Err(GenerationError::job_failed(reason, None));

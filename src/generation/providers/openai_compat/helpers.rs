@@ -2,16 +2,29 @@
 //!
 //! Contains utility functions for error parsing and request building.
 
-use crate::generation::{GenerationError, GenerationRequest};
+use crate::generation::{GenerationError, GenerationParams, GenerationRequest};
 
 use super::provider::OpenAiCompatProvider;
-use super::types::{ImageGenerationRequest, OpenAiErrorResponse};
+use super::types::{
+    ImageGenerationRequest, ImageUrlRef, OpenAiErrorResponse, VideoContentPart, VideoTaskRequest,
+};
 
 impl OpenAiCompatProvider {
     /// Get the full URL for the generations endpoint
     /// Endpoint is auto-completed from base URL during build (see `builder::normalize_endpoint`)
     pub(crate) fn generations_url(&self) -> String {
         self.endpoint.clone()
+    }
+
+    /// True when this provider speaks the Volcengine Ark protocol.
+    ///
+    /// Ark differs from the OpenAI convention in two ways the base code must
+    /// account for: image-to-image reuses the unified `/images/generations`
+    /// JSON endpoint with an `image` field (instead of the multipart
+    /// `/images/edits` endpoint), and video is a task-based async API. Both
+    /// are reachable under the `*.volces.com` host.
+    pub(crate) fn is_ark_protocol(&self) -> bool {
+        self.endpoint.contains("volces.com")
     }
 
     /// Get the full URL for the edits endpoint
@@ -39,9 +52,24 @@ impl OpenAiCompatProvider {
             _ => None,
         };
 
+        // Ark's unified endpoint accepts a reference image for image-to-image
+        // on the same generations call. Only forward it for Ark to avoid
+        // sending an unsupported field to OpenAI-style providers.
+        let image = if self.is_ark_protocol() {
+            request
+                .params
+                .reference_image
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .map(|s| normalize_image_ref(s))
+        } else {
+            None
+        };
+
         ImageGenerationRequest {
             model,
             prompt: request.prompt.clone(),
+            image,
             size,
             quality: request.params.quality.clone(),
             style: request.params.style.clone(),
@@ -49,6 +77,38 @@ impl OpenAiCompatProvider {
             response_format: Some("url".to_string()), // Default to URL format
             user: request.user_id.clone(),
         }
+    }
+
+    /// Build the Volcengine Ark video task request body from a `GenerationRequest`.
+    ///
+    /// The Ark video API (`/contents/generations/tasks`) takes a `content`
+    /// array: a text prompt (with Seedance `--flag value` parameter suffixes)
+    /// plus an optional reference image for image-to-video.
+    pub(crate) fn build_video_task_body(&self, request: &GenerationRequest) -> VideoTaskRequest {
+        let model = request
+            .params
+            .model
+            .clone()
+            .unwrap_or_else(|| self.model.clone());
+
+        let mut content = vec![VideoContentPart::Text {
+            text: build_video_prompt_text(&request.prompt, &request.params),
+        }];
+
+        if let Some(reference) = request
+            .params
+            .reference_image
+            .as_ref()
+            .filter(|s| !s.is_empty())
+        {
+            content.push(VideoContentPart::ImageUrl {
+                image_url: ImageUrlRef {
+                    url: normalize_image_ref(reference),
+                },
+            });
+        }
+
+        VideoTaskRequest { model, content }
     }
 
     /// Parse API error response and convert to `GenerationError`
@@ -100,4 +160,56 @@ impl OpenAiCompatProvider {
             ),
         }
     }
+}
+
+/// Normalize a reference image into a value the Ark API accepts.
+///
+/// HTTP(S) URLs and `data:` URLs pass through unchanged; a bare base64 string
+/// is wrapped as a JPEG `data:` URL (Ark rejects unprefixed base64).
+pub(crate) fn normalize_image_ref(reference: &str) -> String {
+    let lower = reference.trim_start().to_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("data:") {
+        reference.to_string()
+    } else {
+        format!("data:image/jpeg;base64,{reference}")
+    }
+}
+
+/// Map a request's pixel dimensions to a Seedance resolution token.
+///
+/// Seedance accepts coarse resolution tiers rather than exact pixel sizes;
+/// height (falling back to width) is bucketed to the nearest supported tier.
+fn resolution_token(params: &GenerationParams) -> Option<&'static str> {
+    let dim = params.height.or(params.width)?;
+    Some(if dim <= 480 {
+        "480p"
+    } else if dim <= 720 {
+        "720p"
+    } else {
+        "1080p"
+    })
+}
+
+/// Build a Seedance video prompt, appending `--flag value` parameter suffixes.
+///
+/// Seedance encodes generation parameters (aspect ratio, resolution, duration,
+/// seed) as text flags on the prompt rather than as JSON fields. Only
+/// well-supported flags are emitted; unset params fall back to API defaults.
+fn build_video_prompt_text(prompt: &str, params: &GenerationParams) -> String {
+    let mut text = prompt.trim().to_string();
+
+    if let Some(ratio) = params.aspect_ratio.as_deref().filter(|s| !s.is_empty()) {
+        text.push_str(&format!(" --ratio {ratio}"));
+    }
+    if let Some(resolution) = resolution_token(params) {
+        text.push_str(&format!(" --resolution {resolution}"));
+    }
+    if let Some(duration) = params.duration_seconds.filter(|d| *d > 0.0) {
+        text.push_str(&format!(" --duration {}", duration.round() as i64));
+    }
+    if let Some(seed) = params.seed.filter(|s| *s >= 0) {
+        text.push_str(&format!(" --seed {seed}"));
+    }
+
+    text
 }
