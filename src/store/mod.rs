@@ -4,6 +4,7 @@
 pub mod cache;
 pub mod provider;
 pub mod reconcile;
+pub mod trust;
 pub mod types;
 
 pub use types::{
