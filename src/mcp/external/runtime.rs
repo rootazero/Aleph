@@ -26,7 +26,10 @@ impl RuntimeKind {
         s.parse().unwrap_or(Self::None)
     }
 
-    /// Get the command to check for this runtime
+    /// Get the canonical command to check for this runtime.
+    ///
+    /// This is the first (preferred) entry of [`Self::check_commands`]. Prefer
+    /// `check_commands` when probing availability so platform fallbacks apply.
     #[must_use]
     pub const fn check_command(&self) -> Option<&'static str> {
         match self {
@@ -35,6 +38,25 @@ impl RuntimeKind {
             Self::Bun => Some("bun"),
             Self::Deno => Some("deno"),
             Self::None => None,
+        }
+    }
+
+    /// All command names to probe for this runtime, in priority order.
+    ///
+    /// Most runtimes expose a single canonical binary across every platform
+    /// (`node`, `bun`, `deno`). Python is the exception: Unix/macOS canonically
+    /// ship `python3`, but the Windows python.org installer and the `py`
+    /// launcher provide `python` (`python.exe`), and minimal Linux images often
+    /// only have `python`. Probing both prevents Python MCP servers from being
+    /// false-skipped on hosts where only `python` is on PATH.
+    #[must_use]
+    pub const fn check_commands(&self) -> &'static [&'static str] {
+        match self {
+            Self::Node => &["node"],
+            Self::Python => &["python3", "python"],
+            Self::Bun => &["bun"],
+            Self::Deno => &["deno"],
+            Self::None => &[],
         }
     }
 
@@ -93,55 +115,58 @@ pub struct RuntimeCheckResult {
 /// # Returns
 /// `RuntimeCheckResult` with availability and version info
 pub fn check_runtime(kind: RuntimeKind) -> RuntimeCheckResult {
-    let cmd = match kind.check_command() {
-        Some(cmd) => cmd,
-        None => {
-            return RuntimeCheckResult {
-                kind,
-                available: true,
-                version: None,
-                path: None,
-            };
-        }
-    };
+    let candidates = kind.check_commands();
+    if candidates.is_empty() {
+        // No runtime required (e.g. native binary) — always available.
+        return RuntimeCheckResult {
+            kind,
+            available: true,
+            version: None,
+            path: None,
+        };
+    }
 
-    // Check version
-    let version_output = Command::new(cmd).arg("--version").output();
+    // Probe each candidate command in priority order; the first one that
+    // reports a version wins. This lets Python fall back from `python3` to
+    // `python` on Windows / minimal Linux hosts.
+    for cmd in candidates {
+        let version_output = Command::new(cmd).arg("--version").output();
 
-    match version_output {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if let Ok(output) = version_output {
+            if output.status.success() {
+                let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
-            // Try to get the path using 'which' or 'where'
-            let path = get_runtime_path(cmd);
+                // Try to get the path using 'which' or 'where'
+                let path = get_runtime_path(cmd);
 
-            tracing::debug!(
-                runtime = %kind,
-                version = %version,
-                path = ?path,
-                "Runtime found"
-            );
+                tracing::debug!(
+                    runtime = %kind,
+                    command = %cmd,
+                    version = %version,
+                    path = ?path,
+                    "Runtime found"
+                );
 
-            RuntimeCheckResult {
-                kind,
-                available: true,
-                version: Some(version),
-                path,
+                return RuntimeCheckResult {
+                    kind,
+                    available: true,
+                    version: Some(version),
+                    path,
+                };
             }
         }
-        Ok(_) | Err(_) => {
-            tracing::debug!(
-                runtime = %kind,
-                "Runtime not found"
-            );
+    }
 
-            RuntimeCheckResult {
-                kind,
-                available: false,
-                version: None,
-                path: None,
-            }
-        }
+    tracing::debug!(
+        runtime = %kind,
+        "Runtime not found"
+    );
+
+    RuntimeCheckResult {
+        kind,
+        available: false,
+        version: None,
+        path: None,
     }
 }
 
@@ -214,6 +239,40 @@ mod tests {
         assert_eq!(RuntimeKind::Bun.check_command(), Some("bun"));
         assert_eq!(RuntimeKind::Deno.check_command(), Some("deno"));
         assert_eq!(RuntimeKind::None.check_command(), None);
+    }
+
+    #[test]
+    fn test_python_probes_python3_then_python() {
+        // Regression: Python must fall back to `python` so that Windows
+        // (python.org installer / `py` launcher) and minimal Linux hosts —
+        // where only `python` exists — are not false-skipped.
+        assert_eq!(
+            RuntimeKind::Python.check_commands(),
+            &["python3", "python"]
+        );
+    }
+
+    #[test]
+    fn test_single_binary_runtimes_have_one_candidate() {
+        assert_eq!(RuntimeKind::Node.check_commands(), &["node"]);
+        assert_eq!(RuntimeKind::Bun.check_commands(), &["bun"]);
+        assert_eq!(RuntimeKind::Deno.check_commands(), &["deno"]);
+        assert!(RuntimeKind::None.check_commands().is_empty());
+    }
+
+    #[test]
+    fn test_check_command_matches_first_candidate() {
+        // Guard against the two mappings drifting apart: `check_command` must
+        // always equal the first entry of `check_commands` (or None when empty).
+        for kind in [
+            RuntimeKind::Node,
+            RuntimeKind::Python,
+            RuntimeKind::Bun,
+            RuntimeKind::Deno,
+            RuntimeKind::None,
+        ] {
+            assert_eq!(kind.check_command(), kind.check_commands().first().copied());
+        }
     }
 
     #[test]

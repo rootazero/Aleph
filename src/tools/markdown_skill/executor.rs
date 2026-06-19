@@ -15,6 +15,58 @@ const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(300);
 use super::spec::NetworkMode;
 use super::tool_adapter::{MarkdownCliTool, MarkdownToolOutput};
 
+/// Build the host process [`Command`] for a skill's binary, accounting for
+/// Windows launcher conventions.
+///
+/// On Windows, `which` is PATHEXT-aware and resolves launchers that
+/// `CreateProcess` cannot execute directly:
+///   * `.cmd` / `.bat` — node/npm-style CLIs; must run through `cmd /C`.
+///   * `.ps1` — PowerShell scripts; run via PowerShell 7 (`pwsh`) when present,
+///     falling back to Windows PowerShell (`powershell`), using `-File`.
+///
+/// Without this, a skill's binary check (via `which`) would pass while the
+/// actual spawn failed. On non-Windows platforms this is byte-identical to
+/// `Command::new(bin).args(cli_args)`.
+fn build_host_command(bin: &str, cli_args: &[String]) -> Command {
+    #[cfg(windows)]
+    {
+        if let Ok(path) = which::which(bin) {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase);
+            let mut cmd = match ext.as_deref() {
+                Some("cmd" | "bat") => {
+                    // CreateProcess cannot execute batch files directly.
+                    let mut c = Command::new("cmd");
+                    c.arg("/C").arg(&path);
+                    c
+                }
+                Some("ps1") => {
+                    // Prefer PowerShell 7; fall back to Windows PowerShell.
+                    let shell = if which::which("pwsh").is_ok() {
+                        "pwsh"
+                    } else {
+                        "powershell"
+                    };
+                    let mut c = Command::new(shell);
+                    c.arg("-NoProfile").arg("-File").arg(&path);
+                    c
+                }
+                _ => Command::new(&path),
+            };
+            cmd.args(cli_args);
+            return cmd;
+        }
+        // Resolution failed — fall through to a bare spawn so the original
+        // "not found" error surfaces to the caller.
+    }
+
+    let mut cmd = Command::new(bin);
+    cmd.args(cli_args);
+    cmd
+}
+
 impl MarkdownCliTool {
     /// Resolve the execution timeout: skill-specific override or global default.
     fn execution_timeout(&self) -> Duration {
@@ -62,10 +114,10 @@ impl MarkdownCliTool {
             "Executing CLI tool on host"
         );
 
-        // Build command
-        let mut cmd = Command::new(bin);
-        cmd.args(cli_args)
-            .stdout(Stdio::piped())
+        // Build command (Windows-aware: resolves `.cmd`/`.bat` launchers so a
+        // node/npm CLI that passes the `which` binary check also executes).
+        let mut cmd = build_host_command(bin, cli_args);
+        cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null());
 

@@ -212,6 +212,8 @@ pub fn parse_skill_content(
                 let kind = match raw_spec.kind.to_lowercase().as_str() {
                     "brew" => crate::domain::skill::InstallKind::Brew,
                     "apt" => crate::domain::skill::InstallKind::Apt,
+                    "scoop" => crate::domain::skill::InstallKind::Scoop,
+                    "winget" => crate::domain::skill::InstallKind::Winget,
                     "npm" => crate::domain::skill::InstallKind::Npm,
                     "uv" => crate::domain::skill::InstallKind::Uv,
                     "go" => crate::domain::skill::InstallKind::Go,

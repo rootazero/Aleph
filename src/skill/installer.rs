@@ -27,6 +27,15 @@ pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
     match spec.kind {
         InstallKind::Brew => Some(format!("brew install {}", spec.package)),
         InstallKind::Apt => Some(format!("sudo apt-get install -y {}", spec.package)),
+        // Scoop — user-space, no UAC; the de-facto CLI/dev-tool manager on
+        // Windows. Native to PowerShell, runs unattended by default.
+        InstallKind::Scoop => Some(format!("scoop install {}", spec.package)),
+        // `-e` = exact id match; the accept flags suppress winget's interactive
+        // source/package agreement prompts so the install can run unattended.
+        InstallKind::Winget => Some(format!(
+            "winget install -e --accept-source-agreements --accept-package-agreements {}",
+            spec.package
+        )),
         InstallKind::Npm => Some(format!("npm install -g {}", spec.package)),
         InstallKind::Uv => Some(format!("uv pip install {}", spec.package)),
         InstallKind::Go => Some(format!("go install {}", spec.package)),
@@ -72,23 +81,32 @@ pub struct InstallResult {
 }
 
 const fn install_kind_rank(kind: &InstallKind, prefer_brew: bool) -> u8 {
+    // Scoop and Winget are the Windows system managers, ranked alongside Brew
+    // (the macOS system manager): high when system managers are preferred, just
+    // after Brew otherwise. Scoop outranks Winget because it targets CLI/dev
+    // tools (Winget leans toward desktop apps). OS filtering runs before ranking,
+    // so these only compete on Windows in practice.
     if prefer_brew {
         match kind {
             InstallKind::Brew => 0,
-            InstallKind::Uv => 1,
-            InstallKind::Npm => 2,
-            InstallKind::Go => 3,
-            InstallKind::Apt => 4,
-            InstallKind::Download => 5,
+            InstallKind::Scoop => 1,
+            InstallKind::Winget => 2,
+            InstallKind::Uv => 3,
+            InstallKind::Npm => 4,
+            InstallKind::Go => 5,
+            InstallKind::Apt => 6,
+            InstallKind::Download => 7,
         }
     } else {
         match kind {
             InstallKind::Uv => 0,
             InstallKind::Npm => 1,
             InstallKind::Brew => 2,
-            InstallKind::Go => 3,
-            InstallKind::Apt => 4,
-            InstallKind::Download => 5,
+            InstallKind::Scoop => 3,
+            InstallKind::Winget => 4,
+            InstallKind::Go => 5,
+            InstallKind::Apt => 6,
+            InstallKind::Download => 7,
         }
     }
 }
@@ -102,6 +120,35 @@ pub fn select_best_install<'a>(
     let mut candidates = filter_install_specs_for_current_os(specs);
     candidates.sort_by_key(|spec| install_kind_rank(&spec.kind, prefs.prefer_brew));
     candidates.into_iter().next()
+}
+
+/// Build the shell [`Command`](tokio::process::Command) used to run an install
+/// command string.
+///
+/// On Windows, prefer PowerShell 7 (`pwsh`) when available — it is the native
+/// host for `scoop` and modern Windows dev tooling, and (unlike Windows
+/// PowerShell 5.1) does not alias `curl` to `Invoke-WebRequest`, so `Download`
+/// commands behave as written. Fall back to `cmd /C`, which is always present.
+/// `sh` does not exist on Windows by default, so it must never be the Windows
+/// shell. On Unix, use `sh -c`.
+fn build_shell_command(cmd_str: &str) -> tokio::process::Command {
+    #[cfg(windows)]
+    {
+        if which::which("pwsh").is_ok() {
+            let mut c = tokio::process::Command::new("pwsh");
+            c.arg("-NoProfile").arg("-Command").arg(cmd_str);
+            return c;
+        }
+        let mut c = tokio::process::Command::new("cmd");
+        c.arg("/C").arg(cmd_str);
+        c
+    }
+    #[cfg(not(windows))]
+    {
+        let mut c = tokio::process::Command::new("sh");
+        c.arg("-c").arg(cmd_str);
+        c
+    }
 }
 
 /// Executes install commands with timeout and output capture.
@@ -122,20 +169,12 @@ impl InstallExecutor {
             }
         };
 
-        // Pick the platform shell — `sh` does not exist on Windows by default,
-        // so hardcoding it broke install on this project's primary platform.
-        let (shell, flag) = if cfg!(windows) {
-            ("cmd", "/C")
-        } else {
-            ("sh", "-c")
-        };
+        // Pick the platform shell (PowerShell 7 → cmd on Windows, sh on Unix).
+        let mut command = build_shell_command(&cmd_str);
+        command.kill_on_drop(true);
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(300),
-            tokio::process::Command::new(shell)
-                .arg(flag)
-                .arg(&cmd_str)
-                .kill_on_drop(true)
-                .output(),
+            command.output(),
         )
         .await;
 
@@ -201,6 +240,23 @@ mod tests {
         let spec = make_spec(InstallKind::Apt, "ripgrep");
         let cmd = build_install_command(&spec).unwrap();
         assert_eq!(cmd, "sudo apt-get install -y ripgrep");
+    }
+
+    #[test]
+    fn scoop_command() {
+        let spec = make_spec(InstallKind::Scoop, "ripgrep");
+        let cmd = build_install_command(&spec).unwrap();
+        assert_eq!(cmd, "scoop install ripgrep");
+    }
+
+    #[test]
+    fn winget_command() {
+        let spec = make_spec(InstallKind::Winget, "BurntSushi.ripgrep.MSVC");
+        let cmd = build_install_command(&spec).unwrap();
+        assert_eq!(
+            cmd,
+            "winget install -e --accept-source-agreements --accept-package-agreements BurntSushi.ripgrep.MSVC"
+        );
     }
 
     #[test]

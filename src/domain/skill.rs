@@ -291,6 +291,14 @@ impl ValueObject for EligibilitySpec {}
 pub enum InstallKind {
     Brew,
     Apt,
+    /// Scoop — user-space Windows package manager favoured for CLI/dev tools
+    /// (no UAC, installs under the user profile). Preferred over `winget` for
+    /// developer tooling.
+    Scoop,
+    /// Windows Package Manager (`winget`) — the native system package manager
+    /// on Windows, analogous to Brew on macOS / Apt on Linux. Leans toward
+    /// desktop applications; for CLI/dev tools prefer [`Self::Scoop`].
+    Winget,
     Npm,
     Uv,
     Go,
@@ -305,6 +313,8 @@ impl InstallKind {
         match self {
             Self::Brew => "brew",
             Self::Apt => "apt",
+            Self::Scoop => "scoop",
+            Self::Winget => "winget",
             Self::Npm => "npm",
             Self::Uv => "uv",
             Self::Go => "go",
@@ -840,6 +850,8 @@ mod tests {
         let kinds = vec![
             InstallKind::Brew,
             InstallKind::Apt,
+            InstallKind::Scoop,
+            InstallKind::Winget,
             InstallKind::Npm,
             InstallKind::Uv,
             InstallKind::Go,
