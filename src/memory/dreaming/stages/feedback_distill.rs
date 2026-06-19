@@ -76,7 +76,7 @@ impl DreamStage for FeedbackDistillStage {
 
         // Read correction signals via path-prefix + since-filter
         // (Phase 3 Decision D2 + watermark fix).
-        let corrections = match store
+        let mut corrections = match store
             .get_raw_by_path_prefix_since(
                 CORRECTION_PATH_PREFIX,
                 &ctx.agent_id,
@@ -109,6 +109,16 @@ impl DreamStage for FeedbackDistillStage {
             );
             return Ok(ctx);
         }
+
+        // Cap the surfaced batch to what one cycle can actually decide on
+        // (`max_per_cycle`). The query orders corrections by `created_at` ASC, so
+        // truncating keeps the OLDEST and lets the watermark advance (below) to
+        // exactly the decided slice — newer corrections stay unfetched until the
+        // next cycle. Without this, a busy cycle that surfaced `lookback`
+        // (default 50) rows but only emitted `max_per_cycle` (default 3) actions
+        // advanced the watermark past all 50, silently dropping the ~47
+        // corrections the LLM never saw (surfaced != distilled).
+        corrections.truncate(self.max_per_cycle);
 
         // Existing feedback-notes act as candidates so the LLM can choose
         // Strengthen/Supersede instead of always emitting New.

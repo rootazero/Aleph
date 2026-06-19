@@ -615,18 +615,31 @@ fn derive_chain_min_budget(config: &Config, primary_provider_key: &str) -> Chain
     let mut best: Option<ChainMinBudget> = None;
     for key in &keys {
         let provider = config.providers.get(key);
-        let model = provider.and_then(|p| p.models.first().map(String::as_str));
-        let budget = derive_token_budget(provider, model);
-        let is_smaller = best
-            .as_ref()
-            .is_none_or(|b| budget.usable < b.budget.usable);
-        if is_smaller {
-            best = Some(ChainMinBudget {
-                budget,
-                provider: key.clone(),
-                model: model.map(str::to_string),
-                chain_len: keys.len(),
-            });
+        // The live FailoverProvider can migrate across EVERY model a provider
+        // declares (model_catalog is seeded with the full list), so size the
+        // budget from the smallest window any of them could land on — not just
+        // `models.first()`, which would let a narrower sibling listed later
+        // overflow the budget the chain-min design exists to keep safe. An empty
+        // models list still contributes one evaluation (config window / default).
+        let models: Vec<Option<&str>> = match provider {
+            Some(p) if !p.models.is_empty() => {
+                p.models.iter().map(|m| Some(m.as_str())).collect()
+            }
+            _ => vec![None],
+        };
+        for model in models {
+            let budget = derive_token_budget(provider, model);
+            let is_smaller = best
+                .as_ref()
+                .is_none_or(|b| budget.usable < b.budget.usable);
+            if is_smaller {
+                best = Some(ChainMinBudget {
+                    budget,
+                    provider: key.clone(),
+                    model: model.map(str::to_string),
+                    chain_len: keys.len(),
+                });
+            }
         }
     }
     // `keys` always holds at least the primary, so `best` is always `Some`;

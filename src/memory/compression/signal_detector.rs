@@ -10,7 +10,9 @@
 //! ## Priority Levels
 //!
 //! - `Immediate`: Corrections require immediate compression
-//! - `Deferred`: Learning signals are compressed soon
+//! - `Deferred`: computed for learning signals but NOT acted on as an early
+//!   trigger — learning/milestone signals ride the normal turn-threshold
+//!   compaction cadence; only `Immediate` (corrections) compresses early
 //! - `Batch`: Milestones and default - batched with regular compression
 
 /// Compression signal types detected from user messages
