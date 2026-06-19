@@ -45,12 +45,12 @@ pub async fn active_standing_goal(session_key: &str) -> Option<String> {
 
 /// Fetch the session's welded Strategy for the prompt weld. Returns the
 /// `Strategy` struct (the caller renders both the `<strategy>` body and the
-/// guardrail echo from it). Resolution mirrors the StraTA composite key: try
-/// `goal_key(session)` first (a `/goal` Strategy takes precedence), else
-/// `loop_key(session)` (a `/loop` Strategy). Returns `None` (→ both Strategy
-/// layers emit nothing) when the strategy subsystem is uninitialized or no
-/// Strategy is stored for either key. Fail-soft on store error. Mirrors
-/// `active_standing_goal`.
+/// guardrail echo from it). Thin async wrapper over `resolve_active_strategy`,
+/// which resolves the StraTA composite key with precedence
+/// goal → loop → team → session (see its doc for the tier rules). Returns
+/// `None` (→ both Strategy layers emit nothing) when the strategy subsystem is
+/// uninitialized or no Strategy is stored for any tier. Fail-soft on store
+/// error. Mirrors `active_standing_goal`.
 pub async fn active_strategy(session_key: &str) -> Option<crate::strategy::Strategy> {
     let store = crate::strategy::global()?;
     resolve_active_strategy(&store, session_key)
