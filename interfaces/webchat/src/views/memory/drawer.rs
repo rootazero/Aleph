@@ -26,7 +26,7 @@ pub enum DrawerTarget {
 pub fn DetailDrawer(target: RwSignal<Option<DrawerTarget>>) -> impl IntoView {
     view! {
         {move || match target.get() {
-            None => ().into_any(),
+            None => view! { <div></div> }.into_any(),
             Some(DrawerTarget::Note(fact)) => view! {
                 <DrawerShell target=target>
                     <NoteDetail fact=fact />
