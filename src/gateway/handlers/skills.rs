@@ -13,7 +13,7 @@ use crate::skill::{default_skill_dirs, SkillConfigUpdate, SkillSystem};
 /// Lazily ensures the shared instance is initialized with the default skill
 /// directories. `init` is re-runnable; `ExtensionManager` may also call it
 /// later with discovery-derived dirs — both populate the same Arc registry.
-fn shared_system() -> &'static SkillSystem {
+pub(crate) fn shared_system() -> &'static SkillSystem {
     let system = crate::skill::shared_skill_system();
     // Lazily ensure the shared instance is initialized with the default skill
     // dirs. `init` is re-runnable; ExtensionManager may also init it later
