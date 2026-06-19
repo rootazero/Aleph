@@ -1,4 +1,4 @@
-//! `DoctorRepairHintLayer` — webchat-only "press f to repair" hint (priority 1120).
+//! `DoctorRepairHintLayer` — webchat-only "press f to repair" hint (priority 1715).
 //!
 //! Closes the detect→repair loop for the `/doctor` slash command: when the
 //! model runs the read-only `doctor` tool and finds unresolved problems, this
@@ -20,7 +20,12 @@ impl PromptLayer for DoctorRepairHintLayer {
         "doctor_repair_hint"
     }
     fn priority(&self) -> u32 {
-        1120
+        // Dynamic layers MUST live in the `>= 1700` per-request suffix zone so
+        // the cacheable Stable prefix (priorities `< 1700`) is never split by a
+        // dynamic layer — see `PromptPipeline::default_layers` and the
+        // `stable_layers_come_before_dynamic` invariant. Sits with the other
+        // paradigm-gated layer (`VoiceModeLayer` @1710).
+        1715
     }
     fn stability(&self) -> LayerStability {
         LayerStability::Dynamic
@@ -83,7 +88,7 @@ mod tests {
     fn metadata() {
         let layer = DoctorRepairHintLayer;
         assert_eq!(layer.name(), "doctor_repair_hint");
-        assert_eq!(layer.priority(), 1120);
+        assert_eq!(layer.priority(), 1715);
         assert!(matches!(layer.stability(), LayerStability::Dynamic));
         // Guards the "dead on the cached path" regression class: a layer that
         // drops `Cached` from `paths()` silently vanishes in production while

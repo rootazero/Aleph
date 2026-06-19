@@ -251,23 +251,28 @@ pub async fn run_child_with_drain(
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
+    // Read PAST the keep-budget so `truncate_output` can both preserve a
+    // head+tail slice AND report how many bytes were elided — the
+    // `*_truncated_bytes` contract surfaced to the model (see `code_exec`).
+    // Capping the read at exactly `max_output_bytes` would silently drop the
+    // overflow before it could be counted (drop count stuck at 0, `truncated`
+    // stuck false). Reads stay bounded: at most `DRAIN_READ_FACTOR *
+    // max_output_bytes` is buffered for a runaway child, and the reported drop
+    // count saturates at that ceiling for pathological overflows.
+    const DRAIN_READ_FACTOR: u64 = 8;
+    let read_ceiling = (max_output_bytes as u64).saturating_mul(DRAIN_READ_FACTOR);
+
     let stdout_task = tokio::spawn(async move {
         let mut buf = Vec::new();
         if let Some(pipe) = stdout {
-            let _ = pipe
-                .take(max_output_bytes as u64)
-                .read_to_end(&mut buf)
-                .await;
+            let _ = pipe.take(read_ceiling).read_to_end(&mut buf).await;
         }
         buf
     });
     let stderr_task = tokio::spawn(async move {
         let mut buf = Vec::new();
         if let Some(pipe) = stderr {
-            let _ = pipe
-                .take(max_output_bytes as u64)
-                .read_to_end(&mut buf)
-                .await;
+            let _ = pipe.take(read_ceiling).read_to_end(&mut buf).await;
         }
         buf
     });
