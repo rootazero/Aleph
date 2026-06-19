@@ -837,8 +837,12 @@ pub fn ChatSidebar() -> impl IntoView {
                         </button>
 
                         <Show when=move || agent_picker_open.get()>
-                            <div class="glass animate-pop-in absolute bottom-full left-0 right-0 mb-2 z-50 \
-                                        max-h-72 overflow-y-auto rounded-xl border border-border \
+                            // Anchored to the sidebar's top action area, so the
+                            // picker opens DOWNWARD (`top-full` + `mt-2`). `max-h-[60vh]`
+                            // caps it to the viewport and `overflow-y-auto` scrolls the
+                            // overflow, so a long agent list never runs off the window.
+                            <div class="glass animate-pop-in absolute top-full left-0 right-0 mt-2 z-50 \
+                                        max-h-[60vh] overflow-y-auto rounded-xl border border-border \
                                         bg-surface-overlay/85 shadow-xl p-1.5 space-y-0.5"
                                 on:mouseleave=move |_| agent_picker_open.set(false)>
                                 {move || {
