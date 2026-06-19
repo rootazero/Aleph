@@ -21,22 +21,6 @@ pub fn extract_wikilinks(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Extract wikilink targets and their optional aliases from `text`.
-///
-/// `[[target]]` yields `(target, None)`; `[[target|alias]]` yields `(target, Some(alias))`.
-#[allow(dead_code)] // test-only helper
-pub fn extract_wikilinks_with_alias(text: &str) -> Vec<(String, Option<String>)> {
-    WIKILINK_RE
-        .captures_iter(text)
-        .map(|cap| {
-            (
-                cap[1].to_string(),
-                cap.get(2).map(|m| m.as_str().to_string()),
-            )
-        })
-        .collect()
-}
-
 /// Replace every `[[old_name]]` with `[[new_name]]`, leaving other links intact.
 pub fn rewrite_wikilinks(text: &str, old_name: &str, new_name: &str) -> String {
     WIKILINK_RE
@@ -124,18 +108,6 @@ mod tests {
     fn extract_pipe_alias_returns_target_only() {
         let text = "see [[rust|Rust 学习]] and [[plain]]";
         assert_eq!(extract_wikilinks(text), vec!["rust", "plain"]);
-    }
-
-    #[test]
-    fn extract_with_alias_returns_pairs() {
-        let text = "see [[rust|Rust 学习]] and [[plain]]";
-        assert_eq!(
-            extract_wikilinks_with_alias(text),
-            vec![
-                ("rust".to_string(), Some("Rust 学习".to_string())),
-                ("plain".to_string(), None),
-            ]
-        );
     }
 
     #[test]

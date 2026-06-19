@@ -131,8 +131,8 @@
 > 三支柱是 Aleph 长期记忆的工程纪律，落在不同文件，分开描述更精准。
 
 **① 关键词链接地基 (Note Keyword Linking)** ✅
-- 锚点：`src/memory/notes/mod.rs`（frontmatter aliases/keywords；**注**：`aliases` 目前仅用于 Obsidian round-trip，未参与链接解析）、`src/memory/notes/graph/relevance.rs`（四信号打分：直接链接 ×3 / IDF 衰减来源重叠 ×4 / Adamic-Adar 共同邻居 ×1.5 / 类型亲和 ×1）、`src/memory/notes/graph/mod.rs`（community detection）
-- 话术：「记忆链接地基 = 笔记 frontmatter 的 aliases/keywords + Note Graph 四信号相关性 + ingest 时自动 peer 链接。」
+- 锚点：`src/memory/notes/note/mod.rs`（frontmatter aliases/keywords）、`src/memory/store/sqlite/notes/store_impl.rs`（`resolve_target` / `relink_unresolved`：`[[wikilink]]` 解析 **filename 优先，无命中回退 frontmatter `aliases` 精确匹配**，2026-06-19 连线；alias→path 查询在 `notes/helpers.rs::resolve_paths_by_alias`，JSON1-free serde 精确匹配，`notes_index.aliases_json` 列由 `migrate_notes_index_aliases` 迁移）、`src/memory/notes/graph/relevance.rs`（四信号打分：直接链接 ×3 / IDF 衰减来源重叠 ×4 / Adamic-Adar 共同邻居 ×1.5 / 类型亲和 ×1）、`src/memory/notes/graph/mod.rs`（community detection）
+- 话术：「记忆链接地基 = 笔记 frontmatter 的 aliases/keywords + Note Graph 四信号相关性 + ingest 时自动 peer 链接。**`aliases` 现已参与链接解析**：`[[别名]]` 会解析到以该别名声明的笔记（filename 仍优先）；改解析逻辑去 `store_impl.rs::resolve_target`，alias 查询在 `helpers.rs::resolve_paths_by_alias`。」
 
 **② 会话结束实时 flush (Session-End Flush)** ✅
 - 锚点：`src/memory/flush/mod.rs`（非阻塞 spawn `session_end_flush`）、`src/memory/flush/registry.rs`（FlushRegistry + await_ready）、`src/memory/compression/mod.rs`（compress_to_notes）

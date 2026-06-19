@@ -21,7 +21,7 @@ use super::super::SqliteMemoryBackend;
 
 use super::helpers::{
     body_text_sha256, collect_edges_between, load_note_content_from_disk,
-    provenance_origin_from_str, provenance_origin_to_str, row_to_entry,
+    provenance_origin_from_str, provenance_origin_to_str, resolve_paths_by_alias, row_to_entry,
 };
 
 macro_rules! lock_conn {
@@ -50,18 +50,21 @@ impl NoteStore for SqliteMemoryBackend {
         let filename = title.to_string();
 
         let tags_json = serde_json::to_string(&note.tags).unwrap_or_else(|_| "[]".to_string());
+        let aliases_json =
+            serde_json::to_string(&note.aliases).unwrap_or_else(|_| "[]".to_string());
 
         // Upsert notes_index
         conn.execute(
             "INSERT OR REPLACE INTO notes_index \
-             (path, filename, agent_id, category, tags_json, created_at, updated_at, content_hash) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (path, filename, agent_id, category, tags_json, aliases_json, created_at, updated_at, content_hash) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 path,
                 filename,
                 agent_id,
                 category,
                 tags_json,
+                aliases_json,
                 note.created_at,
                 note.updated_at,
                 note.content_hash,
@@ -88,11 +91,21 @@ impl NoteStore for SqliteMemoryBackend {
                 .map_err(|e| AlephError::config(format!("resolve filename query: {e}")))?
                 .filter_map(|r| r.ok())
                 .collect();
-            Ok(if paths.len() == 1 {
-                paths[0].clone()
-            } else {
-                raw_target.to_string()
-            })
+            if paths.len() == 1 {
+                return Ok(paths[0].clone());
+            }
+            // Fallback: resolve via frontmatter `aliases` only when no filename
+            // matched (a real filename always wins; an ambiguous filename match
+            // stays raw). Lets `[[Bob]]` link to the "Bob Smith" note aliased
+            // "Bob" instead of dangling.
+            if paths.is_empty() {
+                let by_alias = resolve_paths_by_alias(&*conn, agent_id, raw_target)
+                    .map_err(|e| AlephError::config(format!("resolve alias query: {e}")))?;
+                if by_alias.len() == 1 {
+                    return Ok(by_alias[0].clone());
+                }
+            }
+            Ok(raw_target.to_string())
         };
 
         let mut desired: HashMap<String, (String, Option<String>)> = HashMap::new();
@@ -998,11 +1011,18 @@ impl NoteStore for SqliteMemoryBackend {
                      WHERE agent_id = ?1 AND filename = ?2 LIMIT 2",
                 )
                 .map_err(|e| AlephError::config(format!("relink find: {e}")))?;
-            let paths: Vec<String> = find
+            let mut paths: Vec<String> = find
                 .query_map(params![agent_id, raw], |r| r.get::<_, String>(0))
                 .map_err(|e| AlephError::config(format!("relink find query: {e}")))?
                 .filter_map(|r| r.ok())
                 .collect();
+            // Frontmatter alias fallback (filename priority) — mirrors
+            // index_note's resolve_target so links re-resolve to aliased notes
+            // that were indexed after the linking note.
+            if paths.is_empty() {
+                paths = resolve_paths_by_alias(&*conn, agent_id, &raw)
+                    .map_err(|e| AlephError::config(format!("relink alias query: {e}")))?;
+            }
             if paths.len() == 1 {
                 conn.execute(
                     "UPDATE notes_links SET to_note = ?1 WHERE id = ?2",
