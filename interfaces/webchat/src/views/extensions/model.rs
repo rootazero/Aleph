@@ -86,32 +86,12 @@ pub fn group_into_shelves(entries: &[ExtensionEntry]) -> Vec<(&'static str, Vec<
 }
 
 #[must_use]
-pub fn kind_label_key(kind: &str) -> &'static str {
-    match kind {
-        "skill" => "extensions.kind.skill",
-        "plugin" => "extensions.kind.plugin",
-        "mcp" => "extensions.kind.mcp",
-        _ => "extensions.kind.other",
-    }
-}
-
-#[must_use]
 pub fn kind_badge_class(kind: &str) -> &'static str {
     match kind {
         "skill" => "bg-success-subtle text-success",
         "plugin" => "bg-primary-subtle text-primary",
         "mcp" => "bg-info-subtle text-info",
         _ => "bg-surface-sunken text-text-secondary",
-    }
-}
-
-#[must_use]
-pub fn trust_label_key(tier: &str) -> &'static str {
-    match tier {
-        "official" => "extensions.trust.official",
-        "verified" => "extensions.trust.verified",
-        "community" => "extensions.trust.community",
-        _ => "extensions.trust.unverified",
     }
 }
 

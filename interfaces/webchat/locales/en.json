@@ -1324,7 +1324,15 @@
     "search_placeholder": "Search by what you want to do…",
     "install": "Install",
     "installed": "Installed",
-    "empty": "No extensions match."
+    "empty": "No extensions match.",
+    "version": "Version",
+    "category_label": "Category",
+    "trust_label": "Trust",
+    "what_it_does": "What it does",
+    "what_it_reaches": "What it can reach",
+    "loading_perms": "Checking permissions…",
+    "no_perms": "No special permissions.",
+    "docs": "Docs ↗"
   },
   "agents": {
     "sidebar": {

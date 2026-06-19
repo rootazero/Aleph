@@ -1,31 +1,10 @@
 use leptos::prelude::*;
-use leptos_i18n::I18nContext;
 
 use crate::api::extensions::ExtensionEntry;
-use crate::i18n::{t, t_string, use_i18n, Locale};
+use crate::components::extensions::labels::{kind_label, trust_label};
+use crate::i18n::{t, use_i18n};
 use crate::views::extensions::model::{kind_badge_class, trust_dot_class};
 use crate::views::extensions::StoreState;
-
-/// Localize a `kind` string using literal i18n key paths.
-/// The `t!` macro requires compile-time literal keys, so we match on the runtime string.
-fn kind_label(i18n: I18nContext<Locale>, kind: &str) -> String {
-    match kind {
-        "skill" => t_string!(i18n, extensions.kind.skill).to_string(),
-        "plugin" => t_string!(i18n, extensions.kind.plugin).to_string(),
-        "mcp" => t_string!(i18n, extensions.kind.mcp).to_string(),
-        _ => t_string!(i18n, extensions.kind.other).to_string(),
-    }
-}
-
-/// Localize a `trust_tier` string using literal i18n key paths.
-fn trust_label(i18n: I18nContext<Locale>, tier: &str) -> String {
-    match tier {
-        "official" => t_string!(i18n, extensions.trust.official).to_string(),
-        "verified" => t_string!(i18n, extensions.trust.verified).to_string(),
-        "community" => t_string!(i18n, extensions.trust.community).to_string(),
-        _ => t_string!(i18n, extensions.trust.unverified).to_string(),
-    }
-}
 
 #[component]
 #[must_use]

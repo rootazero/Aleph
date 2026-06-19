@@ -67,6 +67,7 @@ pub fn ExtensionsView() -> impl IntoView {
                     <crate::views::extensions::browse::BrowsePane />
                 </div>
             </div>
+            <crate::components::extensions::detail_drawer::ExtensionDetailDrawer />
         </div>
     }
 }

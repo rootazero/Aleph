@@ -1324,7 +1324,15 @@
     "search_placeholder": "按你想做的事搜索…",
     "install": "安装",
     "installed": "已安装",
-    "empty": "没有匹配的扩展"
+    "empty": "没有匹配的扩展",
+    "version": "版本",
+    "category_label": "类别",
+    "trust_label": "信任",
+    "what_it_does": "功能说明",
+    "what_it_reaches": "可访问的资源",
+    "loading_perms": "正在检查权限…",
+    "no_perms": "无特殊权限",
+    "docs": "文档 ↗"
   },
   "agents": {
     "sidebar": {
