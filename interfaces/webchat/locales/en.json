@@ -1319,7 +1319,10 @@
       "verified": "Verified",
       "community": "Community",
       "unverified": "Unverified"
-    }
+    },
+    "install": "Install",
+    "installed": "Installed",
+    "empty": "No extensions match."
   },
   "agents": {
     "sidebar": {

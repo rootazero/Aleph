@@ -1319,7 +1319,10 @@
       "verified": "已验证",
       "community": "社区",
       "unverified": "未验证"
-    }
+    },
+    "install": "安装",
+    "installed": "已安装",
+    "empty": "没有匹配的扩展"
   },
   "agents": {
     "sidebar": {

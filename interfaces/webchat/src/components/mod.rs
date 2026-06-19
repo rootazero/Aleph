@@ -1,5 +1,6 @@
 //! Component modules
 
+pub mod extensions;
 pub mod agents_sidebar;
 pub mod boot_check_gate;
 pub mod chat_sidebar;

@@ -1,4 +1,5 @@
 //! Top-level Extensions store mode (full-screen takeover, grouped with Teams).
+pub mod browse;
 pub mod model;
 
 use leptos::prelude::*;
@@ -61,10 +62,9 @@ pub fn ExtensionsView() -> impl IntoView {
                     <p class="text-xs text-text-tertiary">{t!(i18n, extensions.subtitle)}</p>
                 </div>
             </header>
-            // Browse pane is mounted here in Task 4/5; installed slide-in in Task 9.
             <div class="flex-1 overflow-y-auto px-6 pb-6">
-                <div class="max-w-5xl mx-auto py-8 text-text-tertiary text-sm">
-                    "Store browse loads here."
+                <div class="max-w-5xl mx-auto py-6">
+                    <crate::views::extensions::browse::BrowsePane />
                 </div>
             </div>
         </div>
