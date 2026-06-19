@@ -1056,18 +1056,15 @@ pub fn create_tool_boxed(
                 crate::skill::shared_skill_system().clone(),
             ),
         )),
-        // Goal tool — backed by process-global GoalStore (init_global at boot).
-        // Returns None if called before the store is initialized (e.g. in tests
-        // that don't boot the full daemon).
-        "goal" => crate::goal::global().map(|store| {
-            Box::new(crate::builtin_tools::GoalTool::new(store)) as Box<dyn AlephToolDyn>
-        }),
-        // Loop tool — backed by the process-global in-memory LoopRegistry
-        // (init_global at boot). None before boot, same as goal.
-        "loop" => crate::looping::global()
-            .map(|reg| Box::new(crate::builtin_tools::LoopTool::new(reg)) as Box<dyn AlephToolDyn>),
+        // `goal` and `loop` are intentionally NOT built here: both hard-require a
+        // live per-session binding (`GoalTool`/`LoopTool::call` error on an empty
+        // session), which this session-less fallback path cannot supply — building
+        // them here yields a present-but-100%-broken tool. The live agent loop
+        // wires them with a session via the BuiltinToolRegistry builder
+        // constructor; an unconfigured name falls through to `_ => None` (skipped),
+        // which is strictly better than surfacing an always-erroring tool.
         // Strategy tool — backed by the process-global StrategyStore
-        // (init_global at boot). None before boot, same as goal/loop.
+        // (init_global at boot). None before boot.
         "strategy" => crate::strategy::global().map(|store| {
             Box::new(crate::builtin_tools::StrategyTool::new(store)) as Box<dyn AlephToolDyn>
         }),

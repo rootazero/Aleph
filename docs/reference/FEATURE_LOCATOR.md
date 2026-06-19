@@ -42,8 +42,8 @@
 | Harness | plugins 插件 | Plugin System | `src/extension/` | ✅ |
 | Harness | skills 技能 | Skill System | `src/skill/` | ✅ |
 | Harness | browser 浏览器 | Browser Automation | `src/browser/` | ✅ |
-| Loop | goal 命令 | Standing Goal | `src/goal/` + `src/builtin_tools/goal*` | ✅ |
-| Loop | loop 命令 | Loop Command | `src/looping/` + `src/builtin_tools/loop_manage/` | ✅ |
+| Loop | goal 命令 | Standing Goal | `src/goal/` + `src/builtin_tools/goal.rs` | ✅ |
+| Loop | loop 命令 | Loop Command | `src/looping/` + `src/builtin_tools/loop_manage.rs` | ✅ |
 | Loop | workflow 命令 | Workflow | `src/workflow/` | ✅ |
 | Loop | task 任务管理 / 分解 / 验证 / 收尾 | Coordinated Tasks | `src/agents/swarm/tasks/` + `src/teams/dispatcher/` | ✅ |
 | Loop | multi-agent / teams / 多代理 | Teams / Multi-Agent | `src/teams/` + `src/agents/` | ✅ |
@@ -131,7 +131,7 @@
 > 三支柱是 Aleph 长期记忆的工程纪律，落在不同文件，分开描述更精准。
 
 **① 关键词链接地基 (Note Keyword Linking)** ✅
-- 锚点：`src/memory/notes/mod.rs`（frontmatter aliases/keywords）、`src/memory/notes/graph/relevance.rs`（四信号打分：相似度/引用频率/编辑模式/时间接近）、`src/memory/notes/graph/mod.rs`（community detection）
+- 锚点：`src/memory/notes/mod.rs`（frontmatter aliases/keywords；**注**：`aliases` 目前仅用于 Obsidian round-trip，未参与链接解析）、`src/memory/notes/graph/relevance.rs`（四信号打分：直接链接 ×3 / IDF 衰减来源重叠 ×4 / Adamic-Adar 共同邻居 ×1.5 / 类型亲和 ×1）、`src/memory/notes/graph/mod.rs`（community detection）
 - 话术：「记忆链接地基 = 笔记 frontmatter 的 aliases/keywords + Note Graph 四信号相关性 + ingest 时自动 peer 链接。」
 
 **② 会话结束实时 flush (Session-End Flush)** ✅
@@ -141,7 +141,7 @@
 **③ 纠正/教训即时沉淀 (Correction & Lesson Sedimentation)** ✅（G6 已查证 2026-06-16）
 - **写入**：`src/builtin_tools/flag_user_correction.rs`（LLM 调的工具，写 `RawMemorySource::Correction` 到 `aleph://correction/{id}`）；构造于 `src/executor/builtin_registry/builder/constructor.rs:1793`（**有 `memory_db` 即注册，非死代码**），prompt 引导在 `src/thinker/layers/special_actions.rs`。
 - **蒸馏**：`src/memory/dreaming/stages/feedback_distill.rs`（按 `aleph://correction/` 前缀 + watermark 幂等读 → LLM 蒸馏成 `feedback/` note），调度于 `src/memory/dreaming/mod.rs:172,218`（**Consolidate 每日 + Synthesize 两条 dream path 都挂**）。
-- **召回**：`feedback/` note 由 assembler 表面化（`src/memory/assembler/gather.rs:284` / `envelope.rs:34`）；goal 教训另有 `GoalLessonsPromoteStage` → `lesson/` note。
+- **召回**：`feedback/` note 由 assembler 表面化（`src/memory/assembler/gather.rs:284` / `envelope.rs:34`）；goal 教训另有 `GoalLessonsPromoteStage` → `goal-lessons/` note（类别 `goal-lessons`，已补入 indexer `CATEGORY_DIRS`）。
 - **状态**：✅ 端到端已连且生产存活（写入工具注册 + distill 双路调度 + 召回消费者，逐跳有单测）。
 - **设计边界（重要）**：沉淀是 **LLM/工具驱动**（R8 工具即一切 / R7 LLM 主权）——LLM 判断"这值得记"才调 `flag_user_correction`。**没有也不应有**"每次工具失败自动写 raw memory"的 harness 错误 hook（违 R10「不做错误恢复」+ R7，且会用瞬时报错噪声淹没记忆）。
 - 话术：「‘错误/纠正沉淀’走 `flag_user_correction` + `FeedbackDistill`，已全连且存活。想要‘自动捕获工具失败 → 教训’——**这是故意不做的设计边界**（R7/R10），别加 harness 错误 hook；要让 LLM 多记教训就强化 prompt 引导它调工具。」
@@ -218,8 +218,8 @@
 - **代码锚点**：`src/extension/`——`loader.rs`、`plugin_ops.rs`、`discovery/`、`manifest/`、`hooks/`、`marketplace/`、`capability.rs`、`types/plugins.rs`
 - **职责**：管理 Wasm/Mcp/Static 三类插件的发现/加载/注册，多源优先级（Config > Workspace > Global > Bundled）、热重载、风险扫描、marketplace 安装。
 - **状态**：✅ 已实现。**关键事实**：'plugins' 在代码里属于 **`src/extension/`**（plugin 是 extension 的一种 kind），不是独立 `src/plugins/`。**硬化（2026-06-17）**：① WASM hook 执行已连线——`loader.rs::execute_hook` 不再返回 "not yet implemented"，而是复用 WASM runtime 的 `call_tool`（hook = 导出函数），`execute_plugin_hook` 补齐 auto-load 与 `call_plugin_tool` 对称；② marketplace 完整性校验 `installer.rs::verify_plugin_integrity` 修复静默跳过——walk 错误 / `strip_prefix` 失败现在硬失败（此前 `filter_map(ok)` 会把不可读文件排除出哈希 → 篡改归档可绕过校验）。
-- **已知缺口**：插件注册的 hook（`HookRegistration.handler`）经 `sync_hooks_from_registry` 进 `HookExecutor` 时 `actions` 为空、`handler` 字段只写不读——**事件驱动的插件 hook 仍不会从真实 hook 事件触发**（需 executor 持有 loader 回调，涉跨模块循环依赖，未连）。当前 WASM hook 仅经 `ExtensionManager::execute_plugin_hook` 直调路径可达。
-- **打磨话术**：「插件 = extension（`src/extension/`）。三类 kind：Wasm/Mcp/Static。改‘插件优先级/发现’找 discovery，与 Skill 共享优先级解析。‘WASM hook 怎么跑’= `loader.rs::execute_hook` → runtime `call_tool`；‘hook 事件为何不触发插件’= executor 的 `handler` 字段未连 loader（见上‘已知缺口’）。」
+- **缺口已闭合（2026-06-19）**：此前插件注册的 hook 经 `sync_hooks_from_registry` 进 `HookExecutor` 时 `actions` 为空、`handler` 只写不读——**事件驱动的插件 hook 不会从真实 hook 事件触发**（旧描述误判为"需 executor 持有 loader 回调、跨模块循环依赖"）。**修复（连线优先 + 依赖倒置 P4）**：新增 `HookAction::Plugin{plugin_id,handler}` 变体；`sync_hooks_from_registry` 改发该 live action（替代空列表，`handler` 字段保留供 `validation.rs` 显示）；`executor.rs::execute_plugin` 经**既有全局访问器** `try_extension_manager()`（gateway/channel fire-site 已在用）调 `execute_plugin_hook` 派发 WASM 导出函数——**复用现成基础设施，零回调注入、零 Arc 所有权环**。派发集中在 `execute_action` 一处，自动覆盖 observer/interceptor/resolver 三态；observer 忽略输出，interceptor/resolver 可经行前缀协议读结构化返回。manager 未注册（单测）时优雅跳过。
+- **打磨话术**：「插件 = extension（`src/extension/`）。三类 kind：Wasm/Mcp/Static。改‘插件优先级/发现’找 discovery，与 Skill 共享优先级解析。‘WASM hook 怎么跑’= `loader.rs::execute_hook` → runtime `call_tool`；‘事件驱动的插件 hook 怎么派发’= `HookAction::Plugin` → `executor.rs::execute_plugin` → `try_extension_manager()` → `execute_plugin_hook`（2026-06-19 连线，见上‘缺口已闭合’）。要加新 hook 事件源只需在 fire-site 调 `fire_global_observer` 即可，插件 hook 自动参与。」
 
 ### 3.11 技能系统 (Skill System)
 - **口语关键词**：skills、技能、SKILL.md、资格评估、prompt 注入、共现
@@ -241,14 +241,14 @@
 
 ### 4.1 Goal 命令 (Standing Goal)
 - **口语关键词**：goal 命令、自主目标、持久目标、自动续跑、迭代/token/deadline 上限
-- **代码锚点**：`src/goal/`（mod.rs / types.rs / store.rs）、`src/tasks/goal_pursuit.rs`、`src/builtin_tools/goal*`（set/update/list/clear）
+- **代码锚点**：`src/goal/`（mod.rs / types.rs / store.rs）、`src/tasks/goal_pursuit.rs`、`src/builtin_tools/goal.rs`（GoalAction: set/get/update/clear——单文件，无 list 动作）
 - **职责**：用户设持久目标，LLM 经 goal 工具管状态，后台按 迭代/token/deadline 上限自主续跑，每轮注入进度 lessons + 剩余配额。
 - **状态**：✅ 已实现（should_continue / continuation_prompt / cap/deadline/budget_reached_note 全连，门控器决定客观完成）。
-- **打磨话术**：「goal 状态机在 `src/goal/`；‘续跑触发’在 `tasks/goal_pursuit.rs`；用户面工具在 `builtin_tools/goal*`。」
+- **打磨话术**：「goal 状态机在 `src/goal/`；‘续跑触发’在 `tasks/goal_pursuit.rs`；用户面工具在 `builtin_tools/goal.rs`。」
 
 ### 4.2 Loop 命令 (Loop Command)
 - **口语关键词**：loop 命令、周期循环、定时、cadence、内存态
-- **代码锚点**：`src/looping/`（mod.rs / types.rs / pursuit.rs）、`src/builtin_tools/loop_manage/`（set/update/list/stop/clear）
+- **代码锚点**：`src/looping/`（mod.rs / types.rs / pursuit.rs）、`src/builtin_tools/loop_manage.rs`（LoopAction: start/stop/status/update——单文件）
 - **职责**：内存 HashMap 维护每会话 LoopState（Fixed/Timeout），hook 按 next_wake 定时触发续跑 RPC。
 - **状态**：✅ 已实现（含 fail-closed `stop_loop_on_failure` + update 原地重定速）。**注意**：状态**只存进程内，daemon 重启清零**（设计意图"随会话消亡"）。**硬化（2026-06-17）**：① **停因连线（修死计算）**——cap-reached 分支此前算出 `note`（token/deadline/iteration 三因）后只 `info!` 丢弃；现 `LoopState.stop_reason` 字段存储之，失败路径 `stop_loop_on_failure` 同样写入，`loop(action='status')` 表面化，静默封顶的 watch loop 能在下一轮自报停因；② **`status` 打磨**——从裸 `{:?}` Debug dump 改为 `human_summary()` 人类可读摘要（cadence "every 5m"、ticks N/cap、time left、next wake「in 8m」、停因）；③ **`update`/`stop` 诚实化（修误导）**——对已停 loop 的 `update` 不再谎报 `"Loop updated"`（hook 只对 Active fire，永不再跑），改返回 `success=false` 引导 `start`；`stop` 已停 loop 报 `"already stopped"`；④ **熵减**——三路选 note 的 if/else 下沉为 `pursuit::stop_reason_note()`，execute.rs 一行调用。
 - **打磨话术**：「loop 状态在 `src/looping/`，**内存态、重启丢失**别当持久。要持久周期任务用 cron（`src/tasks/cron/`）。停因在 `LoopState.stop_reason`（`pursuit::stop_reason_note` 选 token/deadline/iteration 三因），status 输出在 `LoopState::human_summary`，duration 显示走 `types::fmt_duration_ms`（`parse_interval_ms` 的逆）。」
@@ -265,11 +265,11 @@
 - **代码锚点**：`src/agents/swarm/tasks/`（mod.rs 数据模型 / store/ 持久化 / dag.rs 环检测 / acceptance.rs 验收 / **retry.rs 有界重试**）、`src/teams/dispatcher/schedule.rs`（select_schedulable + **fail_or_retry**）、`src/teams/dispatcher/runner.rs`（execute_member_task）、`src/teams/dispatcher/handoff.rs`（build_recovery_section 续做上下文）
 - **职责**：DAG 中每个 CoordTask 按 blocked_by 扫描依赖，上游完成→Runnable，分派器选最闲 owner 并发执行；失败/超时**有界自动重试**（默认 2 次=至多 3 次尝试，每次重试携带前序 recovery 上下文续做，且**指数退避**间隔），耗尽预算→FailedFinal，僵尸（worker 失联）→强制失败不重试。
 - **状态**：✅ 已实现。**重试连线（2026-06-17）**：此前 `fail_task` 失败即永久 `Failed`，文档承诺的「失败重试 3 次→FailedFinal」是空头——recovery 基础设施（`build_recovery_section`「这是第 N 次尝试」+ 退出日志续做 + `coord_task_runs` 逐次历史）全建好却只能靠 leader 手动 reset 或孤儿回收触发。现新增纯决策 `retry.rs::retry_decision`（有界计数）+ `schedule.rs::fail_or_retry`：失败时数已记录的失败 run 次数对比 `max_retries`（任务 metadata 覆盖，否则 `DispatcherConfig.default_max_retries=2`），未超限 reset `Pending`（**激活既有 recovery 注入**），超限才走 `fail_task`（终态 `Failed`=FailedFinal）。孤儿回收留 `Running` 行不计入预算；僵尸绕过重试直接 `fail_task`。per-task 覆盖经 `task_create` 的 `max_retries` 参数透传。**退避增强（2026-06-17）**：此前 reset `Pending` 后 `run_task` 结尾 `signal()` 当 tick 即重派——transient 失败（限流/过载）几十毫秒内打光重试预算。现 `fail_or_retry` 计算 `retry.rs::jittered_backoff_secs`（指数 `base*2^(n-1)` 封顶 + **equal jitter** `[delay/2,delay]`，`DispatcherConfig.retry_backoff_{base,cap}_secs` = 5s/120s），把 `retry_not_before` 戳进 metadata（复用既有通道，零 schema 漂移），`dispatch_once` 的 `is_retry_eligible` 门在 I/O 边界跳过未到期任务（`select_schedulable` 仍是纯时间无关公平函数）；并 spawn Tokio 精确延时 `signal` 唤醒，短退避不必等 60s fallback tick。jitter seed = task id 哈希（确定性、无 RNG 依赖，但逐任务相异）→ 整团同时失败的任务不再锁步重试再次踩塌恢复中的 provider（thundering herd）。`base=0` 退回即时重试（向后兼容）。**注意**：CoordTaskStatus 实为 10 态（含派生 `Blocked`/`Unsatisfiable`），无独立 `FailedFinal` 状态——`Failed` 即终态，重试期任务回 `Pending` 不落 `Failed`。tasks 无直接用户工具，经 workflow/teams leader 间接驱动。
-- **打磨话术**：「任务调度/依赖/僵尸检测在 `teams/dispatcher/`；‘失败重试几次’= 纯函数 `tasks/retry.rs::retry_decision` + 连线 `schedule.rs::fail_or_retry`，调默认改 `DispatcherConfig.default_max_retries`、按任务改 `task_create` 的 `max_retries`；‘重试间隔/退避’= `tasks/retry.rs::backoff_secs` + `DispatcherConfig.retry_backoff_{base,cap}_secs`，门在 `dispatch_once` 的 `is_retry_eligible`（`retry_not_before` metadata）；‘重试时续做而非重来’= `handoff.rs::build_recovery_section`（智慧在 prompt，R9）；任务数据结构在 `agents/swarm/tasks/`。」
+- **打磨话术**：「任务调度/依赖/僵尸检测在 `teams/dispatcher/`；‘失败重试几次’= 纯函数 `tasks/retry.rs::retry_decision` + 连线 `schedule.rs::fail_or_retry`，调默认改 `DispatcherConfig.default_max_retries`、按任务改 `task_create` 的 `max_retries`；‘重试间隔/退避’= `tasks/retry.rs::backoff_secs` + `DispatcherConfig.retry_backoff_{base,cap}_secs`，门在 `dispatch_once` 的 `is_retry_eligible`（`retry_not_before` metadata）；‘重试时续做而非重来’= `handoff.rs::build_recovery_section`（智慧在 prompt，R9）；任务数据结构在 `agents/swarm/tasks/`。**operator 调参（已连线）**：`[team_dispatcher]` TOML 子表（`default_max_retries`/`retry_backoff_{base,cap}_secs`/`zombie_ttl_secs`/`max_per_owner`/`max_concurrent`/…，缺字段回退 `DispatcherConfig::default()`，boot 站点 `agent_init/mod.rs` 映射，zombie_ttl 钳到不低于 task_timeout）——此前 dispatcher 恒 `::default()`，文档承诺的可调性是空头。」
 
 ### 4.5 多代理 / 团队 (Teams / Multi-Agent)
 - **口语关键词**：multi-agent、teams、多线程多任务多代理、leader、群聊广播、roster
-- **代码锚点**：`src/teams/`——`dispatcher/`、`messages/`（路由）、`broadcast/mod.rs`（GroupChatBroadcaster::dispatch，防风暴三道闸 MAX_CHAIN_DEPTH=6 / MAX_FANOUT_WIDTH=5 / **MAX_TOTAL_ACTIVATIONS=32**）、`store.rs`、`leader_prompt.rs`、`workflow_canvas.rs`；`src/agents/`（registry/runtime/subagent_spawner/swarm）
+- **代码锚点**：`src/teams/`——`dispatcher/`、`messages/`（路由）、`broadcast/mod.rs`（GroupChatBroadcaster::dispatch，防风暴三道闸 MAX_CHAIN_DEPTH=6 / MAX_FANOUT_WIDTH=5 / **MAX_TOTAL_ACTIVATIONS=32**）、`store.rs`、`workflow_canvas.rs`；`src/agents/`（registry/runtime/subagent_spawner/swarm）
 - **职责**：leader 创建团队并分解任务（建 coord_tasks），成员并发执行，消息经 Aggregator 合并后 MessageRouter 投递，群聊可自主链式接话（深度 + 单轮宽度 + 整树累计唤醒三重封顶）。
 - **状态**：✅ 已实现。**强化（2026-06-17）**：① 群聊防风暴补齐**全局唤醒闸** `MAX_TOTAL_ACTIVATIONS`——此前仅 depth×width 是局部约束，最坏 `5^6≈1.5万` 次成员 run 可炸开；现整棵 fan-out 树共享一个累计计数器（`Arc<AtomicUsize>` 随 `dispatch_user` 新建、随递归下传），越界跳过且**恰好跨界一次**发系统提示（原子天然去重，不刷屏）；② fan-out join 不再静默吞 `JoinError`——成员任务 panic 降级为 `warn` 可观测；③ 熵减：删除 `dispatcher/acp_bridge.rs` 中从未被调用的 `execute_acp_member_task`（活体执行在 `runner.rs::execute_member_task`，桥接模块现仅保留 `AcpMemberRef` 命名约定解析）。
 - **打磨话术**：「‘多代理协作/群聊’在 `src/teams/`；‘单个 agent 怎么跑/怎么 spawn 子代理’在 `src/agents/`。两者配合。‘群聊会不会被模型乱 @ 炸开’= 三道闸：深度 `MAX_CHAIN_DEPTH`、单轮宽度 `MAX_FANOUT_WIDTH`、整树累计 `MAX_TOTAL_ACTIVATIONS`（全在 `broadcast/mod.rs`）。ACP 成员执行不在 `acp_bridge.rs`（那只管 `acp:` 命名解析）而在 `runner.rs`。」
@@ -280,7 +280,7 @@
 - **职责**：agent 工具管生命周期，全局（~/.aleph/agents/）+ 项目层（project/.aleph/agents/）两级，项目层可影子覆盖全局。**切换** = 把当前 channel 的活跃 agent 重绑到另一个已存在实例。
 - **状态**：✅ 已实现。**切换工具连线（2026-06-17）**：新增 `agent_switch` 工具——本节namesake 此前缺失（只有 Panel RPC `channels.set_agent`，LLM 无法经自然语言切换，违 R8）。`switch.rs` 复用 `SessionContext.__channel` 注入链 + 实例 `AgentRegistry`（存在性校验，杜绝绑幽灵 agent）+ `set_active_agent` + `GatewayEventBus`（新 `AgentLifecycleEvent::Bound`），逐点接入 9 处枚举（definitions/groups/method_authz(operator 门控)/registry_adapter(EXCLUSIVE)/slash_command/dispatch）。顺带修 `create.rs` 死引用（旧描述让模型调不存在的 `agent_bind`→ 改 `agent_switch`）。
 - **设计边界**：`agent_info` 查的是 AgentDef 子代理目录（explore/coder…），`list/create/delete/switch` 查运行时实例注册表——两套**刻意分层**（persona 实例 vs 子代理 role），未合并。
-- **打磨话术**：「agent 创建/切换/列出/删除 工具在 `agent_manage/`（同一运行时实例注册表）；切换落 `switch.rs`→`set_active_agent`，生效点在 `agent_resolver.rs` Tier2。‘加载与项目覆盖’在 `agents/loader.rs`（那是 AgentDef 侧，另一套）。」
+- **打磨话术**：「agent 创建/切换/列出/删除 工具在 `agent_manage/`（同一运行时实例注册表）；切换落 `switch.rs`→`set_active_agent`，生效点在 `agent_resolver.rs` Tier2。‘加载与项目覆盖’在 `agents/loader.rs`（那是 AgentDef 侧，另一套）。**生命周期事件投递（已修）**：`AgentLifecycleEvent::{Bound,Deleted,Registered}` 经 `bus.publish_json` 时须包成 `TopicEvent`（带 topic）——裸发是 topic-less，被 WS forwarder 当 topic="" 由 `agent.lifecycle.*` 订阅丢弃（Panel 收不到）。**删除解绑（已修）**：`agent_delete` 用 `clear_bindings_for_agent`（按 agent_id 删全部 channel 绑定），不再只解一个（多对一绑定模型，否则残留幽灵）；`set_active_agent` 改 `INSERT OR REPLACE` 原子 upsert。」
 
 ### 4.7 消息流与最终答案汇总 (Message Stream & Final Answer)
 - **口语关键词**：对话消息流、StreamEvent、最终结果汇总、final_response、RunComplete、汇总打印输出、instant/打字机缓冲
@@ -298,7 +298,7 @@
   - **取消/续跑**：`src/gateway/cancellation.rs`、`src/gateway/resume_coordinator.rs`
 - **职责**：agent 繁忙时新消息进 `busy_queue` per-agent FIFO（上限 32，仅队首尝试投递，保到达序，超 30min 才通知失败而非静默丢弃）；同会话有活跃 run 时，按通道 `BusyInputMode` 分流——**Steer**（默认，注入 live event log 让运行中的 loop 下个轮次接住）/ **Interrupt**（取消同会话 sibling，经 busy_queue 以全上下文重启）/ **Queue**（不打扰，排队等当前 run 结束）；Lane + ChannelClass 让本地 Panel 优先于 Bot/CLI。
 - **状态**：✅ 已实现。**熵减（2026-06-17）**：删除死代码 `session_scheduler.rs`（631 行，per-session FIFO 旧版调度器，`::new`/`enqueue` 仅存在于自身测试，零生产消费者）——其职责早被 harness `try_start_run` 每-agent 闸 + `busy_queue` FIFO + `steering` 完整取代，违 R10 YAGNI 故连根清除。
-- **打磨话术**：「‘用户改需求/插队/打断’的真核心 = `busy_queue.rs`（agent 级 FIFO）+ `steering.rs`（mid-loop 注入）+ `BusyInputMode`（Steer/Interrupt/Queue 三态，在 `execution_engine/{mod,execute}.rs`）+ `lane.rs`（Panel 优先）。要改‘改需求时是排队、注入还是打断当前 run’就动 `execute.rs` 的 busy 分支 + 对应通道的 busy-input 模式 + `cancellation.rs`。**注意**：`session_scheduler.rs` 已删除——它从来不是活跃路径，别再去找它。」
+- **打磨话术**：「‘用户改需求/插队/打断’的真核心 = `busy_queue.rs`（agent 级 FIFO）+ `steering.rs`（mid-loop 注入）+ `BusyInputMode`（Steer/Interrupt/Queue 三态，在 `execution_engine/{mod,execute}.rs`）+ `lane.rs`（Panel 优先）。要改‘改需求时是排队、注入还是打断当前 run’就动 `execute.rs` 的 busy 分支 + 对应通道的 busy-input 模式 + `cancellation.rs`。**注意**：`session_scheduler.rs` 已删除——它从来不是活跃路径，别再去找它。**mid-turn steering 开关（已连线）**：`[execution] mid_turn_steering`（默认 true，命名 default fn 保留旧行为）→ `ExecutionEngineConfig.mid_turn_steering`，此前硬钉 true 无 operator 出口；关闭即回退 legacy busy/retry。」
 
 ---
 
@@ -389,7 +389,7 @@
 - **口语关键词**：流式回显、工作区面板、activity timeline、Split 布局
 - **代码锚点**：`interfaces/webchat/src/views/chat/messages.rs`（流式 echo，去 card chrome 留纯文本）、`interfaces/webchat/src/components/workspace_panel.rs`（WorkspacePanel + ActivityTimeline）、`interfaces/webchat/src/components/tool_card.rs`（共享工具卡片，聊天侧+工作区侧同源）、`interfaces/webchat/src/state/layout.rs`（`WorkspaceState`：tool_payloads + 展开覆盖集）、`src/gateway/event_emitter/types.rs`（StreamEvent）
 - **职责**：Panel 两布局——ChatOnly（单列）/ Split（左聊天右工作区）；Split 下工作区按 iteration 显示活动卡（narrative + 工具调用，可展开看 args/result）。
-- **状态**：✅ 已实现。**卡片展开连线（2026-06-17）**：`ToolCard` 的展开/折叠此前用**卡内本地 `RwSignal`**，有两处缺陷——① 渲染 ToolCard 的 keyed `<For>` 因 `row_key` 折入内容长度，**每个流式 token 都 remount**，本地信号被重置回 `default_open` → 流式中用户手动折叠的卡片下一 token 又弹开；② 同一工具被聊天气泡与工作区时间线**两张卡**各自渲染、各持本地信号 → 展开不同步。同时 `WorkspaceState` 早已建好 `expanded_events` + `toggle_event`/`is_event_expanded` 却**零消费者**（死基础设施）。现把展开态连到该共享集（语义改为「相对 kind 默认的覆盖集」：`effective_open = kind.default_open() XOR contains(tool_id)`，default-open 类无需播种；`is_event_expanded`→`is_event_toggled` 正名），一次性修复两个 bug 并激活死代码；storybook 无 `WorkspaceState` 时回退卡内本地信号。顺带把 `StepStrip` 硬编码英文 `step/steps` 改为 i18n（`chat.step`/`chat.steps`，en/zh 对称）。
+- **状态**：✅ 已实现。**卡片展开连线（2026-06-17）**：`ToolCard` 的展开/折叠此前用**卡内本地 `RwSignal`**，有两处缺陷——① 渲染 ToolCard 的 keyed `<For>` 因 `row_key` 折入内容长度，**每个流式 token 都 remount**，本地信号被重置回 `default_open` → 流式中用户手动折叠的卡片下一 token 又弹开；② 同一工具被聊天气泡与工作区时间线**两张卡**各自渲染、各持本地信号 → 展开不同步。同时 `WorkspaceState` 早已建好 `expanded_events` + `toggle_event`/`is_event_expanded` 却**零消费者**（死基础设施）。现把展开态连到该共享集（语义改为「相对 kind 默认的覆盖集」：`effective_open = kind.default_open() XOR contains(tool_id)`，default-open 类无需播种；`is_event_expanded`→`is_event_toggled` 正名），一次性修复两个 bug 并激活死代码；storybook 无 `WorkspaceState` 时回退卡内本地信号。顺带把 `StepStrip` 硬编码英文 `step/steps` 改为 i18n（`chat.step`/`chat.steps`，en/zh 对称）。**i18n 补全（2026-06-19）**：team tab（「交付物」/「任务」）+ 空态（「暂无交付物」/「暂无任务」）此前**中文硬编码**（en locale 也显示中文），已接入 leptos-i18n（`common.team_deliverables`/`team_tasks`/`team_no_deliverables`/`team_no_tasks`，en/zh 对称）；`WorkspacePanel`/`TeamDeliverablesView`/`TeamTasksView` 三组件补 `use_i18n()`（文件已 import 宏）。
 - **打磨话术**：「‘流式回显气泡’在 `views/chat/messages.rs`；‘右侧工作区时间线’在 `components/workspace_panel.rs`；‘工具卡片展开/折叠’共享态在 `state/layout.rs` 的 `expanded_events`（覆盖集，`toggle_event`/`is_event_toggled`），聊天侧与工作区侧同源同步、跨流式 remount 存活——别再往 `ToolCard` 塞卡内本地展开信号。这是前端 Leptos/WASM，改完要重编 binary（rust_embed，见 CLAUDE.md Panel↔Daemon 嵌入链）。」
 
 ### 6.2 Panel 远程连接与 Gateway Token 授权 (Remote Panel Connect & Gateway-Token Auth) ✅
@@ -405,7 +405,7 @@
   - **远程 (LAN)**：首连未授权 → 弹 **Gateway token 输入框**（`token_wall.rs`），或扫 core 展示的 **二维码**（编码 `http(s)://<ip>:<port>/?token=<gateway-token>`，扫码即带 token 打开）→ `SharedTokenManager::validate` 通过 → 授权成功，**权限与本地完全一致（单层，无 Chat/Config 之分）**。客户端把 token 持久化（`localStorage`）供后续自动重连，并**清除地址栏 `?token=`**（不留痕、防过期链接锁死）。
   - **撤销**：轮换 Gateway token（旧 token 全部失效，所有远程端须重新输入）。无 per-device 会话（YAGNI）。
   - 前置：`[gateway] host = "0.0.0.0"` 才开放局域网到达；token 授权是到达之后的第二道闸（**在执行之前**，比旧模型「Chat tier 可未授权跑 bash」更强）。
-- **状态**：✅ **已实现并对齐目标模型（2026-06-17）**。端到端连通：connect 校验 token（`handler.rs:707-781`）+ 登录墙（`handler.rs:512-543`）+ 单层收敛（`method_authz.rs` 仅余 channel tier 闸，Panel 无 Chat/Config 子层）+ 前端 token 框/QR + `bootstrap-token` CLI。`ChannelPermissionLevel` 仍为 channel 系统共用（未删，panel 已解耦）。
+- **状态**：✅ **已实现并对齐目标模型（2026-06-17）**。端到端连通：connect 校验 token（`handler.rs:707-781`）+ 登录墙（`handler.rs:512-543`）+ 单层收敛（`method_authz.rs` 仅余 channel tier 闸，Panel 无 Chat/Config 子层）+ 前端 token 框/QR + `bootstrap-token` CLI。`ChannelPermissionLevel` 仍为 channel 系统共用（未删，panel 已解耦）。**i18n + 泄漏修复（2026-06-19）**：① `token_wall.rs`（登录墙首屏）+ `settings/security/gateway_token.rs`（token 区）此前英文硬编码，已接入 i18n（`common.token_wall_*`/`gateway_token_*`，en/zh 对称）；② **安全**——`context.rs` WS 消息循环此前 `console::log` **整包 dump** 入站消息/事件（`"Received message: {value:?}"` 会把 `gateway.token.current` 响应里的明文 Gateway token + 全部对话内容打到浏览器控制台），已脱敏为 topic/id 级面包屑；③ `method_authz.rs` 回归测试补测 `agent_switch`（OPERATOR_TOOLS 已列但漏测）。
 - **打磨话术**：「Panel 远程不是 channel，是**网页式 token 登录**且已落地。本机零配置 operator；远程输 Gateway token（或扫 QR）后**权限同本地，单层**。改‘授权判定’去 `connect_authorized`（纯函数，主机可测）；改‘登录墙’去 `handler.rs:512-543`；改‘前端 token 框/QR/持久化’去 `context.rs` + `token_wall.rs` + `settings/security/gateway_token.rs`。注意 `read_gateway_token` 让 URL `?token=` 优先于 localStorage——授权后必须 `scrub_token_from_url` 清掉，否则过期 QR 链接会锁死登录墙。改 Panel 记得重编 binary（rust_embed 嵌入链）。」
 
 ---
@@ -413,6 +413,8 @@
 ## 7. Desktop（桌面端）
 
 > 桌面端是 **R1「大脑-四肢绝对分离」** 的物理落地：`src` 内只持有**能力契约 (Trait)**，真实平台 API（AppKit / Vision / windows-rs …）全在 `desktop/*` 原生 Bridge 子 crate，二者经 **JSON-RPC IPC** 跨界。本章按"契约 → 四肢 → 工具 → 壳 → 连线"组织。改桌面功能前先认清：**`src` 严禁直接调平台 API**（违 R1 不得合入）。
+>
+> **审计硬化（2026-06-19，§7.1-7.6 深度审计，28 子代理对抗验证）**：bridge stdin 写失败只 `fail(id)` 单请求、不再 `fail_all` 误伤共享 inflight 全表（7.1-a）；Wayland `delete` 修为 KEY_DELETE(111)、Linux 窗口 id 改变宽 hex 防 64 位 XID 截断（7.1-c/h）；`restart_app` 复用 `SystemCapability::restart_app` 去重 500ms 魔数（7.1-f）；set_of_marks 在 `scale_factor=None` 时回退 `display_list` 主屏 DPR，修 macOS Retina 标记错位 + 输出虚假 scale（7.3-a）；`focus_window`/`screen_record` 经新增 `requires_lock` 谓词取会话锁（与审批解耦、免提示，7.3-b）；scroll 小数 delta `round` + 零值守卫，杜绝静默 no-op 报成功（7.3-c）；`system` 工具补审批闸（launch/quit/restart→DesktopLaunchApp、clipboard_write→DesktopType），杜绝绕过 `desktop` 工具的闸（7.4-a）；permission 工具补全 14 种 PermissionKind（TCC 6 + 手动授权 8）文档（7.4-b）；删 PimArgs 6 个零消费字段（completed + 5 contacts 写字段）、`reminders_complete` 描述去伪、`mail_search` limit `clamp(1,200)`（7.4-c/d/f）；Gateway token 文件 cfg(unix) `0600`（7.5-a）；perm_monitor 改用 `menu::reload_panel` 硬 reload（7.5-c）；deeplink 改 `serde_json::to_string` 转义防换行破字面量（7.5-i）；macOS `screenshot{describe}` OCR 文本层经注入平台 `screen()`（bridge-backed）修复（此前用裸 NativeScreen，macOS OCR NotImplemented→静默丢失，7.6-a）；删 registry 死字段 `desktop_platform`（7.6-d）。**建议未做**：bridge 协议版本握手生产连线（7.1-b）——需注入最关键的 helper 自动 spawn 路径、与 `DEFAULT_RPC_TIMEOUT` 交互复杂、无法编译验证，且 core/helper 同包发版使实际偏移仅在异常手动换 helper 时发生，收益比低故推迟。
 
 ### 7.1 桌面能力契约与 Bridge IPC (Desktop Capability Contracts & Bridge IPC)
 - **口语关键词**：大脑四肢分离、能力 trait、DesktopPlatform、Swift helper、JSON-RPC 桥、IPC、supervisor、能力契约

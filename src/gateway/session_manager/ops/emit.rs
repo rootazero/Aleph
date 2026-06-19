@@ -108,20 +108,25 @@ pub(crate) fn emit_session_end_raw_with_registry(
             });
         }
 
-        // Real-time session-end flush (Pillar 2): drain pending raws into
-        // linked notes immediately so a back-to-back follow-on session recalls
-        // consolidated memory. Guarded in the process-global FlushRegistry so a
-        // fast follow-on session can `await_ready`; a normal session never waits.
+        // Real-time session-end flush (Pillar 2). Two ordering hazards the old
+        // shape got wrong, both fixed here:
+        //   1. TOCTOU — the FlushGuard is acquired SYNCHRONOUSLY now (not inside
+        //      the spawned task), so the registry entry is observable the instant
+        //      close_session returns. Acquiring it in the task raced a back-to-back
+        //      follow-on `await_ready`, which then saw an empty registry and
+        //      no-op'd the gate (`rt.spawn` returns before the task is polled).
+        //   2. Insert race — the flush runs in the TAIL of the raw-insert task
+        //      below, AFTER this session's SessionEnd digest row is committed, so
+        //      `compress_to_notes` drains a batch that INCLUDES that digest
+        //      instead of racing it (previously the two were unordered spawns and
+        //      the freshest signal was usually excluded).
         // Fire-and-forget — best-effort consolidation, never gates close_session.
-        if let Some(cs) = crate::thinker::memory_context_provider::session_end_compression() {
+        let flush = crate::thinker::memory_context_provider::session_end_compression().map(|cs| {
             let reg = crate::memory::flush::global_registry();
             let flush_agent = agent_id.clone();
-            rt.spawn(crate::memory::flush::session_end_flush(
-                reg,
-                flush_agent,
-                cs,
-            ));
-        }
+            let guard = reg.begin(&flush_agent);
+            (guard, flush_agent, cs)
+        });
 
         rt.spawn(async move {
             if let Some(reg) = registry {
@@ -139,6 +144,13 @@ pub(crate) fn emit_session_end_raw_with_registry(
                 }
             } else if let Err(e) = writer.insert_raw_memory(&raw).await {
                 tracing::warn!("session_end raw_memory write failed: {e}");
+            }
+
+            // Pillar 2 flush runs only after the SessionEnd digest is committed
+            // above, holding the synchronously-acquired guard (dropped at task
+            // end → wakes any `await_ready` waiter for this agent).
+            if let Some((guard, flush_agent, cs)) = flush {
+                crate::memory::flush::session_end_flush(guard, flush_agent, cs).await;
             }
         });
     } else {

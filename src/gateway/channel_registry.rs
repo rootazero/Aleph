@@ -535,25 +535,6 @@ impl ChannelRegistry {
         channel.send_typing(conversation_id).await
     }
 
-    /// Broadcast a message to all channels
-    pub async fn broadcast(
-        &self,
-        message: OutboundMessage,
-    ) -> Vec<(ChannelId, ChannelResult<SendResult>)> {
-        let channels = self.channels.read().await;
-        let mut results = Vec::with_capacity(channels.len());
-
-        for (channel_id, channel_arc) in channels.iter() {
-            let channel = channel_arc.read().await;
-            if channel.status() != ChannelStatus::Disabled {
-                let result = channel.send(message.clone()).await;
-                results.push((channel_id.clone(), result));
-            }
-        }
-
-        results
-    }
-
     /// Take the inbound message receiver
     ///
     /// This can only be called once - subsequent calls return None.
@@ -603,27 +584,6 @@ impl ChannelRegistry {
 
             info!("[Forwarder] Channel {} forwarder stopped", channel_id);
         });
-    }
-
-    /// Find channels that can handle a conversation
-    pub async fn find_channels_for_conversation(
-        &self,
-        conversation_id: &ConversationId,
-    ) -> Vec<ChannelId> {
-        // For now, return all connected channels
-        // In the future, implement routing based on conversation metadata
-        let channels = self.channels.read().await;
-        let mut result = Vec::new();
-
-        for (channel_id, channel_arc) in channels.iter() {
-            let channel = channel_arc.read().await;
-            if channel.status() == ChannelStatus::Connected {
-                result.push(channel_id.clone());
-            }
-        }
-
-        let _ = conversation_id; // Will be used for routing in future
-        result
     }
 
     /// Get the voice state for a channel, returning default if not set.

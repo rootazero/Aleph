@@ -17,7 +17,7 @@ use crate::error::Result;
 use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::agent_lifecycle::AgentLifecycleEvent;
-use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -151,12 +151,20 @@ impl AlephTool for AgentSwitchTool {
             })?;
 
         // 5. Emit a lifecycle event so the Panel and other consumers can react.
+        //    Wrap in TopicEvent: a bare publish_json serializes to a topic-less
+        //    {"type":"bound",...} that the WS forwarder reads as topic "" and
+        //    every concrete subscription (e.g. "agent.lifecycle.*") then drops.
+        //    TopicEvent carries the routing topic so the filter delivers it.
         if let Some(ref bus) = self.event_bus {
-            let _ = bus.publish_json(&AgentLifecycleEvent::Bound {
+            let ev = AgentLifecycleEvent::Bound {
                 agent_id: args.agent_id.clone(),
                 channel: channel.to_string(),
                 previous_agent: previous_agent.clone(),
-            });
+            };
+            let _ = bus.publish_json(&TopicEvent::new(
+                ev.topic(),
+                serde_json::to_value(&ev).unwrap_or_default(),
+            ));
         }
 
         let message = match previous_agent.as_deref() {

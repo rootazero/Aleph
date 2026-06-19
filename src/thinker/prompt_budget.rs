@@ -160,7 +160,9 @@ pub fn enforce_budget(
     max_total: usize,
     protected_priorities: &[u32],
 ) -> (String, Vec<TruncationStat>) {
-    let total: usize = sections.iter().map(|(_, _, c)| c.len()).sum();
+    // Budget (`max_total`) is in *characters*; measure characters so a 3-byte
+    // CJK glyph counts as one unit (ASCII is byte==char, so identical there).
+    let total: usize = sections.iter().map(|(_, _, c)| c.chars().count()).sum();
     if total <= max_total {
         let prompt = sections
             .iter()
@@ -187,7 +189,7 @@ pub fn enforce_budget(
         if protected_priorities.contains(priority) {
             continue;
         }
-        let saved = content.len();
+        let saved = content.chars().count();
         included[idx] = false;
         stats.push(TruncationStat {
             layer_name: name.to_string(),
@@ -251,9 +253,14 @@ pub fn render_truncation_notice(mode: TruncationWarning, saved_chars: usize) -> 
 /// Returns `dynamic` unchanged when the assembled prompt is already within
 /// budget — the overwhelming common case, so this is a no-op (and byte-stable)
 /// for normal-sized prompts.
+///
+/// `stable_len` is the stable prefix's **character** count (the budget is in
+/// characters), so callers pass `stable.chars().count()`. All measurement here
+/// is character-based to match [`truncate_with_head_tail`] — a CJK glyph counts
+/// once, not thrice.
 #[must_use]
 pub fn fit_dynamic_suffix(stable_len: usize, dynamic: String, budget: &TokenBudget) -> String {
-    if stable_len + dynamic.len() <= budget.max_total_chars {
+    if stable_len + dynamic.chars().count() <= budget.max_total_chars {
         return dynamic;
     }
     // Reserve headroom for the notice so the final string stays near budget.
@@ -262,9 +269,9 @@ pub fn fit_dynamic_suffix(stable_len: usize, dynamic: String, budget: &TokenBudg
         .max_total_chars
         .saturating_sub(stable_len)
         .saturating_sub(NOTICE_RESERVE);
-    let before = dynamic.len();
+    let before = dynamic.chars().count();
     let trimmed = truncate_with_head_tail(&dynamic, avail, 0.6, 0.3);
-    let saved = before.saturating_sub(trimmed.len());
+    let saved = before.saturating_sub(trimmed.chars().count());
     match render_truncation_notice(budget.truncation_warning, saved) {
         Some(notice) => format!("{trimmed}{notice}"),
         None => trimmed,

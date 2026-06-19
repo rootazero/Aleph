@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::agent_lifecycle::AgentLifecycleEvent;
-use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -103,10 +103,12 @@ impl AlephTool for AgentDeleteTool {
             )));
         }
 
-        // 3. Unbind agent from its channel if bound
-        if let Ok(Some(bound_channel)) = self.workspace_mgr.get_channel_for_agent(&args.agent_id) {
-            let _ = self.workspace_mgr.clear_active_agent(&bound_channel);
-        }
+        // 3. Unbind agent from ALL channels bound to it. The binding model is
+        //    many-to-one (N channels → 1 agent), so clearing only the first
+        //    bound channel (the prior single-channel reverse-lookup path) left
+        //    the other channels pointing at the now-deleted agent — the inbound
+        //    router would then resolve them to a ghost agent.
+        let _ = self.workspace_mgr.clear_bindings_for_agent(&args.agent_id);
 
         // 4. Remove from registry
         let removed = self.registry.remove(&args.agent_id).await;
@@ -157,13 +159,19 @@ impl AlephTool for AgentDeleteTool {
 
         let deleted = removed.is_some();
 
-        // Emit lifecycle event
+        // Emit lifecycle event. Wrap in TopicEvent so the WS forwarder's topic
+        // filter delivers it — a bare publish_json is topic-less and dropped by
+        // concrete subscriptions (see switch.rs for the same fix).
         if deleted {
             if let Some(ref bus) = self.event_bus {
-                let _ = bus.publish_json(&AgentLifecycleEvent::Deleted {
+                let ev = AgentLifecycleEvent::Deleted {
                     agent_id: args.agent_id.clone(),
                     workspace_archived: true,
-                });
+                };
+                let _ = bus.publish_json(&TopicEvent::new(
+                    ev.topic(),
+                    serde_json::to_value(&ev).unwrap_or_default(),
+                ));
             }
         }
 

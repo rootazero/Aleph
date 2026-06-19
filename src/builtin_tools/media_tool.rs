@@ -33,7 +33,8 @@ pub struct MediaArgs {
     /// JPEG quality (0.0–1.0). Used by `camera_snap`. Default: 0.9
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<f32>,
-    /// Recording duration in seconds (0.25–60.0). Used by `camera_clip`. Default: 3.0
+    /// Recording duration in seconds. `camera_clip`: 0.25–60 (default 3.0);
+    /// `record_audio`: 0.25–300 (default 5.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
     /// Include audio from microphone. Used by `camera_clip`. Default: false

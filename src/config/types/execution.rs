@@ -42,6 +42,17 @@ pub struct ExecutionConfig {
     /// to preserve prior behaviour; opt in per-deployment.
     #[serde(default)]
     pub progress_push: bool,
+
+    /// Gateway mid-turn steering (default: true).
+    ///
+    /// When enabled, a message that arrives while the same session has an
+    /// active run is injected into the live event log so the running loop
+    /// catches it on its next turn (the `Steer` busy-input mode), instead of
+    /// being rejected with `AgentBusy`. Disable to restore the legacy
+    /// busy/retry behaviour. Defaults to `true` to preserve current behaviour —
+    /// the engine previously hardcoded this on with no operator override.
+    #[serde(default = "default_mid_turn_steering")]
+    pub mid_turn_steering: bool,
 }
 
 const fn default_timeout_secs() -> u64 {
@@ -52,6 +63,10 @@ const fn default_max_iterations() -> usize {
     1000
 }
 
+const fn default_mid_turn_steering() -> bool {
+    true
+}
+
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
@@ -59,6 +74,7 @@ impl Default for ExecutionConfig {
             max_iterations: default_max_iterations(),
             prompt_mode: PromptMode::default(),
             progress_push: false,
+            mid_turn_steering: default_mid_turn_steering(),
         }
     }
 }
@@ -90,6 +106,9 @@ mod tests {
         assert_eq!(parsed.max_iterations, 1000);
         // Absent `prompt_mode` defaults to Full — preserves prior behaviour.
         assert_eq!(parsed.prompt_mode, PromptMode::Full);
+        // Absent `mid_turn_steering` defaults to true — the engine's prior
+        // hardcoded behaviour, now operator-overridable.
+        assert!(parsed.mid_turn_steering);
     }
 
     #[test]

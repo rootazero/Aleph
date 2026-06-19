@@ -5,12 +5,14 @@
 //! full app with the same authority as the local App. Loopback never sees this.
 
 use crate::context::DashboardState;
+use crate::i18n::{t, use_i18n};
 use leptos::prelude::*;
 
 #[component]
 #[must_use]
 pub fn TokenWall() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let token = RwSignal::new(String::new());
 
     let submit = move || {
@@ -25,12 +27,10 @@ pub fn TokenWall() -> impl IntoView {
             <div class="fixed inset-0 z-[100] flex items-center justify-center bg-surface/95 backdrop-blur-sm p-6">
                 <div class="max-w-md w-full bg-surface-raised border border-border rounded-2xl p-8 shadow-xl">
                     <h2 class="text-2xl font-bold text-text-primary mb-2">
-                        "Authorize this device"
+                        {t!(i18n, common.token_wall_title)}
                     </h2>
                     <p class="text-sm text-text-secondary mb-6">
-                        "Enter the Gateway token to connect to this Aleph core. Get it from the \
-                         core's Settings → Security, or run `aleph-server bootstrap-token` on the \
-                         core machine. Once authorized, this device has the same access as the local app."
+                        {t!(i18n, common.token_wall_instruction)}
                     </p>
                     <input
                         type="password"
@@ -50,7 +50,7 @@ pub fn TokenWall() -> impl IntoView {
                         disabled=move || token.get().trim().is_empty()
                         on:click=move |_| submit()
                     >
-                        "Authorize"
+                        {t!(i18n, common.token_wall_submit)}
                     </button>
                 </div>
             </div>

@@ -175,17 +175,17 @@ async fn test_set_tool_active() {
     }];
     registry.register_custom_commands(&rules).await;
 
-    // Deactivate test command
-    let updated = registry.set_tool_active("custom:test", false).await;
+    // Deactivate test command (id is `custom:{rule_index}:{name}`)
+    let updated = registry.set_tool_active("custom:0:test", false).await;
     assert!(updated);
 
     // Should not appear in active list
     let all = registry.list_all().await;
-    assert!(!all.iter().any(|t| t.id == "custom:test"));
+    assert!(!all.iter().any(|t| t.id == "custom:0:test"));
 
     // Should appear in full list
     let all_with_inactive = registry.list_all_with_inactive().await;
-    assert!(all_with_inactive.iter().any(|t| t.id == "custom:test"));
+    assert!(all_with_inactive.iter().any(|t| t.id == "custom:0:test"));
 }
 
 #[tokio::test]
@@ -1124,6 +1124,6 @@ async fn test_get_tool_definition_prefers_exact_name_match() {
         .get_tool_definition("translate")
         .await
         .expect("translate tool definition");
-    assert_eq!(def.id, "custom:translate");
+    assert_eq!(def.id, "custom:0:translate");
     assert_eq!(def.name, "translate");
 }

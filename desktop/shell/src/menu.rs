@@ -210,7 +210,7 @@ pub fn on_event(app: &AppHandle, id: &str) {
 /// store (HTTP cache, memory resource cache, bfcache, localStorage) and then
 /// doing a *fresh navigation* (not a reload) forces every subresource to be
 /// re-fetched from the Gateway.
-fn reload_panel(app: &AppHandle) {
+pub(crate) fn reload_panel(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };

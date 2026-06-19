@@ -807,7 +807,15 @@ impl ExtensionManager {
                     _ => HookPriority::Normal,
                 },
                 matcher: None,
-                actions: vec![],
+                // Emit a live Plugin dispatch action (not an empty list): the
+                // executor invokes the plugin's exported `handler` via the
+                // process-global ExtensionManager when the event fires. The
+                // `handler` field below is kept for diagnostics display only
+                // (see `validation.rs`); dispatch flows through the action.
+                actions: vec![HookAction::Plugin {
+                    plugin_id: hr.plugin_id.clone(),
+                    handler: hr.handler.clone(),
+                }],
                 plugin_name: hr.plugin_id.clone(),
                 plugin_root: PathBuf::new(),
                 handler: Some(hr.handler.clone()),

@@ -1031,7 +1031,14 @@ impl AgentHarness {
             serde_json::Value::String(s) => s.clone(),
             other => other.to_string(),
         };
-        let already_persisted = text.starts_with("[Full output persisted: ");
+        // Layer-2 (`apply_result_budget`) may prepend an inline error digest
+        // above the `[Full output persisted: …]` marker, so it is not always at
+        // byte 0 — scan every line (mirrors `result_store::extract_persisted_ref`).
+        // A byte-0-only test would mis-flag such results as un-persisted and let
+        // the turn budget waste its spill slot re-offloading a marker.
+        let already_persisted = text
+            .lines()
+            .any(|l| l.starts_with("[Full output persisted: "));
         let tokens = crate::context::budget::pressure::estimate_tokens_smart(&text);
         let record = crate::tools::turn_budget::TurnResult {
             call_id: call.id.clone(),

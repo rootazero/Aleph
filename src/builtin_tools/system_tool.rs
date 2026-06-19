@@ -10,6 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
 use crate::error::Result;
 use crate::tools::AlephTool;
 
@@ -17,11 +18,71 @@ use crate::tools::AlephTool;
 #[derive(Clone)]
 pub struct SystemTool {
     platform: Arc<dyn aleph_desktop::DesktopPlatform>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl SystemTool {
     pub fn new(platform: Arc<dyn aleph_desktop::DesktopPlatform>) -> Self {
-        Self { platform }
+        Self {
+            platform,
+            approval_policy: None,
+        }
+    }
+
+    /// Attach an approval policy to gate state-changing actions.
+    ///
+    /// `launch_app` / `quit_app` / `restart_app` (`DesktopLaunchApp`) and
+    /// `clipboard_write` (`DesktopType`) are checked before execution — the same
+    /// OS operations `DesktopTool` already gates, so an agent cannot bypass the
+    /// `desktop` tool's gate by routing through `system`. Read-only actions and
+    /// notifications are always allowed.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
+    }
+
+    /// Check the approval policy for a gated action.
+    ///
+    /// Returns `None` if allowed (or no policy configured), or
+    /// `Some(SystemOutput)` describing the denial / confirmation prompt.
+    /// Mirrors `DesktopTool::check_approval` (parameterized `ActionType`).
+    async fn check_approval(
+        &self,
+        action_type: ActionType,
+        target: String,
+        context: String,
+    ) -> Option<SystemOutput> {
+        let policy = self.approval_policy.as_ref()?;
+        let request = ActionRequest {
+            action_type,
+            target,
+            agent_id: String::new(),
+            context,
+            timestamp: chrono::Utc::now(),
+        };
+        let decision = policy.check(&request).await;
+        match decision {
+            ApprovalDecision::Allow => {
+                policy.record(&request, &decision).await;
+                None
+            }
+            ApprovalDecision::Deny { ref reason } => {
+                policy.record(&request, &decision).await;
+                Some(SystemOutput {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Action denied by approval policy: {reason}")),
+                })
+            }
+            ApprovalDecision::Ask { ref prompt } => Some(SystemOutput {
+                success: false,
+                data: Some(serde_json::json!({
+                    "approval_required": true,
+                    "prompt": prompt,
+                })),
+                message: Some(format!("Approval required: {prompt}")),
+            }),
+        }
     }
 }
 
@@ -97,6 +158,28 @@ Examples:
                 });
             }
         };
+
+        // Gate state-changing actions behind the approval policy (the same OS
+        // ops DesktopTool gates), so an agent cannot bypass that gate via the
+        // `system` tool. Permissive default = Allow, so this is byte-identical
+        // until a policy file tightens it.
+        let gated = match args.action.as_str() {
+            "launch_app" | "quit_app" | "restart_app" => Some((
+                ActionType::DesktopLaunchApp,
+                args.app_name.clone().unwrap_or_default(),
+            )),
+            "clipboard_write" => Some((
+                ActionType::DesktopType,
+                args.body.clone().unwrap_or_default(),
+            )),
+            _ => None,
+        };
+        if let Some((action_type, target)) = gated {
+            let context = format!("system {}", args.action);
+            if let Some(out) = self.check_approval(action_type, target, context).await {
+                return Ok(out);
+            }
+        }
 
         match args.action.as_str() {
             "launch_app" => {

@@ -19,17 +19,6 @@ use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_mode::PromptMode;
 use crate::context::budget::pressure::{estimate_tokens_aware, DEFAULT_PROSE_RATIO};
-use crate::sync_primitives::RwLock;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Cache hit/miss statistics for [`PromptPipeline::execute_cached`].
-#[derive(Debug, Clone, Default)]
-pub struct CacheStats {
-    pub hits: u64,
-    pub misses: u64,
-    pub entries: usize,
-}
 
 /// One layer's contribution to the assembled prompt, for size introspection
 /// and budget tuning. Produced by [`PromptPipeline::layer_breakdown`].
@@ -54,11 +43,17 @@ pub struct LayerSize {
 /// [`execute`](Self::execute) runs every layer whose declared paths
 /// include the requested path, appending each layer's output to a
 /// single `String`.
+///
+/// Cross-build reuse of the stable prefix is provided by the explicit,
+/// input-keyed snapshot path ([`execute_stable_only`](Self::execute_stable_only)
+/// / `PromptBuilder::capture_snapshot`) and the cached two-part split
+/// (`PromptBuilder::build_system_prompt_cached_with_mode`), not by an internal
+/// name-keyed cache — a fresh builder is constructed per prompt build, so an
+/// in-pipeline cache never served a cross-call hit and could only ever return
+/// stale sections if a builder were reused. The pipeline therefore holds no
+/// mutable cache state.
 pub struct PromptPipeline {
     layers: Vec<Box<dyn PromptLayer>>,
-    cache: RwLock<HashMap<&'static str, String>>,
-    cache_hits: AtomicU64,
-    cache_misses: AtomicU64,
 }
 
 impl PromptPipeline {
@@ -66,12 +61,7 @@ impl PromptPipeline {
     #[must_use]
     pub fn new(mut layers: Vec<Box<dyn PromptLayer>>) -> Self {
         layers.sort_by_key(|l| l.priority());
-        Self {
-            layers,
-            cache: RwLock::new(HashMap::new()),
-            cache_hits: AtomicU64::new(0),
-            cache_misses: AtomicU64::new(0),
-        }
+        Self { layers }
     }
 
     /// Execute the pipeline for the given `path` and `input`.
@@ -127,8 +117,11 @@ impl PromptPipeline {
             }
         }
 
-        // 2. Check total size
-        let total: usize = sections.iter().map(|(_, _, c)| c.len()).sum();
+        // 2. Check total size. Budget is in *characters* (`max_total_chars`),
+        //    so measure characters — a 3-byte CJK glyph counts as one unit,
+        //    matching the char-accurate truncation in `prompt_budget`. (ASCII
+        //    is byte==char, so this is identical for English-only prompts.)
+        let total: usize = sections.iter().map(|(_, _, c)| c.chars().count()).sum();
         if total <= budget.max_total_chars {
             let prompt = sections
                 .iter()
@@ -271,53 +264,19 @@ impl PromptPipeline {
         out
     }
 
-    /// Create a pipeline pre-loaded with the 33 default layers.
+    /// Create a pipeline pre-loaded with the default layer set.
     ///
-    /// Layer order (by priority):
-    ///
-    /// **Stable zone** (cacheable):
-    ///   50  `SoulLayer`
-    ///   55  `AgentRoleLayer`
-    ///   60  `CuratedMemoryLayer`
-    ///   70  `StrategyLayer`
-    ///   75  `ProfileLayer`
-    ///  100  `RoleLayer`
-    ///  300  `EnvironmentLayer`
-    ///  400  `RuntimeCapabilitiesLayer`
-    ///  500  `ToolsLayer` + `HydratedToolsLayer`
-    ///  550  `ToolUsageGrammarLayer`
-    ///  600  `SecurityLayer`
-    ///  700  `ProtocolTokensLayer`
-    ///  710  `HeartbeatLayer`
-    ///  800  `OperationalGuidelinesLayer`
-    ///  810  `ProviderGuidanceLayer`
-    ///  820  `SessionBudgetLayer`
-    ///  900  `CitationStandardsLayer`
-    /// 1000  `GenerationModelsLayer`
-    /// 1050  `SkillInstructionsLayer`
-    /// 1100  `SpecialActionsLayer`
-    /// 1120  `DoctorRepairHintLayer` (WebRich-only press-f hint)
-    /// 1300  `GuidelinesLayer`
-    /// 1350  `ThinkingGuidanceLayer`
-    /// 1400  `SkillModeLayer`
-    /// 1500  `CustomInstructionsLayer`
-    /// 1600  `LanguageLayer`
-    ///
-    /// **Dynamic zone** (per-request, not cacheable):
-    /// 1700  `InboundContextLayer`
-    /// 1702  `ChainContextLayer`
-    /// 1704  `AgentCatalogLayer`
-    /// 1705  `McpInstructionsLayer`
-    /// 1710  `VoiceModeLayer`
-    /// 1720  `RuntimeContextLayer`
-    /// 1730  `IdentityFilesLayer`
-    /// 1735  `ExtraFilesLayer`
-    /// 1740  `MemoryAugmentationLayer`
-    /// 1745  `MemoryProtocolLayer`
-    /// 1750  `SessionContextGuideLayer`
-    /// 1755  `ExecutionPlanLayer`
-    /// 1756  `StrategyPointerLayer`
-    /// 1760  `SessionResumeLayer`
+    /// Each layer self-declares its `priority()` (ascending assembly order) and
+    /// its `stability()`: the cacheable **Stable** prefix zone (priorities
+    /// `< 1700`: persona, tools, security, skills …) followed by the
+    /// per-request **Dynamic** suffix zone (`>= 1700`: inbound/session/memory/
+    /// runtime context). The registration block below is the authoritative
+    /// ordering — a hand-maintained priority table was removed because it
+    /// silently drifted as layers were added. Invariants are locked by tests:
+    /// `test_default_layers_count` (exact layer count),
+    /// `test_default_layers_sorted` (priority monotonicity), and
+    /// `stable_layers_come_before_dynamic` (the Stable→Dynamic split that
+    /// anchors the Anthropic prefix-cache breakpoint).
     #[must_use]
     pub fn default_layers() -> Self {
         Self::new(vec![
@@ -368,74 +327,6 @@ impl PromptPipeline {
             Box::new(SessionResumeLayer),
             Box::new(LanguageLayer),
         ])
-    }
-
-    /// Execute with section-level caching for Stable layers.
-    pub fn execute_cached(&self, path: AssemblyPath, input: &LayerInput) -> String {
-        let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
-        let mut output = String::with_capacity(16384);
-        let mut to_cache: Vec<(&'static str, String)> = Vec::new();
-
-        for layer in &self.layers {
-            if !layer.paths().contains(&path) {
-                continue;
-            }
-
-            if layer.stability() == LayerStability::Stable {
-                if let Some(cached) = cache.get(layer.name()) {
-                    output.push_str(cached);
-                    self.cache_hits.fetch_add(1, Ordering::Relaxed);
-                    continue;
-                }
-            }
-
-            let mut section = String::new();
-            layer.inject(&mut section, input);
-            self.cache_misses.fetch_add(1, Ordering::Relaxed);
-
-            if layer.stability() == LayerStability::Stable && !section.is_empty() {
-                to_cache.push((layer.name(), section.clone()));
-            }
-
-            output.push_str(&section);
-        }
-
-        drop(cache);
-        if !to_cache.is_empty() {
-            if let Ok(mut w) = self.cache.write() {
-                for (name, content) in to_cache {
-                    w.insert(name, content);
-                }
-            }
-        }
-
-        output
-    }
-
-    /// Invalidate a specific layer's cache entry by name.
-    pub fn invalidate(&self, layer_name: &str) {
-        if let Ok(mut w) = self.cache.write() {
-            w.retain(|k, _| *k != layer_name);
-        }
-    }
-
-    /// Invalidate all cached sections and reset statistics.
-    pub fn invalidate_all(&self) {
-        if let Ok(mut w) = self.cache.write() {
-            w.clear();
-        }
-        self.cache_hits.store(0, Ordering::Relaxed);
-        self.cache_misses.store(0, Ordering::Relaxed);
-    }
-
-    /// Cache hit/miss statistics.
-    pub fn cache_stats(&self) -> CacheStats {
-        let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
-        CacheStats {
-            hits: self.cache_hits.load(Ordering::Relaxed),
-            misses: self.cache_misses.load(Ordering::Relaxed),
-            entries: cache.len(),
-        }
     }
 
     /// Number of registered layers (test helper).
@@ -828,47 +719,6 @@ mod budget_tests {
 
         // Minimal should still have content (response format at minimum)
         assert!(!minimal.prompt.is_empty());
-    }
-}
-
-#[cfg(test)]
-mod cache_tests {
-    use super::*;
-    use crate::thinker::prompt_builder::PromptConfig;
-
-    #[test]
-    fn cached_execute_returns_same_result() {
-        let pipeline = PromptPipeline::default_layers();
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let input = LayerInput::basic(&config, &tools);
-        let r1 = pipeline.execute_cached(AssemblyPath::Basic, &input);
-        let r2 = pipeline.execute_cached(AssemblyPath::Basic, &input);
-        assert_eq!(r1, r2);
-    }
-
-    #[test]
-    fn invalidate_clears_cache() {
-        let pipeline = PromptPipeline::default_layers();
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let input = LayerInput::basic(&config, &tools);
-        let _ = pipeline.execute_cached(AssemblyPath::Basic, &input);
-        pipeline.invalidate_all();
-        assert_eq!(pipeline.cache_stats().entries, 0);
-    }
-
-    #[test]
-    fn second_call_hits_cache() {
-        let pipeline = PromptPipeline::default_layers();
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let input = LayerInput::basic(&config, &tools);
-        let _ = pipeline.execute_cached(AssemblyPath::Basic, &input);
-        let s1 = pipeline.cache_stats();
-        let _ = pipeline.execute_cached(AssemblyPath::Basic, &input);
-        let s2 = pipeline.cache_stats();
-        assert!(s2.hits > s1.hits, "Second call should have cache hits");
     }
 }
 

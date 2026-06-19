@@ -164,7 +164,8 @@ pub(crate) fn evdev_keycode(name: &str) -> Option<u16> {
         "return" | "enter" => 28,
         "tab" => 15,
         "escape" | "esc" => 1,
-        "backspace" | "delete" => 14, // KEY_BACKSPACE (mirrors parse_key)
+        "backspace" => 14,       // KEY_BACKSPACE (backward delete)
+        "delete" | "del" => 111, // KEY_DELETE (forward delete; matches enigo Key::Delete)
         "up" | "uparrow" => 103,
         "down" | "downarrow" => 108,
         "left" | "leftarrow" => 105,
