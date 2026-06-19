@@ -283,7 +283,20 @@
     "saving": "保存中……",
     "cancel": "取消",
     "prev_page": "上一页",
-    "next_page": "下一页"
+    "next_page": "下一页",
+    "facet_all_notes": "全部笔记",
+    "facet_facts": "事实",
+    "facet_feedback": "反馈",
+    "facet_lessons": "教训",
+    "facet_raw": "原始",
+    "detail_backlinks": "反向链接",
+    "note_lifecycle_managed": "生命周期由 dream daemon 管理——笔记会被自动巩固与清理。",
+    "similarity": "相似度",
+    "notes_truncated": "仅显示前 1000 条笔记，实际可能更多。",
+    "search_no_pagination": "搜索结果不分页。",
+    "batch_selected": "已选",
+    "batch_delete": "删除所选",
+    "batch_clear": "清除"
   },
   "logs": {
     "title": "服务器日志",

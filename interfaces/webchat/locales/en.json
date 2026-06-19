@@ -283,7 +283,20 @@
     "saving": "Saving…",
     "cancel": "Cancel",
     "prev_page": "Previous",
-    "next_page": "Next"
+    "next_page": "Next",
+    "facet_all_notes": "All Notes",
+    "facet_facts": "Facts",
+    "facet_feedback": "Feedback",
+    "facet_lessons": "Lessons",
+    "facet_raw": "Raw",
+    "detail_backlinks": "Backlinks",
+    "note_lifecycle_managed": "Lifecycle managed by the dream daemon — notes are consolidated and pruned automatically.",
+    "similarity": "Similarity",
+    "notes_truncated": "Showing the first 1000 notes; the store may hold more.",
+    "search_no_pagination": "Search results are not paginated.",
+    "batch_selected": "selected",
+    "batch_delete": "Delete selected",
+    "batch_clear": "Clear"
   },
   "logs": {
     "title": "Server Logs",

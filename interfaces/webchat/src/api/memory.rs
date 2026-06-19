@@ -13,6 +13,11 @@ pub struct RawMemory {
     pub content: String,
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Vector similarity score when this row came from a search query
+    /// (`None` in browse mode). Surfaced in the detail drawer for retrieval
+    /// transparency.
+    #[serde(default)]
+    pub similarity: Option<f32>,
 }
 
 /// Compressed fact entry (Layer 2 — extracted from raw memories by compression)
@@ -35,15 +40,13 @@ struct BackendListFactsResponse {
     facts: Vec<CompressedFact>,
 }
 
-/// Backend memory search result entry (matches handler `MemoryEntry`)
-#[allow(dead_code)]
+/// Backend memory search result entry (matches handler `MemoryEntry`).
+/// Extra backend fields (e.g. `window_title`) are ignored by serde.
 #[derive(Debug, Clone, Deserialize)]
 struct BackendMemoryEntry {
     id: String,
     #[serde(default)]
     agent_id: String,
-    #[serde(default)]
-    window_title: String,
     #[serde(default)]
     user_input: String,
     #[serde(default)]
@@ -85,11 +88,13 @@ impl MemoryApi {
     /// note full-text search path the backend takes for non-empty queries.
     pub async fn search(
         state: &DashboardState,
+        agent_id: &str,
         query: String,
         limit: Option<u32>,
         offset: u32,
     ) -> Result<Vec<RawMemory>, String> {
         let params = serde_json::json!({
+            "agent_id": agent_id,
             "query": query,
             "limit": limit,
             "offset": offset,
@@ -127,6 +132,7 @@ impl MemoryApi {
                     agent_id: entry.agent_id,
                     content,
                     created_at,
+                    similarity: entry.similarity_score,
                 }
             })
             .collect();
@@ -147,10 +153,12 @@ impl MemoryApi {
     /// List compressed facts (Layer 2)
     pub async fn list_facts(
         state: &DashboardState,
+        agent_id: &str,
         limit: Option<usize>,
         offset: usize,
     ) -> Result<Vec<CompressedFact>, String> {
         let params = serde_json::json!({
+            "agent_id": agent_id,
             "limit": limit.unwrap_or(50),
             "offset": offset,
         });
