@@ -1,7 +1,6 @@
 //! Component modules
 
 pub mod extensions;
-pub mod json_schema_form;
 pub mod agents_sidebar;
 pub mod boot_check_gate;
 pub mod chat_sidebar;
@@ -10,6 +9,7 @@ pub mod connection_status;
 pub mod dashboard_sidebar;
 pub mod directory_browser;
 pub mod forms;
+pub mod json_schema_form;
 pub mod json_viewer;
 pub mod layout_toggle;
 pub mod layouts;

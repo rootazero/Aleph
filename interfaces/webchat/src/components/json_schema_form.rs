@@ -219,7 +219,7 @@ pub fn JsonSchemaForm(
                         view! {
                             <input
                                 type="text"
-                                value=Signal::derive(get)
+                                prop:value=Signal::derive(get)
                                 on:input=move |ev| set(event_target_value(&ev))
                                 placeholder=placeholder
                                 class="w-full px-3 py-2 bg-surface-raised border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
@@ -230,7 +230,7 @@ pub fn JsonSchemaForm(
                 };
 
                 view! {
-                    <FormField label=label help_text=Some(help)>
+                    <FormField label=label help_text=(!help.is_empty()).then(|| help.clone())>
                         {widget}
                     </FormField>
                 }
