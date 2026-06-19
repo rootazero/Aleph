@@ -296,7 +296,12 @@
     "search_no_pagination": "Search results are not paginated.",
     "batch_selected": "selected",
     "batch_delete": "Delete selected",
-    "batch_clear": "Clear"
+    "batch_clear": "Clear",
+    "hub_view_graph": "Graph",
+    "hub_view_table": "Table",
+    "view_in_graph": "View in graph",
+    "view_in_list": "View in list",
+    "highlight_not_in_window": "This note is outside the current window — use search to locate it."
   },
   "logs": {
     "title": "Server Logs",
