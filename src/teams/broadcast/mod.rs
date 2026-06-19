@@ -182,12 +182,18 @@ impl GroupChatBroadcaster {
                 let team_id_spawn = team_id.clone();
                 let leader_id = team.leader_id.clone();
                 let roster_label = roster_label.clone();
+                let team_name = team.name.clone();
+                let protocol = team.protocol.clone();
+                let user_request = content.clone();
                 handles.push(tokio::spawn(this.run_member(
                     team_id_spawn,
                     agent_id,
                     role,
                     leader_id,
                     roster_label,
+                    team_name,
+                    protocol,
+                    user_request,
                     chain_depth,
                     budget.clone(),
                 )));
@@ -212,6 +218,9 @@ impl GroupChatBroadcaster {
         role: String,
         leader_id: String,
         roster_label: String,
+        team_name: String,
+        protocol: Option<String>,
+        user_request: String,
         chain_depth: u32,
         budget: Arc<AtomicUsize>,
     ) {
@@ -238,6 +247,9 @@ impl GroupChatBroadcaster {
             &roster_label,
             &transcript,
             is_leader,
+            &team_name,
+            protocol.as_deref(),
+            &user_request,
         );
 
         // collector 收集回复;TeamFanoutEmitter 同时广播到 team.<id>.*(Panel 气泡)
