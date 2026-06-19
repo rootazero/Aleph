@@ -237,6 +237,11 @@ pub fn build_distill_prompt_with_candidates(
          Existing skill-note candidates (you MUST reference these IDs verbatim \
          if you choose strengthen or supersede):\n\
          existing_candidates: {candidates_block}\n\n\
+         Quality bar: each NEW or SUPERSEDE rule must be a transferable procedure or \
+         invariant (not a one-off fact); use a kebab-case title; prefer a \
+         symptom→cause→fix shape; calibrate confidence to evidence strength and set \
+         severity to real impact (low..critical); STRENGTHEN (don't reword) when the rule \
+         already exists and you only have more evidence.\n\n\
          Emit at most {max_per_cycle} actions in this JSON shape:\n\
          ```json\n\
          {{\"actions\": [\n\
@@ -299,6 +304,23 @@ mod tests {
     #[test]
     fn stage_default_uses_config_default_cap() {
         assert_eq!(SkillDistillStage::default().max_per_cycle, 3);
+    }
+
+    #[test]
+    fn build_distill_prompt_includes_quality_bar() {
+        let prompt = build_distill_prompt_with_candidates(
+            "synthesis text",
+            "skill",
+            5,
+            &[("skill/async-error-handling".to_string(), 0.71)],
+        );
+        assert!(
+            prompt.contains("Quality bar:"),
+            "prompt must teach the skill-note quality bar:\n{prompt}"
+        );
+        // existing contract preserved
+        assert!(prompt.contains("existing_candidates"));
+        assert!(prompt.contains("strengthen") && prompt.contains("supersede"));
     }
 
     #[test]
