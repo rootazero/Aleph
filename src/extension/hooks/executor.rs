@@ -31,11 +31,15 @@ fn agent_invoke_directive(plugin_name: &str, event: HookEvent, agent: &str) -> S
     )
 }
 
-/// Build a Claude Code-style event payload JSON for stdin / HTTP body.
+/// Build a Claude Code-style event payload as a JSON value.
 ///
 /// Schema (keyed `snake_case` to match the rest of the hook surface):
 /// `{ hook_event_name, session_id, tool_name?, tool_input?, tool_output?, tool_error?, cwd?, env }`
-fn build_event_payload(event: HookEvent, context: &HookContext) -> String {
+///
+/// Shared by the stdin/HTTP string form ([`build_event_payload`]) and the
+/// plugin-hook path, which passes the value straight to `execute_plugin_hook`
+/// without a string round-trip.
+fn build_event_payload_value(event: HookEvent, context: &HookContext) -> serde_json::Value {
     use serde_json::{json, Map, Value};
     let event_str = match serde_json::to_value(event) {
         Ok(Value::String(s)) => s,
@@ -67,7 +71,13 @@ fn build_event_payload(event: HookEvent, context: &HookContext) -> String {
     if !context.env.is_empty() {
         payload.insert("env".into(), json!(context.env));
     }
-    serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string())
+    Value::Object(payload)
+}
+
+/// Build a Claude Code-style event payload JSON string for stdin / HTTP body.
+fn build_event_payload(event: HookEvent, context: &HookContext) -> String {
+    serde_json::to_string(&build_event_payload_value(event, context))
+        .unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Compare two directory paths for identity, canonicalising best-effort so
@@ -269,7 +279,9 @@ impl HookExecutor {
                                     agent,
                                 ));
                             }
-                            HookAction::Command { .. } | HookAction::Http { .. } => {
+                            HookAction::Command { .. }
+                            | HookAction::Http { .. }
+                            | HookAction::Plugin { .. } => {
                                 if let Some(ref output) = ar.output {
                                     super::parse_command_output(output, &mut result);
                                 }
@@ -397,6 +409,60 @@ impl HookExecutor {
                 self.execute_http(url, headers, context, plugin_root, event, timeout_override)
                     .await
             }
+            HookAction::Plugin {
+                plugin_id,
+                handler,
+            } => self.execute_plugin(plugin_id, handler, context, event).await,
+        }
+    }
+
+    /// Invoke a runtime plugin's exported hook handler via the process-global
+    /// [`ExtensionManager`](crate::extension::ExtensionManager).
+    ///
+    /// Resolving the manager from the same global accessor the gateway/channel
+    /// fire-sites already use ([`try_extension_manager`](crate::extension::try_extension_manager))
+    /// keeps the executor free of a loader callback — and the `Arc` ownership
+    /// cycle that threading one through every `HookExecutor` clone would create.
+    /// When the manager is unregistered (e.g. unit tests construct a bare
+    /// executor) the invoke is skipped with a non-success, no-output result:
+    /// observer fire-sites ignore it and interceptors read empty output as
+    /// "no effect", so a hookless test never blocks.
+    async fn execute_plugin(
+        &self,
+        plugin_id: &str,
+        handler: &str,
+        context: &HookContext,
+        event: HookEvent,
+    ) -> Result<ActionResult, ExtensionError> {
+        let Some(manager) = crate::extension::try_extension_manager() else {
+            return Ok(ActionResult {
+                success: false,
+                output: None,
+                error: Some(
+                    "extension manager not initialized; plugin hook skipped".to_string(),
+                ),
+                exit_code: None,
+            });
+        };
+        let payload = build_event_payload_value(event, context);
+        match manager.execute_plugin_hook(plugin_id, handler, payload).await {
+            Ok(value) => Ok(ActionResult {
+                success: true,
+                // Surface the structured return as text so interceptor/resolver
+                // paths can read line-prefixed directives via the same protocol
+                // as Command/Http; observers ignore output entirely.
+                output: match value {
+                    serde_json::Value::Null => None,
+                    serde_json::Value::String(s) if s.is_empty() => None,
+                    serde_json::Value::String(s) => Some(s),
+                    other => serde_json::to_string(&other).ok(),
+                },
+                error: None,
+                exit_code: None,
+            }),
+            Err(e) => Err(ExtensionError::HookExecution(format!(
+                "plugin hook '{plugin_id}::{handler}' failed: {e}"
+            ))),
         }
     }
 
@@ -702,7 +768,9 @@ impl HookExecutor {
                 match action_result {
                     Ok(ar) => {
                         match action {
-                            HookAction::Command { .. } | HookAction::Http { .. } => {
+                            HookAction::Command { .. }
+                            | HookAction::Http { .. }
+                            | HookAction::Plugin { .. } => {
                                 if let Some(ref output) = ar.output {
                                     super::parse_command_output(output, &mut accumulated);
                                     if accumulated.blocked || accumulated.denied {
@@ -960,5 +1028,57 @@ mod tests {
         })
         .await;
         assert!(!in_b, "project hook must NOT fire inside another project");
+    }
+
+    #[test]
+    fn plugin_action_round_trips_through_serde() {
+        // Wire-format lock for the variant `sync_hooks_from_registry` emits.
+        let action = HookAction::Plugin {
+            plugin_id: "demo".into(),
+            handler: "onEvent".into(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains("\"type\":\"plugin\""), "got: {json}");
+        let back: HookAction = serde_json::from_str(&json).unwrap();
+        match back {
+            HookAction::Plugin {
+                plugin_id,
+                handler,
+            } => {
+                assert_eq!(plugin_id, "demo");
+                assert_eq!(handler, "onEvent");
+            }
+            other => panic!("expected Plugin action, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn plugin_action_is_dispatched_and_skips_without_manager() {
+        // Regression lock: a `HookAction::Plugin` must reach `execute_plugin`
+        // (the wiring this commit adds) instead of being a silent no-op. With
+        // no process-global ExtensionManager registered, the invoke skips with
+        // a non-success, no-output result rather than panicking. Guarded so a
+        // sibling test that boots the manager can't make this non-deterministic.
+        if crate::extension::is_extension_manager_initialized() {
+            return;
+        }
+        let exec = HookExecutor::empty();
+        let ctx = HookContext::new("sess");
+        let result = exec
+            .execute_action(
+                &HookAction::Plugin {
+                    plugin_id: "demo".into(),
+                    handler: "onEvent".into(),
+                },
+                &ctx,
+                &PathBuf::new(),
+                "plugin:demo",
+                HookEvent::MessageReceived,
+                None,
+            )
+            .await
+            .expect("plugin action must skip (not error) when manager is absent");
+        assert!(!result.success);
+        assert!(result.output.is_none());
     }
 }
