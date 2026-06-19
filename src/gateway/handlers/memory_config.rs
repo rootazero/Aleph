@@ -3,7 +3,7 @@
 //! RPC handlers for managing memory/RAG configuration:
 //! - `memory_config.get`: Get current memory configuration
 //! - `memory_config.update`: Update memory configuration
-//! - `memory.retrieve_with_trace`: Retrieve memories with scoring trace (placeholder)
+//! - `memory.retrieve_with_trace`: Retrieve memories with per-stage scoring trace
 //!
 //! All modifications are persisted to config file and broadcast as events.
 //!
