@@ -7,6 +7,7 @@ use tracing::debug;
 
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
+use crate::agents::swarm::tasks::{CoordTaskStatus, CoordTaskStore, CoordTaskUpdate};
 use crate::teams::artifacts::{ArtifactStore, ArtifactType, NewArtifact, TaskStatus};
 use crate::tools::AlephTool;
 
@@ -47,13 +48,23 @@ pub struct TaskSubmitOutput {
 #[derive(Clone)]
 pub struct TaskSubmitTool {
     store: Arc<dyn ArtifactStore>,
+    /// Strategy round 2 (F2): when present and the submitted `task_id` is a real
+    /// coord_task, the submit flips it to `WaitingReview` so the leader's
+    /// `task_review` picks it up. `None` (no CoordTaskStore wired) keeps the
+    /// legacy artifact-only behavior.
+    coord_store: Option<Arc<dyn CoordTaskStore>>,
     current_agent_id: String,
 }
 
 impl TaskSubmitTool {
-    pub fn new(store: Arc<dyn ArtifactStore>, current_agent_id: String) -> Self {
+    pub fn new(
+        store: Arc<dyn ArtifactStore>,
+        coord_store: Option<Arc<dyn CoordTaskStore>>,
+        current_agent_id: String,
+    ) -> Self {
         Self {
             store,
+            coord_store,
             current_agent_id,
         }
     }
@@ -102,6 +113,23 @@ impl AlephTool for TaskSubmitTool {
             .await
             .map_err(|e| AlephError::other(format!("Failed to create artifact: {e}")))?;
 
+        // F2: if this submit is against a real coord_task, flip it to
+        // WaitingReview for the leader's task_review. Graceful no-op when the
+        // id is freeform (not a coord_task) or no CoordTaskStore is wired (P7).
+        if let Some(coord_store) = &self.coord_store {
+            if coord_store.get_task(&args.task_id).await.ok().flatten().is_some() {
+                let _ = coord_store
+                    .update_task(
+                        &args.task_id,
+                        CoordTaskUpdate {
+                            status: Some(CoordTaskStatus::WaitingReview),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+            }
+        }
+
         Ok(TaskSubmitOutput {
             artifact_id: artifact.id,
             task_id: artifact.task_id,
@@ -110,5 +138,22 @@ impl AlephTool for TaskSubmitTool {
                 artifact.title, args.task_id
             ),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The status-flip is store-driven (integration-verified end-to-end); this
+    // unit guards the public constructor arity that the registry depends on.
+    #[test]
+    fn new_takes_optional_coord_store() {
+        fn assert_3_arg(
+            f: impl Fn(Arc<dyn ArtifactStore>, Option<Arc<dyn CoordTaskStore>>, String) -> TaskSubmitTool,
+        ) {
+            let _ = f;
+        }
+        assert_3_arg(TaskSubmitTool::new);
     }
 }

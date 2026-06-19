@@ -224,7 +224,11 @@ impl BuiltinToolRegistry {
                 use crate::builtin_tools::team::{TaskReadArtifactTool, TaskSubmitTool};
 
                 let current_agent_id = current_agent_id.clone();
-                let submit = TaskSubmitTool::new(Arc::clone(artifact_store), current_agent_id);
+                let submit = TaskSubmitTool::new(
+                    Arc::clone(artifact_store),
+                    config.coord_task_store.clone(),
+                    current_agent_id,
+                );
                 let read = TaskReadArtifactTool::new(Arc::clone(artifact_store));
 
                 // Register parameter schemas
