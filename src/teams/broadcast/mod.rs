@@ -34,6 +34,7 @@ use crate::gateway::execution_engine::RunRequest;
 use crate::gateway::reply_emitter::extract_final_response;
 use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Arc;
+use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskStore};
 use crate::teams::messages::{MessageStore, MessageType, NewMessage};
 use crate::teams::TeamStore;
 
@@ -88,6 +89,11 @@ pub struct GroupChatBroadcaster {
     /// first-message team planner + leader-first hard gate dormant — group chat
     /// behaves exactly as before. Gated to `Some` at boot in agent_init.
     planner_provider: Option<Arc<dyn crate::providers::AiProvider>>,
+    /// Read-only coordination-task store (strategy round 2). `Some` lets
+    /// `run_member` diff this member's WaitingReview tasks across a turn and
+    /// re-trigger the leader to review fresh submissions. `None` keeps group
+    /// chat exactly as before (no re-trigger).
+    coord_task_store: Option<Arc<dyn CoordTaskStore>>,
 }
 
 impl GroupChatBroadcaster {
@@ -97,12 +103,14 @@ impl GroupChatBroadcaster {
         team_store: Arc<dyn TeamStore>,
         msg_store: Arc<dyn MessageStore>,
         planner_provider: Option<Arc<dyn crate::providers::AiProvider>>,
+        coord_task_store: Option<Arc<dyn CoordTaskStore>>,
     ) -> Self {
         Self {
             ctx,
             team_store,
             msg_store,
             planner_provider,
+            coord_task_store,
         }
     }
 

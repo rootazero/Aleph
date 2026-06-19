@@ -1417,6 +1417,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         .or_else(|| Some(topic_provider_registry.default_provider()));
                 let chat_team_planner = team_planner_provider.clone();
                 let chat_event_bus = event_bus.clone();
+                let chat_coord_store = coord_store.clone();
                 server
                     .handlers_mut()
                     .register("teams.chat.send", move |req| {
@@ -1426,6 +1427,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         let provider = chat_topic_provider.clone();
                         let planner = chat_team_planner.clone();
                         let bus = chat_event_bus.clone();
+                        let coord = chat_coord_store.clone();
                         async move {
                             alephcore::gateway::handlers::teams::handle_chat_send(
                                 req,
@@ -1435,6 +1437,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                                 provider,
                                 planner,
                                 Some(bus),
+                                coord,
                             )
                             .await
                         }
