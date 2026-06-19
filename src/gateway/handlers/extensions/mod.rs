@@ -5,5 +5,6 @@
 //! those backends and the store cache; they never reimplement their logic.
 //! See docs/superpowers/specs/2026-06-19-unified-extensions-store-design.md
 pub mod catalog;
+pub mod install;
 pub mod lifecycle;
 pub mod sources;

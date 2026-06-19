@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Default)]
 pub struct CatalogFilter {
+    pub id: Option<String>,
     pub kind: Option<ExtensionKind>,
     pub category: Option<ExtensionCategory>,
     pub source_id: Option<String>,
@@ -55,6 +56,10 @@ pub fn upsert_entry(conn: &Connection, e: &ExtensionEntry) -> rusqlite::Result<(
 pub fn query_entries(conn: &Connection, f: &CatalogFilter) -> rusqlite::Result<Vec<ExtensionEntry>> {
     let mut sql = String::from("SELECT data FROM catalog WHERE 1=1");
     let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    if let Some(id) = &f.id {
+        sql.push_str(" AND id = ?");
+        args.push(Box::new(id.clone()));
+    }
     if let Some(k) = f.kind {
         sql.push_str(" AND kind = ?");
         args.push(Box::new(
@@ -212,6 +217,24 @@ mod tests {
         .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "a");
+    }
+
+    #[test]
+    fn query_by_id_returns_exact_entry() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        upsert_entry(&conn, &entry("a", ExtensionCategory::Developer, "Alpha")).unwrap();
+        upsert_entry(&conn, &entry("b", ExtensionCategory::Data, "Beta")).unwrap();
+        let hits = query_entries(
+            &conn,
+            &CatalogFilter {
+                id: Some("b".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "b");
     }
 
     #[test]

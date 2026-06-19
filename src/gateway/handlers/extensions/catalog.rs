@@ -35,6 +35,7 @@ pub async fn handle_catalog(req: JsonRpcRequest, cache: Arc<CatalogCache>) -> Js
         category: p.category,
         source_id: p.source_id,
         query: p.query,
+        ..Default::default()
     };
     match cache.query(&filter).await {
         Ok(entries) => JsonRpcResponse::success(req.id, json!({ "extensions": entries })),
