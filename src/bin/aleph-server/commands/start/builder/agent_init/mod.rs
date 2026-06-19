@@ -368,7 +368,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // "use the executor's model", so when enabled we fall back to the default
         // provider (else the planner would never fire in the default config).
         // enabled=false is the only off switch.
-        let planner_provider = if app_config.strategy.as_ref().map_or(true, |s| s.enabled) {
+        let planner_provider = if app_config.strategy.as_ref().is_none_or(|s| s.enabled) {
             let primary_provider_key = app_config
                 .general
                 .default_provider
@@ -395,7 +395,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let naked_loop_planner_provider = if app_config
             .strategy
             .as_ref()
-            .map_or(true, |s| s.plan_naked_loop)
+            .is_none_or(|s| s.plan_naked_loop)
         {
             planner_provider.clone()
         } else {
@@ -407,11 +407,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // planner + leader-first hard gate in the broadcaster stay dormant.
         // Cloned BEFORE planner_provider is moved into tool_config (E0382).
         // `enabled` already folded in (planner_provider is None when disabled).
-        let team_planner_provider = if app_config
-            .strategy
-            .as_ref()
-            .map_or(true, |s| s.plan_team)
-        {
+        let team_planner_provider = if app_config.strategy.as_ref().is_none_or(|s| s.plan_team) {
             planner_provider.clone()
         } else {
             None

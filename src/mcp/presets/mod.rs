@@ -104,8 +104,7 @@ const CATALOG_JSON: &str = include_str!("catalog.json");
 pub fn catalog() -> &'static [McpPreset] {
     static CELL: OnceLock<Vec<McpPreset>> = OnceLock::new();
     CELL.get_or_init(|| {
-        serde_json::from_str(CATALOG_JSON)
-            .expect("bundled MCP preset catalog.json must be valid")
+        serde_json::from_str(CATALOG_JSON).expect("bundled MCP preset catalog.json must be valid")
     })
 }
 
@@ -135,7 +134,7 @@ impl McpPreset {
             .filter(|e| {
                 e.required
                     && e.default.is_none()
-                    && provided.get(&e.key).map_or(true, |v| v.trim().is_empty())
+                    && provided.get(&e.key).is_none_or(|v| v.trim().is_empty())
             })
             .cloned()
             .collect()
@@ -263,11 +262,18 @@ mod tests {
         // 远程优先：第一个 transport 是 http 且 url 含 key 占位
         let first = &amap.transports[0];
         assert_eq!(first.kind, McpTransportType::Http);
-        assert!(first.url.as_deref().unwrap().contains("<AMAP_MAPS_API_KEY>"));
+        assert!(first
+            .url
+            .as_deref()
+            .unwrap()
+            .contains("<AMAP_MAPS_API_KEY>"));
     }
 
     fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -300,7 +306,10 @@ mod tests {
             other => panic!("expected Ready, got {other:?}"),
         };
         assert_eq!(cfg.transport, McpTransportType::Http);
-        assert_eq!(cfg.url.as_deref(), Some("https://mcp.amap.com/mcp?key=k-123"));
+        assert_eq!(
+            cfg.url.as_deref(),
+            Some("https://mcp.amap.com/mcp?key=k-123")
+        );
         assert_eq!(cfg.id, "amap");
     }
 
@@ -325,8 +334,14 @@ mod tests {
             InstallPlan::Ready(cfg) => *cfg,
             other => panic!("expected Ready, got {other:?}"),
         };
-        assert_eq!(cfg.env.get("MINIMAX_API_HOST").map(String::as_str), Some("https://api.minimaxi.com"));
-        assert_eq!(cfg.env.get("MINIMAX_API_KEY").map(String::as_str), Some("mk"));
+        assert_eq!(
+            cfg.env.get("MINIMAX_API_HOST").map(String::as_str),
+            Some("https://api.minimaxi.com")
+        );
+        assert_eq!(
+            cfg.env.get("MINIMAX_API_KEY").map(String::as_str),
+            Some("mk")
+        );
         assert_eq!(cfg.requires_runtime.as_deref(), Some("python"));
     }
 }

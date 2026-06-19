@@ -103,7 +103,7 @@ pub fn assess_command_decisions(command: &str) -> Vec<ApprovalDecisionType> {
 /// danger classification.
 fn risk_segments(command: &str) -> Vec<&str> {
     command
-        .split(|c| c == ';' || c == '\n' || c == '|' || c == '&')
+        .split([';', '\n', '|', '&'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect()

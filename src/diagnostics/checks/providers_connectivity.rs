@@ -104,7 +104,7 @@ impl HealthCheck for ProvidersConnectivityCheck {
             .filter(|(name, enabled, _)| {
                 *enabled
                     && crate::providers::presets::get_preset(name)
-                        .map_or(true, |p| p.supports_health_check)
+                        .is_none_or(|p| p.supports_health_check)
             })
             .count();
         let futures = probes
@@ -122,7 +122,7 @@ impl HealthCheck for ProvidersConnectivityCheck {
                 // probing them yields a false `unreachable`. Report `skipped`
                 // (Info) instead — and the outage gate ignores them.
                 if !crate::providers::presets::get_preset(&name)
-                    .map_or(true, |p| p.supports_health_check)
+                    .is_none_or(|p| p.supports_health_check)
                 {
                     return Finding::ok(
                         ID,

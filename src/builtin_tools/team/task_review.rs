@@ -73,7 +73,7 @@ fn target_status(decision: ReviewDecision) -> CoordTaskStatus {
 /// allow and lean on prompt-gating). Pure / host-testable.
 #[must_use]
 fn is_authorized(caller: &str, leader: Option<&str>) -> bool {
-    leader.map_or(true, |l| l == caller)
+    leader.is_none_or(|l| l == caller)
 }
 
 #[derive(Clone)]
@@ -124,7 +124,13 @@ impl AlephTool for TaskReviewTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Resolve the task + its team leader for the soft authz check. A missing
         // task is a graceful no-op (the id may be freeform, not a coord_task).
-        let Some(task) = self.coord_store.get_task(&args.task_id).await.ok().flatten() else {
+        let Some(task) = self
+            .coord_store
+            .get_task(&args.task_id)
+            .await
+            .ok()
+            .flatten()
+        else {
             return Ok(TaskReviewOutput {
                 task_id: args.task_id,
                 status: "not_found".into(),
@@ -220,15 +226,27 @@ mod tests {
 
     #[test]
     fn target_status_maps_verdict() {
-        assert_eq!(target_status(ReviewDecision::Approve), CoordTaskStatus::Completed);
-        assert_eq!(target_status(ReviewDecision::Reject), CoordTaskStatus::InProgress);
+        assert_eq!(
+            target_status(ReviewDecision::Approve),
+            CoordTaskStatus::Completed
+        );
+        assert_eq!(
+            target_status(ReviewDecision::Reject),
+            CoordTaskStatus::InProgress
+        );
     }
 
     #[test]
     fn authz_allows_leader_blocks_other_allows_unknown() {
         assert!(is_authorized("alice", Some("alice")), "leader may review");
-        assert!(!is_authorized("bob", Some("alice")), "non-leader is blocked");
-        assert!(is_authorized("bob", None), "unverifiable team → allow (prompt-gating)");
+        assert!(
+            !is_authorized("bob", Some("alice")),
+            "non-leader is blocked"
+        );
+        assert!(
+            is_authorized("bob", None),
+            "unverifiable team → allow (prompt-gating)"
+        );
     }
 
     #[test]
