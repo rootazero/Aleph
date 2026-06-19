@@ -3,7 +3,7 @@ use crate::api::{CompressedFact, MemoryApi, MemoryStats, RawMemory};
 use crate::components::ui::{Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Card, ConfirmButton};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
-use crate::state::memory::MemoryState;
+use crate::state::memory::{MemoryState, MemoryView};
 use leptos::prelude::*;
 use std::collections::HashSet;
 
@@ -12,11 +12,11 @@ mod drawer;
 mod facets;
 
 use data::{
-    bucket_counts, facet_slice, format_ts, page_count, page_slice, MemoryFacet, NOTE_WINDOW,
-    PAGE_SIZE,
+    bucket_counts, facet_slice, format_ts, locate_note, page_count, page_slice, MemoryFacet,
+    NOTE_WINDOW, PAGE_SIZE,
 };
 use drawer::{DetailDrawer, DrawerTarget};
-use facets::{AgentFilter, FacetBar};
+use facets::FacetBar;
 
 /// Total item count for a facet, read from the pre-computed bucket counts
 /// (`[AllNotes, Facts, Feedback, Lessons]`). Raw is server-paginated, so 0 here.
@@ -45,7 +45,6 @@ pub fn Memory() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let mem = expect_context::<MemoryState>();
     let i18n = use_i18n();
-    let is_disabled = Signal::derive(move || !state.is_connected.get());
 
     let stats = RwSignal::new(None::<MemoryStats>);
     let facet = RwSignal::new(MemoryFacet::AllNotes);
@@ -56,7 +55,6 @@ pub fn Memory() -> impl IntoView {
     let notes_page = RwSignal::new(0u32);
 
     // Raw memories (server-paginated).
-    let search_query = RwSignal::new(String::new());
     let applied_query = RwSignal::new(String::new());
     let raw_memories = RwSignal::new(Vec::<RawMemory>::new());
     let is_searching = RwSignal::new(false);
@@ -117,12 +115,6 @@ pub fn Memory() -> impl IntoView {
         }
     });
 
-    // Reset note page when the facet changes so a switch lands on page 1.
-    Effect::new(move || {
-        facet.get();
-        notes_page.set(0);
-    });
-
     // Raw loader — reruns on page / applied query / agent / connection change.
     Effect::new(move || {
         if state.is_connected.get() {
@@ -147,10 +139,49 @@ pub fn Memory() -> impl IntoView {
         }
     });
 
-    let do_search = move || {
-        applied_query.set(search_query.get());
+    // Shared search box (in the hub toolbar) writes `mem.search_query` live and
+    // bumps `mem.search_nonce` on Enter. Commit that into the Raw search here;
+    // a non-empty query also switches to the Raw facet so results are visible.
+    Effect::new(move || {
+        mem.search_nonce.get(); // subscribe to submit pulses
+        let q = mem.search_query.get_untracked();
+        applied_query.set(q.clone());
         raw_page.set(0);
-    };
+        if !q.is_empty() {
+            facet.set(MemoryFacet::Raw);
+        }
+    });
+
+    // Reverse link (graph → list): the node detail panel sets
+    // `mem.highlight_note_id`; jump to the note's facet+page, highlight the row,
+    // and open its drawer. Outside the loaded window → inline notice.
+    let highlight_id = RwSignal::new(None::<String>);
+    let highlight_missing = RwSignal::new(false);
+    Effect::new(move || {
+        let Some(path) = mem.highlight_note_id.get() else {
+            return;
+        };
+        if !notes_loaded.get() {
+            return; // wait for the window; re-runs when it loads
+        }
+        let window = notes_window.get();
+        match locate_note(&window, &path) {
+            Some((f, pg)) => {
+                facet.set(f);
+                notes_page.set(pg);
+                highlight_id.set(Some(path.clone()));
+                highlight_missing.set(false);
+                if let Some(found) = window.into_iter().find(|x| x.path == path) {
+                    drawer_target.set(Some(DrawerTarget::Note(found)));
+                }
+            }
+            None => {
+                highlight_missing.set(true);
+                highlight_id.set(None);
+            }
+        }
+        mem.highlight_note_id.set(None); // consume so re-selecting re-triggers
+    });
 
     // Reusable raw refresh after a delete — keeps stats + current page coherent
     // and steps back off a now-empty trailing page.
@@ -223,7 +254,6 @@ pub fn Memory() -> impl IntoView {
                     </h2>
                     <p class="text-text-secondary">{t!(i18n, memory.description)}</p>
                 </div>
-                <AgentFilter />
             </header>
 
             {move || {
@@ -274,32 +304,20 @@ pub fn Memory() -> impl IntoView {
                 </Card>
             </div>
 
-            // Facet bar + (raw) search
+            // Facet bar (search lives in the hub toolbar).
             <div class="flex items-center justify-between gap-3 flex-wrap border-b border-border pb-2">
-                <FacetBar active=facet counts=counts raw_count=raw_total />
-                {move || {
-                    if facet.get() == MemoryFacet::Raw {
-                        view! {
-                            <div class="relative group">
-                                <svg width="16" height="16" attr:class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary group-focus-within:text-primary transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <circle cx="11" cy="11" r="8" />
-                                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                                </svg>
-                                <input
-                                    type="text"
-                                    placeholder=t_string!(i18n, memory.search_placeholder)
-                                    class="pl-10 pr-4 py-1.5 bg-surface-raised border border-border rounded-lg focus:outline-none focus:border-primary/50 focus:ring-4 focus:ring-primary/10 w-56 transition-all text-sm text-text-primary placeholder:text-text-tertiary"
-                                    disabled=is_disabled
-                                    on:input=move |ev| search_query.set(event_target_value(&ev))
-                                    on:keydown=move |ev| { if ev.key() == "Enter" { do_search(); } }
-                                />
-                            </div>
-                        }.into_any()
-                    } else {
-                        view! { <div></div> }.into_any()
-                    }
-                }}
+                <FacetBar
+                    active=facet
+                    counts=counts
+                    raw_count=raw_total
+                    on_select=Callback::new(move |f: MemoryFacet| { facet.set(f); notes_page.set(0); })
+                />
             </div>
+
+            // Reverse-link notice when the highlighted note is outside the window.
+            {move || highlight_missing.get().then(|| view! {
+                <p class="text-xs text-warning italic">{t!(i18n, memory.highlight_not_in_window)}</p>
+            })}
 
             // Content — switches only between notes-vs-raw so paging/loads don't
             // remount the active table.
@@ -312,7 +330,12 @@ pub fn Memory() -> impl IntoView {
                             page=notes_page
                             loaded=notes_loaded
                             connected=connected
+                            highlight=Signal::derive(move || highlight_id.get())
                             on_open=move |fact| drawer_target.set(Some(DrawerTarget::Note(fact)))
+                            on_locate=move |path: String| {
+                                mem.selected_node.set(Some(path));
+                                mem.memory_view.set(MemoryView::Graph);
+                            }
                         />
                         {move || (notes_window.get().len() >= NOTE_WINDOW).then(|| view! {
                             <p class="text-xs text-text-tertiary italic pt-1">{t!(i18n, memory.notes_truncated)}</p>
@@ -403,7 +426,9 @@ fn NotesTable(
     page: RwSignal<u32>,
     loaded: RwSignal<bool>,
     connected: RwSignal<bool>,
+    highlight: Signal<Option<String>>,
     on_open: impl Fn(CompressedFact) + Clone + Send + 'static,
+    on_locate: impl Fn(String) + Clone + Send + 'static,
 ) -> impl IntoView {
     let i18n = use_i18n();
     view! {
@@ -445,12 +470,38 @@ fn NotesTable(
                             let content = fact.content.clone();
                             let date = format_ts(fact.created_at);
                             let on_open = on_open.clone();
+                            let on_locate = on_locate.clone();
                             let fact_for_click = fact.clone();
+                            let path_for_locate = path.clone();
+                            let path_for_highlight = path.clone();
+                            let i18n_row = i18n;
+                            let is_hl = Signal::derive(move || highlight.get().as_deref() == Some(path_for_highlight.as_str()));
                             view! {
-                                <tr class="group hover:bg-surface-sunken transition-colors cursor-pointer" on:click=move |_| on_open(fact_for_click.clone())>
+                                <tr
+                                    class=move || if is_hl.get() {
+                                        "group bg-primary-subtle ring-1 ring-primary/40 transition-colors cursor-pointer"
+                                    } else {
+                                        "group hover:bg-surface-sunken transition-colors cursor-pointer"
+                                    }
+                                    on:click=move |_| on_open(fact_for_click.clone())
+                                >
                                     <td class="p-4 pl-8">
-                                        <div class="text-sm font-medium text-text-primary line-clamp-2 group-hover:line-clamp-none transition-all">{content}</div>
-                                        <div class="text-xs text-text-tertiary mt-0.5 font-mono">{path}</div>
+                                        <div class="flex items-start justify-between gap-2">
+                                            <div class="min-w-0">
+                                                <div class="text-sm font-medium text-text-primary line-clamp-2 group-hover:line-clamp-none transition-all">{content}</div>
+                                                <div class="text-xs text-text-tertiary mt-0.5 font-mono">{path}</div>
+                                            </div>
+                                            <button
+                                                class="flex-shrink-0 p-1 rounded text-text-tertiary opacity-0 group-hover:opacity-100 hover:text-primary transition-all"
+                                                title=t_string!(i18n_row, memory.view_in_graph)
+                                                on:click=move |ev| { ev.stop_propagation(); on_locate(path_for_locate.clone()); }
+                                            >
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                    <circle cx="5" cy="6" r="2" /><circle cx="19" cy="6" r="2" /><circle cx="12" cy="18" r="2" />
+                                                    <line x1="6.6" y1="7.4" x2="10.6" y2="16.4" /><line x1="17.4" y1="7.4" x2="13.4" y2="16.4" /><line x1="7" y1="6" x2="17" y2="6" />
+                                                </svg>
+                                            </button>
+                                        </div>
                                     </td>
                                     <td class="p-4"><Badge variant=BadgeVariant::Indigo>{agent_id}</Badge></td>
                                     <td class="p-4"><Badge variant=badge_variant>{fact_type}</Badge></td>

@@ -24,11 +24,6 @@ pub fn DashboardSidebar() -> impl IntoView {
                 <SidebarItem href="/dashboard/trace" label=Signal::derive(move || t_string!(i18n, dashboard.sidebar.agent_trace).to_string()) alert_key="agent.trace">
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                 </SidebarItem>
-                <SidebarItem href="/dashboard/memory" label=Signal::derive(move || t_string!(i18n, dashboard.sidebar.memory_vault).to_string()) alert_key="memory.status">
-                    <ellipse cx="12" cy="5" rx="9" ry="3" />
-                    <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
-                    <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-                </SidebarItem>
                 <SidebarItem href="/dashboard/tasks" label=Signal::derive(move || t_string!(i18n, dashboard.sidebar.scheduled_tasks).to_string())>
                     <circle cx="12" cy="12" r="10" />
                     <polyline points="12 6 12 12 16 14" />

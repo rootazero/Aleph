@@ -296,7 +296,12 @@
     "search_no_pagination": "搜索结果不分页。",
     "batch_selected": "已选",
     "batch_delete": "删除所选",
-    "batch_clear": "清除"
+    "batch_clear": "清除",
+    "hub_view_graph": "图谱",
+    "hub_view_table": "列表",
+    "view_in_graph": "在图谱中查看",
+    "view_in_list": "在列表中查看",
+    "highlight_not_in_window": "该笔记不在当前窗口，请用搜索定位。"
   },
   "logs": {
     "title": "服务器日志",

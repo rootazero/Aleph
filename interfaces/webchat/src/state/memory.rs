@@ -9,6 +9,31 @@ use std::collections::VecDeque;
 /// Cap on how many nodes are retained in `recent_visited`.
 const RECENT_VISITED_CAPACITY: usize = 8;
 
+/// Which surface the Memory Hub is currently showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryView {
+    Graph,
+    Table,
+}
+
+/// Parse the `view` query param from a URL search string ("?view=table" or
+/// "view=table"). Returns `None` when absent or unknown so callers can leave
+/// the current view untouched (manual toggles never write the URL).
+#[must_use]
+pub fn parse_view_param(search: &str) -> Option<MemoryView> {
+    let s = search.strip_prefix('?').unwrap_or(search);
+    for pair in s.split('&') {
+        if let Some(v) = pair.strip_prefix("view=") {
+            return match v {
+                "table" => Some(MemoryView::Table),
+                "graph" => Some(MemoryView::Graph),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
 #[derive(Clone, Copy)]
 pub struct MemoryState {
     pub agent_id: RwSignal<String>,
@@ -20,6 +45,9 @@ pub struct MemoryState {
     pub breadcrumb_entries: RwSignal<Vec<String>>,
     pub recent_visited: RwSignal<VecDeque<String>>,
     pub sidebar_collapsed: RwSignal<bool>,
+    pub memory_view: RwSignal<MemoryView>,
+    pub highlight_note_id: RwSignal<Option<String>>,
+    pub search_nonce: RwSignal<u32>,
 }
 
 impl MemoryState {
@@ -53,6 +81,9 @@ impl MemoryState {
             breadcrumb_entries: RwSignal::new(Vec::new()),
             recent_visited: RwSignal::new(VecDeque::with_capacity(RECENT_VISITED_CAPACITY)),
             sidebar_collapsed,
+            memory_view: RwSignal::new(MemoryView::Graph),
+            highlight_note_id: RwSignal::new(None),
+            search_nonce: RwSignal::new(0),
         }
     }
 
@@ -124,5 +155,14 @@ mod tests {
         }
         assert_eq!(q.len(), 1);
         assert_eq!(q[0], "x");
+    }
+
+    #[test]
+    fn parse_view_param_variants() {
+        assert_eq!(parse_view_param("?view=table"), Some(MemoryView::Table));
+        assert_eq!(parse_view_param("view=graph"), Some(MemoryView::Graph));
+        assert_eq!(parse_view_param("?view=bogus"), None);
+        assert_eq!(parse_view_param(""), None);
+        assert_eq!(parse_view_param("?foo=1&view=table"), Some(MemoryView::Table));
     }
 }
