@@ -88,7 +88,21 @@ const fn lb_str(strategy: LoadBalanceStrategy) -> &'static str {
         LoadBalanceStrategy::LeastBusy => "least_busy",
         LoadBalanceStrategy::LatencyAware => "latency_aware",
         LoadBalanceStrategy::UsageBased => "usage_based",
+        LoadBalanceStrategy::CostAware => "cost_aware",
     }
+}
+
+/// Blended `input + output` price in milli-USD per million tokens for a
+/// `(provider, model)` pair, or `None` when the model is not in the static
+/// [`crate::pricing`] table. The same scalar the [`CostAware`] strategy sorts
+/// on — surfaced here so `route_status` shows *why* cost routing ranked a
+/// provider where it did.
+///
+/// [`CostAware`]: crate::config::types::LoadBalanceStrategy::CostAware
+fn price_milli_per_mtok(provider: &str, model: &str) -> Option<u64> {
+    let card = crate::pricing::rate_card(provider, model)?;
+    let usd = card.input_per_mtok.unwrap_or(0.0) + card.output_per_mtok.unwrap_or(0.0);
+    Some((usd * 1000.0).round() as u64)
 }
 
 impl RouteObservability {
@@ -134,6 +148,13 @@ impl RouteObservability {
             pacing.iter().map(|(n, s)| (n.as_str(), *s)).collect();
         let loads_by: std::collections::HashMap<&str, crate::providers::route_policy::LoadMetric> =
             loads.iter().map(|(n, m)| (n.as_str(), *m)).collect();
+        // Provider → first model, the model the cost-aware sort prices (it is the
+        // head of each candidate's model walk). Built from the boot chain.
+        let model_by: std::collections::HashMap<&str, &str> = self
+            .fallbacks
+            .iter()
+            .filter_map(|c| c.models.first().map(|m| (c.name.as_str(), m.as_str())))
+            .collect();
 
         let providers: serde_json::Map<String, serde_json::Value> = names
             .iter()
@@ -142,6 +163,11 @@ impl RouteObservability {
                 let m = loads_by.get(name.as_str()).copied().unwrap_or_default();
                 let (util_permille, over_limit) = limits.assess(name, m.rpm_used, m.tpm_used);
                 let (rpm_limit, tpm_limit) = limits.ceiling(name).unwrap_or((None, None));
+                // Cost-routing sort key (milli-USD/Mtok); `null` when the
+                // provider's first model is unknown or unpriced.
+                let price = model_by
+                    .get(name.as_str())
+                    .and_then(|model| price_milli_per_mtok(name, model));
                 let entry = json!({
                     "circuit": h.map_or("closed", |h| h.circuit),
                     "failure_count": h.map_or(0, |h| h.failure_count),
@@ -156,6 +182,7 @@ impl RouteObservability {
                     "tpm_limit": tpm_limit,
                     "utilization_percent": util_permille / 10,
                     "over_limit": over_limit,
+                    "price_milli_per_mtok": price,
                 });
                 (name.clone(), entry)
             })

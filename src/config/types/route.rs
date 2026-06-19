@@ -71,6 +71,18 @@ pub enum LoadBalanceStrategy {
     /// `rate_limits` are configured every provider reads 0% utilisation, so this
     /// degrades to [`Ordered`](LoadBalanceStrategy::Ordered).
     UsageBased,
+    /// Prefer the *cheapest* fallback — the lowest blended `input + output`
+    /// per-million-token price from the static [`crate::pricing`] rate card of
+    /// each candidate's first model. Maps `LiteLLM` `cost-based-routing`
+    /// (`lowest-cost`) and `RouteLLM`'s cheap-vs-strong cost axis onto Aleph's
+    /// already-shipped price table — pure **infrastructure** (R7 赋能层): the
+    /// price is a static `(provider, model)` fact, never inferred from the
+    /// prompt. Unpriced candidates (on-machine / self-hosted models carry no
+    /// rate card) read price `0` and therefore sort *first* — local inference is
+    /// effectively free, so cost routing naturally prefers it before any paid
+    /// cloud endpoint. When no candidate is priced this degrades to
+    /// [`Ordered`](LoadBalanceStrategy::Ordered).
+    CostAware,
 }
 
 /// Per-provider rate ceiling for usage-aware routing.
@@ -236,6 +248,17 @@ mod tests {
         let c: ModelRouteConfig =
             toml::from_str("mode = \"auto\"\nload_balance = \"usage_based\"\n").unwrap();
         assert_eq!(c.load_balance, LoadBalanceStrategy::UsageBased);
+    }
+
+    #[test]
+    fn cost_aware_strategy_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&LoadBalanceStrategy::CostAware).unwrap(),
+            "\"cost_aware\""
+        );
+        let c: ModelRouteConfig =
+            toml::from_str("mode = \"auto\"\nload_balance = \"cost_aware\"\n").unwrap();
+        assert_eq!(c.load_balance, LoadBalanceStrategy::CostAware);
     }
 
     #[test]

@@ -25,6 +25,7 @@ const LB_KEYS: &[&str] = &[
     "least_busy",
     "latency_aware",
     "usage_based",
+    "cost_aware",
 ];
 
 #[component]
@@ -173,6 +174,7 @@ pub fn RouteView() -> impl IntoView {
                                     "round_robin" => t_string!(i18n, settings.route.lb_round_robin),
                                     "least_busy" => t_string!(i18n, settings.route.lb_least_busy),
                                     "latency_aware" => t_string!(i18n, settings.route.lb_latency_aware),
+                                    "cost_aware" => t_string!(i18n, settings.route.lb_cost_aware),
                                     _ => t_string!(i18n, settings.route.lb_usage_based),
                                 };
                                 view! { <option value=key>{label}</option> }
