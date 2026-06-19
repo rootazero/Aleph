@@ -1320,6 +1320,8 @@
       "community": "Community",
       "unverified": "Unverified"
     },
+    "featured": "Featured",
+    "search_placeholder": "Search by what you want to do…",
     "install": "Install",
     "installed": "Installed",
     "empty": "No extensions match."

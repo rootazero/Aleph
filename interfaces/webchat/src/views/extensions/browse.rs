@@ -4,9 +4,10 @@ use serde_json::json;
 
 use crate::api::extensions::{ExtensionEntry, ExtensionsApi};
 use crate::components::extensions::card::ExtensionCard;
+use crate::components::extensions::chips::{category_label, CategoryChips, FilterSegs, StoreSearch};
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
-use crate::views::extensions::model::{apply_filters, Filters};
+use crate::views::extensions::model::{apply_filters, featured_picks, group_into_shelves, Filters};
 use crate::views::extensions::StoreState;
 
 fn load_catalog(state: DashboardState, store: StoreState) {
@@ -41,7 +42,7 @@ pub fn BrowsePane() -> impl IntoView {
         }
     });
 
-    // Filtered view (Task 5 binds the chip/filter signals; here Filters reads them already).
+    // Filtered view (chip/filter signals drive these already).
     let filtered = move || {
         let f = Filters {
             category: store.category.get(),
@@ -53,12 +54,26 @@ pub fn BrowsePane() -> impl IntoView {
     };
 
     view! {
+        // Chrome: search + chips + filter segments
+        <div class="flex flex-col gap-3 mb-4">
+            <StoreSearch />
+            <CategoryChips />
+            <FilterSegs />
+        </div>
+
+        // Error banner (unchanged from Task 4)
         {move || store.error.get().map(|err| view! {
             <div class="p-3 bg-danger-subtle border border-border rounded text-danger text-sm mb-4">{err}</div>
         })}
+
+        // Body: loading → empty → featured/shelves → flat grid
         {move || {
             if store.loading.get() {
-                view! { <div class="flex items-center justify-center py-12"><div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div></div> }.into_any()
+                view! {
+                    <div class="flex items-center justify-center py-12">
+                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                    </div>
+                }.into_any()
             } else if filtered().is_empty() {
                 view! {
                     <div class="text-center py-12 border border-dashed border-border rounded-xl">
@@ -67,15 +82,67 @@ pub fn BrowsePane() -> impl IntoView {
                     </div>
                 }.into_any()
             } else {
-                view! {
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                        <For
-                            each=move || filtered()
-                            key=|e: &ExtensionEntry| e.id.clone()
-                            children=move |e| view! { <ExtensionCard entry=e /> }
-                        />
-                    </div>
-                }.into_any()
+                let entries = store.entries.get();
+                let category = store.category.get();
+                let query = store.query.get();
+                let kind_filter = store.kind_filter.get();
+                let trust_filter = store.trust_filter.get();
+
+                let featured_view = category == "featured"
+                    && query.trim().is_empty()
+                    && kind_filter == "all"
+                    && trust_filter == "all";
+
+                if featured_view {
+                    let featured = featured_picks(&entries, 3);
+                    let shelves = group_into_shelves(&entries);
+                    view! {
+                        <div class="space-y-8">
+                            {(!featured.is_empty()).then(|| view! {
+                                <div>
+                                    <h2 class="font-serif text-lg text-text-primary mb-3">
+                                        {t!(i18n, extensions.featured)}
+                                    </h2>
+                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                        <For
+                                            each=move || featured.clone()
+                                            key=|e: &ExtensionEntry| e.id.clone()
+                                            children=move |e| view! { <ExtensionCard entry=e /> }
+                                        />
+                                    </div>
+                                </div>
+                            })}
+                            {shelves.into_iter().map(|(cat, items)| {
+                                let shelf_title = category_label(i18n, cat);
+                                view! {
+                                    <div>
+                                        <h2 class="font-serif text-lg text-text-primary mb-3">
+                                            {shelf_title}
+                                        </h2>
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                            <For
+                                                each=move || items.clone()
+                                                key=|e: &ExtensionEntry| e.id.clone()
+                                                children=move |e| view! { <ExtensionCard entry=e /> }
+                                            />
+                                        </div>
+                                    </div>
+                                }
+                            }).collect_view()}
+                        </div>
+                    }.into_any()
+                } else {
+                    // Flat filtered grid (Task 4 body)
+                    view! {
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                            <For
+                                each=move || filtered()
+                                key=|e: &ExtensionEntry| e.id.clone()
+                                children=move |e| view! { <ExtensionCard entry=e /> }
+                            />
+                        </div>
+                    }.into_any()
+                }
             }
         }}
     }

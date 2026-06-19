@@ -1320,6 +1320,8 @@
       "community": "社区",
       "unverified": "未验证"
     },
+    "featured": "精选",
+    "search_placeholder": "按你想做的事搜索…",
     "install": "安装",
     "installed": "已安装",
     "empty": "没有匹配的扩展"
