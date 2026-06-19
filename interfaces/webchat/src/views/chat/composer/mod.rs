@@ -15,8 +15,8 @@ mod voice;
 use super::mention_palette::{update_mention_palette, MentionPaletteView};
 use attachments::{read_file_list_into, AttachmentPreviewBar};
 use palette::{
-    build_palette_entries, parse_command_info, CommandInfo, PaletteEntry, PaletteLabels,
-    SlashPaletteView,
+    build_palette_entries, doctor_command_info, expand_doctor_command, parse_command_info,
+    CommandInfo, PaletteEntry, PaletteLabels, SlashPaletteView,
 };
 use queue_bar::QueuedPromptBar;
 
@@ -141,7 +141,12 @@ pub(super) fn InputArea() -> impl IntoView {
         if is_sending.get_untracked() {
             return;
         }
-        let text = input_text.get_untracked().trim().to_string();
+        let raw = input_text.get_untracked().trim().to_string();
+        // `/doctor` → seed the read-only detection prompt and route it through
+        // the normal LLM pipeline, mirroring the `f`-hotkey repair flow. Done
+        // before send so the literal slash command never reaches the gateway
+        // fast path (which would run the tool deterministically, no LLM).
+        let text = expand_doctor_command(&raw).unwrap_or(raw);
         let files = attachments.get_untracked();
         if text.is_empty() && files.is_empty() {
             return;
@@ -224,7 +229,8 @@ pub(super) fn InputArea() -> impl IntoView {
     // blocked prompt never enters the queue, then stashes the draft on
     // `ChatState` and clears the composer for the next line of input.
     let enqueue_message = move || {
-        let text = input_text.get_untracked().trim().to_string();
+        let raw = input_text.get_untracked().trim().to_string();
+        let text = expand_doctor_command(&raw).unwrap_or(raw);
         let files = attachments.get_untracked();
         if text.is_empty() && files.is_empty() {
             return;
@@ -357,6 +363,9 @@ pub(super) fn InputArea() -> impl IntoView {
                                 cmds.push(cmd);
                             }
                         }
+                    }
+                    if !cmds.iter().any(|c| c.key == "doctor") {
+                        cmds.push(doctor_command_info());
                     }
                     all_commands.set(cmds.clone());
                     commands_loaded.set(true);
