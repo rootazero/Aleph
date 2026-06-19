@@ -3,6 +3,10 @@
 //! `ExtensionEntry`s and syncs its slice into the rusqlite cache. Providers are
 //! the only network callers; `sync()` runs in the background.
 
+pub mod docker_mcp;
+pub mod marketplace;
+pub mod mcp_registry;
+
 use crate::store::cache::CatalogCache;
 use crate::store::types::{ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
 
