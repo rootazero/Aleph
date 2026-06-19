@@ -96,7 +96,10 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
                                 </div>
                             </div>
                             <footer class="px-4 py-3 border-t border-border flex gap-2">
-                                <button class="flex-1 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover text-sm" on:click=move |_| { /* Task 8: start_install(entry) */ }>{t!(i18n, extensions.install)}</button>
+                                {{
+                                    let install_entry = entry.clone();
+                                    view! { <button class="flex-1 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover text-sm" on:click=move |_| { store.start_install(install_entry.clone()); store.selected.set(None); }>{t!(i18n, extensions.install)}</button> }
+                                }}
                                 {entry.repo_url.clone().map(|url| view! { <a class="px-4 py-2 bg-surface-sunken text-text-secondary rounded-lg text-sm" href=url target="_blank" rel="noopener">{t!(i18n, extensions.docs)}</a> })}
                             </footer>
                         </aside>

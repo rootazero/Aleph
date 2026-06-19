@@ -10,7 +10,7 @@ use crate::i18n::{t, use_i18n};
 use crate::views::extensions::model::{apply_filters, featured_picks, group_into_shelves, Filters};
 use crate::views::extensions::StoreState;
 
-fn load_catalog(state: DashboardState, store: StoreState) {
+pub(crate) fn load_catalog(state: DashboardState, store: StoreState) {
     store.loading.set(true);
     store.error.set(None);
     spawn_local(async move {

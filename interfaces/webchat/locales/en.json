@@ -1332,7 +1332,17 @@
     "what_it_reaches": "What it can reach",
     "loading_perms": "Checking permissions…",
     "no_perms": "No special permissions.",
-    "docs": "Docs ↗"
+    "docs": "Docs ↗",
+    "command_label": "Command that will run",
+    "ack": "I understand this runs third-party code on my computer.",
+    "continue_install": "Continue",
+    "cancel": "Cancel",
+    "configure_title": "Configure",
+    "install_and_verify": "Install & verify",
+    "installing": "Installing…",
+    "install_done": "Installed ✓",
+    "install_failed": "Install failed",
+    "leave_confirm": "Install in progress; leaving cancels it. Continue?"
   },
   "agents": {
     "sidebar": {

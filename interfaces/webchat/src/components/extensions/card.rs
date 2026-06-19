@@ -52,11 +52,12 @@ pub fn ExtensionCard(entry: ExtensionEntry) -> impl IntoView {
                 <span class="text-xs text-text-tertiary">{trust_text}</span>
                 <span class="flex-1"></span>
                 {{
-                    let install_select = select.clone();
+                    let install_entry = entry.clone();
                     move || if installed {
                         view! { <span class="px-3 py-1 rounded-lg text-xs bg-success-subtle text-success">{t!(i18n, extensions.installed)}</span> }.into_any()
                     } else {
-                        view! { <button class="px-3 py-1 rounded-lg text-xs bg-primary text-white hover:bg-primary-hover" on:click=install_select.clone()>{t!(i18n, extensions.install)}</button> }.into_any()
+                        let install_entry = install_entry.clone();
+                        view! { <button class="px-3 py-1 rounded-lg text-xs bg-primary text-white hover:bg-primary-hover" on:click=move |ev| { ev.stop_propagation(); store.start_install(install_entry.clone()); }>{t!(i18n, extensions.install)}</button> }.into_any()
                     }
                 }}
             </div>

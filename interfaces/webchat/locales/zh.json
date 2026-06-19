@@ -1332,7 +1332,17 @@
     "what_it_reaches": "可访问的资源",
     "loading_perms": "正在检查权限…",
     "no_perms": "无特殊权限",
-    "docs": "文档 ↗"
+    "docs": "文档 ↗",
+    "command_label": "将要运行的命令",
+    "ack": "我了解这将在我的电脑上运行第三方代码。",
+    "continue_install": "继续",
+    "cancel": "取消",
+    "configure_title": "配置",
+    "install_and_verify": "安装并验证",
+    "installing": "正在安装…",
+    "install_done": "已安装 ✓",
+    "install_failed": "安装失败",
+    "leave_confirm": "安装正在进行中；离开将取消安装。是否继续？"
   },
   "agents": {
     "sidebar": {
