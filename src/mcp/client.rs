@@ -8,8 +8,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use futures::future::join_all;
-
 use crate::error::{AlephError, Result};
 use crate::mcp::external::{check_runtime, McpServerConnection, RuntimeKind};
 use crate::mcp::sampling::SamplingHandler;
@@ -120,83 +118,42 @@ impl McpClient {
         self.sampling_handler.set_callback(callback).await;
     }
 
-    /// Start external MCP servers concurrently
-    ///
-    /// Checks runtime availability before starting each server.
-    /// Servers with missing runtimes are skipped with a warning.
-    ///
-    /// Returns a startup report with success/failure information for each server.
-    /// This allows callers to handle partial failures appropriately.
-    pub async fn start_external_servers(
-        &self,
-        configs: Vec<ExternalServerConfig>,
-    ) -> McpStartupReport {
-        // Pre-filter configs based on runtime availability (sync operation)
-        let valid_configs: Vec<_> = configs
-            .into_iter()
-            .filter(|config| {
-                if let Some(ref runtime_str) = config.requires_runtime {
-                    let runtime = RuntimeKind::from_str_or_default(runtime_str);
-                    if runtime != RuntimeKind::None {
-                        let check = check_runtime(runtime);
-                        if !check.available {
-                            tracing::warn!(
-                                server = %config.name,
-                                runtime = %runtime,
-                                "Skipping MCP server: {} not found",
-                                runtime.display_name()
-                            );
-                            return false;
-                        }
-                        tracing::debug!(
-                            server = %config.name,
-                            runtime = %runtime,
-                            version = ?check.version,
-                            "Runtime check passed"
-                        );
-                    }
-                }
-                true
-            })
-            .collect();
-
-        // Start all servers concurrently
-        let futures: Vec<_> = valid_configs
-            .into_iter()
-            .map(|config| {
-                let name = config.name.clone();
-                async move {
-                    let result = self.start_external_server(config).await;
-                    (name, result)
-                }
-            })
-            .collect();
-
-        let results = join_all(futures).await;
-
-        // Collect results into report
-        let mut report = McpStartupReport::default();
-        for (name, result) in results {
-            match result {
-                Ok(()) => {
-                    tracing::info!(server = %name, "External MCP server started");
-                    report.succeeded.push(name);
-                }
-                Err(e) => {
-                    tracing::error!(server = %name, error = %e, "Failed to start external MCP server");
-                    report.failed.push((name, e.to_string()));
-                }
-            }
-        }
-
-        report
-    }
-
     /// Start a single external server
     ///
     /// This method is public to support incremental refresh (scoped refresh)
     /// where only a single MCP server needs to be restarted.
+    ///
+    /// If the config declares a required runtime (e.g. "node" for npx-based
+    /// servers), the runtime is verified before spawning. A missing runtime
+    /// fails fast with an actionable error instead of an opaque OS spawn
+    /// failure.
     pub async fn start_external_server(&self, config: ExternalServerConfig) -> Result<()> {
+        if let Some(ref runtime_str) = config.requires_runtime {
+            let runtime = RuntimeKind::from_str_or_default(runtime_str);
+            if runtime != RuntimeKind::None {
+                let check = check_runtime(runtime);
+                if !check.available {
+                    tracing::warn!(
+                        server = %config.name,
+                        runtime = %runtime,
+                        "Cannot start MCP server: {} not found",
+                        runtime.display_name()
+                    );
+                    return Err(AlephError::NotFound(format!(
+                        "MCP server '{}' requires the {} runtime, but it was not found on PATH",
+                        config.name,
+                        runtime.display_name()
+                    )));
+                }
+                tracing::debug!(
+                    server = %config.name,
+                    runtime = %runtime,
+                    version = ?check.version,
+                    "Runtime check passed"
+                );
+            }
+        }
+
         let timeout = config.timeout_seconds.map(Duration::from_secs);
 
         let connection = McpServerConnection::connect(
@@ -789,7 +746,6 @@ impl Default for McpClient {
 /// Builder for creating `McpClient` with configuration
 pub struct McpClientBuilder {
     client: McpClient,
-    external_configs: Vec<ExternalServerConfig>,
 }
 
 impl McpClientBuilder {
@@ -798,28 +754,12 @@ impl McpClientBuilder {
     pub fn new() -> Self {
         Self {
             client: McpClient::new(),
-            external_configs: Vec::new(),
         }
-    }
-
-    /// Add an external server configuration
-    pub fn with_external(mut self, config: ExternalServerConfig) -> Self {
-        self.external_configs.push(config);
-        self
     }
 
     /// Build the client (without starting external servers)
     pub fn build(self) -> McpClient {
         self.client
-    }
-
-    /// Build the client and start external servers
-    ///
-    /// Returns the client and startup report (which contains success/failure info)
-    pub async fn build_and_start(self) -> (McpClient, McpStartupReport) {
-        let client = self.client;
-        let report = client.start_external_servers(self.external_configs).await;
-        (client, report)
     }
 }
 
@@ -881,33 +821,6 @@ mod tests {
         let client = McpClient::new();
         let health = client.check_server_health().await;
         assert!(health.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_startup_with_failing_server() {
-        // Create a config with a non-existent command to simulate failure
-        let failing_config = ExternalServerConfig {
-            name: "failing-server".to_string(),
-            command: "/nonexistent/command/that/does/not/exist".to_string(),
-            args: vec![],
-            env: std::collections::HashMap::new(),
-            requires_runtime: None,
-            cwd: None,
-            timeout_seconds: Some(5),
-        };
-
-        let client = McpClient::new();
-        let report = client.start_external_servers(vec![failing_config]).await;
-
-        // Should have 0 succeeded and 1 failed
-        assert_eq!(report.succeeded.len(), 0);
-        assert_eq!(report.failed.len(), 1);
-
-        // Check failure details
-        let (server_name, error_message) = &report.failed[0];
-        assert_eq!(server_name, "failing-server");
-        assert!(!error_message.is_empty());
-        tracing::info!("Expected failure: {} - {}", server_name, error_message);
     }
 
     #[tokio::test]
