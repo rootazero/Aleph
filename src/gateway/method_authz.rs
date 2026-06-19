@@ -61,6 +61,7 @@ mod tests {
             "skill_manage",
             "agent_create",
             "agent_delete",
+            "agent_switch",
             "channel_pairing",
             "clawhub",
         ] {
