@@ -560,7 +560,9 @@ fn linux_window_list() -> Result<Vec<WindowInfo>> {
 
 #[cfg(target_os = "linux")]
 fn linux_focus_window(window_id: u64) -> Result<()> {
-    let id_hex = format!("0x{:08x}", window_id);
+    // Variable-width hex: a fixed 8-digit width would silently truncate a 64-bit
+    // XID parsed by `window_list` (u64::from_str_radix), focusing the wrong window.
+    let id_hex = format!("0x{window_id:x}");
     let output = std::process::Command::new("wmctrl")
         .args(["-i", "-a", &id_hex])
         .output()
@@ -598,7 +600,8 @@ fn linux_resize_window(window_id: u64, width: u32, height: u32) -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn linux_wmctrl_geometry(window_id: u64, geometry: &str) -> Result<()> {
-    let id_hex = format!("0x{window_id:08x}");
+    // Variable-width hex so a 64-bit XID is not truncated (see linux_focus_window).
+    let id_hex = format!("0x{window_id:x}");
     let output = std::process::Command::new("wmctrl")
         .args(["-i", "-r", &id_hex, "-e", geometry])
         .output()

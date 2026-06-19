@@ -302,6 +302,18 @@ impl DesktopTool {
     }
 }
 
+/// Actions that must hold the cross-session desktop lock + escape pre-flight,
+/// even when they are approval-exempt.
+///
+/// `focus_window` mutates global window focus / Z-order and `screen_record`
+/// holds the capture device for seconds, so a second session must not run them
+/// while another holds the exclusive computer-use lock. Locking is deliberately
+/// decoupled from approval ([`classify_approval`]) so these stay prompt-free.
+fn requires_lock(args: &DesktopArgs) -> bool {
+    classify_approval(args).is_some()
+        || matches!(args.action.as_str(), "focus_window" | "screen_record")
+}
+
 /// Classify a desktop action for approval gating.
 ///
 /// Returns `None` for read-only actions that skip approval,
@@ -604,7 +616,10 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
             }
         }
 
-        let is_mutating = classify_approval(&args).is_some();
+        // Approval gating is for mutating actions; locking/escape covers a
+        // slightly wider set (focus_window/screen_record mutate shared desktop
+        // state but stay approval-exempt) — see `requires_lock`.
+        let needs_lock = requires_lock(&args);
 
         // 3. Approval check
         if let Some((action_type, target)) = classify_approval(&args) {
@@ -616,11 +631,11 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
             }
         }
 
-        // 4. Session lock (mutating actions only). The guard is held for the
+        // 4. Session lock (lock-requiring actions only). The guard is held for the
         //    rest of this call (and, for a batch, across all its sub-actions
         //    via re-entrant acquisition) and released on drop, so the desktop
         //    is freed for other sessions once the call returns.
-        let _session_guard = if is_mutating {
+        let _session_guard = if needs_lock {
             match self.acquire_lock() {
                 Ok(guard) => guard,
                 Err(out) => return Ok(out),
@@ -629,8 +644,8 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
             None
         };
 
-        // 5. Escape abort check (mutating actions only)
-        if is_mutating {
+        // 5. Escape abort check (lock-requiring actions only)
+        if needs_lock {
             if let Err(out) = self.check_escape() {
                 return Ok(out);
             }

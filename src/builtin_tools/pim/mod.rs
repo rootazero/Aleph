@@ -253,7 +253,9 @@ impl PimTool {
                 // ── Mail ────────────────────────────────────────
                 "mail_search" => {
                     let query = args.query.as_deref()?;
-                    let limit = args.limit.unwrap_or(20);
+                    // Clamp at the I/O boundary (P7): an unbounded limit could
+                    // force the native bridge to enumerate a huge result set.
+                    let limit = args.limit.unwrap_or(20).clamp(1, 200);
                     pim.mail_search(query, args.folder.as_deref(), limit)
                         .await
                         .map(|v| serde_json::to_value(v).unwrap_or_default())
@@ -391,7 +393,7 @@ Reminders:
 - reminders_list: List reminders. Optional: list_id, include_completed
 - reminders_get: Get reminder details. Required: id
 - reminders_create: Create reminder. Required: title. Optional: list_id, due_date, priority, notes
-- reminders_complete: Mark reminder done/undone. Required: id, completed
+- reminders_complete: Mark a reminder as completed. Required: id
 - reminders_delete: Delete reminder. Required: id
 - reminders_lists: List available reminder lists
 
@@ -468,17 +470,11 @@ mod tests {
             list_id: None,
             due_date: None,
             priority: None,
-            completed: None,
             include_completed: None,
             body: None,
             folder: None,
             query: None,
             limit: None,
-            given_name: None,
-            family_name: None,
-            organization: None,
-            phone_numbers: None,
-            emails: None,
         }
     }
 

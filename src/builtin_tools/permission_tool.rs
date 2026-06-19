@@ -30,9 +30,15 @@ impl PermissionTool {
 pub struct PermissionArgs {
     /// Action to perform: "check", "`check_all`", "request", "guide", "`open_settings`"
     pub action: String,
-    /// Permission to check or request (required for check, request).
-    /// Values: "`screen_recording`", "camera", "microphone", "`speech_recognition`",
-    /// "accessibility", "notifications"
+    /// Permission to check, request, guide, or open settings for.
+    ///
+    /// TCC-managed (support check / request / guide / `open_settings`):
+    /// "`screen_recording`", "camera", "microphone", "`speech_recognition`",
+    /// "accessibility", "notifications".
+    ///
+    /// Manual-grant kinds (support guide / `open_settings`; check reports
+    /// `Unknown`): "`input_monitoring`", "`full_disk`", "automation", "contacts",
+    /// "calendars", "reminders", "photos", "location".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission: Option<String>,
 }
@@ -65,7 +71,9 @@ Actions:
 - guide: Get a step-by-step guide (deep link + steps + rationale) for granting a permission the user must enable manually. Required: permission
 - open_settings: Open System Settings to the pane for a permission. Required: permission
 
-Permission values: screen_recording, camera, microphone, speech_recognition, accessibility, notifications
+Permission values:
+- check / request capable (TCC-managed): screen_recording, camera, microphone, speech_recognition, accessibility, notifications
+- guide / open_settings only (manually granted in System Settings): input_monitoring, full_disk, automation, contacts, calendars, reminders, photos, location
 
 Examples:
 {"action":"check","permission":"screen_recording"}
@@ -177,7 +185,9 @@ Examples:
                             message: Some(
                                 "guide requires a valid 'permission' parameter. \
                                  Values: screen_recording, camera, microphone, \
-                                 speech_recognition, accessibility, notifications"
+                                 speech_recognition, accessibility, notifications, \
+                                 input_monitoring, full_disk, automation, contacts, \
+                                 calendars, reminders, photos, location"
                                     .to_string(),
                             ),
                         });
@@ -207,7 +217,9 @@ Examples:
                             message: Some(
                                 "open_settings requires a valid 'permission' parameter. \
                                  Values: screen_recording, camera, microphone, \
-                                 speech_recognition, accessibility, notifications"
+                                 speech_recognition, accessibility, notifications, \
+                                 input_monitoring, full_disk, automation, contacts, \
+                                 calendars, reminders, photos, location"
                                     .to_string(),
                             ),
                         });

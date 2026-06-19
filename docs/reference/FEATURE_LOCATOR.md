@@ -413,6 +413,8 @@
 ## 7. Desktop（桌面端）
 
 > 桌面端是 **R1「大脑-四肢绝对分离」** 的物理落地：`src` 内只持有**能力契约 (Trait)**，真实平台 API（AppKit / Vision / windows-rs …）全在 `desktop/*` 原生 Bridge 子 crate，二者经 **JSON-RPC IPC** 跨界。本章按"契约 → 四肢 → 工具 → 壳 → 连线"组织。改桌面功能前先认清：**`src` 严禁直接调平台 API**（违 R1 不得合入）。
+>
+> **审计硬化（2026-06-19，§7.1-7.6 深度审计，28 子代理对抗验证）**：bridge stdin 写失败只 `fail(id)` 单请求、不再 `fail_all` 误伤共享 inflight 全表（7.1-a）；Wayland `delete` 修为 KEY_DELETE(111)、Linux 窗口 id 改变宽 hex 防 64 位 XID 截断（7.1-c/h）；`restart_app` 复用 `SystemCapability::restart_app` 去重 500ms 魔数（7.1-f）；set_of_marks 在 `scale_factor=None` 时回退 `display_list` 主屏 DPR，修 macOS Retina 标记错位 + 输出虚假 scale（7.3-a）；`focus_window`/`screen_record` 经新增 `requires_lock` 谓词取会话锁（与审批解耦、免提示，7.3-b）；scroll 小数 delta `round` + 零值守卫，杜绝静默 no-op 报成功（7.3-c）；`system` 工具补审批闸（launch/quit/restart→DesktopLaunchApp、clipboard_write→DesktopType），杜绝绕过 `desktop` 工具的闸（7.4-a）；permission 工具补全 14 种 PermissionKind（TCC 6 + 手动授权 8）文档（7.4-b）；删 PimArgs 6 个零消费字段（completed + 5 contacts 写字段）、`reminders_complete` 描述去伪、`mail_search` limit `clamp(1,200)`（7.4-c/d/f）；Gateway token 文件 cfg(unix) `0600`（7.5-a）；perm_monitor 改用 `menu::reload_panel` 硬 reload（7.5-c）；deeplink 改 `serde_json::to_string` 转义防换行破字面量（7.5-i）；macOS `screenshot{describe}` OCR 文本层经注入平台 `screen()`（bridge-backed）修复（此前用裸 NativeScreen，macOS OCR NotImplemented→静默丢失，7.6-a）；删 registry 死字段 `desktop_platform`（7.6-d）。**建议未做**：bridge 协议版本握手生产连线（7.1-b）——需注入最关键的 helper 自动 spawn 路径、与 `DEFAULT_RPC_TIMEOUT` 交互复杂、无法编译验证，且 core/helper 同包发版使实际偏移仅在异常手动换 helper 时发生，收益比低故推迟。
 
 ### 7.1 桌面能力契约与 Bridge IPC (Desktop Capability Contracts & Bridge IPC)
 - **口语关键词**：大脑四肢分离、能力 trait、DesktopPlatform、Swift helper、JSON-RPC 桥、IPC、supervisor、能力契约

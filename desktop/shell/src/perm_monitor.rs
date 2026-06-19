@@ -25,7 +25,7 @@ pub use macos::start_monitor;
 mod macos {
     use std::time::Duration;
 
-    use tauri::{AppHandle, Manager};
+    use tauri::AppHandle;
 
     use crate::daemon;
 
@@ -166,10 +166,11 @@ mod macos {
         match daemon::ensure_ready().await {
             Ok(()) => {
                 tracing::info!("daemon restarted successfully after permission grant");
-                // Reload the Panel so it picks up the new capability.
-                if let Some(window) = handle.get_webview_window("main") {
-                    let _ = window.eval("window.location.reload()");
-                }
+                // Hard-reload the Panel so it picks up the restarted daemon's new
+                // capabilities. A plain location.reload() is a *soft* reload that
+                // reuses in-session css/js/wasm (menu::reload_panel documents why);
+                // reuse that shared hard-reload path instead of the soft reload.
+                crate::menu::reload_panel(handle);
             }
             Err(e) => {
                 tracing::error!("daemon failed to restart after permission grant: {e}");

@@ -369,7 +369,29 @@ impl AlephTool for DesktopSom {
                 });
             }
         };
-        let scale = shot.scale_factor.unwrap_or(1.0);
+        // Resolve the device pixel ratio. The macOS bridge screenshot path
+        // hard-codes scale_factor=None (DPR is not surfaced over the wire), so on
+        // a Retina display the capture is in physical pixels while AX bounds are
+        // in points — defaulting to 1.0 would paint every numbered mark at
+        // half-position, defeating the Set-of-Marks grounding. Fall back to the
+        // primary display's scale_factor from display_list() so marks land on
+        // their elements and the reported `scale_factor` is truthful.
+        let scale = match shot.scale_factor {
+            Some(s) => s,
+            None => screen
+                .display_list()
+                .await
+                .ok()
+                .and_then(|displays| {
+                    displays
+                        .iter()
+                        .find(|d| d.is_primary)
+                        .or_else(|| displays.first())
+                        .map(|d| d.scale_factor)
+                })
+                .unwrap_or(1.0),
+        };
+        let scale = scale.max(1.0);
 
         // 3. Annotate off the async runtime (CPU-bound decode/draw/encode).
         use base64::Engine;

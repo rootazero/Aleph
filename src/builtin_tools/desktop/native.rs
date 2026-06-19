@@ -507,17 +507,30 @@ impl super::DesktopTool {
                         message: Some("scroll requires non-zero delta_x or delta_y".to_string()),
                     }));
                 }
+                // Round (not truncate): a non-zero sub-unit delta in (-1, 1) must
+                // not silently become a no-op scroll reported as success.
                 let (direction, amount) = if delta_y.abs() >= delta_x.abs() {
                     if delta_y < 0.0 {
-                        ("up", delta_y.abs() as i32)
+                        ("up", delta_y.abs().round() as i32)
                     } else {
-                        ("down", delta_y as i32)
+                        ("down", delta_y.round() as i32)
                     }
                 } else if delta_x < 0.0 {
-                    ("left", delta_x.abs() as i32)
+                    ("left", delta_x.abs().round() as i32)
                 } else {
-                    ("right", delta_x as i32)
+                    ("right", delta_x.round() as i32)
                 };
+                if amount == 0 {
+                    return Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(
+                            "scroll delta too small to move (rounded to 0); use a larger \
+                             delta_x/delta_y (e.g. >= 1)"
+                                .to_string(),
+                        ),
+                    }));
+                }
                 match screen.scroll(direction, amount).await {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
@@ -840,6 +853,28 @@ impl super::DesktopTool {
                         }))
                     }
                 };
+                // Prefer SystemCapability::restart_app: it encapsulates the
+                // quit -> settle -> launch sequence in one place (and lets a
+                // platform supply its own restart override), avoiding the
+                // duplicated 500ms magic constant. Mirrors the system-preferred
+                // clipboard_read pattern below; fall back to the hand-rolled
+                // screen sequence only when no system capability is wired.
+                if let Some(system) = platform.system() {
+                    return Ok(Some(match system.restart_app(bundle_id).await {
+                        Ok(()) => DesktopOutput {
+                            success: true,
+                            data: Some(
+                                serde_json::json!({"restarted": true, "bundle_id": bundle_id}),
+                            ),
+                            message: None,
+                        },
+                        Err(e) => DesktopOutput {
+                            success: false,
+                            data: None,
+                            message: Some(format!("System capability error: {e}")),
+                        },
+                    }));
+                }
                 match screen.quit_app(bundle_id).await {
                     Ok(()) => {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;

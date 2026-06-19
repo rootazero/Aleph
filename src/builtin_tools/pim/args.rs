@@ -75,10 +75,6 @@ pub struct PimArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<i32>,
 
-    /// Whether a reminder is completed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub completed: Option<bool>,
-
     /// Whether to include completed reminders in list.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_completed: Option<bool>,
@@ -98,26 +94,6 @@ pub struct PimArgs {
     /// Maximum number of results to return (used by `mail_search`; default 20).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
-
-    /// Contact given (first) name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub given_name: Option<String>,
-
-    /// Contact family (last) name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub family_name: Option<String>,
-
-    /// Contact organization.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub organization: Option<String>,
-
-    /// Contact phone numbers.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub phone_numbers: Option<Vec<String>>,
-
-    /// Contact email addresses.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub emails: Option<Vec<String>>,
 }
 
 /// Output from PIM operations.

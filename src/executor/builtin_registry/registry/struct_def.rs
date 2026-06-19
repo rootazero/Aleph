@@ -100,9 +100,6 @@ pub struct BuiltinToolRegistry {
     pub(crate) permission_tool: crate::builtin_tools::PermissionTool,
     /// Media tool instance (camera capture, audio device management)
     pub(crate) media_tool: crate::builtin_tools::MediaTool,
-    /// Desktop platform reference (shared with new tools; held for future use)
-    #[allow(dead_code)]
-    pub(crate) desktop_platform: crate::sync_primitives::Arc<dyn aleph_desktop::DesktopPlatform>,
     /// Scratchpad tool instance (project working memory)
     pub(crate) scratchpad_tool: crate::builtin_tools::ScratchpadTool,
     /// Standing-goal tool instance (persistent objective, R8).

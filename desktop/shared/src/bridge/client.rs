@@ -385,12 +385,18 @@ impl SwiftBridge {
         };
 
         if let Err(_write_err) = write_result {
-            // stdin write failed — the process is dead. Reset state and drain inflight.
+            // stdin write failed — this helper is likely dead. Reset state so the
+            // retry below respawns.
             {
                 let mut guard = self.state.lock().await;
                 *guard = None;
             }
-            self.inflight.fail_all("write stdin failed").await;
+            // Fail ONLY this caller's request, not every concurrent in-flight one.
+            // The bridge (and its InflightTable) is shared process-wide (macOS
+            // SHARED_BRIDGE), so a single write failure must not collaterally abort
+            // sibling RPCs. If the helper is genuinely dead its stdout also closes
+            // and the reader loop's EOF path (`fail_all`) drains the rest.
+            self.inflight.fail(id, "write stdin failed").await;
 
             // One retry: re-ensure the helper and send again.
             self.ensure_running().await?;

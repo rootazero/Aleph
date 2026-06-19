@@ -44,8 +44,13 @@ fn handle_url(app: &AppHandle, url: &str) {
 /// Build the JS that dispatches the deep link into the Panel document, with
 /// the URL escaped for a single-quoted string literal.
 fn deep_link_script(url: &str) -> String {
-    let safe = url.replace('\\', "\\\\").replace('\'', "\\'");
-    format!("window.dispatchEvent(new CustomEvent('aleph:deep-link',{{detail:'{safe}'}}))")
+    // serde_json emits a fully-escaped, JS-safe double-quoted string literal —
+    // it covers backslashes, quotes AND control chars (newline/CR) that the old
+    // hand-rolled replace() missed, so a crafted `aleph://` payload cannot break
+    // out of the literal. `to_string` on a &str is infallible; fall back to an
+    // empty literal defensively.
+    let safe = serde_json::to_string(url).unwrap_or_else(|_| "\"\"".to_string());
+    format!("window.dispatchEvent(new CustomEvent('aleph:deep-link',{{detail:{safe}}}))")
 }
 
 #[cfg(test)]
@@ -55,7 +60,17 @@ mod tests {
     #[test]
     fn deep_link_script_escapes_quotes_and_backslashes() {
         let js = deep_link_script("aleph://x'y\\z");
-        assert!(js.contains("aleph://x\\'y\\\\z"));
+        // serde_json double-quotes the literal: backslash escaped, single quote
+        // left bare (valid inside a double-quoted JS string).
+        assert!(js.contains(r#""aleph://x'y\\z""#));
         assert!(js.starts_with("window.dispatchEvent"));
+    }
+
+    #[test]
+    fn deep_link_script_escapes_control_chars() {
+        let js = deep_link_script("aleph://x\ny");
+        // A raw newline would terminate a JS string literal; it must be escaped.
+        assert!(!js.contains('\n'));
+        assert!(js.contains("\\n"));
     }
 }

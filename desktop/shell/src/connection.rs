@@ -47,7 +47,17 @@ fn store_gateway_token(token: &str) -> Result<(), String> {
     if let Some(parent) = marker.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create .aleph dir: {e}"))?;
     }
-    std::fs::write(&marker, token).map_err(|e| format!("write gateway token: {e}"))
+    std::fs::write(&marker, token).map_err(|e| format!("write gateway token: {e}"))?;
+    // The shared Gateway token grants full operator authority, so keep it
+    // owner-only. `std::fs::write` would otherwise leave it at the umask default
+    // (typically 0644 — readable by every local user); mirror the repo-wide
+    // 0o600 secret-store convention (vault, mcp auth, cli endpoint, ...).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
 }
 
 /// Drop any persisted Gateway token. Called when switching to a target that
