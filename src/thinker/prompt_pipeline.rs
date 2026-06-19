@@ -5,11 +5,11 @@
 
 use super::layers::{
     AgentCatalogLayer, AgentRoleLayer, ChainContextLayer, CitationStandardsLayer,
-    CuratedMemoryLayer, CustomInstructionsLayer, EnvironmentLayer, ExecutionPlanLayer,
-    ExtraFilesLayer, GenerationModelsLayer, GuidelinesLayer, HeartbeatLayer, HydratedToolsLayer,
-    IdentityFilesLayer, InboundContextLayer, LanguageLayer, McpInstructionsLayer,
-    MemoryAugmentationLayer, MemoryProtocolLayer, OperationalGuidelinesLayer, ProfileLayer,
-    ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
+    CuratedMemoryLayer, CustomInstructionsLayer, DoctorRepairHintLayer, EnvironmentLayer,
+    ExecutionPlanLayer, ExtraFilesLayer, GenerationModelsLayer, GuidelinesLayer, HeartbeatLayer,
+    HydratedToolsLayer, IdentityFilesLayer, InboundContextLayer, LanguageLayer,
+    McpInstructionsLayer, MemoryAugmentationLayer, MemoryProtocolLayer, OperationalGuidelinesLayer,
+    ProfileLayer, ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
     RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
     SessionResumeLayer, SkillInstructionsLayer, SkillModeLayer, SoulLayer, SpecialActionsLayer,
     StandingGoalLayer, StrategyLayer, StrategyPointerLayer, ThinkingGuidanceLayer,
@@ -296,6 +296,7 @@ impl PromptPipeline {
     /// 1000  `GenerationModelsLayer`
     /// 1050  `SkillInstructionsLayer`
     /// 1100  `SpecialActionsLayer`
+    /// 1120  `DoctorRepairHintLayer` (WebRich-only press-f hint)
     /// 1300  `GuidelinesLayer`
     /// 1350  `ThinkingGuidanceLayer`
     /// 1400  `SkillModeLayer`
@@ -348,6 +349,7 @@ impl PromptPipeline {
             Box::new(GenerationModelsLayer),
             Box::new(SkillInstructionsLayer),
             Box::new(SpecialActionsLayer),
+            Box::new(DoctorRepairHintLayer),
             // ResponseFormatLayer was removed (2026-05-10..06-08): it mandated
             // the legacy `{reasoning, action}` JSON envelope, which had no live
             // consumer once the harness moved to native `with_tools(...)`.
@@ -561,7 +563,9 @@ mod tests {
         // → 42 (StrategyLayer @70 Stable + StrategyPointerLayer @1756 Dynamic
         // weld the StraTA plan into the cacheable head + per-turn tail,
         // 2026-06-18). See `default_layers`.
-        assert_eq!(pipeline.layer_count(), 42);
+        // → 43 (DoctorRepairHintLayer @1120 — WebRich-only "/doctor → press f"
+        // hint, 2026-06-19). See `default_layers`.
+        assert_eq!(pipeline.layer_count(), 43);
     }
 
     #[test]

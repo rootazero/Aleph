@@ -61,6 +61,7 @@ mod provider_guidance;
 mod runtime_context;
 mod security;
 mod session_budget;
+mod doctor_repair_hint;
 mod voice_mode;
 
 // --- Identity files layer ---
@@ -126,4 +127,5 @@ pub use security::SecurityLayer;
 pub use session_budget::SessionBudgetLayer;
 pub use session_context_guide::SessionContextGuideLayer;
 pub use session_resume::SessionResumeLayer;
+pub use doctor_repair_hint::DoctorRepairHintLayer;
 pub use voice_mode::VoiceModeLayer;
