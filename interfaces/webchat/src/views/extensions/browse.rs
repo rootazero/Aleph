@@ -10,18 +10,24 @@ use crate::i18n::{t, use_i18n};
 use crate::views::extensions::model::{apply_filters, featured_picks, group_into_shelves, Filters};
 use crate::views::extensions::StoreState;
 
-pub(crate) fn load_catalog(state: DashboardState, store: StoreState) {
-    store.loading.set(true);
+pub(crate) fn load_catalog(state: DashboardState, store: StoreState, quiet: bool) {
+    if !quiet {
+        store.loading.set(true);
+    }
     store.error.set(None);
     spawn_local(async move {
         match ExtensionsApi::catalog(&state, json!({})).await {
             Ok(list) => {
                 store.entries.set(list);
-                store.loading.set(false);
+                if !quiet {
+                    store.loading.set(false);
+                }
             }
             Err(e) => {
                 store.error.set(Some(format!("Failed to load catalog: {e}")));
-                store.loading.set(false);
+                if !quiet {
+                    store.loading.set(false);
+                }
             }
         }
     });
@@ -36,7 +42,7 @@ pub fn BrowsePane() -> impl IntoView {
 
     Effect::new(move || {
         if state.is_connected.get() {
-            load_catalog(state, store);
+            load_catalog(state, store, false);
         } else {
             store.loading.set(false);
         }

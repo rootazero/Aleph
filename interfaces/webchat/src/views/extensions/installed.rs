@@ -86,7 +86,7 @@ pub fn InstalledPanel() -> impl IntoView {
                                 <For
                                     each=move || items.get()
                                     key=|e: &ExtensionEntry| e.id.clone()
-                                    children=move |e| view! { <InstalledRow entry=e items=items error=error /> }
+                                    children=move |e| view! { <InstalledRow entry=e items=items loading=loading error=error /> }
                                 />
                             }.into_any()
                         }}
@@ -101,6 +101,7 @@ pub fn InstalledPanel() -> impl IntoView {
 fn InstalledRow(
     entry: ExtensionEntry,
     items: RwSignal<Vec<ExtensionEntry>>,
+    loading: RwSignal<bool>,
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
@@ -148,8 +149,11 @@ fn InstalledRow(
         let id = id_for_remove.clone();
         spawn_local(async move {
             match ExtensionsApi::uninstall(&state, id).await {
-                Ok(()) => load_installed(state, items, RwSignal::new(false), error),
-                Err(e) => error.set(Some(format!("Remove failed: {e}"))),
+                Ok(()) => load_installed(state, items, loading, error),
+                Err(e) => {
+                    error.set(Some(format!("Remove failed: {e}")));
+                    confirming.set(false);
+                }
             }
         });
     };

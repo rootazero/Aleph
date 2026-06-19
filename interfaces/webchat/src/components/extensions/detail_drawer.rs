@@ -2,7 +2,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::extensions::{DisclosurePayload, ExtensionsApi, SecretDisclosure};
-use crate::components::extensions::labels::{kind_label, trust_label};
+use crate::components::extensions::labels::{category_label, kind_label, trust_label};
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
 use crate::views::extensions::model::{kind_badge_class, risk_banner_class, trust_dot_class};
@@ -42,6 +42,7 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
                 let badge_cls = format!("px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase {}", kind_badge_class(&entry.kind));
                 let kind_text = kind_label(i18n, &entry.kind);
                 let trust_text = trust_label(i18n, &entry.trust_tier);
+                let category_text = category_label(i18n, &entry.category);
                 view! {
                     <div class="fixed inset-0 z-40 flex justify-end">
                         <div class="aleph-scrim absolute inset-0 bg-black/30" on:click=close></div>
@@ -65,7 +66,7 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
                                 // stat row
                                 <div class="grid grid-cols-3 gap-2 py-2 border-y border-border-subtle text-center">
                                     <div><p class="text-xs text-text-tertiary uppercase tracking-wider">{t!(i18n, extensions.version)}</p><p class="font-mono">{entry.version.clone().unwrap_or_else(|| "—".into())}</p></div>
-                                    <div><p class="text-xs text-text-tertiary uppercase tracking-wider">{t!(i18n, extensions.category_label)}</p><p>{entry.category.clone()}</p></div>
+                                    <div><p class="text-xs text-text-tertiary uppercase tracking-wider">{t!(i18n, extensions.category_label)}</p><p>{category_text}</p></div>
                                     <div><p class="text-xs text-text-tertiary uppercase tracking-wider">{t!(i18n, extensions.trust_label)}</p><p class="flex items-center justify-center gap-1"><span class=format!("inline-block w-2 h-2 rounded-full {}", trust_dot_class(&entry.trust_tier))></span>{trust_text}</p></div>
                                 </div>
                                 // what it does — full untruncated description (spec §11 injection-hardening: no clamp here)
