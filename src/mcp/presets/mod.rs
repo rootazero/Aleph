@@ -226,7 +226,7 @@ impl McpPreset {
             .transports
             .iter()
             .filter_map(|t| t.requires_runtime.clone())
-            .last()
+            .next()
             .unwrap_or_default();
         InstallPlan::NoRuntime(runtime)
     }
