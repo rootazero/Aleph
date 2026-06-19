@@ -1,0 +1,70 @@
+[
+  {
+    "id": "context7",
+    "name": "Context7",
+    "category": "developer",
+    "description": "把版本精确的最新库文档注入上下文，少幻觉。",
+    "vendor": "Upstash",
+    "official": true,
+    "reachability": "cn-unreliable",
+    "transports": [
+      { "kind": "http", "url": "https://mcp.context7.com/mcp" },
+      { "kind": "stdio", "command": "npx", "args": ["-y", "@upstash/context7-mcp"], "requires_runtime": "node" }
+    ],
+    "required_env": [],
+    "tags": ["docs", "developer"]
+  },
+  {
+    "id": "amap",
+    "name": "高德地图",
+    "category": "daily",
+    "description": "地理编码、POI 搜索、路线规划、天气（大陆原生）。",
+    "vendor": "高德 AutoNavi",
+    "official": true,
+    "reachability": "cn-native",
+    "transports": [
+      { "kind": "http", "url": "https://mcp.amap.com/mcp?key=<AMAP_MAPS_API_KEY>" },
+      { "kind": "stdio", "command": "npx", "args": ["-y", "@amap/amap-maps-mcp-server"], "requires_runtime": "node" }
+    ],
+    "required_env": [
+      { "key": "AMAP_MAPS_API_KEY", "label": "高德 API Key", "description": "Web 服务 API Key", "secret": true, "required": true, "how_to_get_url": "https://console.amap.com/dev/key/app" }
+    ],
+    "tags": ["maps", "navigation", "daily"]
+  },
+  {
+    "id": "minimax",
+    "name": "MiniMax",
+    "category": "model-provider",
+    "description": "图像 / 视频 / 语音合成（MiniMax 官方）。",
+    "vendor": "MiniMax",
+    "official": true,
+    "reachability": "cn-native",
+    "transports": [
+      { "kind": "stdio", "command": "uvx", "args": ["minimax-mcp", "-y"], "requires_runtime": "python" }
+    ],
+    "required_env": [
+      { "key": "MINIMAX_API_KEY", "label": "MiniMax API Key", "description": "平台 API Key", "secret": true, "required": true, "how_to_get_url": "https://platform.minimaxi.com" },
+      { "key": "MINIMAX_API_HOST", "label": "API Host", "description": "区域接入点", "secret": false, "required": true, "default": "https://api.minimaxi.com", "how_to_get_url": null }
+    ],
+    "tags": ["image", "video", "tts", "model-provider"]
+  },
+  {
+    "id": "volcengine-veimagex",
+    "name": "火山引擎 veImageX",
+    "category": "model-provider",
+    "description": "文生图 / 超分 / 外扩 / OCR 等图像能力（火山官方）。",
+    "vendor": "火山引擎 ByteDance",
+    "official": true,
+    "reachability": "cn-native",
+    "transports": [
+      { "kind": "stdio", "command": "uvx", "args": ["--from", "git+https://github.com/volcengine/mcp-server#subdirectory=server/mcp_server_veimagex", "mcp-server-veimagex"], "requires_runtime": "python" }
+    ],
+    "required_env": [
+      { "key": "VOLCENGINE_ACCESS_KEY", "label": "Access Key (AK)", "description": "火山访问密钥", "secret": true, "required": true, "how_to_get_url": "https://console.volcengine.com/iam/keymanage/" },
+      { "key": "VOLCENGINE_SECRET_KEY", "label": "Secret Key (SK)", "description": "火山私有密钥", "secret": true, "required": true, "how_to_get_url": "https://console.volcengine.com/iam/keymanage/" },
+      { "key": "SERVICE_ID", "label": "Service ID", "description": "veImageX 服务 ID", "secret": false, "required": true, "how_to_get_url": null },
+      { "key": "DOMAIN_NAME", "label": "Domain", "description": "veImageX 加速域名", "secret": false, "required": true, "how_to_get_url": null }
+    ],
+    "tags": ["image", "model-provider"]
+  }
+]

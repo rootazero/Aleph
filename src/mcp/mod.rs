@@ -50,6 +50,7 @@ pub mod external;
 pub mod jsonrpc;
 pub mod manager;
 mod preflight;
+pub mod presets;
 mod prompts;
 pub mod protocol;
 mod redact;
@@ -102,3 +103,4 @@ pub use manager::{
     McpManagerEvent, McpManagerHandle, McpPersistentConfig, McpServerInfo, McpServerStatusDetail,
     McpTransportType, ServerHealth,
 };
+pub use presets::{McpPreset, PresetCategory, PresetEnvVar, PresetTransport, Reachability};
