@@ -17,14 +17,16 @@ use crate::store::types::{ExtensionEntry, InstallSpec};
 /// Build an `McpManagerConfig` from an install spec.
 ///
 /// `secret_refs` maps an env var name to its stored vault secret name (from
-/// `crate::store::secrets::field_key`). A field present in `secret_refs` is
-/// written as a `{{secret:NAME}}` reference; otherwise its declared `default`
-/// (if any) is used. Plaintext secrets never enter the config.
+/// `crate::store::secrets::field_key`); `plain_values` maps a non-secret env var
+/// name to the user-submitted value. Per field, precedence is: secret reference
+/// (`{{secret:NAME}}`) → submitted plain value → declared `default`. Plaintext
+/// secrets never enter the config.
 pub fn mcp_config_from_spec(
     id: &str,
     name: &str,
     spec: &InstallSpec,
     secret_refs: &HashMap<String, String>,
+    plain_values: &HashMap<String, String>,
 ) -> Result<McpManagerConfig, String> {
     match spec {
         InstallSpec::McpStdio { command, args, env } => {
@@ -32,6 +34,8 @@ pub fn mcp_config_from_spec(
             for e in env {
                 if let Some(secret_name) = secret_refs.get(&e.name) {
                     env_map.insert(e.name.clone(), secret_ref(secret_name));
+                } else if let Some(v) = plain_values.get(&e.name) {
+                    env_map.insert(e.name.clone(), v.clone());
                 } else if let Some(def) = &e.default {
                     env_map.insert(e.name.clone(), def.clone());
                 }
@@ -67,6 +71,8 @@ pub struct InstallContext<'a> {
     pub marketplace: Option<&'a MarketplaceManager>,
     /// env/header field name -> stored vault secret name.
     pub secret_refs: HashMap<String, String>,
+    /// non-secret env field name -> user-submitted plain value.
+    pub plain_values: HashMap<String, String>,
 }
 
 /// Deterministic MCP server id derived from the store entry id.
@@ -83,7 +89,13 @@ pub async fn run_install(
         InstallSpec::McpStdio { .. } | InstallSpec::McpRemote { .. } => {
             let mcp = ctx.mcp.ok_or("MCP manager unavailable")?;
             let id = mcp_server_id(&ctx.entry.id);
-            let cfg = mcp_config_from_spec(&id, &ctx.entry.name, spec, &ctx.secret_refs)?;
+            let cfg = mcp_config_from_spec(
+                &id,
+                &ctx.entry.name,
+                spec,
+                &ctx.secret_refs,
+                &ctx.plain_values,
+            )?;
             mcp.add_server(cfg).await.map_err(|e| e.to_string())?;
             Ok(InstallOutcome::Mcp { id })
         }
@@ -130,11 +142,20 @@ mod tests {
                     default: Some("us".into()),
                     ..Default::default()
                 },
+                // required, non-secret, NO default — must take the submitted value
+                EnvDecl {
+                    name: "ACCOUNT".into(),
+                    required: true,
+                    secret: false,
+                    ..Default::default()
+                },
             ],
         };
         let mut refs = HashMap::new();
         refs.insert("TOKEN".to_string(), "ext.mcp.x.TOKEN".to_string());
-        let cfg = mcp_config_from_spec("x", "Y", &spec, &refs).unwrap();
+        let mut plain = HashMap::new();
+        plain.insert("ACCOUNT".to_string(), "acct-123".to_string());
+        let cfg = mcp_config_from_spec("x", "Y", &spec, &refs, &plain).unwrap();
         assert_eq!(cfg.command.as_deref(), Some("npx"));
         assert_eq!(cfg.args, vec!["-y".to_string(), "@x/y".to_string()]);
         assert_eq!(
@@ -143,6 +164,8 @@ mod tests {
         );
         // non-secret field falls back to its declared default
         assert_eq!(cfg.env.get("REGION").map(String::as_str), Some("us"));
+        // required non-secret field with no default takes the submitted value
+        assert_eq!(cfg.env.get("ACCOUNT").map(String::as_str), Some("acct-123"));
         assert!(cfg.auto_start);
     }
 
@@ -151,7 +174,9 @@ mod tests {
         let spec = InstallSpec::OciImage {
             image: "mcp/y@sha256:abc".into(),
         };
-        let err = mcp_config_from_spec("x", "Y", &spec, &Default::default()).unwrap_err();
+        let err =
+            mcp_config_from_spec("x", "Y", &spec, &Default::default(), &Default::default())
+                .unwrap_err();
         assert!(err.contains("not installable"));
     }
 }

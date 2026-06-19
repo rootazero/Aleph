@@ -240,7 +240,7 @@ pub async fn handle_install(
         return JsonRpcResponse::success(req.id, json!({ "ok": false, "missing": missing }));
     }
     // (5) store secret fields in the vault; map field name -> vault secret name.
-    let (secret_fields, _plain) = split_fields(&spec, &p.values);
+    let (secret_fields, plain_fields) = split_fields(&spec, &p.values);
     let mut secret_refs: HashMap<String, String> = HashMap::new();
     for (name, val) in &secret_fields {
         let key = field_key(entry.kind, &entry.id, name);
@@ -253,12 +253,14 @@ pub async fn handle_install(
         }
         secret_refs.insert(name.clone(), key);
     }
+    let plain_values: HashMap<String, String> = plain_fields.into_iter().collect();
     // (6) route the install.
     let ctx = InstallContext {
         entry: &entry,
         mcp: mcp.as_ref(),
         marketplace: Some(marketplace.as_ref()),
         secret_refs,
+        plain_values,
     };
     let outcome = match run_install(&spec, &ctx).await {
         Ok(o) => o,
