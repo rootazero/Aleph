@@ -3,4 +3,7 @@
 //! docs/superpowers/specs/2026-06-19-unified-extensions-store-design.md
 pub mod types;
 
-pub use types::{ExtensionCategory, ExtensionKind, McpTransport, TrustTier};
+pub use types::{
+    EnvDecl, ExtensionCategory, ExtensionEntry, ExtensionKind, HeaderDecl, InstallSpec,
+    McpTransport, TrustTier,
+};
