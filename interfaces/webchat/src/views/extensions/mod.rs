@@ -1,5 +1,6 @@
 //! Top-level Extensions store mode (full-screen takeover, grouped with Teams).
 pub mod browse;
+pub mod installed;
 pub mod model;
 
 use leptos::prelude::*;
@@ -114,10 +115,16 @@ pub fn ExtensionsView() -> impl IntoView {
                 >
                     {t!(i18n, extensions.back_to_chat)}
                 </button>
-                <div>
+                <div class="flex-1">
                     <h1 class="font-serif text-2xl text-text-primary leading-tight">{t!(i18n, extensions.title)}</h1>
                     <p class="text-xs text-text-tertiary">{t!(i18n, extensions.subtitle)}</p>
                 </div>
+                <button
+                    class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded-lg text-sm hover:text-text-primary"
+                    on:click=move |_| store.show_installed.set(true)
+                >
+                    {t!(i18n, extensions.installed)}
+                </button>
             </header>
             <div class="flex-1 overflow-y-auto px-6 pb-6">
                 <div class="max-w-5xl mx-auto py-6">
@@ -126,6 +133,7 @@ pub fn ExtensionsView() -> impl IntoView {
             </div>
             <crate::components::extensions::detail_drawer::ExtensionDetailDrawer />
             <crate::components::extensions::install_flow::InstallFlow />
+            <crate::views::extensions::installed::InstalledPanel />
         </div>
     }
 }
