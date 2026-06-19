@@ -26,21 +26,51 @@ use crate::vision::types::{
 /// - Object detection: **no**
 #[derive(Clone)]
 pub struct PlatformOcrProvider {
-    screen: Arc<dyn aleph_desktop::ScreenCapability>,
+    source: ScreenSource,
+}
+
+/// Where the provider obtains its OCR-capable screen capability.
+#[derive(Clone)]
+enum ScreenSource {
+    /// A directly-injected screen capability (tests and the bare `new()` default).
+    Direct(Arc<dyn aleph_desktop::ScreenCapability>),
+    /// The full desktop platform; the screen is resolved per call via
+    /// `platform.screen()`. Production uses this so OCR reuses the injected,
+    /// bridge-backed platform screen (macOS routes OCR through the Swift helper)
+    /// instead of a bare `NativeScreen` whose OCR is `NotImplemented` on macOS.
+    Platform(Arc<dyn aleph_desktop::DesktopPlatform>),
 }
 
 impl PlatformOcrProvider {
-    /// Create a new platform OCR provider using the default native screen capability.
+    /// Create a provider over the bare default native screen capability.
+    ///
+    /// NOTE: `NativeScreen`'s OCR is `NotImplemented` on macOS (macOS OCR is
+    /// routed through the Swift bridge), so the production registry should use
+    /// [`with_platform`](Self::with_platform) to reuse the injected,
+    /// bridge-backed platform screen instead.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            screen: Arc::new(aleph_desktop::NativeScreen::new()),
+            source: ScreenSource::Direct(Arc::new(aleph_desktop::NativeScreen::new())),
         }
     }
 
-    /// Create a new provider with a custom screen capability (for testing).
+    /// Create a provider with a custom screen capability (for testing).
     pub fn with_screen(screen: Arc<dyn aleph_desktop::ScreenCapability>) -> Self {
-        Self { screen }
+        Self {
+            source: ScreenSource::Direct(screen),
+        }
+    }
+
+    /// Create a provider that resolves OCR through the injected desktop
+    /// platform's screen capability at call time. This is the production path:
+    /// on macOS `platform.screen().ocr()` routes through the Swift bridge, so
+    /// the `screenshot {describe:true}` OCR text layer works (a bare
+    /// `NativeScreen` returns `NotImplemented` there).
+    pub fn with_platform(platform: Arc<dyn aleph_desktop::DesktopPlatform>) -> Self {
+        Self {
+            source: ScreenSource::Platform(platform),
+        }
     }
 
     /// Resolve an [`ImageInput`] to PNG bytes suitable for the native OCR API.
@@ -115,11 +145,18 @@ impl VisionProvider for PlatformOcrProvider {
 
     async fn ocr(&self, image: &ImageInput) -> Result<OcrResult, VisionError> {
         let png_bytes = Self::resolve_png_bytes(image)?;
-        let result = self
-            .screen
-            .ocr(Some(&png_bytes))
-            .await
-            .map_err(|e| VisionError::ProviderError(format!("Platform OCR failed: {e}")))?;
+        let result = match &self.source {
+            ScreenSource::Direct(screen) => screen.ocr(Some(&png_bytes)).await,
+            ScreenSource::Platform(platform) => {
+                let screen = platform.screen().ok_or_else(|| {
+                    VisionError::ProviderError(
+                        "desktop screen capability unavailable for OCR".into(),
+                    )
+                })?;
+                screen.ocr(Some(&png_bytes)).await
+            }
+        }
+        .map_err(|e| VisionError::ProviderError(format!("Platform OCR failed: {e}")))?;
 
         Ok(convert_platform_ocr_result(result))
     }

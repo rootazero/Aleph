@@ -193,8 +193,14 @@ impl BuiltinToolRegistry {
         // with no change here.
         let vision_bridge = {
             let mut pipeline = crate::vision::VisionPipeline::new();
+            // Resolve OCR through the injected platform's screen capability so
+            // `screenshot {describe:true}` works on macOS (its OCR routes through
+            // the Swift bridge); a bare `PlatformOcrProvider::new()` uses
+            // NativeScreen, whose OCR is NotImplemented on macOS.
             pipeline.add_provider(Box::new(
-                crate::vision::providers::PlatformOcrProvider::new(),
+                crate::vision::providers::PlatformOcrProvider::with_platform(Arc::clone(
+                    &desktop_platform,
+                )),
             ));
             Arc::new(crate::builtin_tools::desktop::VisionBridge::new(Arc::new(
                 pipeline,
@@ -233,7 +239,11 @@ impl BuiltinToolRegistry {
         let desktop_check_permissions_tool = crate::builtin_tools::DesktopCheckPermissions::new()
             .with_platform(Arc::clone(&desktop_platform));
 
-        let system_tool = SystemTool::new(Arc::clone(&desktop_platform));
+        // Gate state-changing system ops (launch/quit/restart/clipboard_write)
+        // behind the same approval policy DesktopTool uses, so an agent cannot
+        // bypass that gate by routing the same OS op through the `system` tool.
+        let system_tool = SystemTool::new(Arc::clone(&desktop_platform))
+            .with_approval_policy(Arc::clone(&approval_policy));
         // Automation runs arbitrary host code (AppleScript/JXA/shell/PowerShell)
         // + Shortcuts — gate it behind the same approval policy as DesktopTool/
         // PimTool via the `DesktopAutomation` action type (permissive default =
@@ -729,7 +739,6 @@ impl BuiltinToolRegistry {
             automation_tool,
             permission_tool,
             media_tool,
-            desktop_platform,
             // Share the live session-key handle so the scratchpad tool can
             // bind its project to the session for the goal-loop hook. When
             // memory is unconfigured the handle is None → hook stays dormant.
