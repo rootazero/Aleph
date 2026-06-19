@@ -234,6 +234,12 @@ pub struct StrategyToml {
     /// turn-1 planner latency. The planner still self-gates trivial messages.
     #[serde(default = "strategy_plan_naked_loop_default")]
     pub plan_naked_loop: bool,
+    /// Whether the strategic planner also fires for a TEAM group-chat first
+    /// message (strategy round 2 → teams). Default **true** (gated under
+    /// `enabled`). Set `false` to keep team group chat exactly as before — no
+    /// leader-first planning, no welded team strategy, byte-identical prompts.
+    #[serde(default = "strategy_plan_team_default")]
+    pub plan_team: bool,
 }
 
 /// serde default for `StrategyToml::enabled` — the planner is on unless an
@@ -248,12 +254,19 @@ fn strategy_plan_naked_loop_default() -> bool {
     true
 }
 
+/// serde default for `StrategyToml::plan_team` — team planning is on unless an
+/// operator explicitly flips it off.
+fn strategy_plan_team_default() -> bool {
+    true
+}
+
 impl Default for StrategyToml {
     fn default() -> Self {
         Self {
             enabled: strategy_enabled_default(),
             planner_model: None,
             plan_naked_loop: strategy_plan_naked_loop_default(),
+            plan_team: strategy_plan_team_default(),
         }
     }
 }
@@ -568,5 +581,23 @@ model = "claude"
     fn strategy_plan_naked_loop_parses_false() {
         let s: StrategyToml = toml::from_str("plan_naked_loop = false").unwrap();
         assert!(!s.plan_naked_loop);
+    }
+}
+
+#[cfg(test)]
+mod plan_team_tests {
+    use super::StrategyToml;
+
+    #[test]
+    fn plan_team_defaults_on() {
+        assert!(
+            StrategyToml::default().plan_team,
+            "Default plan_team must be true"
+        );
+        let from_empty: StrategyToml = serde_json::from_str("{}").unwrap();
+        assert!(
+            from_empty.plan_team,
+            "missing plan_team deserializes to true"
+        );
     }
 }
