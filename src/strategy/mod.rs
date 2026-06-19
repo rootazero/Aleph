@@ -46,6 +46,18 @@ pub fn session_key(session_id: &str) -> String {
     format!("session:{session_id}")
 }
 
+/// Composite-key prefix for a TEAM group-chat strategy, keyed by team (a team
+/// strategy is team-wide, not per-member-session — mirrors `workflow_key`).
+/// Resolved in `active_strategy` BETWEEN `loop_key` and `session_key`: a
+/// member's own `/goal` or `/loop` strategy still wins, but the leader's team
+/// frame beats a bare session strategy. Callers MUST pass the NORMALIZED team
+/// id (the form `SessionKey::task` stores in a `team_chat` key) so the planner
+/// write and the weld read hit the same row.
+#[must_use]
+pub fn team_key(team_id: &str) -> String {
+    format!("team:{team_id}")
+}
+
 /// Process-global strategy store. Initialized once at daemon boot
 /// (`constructor.rs`); `None` until then so tests / early-boot read as "no
 /// strategy subsystem" and the prompt layers stay dormant.
@@ -106,6 +118,11 @@ mod tests {
         // Naked-loop key must not collide with the explicit-flow keys.
         assert_ne!(session_key("s"), goal_key("s"));
         assert_ne!(session_key("s"), loop_key("s"));
+    }
+
+    #[test]
+    fn team_key_is_team_prefixed() {
+        assert_eq!(super::team_key("squad-1"), "team:squad-1");
     }
 
     #[test]
