@@ -9,14 +9,22 @@
 //!
 //! Note: Rerank configuration has its own dedicated handlers in `rerank_config`.
 
+use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use crate::config::Config;
+use crate::error::AlephError;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::memory::note_retrieval::NoteFactRetrieval;
+use crate::memory::notes::indexer::NoteIndexer;
+use crate::memory::store::MemoryBackend;
+use crate::memory::EmbeddingProvider;
+use crate::routing::DEFAULT_AGENT_ID;
 
 /// Handle `memory_config.get` request
 pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
@@ -126,30 +134,166 @@ pub async fn handle_update(
 }
 
 // ============================================================================
-// Retrieve with Trace (placeholder)
+// Retrieve with Trace
 // ============================================================================
+
+/// Max chars of note content returned per traced result (debug panel only).
+const TRACE_CONTENT_MAX: usize = 280;
+
+#[derive(Debug, Default, Deserialize)]
+struct RetrieveTraceParams {
+    query: Option<String>,
+    agent_id: Option<String>,
+    limit: Option<usize>,
+}
+
+/// UTF-8-safe truncation to `max` chars (no panic on multi-byte boundaries).
+fn truncate_chars(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((idx, _)) => s[..idx].to_string(),
+        None => s.to_string(),
+    }
+}
+
+/// Trim a raw query param; `None` when absent or blank.
+fn normalized_query(raw: Option<&str>) -> Option<String> {
+    let q = raw.map_or("", str::trim);
+    if q.is_empty() {
+        None
+    } else {
+        Some(q.to_string())
+    }
+}
+
+/// Stand-in embedder used when no real embedding provider is configured.
+/// Its `embed` always errors, which makes `NoteFactRetrieval::retrieve_traced`
+/// fall back to FTS-only search (recorded as the `fts_search` stage).
+struct UnavailableEmbedder;
+
+#[async_trait]
+impl EmbeddingProvider for UnavailableEmbedder {
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> {
+        Err(AlephError::config("embedding provider not configured"))
+    }
+    async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+        Err(AlephError::config("embedding provider not configured"))
+    }
+    fn dimensions(&self) -> usize {
+        0
+    }
+    fn model_name(&self) -> &str {
+        "unavailable"
+    }
+    fn provider_id(&self) -> &str {
+        "unavailable"
+    }
+}
 
 /// Handle `memory.retrieve_with_trace` request
 ///
-/// Placeholder — full wiring requires the memory service. Returns a mock trace
-/// to validate the RPC registration works.
-pub async fn handle_retrieve_with_trace(request: JsonRpcRequest) -> JsonRpcResponse {
-    let query = request
+/// Real retrieval trace: runs the scoring pipeline and returns per-stage
+/// telemetry + scored results for the Settings ▸ Memory debug panel.
+pub async fn handle_retrieve_with_trace(
+    request: JsonRpcRequest,
+    db: MemoryBackend,
+    embedder: Option<Arc<dyn EmbeddingProvider>>,
+    app_config: Arc<tokio::sync::RwLock<crate::Config>>,
+) -> JsonRpcResponse {
+    let params: RetrieveTraceParams = request
         .params
         .as_ref()
-        .and_then(|p| p["query"].as_str())
-        .unwrap_or("");
+        .and_then(|p| serde_json::from_value(p.clone()).ok())
+        .unwrap_or_default();
 
-    if query.is_empty() {
-        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing 'query' parameter");
-    }
+    let query = match normalized_query(params.query.as_deref()) {
+        Some(q) => q,
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing 'query' parameter")
+        }
+    };
+    let agent_id = params
+        .agent_id
+        .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string());
+    let limit = params.limit.unwrap_or(10);
+
+    // Snapshot the three scoring configs, then drop the lock before retrieval.
+    let (rerank_cfg, scoring_cfg, expansion_cfg) = {
+        let cfg = app_config.read().await;
+        (
+            cfg.memory.rerank.clone(),
+            cfg.memory.retrieval_scoring.clone(),
+            cfg.memory.expansion.clone(),
+        )
+    };
+
+    let memory_dir = match crate::utils::paths::get_note_memory_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("note memory dir unavailable: {e}"),
+            );
+        }
+    };
+    let indexer = Arc::new(NoteIndexer::new(memory_dir, Arc::clone(&db)));
+    let embedder: Arc<dyn EmbeddingProvider> =
+        embedder.unwrap_or_else(|| Arc::new(UnavailableEmbedder));
+
+    let retrieval = NoteFactRetrieval::new(indexer, embedder)
+        .with_rerank_config(&rerank_cfg)
+        .with_scoring_config(&scoring_cfg)
+        .with_expansion_config(&expansion_cfg);
+
+    let (results, stages) = match retrieval.retrieve_traced(&query, &agent_id, limit).await {
+        Ok(r) => r,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("retrieval failed: {e}"),
+            );
+        }
+    };
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    let stages_json: Vec<_> = stages
+        .iter()
+        .map(|s| {
+            json!({
+                "name": s.name,
+                "duration_ms": s.duration_ms,
+                "input_count": s.input_count,
+                "output_count": s.output_count,
+            })
+        })
+        .collect();
+
+    let results_json: Vec<_> = results
+        .iter()
+        .map(|sf| {
+            json!({
+                "id": sf.fact.id,
+                "content": truncate_chars(&sf.fact.content, TRACE_CONTENT_MAX),
+                "score": sf.score,
+            })
+        })
+        .collect();
 
     JsonRpcResponse::success(
         request.id,
         json!({
             "query": query,
-            "results": [],
-            "status": "placeholder — full wiring pending",
+            "trace": {
+                "query": query,
+                "timestamp": now_ms,
+                "stages": stages_json,
+            },
+            "results": results_json,
         }),
     )
 }
@@ -204,6 +348,30 @@ fn apply_compression_update(
         .and_then(|x| x.as_u64())
     {
         policy.background_interval_seconds = v as u32;
+    }
+}
+
+#[cfg(test)]
+mod retrieve_trace_tests {
+    use super::{normalized_query, truncate_chars};
+
+    #[test]
+    fn truncate_chars_is_utf8_safe_and_bounds_length() {
+        // Multi-byte chars must not panic and must cut on a char boundary.
+        let s = "中文字符测试内容"; // 8 chars, 3 bytes each
+        let out = truncate_chars(s, 4);
+        assert_eq!(out, "中文字符");
+        // Shorter-than-limit returns the whole string.
+        assert_eq!(truncate_chars("abc", 10), "abc");
+        // Exact length returns whole string.
+        assert_eq!(truncate_chars("abcd", 4), "abcd");
+    }
+
+    #[test]
+    fn normalized_query_rejects_blank() {
+        assert_eq!(normalized_query(None), None);
+        assert_eq!(normalized_query(Some("   ")), None);
+        assert_eq!(normalized_query(Some(" hi ")), Some("hi".to_string()));
     }
 }
 

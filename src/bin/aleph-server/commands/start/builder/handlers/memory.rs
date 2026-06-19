@@ -213,6 +213,24 @@ pub(in crate::commands::start) fn register_memory_handlers(
             });
     }
 
+    // memory.retrieve_with_trace — real scoring-pipeline trace for the debug panel.
+    {
+        let memory_db = std::sync::Arc::clone(memory_db);
+        let embedder = embedder.clone();
+        let app_config = std::sync::Arc::clone(app_config);
+        server.handlers_mut().register("memory.retrieve_with_trace", move |req| {
+            let memory_db = std::sync::Arc::clone(&memory_db);
+            let embedder = embedder.clone();
+            let app_config = std::sync::Arc::clone(&app_config);
+            async move {
+                alephcore::gateway::handlers::memory_config::handle_retrieve_with_trace(
+                    req, memory_db, embedder, app_config,
+                )
+                .await
+            }
+        });
+    }
+
     if !daemon {
         println!("Memory methods:");
         println!("  - memory.search     : Search memories");
