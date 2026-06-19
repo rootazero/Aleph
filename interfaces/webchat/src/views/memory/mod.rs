@@ -45,7 +45,6 @@ pub fn Memory() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let mem = expect_context::<MemoryState>();
     let i18n = use_i18n();
-    let is_disabled = Signal::derive(move || !state.is_connected.get());
 
     let stats = RwSignal::new(None::<MemoryStats>);
     let facet = RwSignal::new(MemoryFacet::AllNotes);
