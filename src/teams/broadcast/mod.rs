@@ -99,12 +99,14 @@ impl GroupChatBroadcaster {
                 RESERVED_USER_HANDLE.to_string(),
                 0,
                 true,
+                false,
                 budget,
             )
             .await;
     }
 
     /// 递归核心。`user_triggered`=false 时没@不兜底(链自然停)。
+    /// `leader_first`=true 时硬路由到 leader(strategy 轮次2,TaskActivity 之后激活)。
     /// `budget` 是整棵 fan-out 树共享的累计唤醒计数器(防风暴第三闸)。
     fn dispatch(
         self,
@@ -113,6 +115,7 @@ impl GroupChatBroadcaster {
         sender: String,
         chain_depth: u32,
         user_triggered: bool,
+        leader_first: bool,
         budget: Arc<AtomicUsize>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async move {
@@ -137,7 +140,15 @@ impl GroupChatBroadcaster {
                 &team.leader_id,
                 &roster_ids,
                 user_triggered,
+                leader_first,
             );
+            if leader_first && user_triggered && content.contains('@') {
+                self.post_system(
+                    &team_id,
+                    "已交由 leader 统筹:先规划任务分配,再分派给成员。",
+                )
+                .await;
+            }
             if targets.is_empty() {
                 return; // 链自然停
             }
@@ -295,7 +306,7 @@ impl GroupChatBroadcaster {
 
         // 回流:解析回复里的@,递归(agent 触发→没@不兜底)。深度+1。
         // dispatch 返回显式 boxed future(打破 async 递归的 opaque 类型循环)。
-        self.dispatch(team_id, reply, agent_id, chain_depth + 1, false, budget)
+        self.dispatch(team_id, reply, agent_id, chain_depth + 1, false, false, budget)
             .await;
     }
 

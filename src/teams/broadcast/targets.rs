@@ -12,6 +12,7 @@ use crate::teams::messages::{extract_mentions, MENTION_ALL};
 /// - `leader_id`: 团队 leader,用于"没@人时兜底"
 /// - `roster`: 团队全体成员 agent_id(含 leader)
 /// - `user_triggered`: true=用户消息(没@时 leader 兜底);false=agent 回复(没@时不兜底,链停)
+/// - `leader_first`: true=leader 优先硬门控(strategy 轮次2,激活时 leader 先分解任务再分派)
 ///
 /// 规则(spec §7):`@all`/`@everyone` → 全员(除 sender);具体 `@` → 取名册内的;
 /// 去掉自@和 `@user`;用户消息没@ → `[leader]`;agent 回复没@ → `[]`;宽度上限截断。
@@ -22,7 +23,18 @@ pub fn resolve_targets(
     leader_id: &str,
     roster: &[String],
     user_triggered: bool,
+    leader_first: bool,
 ) -> Vec<String> {
+    // Hard gate (strategy round 2): on the user's first message to a team while
+    // the leader has just minted a plan, route ONLY to the leader so it
+    // decomposes + assigns first — even if the user @-named a member. Purely
+    // structural (a boolean), zero content inspection (R7). Once a plan exists
+    // `leader_first` is false and the equal-broadcast below resumes.
+    if user_triggered && leader_first {
+        let leader = leader_id.to_string();
+        return if leader != sender { vec![leader] } else { Vec::new() };
+    }
+
     let mentions = extract_mentions(content);
     let is_all = mentions.iter().any(|m| m == MENTION_ALL);
 
@@ -69,13 +81,13 @@ mod tests {
 
     #[test]
     fn user_mention_specific_agents() {
-        let t = resolve_targets("@alice @bob 看下", "user", "leader", &roster(), true);
+        let t = resolve_targets("@alice @bob 看下", "user", "leader", &roster(), true, false);
         assert_eq!(t, vec!["alice".to_string(), "bob".to_string()]);
     }
 
     #[test]
     fn user_no_mention_falls_back_to_leader() {
-        let t = resolve_targets("随便聊聊", "user", "leader", &roster(), true);
+        let t = resolve_targets("随便聊聊", "user", "leader", &roster(), true, false);
         assert_eq!(
             t,
             vec!["leader".to_string()],
@@ -86,13 +98,13 @@ mod tests {
     #[test]
     fn agent_reply_no_mention_stops_chain() {
         // agent 回复没@人 → 不兜底,返回空(链自然停)
-        let t = resolve_targets("好的我做完了", "alice", "leader", &roster(), false);
+        let t = resolve_targets("好的我做完了", "alice", "leader", &roster(), false, false);
         assert!(t.is_empty(), "agent 回复没@人不应触发 leader 兜底");
     }
 
     #[test]
     fn at_all_expands_to_everyone_except_sender_capped() {
-        let t = resolve_targets("@all 报到", "user", "leader", &roster(), true);
+        let t = resolve_targets("@all 报到", "user", "leader", &roster(), true, false);
         // roster 7 人,@all 排除 sender(user 不在 roster)→ 7 人,宽度上限 5
         assert_eq!(t.len(), MAX_FANOUT_WIDTH, "@all 受宽度上限截断");
         assert!(!t.contains(&"user".to_string()));
@@ -101,13 +113,27 @@ mod tests {
     #[test]
     fn drops_self_mention_and_reserved_user() {
         // alice 回复里 @ 自己 + @user + @bob → 只剩 bob
-        let t = resolve_targets("@alice @user @bob", "alice", "leader", &roster(), false);
+        let t = resolve_targets("@alice @user @bob", "alice", "leader", &roster(), false, false);
         assert_eq!(t, vec!["bob".to_string()], "去掉自@和@user");
     }
 
     #[test]
     fn unknown_mention_ignored() {
-        let t = resolve_targets("@nobody @alice", "user", "leader", &roster(), true);
+        let t = resolve_targets("@nobody @alice", "user", "leader", &roster(), true, false);
         assert_eq!(t, vec!["alice".to_string()], "不在名册的@被忽略");
+    }
+
+    #[test]
+    fn leader_first_overrides_explicit_mention() {
+        // hard gate ON + user message that @-named alice → still routes to leader only
+        let t = resolve_targets("@alice 看下", "user", "leader", &roster(), true, true);
+        assert_eq!(t, vec!["leader".to_string()], "leader_first ignores the user @");
+    }
+
+    #[test]
+    fn leader_first_inactive_keeps_normal_routing() {
+        // hard gate OFF → existing behavior (alice gets it)
+        let t = resolve_targets("@alice 看下", "user", "leader", &roster(), true, false);
+        assert_eq!(t, vec!["alice".to_string()]);
     }
 }
