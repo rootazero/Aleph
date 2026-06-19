@@ -89,7 +89,7 @@ impl PromptBuilder {
         // suffix is head/tail trimmed, with a model-visible truncation notice
         // appended. A no-op (byte-identical) for normal prompts under budget.
         let dynamic = crate::thinker::prompt_budget::fit_dynamic_suffix(
-            stable.len(),
+            stable.chars().count(),
             dynamic,
             &self.config.token_budget,
         );
