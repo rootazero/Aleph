@@ -6,6 +6,7 @@
 pub mod docker_mcp;
 pub mod marketplace;
 pub mod mcp_registry;
+pub mod registry_builder;
 
 use crate::store::cache::CatalogCache;
 use crate::store::types::{ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
@@ -69,6 +70,14 @@ impl ProviderRegistry {
 
     pub fn get(&self, id: &str) -> Option<&dyn SourceProvider> {
         self.providers.iter().find(|p| p.id() == id).map(|b| b.as_ref())
+    }
+
+    /// Provider metadata for `extensions.sources.list` (id, trust tier, kinds).
+    pub fn list_sources(&self) -> Vec<(String, TrustTier, Vec<ExtensionKind>)> {
+        self.providers
+            .iter()
+            .map(|p| (p.id().to_string(), p.trust_tier(), p.kinds().to_vec()))
+            .collect()
     }
 
     /// Sync every provider concurrently; each writes its own slice via

@@ -28,8 +28,8 @@ use builder::{
     initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
     register_agent_handlers, register_agents_handlers, register_arena_handlers,
     register_config_handlers, register_core_handlers, register_cron_handlers,
-    register_daemon_handlers, register_extensions_handlers, register_fs_handlers,
-    register_graph_handlers,
+    register_daemon_handlers, register_extensions_handlers,
+    register_extensions_sources_handlers, register_fs_handlers, register_graph_handlers,
     register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
     register_mcp_handlers, register_memory_handlers, register_oauth_handlers,
     register_projects_handlers, register_session_handlers, register_teams_handlers,
@@ -1267,11 +1267,52 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             .unwrap_or_else(|_| std::path::PathBuf::from("store_catalog.db"));
         match alephcore::store::cache::CatalogCache::open(&catalog_path) {
             Ok(cache) => {
-                register_extensions_handlers(
-                    &mut server,
-                    mcp_handle.clone(),
-                    std::sync::Arc::new(cache),
+                let cache = std::sync::Arc::new(cache);
+                register_extensions_handlers(&mut server, mcp_handle.clone(), cache.clone());
+
+                // Source providers: convert configured marketplaces, build the
+                // registry, register extensions.sources.*, and kick an initial
+                // background catalog sync into the cache.
+                use alephcore::extension::marketplace::types::{
+                    MarketplaceConfig, MarketplaceSourceType,
+                };
+                let marketplace_configs: std::collections::HashMap<String, MarketplaceConfig> = {
+                    let cfg = app_config.read().await;
+                    cfg.plugin_marketplaces
+                        .iter()
+                        .map(|(name, entry)| {
+                            let source_type = match entry.source_type.as_str() {
+                                "local" => MarketplaceSourceType::Local,
+                                _ => MarketplaceSourceType::Github,
+                            };
+                            (
+                                name.clone(),
+                                MarketplaceConfig {
+                                    source: entry.source.clone(),
+                                    source_type,
+                                },
+                            )
+                        })
+                        .collect()
+                };
+                let registry = std::sync::Arc::new(
+                    alephcore::store::provider::registry_builder::build_default_registry(
+                        marketplace_configs,
+                    ),
                 );
+                register_extensions_sources_handlers(&mut server, registry.clone(), cache.clone());
+                {
+                    let registry = registry.clone();
+                    let cache = cache.clone();
+                    tokio::spawn(async move {
+                        let report = registry.sync_all_into(&cache).await;
+                        tracing::info!(
+                            synced = ?report.synced,
+                            failed = ?report.failed,
+                            "initial extensions catalog sync"
+                        );
+                    });
+                }
                 if !args.daemon {
                     println!("  Extensions store handlers registered (extensions.*)");
                 }

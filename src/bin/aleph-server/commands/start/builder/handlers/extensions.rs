@@ -8,6 +8,7 @@ use alephcore::gateway::handlers::extensions;
 use alephcore::gateway::GatewayServer;
 use alephcore::mcp::manager::McpManagerHandle;
 use alephcore::store::cache::CatalogCache;
+use alephcore::store::provider::ProviderRegistry;
 use std::sync::Arc;
 
 pub(in crate::commands::start) fn register_extensions_handlers(
@@ -41,6 +42,27 @@ pub(in crate::commands::start) fn register_extensions_handlers(
         server.handlers_mut().register("extensions.uninstall", move |req| {
             let mcp = mcp.clone();
             async move { extensions::lifecycle::handle_uninstall(req, mcp).await }
+        });
+    }
+}
+
+pub(in crate::commands::start) fn register_extensions_sources_handlers(
+    server: &mut GatewayServer,
+    registry: Arc<ProviderRegistry>,
+    cache: Arc<CatalogCache>,
+) {
+    {
+        let registry = registry.clone();
+        server.handlers_mut().register("extensions.sources.list", move |req| {
+            let registry = registry.clone();
+            async move { extensions::sources::handle_list(req, registry).await }
+        });
+    }
+    {
+        server.handlers_mut().register("extensions.sources.refresh", move |req| {
+            let registry = registry.clone();
+            let cache = cache.clone();
+            async move { extensions::sources::handle_refresh(req, registry, cache).await }
         });
     }
 }

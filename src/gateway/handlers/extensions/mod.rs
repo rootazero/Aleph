@@ -6,3 +6,4 @@
 //! See docs/superpowers/specs/2026-06-19-unified-extensions-store-design.md
 pub mod catalog;
 pub mod lifecycle;
+pub mod sources;
