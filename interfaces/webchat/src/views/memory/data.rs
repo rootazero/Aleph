@@ -106,6 +106,19 @@ pub fn format_ts(ts: i64) -> String {
     )
 }
 
+/// Locate a note by its `path` within the loaded window. Returns the facet to
+/// switch to (mapped from the note's category) and the zero-indexed page that
+/// holds it within that facet's slice. `None` when the path is not in the
+/// window (e.g. it falls outside the NOTE_WINDOW cap) — callers surface a notice.
+#[must_use]
+pub fn locate_note(window: &[CompressedFact], path: &str) -> Option<(MemoryFacet, u32)> {
+    let note = window.iter().find(|f| f.path == path)?;
+    let facet = fact_facet(&note.category);
+    let slice = facet_slice(window, facet);
+    let pos = slice.iter().position(|f| f.path == path)?;
+    Some((facet, (pos as u32) / PAGE_SIZE))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +133,18 @@ mod tests {
             created_at: 0,
             category: cat.into(),
             path: format!("{cat}/x"),
+        }
+    }
+
+    fn fact_p(cat: &str, p: &str) -> CompressedFact {
+        CompressedFact {
+            id: p.into(),
+            agent_id: "main".into(),
+            content: "c".into(),
+            fact_type: cat.into(),
+            created_at: 0,
+            category: cat.into(),
+            path: p.into(),
         }
     }
 
@@ -160,5 +185,21 @@ mod tests {
         assert_eq!(page_slice(&v, 0, 50).len(), 50);
         assert_eq!(page_slice(&v, 2, 50), (100..120).collect::<Vec<_>>());
         assert_eq!(page_slice(&v, 9, 50).len(), 0); // out-of-range page
+    }
+
+    #[test]
+    fn locate_note_finds_facet_and_page() {
+        let mut window: Vec<CompressedFact> =
+            (0..60).map(|i| fact_p("preference", &format!("f{i}"))).collect();
+        window.push(fact_p("feedback", "fb0"));
+
+        // 56th Facts note (index 55) lands on page 1 (55 / 50).
+        assert_eq!(locate_note(&window, "f55"), Some((MemoryFacet::Facts, 1)));
+        // First Facts note is on page 0.
+        assert_eq!(locate_note(&window, "f0"), Some((MemoryFacet::Facts, 0)));
+        // Feedback note maps to the Feedback facet, page 0.
+        assert_eq!(locate_note(&window, "fb0"), Some((MemoryFacet::Feedback, 0)));
+        // Unknown path → None.
+        assert_eq!(locate_note(&window, "missing"), None);
     }
 }
