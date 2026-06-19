@@ -25,9 +25,9 @@ pub fn build_member_input(
             crate::teams::leader_prompt::build(team_id, team_name, roster, protocol, user_request)
         )
     } else {
-        "\n\n团队纪律:你在 leader 的统筹下工作。当 leader 通过 @ 或任务把活派给你时,\
-         优先接下并尽力完成,把产出交回 leader,而不是只在群里闲聊。你仍可自由 @ 其他\
-         成员协作,但讨论要服务于把任务做完。"
+        "\n\n团队纪律:你在 leader 的统筹下工作。当 leader 通过 @ 把任务派给你时,他会带上一个 task_id;\
+         你接下后尽力完成,用 `task_submit`(填那个 task_id)把产出交回,leader 会用 task_review 验收\
+         ——被 reject 就按反馈重做再交。你仍可自由 @ 其他成员协作,但讨论要服务于把任务做完,而不是只在群里闲聊。"
             .to_string()
     };
     format!(
@@ -60,6 +60,7 @@ mod tests {
         assert!(out.contains("[user]: @alice 查下 X"));
         assert!(out.contains("团队纪律"), "member gets the obey contract");
         assert!(!out.contains("你是团队「Squad」的 leader"), "member has no leader contract");
+        assert!(out.contains("task_submit"), "member told to submit via task_submit");
     }
 
     #[test]
@@ -75,5 +76,7 @@ mod tests {
         assert!(out.contains("task_create"), "leader told to decompose with task_create");
         assert!(out.contains("不要自己闷头做完"), "anti-pattern present");
         assert!(out.contains("做个调研"), "user request surfaced to leader");
+        assert!(out.contains("task_review"), "leader told to accept/reject via task_review");
+        assert!(out.contains("task_id"), "leader told to name the task_id when assigning");
     }
 }
