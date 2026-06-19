@@ -88,11 +88,13 @@ impl MemoryApi {
     /// note full-text search path the backend takes for non-empty queries.
     pub async fn search(
         state: &DashboardState,
+        agent_id: &str,
         query: String,
         limit: Option<u32>,
         offset: u32,
     ) -> Result<Vec<RawMemory>, String> {
         let params = serde_json::json!({
+            "agent_id": agent_id,
             "query": query,
             "limit": limit,
             "offset": offset,
@@ -151,10 +153,12 @@ impl MemoryApi {
     /// List compressed facts (Layer 2)
     pub async fn list_facts(
         state: &DashboardState,
+        agent_id: &str,
         limit: Option<usize>,
         offset: usize,
     ) -> Result<Vec<CompressedFact>, String> {
         let params = serde_json::json!({
+            "agent_id": agent_id,
             "limit": limit.unwrap_or(50),
             "offset": offset,
         });
