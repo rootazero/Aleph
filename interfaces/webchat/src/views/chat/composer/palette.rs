@@ -249,6 +249,38 @@ pub(super) fn SlashPaletteView(
     }
 }
 
+/// Seeded when the user runs `/doctor` — a read-only health check. Mirrors
+/// the `f`-hotkey `DOCTOR_REPAIR_PROMPT` (in `composer/mod.rs`) but never
+/// repairs. The model writes a natural-language report; `DoctorRepairHintLayer`
+/// (WebRich-gated, alephcore) appends the "press f" reminder when problems
+/// remain.
+pub(super) const DOCTOR_DETECT_PROMPT: &str = "运行 doctor 工具只读诊断系统健康状况（fix=false，不要修复任何东西）。如实汇报发现的问题及其严重度。";
+
+/// If `text` is exactly the bare `/doctor` command (trimmed, case-insensitive),
+/// return the detection prompt to send through the normal LLM pipeline instead
+/// of the literal slash command (which would hit the deterministic fast path).
+/// Args are not supported in v1 — `/doctor <anything>` does not match.
+pub(super) fn expand_doctor_command(text: &str) -> Option<String> {
+    if text.trim().eq_ignore_ascii_case("/doctor") {
+        Some(DOCTOR_DETECT_PROMPT.to_string())
+    } else {
+        None
+    }
+}
+
+/// Static palette entry so `/doctor` is discoverable when the user types `/`,
+/// even though it is intercepted client-side (not a Gateway tool-backed
+/// command). Merged into the fetched catalogue by `composer::fetch_commands`.
+pub(super) fn doctor_command_info() -> CommandInfo {
+    CommandInfo {
+        key: "doctor".to_string(),
+        description: "只读检测系统健康，发现问题后可按 f 维修".to_string(),
+        is_namespace: false,
+        param_hint: None,
+        children: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,5 +422,34 @@ mod tests {
         assert!(cmd.is_namespace);
         assert_eq!(cmd.children.len(), 1);
         assert_eq!(cmd.children[0].key, "new");
+    }
+
+    #[test]
+    fn expand_doctor_matches_only_bare_command() {
+        assert!(expand_doctor_command("/doctor").is_some());
+        assert!(expand_doctor_command("/Doctor").is_some()); // case-insensitive
+        assert!(expand_doctor_command("  /doctor  ").is_some()); // trimmed
+        assert_eq!(
+            expand_doctor_command("/doctor").unwrap(),
+            DOCTOR_DETECT_PROMPT
+        );
+    }
+
+    #[test]
+    fn expand_doctor_rejects_non_matches() {
+        assert!(expand_doctor_command("/doctorx").is_none());
+        assert!(expand_doctor_command("/doctor now").is_none()); // args not supported in v1
+        assert!(expand_doctor_command("/doc").is_none());
+        assert!(expand_doctor_command("hello").is_none());
+        assert!(expand_doctor_command("").is_none());
+    }
+
+    #[test]
+    fn doctor_command_info_is_a_leaf() {
+        let info = doctor_command_info();
+        assert_eq!(info.key, "doctor");
+        assert!(!info.is_namespace);
+        assert!(info.children.is_empty());
+        assert!(!info.description.is_empty());
     }
 }
