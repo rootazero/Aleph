@@ -83,6 +83,7 @@ const fn lb_to_str(s: LoadBalanceStrategy) -> &'static str {
         LoadBalanceStrategy::LeastBusy => "least_busy",
         LoadBalanceStrategy::LatencyAware => "latency_aware",
         LoadBalanceStrategy::UsageBased => "usage_based",
+        LoadBalanceStrategy::CostAware => "cost_aware",
     }
 }
 
@@ -93,6 +94,7 @@ fn lb_from_str(raw: &str) -> Option<LoadBalanceStrategy> {
         "least_busy" => Some(LoadBalanceStrategy::LeastBusy),
         "latency_aware" => Some(LoadBalanceStrategy::LatencyAware),
         "usage_based" => Some(LoadBalanceStrategy::UsageBased),
+        "cost_aware" => Some(LoadBalanceStrategy::CostAware),
         _ => None,
     }
 }

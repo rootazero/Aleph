@@ -252,6 +252,35 @@ impl FailoverProvider {
         }
     }
 
+    /// Blended `input + output` price for `provider`'s first model, in milli-USD
+    /// per million tokens (USD/Mtok × 1000), looked up from the static
+    /// [`crate::pricing`] table. The sort key fed to the
+    /// [`CostAware`](LoadBalanceStrategy::CostAware) strategy — the bridge that
+    /// finally wires Aleph's shipped price card into route ordering (it had only
+    /// ever fed post-hoc cost *estimation* before).
+    ///
+    /// Returns `0` when the provider's first model is unknown or unpriced:
+    /// on-machine / self-hosted endpoints carry no rate card, so cost routing
+    /// treats them as effectively free and sorts them first. Stays prompt-blind
+    /// (R7) — price is a static `(provider, model)` fact, never the message.
+    fn price_hint(&self, provider: &str) -> u64 {
+        let Some(model) = self
+            .model_catalog
+            .get(provider)
+            .and_then(|models| models.first())
+        else {
+            return 0;
+        };
+        match crate::pricing::rate_card(provider, model) {
+            Some(card) => {
+                let usd =
+                    card.input_per_mtok.unwrap_or(0.0) + card.output_per_mtok.unwrap_or(0.0);
+                (usd * 1000.0).round() as u64
+            }
+            None => 0,
+        }
+    }
+
     /// Whether a cloud-borrow escalation for `name` is authorised right now.
     ///
     /// Fails closed: no gate wired → denied (a warn is logged). Mirrors the
@@ -357,13 +386,19 @@ impl FailoverProvider {
                     rr_base,
                     // Fold each provider's live window counts against its
                     // configured ceiling into the derived utilisation/over-limit
-                    // scalars. The ordering logic stays limit-blind (R7: pure
-                    // infrastructure) — the policy never sees the config.
+                    // scalars, and (only under cost routing) its static price.
+                    // The ordering logic stays limit- and price-blind (R7: pure
+                    // infrastructure) — it just sorts the scalars handed to it.
                     |name| {
                         let mut m = load.metric(name);
                         let (util, over) = limits.assess(name, m.rpm_used, m.tpm_used);
                         m.utilization_permille = util;
                         m.over_limit = over;
+                        // Price lookup only when it is the active sort key —
+                        // every other strategy ignores `price_per_mtok`.
+                        if strategy == LoadBalanceStrategy::CostAware {
+                            m.price_per_mtok = self.price_hint(name);
+                        }
                         m
                     },
                 )
