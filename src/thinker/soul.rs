@@ -507,8 +507,22 @@ impl SoulManifest {
                     .tone
                     .clone()
                     .non_empty_or(base.voice.tone.clone()),
-                verbosity: self.voice.verbosity,
-                formatting_style: self.voice.formatting_style,
+                // Mirror the `relationship` fallback below: a `Copy` enum at its
+                // default is treated as "unset" and yields to `base`, so a
+                // session override that only sets a tone no longer silently
+                // stamps the default Balanced/Markdown over the global soul's
+                // explicit Elaborate/Rich choice. (Same default-vs-explicit
+                // tradeoff already accepted for `relationship`.)
+                verbosity: if self.voice.verbosity == Verbosity::default() {
+                    base.voice.verbosity
+                } else {
+                    self.voice.verbosity
+                },
+                formatting_style: if self.voice.formatting_style == FormattingStyle::default() {
+                    base.voice.formatting_style
+                } else {
+                    self.voice.formatting_style
+                },
                 language_notes: self
                     .voice
                     .language_notes
@@ -710,6 +724,50 @@ mod tests {
         assert_eq!(merged.relationship, RelationshipMode::Expert);
         assert_eq!(merged.expertise.len(), 2);
         assert_eq!(merged.addendum, Some("Additional instructions".to_string()));
+    }
+
+    #[test]
+    fn test_soul_merge_default_voice_enum_falls_back_to_base() {
+        // Regression: a partial session overlay that sets only a tone (leaving
+        // verbosity/formatting at their `Copy`-enum defaults) must NOT stamp
+        // those defaults over the base soul's explicit choices — they fall back
+        // like `relationship` does. Previously `merge_with` took `self`'s
+        // verbosity/formatting unconditionally, silently dropping base's
+        // Elaborate/Rich whenever a session set only a tone.
+        let base = SoulManifest {
+            voice: SoulVoice {
+                verbosity: Verbosity::Elaborate,
+                formatting_style: FormattingStyle::Rich,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let overlay = SoulManifest {
+            voice: SoulVoice {
+                tone: "playful".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let merged = overlay.merge_with(&base);
+        assert_eq!(merged.voice.tone, "playful");
+        // The base's explicit non-default choices survive the partial overlay.
+        assert_eq!(merged.voice.verbosity, Verbosity::Elaborate);
+        assert_eq!(merged.voice.formatting_style, FormattingStyle::Rich);
+
+        // An explicit (non-default) overlay choice still wins over base.
+        let overlay2 = SoulManifest {
+            voice: SoulVoice {
+                verbosity: Verbosity::Concise,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            overlay2.merge_with(&base).voice.verbosity,
+            Verbosity::Concise
+        );
     }
 
     #[test]

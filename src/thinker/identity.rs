@@ -114,7 +114,21 @@ impl IdentityResolver {
     /// Load global soul
     fn load_global_soul(&self) -> Option<SoulManifest> {
         if self.global_path.exists() {
-            SoulManifest::from_file(&self.global_path).ok()
+            // A malformed soul file must not silently vanish into the empty
+            // default — surface the parse error so the user can see *why* their
+            // identity was dropped, then fall back (the prior `.ok()` swallowed
+            // it without a trace).
+            match SoulManifest::from_file(&self.global_path) {
+                Ok(manifest) => Some(manifest),
+                Err(e) => {
+                    tracing::warn!(
+                        path = %self.global_path.display(),
+                        error = %e,
+                        "global soul file exists but failed to parse; ignoring it"
+                    );
+                    None
+                }
+            }
         } else {
             // Also try .json and .toml variants
             let stem = self.global_path.file_stem().and_then(|s| s.to_str());

@@ -782,15 +782,14 @@ Each layer declares which paths it participates in; the pipeline filters by path
 | `Compact` | Excludes 14 heavy layers (runtime_context, environment, runtime_capabilities, protocol_tokens, heartbeat, operational_guidelines, citation_standards, generation_models, skill_instructions, special_actions, guidelines, thinking_guidance, skill_mode, poe_success_criteria) |
 | `Minimal` | Only 5 core layers: soul, tools, hydrated_tools, response_format, language |
 
-### Section-Level Caching
+### Stable-Prefix Reuse
 
-`execute_cached()` caches the output of every `LayerStability::Stable` layer after the first call. Dynamic layers always recompute. ~23 of 29 layers are Stable. Cache management:
+The prompt is partitioned by each layer's `LayerStability` into a cacheable **Stable** prefix (persona, tools, security, skills …) and a per-request **Dynamic** suffix (inbound / session / memory / runtime context). Two mechanisms reuse the stable prefix, both keyed by the *actual input* rather than a layer name:
 
-```rust
-pipeline.invalidate("soul");    // Invalidate one layer by name
-pipeline.invalidate_all();      // Clear all cached sections
-pipeline.cache_stats();         // CacheStats { hits, misses, entries }
-```
+- **Two-part split** — `PromptBuilder::build_system_prompt_cached_with_mode()` returns `[SystemPromptPart { cache: true, .. }, SystemPromptPart { cache: false, .. }]` so the provider (e.g. Anthropic) caches the stable prefix; the cache breakpoint sits exactly at the Stable→Dynamic boundary.
+- **Fork snapshot** — `capture_snapshot()` records `execute_stable_only()` for a given input; subagents prepend it and rebuild only the dynamic layers via `build_from_snapshot()`.
+
+A fresh `PromptBuilder` (and pipeline) is constructed per build, so there is no in-pipeline mutable cache to invalidate. (An earlier name-keyed `execute_cached()` cache was removed: per-build builders meant it never served a cross-call hit, and being keyed by layer name with no input fingerprint it could only ever return stale sections if a builder were reused.)
 
 ### AgentRoleLayer
 

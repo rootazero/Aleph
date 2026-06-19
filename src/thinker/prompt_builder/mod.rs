@@ -374,7 +374,7 @@ impl PromptBuilder {
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
         let input = input.with_iteration_cap_opt(self.iteration_cap);
         maybe_trace_prompt_size(&self.pipeline, path, &input);
-        let mut prompt = self.pipeline.execute_cached(path, &input);
+        let mut prompt = self.pipeline.execute(path, &input);
         // Subagent strategy weld: appended post-pipeline because the Basic-path
         // inline prompt threads no `ResolvedContext` for `StrategyLayer` to read.
         // Wrap mirrors `StrategyLayer` byte-for-byte: `<strategy>\n{body}\n</strategy>\n\n`.
@@ -399,7 +399,7 @@ impl PromptBuilder {
             .with_provider_protocol_opt(self.provider_protocol.as_deref())
             .with_iteration_cap_opt(self.iteration_cap);
         self.pipeline
-            .execute_cached(AssemblyPath::Hydration, &input)
+            .execute(AssemblyPath::Hydration, &input)
     }
 
     /// Build system prompt with soul section at the top
@@ -427,7 +427,7 @@ impl PromptBuilder {
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
         let input = input.with_iteration_cap_opt(self.iteration_cap);
-        self.pipeline.execute_cached(AssemblyPath::Soul, &input)
+        self.pipeline.execute(AssemblyPath::Soul, &input)
     }
 
     /// Build system prompt for a sub-agent.
@@ -453,7 +453,7 @@ impl PromptBuilder {
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
         let input = input.with_iteration_cap_opt(self.iteration_cap);
-        self.pipeline.execute_cached(AssemblyPath::Soul, &input)
+        self.pipeline.execute(AssemblyPath::Soul, &input)
     }
 
     /// Build system prompt for a sub-agent (basic path, no soul).
@@ -477,7 +477,7 @@ impl PromptBuilder {
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
         let input = input.with_iteration_cap_opt(self.iteration_cap);
-        self.pipeline.execute_cached(AssemblyPath::Basic, &input)
+        self.pipeline.execute(AssemblyPath::Basic, &input)
     }
 
     /// Capture the current stable layers output as a reusable snapshot.
@@ -636,7 +636,7 @@ impl PromptBuilder {
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
         let input = input.with_iteration_cap_opt(self.iteration_cap);
-        self.pipeline.execute_cached(AssemblyPath::Soul, &input)
+        self.pipeline.execute(AssemblyPath::Soul, &input)
     }
 
     /// Build system prompt using `ResolvedContext`
@@ -654,7 +654,7 @@ impl PromptBuilder {
             .with_chain_context_opt(self.chain_context.as_ref())
             .with_provider_protocol_opt(self.provider_protocol.as_deref())
             .with_iteration_cap_opt(self.iteration_cap);
-        self.pipeline.execute_cached(AssemblyPath::Context, &input)
+        self.pipeline.execute(AssemblyPath::Context, &input)
     }
 }
 
