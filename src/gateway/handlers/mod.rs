@@ -581,13 +581,6 @@ impl HandlerRegistry {
             )
         });
 
-        // Memory utility handlers (stateless — no shared state required)
-        // NOTE: rerank_config.test is registered in register_config_handlers with vault access
-        registry.register(
-            "memory.retrieve_with_trace",
-            memory_config::handle_retrieve_with_trace,
-        );
-
         // Arena handlers (placeholders - actual handlers wired with ArenaManager)
         registry.register("arena.create", |req| async move {
             JsonRpcResponse::error(
