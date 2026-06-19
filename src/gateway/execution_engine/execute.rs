@@ -727,7 +727,16 @@ where
                                 // the budget. Previously these calls hardcoded
                                 // `tokens_now = 0`, so `over_budget` could never
                                 // fire — the budget was advertised but dead.
-                                let (goal, tokens_now) = if goal.token_budget.is_some() {
+                                // Only capture/enforce the token baseline on an ACTIVE
+                                // goal: `tokens_now` is consumed solely by the Active
+                                // path (should_continue / exhausted_while_active). For a
+                                // goal the model just marked Complete (awaiting gate),
+                                // the gate branch ignores `tokens_now`, so seeding a
+                                // baseline there is a wasted SQLite write plus a spurious
+                                // `updated_at` bump on a terminal goal.
+                                let (goal, tokens_now) = if goal.token_budget.is_some()
+                                    && goal.is_active()
+                                {
                                     match self.session_manager.as_ref() {
                                         Some(sm) => {
                                             match sm.get_total_tokens(&request.session_key).await {
@@ -982,7 +991,18 @@ where
                             };
 
                             if crate::looping::pursuit::should_fire(&state, tokens_now, now_ms) {
-                                let bumped = state.clone().spent_iteration();
+                                // Clear the consumed model-paced wake so a loop whose
+                                // model forgot to re-set `next_wake` falls back to the
+                                // cadence default next tick instead of busy-looping:
+                                // once `now_ms` passes a stale `next_wake_ms`,
+                                // `tick_delay_ms` clamps to 0 and every subsequent tick
+                                // fires back-to-back until the iteration cap. Harmless
+                                // for Fixed cadence (it ignores `next_wake_ms`); a model
+                                // that does re-pace each tick re-sets it before the next
+                                // enqueue, so it is unaffected. `delay` below is computed
+                                // from the un-bumped `&state`, so THIS tick's pacing is
+                                // unchanged — only the NEXT tick is governed by the clear.
+                                let bumped = state.clone().spent_iteration().with_next_wake_ms(None);
                                 let delay = crate::looping::pursuit::tick_delay_ms(&state, now_ms);
                                 let prompt = crate::looping::pursuit::tick_prompt(&state);
                                 loop_reg.put(bumped);

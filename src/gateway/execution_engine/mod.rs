@@ -65,7 +65,14 @@ use super::router::SessionKey;
 /// Configuration for the execution engine
 #[derive(Debug, Clone)]
 pub struct ExecutionEngineConfig {
-    /// Maximum concurrent runs per agent
+    /// Maximum concurrent runs per agent.
+    ///
+    /// Defensive backstop only: in practice unreachable on the normal dispatch
+    /// path because `AgentInstance::try_start_run` flips the agent's single
+    /// `AgentState` Idle→Running before this count is taken, so a same-agent run
+    /// is never `Running` in `active_runs` when a new run reaches the
+    /// `TooManyRuns` guard. It would fire only for a hypothetical dispatch path
+    /// that registers `Running` rows while bypassing `try_start_run`.
     pub max_concurrent_runs: usize,
     /// Default timeout for runs (seconds)
     pub default_timeout_secs: u64,

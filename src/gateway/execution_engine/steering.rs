@@ -363,8 +363,14 @@ pub(super) async fn try_inject_steering(
         .await
     {
         Ok(_) => {
+            // Log new_run_id so an operator can correlate a deferred steering
+            // message with the target run if the sibling leaves Running in the
+            // find_target→emit window (then only the sibling's Completed-only
+            // teardown rescue re-drives it; a Cancelled/Failed sibling defers the
+            // message to the next user turn — never dropped, but otherwise opaque).
             tracing::info!(
                 session = %request.session_key.to_key_string(),
+                new_run_id = %new_run_id,
                 "mid-loop steering: injected user message into running loop",
             );
             true

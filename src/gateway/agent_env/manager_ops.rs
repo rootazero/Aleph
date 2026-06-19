@@ -82,7 +82,7 @@ impl AgentEnvStore {
 
         let result = conn.query_row(
             "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
-                    name, icon, is_archived, decay_rate, permanent_fact_types,
+                    name, icon, archived, decay_rate, permanent_fact_types,
                     default_model, system_prompt_override, allowed_tools
              FROM agent_envs WHERE id = ? AND archived = 0",
             params![id],
@@ -105,12 +105,12 @@ impl AgentEnvStore {
 
         let query = if include_archived {
             "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
-                    name, icon, is_archived, decay_rate, permanent_fact_types,
+                    name, icon, archived, decay_rate, permanent_fact_types,
                     default_model, system_prompt_override, allowed_tools
              FROM agent_envs ORDER BY last_active_at DESC"
         } else {
             "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
-                    name, icon, is_archived, decay_rate, permanent_fact_types,
+                    name, icon, archived, decay_rate, permanent_fact_types,
                     default_model, system_prompt_override, allowed_tools
              FROM agent_envs WHERE archived = 0 ORDER BY last_active_at DESC"
         };
@@ -286,15 +286,13 @@ impl AgentEnvStore {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().timestamp();
 
-        // Clear existing binding for this channel before inserting
+        // Single atomic upsert: `channel` is the PRIMARY KEY, so OR REPLACE
+        // deletes any conflicting row and inserts the new one as one statement.
+        // The old DELETE-then-INSERT pair left the channel UNBOUND (silent
+        // downgrade to the default agent) if the INSERT failed after the DELETE
+        // committed; the upsert removes that failure window and a round trip.
         conn.execute(
-            "DELETE FROM channel_active_agent WHERE channel = ?1",
-            params![channel],
-        )
-        .map_err(|e| AgentEnvError::Database(e.to_string()))?;
-
-        conn.execute(
-            "INSERT INTO channel_active_agent (channel, agent_id, updated_at)
+            "INSERT OR REPLACE INTO channel_active_agent (channel, agent_id, updated_at)
              VALUES (?1, ?2, ?3)",
             params![channel, agent_id, now],
         )
@@ -316,6 +314,23 @@ impl AgentEnvStore {
         Ok(())
     }
 
+    /// Clear ALL channel bindings pointing at this agent.
+    ///
+    /// The binding model is many-to-one (N channels → 1 agent), so deleting an
+    /// agent must drop every channel that pointed at it — otherwise the orphaned
+    /// channels keep a stale `agent_id` and the inbound router resolves them to a
+    /// ghost agent until it falls back. Mirrors the cleanup already in
+    /// [`Self::delete`], single DELETE-by-agent_id for atomicity.
+    pub fn clear_bindings_for_agent(&self, agent_id: &str) -> Result<(), AgentEnvError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "DELETE FROM channel_active_agent WHERE agent_id = ?1",
+            params![agent_id],
+        )
+        .map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        Ok(())
+    }
+
     /// Get the active agent for a channel.
     ///
     /// Returns the `agent_id` bound to this channel, or None if unbound.
@@ -327,20 +342,6 @@ impl AgentEnvStore {
         let result = stmt.query_row(params![channel], |row| row.get::<_, String>(0));
         match result {
             Ok(id) => Ok(Some(id)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(AgentEnvError::Database(e.to_string())),
-        }
-    }
-
-    /// Reverse lookup: which channel is this agent bound to?
-    pub fn get_channel_for_agent(&self, agent_id: &str) -> Result<Option<String>, AgentEnvError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare("SELECT channel FROM channel_active_agent WHERE agent_id = ?1 LIMIT 1")
-            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
-        let result = stmt.query_row(params![agent_id], |row| row.get::<_, String>(0));
-        match result {
-            Ok(ch) => Ok(Some(ch)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(AgentEnvError::Database(e.to_string())),
         }

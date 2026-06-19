@@ -42,8 +42,8 @@
 | Harness | plugins 插件 | Plugin System | `src/extension/` | ✅ |
 | Harness | skills 技能 | Skill System | `src/skill/` | ✅ |
 | Harness | browser 浏览器 | Browser Automation | `src/browser/` | ✅ |
-| Loop | goal 命令 | Standing Goal | `src/goal/` + `src/builtin_tools/goal*` | ✅ |
-| Loop | loop 命令 | Loop Command | `src/looping/` + `src/builtin_tools/loop_manage/` | ✅ |
+| Loop | goal 命令 | Standing Goal | `src/goal/` + `src/builtin_tools/goal.rs` | ✅ |
+| Loop | loop 命令 | Loop Command | `src/looping/` + `src/builtin_tools/loop_manage.rs` | ✅ |
 | Loop | workflow 命令 | Workflow | `src/workflow/` | ✅ |
 | Loop | task 任务管理 / 分解 / 验证 / 收尾 | Coordinated Tasks | `src/agents/swarm/tasks/` + `src/teams/dispatcher/` | ✅ |
 | Loop | multi-agent / teams / 多代理 | Teams / Multi-Agent | `src/teams/` + `src/agents/` | ✅ |
@@ -241,14 +241,14 @@
 
 ### 4.1 Goal 命令 (Standing Goal)
 - **口语关键词**：goal 命令、自主目标、持久目标、自动续跑、迭代/token/deadline 上限
-- **代码锚点**：`src/goal/`（mod.rs / types.rs / store.rs）、`src/tasks/goal_pursuit.rs`、`src/builtin_tools/goal*`（set/update/list/clear）
+- **代码锚点**：`src/goal/`（mod.rs / types.rs / store.rs）、`src/tasks/goal_pursuit.rs`、`src/builtin_tools/goal.rs`（GoalAction: set/get/update/clear——单文件，无 list 动作）
 - **职责**：用户设持久目标，LLM 经 goal 工具管状态，后台按 迭代/token/deadline 上限自主续跑，每轮注入进度 lessons + 剩余配额。
 - **状态**：✅ 已实现（should_continue / continuation_prompt / cap/deadline/budget_reached_note 全连，门控器决定客观完成）。
-- **打磨话术**：「goal 状态机在 `src/goal/`；‘续跑触发’在 `tasks/goal_pursuit.rs`；用户面工具在 `builtin_tools/goal*`。」
+- **打磨话术**：「goal 状态机在 `src/goal/`；‘续跑触发’在 `tasks/goal_pursuit.rs`；用户面工具在 `builtin_tools/goal.rs`。」
 
 ### 4.2 Loop 命令 (Loop Command)
 - **口语关键词**：loop 命令、周期循环、定时、cadence、内存态
-- **代码锚点**：`src/looping/`（mod.rs / types.rs / pursuit.rs）、`src/builtin_tools/loop_manage/`（set/update/list/stop/clear）
+- **代码锚点**：`src/looping/`（mod.rs / types.rs / pursuit.rs）、`src/builtin_tools/loop_manage.rs`（LoopAction: start/stop/status/update——单文件）
 - **职责**：内存 HashMap 维护每会话 LoopState（Fixed/Timeout），hook 按 next_wake 定时触发续跑 RPC。
 - **状态**：✅ 已实现（含 fail-closed `stop_loop_on_failure` + update 原地重定速）。**注意**：状态**只存进程内，daemon 重启清零**（设计意图"随会话消亡"）。**硬化（2026-06-17）**：① **停因连线（修死计算）**——cap-reached 分支此前算出 `note`（token/deadline/iteration 三因）后只 `info!` 丢弃；现 `LoopState.stop_reason` 字段存储之，失败路径 `stop_loop_on_failure` 同样写入，`loop(action='status')` 表面化，静默封顶的 watch loop 能在下一轮自报停因；② **`status` 打磨**——从裸 `{:?}` Debug dump 改为 `human_summary()` 人类可读摘要（cadence "every 5m"、ticks N/cap、time left、next wake「in 8m」、停因）；③ **`update`/`stop` 诚实化（修误导）**——对已停 loop 的 `update` 不再谎报 `"Loop updated"`（hook 只对 Active fire，永不再跑），改返回 `success=false` 引导 `start`；`stop` 已停 loop 报 `"already stopped"`；④ **熵减**——三路选 note 的 if/else 下沉为 `pursuit::stop_reason_note()`，execute.rs 一行调用。
 - **打磨话术**：「loop 状态在 `src/looping/`，**内存态、重启丢失**别当持久。要持久周期任务用 cron（`src/tasks/cron/`）。停因在 `LoopState.stop_reason`（`pursuit::stop_reason_note` 选 token/deadline/iteration 三因），status 输出在 `LoopState::human_summary`，duration 显示走 `types::fmt_duration_ms`（`parse_interval_ms` 的逆）。」
@@ -265,11 +265,11 @@
 - **代码锚点**：`src/agents/swarm/tasks/`（mod.rs 数据模型 / store/ 持久化 / dag.rs 环检测 / acceptance.rs 验收 / **retry.rs 有界重试**）、`src/teams/dispatcher/schedule.rs`（select_schedulable + **fail_or_retry**）、`src/teams/dispatcher/runner.rs`（execute_member_task）、`src/teams/dispatcher/handoff.rs`（build_recovery_section 续做上下文）
 - **职责**：DAG 中每个 CoordTask 按 blocked_by 扫描依赖，上游完成→Runnable，分派器选最闲 owner 并发执行；失败/超时**有界自动重试**（默认 2 次=至多 3 次尝试，每次重试携带前序 recovery 上下文续做，且**指数退避**间隔），耗尽预算→FailedFinal，僵尸（worker 失联）→强制失败不重试。
 - **状态**：✅ 已实现。**重试连线（2026-06-17）**：此前 `fail_task` 失败即永久 `Failed`，文档承诺的「失败重试 3 次→FailedFinal」是空头——recovery 基础设施（`build_recovery_section`「这是第 N 次尝试」+ 退出日志续做 + `coord_task_runs` 逐次历史）全建好却只能靠 leader 手动 reset 或孤儿回收触发。现新增纯决策 `retry.rs::retry_decision`（有界计数）+ `schedule.rs::fail_or_retry`：失败时数已记录的失败 run 次数对比 `max_retries`（任务 metadata 覆盖，否则 `DispatcherConfig.default_max_retries=2`），未超限 reset `Pending`（**激活既有 recovery 注入**），超限才走 `fail_task`（终态 `Failed`=FailedFinal）。孤儿回收留 `Running` 行不计入预算；僵尸绕过重试直接 `fail_task`。per-task 覆盖经 `task_create` 的 `max_retries` 参数透传。**退避增强（2026-06-17）**：此前 reset `Pending` 后 `run_task` 结尾 `signal()` 当 tick 即重派——transient 失败（限流/过载）几十毫秒内打光重试预算。现 `fail_or_retry` 计算 `retry.rs::jittered_backoff_secs`（指数 `base*2^(n-1)` 封顶 + **equal jitter** `[delay/2,delay]`，`DispatcherConfig.retry_backoff_{base,cap}_secs` = 5s/120s），把 `retry_not_before` 戳进 metadata（复用既有通道，零 schema 漂移），`dispatch_once` 的 `is_retry_eligible` 门在 I/O 边界跳过未到期任务（`select_schedulable` 仍是纯时间无关公平函数）；并 spawn Tokio 精确延时 `signal` 唤醒，短退避不必等 60s fallback tick。jitter seed = task id 哈希（确定性、无 RNG 依赖，但逐任务相异）→ 整团同时失败的任务不再锁步重试再次踩塌恢复中的 provider（thundering herd）。`base=0` 退回即时重试（向后兼容）。**注意**：CoordTaskStatus 实为 10 态（含派生 `Blocked`/`Unsatisfiable`），无独立 `FailedFinal` 状态——`Failed` 即终态，重试期任务回 `Pending` 不落 `Failed`。tasks 无直接用户工具，经 workflow/teams leader 间接驱动。
-- **打磨话术**：「任务调度/依赖/僵尸检测在 `teams/dispatcher/`；‘失败重试几次’= 纯函数 `tasks/retry.rs::retry_decision` + 连线 `schedule.rs::fail_or_retry`，调默认改 `DispatcherConfig.default_max_retries`、按任务改 `task_create` 的 `max_retries`；‘重试间隔/退避’= `tasks/retry.rs::backoff_secs` + `DispatcherConfig.retry_backoff_{base,cap}_secs`，门在 `dispatch_once` 的 `is_retry_eligible`（`retry_not_before` metadata）；‘重试时续做而非重来’= `handoff.rs::build_recovery_section`（智慧在 prompt，R9）；任务数据结构在 `agents/swarm/tasks/`。」
+- **打磨话术**：「任务调度/依赖/僵尸检测在 `teams/dispatcher/`；‘失败重试几次’= 纯函数 `tasks/retry.rs::retry_decision` + 连线 `schedule.rs::fail_or_retry`，调默认改 `DispatcherConfig.default_max_retries`、按任务改 `task_create` 的 `max_retries`；‘重试间隔/退避’= `tasks/retry.rs::backoff_secs` + `DispatcherConfig.retry_backoff_{base,cap}_secs`，门在 `dispatch_once` 的 `is_retry_eligible`（`retry_not_before` metadata）；‘重试时续做而非重来’= `handoff.rs::build_recovery_section`（智慧在 prompt，R9）；任务数据结构在 `agents/swarm/tasks/`。**operator 调参（已连线）**：`[team_dispatcher]` TOML 子表（`default_max_retries`/`retry_backoff_{base,cap}_secs`/`zombie_ttl_secs`/`max_per_owner`/`max_concurrent`/…，缺字段回退 `DispatcherConfig::default()`，boot 站点 `agent_init/mod.rs` 映射，zombie_ttl 钳到不低于 task_timeout）——此前 dispatcher 恒 `::default()`，文档承诺的可调性是空头。」
 
 ### 4.5 多代理 / 团队 (Teams / Multi-Agent)
 - **口语关键词**：multi-agent、teams、多线程多任务多代理、leader、群聊广播、roster
-- **代码锚点**：`src/teams/`——`dispatcher/`、`messages/`（路由）、`broadcast/mod.rs`（GroupChatBroadcaster::dispatch，防风暴三道闸 MAX_CHAIN_DEPTH=6 / MAX_FANOUT_WIDTH=5 / **MAX_TOTAL_ACTIVATIONS=32**）、`store.rs`、`leader_prompt.rs`、`workflow_canvas.rs`；`src/agents/`（registry/runtime/subagent_spawner/swarm）
+- **代码锚点**：`src/teams/`——`dispatcher/`、`messages/`（路由）、`broadcast/mod.rs`（GroupChatBroadcaster::dispatch，防风暴三道闸 MAX_CHAIN_DEPTH=6 / MAX_FANOUT_WIDTH=5 / **MAX_TOTAL_ACTIVATIONS=32**）、`store.rs`、`workflow_canvas.rs`；`src/agents/`（registry/runtime/subagent_spawner/swarm）
 - **职责**：leader 创建团队并分解任务（建 coord_tasks），成员并发执行，消息经 Aggregator 合并后 MessageRouter 投递，群聊可自主链式接话（深度 + 单轮宽度 + 整树累计唤醒三重封顶）。
 - **状态**：✅ 已实现。**强化（2026-06-17）**：① 群聊防风暴补齐**全局唤醒闸** `MAX_TOTAL_ACTIVATIONS`——此前仅 depth×width 是局部约束，最坏 `5^6≈1.5万` 次成员 run 可炸开；现整棵 fan-out 树共享一个累计计数器（`Arc<AtomicUsize>` 随 `dispatch_user` 新建、随递归下传），越界跳过且**恰好跨界一次**发系统提示（原子天然去重，不刷屏）；② fan-out join 不再静默吞 `JoinError`——成员任务 panic 降级为 `warn` 可观测；③ 熵减：删除 `dispatcher/acp_bridge.rs` 中从未被调用的 `execute_acp_member_task`（活体执行在 `runner.rs::execute_member_task`，桥接模块现仅保留 `AcpMemberRef` 命名约定解析）。
 - **打磨话术**：「‘多代理协作/群聊’在 `src/teams/`；‘单个 agent 怎么跑/怎么 spawn 子代理’在 `src/agents/`。两者配合。‘群聊会不会被模型乱 @ 炸开’= 三道闸：深度 `MAX_CHAIN_DEPTH`、单轮宽度 `MAX_FANOUT_WIDTH`、整树累计 `MAX_TOTAL_ACTIVATIONS`（全在 `broadcast/mod.rs`）。ACP 成员执行不在 `acp_bridge.rs`（那只管 `acp:` 命名解析）而在 `runner.rs`。」
@@ -280,7 +280,7 @@
 - **职责**：agent 工具管生命周期，全局（~/.aleph/agents/）+ 项目层（project/.aleph/agents/）两级，项目层可影子覆盖全局。**切换** = 把当前 channel 的活跃 agent 重绑到另一个已存在实例。
 - **状态**：✅ 已实现。**切换工具连线（2026-06-17）**：新增 `agent_switch` 工具——本节namesake 此前缺失（只有 Panel RPC `channels.set_agent`，LLM 无法经自然语言切换，违 R8）。`switch.rs` 复用 `SessionContext.__channel` 注入链 + 实例 `AgentRegistry`（存在性校验，杜绝绑幽灵 agent）+ `set_active_agent` + `GatewayEventBus`（新 `AgentLifecycleEvent::Bound`），逐点接入 9 处枚举（definitions/groups/method_authz(operator 门控)/registry_adapter(EXCLUSIVE)/slash_command/dispatch）。顺带修 `create.rs` 死引用（旧描述让模型调不存在的 `agent_bind`→ 改 `agent_switch`）。
 - **设计边界**：`agent_info` 查的是 AgentDef 子代理目录（explore/coder…），`list/create/delete/switch` 查运行时实例注册表——两套**刻意分层**（persona 实例 vs 子代理 role），未合并。
-- **打磨话术**：「agent 创建/切换/列出/删除 工具在 `agent_manage/`（同一运行时实例注册表）；切换落 `switch.rs`→`set_active_agent`，生效点在 `agent_resolver.rs` Tier2。‘加载与项目覆盖’在 `agents/loader.rs`（那是 AgentDef 侧，另一套）。」
+- **打磨话术**：「agent 创建/切换/列出/删除 工具在 `agent_manage/`（同一运行时实例注册表）；切换落 `switch.rs`→`set_active_agent`，生效点在 `agent_resolver.rs` Tier2。‘加载与项目覆盖’在 `agents/loader.rs`（那是 AgentDef 侧，另一套）。**生命周期事件投递（已修）**：`AgentLifecycleEvent::{Bound,Deleted,Registered}` 经 `bus.publish_json` 时须包成 `TopicEvent`（带 topic）——裸发是 topic-less，被 WS forwarder 当 topic="" 由 `agent.lifecycle.*` 订阅丢弃（Panel 收不到）。**删除解绑（已修）**：`agent_delete` 用 `clear_bindings_for_agent`（按 agent_id 删全部 channel 绑定），不再只解一个（多对一绑定模型，否则残留幽灵）；`set_active_agent` 改 `INSERT OR REPLACE` 原子 upsert。」
 
 ### 4.7 消息流与最终答案汇总 (Message Stream & Final Answer)
 - **口语关键词**：对话消息流、StreamEvent、最终结果汇总、final_response、RunComplete、汇总打印输出、instant/打字机缓冲
@@ -298,7 +298,7 @@
   - **取消/续跑**：`src/gateway/cancellation.rs`、`src/gateway/resume_coordinator.rs`
 - **职责**：agent 繁忙时新消息进 `busy_queue` per-agent FIFO（上限 32，仅队首尝试投递，保到达序，超 30min 才通知失败而非静默丢弃）；同会话有活跃 run 时，按通道 `BusyInputMode` 分流——**Steer**（默认，注入 live event log 让运行中的 loop 下个轮次接住）/ **Interrupt**（取消同会话 sibling，经 busy_queue 以全上下文重启）/ **Queue**（不打扰，排队等当前 run 结束）；Lane + ChannelClass 让本地 Panel 优先于 Bot/CLI。
 - **状态**：✅ 已实现。**熵减（2026-06-17）**：删除死代码 `session_scheduler.rs`（631 行，per-session FIFO 旧版调度器，`::new`/`enqueue` 仅存在于自身测试，零生产消费者）——其职责早被 harness `try_start_run` 每-agent 闸 + `busy_queue` FIFO + `steering` 完整取代，违 R10 YAGNI 故连根清除。
-- **打磨话术**：「‘用户改需求/插队/打断’的真核心 = `busy_queue.rs`（agent 级 FIFO）+ `steering.rs`（mid-loop 注入）+ `BusyInputMode`（Steer/Interrupt/Queue 三态，在 `execution_engine/{mod,execute}.rs`）+ `lane.rs`（Panel 优先）。要改‘改需求时是排队、注入还是打断当前 run’就动 `execute.rs` 的 busy 分支 + 对应通道的 busy-input 模式 + `cancellation.rs`。**注意**：`session_scheduler.rs` 已删除——它从来不是活跃路径，别再去找它。」
+- **打磨话术**：「‘用户改需求/插队/打断’的真核心 = `busy_queue.rs`（agent 级 FIFO）+ `steering.rs`（mid-loop 注入）+ `BusyInputMode`（Steer/Interrupt/Queue 三态，在 `execution_engine/{mod,execute}.rs`）+ `lane.rs`（Panel 优先）。要改‘改需求时是排队、注入还是打断当前 run’就动 `execute.rs` 的 busy 分支 + 对应通道的 busy-input 模式 + `cancellation.rs`。**注意**：`session_scheduler.rs` 已删除——它从来不是活跃路径，别再去找它。**mid-turn steering 开关（已连线）**：`[execution] mid_turn_steering`（默认 true，命名 default fn 保留旧行为）→ `ExecutionEngineConfig.mid_turn_steering`，此前硬钉 true 无 operator 出口；关闭即回退 legacy busy/retry。」
 
 ---
 
