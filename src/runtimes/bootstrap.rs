@@ -162,7 +162,17 @@ async fn run_shell(script: &str) -> Result<CmdOutcome, BootstrapError> {
 }
 
 async fn run_powershell(script: &str) -> Result<CmdOutcome, BootstrapError> {
-    run_cmd(Command::new("powershell").args(["-Command", script])).await
+    // Prefer PowerShell 7 (`pwsh`) when present — modern, the direction Microsoft
+    // is steering toward — falling back to the always-present Windows PowerShell
+    // (`powershell`, 5.1). Both run the winget install commands identically.
+    // `-NoProfile` avoids loading the user profile (faster, no profile side
+    // effects), matching the skill installer's shell selection.
+    let shell = if which::which("pwsh").is_ok() {
+        "pwsh"
+    } else {
+        "powershell"
+    };
+    run_cmd(Command::new(shell).args(["-NoProfile", "-Command", script])).await
 }
 
 /// Prepend well-known install-output directories to the current process PATH
