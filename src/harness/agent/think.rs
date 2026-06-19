@@ -432,13 +432,14 @@ impl AgentHarness {
         // call later fails. No LLM cost in this step.
         if let Some(pipeline) = self.deps.preflight_pipeline.as_ref() {
             // Compute the REAL pressure snapshot (read-only via `peek_pressure`
-            // — no calibration or circuit-breaker mutation) so pressure-gated
-            // stages such as `FileOpSupersedeStage` (gate:
-            // `pressure.ratio >= min_pressure_ratio`, default 0.60) fire only
-            // when the context is actually full. The old `ratio: 1.0`
-            // placeholder kept that gate permanently open, so file-op
-            // supersession ran on every turn even on a near-empty context —
-            // contradicting its own "calm runs pay nothing" contract.
+            // — no calibration or circuit-breaker mutation) so the pipeline's
+            // preventive-band gate (`PreflightPipeline::min_pressure_ratio`,
+            // wired from `ContextBudgetConfig::preventive_floor`, default 0.60)
+            // fires the lossy cheap passes only when the context is actually
+            // filling up. The old `ratio: 1.0` placeholder kept the gate
+            // permanently open, so the passes ran on every turn even on a
+            // near-empty context — contradicting the "calm runs pay nothing"
+            // contract.
             // `fresh_tail` comes from the same `ContextBudget` the compactor
             // consults, keeping the protected-tail invariant intact. Falls back
             // to a max-pressure placeholder + `CompactorConfig::default` tail of

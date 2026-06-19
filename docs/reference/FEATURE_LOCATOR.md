@@ -101,10 +101,10 @@
 
 ### 2.1 对话历史压缩 (History Compaction)
 - **口语关键词**：对话压缩、history compaction、session summary、窗口管理、token 有效控制
-- **代码锚点**：`src/context/compact/compactor.rs`（三策略：LlmSummary / DeterministicTruncation / SessionMemoryReuse）、`src/context/compact/session_split.rs`（压缩失败后 split 新 epoch）、`src/context/budget/mod.rs`（ContextPressure 计算）、`src/context/budget/pressure.rs`（内容感知 token 估计）
-- **职责**：消息历史压力超 warning 阈值时走侧信道 LLM 摘要，保留 fresh_tail（最近 ~6 条），失败回退确定性截断或旧 summary，极限时 split 新 session。
-- **状态**：✅ 已实现，三层降级 + 缓存复用 + 零 API 成本路径。
-- **打磨话术**：「‘记忆有效传递又控 token’的核心在 `compactor.rs` 的三策略降级；‘何时触发’在 `budget/pressure.rs` 的阈值。」
+- **代码锚点**：`src/context/compact/compactor.rs`（三策略：LlmSummary / DeterministicTruncation / SessionMemoryReuse）、`src/context/compact/session_split.rs`（压缩失败后 split 新 epoch）、`src/context/budget/mod.rs`（ContextPressure 计算 + `ContextBudgetConfig::preventive_floor`）、`src/context/budget/pressure.rs`（内容感知 token 估计）、`src/context/budget/cheap_passes/`（preflight 廉价 pass：file_op_supersede / tool_result_pruning / image_stripping）
+- **职责**：消息历史压力超 warning 阈值时走侧信道 LLM 摘要，保留 fresh_tail（最近 ~6 条），失败回退确定性截断或旧 summary，极限时 split 新 session。**升级阶梯（preventive band，2026-06-19）**：`< floor`（=`warning − 0.10`）保留全部历史；`[floor, warning)` 触发确定性廉价 pass（无 LLM 成本）；`≥ warning` 触发侧信道 LLM 摘要。三个廉价 pass 的压力门控统一由 `PreflightPipeline::with_min_pressure_ratio(cfg.preventive_floor())` 派生，不再各自硬编码——上下文有余量时不做有损丢弃（headroom 的 `live_zone_only` 压力自适应激进度映射）。
+- **状态**：✅ 已实现，三层降级 + 缓存复用 + 零 API 成本路径 + preventive band 升级阶梯。
+- **打磨话术**：「‘记忆有效传递又控 token’的核心在 `compactor.rs` 的三策略降级；‘何时触发’在 `budget/pressure.rs` 的阈值 + `preventive_floor` 的廉价 pass 预备带；廉价 pass 门控连线在 `runner_impl.rs` 构造 `PreflightPipeline` 处。」
 
 ### 2.2 按模型窗口的压缩时机 (Model-Aware Compaction Timing)
 - **口语关键词**：kimi 20 万 vs claude 100 万、不同模型不同压缩时机、模型窗口差异、压缩阈值、per-model 阈值

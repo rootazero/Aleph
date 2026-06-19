@@ -39,19 +39,44 @@ pub trait PreflightStage: Send + Sync {
 /// tokens freed across all stages.
 pub struct PreflightPipeline {
     stages: Vec<Box<dyn PreflightStage>>,
+    /// Fill-ratio floor below which the whole pipeline is a no-op — the bottom
+    /// of the "preventive band". `0.0` (the [`new`](Self::new) default) keeps
+    /// the historical always-run behaviour; production wires this from
+    /// [`ContextBudgetConfig::preventive_floor`](super::ContextBudgetConfig::preventive_floor)
+    /// so the lossy cheap passes only act once the context is genuinely filling
+    /// up. Centralising the gate here gives all stages one consistent
+    /// aggressiveness knob (headroom's pressure-aware compression), rather than
+    /// each stage carrying its own ad-hoc threshold.
+    min_pressure_ratio: f64,
 }
 
 impl PreflightPipeline {
-    /// Create a new pipeline with the given ordered stages.
+    /// Create a new pipeline with the given ordered stages. The preventive-band
+    /// floor defaults to `0.0` (always run); set it with
+    /// [`with_min_pressure_ratio`](Self::with_min_pressure_ratio).
     #[must_use]
     pub fn new(stages: Vec<Box<dyn PreflightStage>>) -> Self {
-        Self { stages }
+        Self {
+            stages,
+            min_pressure_ratio: 0.0,
+        }
     }
 
     /// Create an empty pipeline (no-op).
     #[must_use]
     pub fn empty() -> Self {
-        Self { stages: Vec::new() }
+        Self {
+            stages: Vec::new(),
+            min_pressure_ratio: 0.0,
+        }
+    }
+
+    /// Set the preventive-band floor: below this fill ratio
+    /// [`run`](Self::run) skips every stage and frees nothing.
+    #[must_use]
+    pub fn with_min_pressure_ratio(mut self, ratio: f64) -> Self {
+        self.min_pressure_ratio = ratio;
+        self
     }
 
     /// Run all stages in order, returning the total tokens freed.
@@ -61,6 +86,21 @@ impl PreflightPipeline {
         pressure: &ContextPressure,
         fresh_tail_count: usize,
     ) -> usize {
+        // Preventive-band gate: with plenty of context headroom, keep history
+        // verbatim. The lossy cheap passes (tool-result pruning, historical
+        // image stripping) permanently shed context the model may still want,
+        // so paying that cost on a near-empty conversation is pure loss — the
+        // budget sensor still escalates to LLM compaction at the warning line.
+        if pressure.ratio < self.min_pressure_ratio {
+            tracing::debug!(
+                target: "preflight_pipeline",
+                ratio = pressure.ratio,
+                floor = self.min_pressure_ratio,
+                "context below preventive band — preflight cheap passes skipped"
+            );
+            return 0;
+        }
+
         let mut total_freed: usize = 0;
 
         for stage in &self.stages {
@@ -156,6 +196,37 @@ mod tests {
         let pressure = make_pressure(0.5);
         let freed = pipeline.run(&mut msgs, &pressure, 1).await;
         assert_eq!(freed, 0);
+    }
+
+    #[tokio::test]
+    async fn preventive_band_skips_all_stages_below_floor() {
+        // A pipeline gated at 0.60 must free nothing below the floor (every
+        // stage skipped) and run normally at/above it — the preventive band.
+        let pipeline = PreflightPipeline::new(vec![Box::new(MockStage {
+            name: "lossy",
+            tokens_to_free: 500,
+        })])
+        .with_min_pressure_ratio(0.60);
+        let mut msgs = vec![UnifiedMessage::user("test")];
+
+        let calm = pipeline.run(&mut msgs, &make_pressure(0.50), 1).await;
+        assert_eq!(calm, 0, "below the preventive floor the pipeline is a no-op");
+
+        let pressured = pipeline.run(&mut msgs, &make_pressure(0.70), 1).await;
+        assert_eq!(pressured, 500, "at/above the floor stages run normally");
+    }
+
+    #[tokio::test]
+    async fn default_pipeline_floor_is_always_on() {
+        // `new` without a floor keeps the historical behaviour: stages run even
+        // at very low pressure (floor defaults to 0.0).
+        let pipeline = PreflightPipeline::new(vec![Box::new(MockStage {
+            name: "always",
+            tokens_to_free: 42,
+        })]);
+        let mut msgs = vec![UnifiedMessage::user("test")];
+        let freed = pipeline.run(&mut msgs, &make_pressure(0.01), 1).await;
+        assert_eq!(freed, 42);
     }
 
     #[tokio::test]
