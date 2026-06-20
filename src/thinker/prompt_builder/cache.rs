@@ -49,7 +49,7 @@ impl PromptBuilder {
         // production entry point: before this threading, the bridge's
         // `with_identity_files` / `with_curated_envelope` /
         // `with_memory_user_message` / `with_agent` / `with_resolved_context`
-        // / `with_chain_context` / `with_provider_protocol` /
+        // / `with_chain_context` / `with_behavior_name` /
         // `with_iteration_cap` / `with_extra_files` calls were silently
         // dropped here (the input was built bare), so the corresponding
         // layers rendered nothing on the production cached path.
@@ -73,7 +73,8 @@ impl PromptBuilder {
             .with_curated_envelope(self.curated_memory_envelope.clone())
             .with_chain_context_opt(self.chain_context.as_ref())
             .with_resolved_context_opt(self.resolved_context.as_ref())
-            .with_provider_protocol_opt(self.provider_protocol.as_deref())
+            .with_behavior_name_opt(self.behavior_name.as_deref())
+            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref())
             .with_iteration_cap_opt(self.iteration_cap);
         let stable = self
             .pipeline

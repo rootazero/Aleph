@@ -431,16 +431,14 @@ impl AgentHarnessRunner {
         resolved_context.voice_mode_active =
             crate::gateway::voice::session_mode::is_active(&session_key_str);
         builder = builder.with_resolved_context(resolved_context);
-        // Phase 3: thread the provider's wire-protocol family so
-        // `ProviderGuidanceLayer` can pick the right per-family
-        // operational directives. `model_behavior_override()` wins over
-        // the raw protocol so providers like OpenRouter that proxy a
-        // different model family can advertise the correct target
-        // (e.g., `protocol = "openai"`, override = `"anthropic"`).
-        let provider_protocol = provider
-            .model_behavior_override()
-            .map_or_else(|| provider.protocol().into_owned(), |s| s.into_owned());
-        builder = builder.with_provider_protocol(provider_protocol);
+        // Resolve the governance behavior name once (same source of truth as
+        // the robustness profile) and pre-load its overridable coaching delta.
+        let behavior_name = crate::orchestrator::harness_bridge::resolve_behavior(provider);
+        let behavior_delta =
+            crate::providers::model_behaviors::load_model_behavior(&behavior_name).await;
+        builder = builder
+            .with_behavior_name(behavior_name.into_owned())
+            .with_model_behavior_delta(behavior_delta);
         // Phase 4 (F2): surface the resolved iteration cap to
         // `SessionBudgetLayer`. Saturating to `u32::MAX` (instead of
         // truncating) preserves "no practical cap" semantics for callers
