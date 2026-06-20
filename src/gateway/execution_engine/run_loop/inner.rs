@@ -49,8 +49,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         hook_executor: Option<Arc<HookExecutor>>,
         hook_session_id: String,
     ) -> Result<String, ExecutionError> {
-        use crate::providers::model_behaviors::{load_model_behavior, protocol_to_behavior};
-
         info!(run_id = run_id, "Starting agent loop (think->act)");
 
         // Effective workspace: if the request carries a per-run `workspace_override`
@@ -528,30 +526,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     },
                 })
                 .await;
-
-            // Resolve model behavior: config override > protocol auto-mapping.
-            {
-                let provider = self
-                    .provider_registry
-                    .get(&resolved.provider_name)
-                    .unwrap_or_else(|| self.provider_registry.default_provider());
-                let behavior_override = provider.model_behavior_override();
-                let protocol = provider.protocol();
-                let behavior_name: Option<&str> = behavior_override
-                    .as_deref()
-                    .or_else(|| protocol_to_behavior(&protocol));
-                let content = match behavior_name {
-                    Some(name) => load_model_behavior(name).await,
-                    None => None,
-                };
-                info!(
-                    run_id = run_id,
-                    protocol = %protocol,
-                    behavior_name = ?behavior_name,
-                    loaded = content.is_some(),
-                    "Model behavior resolved"
-                );
-            }
 
             // Build per-request ToolService with SubagentTool + optional MCP refresh
             let mut loop_registry_inner = crate::tools::adapters::build_registry_from_tools(
