@@ -88,6 +88,8 @@ pub fn MemoryView() -> impl IntoView {
                                 <ReflectionSettings config=config />
                                 <StorageBackupSettings config=config />
                                 <RetrievalDebugPanel />
+                                <DreamInsightsPanel />
+                                <CorrectionsPanel />
 
                                 <div class="pt-4 border-t border-border">
                                     <button
@@ -941,6 +943,276 @@ fn RetrievalDebugPanel() -> impl IntoView {
                                     </div>
                                 </div>
                             }
+                        })}
+                    </div>
+                }.into_any()
+            }}
+        </div>
+    }
+}
+
+// ============================================================================
+// Section F: Dream Insights Panel
+// ============================================================================
+
+
+#[component]
+fn DreamInsightsPanel() -> impl IntoView {
+    use crate::api::memory_config::{DreamInsightsApi, DreamInsightsResponse};
+    let i18n = use_i18n();
+    let expanded = RwSignal::new(false);
+    let loading = RwSignal::new(false);
+    let data = RwSignal::new(Option::<DreamInsightsResponse>::None);
+    let error = RwSignal::new(Option::<String>::None);
+
+    let load = move || {
+        let state = expect_context::<DashboardState>();
+        spawn_local(async move {
+            loading.set(true);
+            error.set(None);
+            match DreamInsightsApi::list(&state, None, Some(30)).await {
+                Ok(resp) => data.set(Some(resp)),
+                Err(e) => error.set(Some(e)),
+            }
+            loading.set(false);
+        });
+    };
+
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <button
+                on:click=move |_| {
+                    let next = !expanded.get();
+                    expanded.set(next);
+                    if next && data.get().is_none() {
+                        load();
+                    }
+                }
+                class="flex items-center w-full text-left"
+            >
+                <span class="text-lg font-semibold">
+                    {move || {
+                        let prefix = if expanded.get() { "- " } else { "+ " };
+                        format!("{}{}", prefix, t_string!(i18n, settings.memory.dream_insights))
+                    }}
+                </span>
+            </button>
+
+            {move || {
+                if !expanded.get() {
+                    return view! { <div></div> }.into_any();
+                }
+                view! {
+                    <div class="mt-4 space-y-4">
+                        {move || if loading.get() {
+                            view! { <div class="text-text-tertiary">{t!(i18n, common.loading)}</div> }.into_any()
+                        } else { view! { <div></div> }.into_any() }}
+
+                        {move || error.get().map(|e| view! {
+                            <div class="p-3 bg-danger-subtle text-danger rounded text-sm">{e}</div>
+                        })}
+
+                        {move || data.get().map(|resp| {
+                            let runs = resp.runs.clone();
+                            let daily = resp.daily.clone();
+                            let synthesis = resp.synthesis.clone();
+                            let is_empty = runs.is_empty() && daily.is_empty() && synthesis.is_empty();
+                            let latest_run_summary = runs.first().map(|latest| {
+                                let label = t_string!(i18n, settings.memory.dream_latest_run).to_string();
+                                format!("{}: {} · {}ms · {} synth",
+                                    label, latest.pipeline_type, latest.duration_ms, latest.synthesis_count)
+                            });
+                            view! {
+                                {if is_empty {
+                                    view! { <div class="text-text-tertiary text-sm">{t!(i18n, settings.memory.dream_no_insights)}</div> }.into_any()
+                                } else { view! { <div></div> }.into_any() }}
+
+                                // Recent runs
+                                <div>
+                                    <h3 class="text-sm font-semibold mb-2">{t!(i18n, settings.memory.dream_runs)}</h3>
+                                    {latest_run_summary.map(|summary| view! {
+                                        <div class="mb-2 px-3 py-1.5 bg-info-subtle rounded text-sm font-medium text-info">
+                                            {summary}
+                                        </div>
+                                    })}
+                                    <div class="space-y-1">
+                                        {runs.into_iter().map(|r| {
+                                            let err = r.errors.clone();
+                                            view! {
+                                                <div class="p-2 bg-surface-sunken rounded border border-border text-sm flex justify-between">
+                                                    <span>{r.pipeline_type}</span>
+                                                    <span class="text-text-tertiary">{format!("{}ms · {} synth", r.duration_ms, r.synthesis_count)}</span>
+                                                    {err.map(|e| view! { <span class="text-danger">{e}</span> })}
+                                                </div>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                </div>
+
+                                // Daily digests
+                                <div>
+                                    <h3 class="text-sm font-semibold mb-2">{t!(i18n, settings.memory.dream_daily)}</h3>
+                                    <div class="space-y-2">
+                                        {daily.into_iter().map(|d| {
+                                            view! {
+                                                <div class="p-3 bg-surface-sunken rounded border border-border">
+                                                    <div class="flex justify-between mb-1">
+                                                        <span class="text-xs font-mono text-text-tertiary">{d.date}</span>
+                                                        <span class="text-xs">{format!("{} {}", d.source_memory_count, t_string!(i18n, settings.memory.dream_source_count))}</span>
+                                                    </div>
+                                                    <p class="text-sm">{d.content}</p>
+                                                </div>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                </div>
+
+                                // Synthesis notes
+                                <div>
+                                    <h3 class="text-sm font-semibold mb-2">{t!(i18n, settings.memory.dream_synthesis)}</h3>
+                                    <div class="space-y-2">
+                                        {synthesis.into_iter().map(|s| {
+                                            view! {
+                                                <div class="p-3 bg-surface-sunken rounded border border-border">
+                                                    <div class="flex justify-between">
+                                                        <span class="text-sm font-medium">{s.title}</span>
+                                                        <span class="text-xs font-mono text-text-tertiary">{s.path}</span>
+                                                    </div>
+                                                </div>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                </div>
+                            }
+                        })}
+                    </div>
+                }.into_any()
+            }}
+        </div>
+    }
+}
+
+// ============================================================================
+// Section G: Corrections Panel
+// ============================================================================
+
+#[component]
+fn CorrectionsPanel() -> impl IntoView {
+    use crate::api::memory_config::{CorrectionsApi, CorrectionsResponse};
+    let i18n = use_i18n();
+    let expanded = RwSignal::new(false);
+    let loading = RwSignal::new(false);
+    let show_distilled = RwSignal::new(true);
+    let data = RwSignal::new(Option::<CorrectionsResponse>::None);
+    let error = RwSignal::new(Option::<String>::None);
+
+    let load = move || {
+        let state = expect_context::<DashboardState>();
+        let include = show_distilled.get();
+        spawn_local(async move {
+            loading.set(true);
+            error.set(None);
+            match CorrectionsApi::list(&state, None, include).await {
+                Ok(resp) => data.set(Some(resp)),
+                Err(e) => error.set(Some(e)),
+            }
+            loading.set(false);
+        });
+    };
+
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <button
+                on:click=move |_| {
+                    let next = !expanded.get();
+                    expanded.set(next);
+                    if next && data.get().is_none() {
+                        load();
+                    }
+                }
+                class="flex items-center w-full text-left"
+            >
+                <span class="text-lg font-semibold">
+                    {move || {
+                        let prefix = if expanded.get() { "- " } else { "+ " };
+                        format!("{}{}", prefix, t_string!(i18n, settings.memory.corrections))
+                    }}
+                </span>
+            </button>
+
+            {move || {
+                if !expanded.get() {
+                    return view! { <div></div> }.into_any();
+                }
+                view! {
+                    <div class="mt-4 space-y-3">
+                        <label class="flex items-center gap-2 text-sm">
+                            <input
+                                type="checkbox"
+                                prop:checked=move || show_distilled.get()
+                                on:change=move |ev| {
+                                    show_distilled.set(event_target_checked(&ev));
+                                    load();
+                                }
+                            />
+                            <span>{t!(i18n, settings.memory.corrections_show_distilled)}</span>
+                        </label>
+
+                        {move || if loading.get() {
+                            view! { <div class="text-text-tertiary">{t!(i18n, common.loading)}</div> }.into_any()
+                        } else { view! { <div></div> }.into_any() }}
+
+                        {move || error.get().map(|e| view! {
+                            <div class="p-3 bg-danger-subtle text-danger rounded text-sm">{e}</div>
+                        })}
+
+                        {move || data.get().map(|resp| {
+                            let items = resp.corrections.clone();
+                            if items.is_empty() {
+                                return view! { <div class="text-text-tertiary text-sm">{t!(i18n, settings.memory.corrections_none)}</div> }.into_any();
+                            }
+                            let pending_count = items.iter().filter(|c| c.status == "pending").count();
+                            let distilled_count = items.len() - pending_count;
+                            let summary = format!(
+                                "{} {} · {} {}",
+                                pending_count,
+                                t_string!(i18n, settings.memory.corrections_pending),
+                                distilled_count,
+                                t_string!(i18n, settings.memory.corrections_distilled),
+                            );
+                            view! {
+                                <div class="space-y-2">
+                                    <p class="text-xs text-text-secondary font-medium">{summary}</p>
+                                    {items.into_iter().map(|c| {
+                                        let is_pending = c.status == "pending";
+                                        let badge = if is_pending {
+                                            t_string!(i18n, settings.memory.corrections_pending).to_string()
+                                        } else {
+                                            t_string!(i18n, settings.memory.corrections_distilled).to_string()
+                                        };
+                                        let badge_class = if is_pending {
+                                            "text-xs px-2 py-0.5 rounded bg-warning-subtle text-warning"
+                                        } else {
+                                            "text-xs px-2 py-0.5 rounded bg-success-subtle text-success"
+                                        };
+                                        let rule = c.suggested_rule.clone();
+                                        view! {
+                                            <div class="p-3 bg-surface-sunken rounded border border-border">
+                                                <div class="flex justify-between items-center mb-1">
+                                                    <span class=badge_class>{badge}</span>
+                                                    <span class="text-xs text-text-tertiary">{c.severity}</span>
+                                                </div>
+                                                <p class="text-sm">{c.content}</p>
+                                                {rule.map(|r| view! {
+                                                    <p class="text-xs text-text-tertiary mt-1">
+                                                        {format!("{}: {}", t_string!(i18n, settings.memory.corrections_suggested_rule), r)}
+                                                    </p>
+                                                })}
+                                            </div>
+                                        }
+                                    }).collect::<Vec<_>>()}
+                                </div>
+                            }.into_any()
                         })}
                     </div>
                 }.into_any()

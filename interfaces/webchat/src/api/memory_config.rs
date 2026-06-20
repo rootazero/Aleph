@@ -287,6 +287,82 @@ pub struct TestRerankResponse {
     pub error: Option<String>,
 }
 
+/// Response from `dreaming.list_insights` RPC.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DreamInsightsResponse {
+    #[serde(default)]
+    pub daily: Vec<DailyInsightDto>,
+    #[serde(default)]
+    pub synthesis: Vec<SynthesisNoteDto>,
+    #[serde(default)]
+    pub runs: Vec<DreamRunDto>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DailyInsightDto {
+    #[serde(default)]
+    pub date: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub source_memory_count: u32,
+    #[serde(default)]
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SynthesisNoteDto {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DreamRunDto {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub pipeline_type: String,
+    #[serde(default)]
+    pub started_at: i64,
+    #[serde(default)]
+    pub finished_at: i64,
+    #[serde(default)]
+    pub duration_ms: i64,
+    #[serde(default)]
+    pub synthesis_count: u32,
+    #[serde(default)]
+    pub errors: Option<String>,
+}
+
+/// Response from `memory.list_corrections` RPC.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CorrectionsResponse {
+    #[serde(default)]
+    pub corrections: Vec<CorrectionDto>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CorrectionDto {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub severity: String,
+    #[serde(default)]
+    pub suggested_rule: Option<String>,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub created_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DreamingConfig {
     #[serde(default = "default_dreaming_enabled")]
@@ -487,5 +563,55 @@ impl RerankConfigApi {
             .map_err(|e| format!("Failed to serialize rerank config: {e}"))?;
         let result = state.rpc_call("rerank_config.test", params).await?;
         serde_json::from_value(result).map_err(|e| format!("Failed to parse test response: {e}"))
+    }
+}
+
+// ============================================================================
+// Dream Insights API
+// ============================================================================
+
+pub struct DreamInsightsApi;
+
+impl DreamInsightsApi {
+    pub async fn list(
+        state: &DashboardState,
+        agent_id: Option<String>,
+        limit: Option<usize>,
+    ) -> Result<DreamInsightsResponse, String> {
+        let mut params = serde_json::Map::new();
+        if let Some(a) = agent_id {
+            params.insert("agent_id".into(), serde_json::Value::String(a));
+        }
+        if let Some(l) = limit {
+            params.insert("limit".into(), serde_json::json!(l));
+        }
+        let result = state
+            .rpc_call("dreaming.list_insights", serde_json::Value::Object(params))
+            .await?;
+        serde_json::from_value(result).map_err(|e| format!("parse dreaming.list_insights: {e}"))
+    }
+}
+
+// ============================================================================
+// Corrections API
+// ============================================================================
+
+pub struct CorrectionsApi;
+
+impl CorrectionsApi {
+    pub async fn list(
+        state: &DashboardState,
+        agent_id: Option<String>,
+        include_distilled: bool,
+    ) -> Result<CorrectionsResponse, String> {
+        let mut params = serde_json::Map::new();
+        if let Some(a) = agent_id {
+            params.insert("agent_id".into(), serde_json::Value::String(a));
+        }
+        params.insert("include_distilled".into(), serde_json::json!(include_distilled));
+        let result = state
+            .rpc_call("memory.list_corrections", serde_json::Value::Object(params))
+            .await?;
+        serde_json::from_value(result).map_err(|e| format!("parse memory.list_corrections: {e}"))
     }
 }

@@ -63,7 +63,7 @@ pub fn MemoryToolbar() -> impl IntoView {
                     let current = mem.agent_id.get();
                     let agents = mem.agents.get();
                     if agents.is_empty() {
-                        view! { <option value=current.clone()>{current}</option> }.into_any()
+                        view! { <option value=current.clone()>{current.clone()}</option> }.into_any()
                     } else {
                         agents.into_iter().map(|a| {
                             let id = a.id.clone();

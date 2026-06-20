@@ -76,6 +76,13 @@ pub(in crate::commands::start) fn register_memory_handlers(
         memory_handlers::handle_clear_facts,
         memory_db
     );
+    // Read-only corrections governance: raw correction rows + distillation status.
+    register_handler!(
+        server,
+        "memory.list_corrections",
+        memory_handlers::handle_list_corrections,
+        memory_db
+    );
     register_handler!(
         server,
         "memory.appList",
@@ -87,6 +94,13 @@ pub(in crate::commands::start) fn register_memory_handlers(
         server,
         "insights.tools",
         alephcore::gateway::handlers::insights::handle_tools,
+        memory_db
+    );
+    // Read-only dream insights listing (daily digests + synthesis + run history).
+    register_handler!(
+        server,
+        "dreaming.list_insights",
+        alephcore::gateway::handlers::dreaming::handle_list_insights,
         memory_db
     );
     if let Some(cs) = compression_service {

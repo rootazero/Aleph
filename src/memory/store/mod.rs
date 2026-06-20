@@ -46,6 +46,10 @@ pub trait DreamStore: Send + Sync {
 
     /// Get the daily insight for a specific date (YYYY-MM-DD format).
     async fn get_daily_insight(&self, date: &str) -> Result<Option<DailyInsight>, AlephError>;
+
+    /// List the most recent daily insights, ordered by date descending,
+    /// capped at `limit`. Used by the `dreaming.list_insights` RPC.
+    async fn recent_daily_insights(&self, limit: usize) -> Result<Vec<DailyInsight>, AlephError>;
 }
 
 // ---------------------------------------------------------------------------
