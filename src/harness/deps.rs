@@ -34,6 +34,11 @@ pub struct HarnessDeps {
     /// knows failover exists (R10 — the loop carries no recovery strategy).
     pub llm: Arc<dyn AiProvider>,
 
+    /// Per-model robustness profile for the active run's model. Resolved by
+    /// `harness_bridge::runner_impl` (where the model is known) and read by
+    /// `run_verifiers` when building `TurnVerifyContext`. Defaults to
+    /// `conservative()` at construction sites that don't resolve a model.
+    pub robustness_profile: crate::verification::ModelRobustnessProfile,
     /// Stage 6a seam (#10). Per-turn verifier chain consulted between Think
     /// and Act every iteration. `StopHookVerifier` (in the chain) preserves
     /// pre-6a "veto before Done" semantics; `ToolLoopVerifier` adds `tool_use`

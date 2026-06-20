@@ -147,6 +147,7 @@ mod tests {
             recent_tool_calls: &[],
             stop_reason: Some("end_turn"),
             session_id,
+            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         }
     }
 
@@ -161,6 +162,7 @@ mod tests {
             recent_tool_calls: &[],
             stop_reason: None, // mid-turn
             session_id: Some("sess-midturn"),
+            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         };
         assert!(v.verify(&ctx, &cancel).await.is_continue());
     }

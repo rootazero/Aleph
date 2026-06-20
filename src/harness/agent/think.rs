@@ -1719,6 +1719,7 @@ impl AgentHarness {
             recent_tool_calls: &snapshot,
             stop_reason,
             session_id: Some(session_key),
+            robustness_profile: self.deps.robustness_profile,
         };
         chain.verify(&ctx, cancel).await
     }

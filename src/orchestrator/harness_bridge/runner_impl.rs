@@ -244,11 +244,20 @@ impl HarnessRunner for AgentHarnessRunner {
             }
             None => (None, None, None),
         };
+        // Per-model loop-watchdog thresholds. Resolve from the active
+        // provider's behavior family (same key the prompt layer uses).
+        // Must be resolved before the HarnessDeps literal (which moves `llm`).
+        let robustness_profile = crate::verification::ModelRobustnessProfile::for_behavior(
+            llm.model_behavior_override()
+                .or_else(|| crate::providers::model_behaviors::protocol_to_behavior(llm.protocol())),
+        )
+        .clamped();
         let deps = HarnessDeps {
             session: self.session_service.clone(),
             tools,
             sandbox,
             llm,
+            robustness_profile,
             verifier_chain: self.verifier_chain.clone(),
             context_budget,
             context_compactor,

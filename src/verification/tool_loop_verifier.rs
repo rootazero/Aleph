@@ -215,3 +215,32 @@ impl TurnVerifier for ToolLoopVerifier {
         VerifierVerdict::Continue
     }
 }
+
+#[cfg(test)]
+mod profile_wiring_tests {
+    use crate::verification::turn_verifier::{TurnVerifyContext, ToolCallSummary};
+    use crate::verification::ModelRobustnessProfile;
+
+    fn ctx_with<'a>(
+        calls: &'a [ToolCallSummary],
+        profile: ModelRobustnessProfile,
+        text: Option<&'a str>,
+    ) -> TurnVerifyContext<'a> {
+        TurnVerifyContext {
+            iterations: 0,
+            tool_calls_made: 0,
+            final_text: text,
+            recent_tool_calls: calls,
+            stop_reason: None,
+            session_id: None,
+            robustness_profile: profile,
+        }
+    }
+
+    #[test]
+    fn context_carries_profile() {
+        let calls: Vec<ToolCallSummary> = Vec::new();
+        let c = ctx_with(&calls, ModelRobustnessProfile::conservative(), None);
+        assert_eq!(c.robustness_profile.repeat_threshold, 5);
+    }
+}
