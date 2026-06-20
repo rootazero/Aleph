@@ -45,6 +45,11 @@ mod guardrails;
 pub(crate) mod prompt;
 mod think;
 
+/// Dedicated short budget for the timeout-salvage grace turn. A per-turn /
+/// stall timeout means a step is likely slow or hung, so the salvage call must
+/// not itself wait another full `turn_timeout`. Fail-soft on expiry.
+const GRACE_TIMEOUT_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Outcome of `AgentHarness::apply_input_guardrail`. The two non-block
 /// variants both carry the (possibly mutated) events vector; the caller
 /// rebinds `events` to the returned vector before assembling the prompt.
@@ -487,6 +492,17 @@ impl Harness for AgentHarness {
                     self.set_terminate_reason(TerminateReason::StallTimeout {
                         elapsed_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
                     });
+                    let _ = tokio::time::timeout(
+                        GRACE_TIMEOUT_BUDGET,
+                        self.fire_boundary_grace_turn(
+                            &current_session,
+                            callback,
+                            iterations,
+                            crate::harness::agent::think::GraceReason::Timeout,
+                            cancel,
+                        ),
+                    )
+                    .await;
                     callback.on_complete();
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                 }
@@ -514,6 +530,17 @@ impl Harness for AgentHarness {
                         phase: phase.to_string(),
                         elapsed_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
                     });
+                    let _ = tokio::time::timeout(
+                        GRACE_TIMEOUT_BUDGET,
+                        self.fire_boundary_grace_turn(
+                            &current_session,
+                            callback,
+                            iterations,
+                            crate::harness::agent::think::GraceReason::Timeout,
+                            cancel,
+                        ),
+                    )
+                    .await;
                     callback.on_complete();
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                 }
