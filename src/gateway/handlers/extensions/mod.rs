@@ -7,4 +7,3 @@
 pub mod catalog;
 pub mod install;
 pub mod lifecycle;
-pub mod sources;

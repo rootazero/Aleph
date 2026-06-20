@@ -29,7 +29,7 @@ use builder::{
     register_agent_handlers, register_agents_handlers, register_arena_handlers,
     register_config_handlers, register_core_handlers, register_cron_handlers,
     register_daemon_handlers, register_extensions_handlers, register_extensions_install_handlers,
-    register_extensions_sources_handlers, register_fs_handlers, register_graph_handlers,
+    register_fs_handlers, register_graph_handlers,
     register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
     register_mcp_handlers, register_memory_handlers, register_oauth_handlers,
     register_projects_handlers, register_session_handlers, register_teams_handlers,
@@ -1326,9 +1326,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 let cache = std::sync::Arc::new(cache);
                 register_extensions_handlers(&mut server, mcp_handle.clone(), cache.clone());
 
-                // Source providers: convert configured marketplaces, build the
-                // registry, register extensions.sources.*, and kick an initial
-                // background catalog sync into the cache.
+                let aleph_hub = std::sync::Arc::new(
+                    alephcore::hub::catalog_client::AlephHubCatalog::new(
+                        alephcore::hub::catalog_client::ALEPH_HUB_ID,
+                        alephcore::hub::catalog_client::ALEPH_HUB_NAME,
+                        alephcore::hub::catalog_client::ALEPH_HUB_URL,
+                        alephcore::hub::types::TrustTier::Verified,
+                    ),
+                );
+
+                // Independently-built MarketplaceManager for the install backend
+                // (SHA256 verification + atomic copy). Separate from the catalog
+                // sync — the catalog comes from the Hub; installs still route
+                // through the marketplace for local plugin installs.
                 use alephcore::extension::marketplace::types::{
                     MarketplaceConfig, MarketplaceSourceType,
                 };
@@ -1351,12 +1361,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         })
                         .collect()
                 };
-                let registry = std::sync::Arc::new(
-                    alephcore::hub::provider::registry_builder::build_default_registry(
-                        marketplace_configs.clone(),
-                    ),
-                );
-                register_extensions_sources_handlers(&mut server, registry.clone(), cache.clone());
 
                 // Trust-gated install façade: extensions.disclosure/.configure/.install.
                 // Reuses the same marketplace configs (SHA256 + atomic copy) and the
@@ -1371,24 +1375,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     &mut server,
                     mcp_handle.clone(),
                     cache.clone(),
-                    registry.clone(),
                     auth_bundle.auth_ctx.shared_token_mgr.clone(),
                     marketplace,
                 );
                 {
-                    let registry = registry.clone();
+                    let aleph_hub = aleph_hub.clone();
                     let cache = cache.clone();
                     tokio::spawn(async move {
-                        // Initial sync immediately, then refresh every 6h. No
-                        // dedicated agent drives this anymore — it is a plain
-                        // background task now (interval fires on first tick).
                         let mut tick =
                             tokio::time::interval(std::time::Duration::from_secs(6 * 60 * 60));
                         loop {
                             tick.tick().await;
-                            let report = registry.sync_all_into(&cache).await;
+                            let report = aleph_hub.sync_into(&cache).await;
                             tracing::info!(
-                                synced = ?report.synced,
+                                synced = report.synced,
                                 failed = ?report.failed,
                                 "extensions catalog sync"
                             );

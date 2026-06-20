@@ -6,8 +6,6 @@ use crate::gateway::handlers::skills::shared_system;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::mcp::manager::McpManagerHandle;
 use crate::hub::cache::{CatalogCache, CatalogFilter};
-use crate::hub::dedup::{dedup_by_priority, DEFAULT_HUB_PRIORITY};
-use crate::hub::display::source_label;
 use crate::hub::reconcile::{mcp_to_entry, plugin_to_entry, skill_to_entry};
 use crate::hub::types::{ExtensionCategory, ExtensionKind};
 use serde::Deserialize;
@@ -41,17 +39,12 @@ pub async fn handle_catalog(req: JsonRpcRequest, cache: Arc<CatalogCache>) -> Js
     };
     match cache.query(&filter).await {
         Ok(entries) => {
-            // Collapse the same upstream surfaced by multiple hubs, keeping the
-            // highest-priority source; then attach the provenance label.
-            let order: Vec<String> =
-                DEFAULT_HUB_PRIORITY.iter().map(|s| (*s).to_string()).collect();
-            let entries = dedup_by_priority(entries, &order);
             let items: Vec<serde_json::Value> = entries
                 .iter()
                 .map(|e| {
                     let mut v = serde_json::to_value(e).unwrap_or_else(|_| json!({}));
                     if let Some(obj) = v.as_object_mut() {
-                        obj.insert("source_label".into(), json!(source_label(&e.source_id)));
+                        obj.insert("source_label".into(), json!(e.via.clone().unwrap_or_default()));
                     }
                     v
                 })

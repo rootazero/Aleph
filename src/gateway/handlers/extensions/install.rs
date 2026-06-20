@@ -13,7 +13,6 @@ use crate::gateway::security::SharedTokenManager;
 use crate::mcp::manager::McpManagerHandle;
 use crate::hub::cache::{CatalogCache, CatalogFilter};
 use crate::hub::install::{run_install, InstallContext, InstallOutcome};
-use crate::hub::provider::ProviderRegistry;
 use crate::hub::secrets::field_key;
 use crate::hub::trust::{build_disclosure, scan_for_injection};
 use crate::hub::types::{ExtensionEntry, InstallSpec};
@@ -120,17 +119,11 @@ async fn lookup_entry(cache: &CatalogCache, id: &str) -> Option<ExtensionEntry> 
     cache.query(&filter).await.ok()?.into_iter().next()
 }
 
-async fn resolve_spec(
-    entry: &ExtensionEntry,
-    registry: &ProviderRegistry,
-) -> Result<InstallSpec, String> {
-    let provider = registry
-        .get(&entry.source_id)
-        .ok_or_else(|| format!("no provider for source '{}'", entry.source_id))?;
-    provider
-        .resolve_install_spec(entry)
-        .await
-        .map_err(|e| e.to_string())
+fn resolve_spec(entry: &ExtensionEntry) -> Result<InstallSpec, String> {
+    entry
+        .install_spec
+        .clone()
+        .ok_or_else(|| format!("no install_spec for entry '{}'", entry.id))
 }
 
 fn scan_text(entry: &ExtensionEntry) -> Vec<crate::hub::trust::InjectionFinding> {
@@ -146,7 +139,6 @@ fn scan_text(entry: &ExtensionEntry) -> Vec<crate::hub::trust::InjectionFinding>
 pub async fn handle_disclosure(
     req: JsonRpcRequest,
     cache: Arc<CatalogCache>,
-    registry: Arc<ProviderRegistry>,
 ) -> JsonRpcResponse {
     let p: DisclosureParams = match parse_params(&req) {
         Ok(p) => p,
@@ -155,7 +147,7 @@ pub async fn handle_disclosure(
     let Some(entry) = lookup_entry(&cache, &p.id).await else {
         return JsonRpcResponse::error(req.id, INVALID_PARAMS, "unknown extension id");
     };
-    let spec = match resolve_spec(&entry, &registry).await {
+    let spec = match resolve_spec(&entry) {
         Ok(s) => s,
         Err(e) => return JsonRpcResponse::error(req.id, INTERNAL_ERROR, e),
     };
@@ -170,7 +162,6 @@ pub async fn handle_disclosure(
 pub async fn handle_configure(
     req: JsonRpcRequest,
     cache: Arc<CatalogCache>,
-    registry: Arc<ProviderRegistry>,
 ) -> JsonRpcResponse {
     let p: ConfigureParams = match parse_params(&req) {
         Ok(p) => p,
@@ -179,7 +170,7 @@ pub async fn handle_configure(
     let Some(entry) = lookup_entry(&cache, &p.id).await else {
         return JsonRpcResponse::error(req.id, INVALID_PARAMS, "unknown extension id");
     };
-    let spec = match resolve_spec(&entry, &registry).await {
+    let spec = match resolve_spec(&entry) {
         Ok(s) => s,
         Err(e) => return JsonRpcResponse::error(req.id, INTERNAL_ERROR, e),
     };
@@ -191,12 +182,10 @@ pub async fn handle_configure(
 }
 
 /// extensions.install — the full trust-gated install pipeline.
-#[allow(clippy::too_many_arguments)]
 pub async fn handle_install(
     req: JsonRpcRequest,
     mcp: Option<McpManagerHandle>,
     cache: Arc<CatalogCache>,
-    registry: Arc<ProviderRegistry>,
     vault: Arc<SharedTokenManager>,
     marketplace: Arc<MarketplaceManager>,
 ) -> JsonRpcResponse {
@@ -209,7 +198,7 @@ pub async fn handle_install(
         return JsonRpcResponse::error(req.id, INVALID_PARAMS, "unknown extension id");
     };
     // (2) resolve the install spec; OCI is unsupported (no container runtime).
-    let spec = match resolve_spec(&entry, &registry).await {
+    let spec = match resolve_spec(&entry) {
         Ok(s) => s,
         Err(e) => return JsonRpcResponse::error(req.id, INTERNAL_ERROR, e),
     };
