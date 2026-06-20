@@ -9,6 +9,7 @@ pub mod reconcile;
 pub mod secrets;
 pub mod trust;
 pub mod types;
+pub mod verify;
 
 pub use types::{
     EnvDecl, ExtensionCategory, ExtensionEntry, ExtensionKind, HeaderDecl, InstallSpec,
