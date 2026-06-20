@@ -38,7 +38,6 @@
 /// `ContentBlock::Image` blocks as the message's base64 `images` array.
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use std::borrow::Cow;
 use crate::providers::adapter::{
     NativeToolCall, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
@@ -47,6 +46,7 @@ use crate::providers::AiProvider;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;

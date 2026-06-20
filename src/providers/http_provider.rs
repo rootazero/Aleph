@@ -4,7 +4,6 @@
 
 use crate::config::ProviderConfig;
 use crate::error::Result;
-use std::borrow::Cow;
 use crate::providers::adapter::{
     ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
@@ -13,6 +12,7 @@ use crate::providers::{AiProvider, ProviderDelta};
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector};
 use crate::sync_primitives::Arc;
 use futures::StreamExt;
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 use tracing::debug;

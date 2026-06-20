@@ -9,11 +9,11 @@
 
 use crate::error::Result;
 use crate::harness::trace::LoopTraceEvent;
-use std::borrow::Cow;
 use crate::harness::TraceSink;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 
