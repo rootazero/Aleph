@@ -97,6 +97,17 @@ const PRESETS: &[SearchPreset] = &[
         needs_engine_id: false,
     },
     SearchPreset {
+        name: "firecrawl",
+        display_name: "Firecrawl",
+        description: "Search + full-content scraping",
+        base_url: "https://api.firecrawl.dev",
+        api_key_placeholder: "fc-...",
+        icon_color: "#FF6B35",
+        needs_api_key: true,
+        is_self_hosted: false,
+        needs_engine_id: false,
+    },
+    SearchPreset {
         name: "duckduckgo",
         display_name: "DuckDuckGo",
         description: "No-account HTML search",

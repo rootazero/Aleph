@@ -1,0 +1,276 @@
+use crate::error::{AlephError, Result};
+use crate::search::providers::base::{build_client, check_status, parse_json};
+use crate::search::{SearchOptions, SearchProvider, SearchResult};
+use crate::sync_primitives::Arc;
+use async_trait::async_trait;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+
+/// Firecrawl search provider.
+///
+/// Firecrawl's `/v2/search` returns SERP-style results and can optionally
+/// scrape each result's full markdown content in the same call — gated on
+/// `SearchOptions::include_full_content` (extra credits when enabled).
+const NAME: &str = "firecrawl";
+const DEFAULT_BASE_URL: &str = "https://api.firecrawl.dev";
+
+#[derive(Debug)]
+pub struct FirecrawlProvider {
+    api_key: Arc<str>,
+    base_url: String,
+    client: Client,
+}
+
+// Firecrawl's `/v2/search` has no `safe_search` knob; that `SearchOptions`
+// field is intentionally not mapped here (mirrors `tavily.rs`).
+#[derive(Serialize)]
+struct FirecrawlRequest {
+    query: String,
+    limit: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lang: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    country: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tbs: Option<&'static str>,
+    #[serde(rename = "scrapeOptions", skip_serializing_if = "Option::is_none")]
+    scrape_options: Option<ScrapeOptions>,
+}
+
+#[derive(Serialize)]
+struct ScrapeOptions {
+    formats: Vec<&'static str>,
+}
+
+#[derive(Deserialize, Default)]
+struct FirecrawlResponse {
+    #[serde(default)]
+    data: FirecrawlData,
+}
+
+#[derive(Deserialize, Default)]
+struct FirecrawlData {
+    #[serde(default)]
+    web: Vec<FirecrawlWebResult>,
+}
+
+#[derive(Deserialize)]
+struct FirecrawlWebResult {
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    markdown: Option<String>,
+}
+
+impl FirecrawlProvider {
+    pub fn new(api_key: impl Into<String>, base_url: Option<String>) -> Result<Self> {
+        let api_key: String = api_key.into();
+        if api_key.is_empty() {
+            return Err(AlephError::invalid_config("Firecrawl API key is required"));
+        }
+
+        let base_url = base_url
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+        let trimmed = base_url.trim_end_matches('/').to_string();
+        let scheme_lower = trimmed.to_lowercase();
+        if !scheme_lower.starts_with("http://") && !scheme_lower.starts_with("https://") {
+            return Err(AlephError::invalid_config(
+                "Firecrawl base URL must use http:// or https:// scheme",
+            ));
+        }
+
+        Ok(Self {
+            api_key: Arc::from(api_key.into_boxed_str()),
+            base_url: trimmed,
+            client: build_client()?,
+        })
+    }
+
+    /// Map a parsed Firecrawl response into unified search results.
+    /// Pure function so the field mapping can be unit-tested without a network call.
+    fn map_response(response: FirecrawlResponse) -> Vec<SearchResult> {
+        response
+            .data
+            .web
+            .into_iter()
+            .map(|r| SearchResult {
+                title: r.title,
+                url: r.url,
+                snippet: r.description,
+                relevance_score: None,
+                full_content: r.markdown,
+                provider: Some(NAME.to_string()),
+            })
+            .collect()
+    }
+}
+
+#[async_trait]
+impl SearchProvider for FirecrawlProvider {
+    async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
+        let request_body = FirecrawlRequest {
+            query: query.to_string(),
+            limit: options.validated_max_results(),
+            lang: options.language.clone(),
+            country: options.region.as_deref().map(str::to_lowercase),
+            tbs: options.firecrawl_tbs(),
+            scrape_options: if options.include_full_content {
+                Some(ScrapeOptions {
+                    formats: vec!["markdown"],
+                })
+            } else {
+                None
+            },
+        };
+
+        let response = self
+            .client
+            .post(format!("{}/v2/search", self.base_url))
+            .bearer_auth(self.api_key.as_ref())
+            .json(&request_body)
+            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
+            .send()
+            .await
+            .map_err(|e| AlephError::network(e.to_string()))?;
+
+        let response = check_status(response, NAME)?;
+        let firecrawl_response: FirecrawlResponse = parse_json(response, NAME).await?;
+
+        Ok(Self::map_response(firecrawl_response))
+    }
+
+    fn name(&self) -> &str {
+        NAME
+    }
+
+    fn is_available(&self) -> bool {
+        !self.api_key.is_empty()
+    }
+}
+
+/// Factory entry for the search provider registry. Co-located with the
+/// provider so adding Firecrawl is a single-file change plus one
+/// registration line in `ProviderFactoryRegistry::with_defaults`.
+pub struct FirecrawlFactory;
+
+impl crate::search::ProviderFactory for FirecrawlFactory {
+    fn provider_type(&self) -> &'static str {
+        NAME
+    }
+    fn build(
+        &self,
+        name: &str,
+        backend: &crate::config::types::SearchBackendConfig,
+    ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>>
+    {
+        let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
+            log::warn!("search backend '{name}' ({NAME}) skipped: no api_key in vault");
+            return Ok(None);
+        };
+        match FirecrawlProvider::new(key.to_string(), backend.base_url.clone()) {
+            Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
+            Err(e) => {
+                log::warn!("search backend '{name}' ({NAME}) construct failed: {e}");
+                Ok(None)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn firecrawl_provider_creation_defaults_to_cloud() {
+        let provider = FirecrawlProvider::new("fc-test-key".to_string(), None).unwrap();
+        assert_eq!(provider.name(), "firecrawl");
+        assert!(provider.is_available());
+        assert_eq!(provider.base_url, "https://api.firecrawl.dev");
+    }
+
+    #[test]
+    fn firecrawl_provider_rejects_empty_key() {
+        let result = FirecrawlProvider::new("".to_string(), None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn firecrawl_provider_custom_base_url_is_trimmed() {
+        let provider = FirecrawlProvider::new(
+            "fc-k".to_string(),
+            Some("http://localhost:3002/".to_string()),
+        )
+        .unwrap();
+        assert_eq!(provider.base_url, "http://localhost:3002");
+    }
+
+    #[test]
+    fn firecrawl_provider_rejects_bad_scheme() {
+        let result =
+            FirecrawlProvider::new("fc-k".to_string(), Some("ftp://example.com".to_string()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn firecrawl_map_response_maps_all_fields() {
+        let json = r##"{
+            "success": true,
+            "data": {
+                "web": [
+                    {
+                        "url": "https://example.com",
+                        "title": "Example",
+                        "description": "An example page",
+                        "markdown": "# Example\n\nbody"
+                    }
+                ]
+            },
+            "creditsUsed": 1,
+            "id": "abc"
+        }"##;
+        let parsed: FirecrawlResponse = serde_json::from_str(json).unwrap();
+        let results = FirecrawlProvider::map_response(parsed);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Example");
+        assert_eq!(results[0].url, "https://example.com");
+        assert_eq!(results[0].snippet, "An example page");
+        assert_eq!(results[0].full_content.as_deref(), Some("# Example\n\nbody"));
+        assert_eq!(results[0].provider.as_deref(), Some("firecrawl"));
+        assert!(results[0].relevance_score.is_none());
+    }
+
+    #[test]
+    fn firecrawl_map_response_without_markdown() {
+        let json = r#"{ "data": { "web": [
+            { "url": "https://e.com", "title": "T", "description": "D" }
+        ]}}"#;
+        let parsed: FirecrawlResponse = serde_json::from_str(json).unwrap();
+        let results = FirecrawlProvider::map_response(parsed);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].full_content.is_none());
+    }
+
+    // Integration test (requires a real API key)
+    #[tokio::test]
+    #[ignore]
+    async fn firecrawl_search_real_api() {
+        let api_key = std::env::var("FIRECRAWL_API_KEY").expect("FIRECRAWL_API_KEY not set");
+        let provider = FirecrawlProvider::new(api_key, None).unwrap();
+        let options = SearchOptions::default();
+
+        let results = provider
+            .search("Rust programming language", &options)
+            .await
+            .unwrap();
+
+        assert!(!results.is_empty());
+        assert!(results[0].url.starts_with("http"));
+        assert_eq!(results[0].provider.as_deref(), Some("firecrawl"));
+    }
+}
