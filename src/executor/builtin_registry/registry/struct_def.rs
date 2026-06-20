@@ -323,6 +323,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) note_schema_tool: Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
     /// User profile tool (Spec 7 Task 9) — optional, requires `ProfileSynthesizer`.
     pub(crate) user_profile_tool: Option<crate::builtin_tools::user_profile::UserProfileTool>,
+    /// Store catalog-sync tool (optional - requires CatalogCache + marketplace configs)
+    pub(crate) store_catalog_sync_tool: Option<crate::builtin_tools::store::StoreCatalogSyncTool>,
     /// Live Config handle for the `config_audit` tool (security-posture audit).
     /// Built per-call from this handle, mirroring `create_tool_boxed`.
     pub(crate) config: Option<Arc<RwLock<crate::config::Config>>>,

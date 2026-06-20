@@ -776,6 +776,50 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             None
         };
 
+    // P4 T5: open the CatalogCache early so store tools (store_catalog_sync
+    // and T6–T8) can be wired into BuiltinToolConfig. Uses the same path as
+    // the extensions.* gateway handlers below — both share the same SQLite
+    // file via separate connections (rusqlite file-level locking).
+    let (early_catalog_cache, early_marketplace_configs) = {
+        use alephcore::extension::marketplace::types::{
+            MarketplaceConfig, MarketplaceSourceType,
+        };
+        let catalog_path = alephcore::discovery::aleph_home_dir()
+            .map(|d| d.join("store_catalog.db"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("store_catalog.db"));
+        match alephcore::store::cache::CatalogCache::open(&catalog_path) {
+            Ok(cache) => {
+                let configs: std::collections::HashMap<String, MarketplaceConfig> = {
+                    let cfg = app_config.read().await;
+                    cfg.plugin_marketplaces
+                        .iter()
+                        .map(|(name, entry)| {
+                            let source_type = match entry.source_type.as_str() {
+                                "local" => MarketplaceSourceType::Local,
+                                _ => MarketplaceSourceType::Github,
+                            };
+                            (
+                                name.clone(),
+                                MarketplaceConfig {
+                                    source: entry.source.clone(),
+                                    source_type,
+                                },
+                            )
+                        })
+                        .collect()
+                };
+                (Some(std::sync::Arc::new(cache)), Some(configs))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to open store_catalog.db for store tools; store_catalog_sync will be unavailable"
+                );
+                (None, None)
+            }
+        }
+    };
+
     let agent_result = register_agent_handlers(
         &mut server,
         session_store.clone(),
@@ -796,6 +840,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Some(wiki.clone()),
         Some(note_memory_dir.clone()),
         Some(sandbox.clone()),
+        early_catalog_cache,
+        early_marketplace_configs,
     )
     .await?;
 

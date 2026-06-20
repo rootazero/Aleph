@@ -558,6 +558,12 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Search, browse, install, and update skills from ClawHub registry",
         requires_config: false,
     },
+    // Store tools — require CatalogCache + marketplace configs
+    BuiltinToolDefinition {
+        name: "store_catalog_sync",
+        description: "Sync all extension sources into the local catalog cache and refresh functional categories.",
+        requires_config: true, // Requires CatalogCache + marketplace configs
+    },
     // Team management tools — require TeamStore
     BuiltinToolDefinition {
         name: "team_create",

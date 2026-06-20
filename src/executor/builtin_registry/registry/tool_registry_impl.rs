@@ -229,6 +229,12 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
+            "store_catalog_sync" => Box::pin(async move {
+                let tool = self.store_catalog_sync_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("store_catalog_sync not configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
             "desktop" => Box::pin(async move { self.desktop_tool.call_json(arguments).await }),
             "desktop_ax_query_focused" => Box::pin(async move {
                 self.desktop_ax_query_focused_tool

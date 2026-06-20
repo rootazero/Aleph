@@ -167,6 +167,21 @@ impl BuiltinToolRegistry {
             VaultStoreTool::new(Arc::clone(mgr))
         });
 
+        // Store catalog-sync tool (requires CatalogCache + marketplace configs)
+        let store_catalog_sync_tool = if let Some(ref cache) = config.catalog_cache {
+            let marketplaces = config
+                .store_marketplace_configs
+                .clone()
+                .unwrap_or_default();
+            info!("Creating StoreCatalogSyncTool");
+            Some(crate::builtin_tools::store::StoreCatalogSyncTool {
+                cache: Arc::clone(cache),
+                marketplaces,
+            })
+        } else {
+            None
+        };
+
         // Build platform-specific DesktopPlatform
         let desktop_platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
             #[cfg(target_os = "macos")]
@@ -604,6 +619,26 @@ impl BuiltinToolRegistry {
             "Registered skill.list, skill.read, and read_config_guide tools in BuiltinToolRegistry"
         );
 
+        // Store catalog-sync tool: register schema only when cache is configured
+        // (matches the dispatch guard in tool_registry_impl.rs).
+        if let Some(ref cache) = config.catalog_cache {
+            use crate::tools::AlephTool;
+            let td = crate::builtin_tools::store::StoreCatalogSyncTool {
+                cache: cache.clone(),
+                marketplaces: config.store_marketplace_configs.clone().unwrap_or_default(),
+            }
+            .definition();
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{}", td.name),
+                &td.name,
+                &td.description,
+                ToolSource::Builtin,
+            );
+            ut = ut.with_parameters_schema(td.parameters.clone());
+            tools.insert(td.name.clone(), ut);
+            info!("Registered schema for store_catalog_sync");
+        }
+
         // Register optional tool metadata
         Self::register_optional_tools(
             &mut tools,
@@ -726,6 +761,7 @@ impl BuiltinToolRegistry {
             list_models_tool,
             doctor_tool,
             vault_store_tool,
+            store_catalog_sync_tool,
             desktop_tool,
             desktop_ax_query_focused_tool,
             desktop_ax_query_tree_tool,

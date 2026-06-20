@@ -154,4 +154,15 @@ pub struct BuiltinToolConfig {
     /// provider as fallback); `None` ⇒ planner disabled. Read by the goal/loop/
     /// workflow tools in the registry constructor.
     pub planner_provider: Option<Arc<dyn crate::providers::AiProvider>>,
+
+    /// Catalog cache for store tools (`store_catalog_sync` and T6–T8 tools).
+    /// When `Some`, `store_catalog_sync` is registered and dispatched.
+    /// Shares the same SQLite file as the gateway extensions handlers.
+    pub catalog_cache: Option<Arc<crate::store::cache::CatalogCache>>,
+
+    /// Marketplace configs for store tools (mirrors the gateway's conversion
+    /// of `plugin_marketplaces` → `MarketplaceConfig`).
+    /// Only meaningful when `catalog_cache` is `Some`.
+    pub store_marketplace_configs:
+        Option<std::collections::HashMap<String, crate::extension::marketplace::types::MarketplaceConfig>>,
 }
