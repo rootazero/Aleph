@@ -26,8 +26,13 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
             let id = entry.id.clone();
             spawn_local(async move {
                 match ExtensionsApi::disclosure(&state, id).await {
-                    Ok((d, _findings)) => { disclosure.set(Some(d)); disc_loading.set(false); }
-                    Err(_) => { disc_loading.set(false); }
+                    Ok((d, _findings)) => {
+                        disclosure.set(Some(d));
+                        disc_loading.set(false);
+                    }
+                    Err(_) => {
+                        disc_loading.set(false);
+                    }
                 }
             });
         }

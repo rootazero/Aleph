@@ -169,10 +169,7 @@ impl BuiltinToolRegistry {
 
         // Store catalog-sync tool (requires CatalogCache + marketplace configs)
         let store_catalog_sync_tool = if let Some(ref cache) = config.catalog_cache {
-            let marketplaces = config
-                .store_marketplace_configs
-                .clone()
-                .unwrap_or_default();
+            let marketplaces = config.store_marketplace_configs.clone().unwrap_or_default();
             info!("Creating StoreCatalogSyncTool");
             Some(crate::builtin_tools::store::StoreCatalogSyncTool {
                 cache: Arc::clone(cache),
@@ -184,10 +181,7 @@ impl BuiltinToolRegistry {
 
         // Store resolve-spec tool (requires CatalogCache + marketplace configs)
         let store_resolve_spec_tool = if let Some(ref cache) = config.catalog_cache {
-            let marketplaces = config
-                .store_marketplace_configs
-                .clone()
-                .unwrap_or_default();
+            let marketplaces = config.store_marketplace_configs.clone().unwrap_or_default();
             info!("Creating StoreResolveSpecTool");
             Some(crate::builtin_tools::store::StoreResolveSpecTool {
                 cache: Arc::clone(cache),
@@ -203,10 +197,7 @@ impl BuiltinToolRegistry {
         // and secret storage still work).
         let store_install_run_tool = match (&config.catalog_cache, &config.shared_token_manager) {
             (Some(cache), Some(vault)) => {
-                let marketplaces = config
-                    .store_marketplace_configs
-                    .clone()
-                    .unwrap_or_default();
+                let marketplaces = config.store_marketplace_configs.clone().unwrap_or_default();
                 info!("Creating StoreInstallRunTool");
                 Some(crate::builtin_tools::store::StoreInstallRunTool {
                     cache: Arc::clone(cache),

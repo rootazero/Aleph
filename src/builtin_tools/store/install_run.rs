@@ -150,7 +150,10 @@ impl AlephTool for StoreInstallRunTool {
         // (3) Build the disclosure and run the system-enforced gate.
         let disclosure = build_disclosure(&entry, &spec);
         let is_oci = matches!(spec, InstallSpec::OciImage { .. });
-        match gate(requires_user_consent(disclosure.ack_required, &spec), is_oci) {
+        match gate(
+            requires_user_consent(disclosure.ack_required, &spec),
+            is_oci,
+        ) {
             GateOutcome::Reject => Ok(InstallToolResult::Rejected {
                 reason: if is_oci {
                     "OCI/Docker MCP containers are not installable in this version".to_string()
@@ -160,9 +163,7 @@ impl AlephTool for StoreInstallRunTool {
             }),
             // RETURN HERE — no install, no secret storage. The agent surfaces
             // the disclosure and directs the user to install via the store UI.
-            GateOutcome::NeedsUserConsent => {
-                Ok(InstallToolResult::NeedsUserConsent { disclosure })
-            }
+            GateOutcome::NeedsUserConsent => Ok(InstallToolResult::NeedsUserConsent { disclosure }),
             GateOutcome::Proceed => {
                 self.proceed(&entry, &spec, &disclosure, &args.config_values)
                     .await

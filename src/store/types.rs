@@ -181,7 +181,10 @@ mod tests {
 
     #[test]
     fn kind_serializes_snake_case() {
-        assert_eq!(serde_json::to_string(&ExtensionKind::Mcp).unwrap(), "\"mcp\"");
+        assert_eq!(
+            serde_json::to_string(&ExtensionKind::Mcp).unwrap(),
+            "\"mcp\""
+        );
         assert_eq!(ExtensionKind::Plugin.as_str(), "plugin");
     }
 

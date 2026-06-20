@@ -51,10 +51,9 @@ impl AlephTool for StoreResolveSpecTool {
             .await
             .map_err(|e| AlephError::other(format!("catalog query failed: {e}")))?;
 
-        let entry = entries
-            .into_iter()
-            .next()
-            .ok_or_else(|| AlephError::other(format!("entry '{}' not found in catalog", args.entry_id)))?;
+        let entry = entries.into_iter().next().ok_or_else(|| {
+            AlephError::other(format!("entry '{}' not found in catalog", args.entry_id))
+        })?;
 
         // Build the provider registry and resolve the install spec.
         let registry = build_default_registry(self.marketplaces.clone());

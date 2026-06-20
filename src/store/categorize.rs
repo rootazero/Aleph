@@ -34,19 +34,51 @@ pub fn category_from_hint(hint: &str) -> Option<ExtensionCategory> {
 /// in the haystack wins; otherwise `Other`.
 const GROUPS: &[(&[&str], ExtensionCategory)] = &[
     (
-        &["postgres", "mysql", "sqlite", "mongodb", "database", " sql", "bigquery", "snowflake", "redis", "duckdb"],
+        &[
+            "postgres",
+            "mysql",
+            "sqlite",
+            "mongodb",
+            "database",
+            " sql",
+            "bigquery",
+            "snowflake",
+            "redis",
+            "duckdb",
+        ],
         ExtensionCategory::Data,
     ),
     (
-        &["web search", "brave search", "google search", "serp", "duckduckgo", "perplexity", "websearch"],
+        &[
+            "web search",
+            "brave search",
+            "google search",
+            "serp",
+            "duckduckgo",
+            "perplexity",
+            "websearch",
+        ],
         ExtensionCategory::Search,
     ),
     (
-        &["github", "gitlab", "kubernetes", "docker", "terraform", "jira", "compiler", "debugger", "lint", "devops"],
+        &[
+            "github",
+            "gitlab",
+            "kubernetes",
+            "docker",
+            "terraform",
+            "jira",
+            "compiler",
+            "debugger",
+            "lint",
+            "devops",
+        ],
         ExtensionCategory::Developer,
     ),
     (
-        &["slack", "discord", "telegram", "gmail", "sendgrid", "twilio", " sms", "mailgun"],
+        &[
+            "slack", "discord", "telegram", "gmail", "sendgrid", "twilio", " sms", "mailgun",
+        ],
         ExtensionCategory::Communication,
     ),
     (
@@ -54,17 +86,45 @@ const GROUPS: &[(&[&str], ExtensionCategory)] = &[
         ExtensionCategory::Knowledge,
     ),
     (
-        &["filesystem", "file system", " s3", "dropbox", "google drive", "ftp", "object storage"],
+        &[
+            "filesystem",
+            "file system",
+            " s3",
+            "dropbox",
+            "google drive",
+            "ftp",
+            "object storage",
+        ],
         ExtensionCategory::Files,
     ),
-    (&["figma", "canva", "image generation", "design"], ExtensionCategory::Design),
     (
-        &["stripe", "paypal", "payment", "invoice", "accounting", "ethereum", "finance"],
+        &["figma", "canva", "image generation", "design"],
+        ExtensionCategory::Design,
+    ),
+    (
+        &[
+            "stripe",
+            "paypal",
+            "payment",
+            "invoice",
+            "accounting",
+            "ethereum",
+            "finance",
+        ],
         ExtensionCategory::Finance,
     ),
-    (&["calendar", "todo", "reminder", "productivity"], ExtensionCategory::Productivity),
-    (&["grammar", "copywriting", "blog post", "writing assistant"], ExtensionCategory::Writing),
-    (&["zapier", "automation", "cron", "scheduler", "workflow"], ExtensionCategory::Automation),
+    (
+        &["calendar", "todo", "reminder", "productivity"],
+        ExtensionCategory::Productivity,
+    ),
+    (
+        &["grammar", "copywriting", "blog post", "writing assistant"],
+        ExtensionCategory::Writing,
+    ),
+    (
+        &["zapier", "automation", "cron", "scheduler", "workflow"],
+        ExtensionCategory::Automation,
+    ),
 ];
 
 /// Deterministic category from free text. Hint (if recognized) wins.
@@ -109,19 +169,37 @@ mod tests {
 
     #[test]
     fn text_keywords_route_to_category() {
-        assert_eq!(categorize("pg", "a postgres database client", &[], None), C::Data);
-        assert_eq!(categorize("ghx", "github pull request tool", &[], None), C::Developer);
-        assert_eq!(categorize("brave", "web search via brave", &[], None), C::Search);
-        assert_eq!(categorize("slackbot", "post to slack channels", &[], None), C::Communication);
+        assert_eq!(
+            categorize("pg", "a postgres database client", &[], None),
+            C::Data
+        );
+        assert_eq!(
+            categorize("ghx", "github pull request tool", &[], None),
+            C::Developer
+        );
+        assert_eq!(
+            categorize("brave", "web search via brave", &[], None),
+            C::Search
+        );
+        assert_eq!(
+            categorize("slackbot", "post to slack channels", &[], None),
+            C::Communication
+        );
     }
 
     #[test]
     fn unknown_text_is_other() {
-        assert_eq!(categorize("zzz", "an inscrutable widget", &[], None), C::Other);
+        assert_eq!(
+            categorize("zzz", "an inscrutable widget", &[], None),
+            C::Other
+        );
     }
 
     #[test]
     fn tags_are_considered() {
-        assert_eq!(categorize("x", "no hints in name", &["database".into()], None), C::Data);
+        assert_eq!(
+            categorize("x", "no hints in name", &["database".into()], None),
+            C::Data
+        );
     }
 }

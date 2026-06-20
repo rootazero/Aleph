@@ -18,10 +18,14 @@ pub fn ExtensionCard(entry: ExtensionEntry) -> impl IntoView {
         "px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider {}",
         kind_badge_class(&entry.kind)
     );
-    let glyph = entry
-        .icon
-        .clone()
-        .unwrap_or_else(|| entry.name.chars().next().map(|c| c.to_string()).unwrap_or_default());
+    let glyph = entry.icon.clone().unwrap_or_else(|| {
+        entry
+            .name
+            .chars()
+            .next()
+            .map(|c| c.to_string())
+            .unwrap_or_default()
+    });
     let author = entry.author.clone().unwrap_or_default();
     let installed = entry.installed;
     let kind_text = kind_label(i18n, &entry.kind);

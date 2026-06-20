@@ -31,8 +31,12 @@ impl StoreInstallVerifyArgs {
     /// Map args to an `InstallOutcome`. This is the pure, tested core.
     pub fn to_outcome(&self) -> Result<InstallOutcome> {
         match self.kind.as_str() {
-            "mcp" => Ok(InstallOutcome::Mcp { id: self.id_or_path.clone() }),
-            "plugin" => Ok(InstallOutcome::Plugin { path: self.id_or_path.clone() }),
+            "mcp" => Ok(InstallOutcome::Mcp {
+                id: self.id_or_path.clone(),
+            }),
+            "plugin" => Ok(InstallOutcome::Plugin {
+                path: self.id_or_path.clone(),
+            }),
             other => Err(AlephError::tool(format!(
                 "unknown kind '{other}'; expected \"mcp\" or \"plugin\""
             ))),
@@ -54,8 +58,7 @@ pub struct StoreInstallVerifyTool {
 #[async_trait]
 impl AlephTool for StoreInstallVerifyTool {
     const NAME: &'static str = "store_install_verify";
-    const DESCRIPTION: &'static str =
-        "Verify that a just-installed extension is healthy. \
+    const DESCRIPTION: &'static str = "Verify that a just-installed extension is healthy. \
          For MCP servers: checks the server is running and exposes ≥1 tool. \
          For plugins: checks the artifact is present on disk.";
     type Args = StoreInstallVerifyArgs;
@@ -77,21 +80,36 @@ mod tests {
 
     #[test]
     fn maps_plugin_outcome_args() {
-        let a = StoreInstallVerifyArgs { kind: "plugin".into(), id_or_path: "/tmp/x".into() };
+        let a = StoreInstallVerifyArgs {
+            kind: "plugin".into(),
+            id_or_path: "/tmp/x".into(),
+        };
         let outcome = a.to_outcome().unwrap();
-        assert!(matches!(outcome, crate::store::install::InstallOutcome::Plugin { .. }));
+        assert!(matches!(
+            outcome,
+            crate::store::install::InstallOutcome::Plugin { .. }
+        ));
     }
 
     #[test]
     fn maps_mcp_outcome_args() {
-        let a = StoreInstallVerifyArgs { kind: "mcp".into(), id_or_path: "my_server".into() };
+        let a = StoreInstallVerifyArgs {
+            kind: "mcp".into(),
+            id_or_path: "my_server".into(),
+        };
         let outcome = a.to_outcome().unwrap();
-        assert!(matches!(outcome, crate::store::install::InstallOutcome::Mcp { .. }));
+        assert!(matches!(
+            outcome,
+            crate::store::install::InstallOutcome::Mcp { .. }
+        ));
     }
 
     #[test]
     fn unknown_kind_is_error() {
-        let a = StoreInstallVerifyArgs { kind: "oci".into(), id_or_path: "irrelevant".into() };
+        let a = StoreInstallVerifyArgs {
+            kind: "oci".into(),
+            id_or_path: "irrelevant".into(),
+        };
         assert!(a.to_outcome().is_err());
     }
 }

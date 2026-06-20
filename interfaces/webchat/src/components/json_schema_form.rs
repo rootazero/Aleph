@@ -45,7 +45,11 @@ pub fn fields_from(
     let schema_required: Vec<String> = config_schema
         .and_then(|s| s.get("required"))
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     // Ordered field names: disclosure.secrets first (the must-fill set), then any
@@ -84,7 +88,11 @@ pub fn fields_from(
             let enum_vals: Option<Vec<String>> = prop
                 .and_then(|p| p.get("enum"))
                 .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                });
             let schema_type = prop
                 .and_then(|p| p.get("type"))
                 .and_then(Value::as_str)
@@ -294,8 +302,7 @@ mod tests {
 
     #[test]
     fn secret_flag_forces_secret_type_over_schema_string() {
-        let schema =
-            json!({ "type":"object","properties": { "KEY": { "type":"string" } } });
+        let schema = json!({ "type":"object","properties": { "KEY": { "type":"string" } } });
         let fields = fields_from(Some(&schema), &[sd("KEY", true)], &[]);
         assert_eq!(fields[0].field_type, FieldType::Secret);
     }

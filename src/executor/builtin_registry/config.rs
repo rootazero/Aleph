@@ -163,8 +163,9 @@ pub struct BuiltinToolConfig {
     /// Marketplace configs for store tools (mirrors the gateway's conversion
     /// of `plugin_marketplaces` → `MarketplaceConfig`).
     /// Only meaningful when `catalog_cache` is `Some`.
-    pub store_marketplace_configs:
-        Option<std::collections::HashMap<String, crate::extension::marketplace::types::MarketplaceConfig>>,
+    pub store_marketplace_configs: Option<
+        std::collections::HashMap<String, crate::extension::marketplace::types::MarketplaceConfig>,
+    >,
 
     /// Live MCP manager handle for `store_install_run` (T7). The SAME shared
     /// handle the gateway `extensions.*` handlers use — it cannot be

@@ -97,8 +97,14 @@ mod tests {
         // body one byte over → truncated.
         let at_limit = vec![b'a'; DOC_BYTE_BUDGET];
         let over_limit = vec![b'b'; DOC_BYTE_BUDGET + 1];
-        assert!(!(at_limit.len() > DOC_BYTE_BUDGET), "at-limit body should not truncate");
-        assert!(over_limit.len() > DOC_BYTE_BUDGET, "over-limit body should truncate");
+        assert!(
+            !(at_limit.len() > DOC_BYTE_BUDGET),
+            "at-limit body should not truncate"
+        );
+        assert!(
+            over_limit.len() > DOC_BYTE_BUDGET,
+            "over-limit body should truncate"
+        );
     }
 
     #[test]

@@ -9,7 +9,9 @@ use crate::store::provider::mcp_registry::McpRegistryProvider;
 use crate::store::provider::ProviderRegistry;
 use std::collections::HashMap;
 
-pub fn build_default_registry(marketplaces: HashMap<String, MarketplaceConfig>) -> ProviderRegistry {
+pub fn build_default_registry(
+    marketplaces: HashMap<String, MarketplaceConfig>,
+) -> ProviderRegistry {
     let mut reg = ProviderRegistry::new();
     reg.register(Box::new(McpRegistryProvider::new()));
     reg.register(Box::new(DockerMcpProvider::new()));

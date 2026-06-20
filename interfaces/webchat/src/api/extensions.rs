@@ -14,26 +14,40 @@ pub struct ExtensionEntry {
     pub kind: String,
     pub category: String,
     pub name: String,
-    #[serde(default)] pub description: String,
-    #[serde(default)] pub author: Option<String>,
-    #[serde(default)] pub icon: Option<String>,
-    #[serde(default)] pub tags: Vec<String>,
-    #[serde(default)] pub version: Option<String>,
-    #[serde(default)] pub source_id: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub source_id: String,
     pub trust_tier: String,
-    #[serde(default)] pub repo_url: Option<String>,
-    #[serde(default)] pub requires_config: bool,
-    #[serde(default)] pub config_schema: Option<Value>,
-    #[serde(default)] pub installed: bool,
-    #[serde(default)] pub enabled: bool,
-    #[serde(default)] pub update_available: bool,
+    #[serde(default)]
+    pub repo_url: Option<String>,
+    #[serde(default)]
+    pub requires_config: bool,
+    #[serde(default)]
+    pub config_schema: Option<Value>,
+    #[serde(default)]
+    pub installed: bool,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub update_available: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SecretDisclosure {
     pub name: String,
-    #[serde(default)] pub purpose: String,
-    #[serde(default)] pub sensitive: bool,
+    #[serde(default)]
+    pub purpose: String,
+    #[serde(default)]
+    pub sensitive: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -41,11 +55,16 @@ pub struct DisclosurePayload {
     pub tier: String,
     pub risk: String,
     pub one_line: String,
-    #[serde(default)] pub command_display: Option<String>,
-    #[serde(default)] pub secrets: Vec<SecretDisclosure>,
-    #[serde(default)] pub version: Option<String>,
-    #[serde(default)] pub sha256: Option<String>,
-    #[serde(default)] pub ack_required: bool,
+    #[serde(default)]
+    pub command_display: Option<String>,
+    #[serde(default)]
+    pub secrets: Vec<SecretDisclosure>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub ack_required: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -58,39 +77,57 @@ pub struct InjectionFinding {
 pub struct SourceInfo {
     pub id: String,
     pub trust_tier: String,
-    #[serde(default)] pub kinds: Vec<String>,
+    #[serde(default)]
+    pub kinds: Vec<String>,
 }
 
 /// The three branch shapes of `extensions.install` (all are JSON-RPC successes).
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstallResult {
-    NeedsAck { disclosure: DisclosurePayload, injection_findings: Vec<InjectionFinding> },
-    Missing { missing: Vec<String> },
-    Done { outcome: Value, verify: Value, pin: Value, injection_findings: Vec<InjectionFinding> },
+    NeedsAck {
+        disclosure: DisclosurePayload,
+        injection_findings: Vec<InjectionFinding>,
+    },
+    Missing {
+        missing: Vec<String>,
+    },
+    Done {
+        outcome: Value,
+        verify: Value,
+        pin: Value,
+        injection_findings: Vec<InjectionFinding>,
+    },
 }
 
 /// Pure: classify an `extensions.install` result `Value` into its branch.
 /// Order matters — `needs_ack` also carries `ok:false`, so test it first.
 pub fn parse_install_result(v: &Value) -> Result<InstallResult, String> {
     if v.get("needs_ack").and_then(Value::as_bool) == Some(true) {
-        let disclosure = serde_json::from_value(v.get("disclosure").cloned().unwrap_or(Value::Null))
-            .map_err(|e| format!("bad disclosure: {e}"))?;
+        let disclosure =
+            serde_json::from_value(v.get("disclosure").cloned().unwrap_or(Value::Null))
+                .map_err(|e| format!("bad disclosure: {e}"))?;
         let injection_findings =
-            serde_json::from_value(v.get("injection_findings").cloned().unwrap_or(json!([]))).unwrap_or_default();
-        return Ok(InstallResult::NeedsAck { disclosure, injection_findings });
+            serde_json::from_value(v.get("injection_findings").cloned().unwrap_or(json!([])))
+                .unwrap_or_default();
+        return Ok(InstallResult::NeedsAck {
+            disclosure,
+            injection_findings,
+        });
     }
     match v.get("ok").and_then(Value::as_bool) {
         Some(false) => {
-            let missing =
-                serde_json::from_value(v.get("missing").cloned().unwrap_or(json!([]))).unwrap_or_default();
+            let missing = serde_json::from_value(v.get("missing").cloned().unwrap_or(json!([])))
+                .unwrap_or_default();
             Ok(InstallResult::Missing { missing })
         }
         Some(true) => Ok(InstallResult::Done {
             outcome: v.get("outcome").cloned().unwrap_or(Value::Null),
             verify: v.get("verify").cloned().unwrap_or(Value::Null),
             pin: v.get("pin").cloned().unwrap_or(Value::Null),
-            injection_findings:
-                serde_json::from_value(v.get("injection_findings").cloned().unwrap_or(json!([]))).unwrap_or_default(),
+            injection_findings: serde_json::from_value(
+                v.get("injection_findings").cloned().unwrap_or(json!([])),
+            )
+            .unwrap_or_default(),
         }),
         None => Err("unrecognized install response".into()),
     }
@@ -99,7 +136,10 @@ pub fn parse_install_result(v: &Value) -> Result<InstallResult, String> {
 pub struct ExtensionsApi;
 
 impl ExtensionsApi {
-    pub async fn catalog(state: &DashboardState, params: Value) -> Result<Vec<ExtensionEntry>, String> {
+    pub async fn catalog(
+        state: &DashboardState,
+        params: Value,
+    ) -> Result<Vec<ExtensionEntry>, String> {
         let r = state.rpc_call("extensions.catalog", params).await?;
         let arr = r.get("extensions").cloned().unwrap_or(json!([]));
         serde_json::from_value(arr).map_err(|e| format!("parse catalog: {e}"))
@@ -115,11 +155,15 @@ impl ExtensionsApi {
         state: &DashboardState,
         id: String,
     ) -> Result<(DisclosurePayload, Vec<InjectionFinding>), String> {
-        let r = state.rpc_call("extensions.disclosure", json!({ "id": id })).await?;
-        let disclosure = serde_json::from_value(r.get("disclosure").cloned().unwrap_or(Value::Null))
-            .map_err(|e| format!("parse disclosure: {e}"))?;
+        let r = state
+            .rpc_call("extensions.disclosure", json!({ "id": id }))
+            .await?;
+        let disclosure =
+            serde_json::from_value(r.get("disclosure").cloned().unwrap_or(Value::Null))
+                .map_err(|e| format!("parse disclosure: {e}"))?;
         let findings =
-            serde_json::from_value(r.get("injection_findings").cloned().unwrap_or(json!([]))).unwrap_or_default();
+            serde_json::from_value(r.get("injection_findings").cloned().unwrap_or(json!([])))
+                .unwrap_or_default();
         Ok((disclosure, findings))
     }
 
@@ -130,27 +174,40 @@ impl ExtensionsApi {
         acknowledge_risk: bool,
     ) -> Result<InstallResult, String> {
         let r = state
-            .rpc_call("extensions.install", json!({ "id": id, "values": values, "acknowledge_risk": acknowledge_risk }))
+            .rpc_call(
+                "extensions.install",
+                json!({ "id": id, "values": values, "acknowledge_risk": acknowledge_risk }),
+            )
             .await?;
         parse_install_result(&r)
     }
 
     pub async fn toggle(state: &DashboardState, id: String, enabled: bool) -> Result<(), String> {
-        state.rpc_call("extensions.toggle", json!({ "id": id, "enabled": enabled })).await.map(|_| ())
+        state
+            .rpc_call("extensions.toggle", json!({ "id": id, "enabled": enabled }))
+            .await
+            .map(|_| ())
     }
 
     pub async fn uninstall(state: &DashboardState, id: String) -> Result<(), String> {
-        state.rpc_call("extensions.uninstall", json!({ "id": id })).await.map(|_| ())
+        state
+            .rpc_call("extensions.uninstall", json!({ "id": id }))
+            .await
+            .map(|_| ())
     }
 
     pub async fn sources_list(state: &DashboardState) -> Result<Vec<SourceInfo>, String> {
-        let r = state.rpc_call("extensions.sources.list", Value::Null).await?;
+        let r = state
+            .rpc_call("extensions.sources.list", Value::Null)
+            .await?;
         let arr = r.get("sources").cloned().unwrap_or(json!([]));
         serde_json::from_value(arr).map_err(|e| format!("parse sources: {e}"))
     }
 
     pub async fn sources_refresh(state: &DashboardState) -> Result<Value, String> {
-        state.rpc_call("extensions.sources.refresh", Value::Null).await
+        state
+            .rpc_call("extensions.sources.refresh", Value::Null)
+            .await
     }
 }
 
@@ -208,7 +265,10 @@ mod tests {
     fn parse_install_missing_branch() {
         let v = json!({ "ok": false, "missing": ["GITHUB_TOKEN", "ACCOUNT"] });
         match parse_install_result(&v).unwrap() {
-            InstallResult::Missing { missing } => assert_eq!(missing, vec!["GITHUB_TOKEN".to_string(), "ACCOUNT".to_string()]),
+            InstallResult::Missing { missing } => assert_eq!(
+                missing,
+                vec!["GITHUB_TOKEN".to_string(), "ACCOUNT".to_string()]
+            ),
             other => panic!("expected Missing, got {other:?}"),
         }
     }
@@ -218,7 +278,9 @@ mod tests {
         let v = json!({ "ok": true, "outcome": {"kind":"mcp","id":"foo"},
             "verify": {"ok": true, "tool_count": 7}, "pin": {"version":"1.0.0","sha256":null}, "injection_findings": [] });
         match parse_install_result(&v).unwrap() {
-            InstallResult::Done { verify, .. } => assert_eq!(verify.get("tool_count").and_then(|x| x.as_u64()), Some(7)),
+            InstallResult::Done { verify, .. } => {
+                assert_eq!(verify.get("tool_count").and_then(|x| x.as_u64()), Some(7))
+            }
             other => panic!("expected Done, got {other:?}"),
         }
     }

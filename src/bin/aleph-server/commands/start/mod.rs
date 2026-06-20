@@ -28,9 +28,8 @@ use builder::{
     initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
     register_agent_handlers, register_agents_handlers, register_arena_handlers,
     register_config_handlers, register_core_handlers, register_cron_handlers,
-    register_daemon_handlers, register_extensions_handlers,
-    register_extensions_install_handlers, register_extensions_sources_handlers,
-    register_fs_handlers, register_graph_handlers,
+    register_daemon_handlers, register_extensions_handlers, register_extensions_install_handlers,
+    register_extensions_sources_handlers, register_fs_handlers, register_graph_handlers,
     register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
     register_mcp_handlers, register_memory_handlers, register_oauth_handlers,
     register_projects_handlers, register_session_handlers, register_teams_handlers,
@@ -781,9 +780,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // the extensions.* gateway handlers below — both share the same SQLite
     // file via separate connections (rusqlite file-level locking).
     let (early_catalog_cache, early_marketplace_configs) = {
-        use alephcore::extension::marketplace::types::{
-            MarketplaceConfig, MarketplaceSourceType,
-        };
+        use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
         let catalog_path = alephcore::discovery::aleph_home_dir()
             .map(|d| d.join("store_catalog.db"))
             .unwrap_or_else(|_| std::path::PathBuf::from("store_catalog.db"));

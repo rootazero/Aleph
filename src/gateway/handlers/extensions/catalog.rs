@@ -64,7 +64,13 @@ pub async fn handle_installed(
         out.extend(mgr.list_plugin_records().await.iter().map(plugin_to_entry));
     }
 
-    out.extend(shared_system().full_status().await.iter().map(skill_to_entry));
+    out.extend(
+        shared_system()
+            .full_status()
+            .await
+            .iter()
+            .map(skill_to_entry),
+    );
 
     JsonRpcResponse::success(req.id, json!({ "extensions": out }))
 }

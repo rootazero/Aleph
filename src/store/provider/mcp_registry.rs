@@ -326,7 +326,10 @@ mod tests {
         assert_eq!(e.name, "github"); // tail of reverse-DNS name
         assert!(e.requires_config); // has a required env var
         assert!(e.config_schema.is_some());
-        assert_eq!(e.repo_url.as_deref(), Some("https://github.com/acme/github-mcp"));
+        assert_eq!(
+            e.repo_url.as_deref(),
+            Some("https://github.com/acme/github-mcp")
+        );
     }
 
     #[test]

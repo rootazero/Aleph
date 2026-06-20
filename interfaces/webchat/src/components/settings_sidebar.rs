@@ -288,13 +288,31 @@ mod tests {
     #[test]
     fn mcp_plugins_skills_demoted_to_advanced() {
         let advanced = group_tab_paths("Advanced");
-        assert!(advanced.contains(&"/settings/mcp"), "Advanced must contain MCP");
-        assert!(advanced.contains(&"/settings/plugins"), "Advanced must contain Plugins");
-        assert!(advanced.contains(&"/settings/skills"), "Advanced must contain Skills");
+        assert!(
+            advanced.contains(&"/settings/mcp"),
+            "Advanced must contain MCP"
+        );
+        assert!(
+            advanced.contains(&"/settings/plugins"),
+            "Advanced must contain Plugins"
+        );
+        assert!(
+            advanced.contains(&"/settings/skills"),
+            "Advanced must contain Skills"
+        );
 
         let extensions = group_tab_paths("Extensions");
-        assert!(!extensions.contains(&"/settings/mcp"), "Extensions must not contain MCP");
-        assert!(!extensions.contains(&"/settings/plugins"), "Extensions must not contain Plugins");
-        assert!(!extensions.contains(&"/settings/skills"), "Extensions must not contain Skills");
+        assert!(
+            !extensions.contains(&"/settings/mcp"),
+            "Extensions must not contain MCP"
+        );
+        assert!(
+            !extensions.contains(&"/settings/plugins"),
+            "Extensions must not contain Plugins"
+        );
+        assert!(
+            !extensions.contains(&"/settings/skills"),
+            "Extensions must not contain Skills"
+        );
     }
 }

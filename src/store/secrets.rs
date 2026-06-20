@@ -49,7 +49,11 @@ mod tests {
 
     #[test]
     fn field_key_is_namespaced_and_placeholder_safe() {
-        let k = field_key(ExtensionKind::Mcp, "mcp-official:io.github.a/b", "GITHUB_TOKEN");
+        let k = field_key(
+            ExtensionKind::Mcp,
+            "mcp-official:io.github.a/b",
+            "GITHUB_TOKEN",
+        );
         assert_eq!(k, "ext.mcp.mcp-official_io.github.a_b.GITHUB_TOKEN");
         assert_eq!(
             secret_ref(&k),

@@ -83,7 +83,10 @@ pub fn build_disclosure(entry: &ExtensionEntry, spec: &InstallSpec) -> Disclosur
     .to_string();
     // Ack required for anything that runs commands unless Official/Verified.
     let ack_required = matches!(risk, RiskClass::RunsCommands)
-        && matches!(entry.trust_tier, TrustTier::Community | TrustTier::Unverified);
+        && matches!(
+            entry.trust_tier,
+            TrustTier::Community | TrustTier::Unverified
+        );
     let sha256 = match spec {
         InstallSpec::GitDir { sha256, .. } => sha256.clone(),
         _ => None,

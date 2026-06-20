@@ -44,8 +44,10 @@ pub trait SourceProvider: Send + Sync {
     async fn search(&self, _q: &Query) -> Option<Result<Vec<ExtensionEntry>, SourceError>> {
         None
     }
-    async fn resolve_install_spec(&self, entry: &ExtensionEntry)
-        -> Result<InstallSpec, SourceError>;
+    async fn resolve_install_spec(
+        &self,
+        entry: &ExtensionEntry,
+    ) -> Result<InstallSpec, SourceError>;
 }
 
 pub struct SyncReport {
@@ -69,7 +71,10 @@ impl ProviderRegistry {
     }
 
     pub fn get(&self, id: &str) -> Option<&dyn SourceProvider> {
-        self.providers.iter().find(|p| p.id() == id).map(|b| b.as_ref())
+        self.providers
+            .iter()
+            .find(|p| p.id() == id)
+            .map(|b| b.as_ref())
     }
 
     /// Provider metadata for `extensions.sources.list` (id, trust tier, kinds).
@@ -99,7 +104,12 @@ impl ProviderRegistry {
                 Ok(mut entries) if !entries.is_empty() => {
                     for e in &mut entries {
                         if e.category == crate::store::types::ExtensionCategory::Other {
-                            e.category = crate::store::categorize::categorize(&e.name, &e.description, &e.tags, None);
+                            e.category = crate::store::categorize::categorize(
+                                &e.name,
+                                &e.description,
+                                &e.tags,
+                                None,
+                            );
                         }
                     }
                     if let Err(e) = cache.replace_source(&id, &entries).await {
@@ -122,9 +132,9 @@ impl ProviderRegistry {
         &self,
         entry: &crate::store::types::ExtensionEntry,
     ) -> Result<crate::store::types::InstallSpec, SourceError> {
-        let provider = self
-            .get(&entry.source_id)
-            .ok_or_else(|| SourceError::Other(format!("no provider for source '{}'", entry.source_id)))?;
+        let provider = self.get(&entry.source_id).ok_or_else(|| {
+            SourceError::Other(format!("no provider for source '{}'", entry.source_id))
+        })?;
         provider.resolve_install_spec(entry).await
     }
 }

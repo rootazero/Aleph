@@ -174,9 +174,8 @@ mod tests {
         let spec = InstallSpec::OciImage {
             image: "mcp/y@sha256:abc".into(),
         };
-        let err =
-            mcp_config_from_spec("x", "Y", &spec, &Default::default(), &Default::default())
-                .unwrap_err();
+        let err = mcp_config_from_spec("x", "Y", &spec, &Default::default(), &Default::default())
+            .unwrap_err();
         assert!(err.contains("not installable"));
     }
 }

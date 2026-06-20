@@ -33,7 +33,8 @@ pub fn docker_install_spec(s: &DockerServer) -> InstallSpec {
 pub fn docker_server_to_extension(name: &str, s: &DockerServer) -> ExtensionEntry {
     let description = s.description.clone();
     let tags = vec!["mcp".into(), "container".into()];
-    let category = s.category
+    let category = s
+        .category
         .as_deref()
         .and_then(crate::store::categorize::category_from_hint)
         .unwrap_or_else(|| crate::store::categorize::categorize(name, &description, &tags, None));

@@ -400,7 +400,10 @@ mod tests {
     fn test_builtin_agents_count() {
         let agents = builtin_agents();
         assert_eq!(agents.len(), 8);
-        let store = agents.iter().find(|a| a.id == "store").expect("store builtin present");
+        let store = agents
+            .iter()
+            .find(|a| a.id == "store")
+            .expect("store builtin present");
         assert_eq!(store.mode, AgentMode::SubAgent);
         assert_eq!(store.source, crate::agents::types::AgentSource::Builtin);
         assert!(store.allowed_tool_sets.iter().any(|s| s == "STORE_TOOLS"));

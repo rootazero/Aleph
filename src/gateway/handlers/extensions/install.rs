@@ -372,8 +372,14 @@ mod tests {
             url: "https://x".into(),
             transport: McpTransport::StreamableHttp,
             headers: vec![
-                HeaderDecl { name: "Authorization".into(), secret: true },
-                HeaderDecl { name: "X-Region".into(), secret: false },
+                HeaderDecl {
+                    name: "Authorization".into(),
+                    secret: true,
+                },
+                HeaderDecl {
+                    name: "X-Region".into(),
+                    secret: false,
+                },
             ],
         };
         let mut values = Map::new();

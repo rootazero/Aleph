@@ -12,11 +12,20 @@ pub struct VerifyReport {
 #[must_use]
 pub fn verdict(running: bool, tool_count: usize) -> VerifyReport {
     if !running {
-        VerifyReport { ok: false, detail: "server not running".into() }
+        VerifyReport {
+            ok: false,
+            detail: "server not running".into(),
+        }
     } else if tool_count == 0 {
-        VerifyReport { ok: false, detail: "running but exposes 0 tools".into() }
+        VerifyReport {
+            ok: false,
+            detail: "running but exposes 0 tools".into(),
+        }
     } else {
-        VerifyReport { ok: true, detail: format!("running; {tool_count} tools") }
+        VerifyReport {
+            ok: true,
+            detail: format!("running; {tool_count} tools"),
+        }
     }
 }
 
@@ -28,25 +37,24 @@ pub async fn verify_install(
     match outcome {
         InstallOutcome::Mcp { id } => {
             let Some(mcp) = mcp else {
-                return VerifyReport { ok: false, detail: "MCP manager unavailable".into() };
+                return VerifyReport {
+                    ok: false,
+                    detail: "MCP manager unavailable".into(),
+                };
             };
             // list_servers returns all registered servers; find by id.
             match mcp.list_servers().await {
-                Ok(servers) => {
-                    match servers.into_iter().find(|s| &s.id == id) {
-                        Some(info) => {
-                            let running = matches!(
-                                info.health,
-                                crate::mcp::manager::HealthStatus::Healthy
-                            );
-                            verdict(running, info.tool_count)
-                        }
-                        None => VerifyReport {
-                            ok: false,
-                            detail: format!("server '{id}' not found"),
-                        },
+                Ok(servers) => match servers.into_iter().find(|s| &s.id == id) {
+                    Some(info) => {
+                        let running =
+                            matches!(info.health, crate::mcp::manager::HealthStatus::Healthy);
+                        verdict(running, info.tool_count)
                     }
-                }
+                    None => VerifyReport {
+                        ok: false,
+                        detail: format!("server '{id}' not found"),
+                    },
+                },
                 Err(e) => VerifyReport {
                     ok: false,
                     detail: format!("failed to query MCP manager: {e}"),
@@ -55,9 +63,15 @@ pub async fn verify_install(
         }
         InstallOutcome::Plugin { path } => {
             if std::path::Path::new(path).exists() {
-                VerifyReport { ok: true, detail: format!("plugin present at {path}") }
+                VerifyReport {
+                    ok: true,
+                    detail: format!("plugin present at {path}"),
+                }
             } else {
-                VerifyReport { ok: false, detail: format!("plugin path missing: {path}") }
+                VerifyReport {
+                    ok: false,
+                    detail: format!("plugin path missing: {path}"),
+                }
             }
         }
     }
