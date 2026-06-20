@@ -21,6 +21,8 @@ pub struct FirecrawlProvider {
     client: Client,
 }
 
+// Firecrawl's `/v2/search` has no `safe_search` knob; that `SearchOptions`
+// field is intentionally not mapped here (mirrors `tavily.rs`).
 #[derive(Serialize)]
 struct FirecrawlRequest {
     query: String,
