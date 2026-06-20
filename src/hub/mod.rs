@@ -2,6 +2,7 @@
 //! existing plugin / MCP / skill backends. See
 //! docs/superpowers/specs/2026-06-20-extension-hub-federation-design.md
 pub mod cache;
+pub mod catalog_client;
 pub mod categorize;
 pub mod dedup;
 pub mod display;
