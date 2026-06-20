@@ -89,6 +89,13 @@ pub(in crate::commands::start) fn register_memory_handlers(
         alephcore::gateway::handlers::insights::handle_tools,
         memory_db
     );
+    // Read-only dream insights listing (daily digests + synthesis + run history).
+    register_handler!(
+        server,
+        "dreaming.list_insights",
+        alephcore::gateway::handlers::dreaming::handle_list_insights,
+        memory_db
+    );
     if let Some(cs) = compression_service {
         register_handler!(
             server,
