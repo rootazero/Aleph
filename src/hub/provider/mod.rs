@@ -7,6 +7,7 @@ pub mod docker_mcp;
 pub mod marketplace;
 pub mod mcp_registry;
 pub mod registry_builder;
+pub mod static_hub;
 
 use crate::hub::cache::CatalogCache;
 use crate::hub::types::{ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
@@ -38,6 +39,10 @@ impl std::fmt::Display for SourceError {
 #[async_trait::async_trait]
 pub trait SourceProvider: Send + Sync {
     fn id(&self) -> &str;
+    /// Human-facing source label for provenance badges. Defaults to `id()`.
+    fn display_name(&self) -> &str {
+        self.id()
+    }
     fn kinds(&self) -> &[ExtensionKind];
     fn trust_tier(&self) -> TrustTier;
     async fn sync(&self, ctx: &SyncCtx) -> Result<Vec<ExtensionEntry>, SourceError>;
@@ -77,11 +82,19 @@ impl ProviderRegistry {
             .map(|b| b.as_ref())
     }
 
-    /// Provider metadata for `extensions.sources.list` (id, trust tier, kinds).
-    pub fn list_sources(&self) -> Vec<(String, TrustTier, Vec<ExtensionKind>)> {
+    /// Provider metadata for `extensions.sources.list` (id, display name, trust
+    /// tier, kinds).
+    pub fn list_sources(&self) -> Vec<(String, String, TrustTier, Vec<ExtensionKind>)> {
         self.providers
             .iter()
-            .map(|p| (p.id().to_string(), p.trust_tier(), p.kinds().to_vec()))
+            .map(|p| {
+                (
+                    p.id().to_string(),
+                    p.display_name().to_string(),
+                    p.trust_tier(),
+                    p.kinds().to_vec(),
+                )
+            })
             .collect()
     }
 

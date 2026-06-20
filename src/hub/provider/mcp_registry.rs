@@ -223,6 +223,9 @@ impl SourceProvider for McpRegistryProvider {
     fn id(&self) -> &str {
         "mcp-official"
     }
+    fn display_name(&self) -> &str {
+        "MCP Registry"
+    }
     fn kinds(&self) -> &[ExtensionKind] {
         &[ExtensionKind::Mcp]
     }

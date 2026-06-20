@@ -12,9 +12,10 @@ pub async fn handle_list(req: JsonRpcRequest, reg: Arc<ProviderRegistry>) -> Jso
     let sources: Vec<_> = reg
         .list_sources()
         .into_iter()
-        .map(|(id, tier, kinds)| {
+        .map(|(id, name, tier, kinds)| {
             json!({
                 "id": id,
+                "name": name,
                 "trust_tier": tier.as_str(),
                 "kinds": kinds.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
             })

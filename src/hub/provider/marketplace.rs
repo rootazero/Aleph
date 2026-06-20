@@ -41,6 +41,9 @@ impl SourceProvider for MarketplaceProvider {
     fn id(&self) -> &str {
         &self.provider_id
     }
+    fn display_name(&self) -> &str {
+        "Plugin Marketplace"
+    }
     fn kinds(&self) -> &[ExtensionKind] {
         &[ExtensionKind::Plugin, ExtensionKind::Skill]
     }

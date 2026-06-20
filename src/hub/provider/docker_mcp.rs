@@ -84,6 +84,9 @@ impl SourceProvider for DockerMcpProvider {
     fn id(&self) -> &str {
         "docker-mcp"
     }
+    fn display_name(&self) -> &str {
+        "Docker"
+    }
     fn kinds(&self) -> &[ExtensionKind] {
         &[ExtensionKind::Mcp]
     }
