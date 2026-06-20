@@ -167,25 +167,21 @@ impl BuiltinToolRegistry {
             VaultStoreTool::new(Arc::clone(mgr))
         });
 
-        // Store catalog-sync tool (requires CatalogCache + marketplace configs)
+        // Store catalog-sync tool (requires CatalogCache)
         let hub_catalog_sync_tool = if let Some(ref cache) = config.catalog_cache {
-            let marketplaces = config.hub_marketplace_configs.clone().unwrap_or_default();
             info!("Creating HubCatalogSyncTool");
             Some(crate::builtin_tools::hub::HubCatalogSyncTool {
                 cache: Arc::clone(cache),
-                marketplaces,
             })
         } else {
             None
         };
 
-        // Store resolve-spec tool (requires CatalogCache + marketplace configs)
+        // Store resolve-spec tool (requires CatalogCache)
         let hub_resolve_spec_tool = if let Some(ref cache) = config.catalog_cache {
-            let marketplaces = config.hub_marketplace_configs.clone().unwrap_or_default();
             info!("Creating HubResolveSpecTool");
             Some(crate::builtin_tools::hub::HubResolveSpecTool {
                 cache: Arc::clone(cache),
-                marketplaces,
             })
         } else {
             None
@@ -660,11 +656,9 @@ impl BuiltinToolRegistry {
         // cache is configured (matches the dispatch guard in tool_registry_impl.rs).
         if let Some(ref cache) = config.catalog_cache {
             use crate::tools::AlephTool;
-            let marketplaces = config.hub_marketplace_configs.clone().unwrap_or_default();
 
             let td = crate::builtin_tools::hub::HubCatalogSyncTool {
                 cache: cache.clone(),
-                marketplaces: marketplaces.clone(),
             }
             .definition();
             let mut ut = UnifiedTool::new(
@@ -679,7 +673,6 @@ impl BuiltinToolRegistry {
 
             let td = crate::builtin_tools::hub::HubResolveSpecTool {
                 cache: cache.clone(),
-                marketplaces,
             }
             .definition();
             let mut ut = UnifiedTool::new(

@@ -1,7 +1,7 @@
-//! `hub_resolve_spec` — look up a catalog entry by id and resolve its
-//! install spec via the matching source provider.
+//! `hub_resolve_spec` — look up a catalog entry by id and return its cached
+//! install spec. No provider registry — resolution is a pure cache lookup of
+//! `ExtensionEntry.install_spec`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -9,9 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AlephError, Result};
-use crate::extension::marketplace::types::MarketplaceConfig;
 use crate::hub::cache::{CatalogCache, CatalogFilter};
-use crate::hub::provider::registry_builder::build_default_registry;
 use crate::tools::AlephTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -29,7 +27,6 @@ pub struct HubResolveSpecOutput {
 #[derive(Clone)]
 pub struct HubResolveSpecTool {
     pub cache: Arc<CatalogCache>,
-    pub marketplaces: HashMap<String, MarketplaceConfig>,
 }
 
 #[async_trait]
@@ -55,18 +52,17 @@ impl AlephTool for HubResolveSpecTool {
             AlephError::other(format!("entry '{}' not found in catalog", args.entry_id))
         })?;
 
-        // Build the provider registry and resolve the install spec.
-        let registry = build_default_registry(self.marketplaces.clone());
-        let spec = registry
-            .resolve_for_entry(&entry)
-            .await
-            .map_err(|e| AlephError::other(format!("resolve_for_entry failed: {e}")))?;
+        // Resolve the install spec from the cached entry (no provider registry).
+        let entry_id = args.entry_id;
+        let spec = entry.install_spec.clone().ok_or_else(|| {
+            AlephError::other(format!("no install spec cached for {entry_id}"))
+        })?;
 
         let install_spec = serde_json::to_value(&spec)
             .map_err(|e| AlephError::other(format!("serialize InstallSpec failed: {e}")))?;
 
         Ok(HubResolveSpecOutput {
-            entry_id: args.entry_id,
+            entry_id,
             install_spec,
         })
     }
@@ -76,7 +72,7 @@ impl AlephTool for HubResolveSpecTool {
 mod tests {
     use super::*;
     use crate::hub::cache::CatalogCache;
-    use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier};
+    use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
 
     fn sample_entry(id: &str, source_id: &str) -> ExtensionEntry {
         ExtensionEntry {
@@ -107,7 +103,6 @@ mod tests {
         let cache = CatalogCache::open_in_memory().unwrap();
         let tool = HubResolveSpecTool {
             cache: Arc::new(cache),
-            marketplaces: HashMap::new(),
         };
         let result = tool
             .call(HubResolveSpecArgs {
@@ -118,23 +113,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn known_entry_unknown_provider_returns_error() {
+    async fn returns_cached_install_spec() {
         let cache = CatalogCache::open_in_memory().unwrap();
-        // Insert a real entry with a source_id that has no registered provider.
-        cache
-            .upsert_many(&[sample_entry("local:foo", "local")])
+        let mut e = sample_entry("aleph-hub:foo", "aleph-hub");
+        e.install_spec = Some(InstallSpec::McpStdio {
+            command: "npx".into(),
+            args: vec!["@t/foo".into()],
+            env: vec![],
+        });
+        cache.upsert_many(&[e]).await.unwrap();
+        let tool = HubResolveSpecTool { cache: Arc::new(cache) };
+        let out = tool
+            .call(HubResolveSpecArgs { entry_id: "aleph-hub:foo".into() })
             .await
             .unwrap();
-        let tool = HubResolveSpecTool {
-            cache: Arc::new(cache),
-            marketplaces: HashMap::new(),
-        };
-        let result = tool
-            .call(HubResolveSpecArgs {
-                entry_id: "local:foo".into(),
-            })
-            .await;
-        // "local" is not a registered provider → resolve_for_entry → Err.
-        assert!(result.is_err(), "expected Err when provider missing");
+        let got: InstallSpec = serde_json::from_value(out.install_spec).unwrap();
+        assert!(matches!(got, InstallSpec::McpStdio { .. }));
+    }
+
+    #[tokio::test]
+    async fn errors_when_no_spec_cached() {
+        let cache = CatalogCache::open_in_memory().unwrap();
+        cache.upsert_many(&[sample_entry("aleph-hub:bar", "aleph-hub")]).await.unwrap();
+        let tool = HubResolveSpecTool { cache: Arc::new(cache) };
+        let err = tool
+            .call(HubResolveSpecArgs { entry_id: "aleph-hub:bar".into() })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no install spec cached"));
     }
 }

@@ -23,7 +23,6 @@ use crate::gateway::security::SharedTokenManager;
 use crate::mcp::manager::McpManagerHandle;
 use crate::hub::cache::{CatalogCache, CatalogFilter};
 use crate::hub::install::{run_install, InstallContext, InstallOutcome};
-use crate::hub::provider::registry_builder::build_default_registry;
 use crate::hub::secrets::field_key;
 use crate::hub::trust::{build_disclosure, DisclosurePayload};
 use crate::hub::types::InstallSpec;
@@ -140,12 +139,11 @@ impl AlephTool for HubInstallRunTool {
             AlephError::other(format!("entry '{}' not found in catalog", args.entry_id))
         })?;
 
-        // (2) Resolve the install spec via the matching source provider.
-        let registry = build_default_registry(self.marketplaces.clone());
-        let spec = registry
-            .resolve_for_entry(&entry)
-            .await
-            .map_err(|e| AlephError::other(format!("resolve_for_entry failed: {e}")))?;
+        // (2) Resolve the install spec from the cached entry.
+        let entry_id = args.entry_id.clone();
+        let spec = entry.install_spec.clone().ok_or_else(|| {
+            AlephError::other(format!("no install spec cached for {entry_id}"))
+        })?;
 
         // (3) Build the disclosure and run the system-enforced gate.
         let disclosure = build_disclosure(&entry, &spec);
