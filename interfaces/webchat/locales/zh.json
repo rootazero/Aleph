@@ -5,7 +5,7 @@
     "agents": "智能体",
     "memory": "记忆",
     "teams": "团队",
-    "extensions": "扩展",
+    "extensions": "Aleph Hub",
     "settings": "设置"
   },
   "session": {
@@ -1293,8 +1293,8 @@
     }
   },
   "extensions": {
-    "title": "扩展",
-    "subtitle": "由你的商店智能体策展",
+    "title": "Aleph Hub",
+    "subtitle": "发现并安装扩展",
     "back_to_chat": "← 返回聊天",
     "cat": {
       "search": "搜索与网络",

@@ -77,14 +77,6 @@ pub struct InjectionFinding {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct SourceInfo {
-    pub id: String,
-    pub trust_tier: String,
-    #[serde(default)]
-    pub kinds: Vec<String>,
-}
-
 /// The three branch shapes of `extensions.install` (all are JSON-RPC successes).
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstallResult {
@@ -200,19 +192,6 @@ impl ExtensionsApi {
             .map(|_| ())
     }
 
-    pub async fn sources_list(state: &DashboardState) -> Result<Vec<SourceInfo>, String> {
-        let r = state
-            .rpc_call("extensions.sources.list", Value::Null)
-            .await?;
-        let arr = r.get("sources").cloned().unwrap_or(json!([]));
-        serde_json::from_value(arr).map_err(|e| format!("parse sources: {e}"))
-    }
-
-    pub async fn sources_refresh(state: &DashboardState) -> Result<Value, String> {
-        state
-            .rpc_call("extensions.sources.refresh", Value::Null)
-            .await
-    }
 }
 
 #[cfg(test)]

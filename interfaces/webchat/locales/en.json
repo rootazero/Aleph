@@ -5,7 +5,7 @@
     "agents": "Agents",
     "memory": "Memory",
     "teams": "Teams",
-    "extensions": "Extensions",
+    "extensions": "Aleph Hub",
     "settings": "Settings"
   },
   "session": {
@@ -1293,8 +1293,8 @@
     }
   },
   "extensions": {
-    "title": "Extensions",
-    "subtitle": "Curated by your Store Agent",
+    "title": "Aleph Hub",
+    "subtitle": "Discover and install extensions",
     "back_to_chat": "← Back to chat",
     "cat": {
       "search": "Search & Web",
