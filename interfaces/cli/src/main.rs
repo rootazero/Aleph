@@ -29,9 +29,9 @@ use aleph_client::{CliConfig, CliResult};
 use commands::cli_args::{
     CallsAction, ChannelsAction, ChatControlAction, Commands, ConfigAction, CronAction,
     DaemonAction, GatewayAction, HeartbeatAction, HooksAction, IdentityAction, LogsAction,
-    MarketplaceAction, McpAction, MemoryAction, ModelsAction, PluginAction, ProvidersAction,
+    MarketplaceAction, McpAction, MemoryAction, PluginAction, ProvidersAction,
     ProxyAction, SandboxAction, SecretAction, ServicesAction, SessionAction, SkillsAction,
-    ToolsAction, TraceAction, VaultAction, WebhookAction, WorkspaceAction,
+    ToolsAction, TraceAction, WebhookAction, WorkspaceAction,
 };
 
 /// Aleph CLI - Personal AI Assistant Client
@@ -158,7 +158,6 @@ async fn dispatch(
         Commands::Channels { action } => dispatch_channels(server_url, action, config, json).await,
         Commands::Daemon { action } => dispatch_daemon(action, json),
         Commands::Providers { action } => dispatch_providers(server_url, action, json).await,
-        Commands::Models { action } => dispatch_models(server_url, action, json).await,
         Commands::Memory { action } => dispatch_memory(server_url, action, json).await,
         Commands::Plugin { action } => dispatch_plugin(server_url, action, json).await,
         Commands::Services { action } => dispatch_services(server_url, action, json).await,
@@ -168,7 +167,6 @@ async fn dispatch(
         Commands::Logs { action } => dispatch_logs(server_url, action, json).await,
         Commands::Trace { action } => dispatch_trace(server_url, action, json).await,
         Commands::Identity { action } => dispatch_identity(server_url, action, json).await,
-        Commands::Vault { action } => dispatch_vault(server_url, action, json).await,
         Commands::Mcp { action } => dispatch_mcp(server_url, action, json).await,
         Commands::Sandbox { action } => dispatch_sandbox(action),
         Commands::ChatControl { action } => {
@@ -559,17 +557,6 @@ async fn dispatch_providers(
     }
 }
 
-async fn dispatch_models(server_url: &str, action: ModelsAction, json: bool) -> CliResult<()> {
-    use commands::models_cmd;
-    match action {
-        ModelsAction::List => models_cmd::list(server_url, json).await,
-        ModelsAction::Get { model_id } => models_cmd::get(server_url, &model_id, json).await,
-        ModelsAction::Capabilities { model_id } => {
-            models_cmd::capabilities(server_url, &model_id, json).await
-        }
-    }
-}
-
 async fn dispatch_memory(server_url: &str, action: MemoryAction, json: bool) -> CliResult<()> {
     use commands::memory_cmd;
     match action {
@@ -629,9 +616,8 @@ async fn dispatch_plugin(server_url: &str, action: PluginAction, json: bool) -> 
             tool,
             params,
         } => plugins_cmd::call(server_url, &plugin, &tool, params.as_deref(), json).await,
-        PluginAction::Search { query } => plugins_cmd::search(server_url, &query, json).await,
-        PluginAction::Update => plugins_cmd::update(server_url, json).await,
-        PluginAction::Reload => plugins_cmd::reload(server_url, json).await,
+        PluginAction::Update { name } => plugins_cmd::update(server_url, &name, json).await,
+        PluginAction::Reload { name } => plugins_cmd::reload(server_url, &name, json).await,
         PluginAction::Info { name } => plugins_cmd::info(server_url, &name, json).await,
         // Dev tools (local, no server)
         PluginAction::Init {
@@ -650,7 +636,7 @@ async fn dispatch_plugin(server_url: &str, action: PluginAction, json: bool) -> 
             plugin_cmd::pack(std::path::Path::new(&path), out.as_deref())
         }
         PluginAction::Doctor => plugin_cmd::doctor(json),
-        // Marketplace (P2 placeholder)
+        // Marketplace
         PluginAction::Marketplace { action } => {
             dispatch_marketplace(server_url, action, json).await
         }
@@ -720,7 +706,6 @@ async fn dispatch_skills(server_url: &str, action: SkillsAction, json: bool) -> 
     match action {
         SkillsAction::List => skills_cmd::list(server_url, json).await,
         SkillsAction::Install { source } => skills_cmd::install(server_url, &source, json).await,
-        SkillsAction::Reload { name } => skills_cmd::reload(server_url, &name, json).await,
         SkillsAction::Delete { name } => skills_cmd::delete(server_url, &name, json).await,
     }
 }
@@ -736,8 +721,6 @@ async fn dispatch_workspace(
         WorkspaceAction::Create { name, description } => {
             workspace_cmd::create(server_url, &name, description.as_deref(), json).await
         }
-        WorkspaceAction::Switch { name } => workspace_cmd::switch(server_url, &name, json).await,
-        WorkspaceAction::Active => workspace_cmd::active(server_url, json).await,
         WorkspaceAction::Archive { name } => workspace_cmd::archive(server_url, &name, json).await,
     }
 }
@@ -775,16 +758,6 @@ async fn dispatch_identity(server_url: &str, action: IdentityAction, json: bool)
         IdentityAction::Set { manifest } => identity_cmd::set(server_url, &manifest, json).await,
         IdentityAction::Clear => identity_cmd::clear(server_url, json).await,
         IdentityAction::List => identity_cmd::list(server_url, json).await,
-    }
-}
-
-async fn dispatch_vault(server_url: &str, action: VaultAction, json: bool) -> CliResult<()> {
-    use commands::vault_cmd;
-    match action {
-        VaultAction::Status => vault_cmd::status(server_url, json).await,
-        VaultAction::Store => vault_cmd::store(server_url, json).await,
-        VaultAction::Delete => vault_cmd::delete(server_url, json).await,
-        VaultAction::Verify => vault_cmd::verify(server_url, json).await,
     }
 }
 

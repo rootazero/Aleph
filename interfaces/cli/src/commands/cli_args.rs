@@ -122,12 +122,6 @@ pub enum Commands {
         action: ProvidersAction,
     },
 
-    /// Model management
-    Models {
-        #[command(subcommand)]
-        action: ModelsAction,
-    },
-
     /// Memory management
     Memory {
         #[command(subcommand)]
@@ -146,7 +140,7 @@ pub enum Commands {
         action: ServicesAction,
     },
 
-    /// Skill management (file-based and markdown)
+    /// Skill management (list, install, remove)
     Skills {
         #[command(subcommand)]
         action: SkillsAction,
@@ -174,12 +168,6 @@ pub enum Commands {
     Identity {
         #[command(subcommand)]
         action: IdentityAction,
-    },
-
-    /// Vault key management
-    Vault {
-        #[command(subcommand)]
-        action: VaultAction,
     },
 
     /// Chat control (send, abort, history, clear)
@@ -606,16 +594,6 @@ pub enum ProvidersAction {
 }
 
 #[derive(Subcommand)]
-pub enum ModelsAction {
-    /// List all available models
-    List,
-    /// Get model details
-    Get { model_id: String },
-    /// Show model capabilities
-    Capabilities { model_id: String },
-}
-
-#[derive(Subcommand)]
 pub enum MemoryAction {
     /// Search memory
     Search {
@@ -672,19 +650,20 @@ pub enum PluginAction {
     Enable { name: String },
     /// Disable a plugin
     Disable { name: String },
-    /// Check for plugin updates
-    Update,
-    /// Reload all plugins (hot reload)
-    Reload,
+    /// Update an installed plugin to its latest marketplace version
+    Update {
+        /// Plugin name to update
+        name: String,
+    },
+    /// Hot-reload a single installed plugin by name
+    Reload {
+        /// Plugin name (ID) to reload
+        name: String,
+    },
     /// Show detailed info about a specific plugin
     Info {
         /// Plugin name or ID
         name: String,
-    },
-    /// Search for plugins in the registry
-    Search {
-        /// Search query
-        query: String,
     },
     /// Call a plugin tool
     Call {
@@ -724,7 +703,7 @@ pub enum PluginAction {
     },
     /// Run plugin diagnostics
     Doctor,
-    // === Marketplace (P2 placeholder) ===
+    // === Marketplace ===
     /// Plugin marketplace management
     Marketplace {
         #[command(subcommand)]
@@ -780,13 +759,11 @@ pub enum ServicesAction {
 
 #[derive(Subcommand)]
 pub enum SkillsAction {
-    /// List all skills (file-based and runtime-loaded)
+    /// List all installed skills
     List,
-    /// Install a skill from source
+    /// Install a skill from a git URL, local path, or .zip
     Install { source: String },
-    /// Reload a markdown skill
-    Reload { name: String },
-    /// Delete/unload a skill
+    /// Remove an installed skill by name
     Delete { name: String },
 }
 
@@ -863,13 +840,6 @@ pub enum WorkspaceAction {
         #[arg(long)]
         description: Option<String>,
     },
-    /// Switch to a workspace
-    Switch {
-        /// Workspace name to switch to
-        name: String,
-    },
-    /// Show the currently active workspace
-    Active,
     /// Archive a workspace
     Archive {
         /// Workspace name to archive
@@ -918,18 +888,6 @@ pub enum IdentityAction {
     Clear,
     /// List identity sources
     List,
-}
-
-#[derive(Subcommand)]
-pub enum VaultAction {
-    /// Show vault status
-    Status,
-    /// Store master key (interactive input)
-    Store,
-    /// Delete master key
-    Delete,
-    /// Verify vault integrity
-    Verify,
 }
 
 #[derive(Subcommand)]

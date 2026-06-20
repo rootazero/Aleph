@@ -285,89 +285,34 @@ pub async fn call(
     Ok(())
 }
 
-/// Search for plugins via the server (marketplace-backed)
-pub async fn search(server_url: &str, query: &str, json: bool) -> CliResult<()> {
+/// Update an installed plugin to its latest marketplace version (`plugin.update`).
+pub async fn update(server_url: &str, name: &str, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
 
-    let params = serde_json::json!({ "query": query });
-    let result: Value = client.call("plugins.search", Some(params)).await?;
+    let params = serde_json::json!({ "name": name });
+    let result: Value = client.call("plugin.update", Some(params)).await?;
 
     if json {
         output::print_json(&result);
     } else {
-        let mut rows = Vec::new();
-        if let Some(plugins) = result.as_array() {
-            for p in plugins {
-                let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("-");
-                let version = p.get("version").and_then(|v| v.as_str()).unwrap_or("-");
-                let description = p.get("description").and_then(|v| v.as_str()).unwrap_or("-");
-                rows.push(vec![
-                    name.to_string(),
-                    version.to_string(),
-                    description.to_string(),
-                ]);
-            }
-        }
-        if rows.is_empty() {
-            println!("No plugins found matching '{query}'.");
-        } else {
-            output::print_table(&["Name", "Version", "Description"], &rows, false, &result);
-        }
+        println!("Plugin '{name}' updated.");
     }
 
     client.close().await?;
     Ok(())
 }
 
-/// Check for available plugin updates via the server
-pub async fn update(server_url: &str, json: bool) -> CliResult<()> {
+/// Hot-reload a single installed plugin by name (`plugin.reload`).
+pub async fn reload(server_url: &str, name: &str, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
 
-    let result: Value = client.call("plugins.checkUpdates", None::<()>).await?;
+    let params = serde_json::json!({ "pluginId": name });
+    let result: Value = client.call("plugin.reload", Some(params)).await?;
 
     if json {
         output::print_json(&result);
     } else {
-        let mut rows = Vec::new();
-        if let Some(updates) = result.as_array() {
-            for u in updates {
-                let name = u.get("name").and_then(|v| v.as_str()).unwrap_or("-");
-                let current = u
-                    .get("current_version")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("-");
-                let latest = u
-                    .get("latest_version")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("-");
-                rows.push(vec![
-                    name.to_string(),
-                    current.to_string(),
-                    latest.to_string(),
-                ]);
-            }
-        }
-        if rows.is_empty() {
-            println!("All installed plugins are up to date.");
-        } else {
-            output::print_table(&["Plugin", "Installed", "Available"], &rows, false, &result);
-        }
-    }
-
-    client.close().await?;
-    Ok(())
-}
-
-/// Reload all plugins
-pub async fn reload(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-
-    let result: Value = client.call("plugins.reload", None::<()>).await?;
-
-    if json {
-        output::print_json(&result);
-    } else {
-        println!("Plugins reloaded.");
+        println!("Plugin '{name}' reloaded.");
     }
 
     client.close().await?;
