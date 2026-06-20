@@ -218,6 +218,13 @@ impl BuiltinToolRegistry {
             _ => None,
         };
 
+        // Store install-verify tool (T8). Dep: optional live MCP handle only.
+        // Always constructed (even without CatalogCache) — plugin verification
+        // needs no cache; the mcp field is None when the handle isn't available.
+        let store_install_verify_tool = Some(crate::builtin_tools::store::StoreInstallVerifyTool {
+            mcp: config.store_mcp_handle.clone(),
+        });
+
         // Store fetch-docs tool (scaffold — no CatalogCache dep; always constructed)
         let store_fetch_docs_tool = crate::builtin_tools::store::StoreFetchDocsTool;
 
@@ -731,6 +738,24 @@ impl BuiltinToolRegistry {
             info!("Registered schema for store_fetch_docs");
         }
 
+        // store_install_verify: no CatalogCache dep — register unconditionally.
+        {
+            use crate::tools::AlephTool;
+            let td = crate::builtin_tools::store::StoreInstallVerifyTool {
+                mcp: config.store_mcp_handle.clone(),
+            }
+            .definition();
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{}", td.name),
+                &td.name,
+                &td.description,
+                ToolSource::Builtin,
+            );
+            ut = ut.with_parameters_schema(td.parameters.clone());
+            tools.insert(td.name.clone(), ut);
+            info!("Registered schema for store_install_verify");
+        }
+
         // Register optional tool metadata
         Self::register_optional_tools(
             &mut tools,
@@ -856,6 +881,7 @@ impl BuiltinToolRegistry {
             store_catalog_sync_tool,
             store_resolve_spec_tool,
             store_install_run_tool,
+            store_install_verify_tool,
             store_fetch_docs_tool,
             desktop_tool,
             desktop_ax_query_focused_tool,

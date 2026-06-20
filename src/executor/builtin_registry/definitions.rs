@@ -575,6 +575,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires CatalogCache + marketplace configs + vault
     },
     BuiltinToolDefinition {
+        name: "store_install_verify",
+        description: "Verify that a just-installed extension is healthy. For MCP servers: checks the server is running and exposes ≥1 tool. For plugins: checks the artifact is present on disk.",
+        requires_config: true, // Requires live McpManagerHandle for MCP verification
+    },
+    BuiltinToolDefinition {
         name: "store_fetch_docs",
         description: "Fetch a URL (README/manifest) for the long-tail install path and scan for prompt-injection. SCAFFOLD — not wired to any install surface.",
         requires_config: false, // No CatalogCache needed; HTTP-only scaffold

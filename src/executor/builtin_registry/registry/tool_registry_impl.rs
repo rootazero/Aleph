@@ -247,6 +247,12 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
+            "store_install_verify" => Box::pin(async move {
+                let tool = self.store_install_verify_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("store_install_verify not configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
             "store_fetch_docs" => Box::pin(async move {
                 self.store_fetch_docs_tool.call_json(arguments).await
             }),
