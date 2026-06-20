@@ -53,7 +53,8 @@ impl BuiltinToolRegistry {
         };
         let agent_info_tool = {
             use crate::tools::AlephTool;
-            let tool = crate::builtin_tools::agent_manage::AgentInfoTool::new(Arc::clone(&agent_catalog));
+            let tool =
+                crate::builtin_tools::agent_manage::AgentInfoTool::new(Arc::clone(&agent_catalog));
             let td = tool.definition();
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", td.name),

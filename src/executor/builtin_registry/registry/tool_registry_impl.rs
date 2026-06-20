@@ -229,33 +229,37 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
-            "store_catalog_sync" => Box::pin(async move {
-                let tool = self.store_catalog_sync_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("store_catalog_sync not configured")
-                })?;
+            "hub_catalog_sync" => Box::pin(async move {
+                let tool = self
+                    .hub_catalog_sync_tool
+                    .as_ref()
+                    .ok_or_else(|| AlephError::tool("hub_catalog_sync not configured"))?;
                 tool.call_json(arguments).await
             }),
-            "store_resolve_spec" => Box::pin(async move {
-                let tool = self.store_resolve_spec_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("store_resolve_spec not configured")
-                })?;
+            "hub_resolve_spec" => Box::pin(async move {
+                let tool = self
+                    .hub_resolve_spec_tool
+                    .as_ref()
+                    .ok_or_else(|| AlephError::tool("hub_resolve_spec not configured"))?;
                 tool.call_json(arguments).await
             }),
-            "store_install_run" => Box::pin(async move {
-                let tool = self.store_install_run_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("store_install_run not configured")
-                })?;
+            "hub_install_run" => Box::pin(async move {
+                let tool = self
+                    .hub_install_run_tool
+                    .as_ref()
+                    .ok_or_else(|| AlephError::tool("hub_install_run not configured"))?;
                 tool.call_json(arguments).await
             }),
-            "store_install_verify" => Box::pin(async move {
-                let tool = self.store_install_verify_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("store_install_verify not configured")
-                })?;
+            "hub_install_verify" => Box::pin(async move {
+                let tool = self
+                    .hub_install_verify_tool
+                    .as_ref()
+                    .ok_or_else(|| AlephError::tool("hub_install_verify not configured"))?;
                 tool.call_json(arguments).await
             }),
-            "store_fetch_docs" => Box::pin(async move {
-                self.store_fetch_docs_tool.call_json(arguments).await
-            }),
+            "hub_fetch_docs" => {
+                Box::pin(async move { self.hub_fetch_docs_tool.call_json(arguments).await })
+            }
             "desktop" => Box::pin(async move { self.desktop_tool.call_json(arguments).await }),
             "desktop_ax_query_focused" => Box::pin(async move {
                 self.desktop_ax_query_focused_tool

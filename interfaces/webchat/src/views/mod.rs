@@ -1,4 +1,3 @@
-pub mod extensions;
 pub mod agent_trace;
 pub mod agent_trace_model;
 pub mod agents;
@@ -6,6 +5,7 @@ pub mod canvas;
 pub mod chat;
 pub mod cron;
 pub mod dashboard_cron;
+pub mod extensions;
 pub mod home;
 pub mod logs;
 pub mod memory;

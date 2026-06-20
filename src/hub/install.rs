@@ -11,13 +11,13 @@ use std::collections::HashMap;
 use crate::extension::marketplace::MarketplaceManager;
 use crate::extension::PluginScope;
 use crate::mcp::manager::{McpManagerConfig, McpManagerHandle};
-use crate::store::secrets::secret_ref;
-use crate::store::types::{ExtensionEntry, InstallSpec};
+use crate::hub::secrets::secret_ref;
+use crate::hub::types::{ExtensionEntry, InstallSpec};
 
 /// Build an `McpManagerConfig` from an install spec.
 ///
 /// `secret_refs` maps an env var name to its stored vault secret name (from
-/// `crate::store::secrets::field_key`); `plain_values` maps a non-secret env var
+/// `crate::hub::secrets::field_key`); `plain_values` maps a non-secret env var
 /// name to the user-submitted value. Per field, precedence is: secret reference
 /// (`{{secret:NAME}}`) → submitted plain value → declared `default`. Plaintext
 /// secrets never enter the config.
@@ -75,7 +75,7 @@ pub struct InstallContext<'a> {
     pub plain_values: HashMap<String, String>,
 }
 
-/// Deterministic MCP server id derived from the store entry id.
+/// Deterministic MCP server id derived from the hub entry id.
 fn mcp_server_id(entry_id: &str) -> String {
     entry_id.replace([':', '/'], "_")
 }
@@ -106,7 +106,7 @@ pub async fn run_install(
             // Plugin install via the marketplace path (SHA-256 + atomic copy).
             let marketplace = ctx.marketplace.ok_or("marketplace unavailable")?;
             let marketplace_name =
-                (ctx.entry.source_id != "local").then(|| ctx.entry.source_id.as_str());
+                (ctx.entry.source_id != "local").then_some(ctx.entry.source_id.as_str());
             let path = marketplace.install_to_scope(
                 &ctx.entry.name,
                 marketplace_name,
@@ -123,7 +123,7 @@ pub async fn run_install(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::types::EnvDecl;
+    use crate::hub::types::EnvDecl;
 
     #[test]
     fn stdio_spec_builds_config_with_secret_refs() {
@@ -174,9 +174,8 @@ mod tests {
         let spec = InstallSpec::OciImage {
             image: "mcp/y@sha256:abc".into(),
         };
-        let err =
-            mcp_config_from_spec("x", "Y", &spec, &Default::default(), &Default::default())
-                .unwrap_err();
+        let err = mcp_config_from_spec("x", "Y", &spec, &Default::default(), &Default::default())
+            .unwrap_err();
         assert!(err.contains("not installable"));
     }
 }

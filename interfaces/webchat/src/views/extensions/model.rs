@@ -4,26 +4,78 @@
 use crate::api::extensions::ExtensionEntry;
 
 pub struct CategoryFacet {
-    pub value: &'static str,    // snake_case wire category
+    pub value: &'static str,     // snake_case wire category
     pub label_key: &'static str, // i18n key under `extensions.cat`
     pub emoji: &'static str,
 }
 
 /// Primary browse taxonomy (spec §12). Order here is the shelf/chip display order.
 pub const CATEGORIES: &[CategoryFacet] = &[
-    CategoryFacet { value: "search",        label_key: "extensions.cat.search",        emoji: "🔍" },
-    CategoryFacet { value: "developer",     label_key: "extensions.cat.developer",     emoji: "🛠" },
-    CategoryFacet { value: "data",          label_key: "extensions.cat.data",          emoji: "🗄" },
-    CategoryFacet { value: "productivity",  label_key: "extensions.cat.productivity",  emoji: "⚡" },
-    CategoryFacet { value: "writing",       label_key: "extensions.cat.writing",       emoji: "✍" },
-    CategoryFacet { value: "communication", label_key: "extensions.cat.communication", emoji: "💬" },
-    CategoryFacet { value: "knowledge",     label_key: "extensions.cat.knowledge",     emoji: "📚" },
-    CategoryFacet { value: "files",         label_key: "extensions.cat.files",         emoji: "📁" },
-    CategoryFacet { value: "design",        label_key: "extensions.cat.design",        emoji: "🎨" },
-    CategoryFacet { value: "automation",    label_key: "extensions.cat.automation",    emoji: "🔁" },
-    CategoryFacet { value: "finance",       label_key: "extensions.cat.finance",       emoji: "💰" },
-    CategoryFacet { value: "utilities",     label_key: "extensions.cat.utilities",     emoji: "🧰" },
-    CategoryFacet { value: "other",         label_key: "extensions.cat.other",         emoji: "•" },
+    CategoryFacet {
+        value: "search",
+        label_key: "extensions.cat.search",
+        emoji: "🔍",
+    },
+    CategoryFacet {
+        value: "developer",
+        label_key: "extensions.cat.developer",
+        emoji: "🛠",
+    },
+    CategoryFacet {
+        value: "data",
+        label_key: "extensions.cat.data",
+        emoji: "🗄",
+    },
+    CategoryFacet {
+        value: "productivity",
+        label_key: "extensions.cat.productivity",
+        emoji: "⚡",
+    },
+    CategoryFacet {
+        value: "writing",
+        label_key: "extensions.cat.writing",
+        emoji: "✍",
+    },
+    CategoryFacet {
+        value: "communication",
+        label_key: "extensions.cat.communication",
+        emoji: "💬",
+    },
+    CategoryFacet {
+        value: "knowledge",
+        label_key: "extensions.cat.knowledge",
+        emoji: "📚",
+    },
+    CategoryFacet {
+        value: "files",
+        label_key: "extensions.cat.files",
+        emoji: "📁",
+    },
+    CategoryFacet {
+        value: "design",
+        label_key: "extensions.cat.design",
+        emoji: "🎨",
+    },
+    CategoryFacet {
+        value: "automation",
+        label_key: "extensions.cat.automation",
+        emoji: "🔁",
+    },
+    CategoryFacet {
+        value: "finance",
+        label_key: "extensions.cat.finance",
+        emoji: "💰",
+    },
+    CategoryFacet {
+        value: "utilities",
+        label_key: "extensions.cat.utilities",
+        emoji: "🧰",
+    },
+    CategoryFacet {
+        value: "other",
+        label_key: "extensions.cat.other",
+        emoji: "•",
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,7 +88,12 @@ pub struct Filters {
 
 impl Default for Filters {
     fn default() -> Self {
-        Self { category: "featured".into(), kind: "all".into(), trust: "all".into(), query: String::new() }
+        Self {
+            category: "featured".into(),
+            kind: "all".into(),
+            trust: "all".into(),
+            query: String::new(),
+        }
     }
 }
 
@@ -68,7 +125,7 @@ pub fn featured_picks(entries: &[ExtensionEntry], max: usize) -> Vec<ExtensionEn
         .filter(|e| e.trust_tier == "official" || e.trust_tier == "verified")
         .cloned()
         .collect();
-    v.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    v.sort_by_key(|a| a.name.to_lowercase());
     v.truncate(max);
     v
 }
@@ -79,7 +136,11 @@ pub fn group_into_shelves(entries: &[ExtensionEntry]) -> Vec<(&'static str, Vec<
     CATEGORIES
         .iter()
         .filter_map(|c| {
-            let items: Vec<ExtensionEntry> = entries.iter().filter(|e| e.category == c.value).cloned().collect();
+            let items: Vec<ExtensionEntry> = entries
+                .iter()
+                .filter(|e| e.category == c.value)
+                .cloned()
+                .collect();
             (!items.is_empty()).then_some((c.value, items))
         })
         .collect()
@@ -120,36 +181,137 @@ mod tests {
     use super::*;
     use crate::api::extensions::ExtensionEntry;
 
-    fn e(id: &str, kind: &str, cat: &str, trust: &str, name: &str, desc: &str, tags: &[&str]) -> ExtensionEntry {
+    fn e(
+        id: &str,
+        kind: &str,
+        cat: &str,
+        trust: &str,
+        name: &str,
+        desc: &str,
+        tags: &[&str],
+    ) -> ExtensionEntry {
         ExtensionEntry {
-            id: id.into(), kind: kind.into(), category: cat.into(), name: name.into(),
-            description: desc.into(), author: None, icon: None,
-            tags: tags.iter().map(|s| s.to_string()).collect(), version: None,
-            source_id: "s".into(), trust_tier: trust.into(), repo_url: None,
-            requires_config: false, config_schema: None, installed: false, enabled: false, update_available: false,
+            id: id.into(),
+            kind: kind.into(),
+            category: cat.into(),
+            name: name.into(),
+            description: desc.into(),
+            author: None,
+            icon: None,
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+            version: None,
+            source_id: "s".into(),
+            trust_tier: trust.into(),
+            repo_url: None,
+            requires_config: false,
+            config_schema: None,
+            installed: false,
+            enabled: false,
+            update_available: false,
+            source_label: String::new(),
         }
     }
 
     #[test]
     fn matches_category_kind_trust_query() {
-        let item = e("a", "mcp", "developer", "community", "GitHub", "Manage repos", &["git"]);
+        let item = e(
+            "a",
+            "mcp",
+            "developer",
+            "community",
+            "GitHub",
+            "Manage repos",
+            &["git"],
+        );
         // category facet
-        assert!(matches(&item, &Filters { category: "developer".into(), ..Default::default() }));
-        assert!(!matches(&item, &Filters { category: "data".into(), ..Default::default() }));
+        assert!(matches(
+            &item,
+            &Filters {
+                category: "developer".into(),
+                ..Default::default()
+            }
+        ));
+        assert!(!matches(
+            &item,
+            &Filters {
+                category: "data".into(),
+                ..Default::default()
+            }
+        ));
         // "featured"/"all" are pass-through category facets
-        assert!(matches(&item, &Filters { category: "featured".into(), ..Default::default() }));
-        assert!(matches(&item, &Filters { category: "all".into(), ..Default::default() }));
+        assert!(matches(
+            &item,
+            &Filters {
+                category: "featured".into(),
+                ..Default::default()
+            }
+        ));
+        assert!(matches(
+            &item,
+            &Filters {
+                category: "all".into(),
+                ..Default::default()
+            }
+        ));
         // kind (secondary)
-        assert!(matches(&item, &Filters { kind: "mcp".into(), ..Default::default() }));
-        assert!(!matches(&item, &Filters { kind: "skill".into(), ..Default::default() }));
+        assert!(matches(
+            &item,
+            &Filters {
+                kind: "mcp".into(),
+                ..Default::default()
+            }
+        ));
+        assert!(!matches(
+            &item,
+            &Filters {
+                kind: "skill".into(),
+                ..Default::default()
+            }
+        ));
         // trust filtered CLIENT-SIDE (server has no trust filter)
-        assert!(matches(&item, &Filters { trust: "community".into(), ..Default::default() }));
-        assert!(!matches(&item, &Filters { trust: "official".into(), ..Default::default() }));
+        assert!(matches(
+            &item,
+            &Filters {
+                trust: "community".into(),
+                ..Default::default()
+            }
+        ));
+        assert!(!matches(
+            &item,
+            &Filters {
+                trust: "official".into(),
+                ..Default::default()
+            }
+        ));
         // query over name OR description OR tags, case-insensitive
-        assert!(matches(&item, &Filters { query: "github".into(), ..Default::default() }));
-        assert!(matches(&item, &Filters { query: "REPOS".into(), ..Default::default() }));
-        assert!(matches(&item, &Filters { query: "git".into(), ..Default::default() }));
-        assert!(!matches(&item, &Filters { query: "zzz".into(), ..Default::default() }));
+        assert!(matches(
+            &item,
+            &Filters {
+                query: "github".into(),
+                ..Default::default()
+            }
+        ));
+        assert!(matches(
+            &item,
+            &Filters {
+                query: "REPOS".into(),
+                ..Default::default()
+            }
+        ));
+        assert!(matches(
+            &item,
+            &Filters {
+                query: "git".into(),
+                ..Default::default()
+            }
+        ));
+        assert!(!matches(
+            &item,
+            &Filters {
+                query: "zzz".into(),
+                ..Default::default()
+            }
+        ));
     }
 
     #[test]
@@ -188,6 +350,9 @@ mod tests {
         assert_eq!(kind_badge_class("skill"), "bg-success-subtle text-success");
         assert_eq!(kind_badge_class("plugin"), "bg-primary-subtle text-primary");
         assert_eq!(kind_badge_class("mcp"), "bg-info-subtle text-info");
-        assert_eq!(risk_banner_class("runs_commands"), "bg-danger-subtle text-danger border-danger/30");
+        assert_eq!(
+            risk_banner_class("runs_commands"),
+            "bg-danger-subtle text-danger border-danger/30"
+        );
     }
 }

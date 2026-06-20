@@ -1,4 +1,4 @@
-use crate::store::types::{ExtensionCategory, ExtensionEntry, ExtensionKind};
+use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind};
 use rusqlite::{params, Connection};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -32,8 +32,8 @@ pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 pub fn upsert_entry(conn: &Connection, e: &ExtensionEntry) -> rusqlite::Result<()> {
-    let data =
-        serde_json::to_string(e).map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+    let data = serde_json::to_string(e)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
     conn.execute(
         "INSERT INTO catalog (id, kind, category, name_lc, source_id, installed, data)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -53,7 +53,10 @@ pub fn upsert_entry(conn: &Connection, e: &ExtensionEntry) -> rusqlite::Result<(
     Ok(())
 }
 
-pub fn query_entries(conn: &Connection, f: &CatalogFilter) -> rusqlite::Result<Vec<ExtensionEntry>> {
+pub fn query_entries(
+    conn: &Connection,
+    f: &CatalogFilter,
+) -> rusqlite::Result<Vec<ExtensionEntry>> {
     let mut sql = String::from("SELECT data FROM catalog WHERE 1=1");
     let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     if let Some(id) = &f.id {
@@ -63,13 +66,21 @@ pub fn query_entries(conn: &Connection, f: &CatalogFilter) -> rusqlite::Result<V
     if let Some(k) = f.kind {
         sql.push_str(" AND kind = ?");
         args.push(Box::new(
-            serde_json::to_value(k).unwrap().as_str().unwrap().to_string(),
+            serde_json::to_value(k)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
         ));
     }
     if let Some(c) = f.category {
         sql.push_str(" AND category = ?");
         args.push(Box::new(
-            serde_json::to_value(c).unwrap().as_str().unwrap().to_string(),
+            serde_json::to_value(c)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
         ));
     }
     if let Some(s) = &f.source_id {
@@ -93,7 +104,10 @@ pub fn query_entries(conn: &Connection, f: &CatalogFilter) -> rusqlite::Result<V
 }
 
 pub fn clear_source(conn: &Connection, source_id: &str) -> rusqlite::Result<usize> {
-    conn.execute("DELETE FROM catalog WHERE source_id = ?1", params![source_id])
+    conn.execute(
+        "DELETE FROM catalog WHERE source_id = ?1",
+        params![source_id],
+    )
 }
 
 pub struct CatalogCache {
@@ -144,7 +158,7 @@ impl CatalogCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::types::TrustTier;
+    use crate::hub::types::TrustTier;
 
     fn entry(id: &str, cat: ExtensionCategory, name: &str) -> ExtensionEntry {
         ExtensionEntry {
@@ -165,6 +179,8 @@ mod tests {
             installed: false,
             enabled: false,
             update_available: false,
+            via: None,
+            install_spec: None,
         }
     }
 
@@ -246,6 +262,11 @@ mod tests {
         upsert_entry(&conn, &e).unwrap();
         upsert_entry(&conn, &entry("b", ExtensionCategory::Data, "Beta")).unwrap(); // mcp-official
         assert_eq!(clear_source(&conn, "mcp-official").unwrap(), 1);
-        assert_eq!(query_entries(&conn, &CatalogFilter::default()).unwrap().len(), 1);
+        assert_eq!(
+            query_entries(&conn, &CatalogFilter::default())
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

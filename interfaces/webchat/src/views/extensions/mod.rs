@@ -99,9 +99,10 @@ pub fn ExtensionsView() -> impl IntoView {
                             if store.installing.get() {
                                 let ok = web_sys::window()
                                     .map(|w| {
-                                        w.confirm_with_message(
-                                            &t_string!(i18n, extensions.leave_confirm).to_string(),
-                                        )
+                                        w.confirm_with_message(t_string!(
+                                            i18n,
+                                            extensions.leave_confirm
+                                        ))
                                         .unwrap_or(false)
                                     })
                                     .unwrap_or(false);

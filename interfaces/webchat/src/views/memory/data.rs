@@ -90,7 +90,6 @@ pub fn page_count(total: usize, page_size: u32) -> u32 {
 /// Format a unix-seconds timestamp for display (`YYYY-MM-DD HH:MM`); `—` for
 /// non-positive. Single source of truth for both memory tabs (replaces the
 /// former duplicate in `views/memory` and mirrors `api/memory::format_timestamp_secs`).
-#[cfg(target_arch = "wasm32")]
 pub fn format_ts(ts: i64) -> String {
     if ts <= 0 {
         return "\u{2014}".to_string();

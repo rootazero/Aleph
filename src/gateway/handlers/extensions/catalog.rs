@@ -5,9 +5,9 @@ use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::skills::shared_system;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::mcp::manager::McpManagerHandle;
-use crate::store::cache::{CatalogCache, CatalogFilter};
-use crate::store::reconcile::{mcp_to_entry, plugin_to_entry, skill_to_entry};
-use crate::store::types::{ExtensionCategory, ExtensionKind};
+use crate::hub::cache::{CatalogCache, CatalogFilter};
+use crate::hub::reconcile::{mcp_to_entry, plugin_to_entry, skill_to_entry};
+use crate::hub::types::{ExtensionCategory, ExtensionKind};
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -38,7 +38,19 @@ pub async fn handle_catalog(req: JsonRpcRequest, cache: Arc<CatalogCache>) -> Js
         ..Default::default()
     };
     match cache.query(&filter).await {
-        Ok(entries) => JsonRpcResponse::success(req.id, json!({ "extensions": entries })),
+        Ok(entries) => {
+            let items: Vec<serde_json::Value> = entries
+                .iter()
+                .map(|e| {
+                    let mut v = serde_json::to_value(e).unwrap_or_else(|_| json!({}));
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert("source_label".into(), json!(e.via.clone().unwrap_or_default()));
+                    }
+                    v
+                })
+                .collect();
+            JsonRpcResponse::success(req.id, json!({ "extensions": items }))
+        }
         Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string()),
     }
 }
@@ -64,7 +76,13 @@ pub async fn handle_installed(
         out.extend(mgr.list_plugin_records().await.iter().map(plugin_to_entry));
     }
 
-    out.extend(shared_system().full_status().await.iter().map(skill_to_entry));
+    out.extend(
+        shared_system()
+            .full_status()
+            .await
+            .iter()
+            .map(skill_to_entry),
+    );
 
     JsonRpcResponse::success(req.id, json!({ "extensions": out }))
 }

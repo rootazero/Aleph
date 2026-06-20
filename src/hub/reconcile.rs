@@ -1,7 +1,7 @@
 use crate::extension::{PluginRecord, PluginStatus};
 use crate::mcp::manager::{HealthStatus, McpServerInfo};
 use crate::skill::status::SkillStatusEntry;
-use crate::store::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier};
+use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier};
 
 fn base_entry(kind: ExtensionKind, local_id: &str, name: String) -> ExtensionEntry {
     ExtensionEntry {
@@ -22,6 +22,8 @@ fn base_entry(kind: ExtensionKind, local_id: &str, name: String) -> ExtensionEnt
         installed: true,
         enabled: true,
         update_available: false,
+        via: None,
+        install_spec: None,
     }
 }
 

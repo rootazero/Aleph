@@ -21,10 +21,7 @@ use crate::tools::AlephTool;
 ///
 /// A catalog miss (user-created runtime agent with no `AgentDef`) returns
 /// `false` — those agents must remain deletable.
-pub(crate) fn is_protected(
-    catalog: &crate::agents::AgentRegistry,
-    id: &str,
-) -> bool {
+pub(crate) fn is_protected(catalog: &crate::agents::AgentRegistry, id: &str) -> bool {
     catalog
         .get(id)
         .map(|def| def.source == crate::agents::AgentSource::Builtin)
@@ -253,7 +250,15 @@ mod tests {
     fn is_protected_rejects_all_builtins() {
         let catalog = CatalogRegistry::with_builtins();
         // Every built-in agent must be protected
-        for id in ["main", "explore", "coder", "researcher", "default", "plan", "verify", "store"] {
+        for id in [
+            "main",
+            "explore",
+            "coder",
+            "researcher",
+            "default",
+            "plan",
+            "verify",
+        ] {
             assert!(
                 is_protected(&catalog, id),
                 "Expected built-in '{}' to be protected",

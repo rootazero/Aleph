@@ -64,7 +64,10 @@ pub async fn handle_toggle(req: JsonRpcRequest, mcp: Option<McpManagerHandle>) -
             None => Err("extension manager unavailable".to_string()),
         },
         "skill" => shared_system()
-            .update_config(&SkillId::new(backend), SkillConfigUpdate::SetEnabled(p.enabled))
+            .update_config(
+                &SkillId::new(backend),
+                SkillConfigUpdate::SetEnabled(p.enabled),
+            )
             .await
             .map_err(|e| e.to_string()),
         other => Err(format!("unknown kind: {other}")),
@@ -160,7 +163,10 @@ mod tests {
     #[test]
     fn handles_backend_ids_with_colons() {
         // split_once stops at the first ':', so a backend id may itself contain ':'.
-        assert_eq!(parse_local_id("local:skill:my:skill"), Some(("skill", "my:skill")));
+        assert_eq!(
+            parse_local_id("local:skill:my:skill"),
+            Some(("skill", "my:skill"))
+        );
     }
 
     #[test]

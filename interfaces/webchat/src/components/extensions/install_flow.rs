@@ -224,12 +224,17 @@ mod tests {
 
     #[test]
     fn needs_ack_goes_to_trust() {
-        let r = InstallResult::NeedsAck { disclosure: disc(true), injection_findings: vec![] };
+        let r = InstallResult::NeedsAck {
+            disclosure: disc(true),
+            injection_findings: vec![],
+        };
         assert_eq!(next_step(&r), InstallStep::Trust);
     }
     #[test]
     fn missing_goes_to_configure() {
-        let r = InstallResult::Missing { missing: vec!["TOKEN".into()] };
+        let r = InstallResult::Missing {
+            missing: vec!["TOKEN".into()],
+        };
         assert_eq!(next_step(&r), InstallStep::Configure);
     }
     #[test]

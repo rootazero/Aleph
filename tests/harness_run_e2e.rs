@@ -166,6 +166,7 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
         ),
         in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
+        robustness_profile: alephcore::verification::ModelRobustnessProfile::conservative(),
     })
 }
 

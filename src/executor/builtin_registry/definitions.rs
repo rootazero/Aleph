@@ -560,27 +560,27 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     // Store tools — require CatalogCache + marketplace configs
     BuiltinToolDefinition {
-        name: "store_catalog_sync",
+        name: "hub_catalog_sync",
         description: "Sync all extension sources into the local catalog cache and refresh functional categories.",
         requires_config: true, // Requires CatalogCache + marketplace configs
     },
     BuiltinToolDefinition {
-        name: "store_resolve_spec",
+        name: "hub_resolve_spec",
         description: "Resolve the install spec for a catalog entry by its id, routing through the matching source provider.",
         requires_config: true, // Requires CatalogCache + marketplace configs
     },
     BuiltinToolDefinition {
-        name: "store_install_run",
+        name: "hub_install_run",
         description: "Install a catalog entry by id (trust-gated). Clean specs install directly; ack-required specs bounce to the user for consent via the store UI; OCI is rejected.",
         requires_config: true, // Requires CatalogCache + marketplace configs + vault
     },
     BuiltinToolDefinition {
-        name: "store_install_verify",
+        name: "hub_install_verify",
         description: "Verify that a just-installed extension is healthy. For MCP servers: checks the server is running and exposes ≥1 tool. For plugins: checks the artifact is present on disk.",
         requires_config: true, // Requires live McpManagerHandle for MCP verification
     },
     BuiltinToolDefinition {
-        name: "store_fetch_docs",
+        name: "hub_fetch_docs",
         description: "Fetch a URL (README/manifest) for the long-tail install path and scan for prompt-injection. SCAFFOLD — not wired to any install surface.",
         requires_config: false, // No CatalogCache needed; HTTP-only scaffold
     },

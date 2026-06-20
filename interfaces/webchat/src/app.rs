@@ -9,18 +9,18 @@ use leptos_router::hooks::{use_location, use_navigate};
 use crate::views::agent_trace::AgentTrace;
 use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
+use crate::views::extensions::ExtensionsView;
 use crate::views::home::Home;
 use crate::views::logs::Logs;
 use crate::views::memory_hub::MemoryHub;
 use crate::views::runtimes::RuntimesView;
 use crate::views::settings::{
     AcpHarnessesView, AppearanceView, BehaviorView, BrowserView, ChannelPlatformPage,
-    ChannelsOverview, EmbeddingProvidersView, ExecutionView, GeneralView,
-    GenerationProvidersView, McpView, MemoryView, NetworkView, PluginsView, PoliciesView,
-    ProvidersView, RerankingProvidersView, RouteView, RoutingRulesView, SearchView, SecurityView,
-    Settings, SkillsView,
+    ChannelsOverview, EmbeddingProvidersView, ExecutionView, GeneralView, GenerationProvidersView,
+    McpView, MemoryView, NetworkView, PluginsView, PoliciesView, ProvidersView,
+    RerankingProvidersView, RouteView, RoutingRulesView, SearchView, SecurityView, Settings,
+    SkillsView,
 };
-use crate::views::extensions::ExtensionsView;
 use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
 use crate::views::usage::UsageView;

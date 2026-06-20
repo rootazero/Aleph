@@ -26,8 +26,13 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
             let id = entry.id.clone();
             spawn_local(async move {
                 match ExtensionsApi::disclosure(&state, id).await {
-                    Ok((d, _findings)) => { disclosure.set(Some(d)); disc_loading.set(false); }
-                    Err(_) => { disc_loading.set(false); }
+                    Ok((d, _findings)) => {
+                        disclosure.set(Some(d));
+                        disc_loading.set(false);
+                    }
+                    Err(_) => {
+                        disc_loading.set(false);
+                    }
                 }
             });
         }
@@ -58,6 +63,10 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
                                             <span class=badge_cls>{kind_text}</span>
                                         </div>
                                         <p class="text-xs text-text-tertiary truncate">{entry.author.clone().unwrap_or_default()}</p>
+                                        {(!entry.source_label.is_empty()).then({
+                                            let s = entry.source_label.clone();
+                                            move || view! { <p class="text-xs text-text-tertiary truncate">{t!(i18n, extensions.via)}" "{s}</p> }
+                                        })}
                                     </div>
                                 </div>
                                 <button class="text-text-tertiary hover:text-text-primary" on:click=close>"✕"</button>

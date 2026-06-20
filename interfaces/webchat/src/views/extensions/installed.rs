@@ -13,9 +13,9 @@ use crate::components::extensions::labels::kind_label;
 use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n, Locale};
-use leptos_i18n::I18nContext;
 use crate::views::extensions::model::kind_badge_class;
 use crate::views::extensions::StoreState;
+use leptos_i18n::I18nContext;
 
 fn load_installed(
     state: DashboardState,
@@ -126,7 +126,12 @@ fn InstalledRow(
     let manual = entry.trust_tier == "unverified";
     // Capture fields needed in closures.
     let kind_str = entry.kind.clone();
-    let name_initial = entry.name.chars().next().map(|c| c.to_string()).unwrap_or_default();
+    let name_initial = entry
+        .name
+        .chars()
+        .next()
+        .map(|c| c.to_string())
+        .unwrap_or_default();
     let name_display = entry.name.clone();
     let version_display = entry.version.clone();
     let update_available = entry.update_available;

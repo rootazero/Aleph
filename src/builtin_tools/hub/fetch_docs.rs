@@ -1,4 +1,4 @@
-//! `store_fetch_docs` — fetch a repo/URL's README/manifest for the long-tail
+//! `hub_fetch_docs` — fetch a repo/URL's README/manifest for the long-tail
 //! install path. SCAFFOLD (v1): implemented + injection-scanned, but NOT wired
 //! to any user-facing install flow. The supported install path is the
 //! deterministic fast-path (P2/P3 UI).
@@ -8,20 +8,20 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AlephError, Result};
-use crate::store::trust::{scan_for_injection, InjectionFinding};
+use crate::hub::trust::{scan_for_injection, InjectionFinding};
 use crate::tools::AlephTool;
 
 /// Maximum number of bytes accepted from the remote response body.
 const DOC_BYTE_BUDGET: usize = 64 * 1024; // 64 KiB
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct StoreFetchDocsArgs {
+pub struct HubFetchDocsArgs {
     /// URL to fetch (README, manifest, or any text document).
     pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct StoreFetchDocsOutput {
+pub struct HubFetchDocsOutput {
     pub text: String,
     pub truncated: bool,
     pub injection_findings: Vec<InjectionFinding>,
@@ -31,15 +31,15 @@ pub struct StoreFetchDocsOutput {
 /// to `DOC_BYTE_BUDGET`, and runs the injection scanner before returning.
 /// Not wired to any user install surface.
 #[derive(Clone)]
-pub struct StoreFetchDocsTool;
+pub struct HubFetchDocsTool;
 
 #[async_trait]
-impl AlephTool for StoreFetchDocsTool {
-    const NAME: &'static str = "store_fetch_docs";
+impl AlephTool for HubFetchDocsTool {
+    const NAME: &'static str = "hub_fetch_docs";
     const DESCRIPTION: &'static str =
         "Fetch a URL (README/manifest) for the long-tail install path and scan for prompt-injection. SCAFFOLD — not wired to any install surface.";
-    type Args = StoreFetchDocsArgs;
-    type Output = StoreFetchDocsOutput;
+    type Args = HubFetchDocsArgs;
+    type Output = HubFetchDocsOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Build a short-timeout client, mirroring docker_mcp/mcp_registry providers.
@@ -79,7 +79,7 @@ impl AlephTool for StoreFetchDocsTool {
 
         let injection_findings = scan_for_injection(&text);
 
-        Ok(StoreFetchDocsOutput {
+        Ok(HubFetchDocsOutput {
             text,
             truncated,
             injection_findings,
@@ -97,14 +97,20 @@ mod tests {
         // body one byte over → truncated.
         let at_limit = vec![b'a'; DOC_BYTE_BUDGET];
         let over_limit = vec![b'b'; DOC_BYTE_BUDGET + 1];
-        assert!(!(at_limit.len() > DOC_BYTE_BUDGET), "at-limit body should not truncate");
-        assert!(over_limit.len() > DOC_BYTE_BUDGET, "over-limit body should truncate");
+        assert!(
+            at_limit.len() <= DOC_BYTE_BUDGET,
+            "at-limit body should not truncate"
+        );
+        assert!(
+            over_limit.len() > DOC_BYTE_BUDGET,
+            "over-limit body should truncate"
+        );
     }
 
     #[test]
     fn injection_findings_included_in_output() {
         // Verify that a fabricated output with findings serializes correctly.
-        let out = StoreFetchDocsOutput {
+        let out = HubFetchDocsOutput {
             text: "clean".into(),
             truncated: false,
             injection_findings: vec![InjectionFinding {

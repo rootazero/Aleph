@@ -324,16 +324,17 @@ pub struct BuiltinToolRegistry {
     /// User profile tool (Spec 7 Task 9) — optional, requires `ProfileSynthesizer`.
     pub(crate) user_profile_tool: Option<crate::builtin_tools::user_profile::UserProfileTool>,
     /// Store catalog-sync tool (optional - requires CatalogCache + marketplace configs)
-    pub(crate) store_catalog_sync_tool: Option<crate::builtin_tools::store::StoreCatalogSyncTool>,
+    pub(crate) hub_catalog_sync_tool: Option<crate::builtin_tools::hub::HubCatalogSyncTool>,
     /// Store resolve-spec tool (optional - requires CatalogCache + marketplace configs)
-    pub(crate) store_resolve_spec_tool: Option<crate::builtin_tools::store::StoreResolveSpecTool>,
+    pub(crate) hub_resolve_spec_tool: Option<crate::builtin_tools::hub::HubResolveSpecTool>,
     /// Store install-run tool (optional - requires CatalogCache + marketplace
     /// configs + vault; live MCP handle optional).
-    pub(crate) store_install_run_tool: Option<crate::builtin_tools::store::StoreInstallRunTool>,
+    pub(crate) hub_install_run_tool: Option<crate::builtin_tools::hub::HubInstallRunTool>,
     /// Store install-verify tool (optional - live MCP handle optional for plugin-only verification).
-    pub(crate) store_install_verify_tool: Option<crate::builtin_tools::store::StoreInstallVerifyTool>,
+    pub(crate) hub_install_verify_tool:
+        Option<crate::builtin_tools::hub::HubInstallVerifyTool>,
     /// Store fetch-docs tool (scaffold - HTTP-only, no CatalogCache dep)
-    pub(crate) store_fetch_docs_tool: crate::builtin_tools::store::StoreFetchDocsTool,
+    pub(crate) hub_fetch_docs_tool: crate::builtin_tools::hub::HubFetchDocsTool,
     /// Live Config handle for the `config_audit` tool (security-posture audit).
     /// Built per-call from this handle, mirroring `create_tool_boxed`.
     pub(crate) config: Option<Arc<RwLock<crate::config::Config>>>,

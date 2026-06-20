@@ -4,14 +4,21 @@ use serde_json::json;
 
 use crate::api::extensions::{ExtensionEntry, ExtensionsApi};
 use crate::components::extensions::card::ExtensionCard;
-use crate::components::extensions::chips::{category_label, CategoryChips, FilterSegs, StoreSearch};
+use crate::components::extensions::chips::{
+    category_label, CategoryChips, FilterSegs, StoreSearch,
+};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n, Locale};
-use leptos_i18n::I18nContext;
 use crate::views::extensions::model::{apply_filters, featured_picks, group_into_shelves, Filters};
 use crate::views::extensions::StoreState;
+use leptos_i18n::I18nContext;
 
-pub(crate) fn load_catalog(state: DashboardState, store: StoreState, i18n: I18nContext<Locale>, quiet: bool) {
+pub(crate) fn load_catalog(
+    state: DashboardState,
+    store: StoreState,
+    i18n: I18nContext<Locale>,
+    quiet: bool,
+) {
     if !quiet {
         store.loading.set(true);
     }

@@ -39,16 +39,6 @@ pub const INVESTIGATION: &[&str] = &["file_read", "file_ops", "search", "web_fet
 /// background recursion misuse beyond Stage B guarantees.
 pub const ASYNC_SAFE: &[&str] = &["file_read", "file_ops", "search"];
 
-/// Private tool set for the built-in `store` agent. Not granted to chat agents
-/// (the wildcard hole on `main`/`verify` is closed via denied_tools — see Task 4).
-pub const STORE_TOOLS: &[&str] = &[
-    "store_catalog_sync",
-    "store_fetch_docs",
-    "store_resolve_spec",
-    "store_install_run",
-    "store_install_verify",
-];
-
 /// Resolve a set name to its tool list. Returns None for unknown names so
 /// callers can warn (loader) or treat as empty allowance (`is_tool_allowed`)
 /// without rejecting valid agent definitions.
@@ -57,7 +47,6 @@ pub fn resolve(set_name: &str) -> Option<&'static [&'static str]> {
         "READ_ONLY" => Some(READ_ONLY),
         "INVESTIGATION" => Some(INVESTIGATION),
         "ASYNC_SAFE" => Some(ASYNC_SAFE),
-        "STORE_TOOLS" => Some(STORE_TOOLS),
         _ => None,
     }
 }
@@ -139,13 +128,5 @@ mod tests {
         assert!(resolve("FOOBAR").is_none());
         assert!(resolve("read_only").is_none()); // case-sensitive
         assert!(resolve("").is_none());
-    }
-
-    #[test]
-    fn store_tools_resolve_to_five_names() {
-        let set = resolve("STORE_TOOLS").expect("STORE_TOOLS must resolve");
-        assert_eq!(set.len(), 5);
-        assert!(set.contains(&"store_install_run"));
-        assert!(set.contains(&"store_catalog_sync"));
     }
 }

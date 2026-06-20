@@ -18,12 +18,17 @@ pub fn ExtensionCard(entry: ExtensionEntry) -> impl IntoView {
         "px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider {}",
         kind_badge_class(&entry.kind)
     );
-    let glyph = entry
-        .icon
-        .clone()
-        .unwrap_or_else(|| entry.name.chars().next().map(|c| c.to_string()).unwrap_or_default());
+    let glyph = entry.icon.clone().unwrap_or_else(|| {
+        entry
+            .name
+            .chars()
+            .next()
+            .map(|c| c.to_string())
+            .unwrap_or_default()
+    });
     let author = entry.author.clone().unwrap_or_default();
     let installed = entry.installed;
+    let source_label = entry.source_label.clone();
     let kind_text = kind_label(i18n, &entry.kind);
     let trust_text = trust_label(i18n, &entry.trust_tier);
     let trust_cls = format!(
@@ -50,6 +55,12 @@ pub fn ExtensionCard(entry: ExtensionEntry) -> impl IntoView {
             <div class="flex items-center gap-2 mt-1">
                 <span class=trust_cls></span>
                 <span class="text-xs text-text-tertiary">{trust_text}</span>
+                {
+                    let source_label = source_label.clone();
+                    (!source_label.is_empty()).then(move || view! {
+                        <span class="text-xs text-text-tertiary truncate">"· "{t!(i18n, extensions.via)}" "{source_label}</span>
+                    })
+                }
                 <span class="flex-1"></span>
                 {{
                     let install_entry = entry.clone();

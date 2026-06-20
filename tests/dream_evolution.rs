@@ -43,10 +43,10 @@ async fn full_evolution_cycle_consolidate() {
         &MemoryDecayPolicy::default(),
     );
     // Consolidate: lint, review, consolidate, feedback_distill, drift, index,
-    // weave, decay, skill_lifecycle, goal_lessons_promote — mirrors the
-    // authoritative name-list test `pipeline_from_strategy_consolidate` in
-    // `src/memory/dreaming/mod.rs`.
-    assert_eq!(pipeline.stages.len(), 10);
+    // graph_recompute, weave, decay, skill_lifecycle, goal_lessons_promote —
+    // mirrors the authoritative name-list test `pipeline_from_strategy_consolidate`
+    // in `src/memory/dreaming/mod.rs`.
+    assert_eq!(pipeline.stages.len(), 11);
     assert_eq!(
         pipeline.stages.last().map(|s| s.name()),
         Some("goal_lessons_promote")
@@ -119,8 +119,8 @@ async fn high_growth_selects_synthesize() {
         &MemoryDecayPolicy::default(),
     );
     // Synthesize: lint, review, consolidate, note_synthesis, skill_distill,
-    // feedback_distill, workflow_proposal, daily_digest
-    assert_eq!(pipeline.stages.len(), 8);
+    // feedback_distill, workflow_proposal, corpus_narrative, daily_digest
+    assert_eq!(pipeline.stages.len(), 9);
     assert_eq!(pipeline.stages[4].name(), "skill_distill");
     assert_eq!(pipeline.stages[5].name(), "feedback_distill");
     assert_eq!(pipeline.stages[6].name(), "workflow_proposal");
@@ -154,13 +154,13 @@ async fn merge_cycle_forces_conserve() {
     let selection = selector.select(&snapshot, &gate_decision);
     assert_eq!(selection.strategy, DreamStrategy::Conserve);
 
-    // Conserve pipeline is minimal: lint, review, index
+    // Conserve pipeline is minimal: lint, review, index, graph_recompute
     let pipeline = DreamPipeline::from_strategy(
         selection.strategy,
         &DreamingConfig::default(),
         &MemoryDecayPolicy::default(),
     );
-    assert_eq!(pipeline.stages.len(), 3);
+    assert_eq!(pipeline.stages.len(), 4);
 }
 
 /// Personality adaptation across multiple cycles.

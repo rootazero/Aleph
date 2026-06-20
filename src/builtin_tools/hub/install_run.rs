@@ -1,6 +1,6 @@
-//! `store_install_run` — trust-gated, agent-driven extension install.
+//! `hub_install_run` — trust-gated, agent-driven extension install.
 //!
-//! SECURITY: this tool takes NO `ack` argument. The store agent is an LLM; an
+//! SECURITY: this tool takes NO `ack` argument. The calling agent is an LLM; an
 //! `ack` it controlled would let it fabricate user consent. The pure [`gate`]
 //! is the system-enforced core: OCI is always rejected, any ack-required spec
 //! bounces to the user (`NeedsUserConsent`) with ZERO install or secret-storage
@@ -21,12 +21,11 @@ use crate::extension::marketplace::types::MarketplaceConfig;
 use crate::extension::marketplace::MarketplaceManager;
 use crate::gateway::security::SharedTokenManager;
 use crate::mcp::manager::McpManagerHandle;
-use crate::store::cache::{CatalogCache, CatalogFilter};
-use crate::store::install::{run_install, InstallContext, InstallOutcome};
-use crate::store::provider::registry_builder::build_default_registry;
-use crate::store::secrets::field_key;
-use crate::store::trust::{build_disclosure, DisclosurePayload};
-use crate::store::types::InstallSpec;
+use crate::hub::cache::{CatalogCache, CatalogFilter};
+use crate::hub::install::{run_install, InstallContext, InstallOutcome};
+use crate::hub::secrets::field_key;
+use crate::hub::trust::{build_disclosure, DisclosurePayload};
+use crate::hub::types::InstallSpec;
 use crate::tools::AlephTool;
 
 // --------------------------------------------------------------------------
@@ -60,8 +59,8 @@ pub fn gate(ack_required: bool, is_oci: bool) -> GateOutcome {
 /// always require a user gesture via the trust-gated UI. MCP specs may
 /// auto-install when their disclosure is not ack-required.
 #[must_use]
-pub fn requires_user_consent(ack_required: bool, spec: &crate::store::types::InstallSpec) -> bool {
-    ack_required || matches!(spec, crate::store::types::InstallSpec::GitDir { .. })
+pub fn requires_user_consent(ack_required: bool, spec: &crate::hub::types::InstallSpec) -> bool {
+    ack_required || matches!(spec, crate::hub::types::InstallSpec::GitDir { .. })
 }
 
 // --------------------------------------------------------------------------
@@ -69,7 +68,7 @@ pub fn requires_user_consent(ack_required: bool, spec: &crate::store::types::Ins
 // --------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct StoreInstallRunArgs {
+pub struct HubInstallRunArgs {
     /// The catalog entry id to install (e.g. "mcp-official:io.github.acme/foo").
     pub entry_id: String,
     /// Submitted config field values (env vars / headers). Secret fields are
@@ -79,7 +78,7 @@ pub struct StoreInstallRunArgs {
 }
 
 /// Three-way install result. `NeedsUserConsent` carries the disclosure the agent
-/// surfaces so the user can complete the risky install through the store UI's
+/// surfaces so the user can complete the risky install through the Extensions UI's
 /// ack flow; this tool performs no side effect in that case.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "status")]
@@ -107,7 +106,7 @@ fn value_to_string(v: &Value) -> Option<String> {
 }
 
 #[derive(Clone)]
-pub struct StoreInstallRunTool {
+pub struct HubInstallRunTool {
     pub cache: Arc<CatalogCache>,
     pub marketplaces: HashMap<String, MarketplaceConfig>,
     pub vault: Arc<SharedTokenManager>,
@@ -118,12 +117,12 @@ pub struct StoreInstallRunTool {
 }
 
 #[async_trait]
-impl AlephTool for StoreInstallRunTool {
-    const NAME: &'static str = "store_install_run";
+impl AlephTool for HubInstallRunTool {
+    const NAME: &'static str = "hub_install_run";
     const DESCRIPTION: &'static str =
         "Install a catalog entry by id (trust-gated). Clean specs install directly; \
-         ack-required specs bounce to the user for consent via the store UI; OCI is rejected.";
-    type Args = StoreInstallRunArgs;
+         ack-required specs bounce to the user for consent via the Extensions UI; OCI is rejected.";
+    type Args = HubInstallRunArgs;
     type Output = InstallToolResult;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
@@ -140,17 +139,19 @@ impl AlephTool for StoreInstallRunTool {
             AlephError::other(format!("entry '{}' not found in catalog", args.entry_id))
         })?;
 
-        // (2) Resolve the install spec via the matching source provider.
-        let registry = build_default_registry(self.marketplaces.clone());
-        let spec = registry
-            .resolve_for_entry(&entry)
-            .await
-            .map_err(|e| AlephError::other(format!("resolve_for_entry failed: {e}")))?;
+        // (2) Resolve the install spec from the cached entry.
+        let entry_id = args.entry_id.clone();
+        let spec = entry.install_spec.clone().ok_or_else(|| {
+            AlephError::other(format!("no install spec cached for {entry_id}"))
+        })?;
 
         // (3) Build the disclosure and run the system-enforced gate.
         let disclosure = build_disclosure(&entry, &spec);
         let is_oci = matches!(spec, InstallSpec::OciImage { .. });
-        match gate(requires_user_consent(disclosure.ack_required, &spec), is_oci) {
+        match gate(
+            requires_user_consent(disclosure.ack_required, &spec),
+            is_oci,
+        ) {
             GateOutcome::Reject => Ok(InstallToolResult::Rejected {
                 reason: if is_oci {
                     "OCI/Docker MCP containers are not installable in this version".to_string()
@@ -159,10 +160,8 @@ impl AlephTool for StoreInstallRunTool {
                 },
             }),
             // RETURN HERE — no install, no secret storage. The agent surfaces
-            // the disclosure and directs the user to install via the store UI.
-            GateOutcome::NeedsUserConsent => {
-                Ok(InstallToolResult::NeedsUserConsent { disclosure })
-            }
+            // the disclosure and directs the user to install via the Extensions UI.
+            GateOutcome::NeedsUserConsent => Ok(InstallToolResult::NeedsUserConsent { disclosure }),
             GateOutcome::Proceed => {
                 self.proceed(&entry, &spec, &disclosure, &args.config_values)
                     .await
@@ -171,13 +170,13 @@ impl AlephTool for StoreInstallRunTool {
     }
 }
 
-impl StoreInstallRunTool {
+impl HubInstallRunTool {
     /// The clean-spec install path: split secrets from plain values, store
     /// secrets in the vault, then route the install. Reached ONLY for specs the
     /// gate cleared (no ack required, not OCI).
     async fn proceed(
         &self,
-        entry: &crate::store::types::ExtensionEntry,
+        entry: &crate::hub::types::ExtensionEntry,
         spec: &InstallSpec,
         disclosure: &DisclosurePayload,
         config_values: &Map<String, Value>,
@@ -229,7 +228,7 @@ impl StoreInstallRunTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::types::InstallSpec;
+    use crate::hub::types::InstallSpec;
 
     // --- gate (existing 4 tests — unchanged) ---------------------------------
 
@@ -272,7 +271,7 @@ mod tests {
     fn mcp_remote_spec() -> InstallSpec {
         InstallSpec::McpRemote {
             url: "https://mcp.example.com".into(),
-            transport: crate::store::types::McpTransport::StreamableHttp,
+            transport: crate::hub::types::McpTransport::StreamableHttp,
             headers: vec![],
         }
     }

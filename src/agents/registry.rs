@@ -201,7 +201,6 @@ fn normalize_agent_alias(raw: &str) -> Option<&'static str> {
         "researcher" => return Some("researcher"),
         "coder" => return Some("coder"),
         "main" => return Some("main"),
-        "store" => return Some("store"),
         _ => {}
     }
     match lowered.as_str() {
@@ -221,18 +220,11 @@ pub fn builtin_agents() -> Vec<AgentDef> {
         // Main agent - full access. Explicit "flow_run" alongside "*" marks the
         // sub-flow dispatch tool as an intentional capability in the catalog
         // (registration wiring lands in Phase 6 — see orchestrator::flow_run_tool).
-        // Store tools are denied explicitly so the wildcard cannot reach them —
-        // denied_tools short-circuits before the "*" wildcard in is_tool_allowed.
+        // Hub tools (hub_*) are reachable via the wildcard; install safety is
+        // enforced by the operator-tier gate (method_authz), not agent scoping.
         AgentDef::new("main", AgentMode::Primary)
             .with_description("Primary agent that responds directly to user")
-            .with_allowed_tools(vec!["*".into(), "flow_run".into()])
-            .with_denied_tools(vec![
-                "store_catalog_sync".into(),
-                "store_fetch_docs".into(),
-                "store_resolve_spec".into(),
-                "store_install_run".into(),
-                "store_install_verify".into(),
-            ]),
+            .with_allowed_tools(vec!["*".into(), "flow_run".into()]),
         // Explore agent — INVESTIGATION named set (P2 Stage G demo migration).
         // Effective behavior unchanged: Stage B recursion guard blocks subagent
         // for SubAgent mode; denied_tools preserved. Default wildcard cleared so
@@ -290,8 +282,8 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_max_iterations(20)
             .with_context_mode(ContextMode::Summary),
         // Verify agent - adversarial verifier (read-only).
-        // Store tools are denied explicitly so the wildcard cannot reach them —
-        // denied_tools short-circuits before the "*" wildcard in is_tool_allowed.
+        // Hub tools are denied explicitly so the wildcard cannot reach them —
+        // verify must not install/mutate; denied_tools short-circuits the "*" wildcard.
         AgentDef::new("verify", AgentMode::SubAgent)
             .with_description("Adversarial verification specialist")
             .with_when_to_use("When you need to independently verify that work was done correctly")
@@ -300,28 +292,14 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_denied_tools(vec![
                 "file_write".into(),
                 "file_edit".into(),
-                "store_catalog_sync".into(),
-                "store_fetch_docs".into(),
-                "store_resolve_spec".into(),
-                "store_install_run".into(),
-                "store_install_verify".into(),
+                "hub_catalog_sync".into(),
+                "hub_fetch_docs".into(),
+                "hub_resolve_spec".into(),
+                "hub_install_run".into(),
+                "hub_install_verify".into(),
             ])
             .with_max_iterations(25)
             .with_context_mode(ContextMode::Summary),
-        // Store agent - extensions store curator and installer (private STORE_TOOLS only)
-        AgentDef::new("store", AgentMode::SubAgent)
-            .with_description(
-                "Extensions Store curator and installer: syncs the catalog, assigns \
-                 functional categories, and drives trust-gated installs. Built-in and \
-                 non-deletable. Cannot bypass install trust rails (disclosure + ack \
-                 + SHA256 are system-enforced).",
-            )
-            .with_when_to_use(
-                "When curating the extensions catalog or installing an extension on the \
-                 user's behalf through the store.",
-            )
-            .with_allowed_tool_sets(vec!["STORE_TOOLS".into()])
-            .with_max_iterations(15),
     ]
 }
 
@@ -399,13 +377,11 @@ mod tests {
     #[test]
     fn test_builtin_agents_count() {
         let agents = builtin_agents();
-        assert_eq!(agents.len(), 8);
-        let store = agents.iter().find(|a| a.id == "store").expect("store builtin present");
-        assert_eq!(store.mode, AgentMode::SubAgent);
-        assert_eq!(store.source, crate::agents::types::AgentSource::Builtin);
-        assert!(store.allowed_tool_sets.iter().any(|s| s == "STORE_TOOLS"));
-        assert!(!store.is_tool_allowed("file_write")); // not in STORE_TOOLS
-        assert!(store.is_tool_allowed("store_catalog_sync"));
+        assert_eq!(agents.len(), 7);
+        assert!(
+            agents.iter().all(|a| a.id != "store"),
+            "store agent must be retired"
+        );
     }
 
     #[test]
@@ -657,27 +633,27 @@ mod tests {
     }
 
     #[test]
-    fn wildcard_agents_deny_store_tools() {
+    fn main_allows_hub_tools_verify_denies() {
         let agents = builtin_agents();
         let main = agents.iter().find(|a| a.id == "main").unwrap();
         let verify = agents.iter().find(|a| a.id == "verify").unwrap();
 
-        // All 5 store tools must be denied on both wildcard agents.
-        let store_tools = [
-            "store_catalog_sync",
-            "store_fetch_docs",
-            "store_resolve_spec",
-            "store_install_run",
-            "store_install_verify",
+        // Hub tools are demoted to the main loop; the read-only verifier still denies them.
+        let hub_tools = [
+            "hub_catalog_sync",
+            "hub_fetch_docs",
+            "hub_resolve_spec",
+            "hub_install_run",
+            "hub_install_verify",
         ];
-        for name in &store_tools {
+        for name in &hub_tools {
             assert!(
-                !main.is_tool_allowed(name),
-                "main should deny store tool: {name}"
+                main.is_tool_allowed(name),
+                "main should allow hub tool: {name}"
             );
             assert!(
                 !verify.is_tool_allowed(name),
-                "verify should deny store tool: {name}"
+                "verify (read-only) should deny hub tool: {name}"
             );
         }
 

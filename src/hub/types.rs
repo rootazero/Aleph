@@ -173,6 +173,14 @@ pub struct ExtensionEntry {
     pub enabled: bool,
     #[serde(default)]
     pub update_available: bool,
+    /// Upstream provenance label (e.g. "clawhub", "github:owner"); filled from
+    /// the published catalog. None for local/installed entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+    /// Resolved install spec carried by the catalog entry; None for local
+    /// entries. Install resolution is a pure cache lookup of this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_spec: Option<InstallSpec>,
 }
 
 #[cfg(test)]
@@ -181,7 +189,10 @@ mod tests {
 
     #[test]
     fn kind_serializes_snake_case() {
-        assert_eq!(serde_json::to_string(&ExtensionKind::Mcp).unwrap(), "\"mcp\"");
+        assert_eq!(
+            serde_json::to_string(&ExtensionKind::Mcp).unwrap(),
+            "\"mcp\""
+        );
         assert_eq!(ExtensionKind::Plugin.as_str(), "plugin");
     }
 
@@ -243,7 +254,21 @@ mod tests {
             installed: false,
             enabled: false,
             update_available: false,
+            via: None,
+            install_spec: None,
         }
+    }
+
+    #[test]
+    fn entry_carries_via_and_install_spec() {
+        let mut e = sample_entry();
+        e.via = Some("aleph-hub".into());
+        e.install_spec = Some(InstallSpec::OciImage { image: "x@sha256:abc".into() });
+        let j = serde_json::to_value(&e).unwrap();
+        assert_eq!(j["via"], "aleph-hub");
+        assert!(j["install_spec"].is_object());
+        let back: ExtensionEntry = serde_json::from_value(j).unwrap();
+        assert_eq!(back, e);
     }
 
     #[test]
