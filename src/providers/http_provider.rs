@@ -12,6 +12,7 @@ use crate::providers::{AiProvider, ProviderDelta};
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector};
 use crate::sync_primitives::Arc;
 use futures::StreamExt;
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 use tracing::debug;
@@ -623,12 +624,12 @@ impl AiProvider for HttpProvider {
         &self.config.color
     }
 
-    fn protocol(&self) -> &str {
-        self.adapter.name()
+    fn protocol(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.adapter.name())
     }
 
-    fn model_behavior_override(&self) -> Option<&str> {
-        self.config.model_behavior.as_deref()
+    fn model_behavior_override(&self) -> Option<Cow<'_, str>> {
+        self.config.model_behavior.as_deref().map(Cow::Borrowed)
     }
 
     fn as_http_provider(&self) -> Option<&HttpProvider> {
