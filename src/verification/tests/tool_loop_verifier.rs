@@ -157,6 +157,8 @@ async fn threshold_clamped_to_history_window() {
     let v = ToolLoopVerifier::new().with_threshold(TOOL_HISTORY_WINDOW + 100);
     assert_eq!(v.threshold(), TOOL_HISTORY_WINDOW);
 
+    // With the profile-driven verify, a full window of identical calls triggers
+    // Tier-1 Halt (run=8 >= halt_threshold=8 > repeat_threshold=5).
     let history = vec![make("read", 1); TOOL_HISTORY_WINDOW];
     let ctx = TurnVerifyContext {
         iterations: TOOL_HISTORY_WINDOW,
@@ -168,13 +170,23 @@ async fn threshold_clamped_to_history_window() {
             robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
-    assert!(v.verify(&ctx, &cancel).await.is_veto());
+    assert!(v.verify(&ctx, &cancel).await.is_halt());
 }
 
 #[tokio::test]
 async fn threshold_two_vetoes_at_exactly_two() {
+    // Verify that a profile with a low repeat_threshold (2) fires Veto at
+    // exactly two identical calls. `with_threshold` on the struct is kept for
+    // API compatibility; detection thresholds now come from the profile.
     let v = ToolLoopVerifier::new().with_threshold(2);
     let history = vec![make("read", 1), make("read", 1)];
+    let tight_profile = crate::verification::ModelRobustnessProfile {
+        repeat_threshold: 2,
+        halt_threshold: 8,
+        steer_max: 6,
+        novelty_min: 0.5,
+        silence_required: true,
+    };
     let ctx = TurnVerifyContext {
         iterations: 2,
         tool_calls_made: 2,
@@ -182,7 +194,7 @@ async fn threshold_two_vetoes_at_exactly_two() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+            robustness_profile: tight_profile,
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_veto());
@@ -234,11 +246,40 @@ async fn at_halt_threshold_halts() {
 }
 
 #[tokio::test]
-async fn tier2_same_name_varying_args_no_text_halts() {
-    // A full window of the SAME tool name with all-different args (so Tier 1's
-    // identical run never reaches the threshold) and no narration text → the
-    // exploration-loop Tier 2 halts. This is the template.html/layouts.md/
-    // themes.md thrash the identical-args check is blind to.
+async fn tier2_low_distinctness_no_text_steers() {
+    // A full window of the SAME tool name cycling a SMALL set of args (so Tier
+    // 1's identical run never reaches the threshold) and no narration text →
+    // the thrash Tier-2 emits a Veto (steer) so the harness can inject
+    // feedback. This is the template.html/layouts.md/themes.md pattern.
+    // (3 distinct out of 8 = 0.375 distinctness < 0.5 novelty_min.)
+    let v = ToolLoopVerifier::new();
+    let history: Vec<_> = (0..TOOL_HISTORY_WINDOW as u64)
+        .map(|i| make("file_read", i % 3)) // same name, only 3 distinct args
+        .collect();
+    let ctx = TurnVerifyContext {
+        iterations: TOOL_HISTORY_WINDOW,
+        tool_calls_made: TOOL_HISTORY_WINDOW,
+        final_text: None,
+        recent_tool_calls: &history,
+        stop_reason: None,
+        session_id: None,
+            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+    };
+    let cancel = CancellationToken::new();
+    match v.verify(&ctx, &cancel).await {
+        VerifierVerdict::Veto { reason, .. } => {
+            assert!(reason.contains("file_read"));
+            assert!(reason.contains("distinct"));
+        }
+        other => panic!("expected Tier-2 Veto, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn tier2_high_distinctness_no_text_continues() {
+    // A full window of all-distinct args (fan-out pattern, e.g. 8 different
+    // web_fetch URLs) must NOT trigger Tier-2, even with no narration text.
+    // Distinctness = 8/8 = 1.0 >= novelty_min → Continue.
     let v = ToolLoopVerifier::new();
     let history: Vec<_> = (0..TOOL_HISTORY_WINDOW as u64)
         .map(|i| make("file_read", i)) // same name, every args_hash distinct
@@ -253,13 +294,10 @@ async fn tier2_same_name_varying_args_no_text_halts() {
             robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
-    match v.verify(&ctx, &cancel).await {
-        VerifierVerdict::Halt { reason, .. } => {
-            assert!(reason.contains("file_read"));
-            assert!(reason.contains("varying arguments"));
-        }
-        other => panic!("expected Tier-2 Halt, got {other:?}"),
-    }
+    assert!(
+        v.verify(&ctx, &cancel).await.is_continue(),
+        "high-distinctness fan-out must not trigger Tier-2"
+    );
 }
 
 #[tokio::test]
