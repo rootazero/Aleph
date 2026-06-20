@@ -632,6 +632,14 @@ impl AiProvider for HttpProvider {
         self.config.model_behavior.as_deref().map(Cow::Borrowed)
     }
 
+    fn behavior_hint(&self) -> Option<Cow<'_, str>> {
+        crate::providers::model_behaviors::vendor_identity(
+            self.config.base_url.as_deref(),
+            self.config.default_model(),
+        )
+        .map(Cow::Borrowed)
+    }
+
     fn as_http_provider(&self) -> Option<&HttpProvider> {
         Some(self)
     }
