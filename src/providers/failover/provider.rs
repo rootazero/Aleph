@@ -1,5 +1,6 @@
 //! The [`FailoverProvider`] decorator and its [`AiProvider`] failover walk.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -777,5 +778,19 @@ impl AiProvider for FailoverProvider {
     // The wrapper should look like its live primary for behavior-resolution.
     fn supports_native_tools(&self) -> bool {
         self.primary.current().supports_native_tools()
+    }
+
+    // Behavior-resolution must reflect the live primary, like
+    // `supports_native_tools` above. `current()` yields a temporary `Arc`,
+    // so the value is copied out (`Cow::Owned`) rather than borrowed.
+    fn protocol(&self) -> Cow<'_, str> {
+        Cow::Owned(self.primary.current().protocol().into_owned())
+    }
+
+    fn model_behavior_override(&self) -> Option<Cow<'_, str>> {
+        self.primary
+            .current()
+            .model_behavior_override()
+            .map(|c| Cow::Owned(c.into_owned()))
     }
 }

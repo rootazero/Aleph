@@ -63,6 +63,10 @@ impl AiProvider for ModelOverrideProvider {
     fn protocol(&self) -> Cow<'_, str> {
         self.inner.protocol()
     }
+
+    fn model_behavior_override(&self) -> Option<std::borrow::Cow<'_, str>> {
+        self.inner.model_behavior_override()
+    }
 }
 
 #[cfg(test)]
@@ -124,5 +128,32 @@ mod tests {
         let wrapped = ModelOverrideProvider::new(inner, "m");
         assert_eq!(wrapped.name(), "recorder");
         assert_eq!(wrapped.color(), "#000");
+    }
+
+    #[test]
+    fn delegates_behavior_override_to_inner() {
+        struct OverrideInner;
+        impl AiProvider for OverrideInner {
+            fn process<'a>(
+                &'a self,
+                _payload: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+                Box::pin(async { Ok(ProviderResponse::text_only("inner".to_string())) })
+            }
+            fn name(&self) -> &str {
+                "inner"
+            }
+            fn color(&self) -> &str {
+                "#000"
+            }
+            fn model_behavior_override(&self) -> Option<std::borrow::Cow<'_, str>> {
+                Some(std::borrow::Cow::Borrowed("openrouter-anthropic"))
+            }
+        }
+        let wrapped = ModelOverrideProvider::new(Arc::new(OverrideInner), "m");
+        assert_eq!(
+            wrapped.model_behavior_override().as_deref(),
+            Some("openrouter-anthropic")
+        );
     }
 }
