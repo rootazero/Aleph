@@ -201,6 +201,7 @@ fn normalize_agent_alias(raw: &str) -> Option<&'static str> {
         "researcher" => return Some("researcher"),
         "coder" => return Some("coder"),
         "main" => return Some("main"),
+        "store" => return Some("store"),
         _ => {}
     }
     match lowered.as_str() {
@@ -288,6 +289,20 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_denied_tools(vec!["file_write".into(), "file_edit".into()])
             .with_max_iterations(25)
             .with_context_mode(ContextMode::Summary),
+        // Store agent - extensions store curator and installer (private STORE_TOOLS only)
+        AgentDef::new("store", AgentMode::SubAgent)
+            .with_description(
+                "Extensions Store curator and installer: syncs the catalog, assigns \
+                 functional categories, and drives trust-gated installs. Built-in and \
+                 non-deletable. Cannot bypass install trust rails (disclosure + ack \
+                 + SHA256 are system-enforced).",
+            )
+            .with_when_to_use(
+                "When curating the extensions catalog or installing an extension on the \
+                 user's behalf through the store.",
+            )
+            .with_allowed_tool_sets(vec!["STORE_TOOLS".into()])
+            .with_max_iterations(15),
     ]
 }
 
@@ -365,7 +380,13 @@ mod tests {
     #[test]
     fn test_builtin_agents_count() {
         let agents = builtin_agents();
-        assert_eq!(agents.len(), 7);
+        assert_eq!(agents.len(), 8);
+        let store = agents.iter().find(|a| a.id == "store").expect("store builtin present");
+        assert_eq!(store.mode, AgentMode::SubAgent);
+        assert_eq!(store.source, crate::agents::types::AgentSource::Builtin);
+        assert!(store.allowed_tool_sets.iter().any(|s| s == "STORE_TOOLS"));
+        assert!(!store.is_tool_allowed("file_write")); // not in STORE_TOOLS
+        assert!(store.is_tool_allowed("store_catalog_sync"));
     }
 
     #[test]
