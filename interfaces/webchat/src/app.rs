@@ -16,7 +16,7 @@ use crate::views::memory::Memory;
 use crate::views::runtimes::RuntimesView;
 use crate::views::settings::{
     AcpHarnessesView, AppearanceView, BehaviorView, BrowserView, ChannelPlatformPage,
-    ChannelsOverview, ClawHubView, EmbeddingProvidersView, ExecutionView, GeneralView,
+    ChannelsOverview, EmbeddingProvidersView, ExecutionView, GeneralView,
     GenerationProvidersView, McpView, MemoryView, NetworkView, PluginsView, PoliciesView,
     ProvidersView, RerankingProvidersView, RouteView, RoutingRulesView, SearchView, SecurityView,
     Settings, SkillsView,
@@ -440,7 +440,6 @@ fn SettingsRouter() -> impl IntoView {
             "/settings/mcp" => view! { <McpView /> }.into_any(),
             "/settings/plugins" => view! { <PluginsView /> }.into_any(),
             "/settings/skills" => view! { <SkillsView /> }.into_any(),
-            "/settings/clawhub" => view! { <ClawHubView /> }.into_any(),
             "/settings/acp" => view! { <AcpHarnessesView /> }.into_any(),
 
             // Security

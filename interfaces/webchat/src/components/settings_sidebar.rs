@@ -26,7 +26,6 @@ pub enum SettingsTab {
     Mcp,
     Plugins,
     Skills,
-    ClawHub,
     Acp,
 
     // Channels
@@ -64,7 +63,6 @@ impl SettingsTab {
             Self::Mcp => "/settings/mcp",
             Self::Plugins => "/settings/plugins",
             Self::Skills => "/settings/skills",
-            Self::ClawHub => "/settings/clawhub",
             Self::Acp => "/settings/acp",
             Self::Channels => "/settings/channels",
             Self::Telegram => "/settings/channels/telegram",
@@ -96,7 +94,6 @@ impl SettingsTab {
             Self::Mcp => t_string!(i18n, settings.tabs.mcp).to_string(),
             Self::Plugins => t_string!(i18n, settings.tabs.plugins).to_string(),
             Self::Skills => t_string!(i18n, settings.tabs.skills).to_string(),
-            Self::ClawHub => t_string!(i18n, settings.tabs.clawhub).to_string(),
             Self::Acp => t_string!(i18n, settings.tabs.acp).to_string(),
             Self::Channels => t_string!(i18n, settings.tabs.channels).to_string(),
             Self::Telegram => t_string!(i18n, settings.tabs.telegram).to_string(),
@@ -149,9 +146,6 @@ impl SettingsTab {
             Self::Plugins => r#"<circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6"/>"#,
             Self::Skills => {
                 r#"<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>"#
-            }
-            Self::ClawHub => {
-                r#"<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>"#
             }
             Self::Acp => {
                 r#"<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>"#
@@ -245,7 +239,6 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
             SettingsTab::Mcp,
             SettingsTab::Plugins,
             SettingsTab::Skills,
-            SettingsTab::ClawHub,
             SettingsTab::Acp,
         ],
     },
@@ -263,3 +256,25 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
         tabs: &[SettingsTab::Network],
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every tab path reachable from the sidebar navigation.
+    fn all_tab_paths() -> Vec<&'static str> {
+        SETTINGS_GROUPS
+            .iter()
+            .flat_map(|g| g.tabs.iter().map(|t| t.path()))
+            .collect()
+    }
+
+    #[test]
+    fn clawhub_tab_is_removed() {
+        // ClawHub is subsumed into the Extensions store (P5); its settings tab must be gone.
+        assert!(
+            !all_tab_paths().contains(&"/settings/clawhub"),
+            "ClawHub settings tab must be fully removed from SETTINGS_GROUPS"
+        );
+    }
+}
