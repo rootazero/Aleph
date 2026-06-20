@@ -1,3 +1,7 @@
+> **SUPERSEDED (2026-06-20)** by `2026-06-20-aleph-hub-single-source-design.md`.
+> The local federation / multi-source / dedup design below was reversed: Aleph
+> is now a single-source consumer of one published Aleph Hub catalog.
+
 # 扩展中心化 Hub 联邦 — 设计文档 (Extension Hub Federation)
 
 - **Date**: 2026-06-20
