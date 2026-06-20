@@ -14,7 +14,7 @@ use lru::LruCache;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use schemars::JsonSchema;
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
@@ -71,6 +71,24 @@ static RE_SR_CLASSES: Lazy<Regex> = Lazy::new(|| {
     .expect("valid regex")
 });
 static RE_STRIP_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").expect("valid regex"));
+
+// Surface `<time datetime="…">` machine timestamps into the element's own
+// text. News/listing pages frequently carry the absolute publication time
+// ONLY in the `datetime` attribute (visible text is relative, e.g. "2h ago",
+// or rendered later by JS). Both `.text()` extraction and Markdown
+// conversion drop attributes, so without this the timestamp is lost — which
+// is what made fetched pages report "publish time: not provided".
+static RE_TIME_DATETIME: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?si)<time\b[^>]*\bdatetime\s*=\s*["']([^"']+)["'][^>]*>(.*?)</time>"#)
+        .expect("valid regex")
+});
+
+// Match `href="…"` / `src="…"` attribute values for base-URL resolution so
+// extracted Markdown links point at usable absolute "original article" URLs
+// rather than the relative paths an index page ships.
+static RE_HREF_SRC: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?i)(\s(?:href|src)\s*=\s*["'])([^"']*)(["'])"#).expect("valid regex")
+});
 
 // ---------------------------------------------------------------------------
 // URL fetch cache (inspired by claude-code's WebFetchTool LRU)
@@ -149,6 +167,27 @@ fn canonicalize_url(raw: &str) -> String {
         let _ = parsed.set_port(None);
     }
     parsed.to_string()
+}
+
+/// Resolve relative `href`/`src` URLs in an HTML fragment against `base_url`
+/// so extracted Markdown links point at usable absolute URLs. Falls back to
+/// the original fragment when `base_url` can't be parsed; already-absolute
+/// URLs and non-HTTP schemes (`mailto:`, `data:`, …) are left unchanged by
+/// the RFC-3986 `join`. Protocol-relative (`//host/x`) and root-relative
+/// (`/x`) forms resolve against the page's scheme/host.
+fn resolve_relative_urls<'a>(html: &'a str, base_url: &str) -> std::borrow::Cow<'a, str> {
+    let Ok(base) = url::Url::parse(base_url) else {
+        return std::borrow::Cow::Borrowed(html);
+    };
+    RE_HREF_SRC.replace_all(html, |caps: &regex::Captures| {
+        let prefix = &caps[1];
+        let value = &caps[2];
+        let suffix = &caps[3];
+        match base.join(value) {
+            Ok(abs) => format!("{prefix}{abs}{suffix}"),
+            Err(_) => format!("{prefix}{value}{suffix}"),
+        }
+    })
 }
 
 fn cache_key(url: &str, mode: &ExtractMode) -> CacheKey {
@@ -463,8 +502,13 @@ impl WebFetchTool {
             .filter(|s| !s.is_empty())
     }
 
-    /// Extract main content using priority-ordered selectors
-    fn extract_content(&self, document: &Html) -> String {
+    /// Extract main content using priority-ordered selectors, honouring the
+    /// requested `mode`. In Markdown mode the selected element is converted to
+    /// Markdown (preserving `<a href>` links and `<time>` timestamps) with
+    /// relative URLs resolved against `base_url`; the legacy plain-`.text()`
+    /// path dropped every link and timestamp, which is what made index/listing
+    /// pages report "original link / publish time not provided".
+    fn extract_content(&self, document: &Html, mode: &ExtractMode, base_url: &str) -> String {
         // Content selectors in priority order
         let selectors = [
             "article",
@@ -477,34 +521,42 @@ impl WebFetchTool {
 
         for selector_str in selectors {
             if let Ok(selector) = Selector::parse(selector_str) {
-                let content = document
-                    .select(&selector)
-                    .next()
-                    .map(|el| self.clean_text(&el.text().collect::<String>()))
-                    .unwrap_or_default();
-
-                if content.len() > self.min_content_length {
-                    debug!(
-                        "Using selector '{}' with {} chars",
-                        selector_str,
-                        content.len()
-                    );
-                    return self.truncate_content(content);
+                if let Some(el) = document.select(&selector).next() {
+                    let content = self.render_element(&el, mode, base_url);
+                    if content.len() > self.min_content_length {
+                        debug!(
+                            "Using selector '{}' with {} chars",
+                            selector_str,
+                            content.len()
+                        );
+                        return self.truncate_content(content);
+                    }
                 }
             }
         }
 
         // Fallback: return whatever we can get from body
         if let Ok(selector) = Selector::parse("body") {
-            let content = document
-                .select(&selector)
-                .next()
-                .map(|el| self.clean_text(&el.text().collect::<String>()))
-                .unwrap_or_default();
-            return self.truncate_content(content);
+            if let Some(el) = document.select(&selector).next() {
+                return self.truncate_content(self.render_element(&el, mode, base_url));
+            }
         }
 
         String::new()
+    }
+
+    /// Render a selected element to the requested output format. Markdown mode
+    /// preserves links/timestamps and resolves relative URLs against
+    /// `base_url`; Text mode keeps the legacy whitespace-collapsed plain text.
+    fn render_element(&self, el: &ElementRef<'_>, mode: &ExtractMode, base_url: &str) -> String {
+        match mode {
+            ExtractMode::Markdown => {
+                let raw = el.html();
+                let resolved = resolve_relative_urls(&raw, base_url);
+                self.html_to_markdown(&resolved)
+            }
+            ExtractMode::Text => self.clean_text(&el.text().collect::<String>()),
+        }
     }
 
     /// Clean whitespace from text (collapse multiple spaces)
@@ -578,7 +630,14 @@ impl WebFetchTool {
         let cleaned = RE_DISPLAY_NONE.replace_all(&cleaned, "").to_string();
 
         // 7. Remove elements with screen-reader / visually-hidden CSS classes
-        RE_SR_CLASSES.replace_all(&cleaned, "").to_string()
+        let cleaned = RE_SR_CLASSES.replace_all(&cleaned, "").to_string();
+
+        // 8. Surface <time datetime="…"> machine timestamps into the visible
+        //    text so absolute publication times survive text/Markdown
+        //    extraction (the attribute itself is dropped by both).
+        RE_TIME_DATETIME
+            .replace_all(&cleaned, "<time>${2} (${1})</time>")
+            .to_string()
     }
 
     // -----------------------------------------------------------------------
@@ -641,9 +700,11 @@ impl WebFetchTool {
             }
         }
 
-        // Fallback: legacy CSS-selector-based extraction
-        let document = Html::parse_document(raw_html);
-        let content = self.extract_content(&document);
+        // Fallback: legacy CSS-selector-based extraction. Parse the
+        // *cleaned* HTML so the selector path also benefits from script/style
+        // removal and `<time>` timestamp surfacing.
+        let document = Html::parse_document(&cleaned_html);
+        let content = self.extract_content(&document, mode, url);
         (content, Extractor::Selector)
     }
 }
@@ -1015,6 +1076,121 @@ mod tests {
             matches!(extractor, Extractor::Selector),
             "Should use Selector when readability disabled, got {:?}",
             extractor
+        );
+    }
+
+    // ─── Selector fallback: link & timestamp preservation (regression) ──
+    //
+    // Index/listing pages make Readability fall back to the selector path.
+    // The legacy path flattened the element with `.text()`, dropping every
+    // `<a href>` URL and `<time>` timestamp — which is why fetched pages
+    // reported "original link: not provided / publish time: not provided".
+
+    #[test]
+    fn selector_fallback_preserves_and_resolves_links_as_markdown() {
+        // Headline links, no single article body → disable Readability to
+        // force the selector fallback path deterministically.
+        let html = r#"<!DOCTYPE html><html><head><title>News</title></head>
+        <body><main>
+            <a href="/a/one">First headline describing an important world event today</a>
+            <a href="two.html">Second headline with additional descriptive words here</a>
+            <a href="https://other.test/x">Third already-absolute headline link with words</a>
+        </main></body></html>"#;
+        let mut tool = WebFetchTool::new();
+        tool.enable_readability = false;
+        let (content, extractor) = tool.extract_content_enhanced(
+            html,
+            "https://news.test/world/index.html",
+            &ExtractMode::Markdown,
+        );
+        assert!(matches!(extractor, Extractor::Selector));
+        // Links survive as Markdown rather than being stripped to bare text.
+        assert!(
+            content.contains("]("),
+            "expected markdown links, got: {content}"
+        );
+        // Root-relative resolved against the host.
+        assert!(
+            content.contains("https://news.test/a/one"),
+            "root-relative link not resolved: {content}"
+        );
+        // Path-relative resolved against the base directory.
+        assert!(
+            content.contains("https://news.test/world/two.html"),
+            "path-relative link not resolved: {content}"
+        );
+        // Already-absolute link left intact.
+        assert!(
+            content.contains("https://other.test/x"),
+            "absolute link altered: {content}"
+        );
+    }
+
+    #[test]
+    fn selector_fallback_text_mode_stays_plain() {
+        let html = r#"<html><body><main>
+            <a href="/x">A deliberately long headline sentence placed here so the main block clearly clears the minimum content length gate without any markdown</a>
+        </main></body></html>"#;
+        let mut tool = WebFetchTool::new();
+        tool.enable_readability = false;
+        let (content, _) =
+            tool.extract_content_enhanced(html, "https://news.test/", &ExtractMode::Text);
+        assert!(
+            !content.contains("]("),
+            "text mode must stay plain: {content}"
+        );
+        assert!(
+            !content.contains("http"),
+            "text mode must not surface URLs: {content}"
+        );
+        assert!(content.contains("long headline sentence"), "got: {content}");
+    }
+
+    #[test]
+    fn time_datetime_is_surfaced_into_extracted_content() {
+        let html = r#"<html><body><main>
+            <a href="/a/1">A sufficiently long headline so the main content block clears the minimum length gate cleanly</a>
+            <time datetime="2026-06-20T08:30:00Z">8 hours ago</time>
+        </main></body></html>"#;
+        let mut tool = WebFetchTool::new();
+        tool.enable_readability = false;
+        let (content, _) =
+            tool.extract_content_enhanced(html, "https://news.test/", &ExtractMode::Markdown);
+        assert!(
+            content.contains("2026-06-20T08:30:00Z"),
+            "absolute timestamp should survive extraction: {content}"
+        );
+    }
+
+    #[test]
+    fn pre_clean_surfaces_time_datetime() {
+        let html = r#"<time datetime="2026-06-20T08:30:00Z">8 hours ago</time>"#;
+        let cleaned = WebFetchTool::pre_clean_html(html);
+        assert!(
+            cleaned.contains("8 hours ago"),
+            "visible text kept: {cleaned}"
+        );
+        assert!(
+            cleaned.contains("2026-06-20T08:30:00Z"),
+            "datetime surfaced into text: {cleaned}"
+        );
+    }
+
+    #[test]
+    fn resolve_relative_urls_handles_common_cases() {
+        let base = "https://news.test/world/index.html";
+        let html = r#"<a href="/a">x</a><a href="b">y</a><a href="https://z.test/c">z</a><a href="mailto:t@x.test">m</a><img src="//cdn.test/i.png">"#;
+        let out = resolve_relative_urls(html, base);
+        assert!(out.contains("https://news.test/a"), "root-relative: {out}");
+        assert!(
+            out.contains("https://news.test/world/b"),
+            "path-relative: {out}"
+        );
+        assert!(out.contains("https://z.test/c"), "absolute kept: {out}");
+        assert!(out.contains("mailto:t@x.test"), "scheme kept: {out}");
+        assert!(
+            out.contains("https://cdn.test/i.png"),
+            "protocol-relative: {out}"
         );
     }
 
