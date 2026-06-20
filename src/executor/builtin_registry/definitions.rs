@@ -570,6 +570,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires CatalogCache + marketplace configs
     },
     BuiltinToolDefinition {
+        name: "store_install_run",
+        description: "Install a catalog entry by id (trust-gated). Clean specs install directly; ack-required specs bounce to the user for consent via the store UI; OCI is rejected.",
+        requires_config: true, // Requires CatalogCache + marketplace configs + vault
+    },
+    BuiltinToolDefinition {
         name: "store_fetch_docs",
         description: "Fetch a URL (README/manifest) for the long-tail install path and scan for prompt-injection. SCAFFOLD — not wired to any install surface.",
         requires_config: false, // No CatalogCache needed; HTTP-only scaffold

@@ -152,6 +152,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             alephcore::extension::marketplace::types::MarketplaceConfig,
         >,
     >,
+    // P4 T7: live MCP manager handle for `store_install_run`. The SAME shared
+    // handle the gateway `extensions.*` handlers use — it cannot be
+    // reconstructed. `None` → agent-driven MCP installs degrade gracefully.
+    store_mcp_handle: Option<alephcore::mcp::manager::McpManagerHandle>,
 ) -> alephcore::Result<AgentHandlersResult> {
     // Assigned in both the real-execution branch and the simulated branch
     // below; deferred init keeps the dead initial value out (and lets the
@@ -490,6 +494,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             planner_provider,
             catalog_cache,
             store_marketplace_configs,
+            store_mcp_handle,
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await?;

@@ -842,6 +842,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Some(sandbox.clone()),
         early_catalog_cache,
         early_marketplace_configs,
+        mcp_handle.clone(),
     )
     .await?;
 

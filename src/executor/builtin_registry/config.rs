@@ -165,4 +165,10 @@ pub struct BuiltinToolConfig {
     /// Only meaningful when `catalog_cache` is `Some`.
     pub store_marketplace_configs:
         Option<std::collections::HashMap<String, crate::extension::marketplace::types::MarketplaceConfig>>,
+
+    /// Live MCP manager handle for `store_install_run` (T7). The SAME shared
+    /// handle the gateway `extensions.*` handlers use — it cannot be
+    /// reconstructed. `None` → agent-driven MCP installs report "MCP manager
+    /// unavailable"; plugin installs and secret storage still work.
+    pub store_mcp_handle: Option<crate::mcp::manager::McpManagerHandle>,
 }
