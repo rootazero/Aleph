@@ -57,6 +57,16 @@ impl ModelRobustnessProfile {
                 novelty_min: 0.6,
                 silence_required: false,
             },
+            // Open-weight / weaker instruction-followers (Kimi, Minimax,
+            // DeepSeek, Qwen, GLM) self-identified by `vendor_identity`.
+            // Tightest leash: steer early, few chances, tolerate little thrash.
+            Some("strict") => Self {
+                repeat_threshold: 3,
+                halt_threshold: TOOL_HISTORY_WINDOW,
+                steer_max: 5,
+                novelty_min: 0.6,
+                silence_required: false,
+            },
             // openai / gemini / unknown: conservative default.
             _ => Self::conservative(),
         }
@@ -135,5 +145,15 @@ mod tests {
         assert!(bad.halt_threshold >= bad.repeat_threshold && bad.halt_threshold <= 8);
         assert!(bad.steer_max >= 1);
         assert!(bad.novelty_min >= 0.0 && bad.novelty_min <= 1.0);
+    }
+
+    #[test]
+    fn for_behavior_strict_is_tightest() {
+        let strict = ModelRobustnessProfile::for_behavior(Some("strict"));
+        let ollama = ModelRobustnessProfile::for_behavior(Some("ollama"));
+        assert!(strict.repeat_threshold <= ollama.repeat_threshold);
+        assert!(strict.steer_max <= ollama.steer_max);
+        assert!(strict.novelty_min >= ollama.novelty_min);
+        assert!(!strict.silence_required);
     }
 }
