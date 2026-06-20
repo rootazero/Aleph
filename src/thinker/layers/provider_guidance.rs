@@ -1,14 +1,18 @@
 //! `ProviderGuidanceLayer` — family-specific operational directives (priority 810).
 //!
-//! Ports Hermes-agent's `TOOL_USE_ENFORCEMENT` / `OPENAI_EXECUTION` /
-//! `GOOGLE_MODEL_OPERATIONAL` guidance blocks into a single
-//! protocol-dispatched layer. The wire protocol reported by
-//! `AiProvider::protocol()` ("anthropic" / "openai" / "gemini" /
-//! "ollama" / custom) selects the appropriate block. Anthropic is
-//! left silent — Claude's native `tool_use` is well-behaved enough
-//! that the extra steering does more harm than good.
+//! Dispatches on the resolved governance **behavior name**
+//! (`resolve_behavior`: anthropic / openai / gemini / ollama / strict /
+//! unknown) rather than the raw wire protocol, so a weak model on the
+//! anthropic protocol is steered as the weak model it is. Every
+//! non-anthropic family receives the shared `TOOL_USE_ENFORCEMENT`
+//! baseline; every family (Anthropic included) receives the
+//! `TOOL_PERSISTENCE_DOCTRINE`. The per-family coaching delta — and the
+//! L2 elicitation that extracts more capability — is the overridable
+//! `.md` content threaded in via `LayerInput::model_behavior_delta`
+//! (`model_behaviors/{behavior}.md`, user-overridable at
+//! `~/.aleph/model_behaviors/`), appended verbatim after the baseline.
 //!
-//! Stability: Stable (protocol is fixed per run; cacheable in the
+//! Stability: Stable (behavior is fixed per run; cacheable in the
 //! prompt prefix).
 //! Mode: Full only.
 
@@ -48,57 +52,26 @@ impl PromptLayer for ProviderGuidanceLayer {
     }
 
     fn inject(&self, output: &mut String, input: &LayerInput) {
-        let protocol = match input.provider_protocol {
-            Some(p) => p,
+        let behavior = match input.behavior_name {
+            Some(b) => b,
             None => return,
         };
-        match protocol {
-            // Claude / Anthropic protocol — native tool_use, extended
-            // thinking, and prompt caching are well-tuned, so the heavy
-            // TOOL_USE_ENFORCEMENT block stays off. But Claude *does*
-            // share the early-give-up failure mode when one source
-            // returns 401/403/timeout (Reuters-class incidents observed
-            // on scheduled briefing jobs), so we still emit the
-            // protocol-neutral persistence doctrine.
-            "anthropic" => {
-                output.push_str(TOOL_PERSISTENCE_DOCTRINE);
-                output.push_str("\n\n");
-            }
-
-            // OpenAI / Codex / Grok (all reach us via the OpenAI wire
-            // protocol). Same failure modes empirically: stops early,
-            // hallucinates instead of calling tools, declares "done"
-            // without verification.
-            "openai" => {
-                output.push_str(TOOL_USE_ENFORCEMENT);
-                output.push_str("\n\n");
-                output.push_str(TOOL_PERSISTENCE_DOCTRINE);
-                output.push_str("\n\n");
-                output.push_str(OPENAI_EXECUTION_DISCIPLINE_TAIL);
-                output.push_str("\n\n");
-            }
-
-            // Google Gemini / Gemma — adds path-handling, dependency,
-            // and parallel-tool-call discipline on top of the tool-use
-            // enforcement + persistence baseline.
-            "gemini" => {
-                output.push_str(TOOL_USE_ENFORCEMENT);
-                output.push_str("\n\n");
-                output.push_str(TOOL_PERSISTENCE_DOCTRINE);
-                output.push_str("\n\n");
-                output.push_str(GOOGLE_OPERATIONAL_DIRECTIVES);
-                output.push_str("\n\n");
-            }
-
-            // Local / open-weight (ollama and anything else that goes
-            // through the OpenAI-compatible chat protocol but isn't
-            // matched above) — emit tool-use enforcement plus the
-            // persistence doctrine. Better to over-steer a small model
-            // than leave it adrift.
-            _ => {
-                output.push_str(TOOL_USE_ENFORCEMENT);
-                output.push_str("\n\n");
-                output.push_str(TOOL_PERSISTENCE_DOCTRINE);
+        // Shared baseline, selected by behavior family. Anthropic skips the
+        // heavy tool-use enforcement (native tool_use is well-trained); every
+        // family — Anthropic included — gets the persistence doctrine.
+        if behavior != "anthropic" {
+            output.push_str(TOOL_USE_ENFORCEMENT);
+            output.push_str("\n\n");
+        }
+        output.push_str(TOOL_PERSISTENCE_DOCTRINE);
+        output.push_str("\n\n");
+        // Per-family delta (OpenAI tail / Google directives / ollama rails /
+        // strict control / L2 elicitation) — data-driven, user-overridable at
+        // `~/.aleph/model_behaviors/{behavior}.md`.
+        if let Some(delta) = input.model_behavior_delta {
+            let delta = delta.trim();
+            if !delta.is_empty() {
+                output.push_str(delta);
                 output.push_str("\n\n");
             }
         }
@@ -151,38 +124,6 @@ a tool; time / date / timezone → query the system; file contents / sizes / lin
 read the files; system state (OS, CPU, processes, ports) → query live; current facts \
 (weather, news, versions) → search.";
 
-/// `OpenAI` / Codex / Grok — tail of the original execution-discipline block.
-/// Holds the "act, don't ask" + "verify before finalizing" directives that
-/// remain OpenAI-family specific (Claude's native `tool_use` already enforces
-/// these by training). Emitted in addition to `TOOL_PERSISTENCE_DOCTRINE` for
-/// OpenAI-protocol providers. Ported from `OPENAI_MODEL_EXECUTION_GUIDANCE`.
-const OPENAI_EXECUTION_DISCIPLINE_TAIL: &str = "## Execution Discipline — OpenAI Family\n\
-\n\
-**Act, don't ask** — when a question has an obvious default interpretation, act on it. Only \
-ask for clarification when the ambiguity genuinely changes what tool you would call.\n\
-\n\
-**Verify before finalizing**: correctness, grounding (factual claims backed by tool outputs), \
-formatting, safety (confirm scope before side-effecting actions).";
-
-/// Gemini / Gemma — operational rules that empirically reduce common
-/// failure modes (relative paths, missing dep checks, verbose narration,
-/// sequential tool calls when parallel would do). Ported from
-/// `GOOGLE_MODEL_OPERATIONAL_GUIDANCE`.
-const GOOGLE_OPERATIONAL_DIRECTIVES: &str = "## Google Model Operational Directives\n\
-\n\
-- **Absolute paths**: always construct and use absolute file paths for all file-system operations.\n\
-- **Verify first**: read the file or search the project before making changes — never guess at \
-contents.\n\
-- **Dependency checks**: never assume a library is available; check package.json / requirements.txt \
-/ Cargo.toml first.\n\
-- **Conciseness**: narrate each step in one short line (what + why); no paragraphs.\n\
-- **Parallel tool calls**: when independent operations are needed (reading several files, for \
-example), make all the calls in a single response rather than sequentially.\n\
-- **Non-interactive commands**: pass flags like `-y`, `--yes`, `--non-interactive` to prevent CLI \
-tools from hanging on prompts.\n\
-- **Keep going**: work autonomously until the task is fully resolved — don't stop with a plan, \
-execute it.";
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn silent_when_protocol_missing() {
+    fn silent_when_behavior_missing() {
         let layer = ProviderGuidanceLayer;
         let config = PromptConfig::default();
         let tools = vec![];
@@ -226,84 +167,44 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_emits_persistence_doctrine_only() {
-        // Claude doesn't need TOOL_USE_ENFORCEMENT (native tool_use is
-        // well-trained) but DOES need the persistence doctrine — a real
-        // Reuters-401 failure on scheduled briefing showed Claude gives
-        // up on a single source error without trying alternates.
+    fn anthropic_baseline_is_persistence_only() {
         let layer = ProviderGuidanceLayer;
         let config = PromptConfig::default();
         let tools = vec![];
-        let input =
-            LayerInput::basic(&config, &tools).with_provider_protocol_opt(Some("anthropic"));
+        let input = LayerInput::basic(&config, &tools).with_behavior_name_opt(Some("anthropic"));
         let mut out = String::new();
         layer.inject(&mut out, &input);
-        assert!(
-            out.contains("## Execution Discipline — Persistence"),
-            "Anthropic must receive the persistence doctrine"
-        );
-        assert!(out.contains("Tool persistence"));
-        assert!(out.contains("fallback ladder"));
-        // Ceiling clause (moved here from GuidelinesLayer 13b): the ladder has
-        // a top, not just a floor — after ~3 same-class failures, escalate tool
-        // class once then deliver partial. Co-located with the ladder it bounds.
-        assert!(out.contains("**Ceiling**"));
-        assert!(out.contains("Escalate tool CLASS once"));
-        assert!(
-            !out.contains("## Tool-Use Enforcement"),
-            "Anthropic should NOT get the heavy tool-use enforcement block"
-        );
-        assert!(
-            !out.contains("## Execution Discipline — OpenAI Family"),
-            "Anthropic should NOT get OpenAI-family-specific tail"
-        );
+        assert!(out.contains("## Execution Discipline — Persistence"));
+        assert!(!out.contains("## Tool-Use Enforcement"));
     }
 
     #[test]
-    fn openai_emits_tool_use_persistence_and_execution_discipline() {
-        let layer = ProviderGuidanceLayer;
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let input = LayerInput::basic(&config, &tools).with_provider_protocol_opt(Some("openai"));
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-        assert!(out.contains("## Tool-Use Enforcement"));
-        assert!(out.contains("## Execution Discipline — Persistence"));
-        assert!(out.contains("## Execution Discipline — OpenAI Family"));
-        assert!(out.contains("Tool persistence"));
-        assert!(out.contains("Act, don't ask"));
-        assert!(!out.contains("Google Model"));
+    fn non_anthropic_baseline_has_tool_use_and_persistence() {
+        for behavior in ["openai", "gemini", "ollama", "strict", "unknown"] {
+            let layer = ProviderGuidanceLayer;
+            let config = PromptConfig::default();
+            let tools = vec![];
+            let input = LayerInput::basic(&config, &tools).with_behavior_name_opt(Some(behavior));
+            let mut out = String::new();
+            layer.inject(&mut out, &input);
+            assert!(out.contains("## Tool-Use Enforcement"), "{behavior}");
+            assert!(out.contains("## Execution Discipline — Persistence"), "{behavior}");
+        }
     }
 
     #[test]
-    fn gemini_emits_tool_use_persistence_and_google_directives() {
+    fn delta_is_appended_after_baseline() {
         let layer = ProviderGuidanceLayer;
         let config = PromptConfig::default();
         let tools = vec![];
-        let input = LayerInput::basic(&config, &tools).with_provider_protocol_opt(Some("gemini"));
+        let delta = "## Execution Discipline — OpenAI Family\nAct, don't ask";
+        let input = LayerInput::basic(&config, &tools)
+            .with_behavior_name_opt(Some("openai"))
+            .with_model_behavior_delta_opt(Some(delta));
         let mut out = String::new();
         layer.inject(&mut out, &input);
-        assert!(out.contains("## Tool-Use Enforcement"));
-        assert!(out.contains("## Execution Discipline — Persistence"));
-        assert!(out.contains("## Google Model Operational Directives"));
-        assert!(out.contains("Absolute paths"));
-        assert!(
-            !out.contains("## Execution Discipline — OpenAI Family"),
-            "Gemini should not get OpenAI-family-specific tail"
-        );
-    }
-
-    #[test]
-    fn unknown_protocol_falls_back_to_tool_use_plus_persistence() {
-        let layer = ProviderGuidanceLayer;
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let input = LayerInput::basic(&config, &tools).with_provider_protocol_opt(Some("ollama"));
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-        assert!(out.contains("## Tool-Use Enforcement"));
-        assert!(out.contains("## Execution Discipline — Persistence"));
-        assert!(!out.contains("## Execution Discipline — OpenAI Family"));
-        assert!(!out.contains("## Google Model Operational Directives"));
+        let baseline_at = out.find("## Tool-Use Enforcement").unwrap();
+        let delta_at = out.find("Act, don't ask").unwrap();
+        assert!(delta_at > baseline_at, "delta must follow the baseline");
     }
 }
