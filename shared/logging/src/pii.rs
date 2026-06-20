@@ -35,7 +35,7 @@ fn get_patterns() -> &'static PiiPatterns {
         // Preserves the key name; redacts only the value. Conservative over-match
         // is acceptable (this module favours false positives over leaks).
         generic_secret: Regex::new(
-            r#"(?i)(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|authorization)(\s*[:=]\s*)("?)((?:\w+[ \t]+)?[^\s",}]+)"#,
+            r#"(?i)(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|authorization)(\s*[:=]\s*)("?)([^\s",}]+)"#,
         )
         .unwrap(),
         china_mobile: Regex::new(r"\b1[3-9]\d{9}\b").unwrap(),
