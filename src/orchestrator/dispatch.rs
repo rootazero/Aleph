@@ -128,7 +128,7 @@ pub enum TerminateReason {
     /// Consecutive failure cap reached after `consecutive` turns produced
     /// only `ToolError` events.
     ConsecutiveFailureCap { consecutive: u32 },
-    /// Verifier veto count reached `MAX_VERIFIER_VETOS`.
+    /// Verifier veto count reached the per-model `steer_max` cap.
     VerifierVeto { vetos: u32 },
     /// The provider returned a response with no text, no `tool_calls` and no
     /// thinking on every attempt, including bounded retries. The user

@@ -744,7 +744,7 @@ async fn tool_loop_verifier_vetoes_repeated_tool_call_with_no_text() {
     let provider = RepeatingToolCallProvider::new();
     // Threshold = 5; max_iterations cap small enough that the loop ends
     // shortly after the verifier should have fired but before the
-    // MAX_VERIFIER_VETOS=10 safety cap.
+    // per-model steer_max cap (conservative default = 10).
     let chain = Arc::new(
         VerifierChain::builder()
             .with(Arc::new(ToolLoopVerifier::new()))
@@ -1093,5 +1093,91 @@ async fn per_tool_budget_overrun_recovers_as_tool_error_not_run_abort() {
                 if error.contains("wall-clock budget")
         )),
         "per-tool timeout must be recorded as a recoverable ToolError",
+    );
+}
+
+// =============================================================================
+// Test — Veto cap follows per-model steer_max, not the old global const.
+// With steer_max=2 the harness must fire a wrap-up grace turn after 2 vetoes,
+// materially sooner than the old MAX_VERIFIER_VETOS=10 constant would.
+// =============================================================================
+
+#[tokio::test]
+async fn veto_cap_follows_profile_steer_max() {
+    // Build a profile with steer_max=2; all other fields stay conservative.
+    // conservative() repeat_threshold=5, halt_threshold=8.
+    // ToolLoopVerifier emits Veto (not Halt) for runs in [5,8) identical calls.
+    // With steer_max=2, the harness must terminate (grace/HitLimit) after
+    // exactly 2 accumulated vetoes — well before the old const-10 threshold.
+    let profile = crate::verification::ModelRobustnessProfile {
+        steer_max: 2,
+        ..crate::verification::ModelRobustnessProfile::conservative()
+    };
+
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("loop on me")]);
+    let provider = RepeatingToolCallProvider::new();
+    let chain = Arc::new(
+        VerifierChain::builder()
+            .with(Arc::new(ToolLoopVerifier::new()))
+            .build(),
+    );
+    // max_iterations set high enough that the steer_max cap (2 vetoes) fires
+    // long before the iteration ceiling.  With repeat_threshold=5, the first
+    // Veto fires on turn 5; second on turn 6; then the cap triggers a grace turn.
+    // 20 iterations is safely above 6 and safely below old-const-10's turn count.
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        robustness_profile: profile,
+        verifier_chain: Some(chain),
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: Some(20),
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let cancel = CancellationToken::new();
+    let mut cb = NoopHarnessCallback;
+    harness
+        .run(&sample_session_id(), &mut cb, &cancel)
+        .await
+        .expect("harness.run should complete via steer_max cap");
+
+    // The run must terminate via the VerifierVeto cap, not the iteration cap.
+    assert!(
+        matches!(
+            harness.terminate_reason(),
+            crate::orchestrator::dispatch::TerminateReason::VerifierVeto { .. }
+        ),
+        "expected VerifierVeto termination with steer_max=2; got {:?}",
+        harness.terminate_reason()
+    );
+    assert!(harness.hit_limit(), "hit_limit must be set on VerifierVeto termination");
+
+    // The provider must have been called materially fewer times than the old
+    // const-10 behavior would require.  With steer_max=2, vetoes fire on turns
+    // 5 and 6 (first time run==repeat_threshold, second time run==6), so the
+    // grace turn fires after turn 6 — well under 10+repeat_threshold=15.
+    let calls = provider.calls.load(Ordering::SeqCst);
+    assert!(
+        calls < 15,
+        "with steer_max=2, run must end well before old-const-10 turn count; got {calls} LLM calls",
     );
 }
