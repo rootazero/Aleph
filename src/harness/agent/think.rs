@@ -163,7 +163,7 @@ pub(crate) enum GraceReason {
     Diminishing,
     /// `max_iterations` cap reached in the outer loop.
     MaxIterations,
-    /// `MAX_VERIFIER_VETOS` cap reached — model kept finishing with steps left.
+    /// Per-model `steer_max` cap reached — model kept finishing with steps left.
     VerifierVeto,
     /// `consecutive_failure_cap` reached — repeated total-failure turns.
     ConsecutiveFailureCap,
@@ -1719,6 +1719,7 @@ impl AgentHarness {
             recent_tool_calls: &snapshot,
             stop_reason,
             session_id: Some(session_key),
+            robustness_profile: self.deps.robustness_profile,
         };
         chain.verify(&ctx, cancel).await
     }

@@ -26,7 +26,7 @@
 //! The model stays sovereign over completion: it decides what goes on the
 //! list, checks boxes via `complete_item`, and ends the loop by either
 //! finishing every box or calling `scratchpad(action='clear')`. The
-//! `MAX_VERIFIER_VETOS` cap in the harness is the hard backstop, mirroring
+//! per-model `steer_max` cap in the harness is the hard backstop, mirroring
 //! goals.py's `max_turns`. Zero LLM calls; passes R10's Future-Proof Test.
 
 use async_trait::async_trait;
@@ -147,6 +147,7 @@ mod tests {
             recent_tool_calls: &[],
             stop_reason: Some("end_turn"),
             session_id,
+            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         }
     }
 
@@ -161,6 +162,7 @@ mod tests {
             recent_tool_calls: &[],
             stop_reason: None, // mid-turn
             session_id: Some("sess-midturn"),
+            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         };
         assert!(v.verify(&ctx, &cancel).await.is_continue());
     }
