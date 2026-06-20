@@ -1,4 +1,6 @@
-//! `ToolLoopVerifier` threshold + identical-call repetition semantics.
+//! `ToolLoopVerifier` identical-call repetition semantics.
+//! Thresholds are supplied via `TurnVerifyContext.robustness_profile`; the
+//! verifier struct itself carries no tunable fields.
 
 use tokio_util::sync::CancellationToken;
 
@@ -16,7 +18,7 @@ fn make(name: &str, args_hash: u64) -> ToolCallSummary {
 
 #[tokio::test]
 async fn below_threshold_allows() {
-    let v = ToolLoopVerifier::new().with_threshold(5);
+    let v = ToolLoopVerifier::new();
     let history = vec![make("read", 1); 4];
     let ctx = TurnVerifyContext {
         iterations: 4,
@@ -33,7 +35,7 @@ async fn below_threshold_allows() {
 
 #[tokio::test]
 async fn at_threshold_with_no_text_vetoes() {
-    let v = ToolLoopVerifier::new().with_threshold(5);
+    let v = ToolLoopVerifier::new();
     let history = vec![make("read", 1); 5];
     let ctx = TurnVerifyContext {
         iterations: 5,
@@ -60,7 +62,7 @@ async fn thinking_text_does_not_rescue_identical_loop() {
     // the signal that suppresses death-loop detection. Five identical
     // (name, args_hash) calls is a loop whether or not the model narrates —
     // the args_hash equality already excludes legitimate varied exploration.
-    let v = ToolLoopVerifier::new().with_threshold(5);
+    let v = ToolLoopVerifier::new();
     let history = vec![make("read", 1); 5];
     let ctx = TurnVerifyContext {
         iterations: 5,
@@ -80,7 +82,7 @@ async fn text_present_still_vetoes_identical_loop() {
     // After removing the has_text escape, the presence of *any* final_text
     // (whitespace or substantive) does not change the verdict for an identical
     // (name, args_hash) run — it vetoes on repetition alone.
-    let v = ToolLoopVerifier::new().with_threshold(5);
+    let v = ToolLoopVerifier::new();
     let history = vec![make("read", 1); 5];
     let ctx = TurnVerifyContext {
         iterations: 5,
@@ -97,7 +99,7 @@ async fn text_present_still_vetoes_identical_loop() {
 
 #[tokio::test]
 async fn different_args_hash_breaks_repetition() {
-    let v = ToolLoopVerifier::new().with_threshold(5);
+    let v = ToolLoopVerifier::new();
     let history = vec![
         make("read", 1),
         make("read", 1),
@@ -119,22 +121,12 @@ async fn different_args_hash_breaks_repetition() {
 }
 
 #[tokio::test]
-async fn threshold_minimum_is_two() {
-    // with_threshold(0) and with_threshold(1) should clamp up to 2 to
-    // avoid pathological "single call ⇒ instant veto" behavior.
-    let v = ToolLoopVerifier::new().with_threshold(0);
-    assert_eq!(v.threshold(), 2);
-    let v = ToolLoopVerifier::new().with_threshold(1);
-    assert_eq!(v.threshold(), 2);
-}
-
-#[tokio::test]
 async fn stop_turn_never_vetoes_on_stale_history() {
     // A stop turn (`stop_reason.is_some()`) with a buffer full of identical
     // calls and empty answer text (e.g. a thinking-only finish) must NOT veto:
     // the death loop is a mid-turn concern and re-judging stale history here
     // would flip a clean Done into a Continue.
-    let v = ToolLoopVerifier::new().with_threshold(5);
+    let v = ToolLoopVerifier::new();
     let history = vec![make("read", 1); 5];
     let ctx = TurnVerifyContext {
         iterations: 5,
@@ -151,14 +143,9 @@ async fn stop_turn_never_vetoes_on_stale_history() {
 
 #[tokio::test]
 async fn threshold_clamped_to_history_window() {
-    // A threshold above the ring-buffer capacity could never be satisfied
-    // (`recent_tool_calls.len()` is bounded by the window), silently disabling
-    // detection. `with_threshold` clamps to the window so it can still fire.
-    let v = ToolLoopVerifier::new().with_threshold(TOOL_HISTORY_WINDOW + 100);
-    assert_eq!(v.threshold(), TOOL_HISTORY_WINDOW);
-
     // With the profile-driven verify, a full window of identical calls triggers
     // Tier-1 Halt (run=8 >= halt_threshold=8 > repeat_threshold=5).
+    let v = ToolLoopVerifier::new();
     let history = vec![make("read", 1); TOOL_HISTORY_WINDOW];
     let ctx = TurnVerifyContext {
         iterations: TOOL_HISTORY_WINDOW,
@@ -176,9 +163,9 @@ async fn threshold_clamped_to_history_window() {
 #[tokio::test]
 async fn threshold_two_vetoes_at_exactly_two() {
     // Verify that a profile with a low repeat_threshold (2) fires Veto at
-    // exactly two identical calls. `with_threshold` on the struct is kept for
-    // API compatibility; detection thresholds now come from the profile.
-    let v = ToolLoopVerifier::new().with_threshold(2);
+    // exactly two identical calls. Detection thresholds come from the profile,
+    // not from the verifier struct.
+    let v = ToolLoopVerifier::new();
     let history = vec![make("read", 1), make("read", 1)];
     let tight_profile = crate::verification::ModelRobustnessProfile {
         repeat_threshold: 2,
@@ -341,17 +328,4 @@ async fn tier2_below_window_continues() {
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_continue());
-}
-
-#[tokio::test]
-async fn halt_threshold_clamped_at_or_above_repeat() {
-    // A halt threshold below the veto threshold would invert the tiers; it is
-    // lifted to `repeat_threshold`.
-    let v = ToolLoopVerifier::new()
-        .with_threshold(5)
-        .with_halt_threshold(2);
-    assert_eq!(v.halt_threshold(), 5);
-    // And it can never exceed the ring-buffer window (else it could never fire).
-    let v = ToolLoopVerifier::new().with_halt_threshold(TOOL_HISTORY_WINDOW + 50);
-    assert_eq!(v.halt_threshold(), TOOL_HISTORY_WINDOW);
 }

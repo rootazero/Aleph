@@ -48,56 +48,15 @@ use crate::verification::turn_verifier::{
     ToolCallSummary, TurnVerifier, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
 };
 
-pub struct ToolLoopVerifier {
-    repeat_threshold: usize,
-    halt_threshold: usize,
-}
+pub struct ToolLoopVerifier;
 
 impl ToolLoopVerifier {
-    /// Default thresholds: veto at 5 identical consecutive calls (master spec
-    /// § Stage 6 "纯重复 tool call N 轮"), hard-halt at the full
-    /// [`TOOL_HISTORY_WINDOW`] (8) — i.e. ~3 ignored vetoes before the loop is
-    /// cut off. Both tunable via `with_threshold` / `with_halt_threshold`.
+    /// Construct the verifier. Detection thresholds (`repeat_threshold`,
+    /// `halt_threshold`, etc.) are read from `ctx.robustness_profile` at
+    /// `verify` time — see `ModelRobustnessProfile` and `TurnVerifyContext`.
     #[must_use]
     pub const fn new() -> Self {
-        Self {
-            repeat_threshold: 5,
-            halt_threshold: TOOL_HISTORY_WINDOW,
-        }
-    }
-
-    /// Set the repetition (veto) threshold. Clamped to `[2, TOOL_HISTORY_WINDOW]`:
-    /// the lower bound avoids "single call ⇒ instant veto"; the upper bound
-    /// is the harness ring-buffer capacity — a threshold above it could never
-    /// be satisfied (`recent_tool_calls.len()` is bounded by the window), which
-    /// would silently disable detection. The halt threshold is lifted to stay
-    /// `≥ repeat_threshold` so the two tiers never invert.
-    #[must_use]
-    pub fn with_threshold(mut self, n: usize) -> Self {
-        self.repeat_threshold = n.clamp(2, TOOL_HISTORY_WINDOW);
-        self.halt_threshold = self.halt_threshold.max(self.repeat_threshold);
-        self
-    }
-
-    /// Set the hard-halt threshold. Clamped to `[repeat_threshold,
-    /// TOOL_HISTORY_WINDOW]` so it can always be reached and never fires *before*
-    /// the soft veto tier.
-    #[must_use]
-    pub fn with_halt_threshold(mut self, n: usize) -> Self {
-        self.halt_threshold = n.clamp(self.repeat_threshold, TOOL_HISTORY_WINDOW);
-        self
-    }
-
-    /// Current repetition (veto) threshold (always within `[2, TOOL_HISTORY_WINDOW]`).
-    #[must_use]
-    pub const fn threshold(&self) -> usize {
-        self.repeat_threshold
-    }
-
-    /// Current hard-halt threshold (always within `[repeat_threshold, TOOL_HISTORY_WINDOW]`).
-    #[must_use]
-    pub const fn halt_threshold(&self) -> usize {
-        self.halt_threshold
+        Self
     }
 }
 
@@ -145,7 +104,7 @@ fn trailing_same_name_run(calls: &[ToolCallSummary]) -> usize {
 
 impl Default for ToolLoopVerifier {
     fn default() -> Self {
-        Self::new()
+        Self
     }
 }
 
