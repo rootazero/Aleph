@@ -4,10 +4,10 @@
 use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::skills::shared_system;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
-use crate::mcp::manager::McpManagerHandle;
 use crate::hub::cache::{CatalogCache, CatalogFilter};
 use crate::hub::reconcile::{mcp_to_entry, plugin_to_entry, skill_to_entry};
 use crate::hub::types::{ExtensionCategory, ExtensionKind};
+use crate::mcp::manager::McpManagerHandle;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -44,7 +44,10 @@ pub async fn handle_catalog(req: JsonRpcRequest, cache: Arc<CatalogCache>) -> Js
                 .map(|e| {
                     let mut v = serde_json::to_value(e).unwrap_or_else(|_| json!({}));
                     if let Some(obj) = v.as_object_mut() {
-                        obj.insert("source_label".into(), json!(e.via.clone().unwrap_or_default()));
+                        obj.insert(
+                            "source_label".into(),
+                            json!(e.via.clone().unwrap_or_default()),
+                        );
                     }
                     v
                 })

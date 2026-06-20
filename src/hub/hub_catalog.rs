@@ -8,9 +8,7 @@
 
 use serde::Deserialize;
 
-use crate::hub::types::{
-    ExtensionCategory, ExtensionEntry, ExtensionKind, InstallSpec, TrustTier,
-};
+use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
 
 /// Current artifact schema version this client understands.
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;

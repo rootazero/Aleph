@@ -29,12 +29,11 @@ use builder::{
     register_agent_handlers, register_agents_handlers, register_arena_handlers,
     register_config_handlers, register_core_handlers, register_cron_handlers,
     register_daemon_handlers, register_extensions_handlers, register_extensions_install_handlers,
-    register_fs_handlers, register_graph_handlers,
-    register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
-    register_mcp_handlers, register_memory_handlers, register_oauth_handlers,
-    register_projects_handlers, register_session_handlers, register_teams_handlers,
-    register_voice_capability_handlers, register_workspace_handlers, setup_config_watcher,
-    start_webchat_server,
+    register_fs_handlers, register_graph_handlers, register_group_chat_handlers,
+    register_heartbeat_handlers, register_identity_handlers, register_mcp_handlers,
+    register_memory_handlers, register_oauth_handlers, register_projects_handlers,
+    register_session_handlers, register_teams_handlers, register_voice_capability_handlers,
+    register_workspace_handlers, setup_config_watcher, start_webchat_server,
 };
 
 mod orchestrator_init;
@@ -1326,14 +1325,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 let cache = std::sync::Arc::new(cache);
                 register_extensions_handlers(&mut server, mcp_handle.clone(), cache.clone());
 
-                let aleph_hub = std::sync::Arc::new(
-                    alephcore::hub::catalog_client::AlephHubCatalog::new(
+                let aleph_hub =
+                    std::sync::Arc::new(alephcore::hub::catalog_client::AlephHubCatalog::new(
                         alephcore::hub::catalog_client::ALEPH_HUB_ID,
                         alephcore::hub::catalog_client::ALEPH_HUB_NAME,
                         alephcore::hub::catalog_client::ALEPH_HUB_URL,
                         alephcore::hub::types::TrustTier::Verified,
-                    ),
-                );
+                    ));
 
                 // Independently-built MarketplaceManager for the install backend
                 // (SHA256 verification + atomic copy). Separate from the catalog

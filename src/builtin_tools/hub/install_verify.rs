@@ -9,9 +9,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AlephError, Result};
-use crate::mcp::manager::McpManagerHandle;
 use crate::hub::install::InstallOutcome;
 use crate::hub::verify::{verify_install, VerifyReport};
+use crate::mcp::manager::McpManagerHandle;
 use crate::tools::AlephTool;
 
 // --------------------------------------------------------------------------

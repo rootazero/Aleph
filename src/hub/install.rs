@@ -10,9 +10,9 @@ use std::collections::HashMap;
 
 use crate::extension::marketplace::MarketplaceManager;
 use crate::extension::PluginScope;
-use crate::mcp::manager::{McpManagerConfig, McpManagerHandle};
 use crate::hub::secrets::secret_ref;
 use crate::hub::types::{ExtensionEntry, InstallSpec};
+use crate::mcp::manager::{McpManagerConfig, McpManagerHandle};
 
 /// Build an `McpManagerConfig` from an install spec.
 ///

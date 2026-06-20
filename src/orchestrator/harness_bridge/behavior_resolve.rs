@@ -29,7 +29,8 @@ pub fn resolve_behavior(provider: &dyn AiProvider) -> Cow<'static, str> {
     if let Some(hint) = provider.behavior_hint() {
         return Cow::Owned(hint.into_owned());
     }
-    if let Some(name) = crate::providers::model_behaviors::protocol_to_behavior(&provider.protocol())
+    if let Some(name) =
+        crate::providers::model_behaviors::protocol_to_behavior(&provider.protocol())
     {
         return Cow::Borrowed(name);
     }
@@ -57,9 +58,15 @@ mod tests {
         {
             Box::pin(async { Ok(ProviderResponse::text_only("x".to_string())) })
         }
-        fn name(&self) -> &str { "stub" }
-        fn color(&self) -> &str { "#000" }
-        fn protocol(&self) -> Cow<'_, str> { Cow::Borrowed(self.protocol) }
+        fn name(&self) -> &str {
+            "stub"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+        fn protocol(&self) -> Cow<'_, str> {
+            Cow::Borrowed(self.protocol)
+        }
         fn model_behavior_override(&self) -> Option<Cow<'_, str>> {
             self.override_.map(Cow::Borrowed)
         }
@@ -68,21 +75,35 @@ mod tests {
         }
     }
 
-    fn p(protocol: &'static str, override_: Option<&'static str>, hint: Option<&'static str>) -> StubProvider {
-        StubProvider { protocol, override_, hint }
+    fn p(
+        protocol: &'static str,
+        override_: Option<&'static str>,
+        hint: Option<&'static str>,
+    ) -> StubProvider {
+        StubProvider {
+            protocol,
+            override_,
+            hint,
+        }
     }
 
     #[test]
     fn override_wins_over_everything() {
         let _ = UnifiedMessage::user("warmup");
-        assert_eq!(resolve_behavior(&p("anthropic", Some("openai"), Some("strict"))), "openai");
+        assert_eq!(
+            resolve_behavior(&p("anthropic", Some("openai"), Some("strict"))),
+            "openai"
+        );
     }
 
     #[test]
     fn hint_wins_over_protocol_kimi_over_anthropic() {
         // THE headline case: Kimi on the anthropic wire protocol must resolve
         // to "strict", NOT "anthropic" (Claude's loose leash).
-        assert_eq!(resolve_behavior(&p("anthropic", None, Some("strict"))), "strict");
+        assert_eq!(
+            resolve_behavior(&p("anthropic", None, Some("strict"))),
+            "strict"
+        );
     }
 
     #[test]

@@ -208,32 +208,59 @@ mod tests {
     #[test]
     fn vendor_identity_matches_kimi_by_url_and_model() {
         assert_eq!(
-            vendor_identity(Some("https://api.moonshot.cn/anthropic"), "kimi-k2-0905-preview"),
+            vendor_identity(
+                Some("https://api.moonshot.cn/anthropic"),
+                "kimi-k2-0905-preview"
+            ),
             Some("strict")
         );
-        assert_eq!(vendor_identity(None, "kimi-k2-turbo-preview"), Some("strict"));
-        assert_eq!(vendor_identity(Some("https://api.moonshot.ai/v1"), "moonshot-v1-8k"), Some("strict"));
+        assert_eq!(
+            vendor_identity(None, "kimi-k2-turbo-preview"),
+            Some("strict")
+        );
+        assert_eq!(
+            vendor_identity(Some("https://api.moonshot.ai/v1"), "moonshot-v1-8k"),
+            Some("strict")
+        );
     }
 
     #[test]
     fn vendor_identity_matches_minimax_including_abab_by_url() {
-        assert_eq!(vendor_identity(Some("https://api.minimaxi.com/anthropic"), "MiniMax-M2.5"), Some("strict"));
-        assert_eq!(vendor_identity(Some("https://api.minimaxi.com/anthropic"), "abab6.5s-chat"), Some("strict"));
+        assert_eq!(
+            vendor_identity(Some("https://api.minimaxi.com/anthropic"), "MiniMax-M2.5"),
+            Some("strict")
+        );
+        assert_eq!(
+            vendor_identity(Some("https://api.minimaxi.com/anthropic"), "abab6.5s-chat"),
+            Some("strict")
+        );
         assert_eq!(vendor_identity(None, "abab6.5s-chat"), Some("strict"));
     }
 
     #[test]
     fn vendor_identity_matches_other_oss_families() {
-        assert_eq!(vendor_identity(Some("https://api.deepseek.com"), "deepseek-chat"), Some("strict"));
+        assert_eq!(
+            vendor_identity(Some("https://api.deepseek.com"), "deepseek-chat"),
+            Some("strict")
+        );
         assert_eq!(vendor_identity(None, "qwen-max"), Some("strict"));
-        assert_eq!(vendor_identity(Some("https://dashscope.aliyuncs.com"), "qwq-32b"), Some("strict"));
+        assert_eq!(
+            vendor_identity(Some("https://dashscope.aliyuncs.com"), "qwq-32b"),
+            Some("strict")
+        );
         assert_eq!(vendor_identity(None, "glm-4-plus"), Some("strict"));
     }
 
     #[test]
     fn vendor_identity_ignores_strong_models() {
-        assert_eq!(vendor_identity(Some("https://api.openai.com/v1"), "gpt-4o"), None);
-        assert_eq!(vendor_identity(Some("https://api.anthropic.com"), "claude-sonnet-4-6"), None);
+        assert_eq!(
+            vendor_identity(Some("https://api.openai.com/v1"), "gpt-4o"),
+            None
+        );
+        assert_eq!(
+            vendor_identity(Some("https://api.anthropic.com"), "claude-sonnet-4-6"),
+            None
+        );
         assert_eq!(vendor_identity(None, "gemini-2.5-pro"), None);
     }
 

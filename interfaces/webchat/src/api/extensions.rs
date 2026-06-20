@@ -191,7 +191,6 @@ impl ExtensionsApi {
             .await
             .map(|_| ())
     }
-
 }
 
 #[cfg(test)]

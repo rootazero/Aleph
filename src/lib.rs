@@ -83,6 +83,7 @@ pub mod extension;
 pub mod generation;
 pub mod goal;
 pub mod guardrails;
+pub mod hub;
 mod init_unified;
 pub mod logging;
 pub mod looping;
@@ -102,7 +103,6 @@ pub mod sandbox;
 pub mod search;
 pub mod session;
 pub mod skill;
-pub mod hub;
 pub mod strategy;
 pub mod tool_metadata;
 

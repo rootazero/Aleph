@@ -29,9 +29,9 @@ use aleph_client::{CliConfig, CliResult};
 use commands::cli_args::{
     CallsAction, ChannelsAction, ChatControlAction, Commands, ConfigAction, CronAction,
     DaemonAction, GatewayAction, HeartbeatAction, HooksAction, IdentityAction, LogsAction,
-    MarketplaceAction, McpAction, MemoryAction, PluginAction, ProvidersAction,
-    ProxyAction, SandboxAction, SecretAction, ServicesAction, SessionAction, SkillsAction,
-    ToolsAction, TraceAction, WebhookAction, WorkspaceAction,
+    MarketplaceAction, McpAction, MemoryAction, PluginAction, ProvidersAction, ProxyAction,
+    SandboxAction, SecretAction, ServicesAction, SessionAction, SkillsAction, ToolsAction,
+    TraceAction, WebhookAction, WorkspaceAction,
 };
 
 /// Aleph CLI - Personal AI Assistant Client

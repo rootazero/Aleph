@@ -188,7 +188,10 @@ mod tests {
             let mut out = String::new();
             layer.inject(&mut out, &input);
             assert!(out.contains("## Tool-Use Enforcement"), "{behavior}");
-            assert!(out.contains("## Execution Discipline — Persistence"), "{behavior}");
+            assert!(
+                out.contains("## Execution Discipline — Persistence"),
+                "{behavior}"
+            );
         }
     }
 

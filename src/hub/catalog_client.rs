@@ -123,15 +123,24 @@ impl AlephHubCatalog {
             Ok(entries) if !entries.is_empty() => {
                 let synced = entries.len();
                 match cache.replace_source(&self.id, &entries).await {
-                    Ok(()) => SyncReport { synced, failed: Vec::new() },
-                    Err(e) => SyncReport { synced: 0, failed: vec![format!("cache write: {e}")] },
+                    Ok(()) => SyncReport {
+                        synced,
+                        failed: Vec::new(),
+                    },
+                    Err(e) => SyncReport {
+                        synced: 0,
+                        failed: vec![format!("cache write: {e}")],
+                    },
                 }
             }
             Ok(_) => SyncReport {
                 synced: 0,
                 failed: vec!["empty catalog; kept last-good cache".into()],
             },
-            Err(e) => SyncReport { synced: 0, failed: vec![e.to_string()] },
+            Err(e) => SyncReport {
+                synced: 0,
+                failed: vec![e.to_string()],
+            },
         }
     }
 }
@@ -149,7 +158,12 @@ mod tests {
 
     #[test]
     fn ingest_populates_via_and_install_spec() {
-        let c = AlephHubCatalog::new(ALEPH_HUB_ID, ALEPH_HUB_NAME, "http://unused", TrustTier::Verified);
+        let c = AlephHubCatalog::new(
+            ALEPH_HUB_ID,
+            ALEPH_HUB_NAME,
+            "http://unused",
+            TrustTier::Verified,
+        );
         let entries = c.ingest(FIXTURE).unwrap();
         assert_eq!(entries.len(), 1);
         let e = &entries[0];
@@ -166,7 +180,12 @@ mod tests {
           "entries":[{"id":"aleph-hub:x","kind":"mcp","category":"other","name":"X","description":"d",
           "repo_url":"https://github.com/x/x","trust_tier":"verified",
           "install_spec":{"type":"mcp_stdio","command":"c","args":[],"env":[]}}]}"#;
-        let c = AlephHubCatalog::new(ALEPH_HUB_ID, ALEPH_HUB_NAME, "http://unused", TrustTier::Verified);
+        let c = AlephHubCatalog::new(
+            ALEPH_HUB_ID,
+            ALEPH_HUB_NAME,
+            "http://unused",
+            TrustTier::Verified,
+        );
         let e = &c.ingest(body).unwrap()[0];
         assert_eq!(e.via.as_deref(), Some("aleph-hub")); // fallback to hub_id
     }
@@ -190,9 +209,17 @@ mod tests {
     #[test]
     fn ingest_empty_entries_returns_ok_empty_vec() {
         let body = r#"{"manifest":{"schema_version":1,"hub_id":"aleph-hub","name":"Aleph Hub"},"entries":[]}"#;
-        let c = AlephHubCatalog::new(ALEPH_HUB_ID, ALEPH_HUB_NAME, "http://unused", TrustTier::Verified);
+        let c = AlephHubCatalog::new(
+            ALEPH_HUB_ID,
+            ALEPH_HUB_NAME,
+            "http://unused",
+            TrustTier::Verified,
+        );
         let entries = c.ingest(body).unwrap();
-        assert!(entries.is_empty(), "expected empty vec from empty entries array");
+        assert!(
+            entries.is_empty(),
+            "expected empty vec from empty entries array"
+        );
     }
 
     /// Fact 2: `CatalogCache::replace_source` with an empty slice is destructive —
@@ -201,7 +228,9 @@ mod tests {
     #[tokio::test]
     async fn replace_source_with_empty_slice_wipes_existing_rows() {
         use crate::hub::cache::{CatalogCache, CatalogFilter};
-        use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier as TT};
+        use crate::hub::types::{
+            ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier as TT,
+        };
 
         let cache = CatalogCache::open_in_memory().unwrap();
         let entry = ExtensionEntry {
@@ -229,7 +258,10 @@ mod tests {
 
         // Confirm the row is present before the wipe.
         let before = cache
-            .query(&CatalogFilter { source_id: Some(ALEPH_HUB_ID.into()), ..Default::default() })
+            .query(&CatalogFilter {
+                source_id: Some(ALEPH_HUB_ID.into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(before.len(), 1, "seed row must be present");
@@ -237,9 +269,15 @@ mod tests {
         // An empty replace_source is destructive — rows are gone.
         cache.replace_source(ALEPH_HUB_ID, &[]).await.unwrap();
         let after = cache
-            .query(&CatalogFilter { source_id: Some(ALEPH_HUB_ID.into()), ..Default::default() })
+            .query(&CatalogFilter {
+                source_id: Some(ALEPH_HUB_ID.into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
-        assert!(after.is_empty(), "replace_source with empty slice must wipe existing rows");
+        assert!(
+            after.is_empty(),
+            "replace_source with empty slice must wipe existing rows"
+        );
     }
 }

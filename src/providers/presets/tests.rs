@@ -558,7 +558,10 @@ fn kimi_minimax_govern_as_strict_regardless_of_protocol() {
     // NOT loosen governance — vendor_identity still resolves "strict".
     use crate::providers::model_behaviors::vendor_identity;
     assert_eq!(
-        vendor_identity(Some("https://api.moonshot.cn/anthropic"), "kimi-k2-0905-preview"),
+        vendor_identity(
+            Some("https://api.moonshot.cn/anthropic"),
+            "kimi-k2-0905-preview"
+        ),
         Some("strict")
     );
     assert_eq!(

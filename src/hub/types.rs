@@ -263,7 +263,9 @@ mod tests {
     fn entry_carries_via_and_install_spec() {
         let mut e = sample_entry();
         e.via = Some("aleph-hub".into());
-        e.install_spec = Some(InstallSpec::OciImage { image: "x@sha256:abc".into() });
+        e.install_spec = Some(InstallSpec::OciImage {
+            image: "x@sha256:abc".into(),
+        });
         let j = serde_json::to_value(&e).unwrap();
         assert_eq!(j["via"], "aleph-hub");
         assert!(j["install_spec"].is_object());

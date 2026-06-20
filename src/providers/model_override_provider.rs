@@ -171,8 +171,12 @@ mod tests {
             ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
                 Box::pin(async { Ok(ProviderResponse::text_only("inner".to_string())) })
             }
-            fn name(&self) -> &str { "inner" }
-            fn color(&self) -> &str { "#000" }
+            fn name(&self) -> &str {
+                "inner"
+            }
+            fn color(&self) -> &str {
+                "#000"
+            }
             fn behavior_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
                 Some(std::borrow::Cow::Borrowed("strict"))
             }

@@ -627,13 +627,14 @@ impl Harness for AgentHarness {
                                         at: crate::session::events::now_ms(),
                                         synthetic: true,
                                     };
-                                    if let Err(e) = self
-                                        .deps
-                                        .session
-                                        .emit_event(&current_session, warn)
-                                        .await
+                                    if let Err(e) =
+                                        self.deps.session.emit_event(&current_session, warn).await
                                     {
-                                        tracing::warn!(?current_session, ?e, "soft-failure warning emit failed");
+                                        tracing::warn!(
+                                            ?current_session,
+                                            ?e,
+                                            "soft-failure warning emit failed"
+                                        );
                                     }
                                 }
                                 if consecutive_failure_turns >= cap {

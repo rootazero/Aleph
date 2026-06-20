@@ -8,8 +8,8 @@ use alephcore::extension::marketplace::MarketplaceManager;
 use alephcore::gateway::handlers::extensions;
 use alephcore::gateway::security::SharedTokenManager;
 use alephcore::gateway::GatewayServer;
-use alephcore::mcp::manager::McpManagerHandle;
 use alephcore::hub::cache::CatalogCache;
+use alephcore::mcp::manager::McpManagerHandle;
 use std::sync::Arc;
 
 pub(in crate::commands::start) fn register_extensions_handlers(

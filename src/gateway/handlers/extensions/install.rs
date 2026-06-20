@@ -10,12 +10,12 @@ use crate::extension::marketplace::MarketplaceManager;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
-use crate::mcp::manager::McpManagerHandle;
 use crate::hub::cache::{CatalogCache, CatalogFilter};
 use crate::hub::install::{run_install, InstallContext, InstallOutcome};
 use crate::hub::secrets::field_key;
 use crate::hub::trust::{build_disclosure, scan_for_injection};
 use crate::hub::types::{ExtensionEntry, InstallSpec};
+use crate::mcp::manager::McpManagerHandle;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -136,10 +136,7 @@ fn scan_text(entry: &ExtensionEntry) -> Vec<crate::hub::trust::InjectionFinding>
 
 /// extensions.disclosure — resolve the spec and return the pre-install
 /// disclosure payload + injection findings, without installing.
-pub async fn handle_disclosure(
-    req: JsonRpcRequest,
-    cache: Arc<CatalogCache>,
-) -> JsonRpcResponse {
+pub async fn handle_disclosure(req: JsonRpcRequest, cache: Arc<CatalogCache>) -> JsonRpcResponse {
     let p: DisclosureParams = match parse_params(&req) {
         Ok(p) => p,
         Err(e) => return e,
@@ -159,10 +156,7 @@ pub async fn handle_disclosure(
 }
 
 /// extensions.configure — validate a submitted config against the spec.
-pub async fn handle_configure(
-    req: JsonRpcRequest,
-    cache: Arc<CatalogCache>,
-) -> JsonRpcResponse {
+pub async fn handle_configure(req: JsonRpcRequest, cache: Arc<CatalogCache>) -> JsonRpcResponse {
     let p: ConfigureParams = match parse_params(&req) {
         Ok(p) => p,
         Err(e) => return e,

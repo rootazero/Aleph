@@ -30,14 +30,21 @@ pub struct HubCatalogSyncTool {
 #[async_trait]
 impl AlephTool for HubCatalogSyncTool {
     const NAME: &'static str = "hub_catalog_sync";
-    const DESCRIPTION: &'static str =
-        "Sync the Aleph Hub catalog into the local cache.";
+    const DESCRIPTION: &'static str = "Sync the Aleph Hub catalog into the local cache.";
     type Args = HubCatalogSyncArgs;
     type Output = HubCatalogSyncOutput;
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output> {
-        let hub = AlephHubCatalog::new(ALEPH_HUB_ID, ALEPH_HUB_NAME, ALEPH_HUB_URL, TrustTier::Verified);
+        let hub = AlephHubCatalog::new(
+            ALEPH_HUB_ID,
+            ALEPH_HUB_NAME,
+            ALEPH_HUB_URL,
+            TrustTier::Verified,
+        );
         let report = hub.sync_into(&self.cache).await;
-        Ok(HubCatalogSyncOutput { synced: report.synced, failed: report.failed })
+        Ok(HubCatalogSyncOutput {
+            synced: report.synced,
+            failed: report.failed,
+        })
     }
 }

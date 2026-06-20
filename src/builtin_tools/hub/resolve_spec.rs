@@ -54,9 +54,10 @@ impl AlephTool for HubResolveSpecTool {
 
         // Resolve the install spec from the cached entry (no provider registry).
         let entry_id = args.entry_id;
-        let spec = entry.install_spec.clone().ok_or_else(|| {
-            AlephError::other(format!("no install spec cached for {entry_id}"))
-        })?;
+        let spec = entry
+            .install_spec
+            .clone()
+            .ok_or_else(|| AlephError::other(format!("no install spec cached for {entry_id}")))?;
 
         let install_spec = serde_json::to_value(&spec)
             .map_err(|e| AlephError::other(format!("serialize InstallSpec failed: {e}")))?;
@@ -72,7 +73,9 @@ impl AlephTool for HubResolveSpecTool {
 mod tests {
     use super::*;
     use crate::hub::cache::CatalogCache;
-    use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
+    use crate::hub::types::{
+        ExtensionCategory, ExtensionEntry, ExtensionKind, InstallSpec, TrustTier,
+    };
 
     fn sample_entry(id: &str, source_id: &str) -> ExtensionEntry {
         ExtensionEntry {
@@ -122,9 +125,13 @@ mod tests {
             env: vec![],
         });
         cache.upsert_many(&[e]).await.unwrap();
-        let tool = HubResolveSpecTool { cache: Arc::new(cache) };
+        let tool = HubResolveSpecTool {
+            cache: Arc::new(cache),
+        };
         let out = tool
-            .call(HubResolveSpecArgs { entry_id: "aleph-hub:foo".into() })
+            .call(HubResolveSpecArgs {
+                entry_id: "aleph-hub:foo".into(),
+            })
             .await
             .unwrap();
         let got: InstallSpec = serde_json::from_value(out.install_spec).unwrap();
@@ -134,10 +141,17 @@ mod tests {
     #[tokio::test]
     async fn errors_when_no_spec_cached() {
         let cache = CatalogCache::open_in_memory().unwrap();
-        cache.upsert_many(&[sample_entry("aleph-hub:bar", "aleph-hub")]).await.unwrap();
-        let tool = HubResolveSpecTool { cache: Arc::new(cache) };
+        cache
+            .upsert_many(&[sample_entry("aleph-hub:bar", "aleph-hub")])
+            .await
+            .unwrap();
+        let tool = HubResolveSpecTool {
+            cache: Arc::new(cache),
+        };
         let err = tool
-            .call(HubResolveSpecArgs { entry_id: "aleph-hub:bar".into() })
+            .call(HubResolveSpecArgs {
+                entry_id: "aleph-hub:bar".into(),
+            })
             .await
             .unwrap_err();
         assert!(err.to_string().contains("no install spec cached"));

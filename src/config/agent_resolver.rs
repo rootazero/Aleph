@@ -796,7 +796,7 @@ mod tests {
         assert!(soul.contains("_You are Nova._"));
         assert!(soul.contains("Never fabricate facts, citations")); // base honesty floor
         assert!(soul.contains("Lead with the answer or the action.")); // assistant archetype
-        // The old "thinking companion" template must be gone.
+                                                                       // The old "thinking companion" template must be gone.
         assert!(!soul.contains("thinking companion"));
     }
 

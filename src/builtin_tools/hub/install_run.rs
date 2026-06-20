@@ -20,12 +20,12 @@ use crate::error::{AlephError, Result};
 use crate::extension::marketplace::types::MarketplaceConfig;
 use crate::extension::marketplace::MarketplaceManager;
 use crate::gateway::security::SharedTokenManager;
-use crate::mcp::manager::McpManagerHandle;
 use crate::hub::cache::{CatalogCache, CatalogFilter};
 use crate::hub::install::{run_install, InstallContext, InstallOutcome};
 use crate::hub::secrets::field_key;
 use crate::hub::trust::{build_disclosure, DisclosurePayload};
 use crate::hub::types::InstallSpec;
+use crate::mcp::manager::McpManagerHandle;
 use crate::tools::AlephTool;
 
 // --------------------------------------------------------------------------
@@ -141,9 +141,10 @@ impl AlephTool for HubInstallRunTool {
 
         // (2) Resolve the install spec from the cached entry.
         let entry_id = args.entry_id.clone();
-        let spec = entry.install_spec.clone().ok_or_else(|| {
-            AlephError::other(format!("no install spec cached for {entry_id}"))
-        })?;
+        let spec = entry
+            .install_spec
+            .clone()
+            .ok_or_else(|| AlephError::other(format!("no install spec cached for {entry_id}")))?;
 
         // (3) Build the disclosure and run the system-enforced gate.
         let disclosure = build_disclosure(&entry, &spec);
