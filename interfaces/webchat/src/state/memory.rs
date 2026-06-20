@@ -163,6 +163,9 @@ mod tests {
         assert_eq!(parse_view_param("view=graph"), Some(MemoryView::Graph));
         assert_eq!(parse_view_param("?view=bogus"), None);
         assert_eq!(parse_view_param(""), None);
-        assert_eq!(parse_view_param("?foo=1&view=table"), Some(MemoryView::Table));
+        assert_eq!(
+            parse_view_param("?foo=1&view=table"),
+            Some(MemoryView::Table)
+        );
     }
 }

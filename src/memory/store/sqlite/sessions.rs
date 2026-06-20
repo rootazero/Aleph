@@ -119,7 +119,9 @@ impl DreamStore for SqliteMemoryBackend {
                 "SELECT date, content, source_memory_count, created_at \
                  FROM daily_insights ORDER BY date DESC LIMIT ?1",
             )
-            .map_err(|e| AlephError::config(format!("Failed to prepare recent_daily_insights: {e}")))?;
+            .map_err(|e| {
+                AlephError::config(format!("Failed to prepare recent_daily_insights: {e}"))
+            })?;
 
         let rows = stmt
             .query_map(params![limit as i64], |row| {
@@ -134,7 +136,9 @@ impl DreamStore for SqliteMemoryBackend {
 
         let mut out = Vec::new();
         for row in rows {
-            out.push(row.map_err(|e| AlephError::config(format!("recent_daily_insights row: {e}")))?);
+            out.push(
+                row.map_err(|e| AlephError::config(format!("recent_daily_insights row: {e}")))?,
+            );
         }
         Ok(out)
     }
@@ -221,8 +225,8 @@ impl CompressionStore for SqliteMemoryBackend {
 #[cfg(test)]
 mod daily_insight_tests {
     use crate::memory::dreaming::DailyInsight;
-    use crate::memory::store::DreamStore;
     use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::memory::store::DreamStore;
 
     #[tokio::test]
     async fn recent_daily_insights_orders_desc_and_limits() {

@@ -240,7 +240,10 @@ mod tests {
         assert_eq!(results[0].title, "Example");
         assert_eq!(results[0].url, "https://example.com");
         assert_eq!(results[0].snippet, "An example page");
-        assert_eq!(results[0].full_content.as_deref(), Some("# Example\n\nbody"));
+        assert_eq!(
+            results[0].full_content.as_deref(),
+            Some("# Example\n\nbody")
+        );
         assert_eq!(results[0].provider.as_deref(), Some("firecrawl"));
         assert!(results[0].relevance_score.is_none());
     }

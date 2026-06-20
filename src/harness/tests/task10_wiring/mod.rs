@@ -1170,7 +1170,10 @@ async fn veto_cap_follows_profile_steer_max() {
         "expected VerifierVeto termination with steer_max=2; got {:?}",
         harness.terminate_reason()
     );
-    assert!(harness.hit_limit(), "hit_limit must be set on VerifierVeto termination");
+    assert!(
+        harness.hit_limit(),
+        "hit_limit must be set on VerifierVeto termination"
+    );
 
     // The provider must have been called materially fewer times than the old
     // const-10 behavior would require.  With steer_max=2, vetoes fire on turns
@@ -1331,14 +1334,11 @@ async fn grace_turn_payload_has_no_orphaned_tool_calls() {
         !recorded.is_empty(),
         "provider must have been called at least once"
     );
-    let grace_payload_messages = recorded
-        .last()
-        .expect("at least one recorded payload");
+    let grace_payload_messages = recorded.last().expect("at least one recorded payload");
 
     // Build the set of tool_use ids that appear in ANY assistant message
     // in the grace payload.
-    let mut tool_use_ids: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut tool_use_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     for msg in grace_payload_messages.iter() {
         if let UnifiedMessage::Assistant { content } = msg {
             for block in content {
@@ -1352,8 +1352,7 @@ async fn grace_turn_payload_has_no_orphaned_tool_calls() {
     // For every tool_use id, there must be a matching ToolResult (or error)
     // message later in the payload.  A missing entry means the prompt builder
     // failed to pair the call — Anthropic-compatible backends reject with 400.
-    let mut answered_ids: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut answered_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     for msg in grace_payload_messages.iter() {
         if let UnifiedMessage::ToolResult { tool_call_id, .. } = msg {
             answered_ids.insert(tool_call_id.clone());

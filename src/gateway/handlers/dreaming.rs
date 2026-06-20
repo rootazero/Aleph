@@ -168,8 +168,8 @@ mod tests {
     #[tokio::test]
     async fn list_insights_returns_daily_and_runs() {
         use crate::memory::dreaming::DailyInsight;
-        use crate::memory::store::DreamStore;
         use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use crate::memory::store::DreamStore;
         use crate::sync_primitives::Arc;
 
         let backend = SqliteMemoryBackend::in_memory().expect("in-memory backend");
@@ -188,7 +188,10 @@ mod tests {
 
         assert!(resp.is_success(), "expected success: {:?}", resp.error);
         let v = resp.result.expect("result payload");
-        let daily = v.get("daily").and_then(|d| d.as_array()).expect("daily array");
+        let daily = v
+            .get("daily")
+            .and_then(|d| d.as_array())
+            .expect("daily array");
         assert_eq!(daily.len(), 1);
         assert_eq!(daily[0]["date"], "2026-06-20");
         assert_eq!(daily[0]["source_memory_count"], 4);

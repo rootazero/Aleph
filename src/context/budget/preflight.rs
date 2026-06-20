@@ -210,7 +210,10 @@ mod tests {
         let mut msgs = vec![UnifiedMessage::user("test")];
 
         let calm = pipeline.run(&mut msgs, &make_pressure(0.50), 1).await;
-        assert_eq!(calm, 0, "below the preventive floor the pipeline is a no-op");
+        assert_eq!(
+            calm, 0,
+            "below the preventive floor the pipeline is a no-op"
+        );
 
         let pressured = pipeline.run(&mut msgs, &make_pressure(0.70), 1).await;
         assert_eq!(pressured, 500, "at/above the floor stages run normally");

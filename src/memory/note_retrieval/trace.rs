@@ -24,7 +24,13 @@ pub enum TraceSink {
 
 impl TraceSink {
     /// Record one stage. No-op when `Off`.
-    pub fn record(&mut self, name: &str, duration_ms: u64, input_count: usize, output_count: usize) {
+    pub fn record(
+        &mut self,
+        name: &str,
+        duration_ms: u64,
+        input_count: usize,
+        output_count: usize,
+    ) {
         if let Self::On(stages) = self {
             stages.push(StageTrace {
                 name: name.to_string(),

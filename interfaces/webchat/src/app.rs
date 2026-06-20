@@ -480,7 +480,10 @@ fn AgentsRouter() -> impl IntoView {
 fn MemoryVaultRedirect() -> impl IntoView {
     let navigate = use_navigate();
     Effect::new(move |_| {
-        navigate("/memory?view=table", leptos_router::NavigateOptions::default());
+        navigate(
+            "/memory?view=table",
+            leptos_router::NavigateOptions::default(),
+        );
     });
     ().into_any()
 }

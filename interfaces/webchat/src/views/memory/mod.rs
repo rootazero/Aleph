@@ -1,6 +1,8 @@
 use crate::api::agents::AgentsApi;
 use crate::api::{CompressedFact, MemoryApi, MemoryStats, RawMemory};
-use crate::components::ui::{Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Card, ConfirmButton};
+use crate::components::ui::{
+    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Card, ConfirmButton,
+};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::memory::{MemoryState, MemoryView};
@@ -103,7 +105,8 @@ pub fn Memory() -> impl IntoView {
             let agent = mem.agent_id.get();
             leptos::task::spawn_local(async move {
                 notes_loaded.set(false);
-                if let Ok(facts) = MemoryApi::list_facts(&state, &agent, Some(NOTE_WINDOW), 0).await {
+                if let Ok(facts) = MemoryApi::list_facts(&state, &agent, Some(NOTE_WINDOW), 0).await
+                {
                     notes_window.set(facts);
                 }
                 notes_loaded.set(true);
@@ -126,7 +129,8 @@ pub fn Memory() -> impl IntoView {
                 is_searching.set(true);
                 raw_loaded.set(false);
                 if let Ok(results) =
-                    MemoryApi::search(&state, &agent, query, Some(PAGE_SIZE), page * PAGE_SIZE).await
+                    MemoryApi::search(&state, &agent, query, Some(PAGE_SIZE), page * PAGE_SIZE)
+                        .await
                 {
                     raw_memories.set(results);
                 }
@@ -380,7 +384,8 @@ fn Pager(
 ) -> impl IntoView {
     let i18n = use_i18n();
 
-    let total_pages = Signal::derive(move || total.get().map(|t| page_count(t as usize, PAGE_SIZE)));
+    let total_pages =
+        Signal::derive(move || total.get().map(|t| page_count(t as usize, PAGE_SIZE)));
     let has_prev = Signal::derive(move || page.get() > 0);
     let has_next = Signal::derive(move || match total_pages.get() {
         Some(tp) => page.get() + 1 < tp,

@@ -189,8 +189,9 @@ mod tests {
 
     #[test]
     fn locate_note_finds_facet_and_page() {
-        let mut window: Vec<CompressedFact> =
-            (0..60).map(|i| fact_p("preference", &format!("f{i}"))).collect();
+        let mut window: Vec<CompressedFact> = (0..60)
+            .map(|i| fact_p("preference", &format!("f{i}")))
+            .collect();
         window.push(fact_p("feedback", "fb0"));
 
         // 56th Facts note (index 55) lands on page 1 (55 / 50).
@@ -198,7 +199,10 @@ mod tests {
         // First Facts note is on page 0.
         assert_eq!(locate_note(&window, "f0"), Some((MemoryFacet::Facts, 0)));
         // Feedback note maps to the Feedback facet, page 0.
-        assert_eq!(locate_note(&window, "fb0"), Some((MemoryFacet::Feedback, 0)));
+        assert_eq!(
+            locate_note(&window, "fb0"),
+            Some((MemoryFacet::Feedback, 0))
+        );
         // Unknown path → None.
         assert_eq!(locate_note(&window, "missing"), None);
     }

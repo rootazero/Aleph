@@ -170,7 +170,9 @@ pub fn migrate_notes_index_aliases(conn: &rusqlite::Connection) -> rusqlite::Res
     if has_col {
         return Ok(());
     }
-    conn.execute_batch("ALTER TABLE notes_index ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]';")?;
+    conn.execute_batch(
+        "ALTER TABLE notes_index ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]';",
+    )?;
     Ok(())
 }
 

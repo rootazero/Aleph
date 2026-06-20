@@ -955,7 +955,6 @@ fn RetrievalDebugPanel() -> impl IntoView {
 // Section F: Dream Insights Panel
 // ============================================================================
 
-
 #[component]
 fn DreamInsightsPanel() -> impl IntoView {
     use crate::api::memory_config::{DreamInsightsApi, DreamInsightsResponse};

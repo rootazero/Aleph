@@ -164,10 +164,7 @@ impl TurnVerifier for ToolLoopVerifier {
         let distinct = distinct_count(ctx.recent_tool_calls);
         let distinctness = distinct as f32 / ctx.recent_tool_calls.len() as f32;
         let silent_ok = !profile.silence_required || !has_text;
-        if same_name_run >= TOOL_HISTORY_WINDOW
-            && distinctness < profile.novelty_min
-            && silent_ok
-        {
+        if same_name_run >= TOOL_HISTORY_WINDOW && distinctness < profile.novelty_min && silent_ok {
             let tool = &ctx.recent_tool_calls[ctx.recent_tool_calls.len() - 1].name;
             return VerifierVerdict::Veto {
                 reason: format!(
@@ -185,7 +182,7 @@ impl TurnVerifier for ToolLoopVerifier {
 
 #[cfg(test)]
 mod profile_wiring_tests {
-    use crate::verification::turn_verifier::{TurnVerifyContext, ToolCallSummary};
+    use crate::verification::turn_verifier::{ToolCallSummary, TurnVerifyContext};
     use crate::verification::ModelRobustnessProfile;
 
     fn ctx_with<'a>(
@@ -215,12 +212,15 @@ mod profile_wiring_tests {
 #[cfg(test)]
 mod distinctness_tests {
     use super::*;
-    use crate::verification::turn_verifier::{TurnVerifyContext, ToolCallSummary};
+    use crate::verification::turn_verifier::{ToolCallSummary, TurnVerifyContext};
     use crate::verification::ModelRobustnessProfile;
     use tokio_util::sync::CancellationToken;
 
     fn call(name: &str, args: u64) -> ToolCallSummary {
-        ToolCallSummary { name: name.to_string(), args_hash: args }
+        ToolCallSummary {
+            name: name.to_string(),
+            args_hash: args,
+        }
     }
 
     fn ctx<'a>(
@@ -244,11 +244,16 @@ mod distinctness_tests {
     async fn high_distinctness_fanout_passes() {
         let calls: Vec<_> = (0..8).map(|i| call("web_fetch", i)).collect();
         let v = ToolLoopVerifier::new();
-        let verdict = v.verify(
-            &ctx(&calls, ModelRobustnessProfile::conservative(), None),
-            &CancellationToken::new(),
-        ).await;
-        assert!(verdict.is_continue(), "distinct fan-out must not trip: {verdict:?}");
+        let verdict = v
+            .verify(
+                &ctx(&calls, ModelRobustnessProfile::conservative(), None),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            verdict.is_continue(),
+            "distinct fan-out must not trip: {verdict:?}"
+        );
     }
 
     // THRASH: 3 files cycling, 8 same-name silent → Tier-2 → VETO (was Halt).
@@ -256,11 +261,16 @@ mod distinctness_tests {
     async fn low_distinctness_thrash_steers_not_halts() {
         let calls: Vec<_> = (0..8).map(|i| call("file_read", (i % 3) as u64)).collect();
         let v = ToolLoopVerifier::new();
-        let verdict = v.verify(
-            &ctx(&calls, ModelRobustnessProfile::conservative(), None),
-            &CancellationToken::new(),
-        ).await;
-        assert!(verdict.is_veto(), "silent thrash must steer (Veto), not Halt: {verdict:?}");
+        let verdict = v
+            .verify(
+                &ctx(&calls, ModelRobustnessProfile::conservative(), None),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            verdict.is_veto(),
+            "silent thrash must steer (Veto), not Halt: {verdict:?}"
+        );
     }
 
     // THRASH WITH NARRATION + silence_required → Continue (legit exploration).
@@ -268,11 +278,20 @@ mod distinctness_tests {
     async fn thrash_with_narration_passes_when_silence_required() {
         let calls: Vec<_> = (0..8).map(|i| call("file_read", (i % 3) as u64)).collect();
         let v = ToolLoopVerifier::new();
-        let verdict = v.verify(
-            &ctx(&calls, ModelRobustnessProfile::conservative(), Some("Comparing the three files...")),
-            &CancellationToken::new(),
-        ).await;
-        assert!(verdict.is_continue(), "narrated exploration must pass: {verdict:?}");
+        let verdict = v
+            .verify(
+                &ctx(
+                    &calls,
+                    ModelRobustnessProfile::conservative(),
+                    Some("Comparing the three files..."),
+                ),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            verdict.is_continue(),
+            "narrated exploration must pass: {verdict:?}"
+        );
     }
 
     // TIER-1 identical run at repeat_threshold → Veto.
@@ -280,10 +299,12 @@ mod distinctness_tests {
     async fn identical_run_vetoes() {
         let calls: Vec<_> = (0..5).map(|_| call("grep", 42)).collect();
         let v = ToolLoopVerifier::new();
-        let verdict = v.verify(
-            &ctx(&calls, ModelRobustnessProfile::conservative(), None),
-            &CancellationToken::new(),
-        ).await;
+        let verdict = v
+            .verify(
+                &ctx(&calls, ModelRobustnessProfile::conservative(), None),
+                &CancellationToken::new(),
+            )
+            .await;
         assert!(verdict.is_veto(), "identical run should veto: {verdict:?}");
     }
 
@@ -292,10 +313,15 @@ mod distinctness_tests {
     async fn identical_run_full_window_halts() {
         let calls: Vec<_> = (0..8).map(|_| call("grep", 42)).collect();
         let v = ToolLoopVerifier::new();
-        let verdict = v.verify(
-            &ctx(&calls, ModelRobustnessProfile::conservative(), None),
-            &CancellationToken::new(),
-        ).await;
-        assert!(verdict.is_halt(), "identical full-window run should halt: {verdict:?}");
+        let verdict = v
+            .verify(
+                &ctx(&calls, ModelRobustnessProfile::conservative(), None),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            verdict.is_halt(),
+            "identical full-window run should halt: {verdict:?}"
+        );
     }
 }

@@ -12,7 +12,6 @@ pub mod trace;
 use std::collections::HashMap;
 
 use self::trace::{StageTrace, TraceSink};
-use std::time::Instant;
 use crate::config::types::memory::{ExpansionConfig, RetrievalScoringConfig};
 use crate::error::AlephError;
 use crate::memory::context::{MemoryFact, NoteType};
@@ -22,6 +21,7 @@ use crate::memory::rerank::{blend_scores, build_provider, RerankConfig, RerankPr
 use crate::memory::store::types::ScoredFact;
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
+use std::time::Instant;
 
 /// When a cross-encoder reranker is active, over-fetch candidates by this factor
 /// so the reranker has a meaningful pool to reorder before truncation.
@@ -185,7 +185,12 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                 .into_iter()
                 .filter_map(|i| slots.get_mut(i).and_then(Option::take))
                 .collect();
-            sink.record("mmr_diversity", t0.elapsed().as_millis() as u64, n, facts.len());
+            sink.record(
+                "mmr_diversity",
+                t0.elapsed().as_millis() as u64,
+                n,
+                facts.len(),
+            );
         }
 
         facts
@@ -303,7 +308,9 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         limit: usize,
     ) -> Result<(Vec<ScoredFact>, Vec<StageTrace>), AlephError> {
         let mut sink = TraceSink::On(Vec::new());
-        let results = self.retrieve_inner(query, agent_id, limit, &mut sink).await?;
+        let results = self
+            .retrieve_inner(query, agent_id, limit, &mut sink)
+            .await?;
         Ok((results, sink.into_stages()))
     }
 
@@ -329,7 +336,12 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                 );
                 let t0 = Instant::now();
                 let results = self.text_retrieve(query, agent_id, limit).await?;
-                sink.record("fts_search", t0.elapsed().as_millis() as u64, 0, results.len());
+                sink.record(
+                    "fts_search",
+                    t0.elapsed().as_millis() as u64,
+                    0,
+                    results.len(),
+                );
                 return Ok(results);
             }
         };
@@ -341,7 +353,12 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             .store()
             .hybrid_search_notes(&embedding, query, agent_id, dim, self.fetch_limit(limit))
             .await?;
-        sink.record("hybrid_search", t0.elapsed().as_millis() as u64, 0, results.len());
+        sink.record(
+            "hybrid_search",
+            t0.elapsed().as_millis() as u64,
+            0,
+            results.len(),
+        );
 
         if self.expansion.is_active() {
             let t0 = Instant::now();
@@ -363,7 +380,12 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                 });
                 results.truncate(RERANK_MAX_CANDIDATES);
             }
-            sink.record("graph_expand", t0.elapsed().as_millis() as u64, before, results.len());
+            sink.record(
+                "graph_expand",
+                t0.elapsed().as_millis() as u64,
+                before,
+                results.len(),
+            );
         }
 
         let facts: Vec<ScoredFact> = results.iter().map(|r| r.to_scored_fact(agent_id)).collect();
@@ -373,7 +395,12 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         let before = ranked.len();
         let t0 = Instant::now();
         ranked.truncate(limit);
-        sink.record("truncate", t0.elapsed().as_millis() as u64, before, ranked.len());
+        sink.record(
+            "truncate",
+            t0.elapsed().as_millis() as u64,
+            before,
+            ranked.len(),
+        );
         // Close the hot-floating loop: record the surfaced notes as recall hits.
         self.record_recall(query, agent_id, &ranked).await;
         Ok(ranked)
@@ -473,7 +500,9 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         });
         all_results.truncate(self.fetch_limit(limit));
 
-        let ranked = self.apply_rerank(query, all_results, &mut TraceSink::Off).await;
+        let ranked = self
+            .apply_rerank(query, all_results, &mut TraceSink::Off)
+            .await;
         let counts = self.fetch_reinforcement_counts(&ranked).await;
         let mut ranked = self.apply_scoring(ranked, now_unix(), &counts, &mut TraceSink::Off);
         ranked.truncate(limit);
@@ -884,7 +913,9 @@ mod tests {
             scored("p/c", "gamma", 0.7),
         ];
         let retrieval = with_mock(retrieval, vec![(2, 0.99), (0, 0.5), (1, 0.1)], false, 1.0);
-        let out = retrieval.apply_rerank("q", facts, &mut TraceSink::Off).await;
+        let out = retrieval
+            .apply_rerank("q", facts, &mut TraceSink::Off)
+            .await;
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(order, vec!["p/c", "p/a", "p/b"]);
     }
@@ -894,7 +925,9 @@ mod tests {
         let (retrieval, _dir) = create_retrieval().await;
         let facts = vec![scored("p/a", "alpha", 0.9), scored("p/b", "beta", 0.5)];
         let retrieval = with_mock(retrieval, vec![], true, 1.0);
-        let out = retrieval.apply_rerank("q", facts, &mut TraceSink::Off).await;
+        let out = retrieval
+            .apply_rerank("q", facts, &mut TraceSink::Off)
+            .await;
         // Error → original order preserved, no facts dropped.
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(order, vec!["p/a", "p/b"]);
@@ -904,7 +937,9 @@ mod tests {
     async fn apply_rerank_noop_without_reranker() {
         let (retrieval, _dir) = create_retrieval().await;
         let facts = vec![scored("p/a", "alpha", 0.9), scored("p/b", "beta", 0.5)];
-        let out = retrieval.apply_rerank("q", facts, &mut TraceSink::Off).await;
+        let out = retrieval
+            .apply_rerank("q", facts, &mut TraceSink::Off)
+            .await;
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(order, vec!["p/a", "p/b"]);
     }
@@ -1114,10 +1149,14 @@ mod tests {
         let mut on = TraceSink::On(Vec::new());
         let traced_out = retrieval.apply_scoring(facts, 1_700_000_000, &counts, &mut on);
 
-        let ref_ids: Vec<(&str, f32)> =
-            ref_out.iter().map(|f| (f.fact.id.as_str(), f.score)).collect();
-        let traced_ids: Vec<(&str, f32)> =
-            traced_out.iter().map(|f| (f.fact.id.as_str(), f.score)).collect();
+        let ref_ids: Vec<(&str, f32)> = ref_out
+            .iter()
+            .map(|f| (f.fact.id.as_str(), f.score))
+            .collect();
+        let traced_ids: Vec<(&str, f32)> = traced_out
+            .iter()
+            .map(|f| (f.fact.id.as_str(), f.score))
+            .collect();
         assert_eq!(ref_ids, traced_ids, "tracing must not change results");
 
         let stages = on.into_stages();
@@ -1136,11 +1175,16 @@ mod tests {
     #[tokio::test]
     async fn retrieve_traced_on_empty_store_returns_stages() {
         let (retrieval, _dir) = create_retrieval().await;
-        let (results, stages) = retrieval.retrieve_traced("anything", "main", 5).await.unwrap();
+        let (results, stages) = retrieval
+            .retrieve_traced("anything", "main", 5)
+            .await
+            .unwrap();
         assert!(results.is_empty(), "empty store yields no results");
         // The search stage always runs; with a mock embedder it is hybrid_search.
         assert!(
-            stages.iter().any(|s| s.name == "hybrid_search" || s.name == "fts_search"),
+            stages
+                .iter()
+                .any(|s| s.name == "hybrid_search" || s.name == "fts_search"),
             "a search stage must be recorded, got {stages:?}"
         );
     }

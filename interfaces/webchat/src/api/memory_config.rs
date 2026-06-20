@@ -608,7 +608,10 @@ impl CorrectionsApi {
         if let Some(a) = agent_id {
             params.insert("agent_id".into(), serde_json::Value::String(a));
         }
-        params.insert("include_distilled".into(), serde_json::json!(include_distilled));
+        params.insert(
+            "include_distilled".into(),
+            serde_json::json!(include_distilled),
+        );
         let result = state
             .rpc_call("memory.list_corrections", serde_json::Value::Object(params))
             .await?;

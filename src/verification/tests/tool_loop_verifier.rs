@@ -27,7 +27,7 @@ async fn below_threshold_allows() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_continue());
@@ -44,7 +44,7 @@ async fn at_threshold_with_no_text_vetoes() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     match v.verify(&ctx, &cancel).await {
@@ -71,7 +71,7 @@ async fn thinking_text_does_not_rescue_identical_loop() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_veto());
@@ -91,7 +91,7 @@ async fn text_present_still_vetoes_identical_loop() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_veto());
@@ -114,7 +114,7 @@ async fn different_args_hash_breaks_repetition() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_continue());
@@ -135,7 +135,7 @@ async fn stop_turn_never_vetoes_on_stale_history() {
         recent_tool_calls: &history,
         stop_reason: Some("end_turn"),
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_continue());
@@ -154,7 +154,7 @@ async fn threshold_clamped_to_history_window() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_halt());
@@ -181,7 +181,7 @@ async fn threshold_two_vetoes_at_exactly_two() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: tight_profile,
+        robustness_profile: tight_profile,
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_veto());
@@ -200,7 +200,7 @@ async fn between_thresholds_still_vetoes_not_halts() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_veto());
@@ -220,7 +220,7 @@ async fn at_halt_threshold_halts() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     match v.verify(&ctx, &cancel).await {
@@ -250,7 +250,7 @@ async fn tier2_low_distinctness_no_text_steers() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     match v.verify(&ctx, &cancel).await {
@@ -278,7 +278,7 @@ async fn tier2_high_distinctness_no_text_continues() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     assert!(
@@ -303,7 +303,7 @@ async fn tier2_narration_rescues_varying_args_loop() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_continue());
@@ -324,7 +324,7 @@ async fn tier2_below_window_continues() {
         recent_tool_calls: &history,
         stop_reason: None,
         session_id: None,
-            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_continue());

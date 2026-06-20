@@ -273,8 +273,7 @@ impl FailoverProvider {
         };
         match crate::pricing::rate_card(provider, model) {
             Some(card) => {
-                let usd =
-                    card.input_per_mtok.unwrap_or(0.0) + card.output_per_mtok.unwrap_or(0.0);
+                let usd = card.input_per_mtok.unwrap_or(0.0) + card.output_per_mtok.unwrap_or(0.0);
                 (usd * 1000.0).round() as u64
             }
             None => 0,

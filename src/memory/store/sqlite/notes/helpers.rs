@@ -57,7 +57,10 @@ pub(crate) fn resolve_paths_by_alias(
         .filter_map(|r| r.ok())
         .filter_map(|(path, aliases_json)| {
             let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
-            aliases.iter().any(|a| a.as_str() == raw_target).then_some(path)
+            aliases
+                .iter()
+                .any(|a| a.as_str() == raw_target)
+                .then_some(path)
         })
         .collect();
     Ok(paths)

@@ -427,7 +427,10 @@ pub async fn handle_app_list(request: JsonRpcRequest, _db: MemoryBackend) -> Jso
 /// Read-only listing of user corrections (raw `flag_user_correction` rows)
 /// and their distillation status. Surfaces the correction→feedback lifecycle
 /// to the panel; performs NO mutation (R7/R8: distillation stays LLM-driven).
-pub async fn handle_list_corrections(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+pub async fn handle_list_corrections(
+    request: JsonRpcRequest,
+    db: MemoryBackend,
+) -> JsonRpcResponse {
     use crate::memory::store::raw_memory::{RawMemorySource, RawMemoryStore};
 
     #[derive(serde::Deserialize, Default)]
@@ -696,10 +699,16 @@ mod list_corrections_tests {
         );
         let resp = handle_list_corrections(req, db).await;
         assert!(resp.is_success(), "{:?}", resp.error);
-        let items = resp.result.unwrap()["corrections"].as_array().unwrap().clone();
+        let items = resp.result.unwrap()["corrections"]
+            .as_array()
+            .unwrap()
+            .clone();
         assert_eq!(items.len(), 2);
         // Each entry carries status mapped from is_processed.
-        let statuses: Vec<&str> = items.iter().map(|i| i["status"].as_str().unwrap()).collect();
+        let statuses: Vec<&str> = items
+            .iter()
+            .map(|i| i["status"].as_str().unwrap())
+            .collect();
         assert!(statuses.contains(&"pending"));
         assert!(statuses.contains(&"distilled"));
         let c1 = items.iter().find(|i| i["status"] == "pending").unwrap();
@@ -720,7 +729,10 @@ mod list_corrections_tests {
             json!(1),
         );
         let resp = handle_list_corrections(req, db).await;
-        let items = resp.result.unwrap()["corrections"].as_array().unwrap().clone();
+        let items = resp.result.unwrap()["corrections"]
+            .as_array()
+            .unwrap()
+            .clone();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["status"], "pending");
     }
