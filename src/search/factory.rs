@@ -83,6 +83,7 @@ impl ProviderFactoryRegistry {
         r.register(Box::new(crate::search::providers::BingFactory));
         r.register(Box::new(crate::search::providers::GoogleFactory));
         r.register(Box::new(crate::search::providers::ExaFactory));
+        r.register(Box::new(crate::search::providers::FirecrawlFactory));
         r.register(Box::new(crate::search::providers::JinaFactory));
         r.register(Box::new(crate::search::providers::DuckDuckGoFactory));
         r
@@ -161,6 +162,7 @@ mod tests {
             "bing",
             "google",
             "exa",
+            "firecrawl",
             "jina",
             "duckduckgo",
         ] {
