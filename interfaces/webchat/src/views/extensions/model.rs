@@ -208,6 +208,7 @@ mod tests {
             installed: false,
             enabled: false,
             update_available: false,
+            source_label: String::new(),
         }
     }
 

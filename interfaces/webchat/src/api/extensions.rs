@@ -39,6 +39,10 @@ pub struct ExtensionEntry {
     pub enabled: bool,
     #[serde(default)]
     pub update_available: bool,
+    /// Provenance: human label of the source/hub that surfaced this entry
+    /// (e.g. "Aleph Hub"). Emitted by `extensions.catalog`; empty for installed.
+    #[serde(default)]
+    pub source_label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

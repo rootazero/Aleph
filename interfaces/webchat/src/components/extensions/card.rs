@@ -28,6 +28,7 @@ pub fn ExtensionCard(entry: ExtensionEntry) -> impl IntoView {
     });
     let author = entry.author.clone().unwrap_or_default();
     let installed = entry.installed;
+    let source_label = entry.source_label.clone();
     let kind_text = kind_label(i18n, &entry.kind);
     let trust_text = trust_label(i18n, &entry.trust_tier);
     let trust_cls = format!(
@@ -54,6 +55,12 @@ pub fn ExtensionCard(entry: ExtensionEntry) -> impl IntoView {
             <div class="flex items-center gap-2 mt-1">
                 <span class=trust_cls></span>
                 <span class="text-xs text-text-tertiary">{trust_text}</span>
+                {
+                    let source_label = source_label.clone();
+                    (!source_label.is_empty()).then(move || view! {
+                        <span class="text-xs text-text-tertiary truncate">"· "{t!(i18n, extensions.via)}" "{source_label}</span>
+                    })
+                }
                 <span class="flex-1"></span>
                 {{
                     let install_entry = entry.clone();

@@ -1351,6 +1351,7 @@
     "loading_perms": "正在检查权限…",
     "no_perms": "无特殊权限",
     "docs": "文档 ↗",
+    "via": "来自",
     "command_label": "将要运行的命令",
     "ack": "我了解这将在我的电脑上运行第三方代码。",
     "continue_install": "继续",

@@ -1351,6 +1351,7 @@
     "loading_perms": "Checking permissions…",
     "no_perms": "No special permissions.",
     "docs": "Docs ↗",
+    "via": "via",
     "command_label": "Command that will run",
     "ack": "I understand this runs third-party code on my computer.",
     "continue_install": "Continue",
