@@ -89,6 +89,7 @@ pub fn MemoryView() -> impl IntoView {
                                 <StorageBackupSettings config=config />
                                 <RetrievalDebugPanel />
                                 <DreamInsightsPanel />
+                                <CorrectionsPanel />
 
                                 <div class="pt-4 border-t border-border">
                                     <button
@@ -954,6 +955,7 @@ fn RetrievalDebugPanel() -> impl IntoView {
 // Section F: Dream Insights Panel
 // ============================================================================
 
+
 #[component]
 fn DreamInsightsPanel() -> impl IntoView {
     use crate::api::memory_config::{DreamInsightsApi, DreamInsightsResponse};
@@ -1072,6 +1074,125 @@ fn DreamInsightsPanel() -> impl IntoView {
                                     </div>
                                 </div>
                             }
+                        })}
+                    </div>
+                }.into_any()
+            }}
+        </div>
+    }
+}
+
+// ============================================================================
+// Section G: Corrections Panel
+// ============================================================================
+
+#[component]
+fn CorrectionsPanel() -> impl IntoView {
+    use crate::api::memory_config::{CorrectionsApi, CorrectionsResponse};
+    let i18n = use_i18n();
+    let expanded = RwSignal::new(false);
+    let loading = RwSignal::new(false);
+    let show_distilled = RwSignal::new(true);
+    let data = RwSignal::new(Option::<CorrectionsResponse>::None);
+    let error = RwSignal::new(Option::<String>::None);
+
+    let load = move || {
+        let state = expect_context::<DashboardState>();
+        let include = show_distilled.get();
+        spawn_local(async move {
+            loading.set(true);
+            error.set(None);
+            match CorrectionsApi::list(&state, None, include).await {
+                Ok(resp) => data.set(Some(resp)),
+                Err(e) => error.set(Some(e)),
+            }
+            loading.set(false);
+        });
+    };
+
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <button
+                on:click=move |_| {
+                    let next = !expanded.get();
+                    expanded.set(next);
+                    if next && data.get().is_none() {
+                        load();
+                    }
+                }
+                class="flex items-center w-full text-left"
+            >
+                <span class="text-lg font-semibold">
+                    {move || {
+                        let prefix = if expanded.get() { "- " } else { "+ " };
+                        format!("{}{}", prefix, t_string!(i18n, settings.memory.corrections))
+                    }}
+                </span>
+            </button>
+
+            {move || {
+                if !expanded.get() {
+                    return view! { <div></div> }.into_any();
+                }
+                view! {
+                    <div class="mt-4 space-y-3">
+                        <label class="flex items-center gap-2 text-sm">
+                            <input
+                                type="checkbox"
+                                prop:checked=move || show_distilled.get()
+                                on:change=move |ev| {
+                                    show_distilled.set(event_target_checked(&ev));
+                                    load();
+                                }
+                            />
+                            <span>{t!(i18n, settings.memory.corrections_show_distilled)}</span>
+                        </label>
+
+                        {move || if loading.get() {
+                            view! { <div class="text-text-tertiary">{t!(i18n, common.loading)}</div> }.into_any()
+                        } else { view! { <div></div> }.into_any() }}
+
+                        {move || error.get().map(|e| view! {
+                            <div class="p-3 bg-danger-subtle text-danger rounded text-sm">{e}</div>
+                        })}
+
+                        {move || data.get().map(|resp| {
+                            let items = resp.corrections.clone();
+                            if items.is_empty() {
+                                return view! { <div class="text-text-tertiary text-sm">{t!(i18n, settings.memory.corrections_none)}</div> }.into_any();
+                            }
+                            view! {
+                                <div class="space-y-2">
+                                    {items.into_iter().map(|c| {
+                                        let is_pending = c.status == "pending";
+                                        let badge = if is_pending {
+                                            t_string!(i18n, settings.memory.corrections_pending).to_string()
+                                        } else {
+                                            t_string!(i18n, settings.memory.corrections_distilled).to_string()
+                                        };
+                                        let badge_class = if is_pending {
+                                            "text-xs px-2 py-0.5 rounded bg-warning-subtle text-warning"
+                                        } else {
+                                            "text-xs px-2 py-0.5 rounded bg-success-subtle text-success"
+                                        };
+                                        let rule = c.suggested_rule.clone();
+                                        view! {
+                                            <div class="p-3 bg-surface-sunken rounded border border-border">
+                                                <div class="flex justify-between items-center mb-1">
+                                                    <span class=badge_class>{badge}</span>
+                                                    <span class="text-xs text-text-tertiary">{c.severity}</span>
+                                                </div>
+                                                <p class="text-sm">{c.content}</p>
+                                                {rule.map(|r| view! {
+                                                    <p class="text-xs text-text-tertiary mt-1">
+                                                        {format!("{}: {}", t_string!(i18n, settings.memory.corrections_suggested_rule), r)}
+                                                    </p>
+                                                })}
+                                            </div>
+                                        }
+                                    }).collect::<Vec<_>>()}
+                                </div>
+                            }.into_any()
                         })}
                     </div>
                 }.into_any()
