@@ -258,7 +258,6 @@ mod tests {
             "default",
             "plan",
             "verify",
-            "store",
         ] {
             assert!(
                 is_protected(&catalog, id),

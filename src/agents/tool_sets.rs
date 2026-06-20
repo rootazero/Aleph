@@ -39,16 +39,6 @@ pub const INVESTIGATION: &[&str] = &["file_read", "file_ops", "search", "web_fet
 /// background recursion misuse beyond Stage B guarantees.
 pub const ASYNC_SAFE: &[&str] = &["file_read", "file_ops", "search"];
 
-/// Private tool set for the built-in `store` agent. Not granted to chat agents
-/// (the wildcard hole on `main`/`verify` is closed via denied_tools — see Task 4).
-pub const HUB_TOOLS: &[&str] = &[
-    "hub_catalog_sync",
-    "hub_fetch_docs",
-    "hub_resolve_spec",
-    "hub_install_run",
-    "hub_install_verify",
-];
-
 /// Resolve a set name to its tool list. Returns None for unknown names so
 /// callers can warn (loader) or treat as empty allowance (`is_tool_allowed`)
 /// without rejecting valid agent definitions.
@@ -57,7 +47,6 @@ pub fn resolve(set_name: &str) -> Option<&'static [&'static str]> {
         "READ_ONLY" => Some(READ_ONLY),
         "INVESTIGATION" => Some(INVESTIGATION),
         "ASYNC_SAFE" => Some(ASYNC_SAFE),
-        "HUB_TOOLS" => Some(HUB_TOOLS),
         _ => None,
     }
 }
@@ -139,13 +128,5 @@ mod tests {
         assert!(resolve("FOOBAR").is_none());
         assert!(resolve("read_only").is_none()); // case-sensitive
         assert!(resolve("").is_none());
-    }
-
-    #[test]
-    fn store_tools_resolve_to_five_names() {
-        let set = resolve("HUB_TOOLS").expect("HUB_TOOLS must resolve");
-        assert_eq!(set.len(), 5);
-        assert!(set.contains(&"hub_install_run"));
-        assert!(set.contains(&"hub_catalog_sync"));
     }
 }
