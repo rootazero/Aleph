@@ -564,6 +564,16 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Sync all extension sources into the local catalog cache and refresh functional categories.",
         requires_config: true, // Requires CatalogCache + marketplace configs
     },
+    BuiltinToolDefinition {
+        name: "store_resolve_spec",
+        description: "Resolve the install spec for a catalog entry by its id, routing through the matching source provider.",
+        requires_config: true, // Requires CatalogCache + marketplace configs
+    },
+    BuiltinToolDefinition {
+        name: "store_fetch_docs",
+        description: "Fetch a URL (README/manifest) for the long-tail install path and scan for prompt-injection. SCAFFOLD — not wired to any install surface.",
+        requires_config: false, // No CatalogCache needed; HTTP-only scaffold
+    },
     // Team management tools — require TeamStore
     BuiltinToolDefinition {
         name: "team_create",

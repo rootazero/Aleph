@@ -235,6 +235,15 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
+            "store_resolve_spec" => Box::pin(async move {
+                let tool = self.store_resolve_spec_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("store_resolve_spec not configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "store_fetch_docs" => Box::pin(async move {
+                self.store_fetch_docs_tool.call_json(arguments).await
+            }),
             "desktop" => Box::pin(async move { self.desktop_tool.call_json(arguments).await }),
             "desktop_ax_query_focused" => Box::pin(async move {
                 self.desktop_ax_query_focused_tool

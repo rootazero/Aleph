@@ -325,6 +325,10 @@ pub struct BuiltinToolRegistry {
     pub(crate) user_profile_tool: Option<crate::builtin_tools::user_profile::UserProfileTool>,
     /// Store catalog-sync tool (optional - requires CatalogCache + marketplace configs)
     pub(crate) store_catalog_sync_tool: Option<crate::builtin_tools::store::StoreCatalogSyncTool>,
+    /// Store resolve-spec tool (optional - requires CatalogCache + marketplace configs)
+    pub(crate) store_resolve_spec_tool: Option<crate::builtin_tools::store::StoreResolveSpecTool>,
+    /// Store fetch-docs tool (scaffold - HTTP-only, no CatalogCache dep)
+    pub(crate) store_fetch_docs_tool: crate::builtin_tools::store::StoreFetchDocsTool,
     /// Live Config handle for the `config_audit` tool (security-posture audit).
     /// Built per-call from this handle, mirroring `create_tool_boxed`.
     pub(crate) config: Option<Arc<RwLock<crate::config::Config>>>,

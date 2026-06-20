@@ -116,6 +116,17 @@ impl ProviderRegistry {
         }
         report
     }
+
+    /// Route an entry to its provider and resolve its install spec.
+    pub async fn resolve_for_entry(
+        &self,
+        entry: &crate::store::types::ExtensionEntry,
+    ) -> Result<crate::store::types::InstallSpec, SourceError> {
+        let provider = self
+            .get(&entry.source_id)
+            .ok_or_else(|| SourceError::Other(format!("no provider for source '{}'", entry.source_id)))?;
+        provider.resolve_install_spec(entry).await
+    }
 }
 
 impl Default for ProviderRegistry {
@@ -128,6 +139,7 @@ impl Default for ProviderRegistry {
 mod tests {
     use super::*;
     use crate::store::cache::CatalogFilter;
+    use crate::store::provider::registry_builder::build_default_registry;
     use crate::store::types::ExtensionCategory;
 
     struct FakeProvider {
@@ -196,5 +208,14 @@ mod tests {
         assert_eq!(report.failed.len(), 0);
         let all = cache.query(&CatalogFilter::default()).await.unwrap();
         assert_eq!(all.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn resolve_for_entry_routes_by_source_id() {
+        let reg = build_default_registry(Default::default());
+        let mut e = entry("test:foo", "p1");
+        e.source_id = "local".into();
+        // "local" has no registered provider → Err, not panic
+        assert!(reg.resolve_for_entry(&e).await.is_err());
     }
 }
