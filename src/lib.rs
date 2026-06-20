@@ -102,6 +102,7 @@ pub mod sandbox;
 pub mod search;
 pub mod session;
 pub mod skill;
+pub mod store;
 pub mod strategy;
 pub mod tool_metadata;
 

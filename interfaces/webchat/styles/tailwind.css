@@ -72,6 +72,7 @@
     "SF Pro Text", "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "JetBrains Mono", "JetBrains Mono Variable", ui-monospace,
     SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-serif: "Fraunces", "Noto Sans SC", Georgia, serif;
 
   /* === Motion — one converged ease-out curve, calm by default ===
          Aliased into a duration scale so components can pick a tempo

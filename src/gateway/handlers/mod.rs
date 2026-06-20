@@ -106,6 +106,7 @@ pub mod services;
 pub mod session;
 
 pub mod dreaming;
+pub mod extensions;
 pub mod skills;
 pub mod system_info;
 pub mod teams;

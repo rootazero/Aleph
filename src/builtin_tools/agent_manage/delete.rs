@@ -14,6 +14,24 @@ use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
 // =============================================================================
+// Guard helper
+// =============================================================================
+
+/// Returns `true` if `id` maps to a built-in agent in the catalog.
+///
+/// A catalog miss (user-created runtime agent with no `AgentDef`) returns
+/// `false` — those agents must remain deletable.
+pub(crate) fn is_protected(
+    catalog: &crate::agents::AgentRegistry,
+    id: &str,
+) -> bool {
+    catalog
+        .get(id)
+        .map(|def| def.source == crate::agents::AgentSource::Builtin)
+        .unwrap_or(false)
+}
+
+// =============================================================================
 // Args / Output
 // =============================================================================
 
@@ -43,26 +61,31 @@ pub struct AgentDeleteOutput {
 
 /// Tool that deletes an agent and archives its workspace.
 ///
-/// The "main" agent cannot be deleted. If the deleted agent is currently
-/// active, the session is automatically switched to "main".
+/// Built-in agents (those whose catalog `AgentDef.source == Builtin`) cannot
+/// be deleted. If the deleted agent is currently active, the session is
+/// automatically switched to "main".
 #[derive(Clone)]
 pub struct AgentDeleteTool {
     registry: Arc<AgentRegistry>,
     workspace_mgr: Arc<AgentEnvStore>,
     event_bus: Option<Arc<GatewayEventBus>>,
+    /// Catalog registry — used to detect built-in agents at delete time.
+    agent_catalog: Arc<crate::agents::AgentRegistry>,
 }
 
 impl AgentDeleteTool {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         registry: Arc<AgentRegistry>,
         workspace_mgr: Arc<AgentEnvStore>,
         event_bus: Option<Arc<GatewayEventBus>>,
+        agent_catalog: Arc<crate::agents::AgentRegistry>,
     ) -> Self {
         Self {
             registry,
             workspace_mgr,
             event_bus,
+            agent_catalog,
         }
     }
 }
@@ -71,7 +94,7 @@ impl AgentDeleteTool {
 impl AlephTool for AgentDeleteTool {
     const NAME: &'static str = "agent_delete";
     const DESCRIPTION: &'static str =
-        "Delete an agent and archive its workspace. The 'main' agent cannot be deleted. \
+        "Delete an agent and archive its workspace. Built-in agents cannot be deleted. \
          If the deleted agent is bound to a channel, the binding is cleared.";
 
     type Args = AgentDeleteArgs;
@@ -88,11 +111,12 @@ impl AlephTool for AgentDeleteTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         info!(agent_id = %args.agent_id, "Agent deletion requested");
 
-        // 1. Reject "main" deletion
-        if args.agent_id == "main" {
-            return Err(crate::error::AlephError::other(
-                "Cannot delete the 'main' agent. It is the default agent and must always exist.",
-            ));
+        // 1. Reject deletion of any built-in agent (main + store + other builtins).
+        if is_protected(&self.agent_catalog, &args.agent_id) {
+            return Err(crate::error::AlephError::other(format!(
+                "Cannot delete the built-in '{}' agent. Built-in agents are protected.",
+                args.agent_id
+            )));
         }
 
         // 2. Verify agent exists
@@ -197,6 +221,7 @@ impl AlephTool for AgentDeleteTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::AgentRegistry as CatalogRegistry;
     use crate::gateway::agent_env::AgentEnvStoreConfig;
     use crate::tools::AlephTool;
     use tempfile::tempdir;
@@ -215,11 +240,33 @@ mod tests {
     fn test_delete_tool_definition() {
         let registry = Arc::new(AgentRegistry::new());
         let workspace_mgr = test_workspace_mgr();
-        let tool = AgentDeleteTool::new(registry, workspace_mgr, None);
+        let catalog = Arc::new(CatalogRegistry::with_builtins());
+        let tool = AgentDeleteTool::new(registry, workspace_mgr, None, catalog);
         let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "agent_delete");
         assert!(def.requires_confirmation);
         assert!(def.llm_context.is_some());
+    }
+
+    #[test]
+    fn is_protected_rejects_all_builtins() {
+        let catalog = CatalogRegistry::with_builtins();
+        // Every built-in agent must be protected
+        for id in ["main", "explore", "coder", "researcher", "default", "plan", "verify", "store"] {
+            assert!(
+                is_protected(&catalog, id),
+                "Expected built-in '{}' to be protected",
+                id
+            );
+        }
+    }
+
+    #[test]
+    fn is_protected_allows_unknown_agent() {
+        let catalog = CatalogRegistry::with_builtins();
+        // A user-created agent not in the catalog must NOT be protected
+        assert!(!is_protected(&catalog, "nonexistent-user-agent"));
+        assert!(!is_protected(&catalog, "my-custom-trader"));
     }
 }

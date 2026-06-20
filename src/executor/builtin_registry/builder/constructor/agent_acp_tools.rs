@@ -38,16 +38,22 @@ impl BuiltinToolRegistry {
         // the model to call `agent_info(agent_id)`, so this tool must always be
         // available. Build the same catalog the orchestrator uses: builtins plus
         // filesystem-loaded definitions (degrades to builtins-only on I/O error).
-        let agent_info_tool = {
-            use crate::tools::AlephTool;
-            let def_registry = Arc::new(crate::agents::AgentRegistry::with_builtins());
+        //
+        // The catalog Arc is also shared with AgentDeleteTool so the delete guard
+        // can detect built-in agents without constructing a second registry.
+        let agent_catalog = {
+            let reg = Arc::new(crate::agents::AgentRegistry::with_builtins());
             if let Ok(home) = crate::discovery::aleph_home_dir() {
                 let project_dir = std::env::current_dir().ok();
-                if let Err(e) = def_registry.register_from_dirs(&home, project_dir.as_deref()) {
-                    warn!(error = %e, "agent_info: failed to load user agent defs; degrades to builtins-only");
+                if let Err(e) = reg.register_from_dirs(&home, project_dir.as_deref()) {
+                    warn!(error = %e, "agent catalog: failed to load user agent defs; degrades to builtins-only");
                 }
             }
-            let tool = crate::builtin_tools::agent_manage::AgentInfoTool::new(def_registry);
+            reg
+        };
+        let agent_info_tool = {
+            use crate::tools::AlephTool;
+            let tool = crate::builtin_tools::agent_manage::AgentInfoTool::new(Arc::clone(&agent_catalog));
             let td = tool.definition();
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", td.name),
@@ -107,6 +113,7 @@ impl BuiltinToolRegistry {
                 Arc::clone(ar),
                 Arc::clone(wm),
                 config.event_bus.clone(),
+                Arc::clone(&agent_catalog),
             );
             let switch = agent_manage::AgentSwitchTool::new(
                 Arc::clone(ar),

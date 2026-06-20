@@ -143,6 +143,19 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     note_memory_dir: Option<std::path::PathBuf>,
     // Phase 3 Task 8: sandbox for exec-class tools.
     sandbox: Option<Arc<dyn alephcore::sandbox::Sandbox>>,
+    // P4 T5: store tools dep seam — catalog cache and marketplace configs.
+    // `None` if the catalog DB failed to open (store tools degrade gracefully).
+    catalog_cache: Option<std::sync::Arc<alephcore::store::cache::CatalogCache>>,
+    store_marketplace_configs: Option<
+        std::collections::HashMap<
+            String,
+            alephcore::extension::marketplace::types::MarketplaceConfig,
+        >,
+    >,
+    // P4 T7: live MCP manager handle for `store_install_run`. The SAME shared
+    // handle the gateway `extensions.*` handlers use — it cannot be
+    // reconstructed. `None` → agent-driven MCP installs degrade gracefully.
+    store_mcp_handle: Option<alephcore::mcp::manager::McpManagerHandle>,
 ) -> alephcore::Result<AgentHandlersResult> {
     // Assigned in both the real-execution branch and the simulated branch
     // below; deferred init keeps the dead initial value out (and lets the
@@ -479,6 +492,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             google_meet_bridge: alephcore::builtin_tools::google_meet::GoogleMeetBridge::from_env()
                 .map(std::sync::Arc::new),
             planner_provider,
+            catalog_cache,
+            store_marketplace_configs,
+            store_mcp_handle,
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await?;

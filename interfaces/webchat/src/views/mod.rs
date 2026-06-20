@@ -1,3 +1,4 @@
+pub mod extensions;
 pub mod agent_trace;
 pub mod agent_trace_model;
 pub mod agents;

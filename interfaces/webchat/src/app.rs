@@ -16,11 +16,12 @@ use crate::views::memory::Memory;
 use crate::views::runtimes::RuntimesView;
 use crate::views::settings::{
     AcpHarnessesView, AppearanceView, BehaviorView, BrowserView, ChannelPlatformPage,
-    ChannelsOverview, ClawHubView, EmbeddingProvidersView, ExecutionView, GeneralView,
+    ChannelsOverview, EmbeddingProvidersView, ExecutionView, GeneralView,
     GenerationProvidersView, McpView, MemoryView, NetworkView, PluginsView, PoliciesView,
     ProvidersView, RerankingProvidersView, RouteView, RoutingRulesView, SearchView, SecurityView,
     Settings, SkillsView,
 };
+use crate::views::extensions::ExtensionsView;
 use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
 use crate::views::usage::UsageView;
@@ -373,6 +374,9 @@ fn MainContent() -> impl IntoView {
         <div style:display=move || if mode.get() == PanelMode::Teams { "contents" } else { "none" }>
             <TeamsView />
         </div>
+        <div style:display=move || if mode.get() == PanelMode::Extensions { "contents" } else { "none" }>
+            <ExtensionsView />
+        </div>
         <div style:display=move || if mode.get() == PanelMode::Settings { "block" } else { "none" }>
             <SettingsRouter />
         </div>
@@ -436,7 +440,6 @@ fn SettingsRouter() -> impl IntoView {
             "/settings/mcp" => view! { <McpView /> }.into_any(),
             "/settings/plugins" => view! { <PluginsView /> }.into_any(),
             "/settings/skills" => view! { <SkillsView /> }.into_any(),
-            "/settings/clawhub" => view! { <ClawHubView /> }.into_any(),
             "/settings/acp" => view! { <AcpHarnessesView /> }.into_any(),
 
             // Security

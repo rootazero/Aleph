@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Aleph · Extensions Store — Design Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    /* warm paper gallery palette — maps to Aleph design tokens at impl time */
+    --paper:#F6F3EC;          /* app bg */
+    --surface:#FFFFFF;        /* cards */
+    --raised:#FDFBF6;         /* hover / raised */
+    --ink:#211E1A;            /* text-primary */
+    --ink-2:#6B655C;          /* text-secondary */
+    --ink-3:#9C958A;          /* text-muted */
+    --line:#E7E0D2;           /* border */
+    --line-2:#D9D0BE;         /* border-strong */
+    --brand:#10665C;          /* deep teal-green — brand / CTA / official */
+    --brand-ink:#0B4A43;
+    --brand-wash:#E5EFEC;
+    /* trust semantics */
+    --t-official:#10665C;
+    --t-verified:#2F8F5B;
+    --t-community:#7A8B99;
+    --t-unverified:#B7791F;
+    --risk:#B23A2E;           /* danger banner */
+    --risk-wash:#F7E7E3;
+    --warn-wash:#F6ECD7;
+
+    --shadow-sm:0 1px 2px rgba(33,30,26,.05), 0 1px 1px rgba(33,30,26,.04);
+    --shadow-md:0 8px 24px -8px rgba(33,30,26,.16), 0 2px 6px rgba(33,30,26,.06);
+    --shadow-lg:0 30px 60px -20px rgba(33,30,26,.30), 0 8px 20px -8px rgba(33,30,26,.14);
+    --radius:14px;
+    --sans:"Hanken Grotesk","Noto Sans SC",system-ui,sans-serif;
+    --serif:"Fraunces","Noto Sans SC",Georgia,serif;
+    --mono:"JetBrains Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:var(--sans);background:var(--paper);color:var(--ink);
+    -webkit-font-smoothing:antialiased;line-height:1.5;overflow:hidden;
+  }
+  /* subtle paper grain */
+  body::before{
+    content:"";position:fixed;inset:0;z-index:9999;pointer-events:none;opacity:.32;mix-blend-mode:multiply;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E");
+  }
+  ::selection{background:var(--brand);color:#fff}
+
+  /* ============ App frame (mimics Aleph shell) ============ */
+  .app{display:grid;grid-template-columns:64px 1fr;height:100vh}
+  .railnav{
+    background:#1C2421;display:flex;flex-direction:column;align-items:center;
+    padding:14px 0;gap:4px;border-right:1px solid #0e1413;
+  }
+  .railnav .brand{width:34px;height:34px;border-radius:9px;background:var(--brand);
+    display:grid;place-items:center;color:#fff;font-family:var(--serif);font-weight:600;font-size:19px;margin-bottom:12px}
+  .nav-i{width:42px;height:42px;border-radius:11px;display:grid;place-items:center;color:#8FA39C;cursor:pointer;position:relative;transition:.18s}
+  .nav-i:hover{background:#27322E;color:#D6E2DD}
+  .nav-i svg{width:21px;height:21px;stroke-width:1.7}
+  .nav-i.active{background:var(--brand);color:#fff}
+  .nav-i.active::before{content:"";position:absolute;left:-14px;width:3px;height:22px;border-radius:3px;background:var(--brand)}
+  .nav-group{margin-top:auto}
+  .nav-divider{width:26px;height:1px;background:#33403B;margin:8px 0}
+  .nav-tip{position:absolute;left:52px;white-space:nowrap;background:#1C2421;color:#D6E2DD;font-size:12px;
+    padding:5px 9px;border-radius:7px;opacity:0;pointer-events:none;transform:translateX(-4px);transition:.15s;z-index:50;box-shadow:var(--shadow-md)}
+  .nav-i:hover .nav-tip{opacity:1;transform:translateX(0)}
+
+  /* ============ Store main ============ */
+  .store{display:flex;flex-direction:column;height:100vh;overflow:hidden;position:relative}
+  .topbar{
+    display:flex;align-items:center;gap:18px;padding:14px 30px;
+    background:rgba(246,243,236,.82);backdrop-filter:blur(12px);
+    border-bottom:1px solid var(--line);z-index:20;flex-shrink:0;
+  }
+  .back{display:flex;align-items:center;gap:7px;color:var(--ink-2);font-size:13.5px;font-weight:500;
+    cursor:pointer;padding:7px 11px;border-radius:9px;transition:.16s;border:1px solid transparent}
+  .back:hover{background:var(--surface);color:var(--ink);border-color:var(--line)}
+  .back svg{width:16px;height:16px}
+  .wordmark{display:flex;flex-direction:column;line-height:1.05}
+  .wordmark .t{font-family:var(--serif);font-weight:600;font-size:23px;letter-spacing:-.01em}
+  .wordmark .s{font-size:11.5px;color:var(--ink-3);font-weight:500;letter-spacing:.02em}
+  .wordmark .s b{color:var(--brand);font-weight:600}
+  .search{flex:1;max-width:440px;margin-left:8px;position:relative}
+  .search input{width:100%;padding:10px 14px 10px 38px;border:1px solid var(--line-2);border-radius:11px;
+    background:var(--surface);font-family:var(--sans);font-size:13.5px;color:var(--ink);transition:.16s}
+  .search input::placeholder{color:var(--ink-3)}
+  .search input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-wash)}
+  .search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:17px;height:17px;color:var(--ink-3)}
+  .spacer{flex:1}
+  .btn{font-family:var(--sans);font-weight:600;font-size:13px;cursor:pointer;border-radius:10px;
+    padding:9px 15px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink);transition:.16s;display:inline-flex;align-items:center;gap:7px}
+  .btn:hover{border-color:var(--ink-3);background:var(--raised)}
+  .btn.primary{background:var(--brand);color:#fff;border-color:var(--brand)}
+  .btn.primary:hover{background:var(--brand-ink)}
+  .btn .count{background:var(--brand-wash);color:var(--brand-ink);font-size:11px;font-weight:700;padding:1px 7px;border-radius:20px}
+
+  /* category chip bar */
+  .chips{display:flex;gap:8px;padding:14px 30px 6px;overflow-x:auto;flex-shrink:0;scrollbar-width:none}
+  .chips::-webkit-scrollbar{display:none}
+  .chip{white-space:nowrap;font-size:13px;font-weight:500;color:var(--ink-2);padding:7px 14px;border-radius:20px;
+    border:1px solid var(--line);background:var(--surface);cursor:pointer;transition:.16s;display:flex;align-items:center;gap:6px}
+  .chip:hover{border-color:var(--ink-3);color:var(--ink)}
+  .chip.active{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+  .chip .ic{font-size:14px;line-height:1}
+
+  /* secondary filter row */
+  .filters{display:flex;align-items:center;gap:10px;padding:6px 30px 12px;flex-shrink:0}
+  .filters .lab{font-size:11.5px;color:var(--ink-3);font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+  .seg{display:flex;background:var(--surface);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .seg button{font-family:var(--mono);font-size:11.5px;font-weight:500;padding:6px 11px;border:none;background:none;color:var(--ink-2);cursor:pointer;transition:.14s;border-right:1px solid var(--line)}
+  .seg button:last-child{border-right:none}
+  .seg button.on{background:var(--ink);color:var(--paper)}
+  .seg button:not(.on):hover{background:var(--raised);color:var(--ink)}
+
+  /* scroll area */
+  .scroll{flex:1;overflow-y:auto;padding:6px 30px 60px}
+  .scroll::-webkit-scrollbar{width:10px}
+  .scroll::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:10px;border:3px solid var(--paper)}
+
+  /* featured hero */
+  .feat-head{display:flex;align-items:baseline;gap:12px;margin:18px 0 14px}
+  .feat-head .star{color:var(--brand)}
+  .section-title{font-family:var(--serif);font-weight:600;font-size:24px;letter-spacing:-.015em}
+  .section-sub{font-size:12.5px;color:var(--ink-3)}
+  .see-all{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--brand);cursor:pointer;display:flex;align-items:center;gap:4px}
+  .see-all:hover{gap:7px}
+
+  .feat-grid{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:16px;margin-bottom:8px}
+  .feat-card{position:relative;border-radius:var(--radius);padding:22px;cursor:pointer;overflow:hidden;
+    border:1px solid var(--line);min-height:172px;display:flex;flex-direction:column;justify-content:space-between;transition:.22s;box-shadow:var(--shadow-sm)}
+  .feat-card:hover{transform:translateY(-3px);box-shadow:var(--shadow-md)}
+  .feat-card.lead{background:linear-gradient(135deg,#143E39 0%,#10665C 60%,#1A7A6C 100%);color:#EAF3F0;border-color:#0d4a43}
+  .feat-card.alt{background:var(--surface)}
+  .feat-card .ed{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;opacity:.7;margin-bottom:auto}
+  .feat-card.lead .ed{color:#A9D2CA}
+  .feat-ic{width:52px;height:52px;border-radius:13px;display:grid;place-items:center;font-size:26px;margin-bottom:12px}
+  .feat-card.lead .feat-ic{background:rgba(255,255,255,.14)}
+  .feat-card.alt .feat-ic{background:var(--brand-wash)}
+  .feat-card h3{font-family:var(--serif);font-weight:600;font-size:21px;letter-spacing:-.01em;margin-bottom:4px}
+  .feat-card p{font-size:13px;opacity:.86;line-height:1.45}
+  .feat-card .meta{display:flex;align-items:center;gap:8px;margin-top:14px}
+
+  /* shelves */
+  .shelf{margin-top:30px}
+  .shelf-head{display:flex;align-items:baseline;gap:12px;margin-bottom:14px}
+  .shelf-head .idx{font-family:var(--mono);font-size:12px;color:var(--ink-3);font-weight:500}
+  .shelf-title{font-family:var(--serif);font-weight:600;font-size:20px;letter-spacing:-.01em}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(244px,1fr));gap:14px}
+
+  /* extension card */
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;
+    cursor:pointer;transition:.2s;box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:11px;opacity:0;transform:translateY(10px);animation:rise .5s forwards}
+  @keyframes rise{to{opacity:1;transform:none}}
+  .card:hover{transform:translateY(-3px);border-color:var(--line-2);box-shadow:var(--shadow-md)}
+  .card-top{display:flex;gap:12px;align-items:flex-start}
+  .card-ic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;font-size:22px;flex-shrink:0;background:var(--brand-wash)}
+  .card-name{font-weight:600;font-size:15px;letter-spacing:-.01em;display:flex;align-items:center;gap:7px}
+  .card-author{font-size:11.5px;color:var(--ink-3);margin-top:1px}
+  .card-blurb{font-size:12.8px;color:var(--ink-2);line-height:1.45;flex:1;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .card-foot{display:flex;align-items:center;gap:9px;margin-top:2px}
+
+  /* kind badge (mono, secondary) */
+  .kind{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+    padding:2.5px 7px;border-radius:6px;border:1px solid var(--line-2);color:var(--ink-2);background:var(--raised)}
+  .kind.skill{color:#2F6E4A;border-color:#BFE0CC;background:#EAF5EE}
+  .kind.plugin{color:#5B4B86;border-color:#D6CCEC;background:#F0ECF8}
+  .kind.mcp{color:#1F5E6E;border-color:#C2DEE6;background:#E8F3F6}
+
+  /* trust dot */
+  .trust{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--ink-2);font-weight:500}
+  .trust .dot{width:7px;height:7px;border-radius:50%}
+  .trust.official .dot{background:var(--t-official)} .trust.official{color:var(--t-official)}
+  .trust.verified .dot{background:var(--t-verified)} .trust.verified{color:var(--t-verified)}
+  .trust.community .dot{background:var(--t-community)}
+  .trust.unverified .dot{background:var(--t-unverified)} .trust.unverified{color:var(--t-unverified)}
+
+  .stars{font-size:11.5px;color:var(--ink-3);display:flex;align-items:center;gap:3px;font-variant-numeric:tabular-nums}
+  .stars svg{width:12px;height:12px;color:#D9A52B;fill:#D9A52B}
+  .pushr{margin-left:auto}
+  .ibtn{font-family:var(--sans);font-weight:600;font-size:12px;padding:6.5px 13px;border-radius:9px;border:1px solid var(--brand);
+    background:var(--brand);color:#fff;cursor:pointer;transition:.16s;white-space:nowrap}
+  .ibtn:hover{background:var(--brand-ink)}
+  .ibtn.installed{background:transparent;color:var(--t-verified);border-color:#BFE0CC;cursor:default;display:flex;align-items:center;gap:5px}
+  .ibtn.ghost{background:transparent;color:var(--brand);border-color:var(--line-2)}
+
+  /* ============ Overlays ============ */
+  .scrim{position:fixed;inset:0;background:rgba(28,24,20,.42);backdrop-filter:blur(2px);z-index:100;opacity:0;pointer-events:none;transition:.25s}
+  .scrim.show{opacity:1;pointer-events:auto}
+
+  /* detail drawer */
+  .drawer{position:fixed;top:0;right:0;height:100vh;width:480px;max-width:94vw;background:var(--paper);z-index:110;
+    box-shadow:var(--shadow-lg);transform:translateX(100%);transition:transform .32s cubic-bezier(.4,0,.1,1);display:flex;flex-direction:column}
+  .drawer.show{transform:none}
+  .drawer-x{position:absolute;top:16px;right:16px;width:32px;height:32px;border-radius:9px;border:1px solid var(--line);
+    background:var(--surface);display:grid;place-items:center;cursor:pointer;color:var(--ink-2);z-index:2}
+  .drawer-x:hover{color:var(--ink);border-color:var(--ink-3)}
+  .drawer-scroll{overflow-y:auto;padding:30px 30px 110px}
+  .d-hero{display:flex;gap:16px;align-items:flex-start;margin-bottom:18px}
+  .d-ic{width:64px;height:64px;border-radius:16px;background:var(--brand-wash);display:grid;place-items:center;font-size:33px;flex-shrink:0}
+  .d-name{font-family:var(--serif);font-weight:600;font-size:25px;letter-spacing:-.015em;line-height:1.1}
+  .d-author{font-size:13px;color:var(--ink-3);margin-top:3px}
+  .d-tags{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 0}
+  .d-section{margin-top:24px}
+  .d-section h4{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--ink-3);margin-bottom:10px;font-weight:600}
+  .d-desc{font-size:14px;color:var(--ink);line-height:1.6}
+  .perm{display:flex;gap:11px;align-items:flex-start;padding:11px 13px;border:1px solid var(--line);border-radius:11px;background:var(--surface);margin-bottom:8px}
+  .perm svg{width:18px;height:18px;flex-shrink:0;margin-top:1px}
+  .perm .pt{font-size:13px;font-weight:600}
+  .perm .pd{font-size:12px;color:var(--ink-2);margin-top:1px}
+  .perm.danger{background:var(--risk-wash);border-color:#E7C3BC} .perm.danger svg{color:var(--risk)}
+  .perm.warn{background:var(--warn-wash);border-color:#E6D3A6} .perm.warn svg{color:var(--t-unverified)}
+  .perm.ok svg{color:var(--brand)}
+  .d-stat{display:flex;gap:20px;padding:14px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-top:18px}
+  .d-stat .k{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+  .d-stat .v{font-size:15px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums}
+  .drawer-foot{position:absolute;bottom:0;left:0;right:0;padding:16px 30px;background:var(--paper);border-top:1px solid var(--line);display:flex;gap:10px}
+  .drawer-foot .ibtn{flex:1;font-size:14px;padding:12px;text-align:center}
+
+  /* modal (trust disclosure + wizard) */
+  .modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-46%) scale(.97);z-index:120;width:560px;max-width:94vw;max-height:88vh;
+    background:var(--paper);border-radius:18px;box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:.26s;display:flex;flex-direction:column;overflow:hidden}
+  .modal.show{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1)}
+  .modal-head{padding:22px 26px 16px;border-bottom:1px solid var(--line);flex-shrink:0}
+  .modal-eyebrow{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--ink-3);font-weight:600;margin-bottom:8px}
+  .modal-title{font-family:var(--serif);font-weight:600;font-size:22px;letter-spacing:-.01em;display:flex;align-items:center;gap:10px}
+  .modal-body{padding:20px 26px;overflow-y:auto}
+  .modal-foot{padding:16px 26px;border-top:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-shrink:0}
+
+  /* risk verdict banner */
+  .verdict{display:flex;gap:12px;align-items:center;padding:14px 15px;border-radius:12px;margin-bottom:18px}
+  .verdict.red{background:var(--risk-wash);border:1px solid #E7C3BC}
+  .verdict .vic{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;flex-shrink:0}
+  .verdict.red .vic{background:var(--risk);color:#fff}
+  .verdict .vt{font-size:14px;font-weight:700;color:var(--risk)}
+  .verdict .vs{font-size:12.5px;color:var(--ink-2);margin-top:1px}
+
+  .kv{display:flex;gap:12px;padding:11px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .kv:last-child{border-bottom:none}
+  .kv .kk{width:104px;flex-shrink:0;color:var(--ink-3);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em;padding-top:1px}
+  .kv .vv{flex:1;color:var(--ink)}
+  .cmd{font-family:var(--mono);font-size:12px;background:#1C2421;color:#CFE3DD;padding:11px 13px;border-radius:9px;line-height:1.5;
+    word-break:break-all;position:relative}
+  .cmd .copy{position:absolute;top:8px;right:8px;font-size:10px;color:#7FA39A;cursor:pointer;border:1px solid #33403B;padding:2px 6px;border-radius:5px}
+  .disclose{margin-top:14px;border:1px solid var(--line);border-radius:11px;overflow:hidden}
+  .disclose summary{padding:12px 14px;font-size:12.5px;font-weight:600;color:var(--ink-2);cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;background:var(--surface)}
+  .disclose summary::-webkit-details-marker{display:none}
+  .disclose summary .chev{transition:.2s;margin-left:auto}
+  .disclose[open] summary .chev{transform:rotate(90deg)}
+  .disclose .dc{padding:4px 14px 14px}
+  .ack{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;background:var(--warn-wash);border:1px solid #E6D3A6;border-radius:10px;margin-top:14px;cursor:pointer}
+  .ack input{margin-top:2px;width:16px;height:16px;accent-color:var(--brand)}
+  .ack .at{font-size:12.5px;color:var(--ink);line-height:1.45}
+
+  /* config wizard fields */
+  .field{margin-bottom:16px}
+  .field label{display:block;font-size:13px;font-weight:600;margin-bottom:5px}
+  .field label .req{color:var(--risk);margin-left:3px}
+  .field .help{font-size:12px;color:var(--ink-3);margin-bottom:7px;line-height:1.4}
+  .field input{width:100%;padding:10px 12px;border:1px solid var(--line-2);border-radius:9px;font-family:var(--sans);font-size:13.5px;background:var(--surface);color:var(--ink)}
+  .field input.mono{font-family:var(--mono);font-size:12.5px}
+  .field input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-wash)}
+  .field .secret-row{position:relative}
+  .field .secret-row .eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--ink-3);cursor:pointer}
+  .keychain{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--brand);margin-top:6px;font-weight:500}
+
+  /* installed panel */
+  .installed{position:absolute;inset:0;background:var(--paper);z-index:30;transform:translateX(100%);transition:transform .3s cubic-bezier(.4,0,.1,1);display:flex;flex-direction:column}
+  .installed.show{transform:none}
+  .inst-row{display:flex;align-items:center;gap:14px;padding:15px 18px;border:1px solid var(--line);border-radius:13px;background:var(--surface);margin-bottom:10px}
+  .inst-row .card-ic{width:40px;height:40px;font-size:20px}
+  .toggle{width:38px;height:22px;border-radius:20px;background:var(--brand);position:relative;cursor:pointer;flex-shrink:0;transition:.18s}
+  .toggle::after{content:"";position:absolute;top:2px;left:18px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.18s;box-shadow:var(--shadow-sm)}
+  .toggle.off{background:var(--line-2)} .toggle.off::after{left:2px}
+  .upd{font-size:11px;font-weight:600;color:var(--t-unverified);background:var(--warn-wash);border:1px solid #E6D3A6;padding:3px 8px;border-radius:6px}
+  .manual-tag{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);border:1px dashed var(--line-2);padding:2px 6px;border-radius:5px}
+
+  .hint{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:200;background:#1C2421;color:#D6E2DD;
+    font-size:12px;padding:8px 14px;border-radius:20px;box-shadow:var(--shadow-md);font-family:var(--mono);letter-spacing:.02em}
+  .hint b{color:#7FD3C5}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Aleph global nav (Extensions grouped with Teams) -->
+  <nav class="railnav">
+    <div class="brand">A</div>
+    <div class="nav-i"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 12h8M8 8h8M8 16h5M21 12a9 9 0 1 1-4-7.5L21 3v6h-6"/></svg><span class="nav-tip">Chat</span></div>
+    <div class="nav-i"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span class="nav-tip">Dashboard</span></div>
+    <div class="nav-i"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4"/></svg><span class="nav-tip">Memory</span></div>
+    <div class="nav-i"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 12 0v1"/></svg><span class="nav-tip">Agents</span></div>
+    <div class="nav-divider"></div>
+    <!-- grouped: Teams + Extensions -->
+    <div class="nav-i"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20v-1a6 6 0 0 1 11-3M14 20v-1a5 5 0 0 1 8-3"/></svg><span class="nav-tip">Teams</span></div>
+    <div class="nav-i active"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 7h5a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2"/><path d="M9 7V5a3 3 0 0 1 6 0v2"/><path d="M3 12h18"/></svg><span class="nav-tip">Extensions</span></div>
+    <div class="nav-group nav-i"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 0 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 0 1 0-4h.1A1.6 1.6 0 0 0 4.6 7"/></svg><span class="nav-tip">Settings</span></div>
+  </nav>
+
+  <!-- Store -->
+  <div class="store">
+    <div class="topbar">
+      <div class="back"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg> Back to chat</div>
+      <div class="wordmark">
+        <span class="t">Extensions</span>
+        <span class="s">Curated by your <b>Store Agent</b> · 312 available</span>
+      </div>
+      <div class="search">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+        <input placeholder="Search by what you want to do — “query my database”, “search the web”…" />
+      </div>
+      <div class="spacer"></div>
+      <button class="btn" onclick="openInstalled()">Installed <span class="count">7</span></button>
+    </div>
+
+    <!-- functional category chips (primary taxonomy) -->
+    <div class="chips">
+      <div class="chip active"><span class="ic">✦</span> Featured</div>
+      <div class="chip"><span class="ic">🔎</span> Search &amp; Web</div>
+      <div class="chip"><span class="ic">⌘</span> Developer</div>
+      <div class="chip"><span class="ic">🗄️</span> Data &amp; DB</div>
+      <div class="chip"><span class="ic">⚡</span> Productivity</div>
+      <div class="chip"><span class="ic">✍️</span> Writing</div>
+      <div class="chip"><span class="ic">💬</span> Communication</div>
+      <div class="chip"><span class="ic">🧠</span> Knowledge</div>
+      <div class="chip"><span class="ic">🗂️</span> Files</div>
+      <div class="chip"><span class="ic">🎨</span> Design &amp; Media</div>
+      <div class="chip"><span class="ic">🔗</span> Automation</div>
+      <div class="chip"><span class="ic">💳</span> Finance</div>
+    </div>
+
+    <!-- secondary filters: kind (technical) + trust -->
+    <div class="filters">
+      <span class="lab">Type</span>
+      <div class="seg"><button class="on">All</button><button>Skill</button><button>Plugin</button><button>MCP</button></div>
+      <span class="lab" style="margin-left:8px">Trust</span>
+      <div class="seg"><button class="on">All</button><button>Official</button><button>Verified</button><button>Community</button></div>
+    </div>
+
+    <div class="scroll">
+      <!-- FEATURED -->
+      <div class="feat-head">
+        <span class="section-title"><span class="star">✦</span> Featured this week</span>
+        <span class="section-sub" style="align-self:flex-end">Hand-picked by your Store Agent</span>
+      </div>
+      <div class="feat-grid">
+        <div class="feat-card lead" onclick="openDrawer()">
+          <div class="ed">Editor’s pick</div>
+          <div>
+            <div class="feat-ic">🐙</div>
+            <h3>GitHub</h3>
+            <p>Let the agent read issues, review PRs, and push commits across your repos.</p>
+            <div class="meta">
+              <span class="kind mcp" style="background:rgba(255,255,255,.14);color:#cfe;border-color:rgba(255,255,255,.2)">MCP</span>
+              <span class="trust official" style="color:#bfe"><span class="dot" style="background:#bfe"></span>Official</span>
+            </div>
+          </div>
+        </div>
+        <div class="feat-card alt" onclick="openDrawer()">
+          <div class="ed">Trending</div>
+          <div>
+            <div class="feat-ic">🔎</div>
+            <h3>Web Search</h3>
+            <p>Give the model live web access with cited results.</p>
+            <div class="meta"><span class="kind skill">Skill</span><span class="trust verified"><span class="dot"></span>Verified</span></div>
+          </div>
+        </div>
+        <div class="feat-card alt" onclick="openDrawer()">
+          <div class="ed">New</div>
+          <div>
+            <div class="feat-ic">🐘</div>
+            <h3>Postgres</h3>
+            <p>Query and inspect your Postgres databases in chat.</p>
+            <div class="meta"><span class="kind mcp">MCP</span><span class="trust community"><span class="dot"></span>Community</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SHELF: Search & Web -->
+      <div class="shelf">
+        <div class="shelf-head"><span class="idx">01</span><span class="shelf-title">Search &amp; Web</span><span class="see-all" style="margin-left:auto">See all 28 →</span></div>
+        <div class="grid" id="grid1"></div>
+      </div>
+
+      <!-- SHELF: Developer -->
+      <div class="shelf">
+        <div class="shelf-head"><span class="idx">02</span><span class="shelf-title">Developer</span><span class="see-all" style="margin-left:auto">See all 64 →</span></div>
+        <div class="grid" id="grid2"></div>
+      </div>
+
+      <!-- SHELF: Data & DB -->
+      <div class="shelf">
+        <div class="shelf-head"><span class="idx">03</span><span class="shelf-title">Data &amp; Databases</span><span class="see-all" style="margin-left:auto">See all 41 →</span></div>
+        <div class="grid" id="grid3"></div>
+      </div>
+    </div>
+
+    <!-- INSTALLED panel (slides over) -->
+    <div class="installed" id="installed">
+      <div class="topbar">
+        <div class="back" onclick="closeInstalled()"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg> Store</div>
+        <div class="wordmark"><span class="t">Installed</span><span class="s">7 extensions · including items added before the store</span></div>
+        <div class="spacer"></div>
+      </div>
+      <div class="scroll" style="padding-top:18px">
+        <div class="inst-row">
+          <div class="card-ic">🐙</div>
+          <div style="flex:1"><div class="card-name">GitHub <span class="kind mcp">MCP</span></div><div class="card-author">io.modelcontextprotocol/github · v1.4.0</div></div>
+          <span class="trust official"><span class="dot"></span>Official</span>
+          <div class="toggle"></div>
+          <button class="ibtn ghost">Remove</button>
+        </div>
+        <div class="inst-row">
+          <div class="card-ic">🔎</div>
+          <div style="flex:1"><div class="card-name">Web Search <span class="kind skill">Skill</span></div><div class="card-author">anthropic/web-search · v2.1.0</div></div>
+          <span class="upd">Update → v2.2</span>
+          <div class="toggle"></div>
+          <button class="ibtn ghost">Remove</button>
+        </div>
+        <div class="inst-row">
+          <div class="card-ic">📨</div>
+          <div style="flex:1"><div class="card-name">Postmark <span class="kind mcp">MCP</span> <span class="manual-tag">manual · not in catalog</span></div><div class="card-author">added by you · ~/.aleph/mcp_config.json</div></div>
+          <span class="trust unverified"><span class="dot"></span>Unverified</span>
+          <div class="toggle off"></div>
+          <button class="ibtn ghost">Remove</button>
+        </div>
+        <div class="inst-row">
+          <div class="card-ic">🐘</div>
+          <div style="flex:1"><div class="card-name">Postgres <span class="kind mcp">MCP</span></div><div class="card-author">community/postgres-mcp · v0.7.1</div></div>
+          <span class="trust community"><span class="dot"></span>Community</span>
+          <div class="toggle"></div>
+          <button class="ibtn ghost">Remove</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Scrim + Detail Drawer ===== -->
+<div class="scrim" id="scrim" onclick="closeAll()"></div>
+
+<aside class="drawer" id="drawer">
+  <div class="drawer-x" onclick="closeAll()"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" width="16"><path d="M18 6 6 18M6 6l12 12"/></svg></div>
+  <div class="drawer-scroll">
+    <div class="d-hero">
+      <div class="d-ic">🐙</div>
+      <div>
+        <div class="d-name">GitHub</div>
+        <div class="d-author">io.modelcontextprotocol/github</div>
+        <div class="d-tags">
+          <span class="kind mcp">MCP</span>
+          <span class="trust official"><span class="dot"></span>Official</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="d-stat">
+      <div><div class="k">Stars</div><div class="v">14.2k</div></div>
+      <div><div class="k">Version</div><div class="v">1.4.0</div></div>
+      <div><div class="k">Category</div><div class="v" style="font-size:13px">Developer</div></div>
+      <div><div class="k">Runs via</div><div class="v" style="font-family:var(--mono);font-size:13px">npx</div></div>
+    </div>
+
+    <div class="d-section">
+      <h4>What it does</h4>
+      <div class="d-desc">Connects your agent to GitHub. Read and search issues &amp; pull requests, review diffs, comment, manage labels, and push commits — all from chat. Pairs well with the Web Search and Filesystem extensions.</div>
+    </div>
+
+    <div class="d-section">
+      <h4>What it can reach</h4>
+      <div class="perm danger">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="m21 16-4 4-4-4M17 20V4"/><rect x="3" y="4" width="8" height="16" rx="1"/></svg>
+        <div><div class="pt">Runs a command on your computer</div><div class="pd">Launches <code style="font-family:var(--mono);font-size:11px">npx @modelcontextprotocol/server-github</code></div></div>
+      </div>
+      <div class="perm warn">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20"/></svg>
+        <div><div class="pt">Network access</div><div class="pd">Only <code style="font-family:var(--mono);font-size:11px">api.github.com</code></div></div>
+      </div>
+      <div class="perm ok">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <div><div class="pt">Requires a secret</div><div class="pd">GitHub personal access token (stored in your OS keychain)</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="drawer-foot">
+    <button class="ibtn" style="flex:1" onclick="openTrust()">Install</button>
+    <button class="btn">Docs ↗</button>
+  </div>
+</aside>
+
+<!-- ===== Trust disclosure modal ===== -->
+<div class="modal" id="trust">
+  <div class="modal-head">
+    <div class="modal-eyebrow">Review before installing · GitHub (MCP)</div>
+    <div class="modal-title">This will run a program on your computer</div>
+  </div>
+  <div class="modal-body">
+    <div class="verdict red">
+      <div class="vic"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" width="20"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg></div>
+      <div><div class="vt">Community extension — installs and runs unsandboxed code</div><div class="vs">Only continue if you trust the publisher. The exact command is shown below.</div></div>
+    </div>
+
+    <div class="kv"><div class="kk">Publisher</div><div class="vv">io.modelcontextprotocol · <span style="color:var(--t-official);font-weight:600">namespace-verified</span></div></div>
+    <div class="kv"><div class="kk">Version</div><div class="vv">1.4.0 · pinned</div></div>
+    <div class="kv"><div class="kk">Integrity</div><div class="vv" style="font-family:var(--mono);font-size:11.5px;color:var(--ink-2)">sha256:9f2a…c41e ✓ verified</div></div>
+    <div class="kv"><div class="kk">Secrets</div><div class="vv">1 required — <b>GITHUB_TOKEN</b> · asked next, kept in OS keychain</div></div>
+
+    <div class="disclose" open>
+      <summary>Command that will run <svg class="chev" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" width="15" style="margin-left:auto"><path d="m9 18 6-6-6-6"/></svg></summary>
+      <div class="dc">
+        <div class="cmd"><span class="copy">copy</span>npx -y @modelcontextprotocol/server-github</div>
+      </div>
+    </div>
+
+    <label class="ack"><input type="checkbox" /><span class="at">I understand this runs third-party code on my machine with the access shown above, and I trust this publisher.</span></label>
+  </div>
+  <div class="modal-foot">
+    <button class="btn" onclick="closeAll()">Cancel</button>
+    <div class="pushr" style="flex:1"></div>
+    <button class="ibtn" onclick="openWizard()">Continue</button>
+  </div>
+</div>
+
+<!-- ===== Config wizard modal ===== -->
+<div class="modal" id="wizard">
+  <div class="modal-head">
+    <div class="modal-eyebrow">Step 2 of 2 · Configure GitHub</div>
+    <div class="modal-title">Add your credentials</div>
+  </div>
+  <div class="modal-body">
+    <div class="field">
+      <label>GitHub token <span class="req">*</span></label>
+      <div class="help">A personal access token with <code style="font-family:var(--mono)">repo</code> scope. Create one at github.com/settings/tokens.</div>
+      <div class="secret-row">
+        <input class="mono" type="password" placeholder="ghp_••••••••••••••••••••" value="ghp_xxxxxxxxxxxxxxxxxxxx" />
+        <span class="eye"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" width="17"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></span>
+      </div>
+      <div class="keychain"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" width="13"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Stored securely in your OS keychain — never written to config</div>
+    </div>
+    <div class="field">
+      <label>Default org <span style="color:var(--ink-3);font-weight:500">(optional)</span></label>
+      <div class="help">Scope tools to a single organization.</div>
+      <input placeholder="e.g. acme-inc" />
+    </div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn" onclick="openTrust()">Back</button>
+    <div class="pushr" style="flex:1"></div>
+    <button class="ibtn" onclick="finishInstall()">Install &amp; verify</button>
+  </div>
+</div>
+
+<div class="hint">Mockup — click <b>cards</b>, <b>Install</b>, <b>Installed</b> · press <b>Esc</b> to close</div>
+
+<script>
+  const EXT = {
+    grid1:[
+      {i:"🔎",n:"Web Search",a:"anthropic",b:"Live web access with cited results for the model.",k:"skill",t:"verified",s:"9.1k",inst:true},
+      {i:"🌐",n:"Browser",a:"modelcontextprotocol",b:"Drive a real browser — navigate, click, read pages.",k:"mcp",t:"official",s:"7.4k"},
+      {i:"🧭",n:"Exa Search",a:"exa-labs",b:"Neural search built for agents and research.",k:"mcp",t:"community",s:"3.2k"},
+      {i:"📡",n:"Fetch",a:"modelcontextprotocol",b:"Fetch a URL and convert it to clean markdown.",k:"mcp",t:"official",s:"5.8k"},
+    ],
+    grid2:[
+      {i:"🐙",n:"GitHub",a:"modelcontextprotocol",b:"Issues, PRs, reviews and commits from chat.",k:"mcp",t:"official",s:"14.2k",inst:true},
+      {i:"🌿",n:"Git",a:"modelcontextprotocol",b:"Local git operations — status, diff, commit.",k:"mcp",t:"official",s:"6.0k"},
+      {i:"📁",n:"Filesystem",a:"modelcontextprotocol",b:"Scoped read/write access to local folders.",k:"mcp",t:"official",s:"8.7k"},
+      {i:"🐛",n:"Sentry",a:"getsentry",b:"Pull error details and stack traces into context.",k:"mcp",t:"verified",s:"2.4k"},
+      {i:"🐳",n:"Docker",a:"docker",b:"Run containerized MCP servers, signed images.",k:"mcp",t:"official",s:"4.1k"},
+      {i:"🧩",n:"Code Review",a:"community",b:"A skill that reviews diffs for bugs & smells.",k:"skill",t:"community",s:"1.6k"},
+    ],
+    grid3:[
+      {i:"🐘",n:"Postgres",a:"community",b:"Query and inspect Postgres databases.",k:"mcp",t:"community",s:"5.3k",inst:true},
+      {i:"🪶",n:"SQLite",a:"modelcontextprotocol",b:"Lightweight local SQL queries.",k:"mcp",t:"official",s:"3.9k"},
+      {i:"📊",n:"BigQuery",a:"google",b:"Run analytical queries over BigQuery.",k:"mcp",t:"verified",s:"2.1k"},
+      {i:"❄️",n:"Snowflake",a:"community",b:"Connect to Snowflake warehouses.",k:"mcp",t:"community",s:"1.2k"},
+    ],
+  };
+  const star = '<svg viewBox="0 0 24 24"><path d="M12 2l3 6.9 7.5.6-5.7 4.9 1.8 7.3L12 17.8 5.1 21.7l1.8-7.3L1.2 9.5 8.7 8.9z"/></svg>';
+  function card(e,delay){
+    const trustLab={official:"Official",verified:"Verified",community:"Community",unverified:"Unverified"};
+    const inst = e.inst
+      ? '<button class="ibtn installed"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5" width="13"><path d="M20 6 9 17l-5-5"/></svg>Installed</button>'
+      : '<button class="ibtn" onclick="event.stopPropagation();openTrust()">Install</button>';
+    return `<div class="card" style="animation-delay:${delay}ms" onclick="openDrawer()">
+      <div class="card-top">
+        <div class="card-ic">${e.i}</div>
+        <div style="flex:1;min-width:0">
+          <div class="card-name">${e.n} <span class="kind ${e.k}">${e.k.toUpperCase()}</span></div>
+          <div class="card-author">${e.a}</div>
+        </div>
+      </div>
+      <div class="card-blurb">${e.b}</div>
+      <div class="card-foot">
+        <span class="trust ${e.t}"><span class="dot"></span>${trustLab[e.t]}</span>
+        <span class="stars">${star}${e.s}</span>
+        <span class="pushr"></span>${inst}
+      </div>
+    </div>`;
+  }
+  Object.keys(EXT).forEach(id=>{
+    document.getElementById(id).innerHTML = EXT[id].map((e,i)=>card(e,i*55)).join("");
+  });
+
+  const scrim=document.getElementById('scrim');
+  function show(id){scrim.classList.add('show');document.getElementById(id).classList.add('show')}
+  function openDrawer(){show('drawer')}
+  function openTrust(){closePanels();show('trust')}
+  function openWizard(){closePanels();show('wizard')}
+  function closePanels(){['drawer','trust','wizard'].forEach(x=>document.getElementById(x).classList.remove('show'))}
+  function closeAll(){scrim.classList.remove('show');closePanels()}
+  function finishInstall(){closeAll();setTimeout(()=>alert("Installing → atomic copy + SHA256 verify → start server → list tools ✓\n(Store Agent drives install + post-install verification)"),120)}
+  function openInstalled(){document.getElementById('installed').classList.add('show')}
+  function closeInstalled(){document.getElementById('installed').classList.remove('show')}
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeAll();closeInstalled()}});
+  // chips + segs interactivity
+  document.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{document.querySelector('.chip.active').classList.remove('active');c.classList.add('active')});
+  document.querySelectorAll('.seg').forEach(s=>s.querySelectorAll('button').forEach(b=>b.onclick=()=>{s.querySelector('.on').classList.remove('on');b.classList.add('on')}));
+  document.querySelectorAll('.toggle').forEach(t=>t.onclick=()=>t.classList.toggle('off'));
+</script>
+</body>
+</html>

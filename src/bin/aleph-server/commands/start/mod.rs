@@ -28,7 +28,9 @@ use builder::{
     initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
     register_agent_handlers, register_agents_handlers, register_arena_handlers,
     register_config_handlers, register_core_handlers, register_cron_handlers,
-    register_daemon_handlers, register_fs_handlers, register_graph_handlers,
+    register_daemon_handlers, register_extensions_handlers,
+    register_extensions_install_handlers, register_extensions_sources_handlers,
+    register_fs_handlers, register_graph_handlers,
     register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
     register_mcp_handlers, register_memory_handlers, register_oauth_handlers,
     register_projects_handlers, register_session_handlers, register_teams_handlers,
@@ -215,29 +217,27 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         });
     }
 
-    // MCP: spawn the manager actor here so dependent handlers can resolve
-    // `mcp_handle` below. The tool bridge is spawned later — after
-    // `agent_result` materialises — so it can carry the tool catalog's
-    // `ToolHealthCache` handle for `McpServerProbe` registration.
+    // MCP: build the manager actor here so dependent handlers can resolve
+    // `mcp_handle` below, but defer `actor.run()` until after the vault is
+    // initialized so a secret resolver can be injected before any persisted
+    // `{{secret:..}}`-bearing server auto-starts. The tool bridge is spawned
+    // later — after `agent_result` materialises — so it can carry the tool
+    // catalog's `ToolHealthCache` handle for `McpServerProbe` registration.
     // Warn-only on failure — a missing or malformed MCP config must never
     // abort boot.
-    let mcp_handle: Option<alephcore::mcp::McpManagerHandle> =
-        match alephcore::mcp::McpManagerActor::new(None).await {
-            Ok((actor, handle)) => {
-                tokio::spawn(actor.run());
-                if !args.daemon {
-                    println!("MCP Manager spawned");
-                }
-                Some(handle)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "MCP Manager failed to start — external MCP servers unavailable this run"
-                );
-                None
-            }
-        };
+    let (mcp_handle, mcp_actor_pending): (
+        Option<alephcore::mcp::McpManagerHandle>,
+        Option<alephcore::mcp::McpManagerActor>,
+    ) = match alephcore::mcp::McpManagerActor::new(None).await {
+        Ok((actor, handle)) => (Some(handle), Some(actor)),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "MCP Manager failed to start — external MCP servers unavailable this run"
+            );
+            (None, None)
+        }
+    };
 
     // Phase 3 Task 7: compose the shared `Arc<dyn Sandbox>` once at boot.
     //
@@ -411,6 +411,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Publish the vault handle (also installs the process-global used by
     // vault consumers outside the request path).
     server.set_shared_token_manager(auth_bundle.auth_ctx.shared_token_mgr.clone());
+
+    // Now spawn the deferred MCP manager, injecting a vault-backed secret
+    // resolver so `{{secret:NAME}}` env references resolve per-server into the
+    // child process only (never the daemon's own env).
+    if let Some(actor) = mcp_actor_pending {
+        let resolver = std::sync::Arc::new(alephcore::secrets::VaultSecretResolver::new(
+            auth_bundle.auth_ctx.shared_token_mgr.clone(),
+        ));
+        tokio::spawn(actor.with_secret_resolver(resolver).run());
+        if !args.daemon {
+            println!("MCP Manager spawned");
+        }
+    }
 
     // Gateway-token RPCs: read the shared token (display / QR) and rotate it
     // (revoke all authorized remotes). Authorized-only — the WS login wall
@@ -763,6 +776,50 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             None
         };
 
+    // P4 T5: open the CatalogCache early so store tools (store_catalog_sync
+    // and T6–T8) can be wired into BuiltinToolConfig. Uses the same path as
+    // the extensions.* gateway handlers below — both share the same SQLite
+    // file via separate connections (rusqlite file-level locking).
+    let (early_catalog_cache, early_marketplace_configs) = {
+        use alephcore::extension::marketplace::types::{
+            MarketplaceConfig, MarketplaceSourceType,
+        };
+        let catalog_path = alephcore::discovery::aleph_home_dir()
+            .map(|d| d.join("store_catalog.db"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("store_catalog.db"));
+        match alephcore::store::cache::CatalogCache::open(&catalog_path) {
+            Ok(cache) => {
+                let configs: std::collections::HashMap<String, MarketplaceConfig> = {
+                    let cfg = app_config.read().await;
+                    cfg.plugin_marketplaces
+                        .iter()
+                        .map(|(name, entry)| {
+                            let source_type = match entry.source_type.as_str() {
+                                "local" => MarketplaceSourceType::Local,
+                                _ => MarketplaceSourceType::Github,
+                            };
+                            (
+                                name.clone(),
+                                MarketplaceConfig {
+                                    source: entry.source.clone(),
+                                    source_type,
+                                },
+                            )
+                        })
+                        .collect()
+                };
+                (Some(std::sync::Arc::new(cache)), Some(configs))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to open store_catalog.db for store tools; store_catalog_sync will be unavailable"
+                );
+                (None, None)
+            }
+        }
+    };
+
     let agent_result = register_agent_handlers(
         &mut server,
         session_store.clone(),
@@ -783,6 +840,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Some(wiki.clone()),
         Some(note_memory_dir.clone()),
         Some(sandbox.clone()),
+        early_catalog_cache,
+        early_marketplace_configs,
+        mcp_handle.clone(),
     )
     .await?;
 
@@ -1255,6 +1315,86 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         register_mcp_handlers(&mut server, h);
         if !args.daemon {
             println!("  MCP management handlers registered (mcp.*)");
+        }
+    }
+
+    // Unified Extensions Store — `extensions.*` façade over MCP/plugins/skills,
+    // backed by a local rusqlite catalog cache opened at ~/.aleph.
+    {
+        let catalog_path = alephcore::discovery::aleph_home_dir()
+            .map(|d| d.join("store_catalog.db"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("store_catalog.db"));
+        match alephcore::store::cache::CatalogCache::open(&catalog_path) {
+            Ok(cache) => {
+                let cache = std::sync::Arc::new(cache);
+                register_extensions_handlers(&mut server, mcp_handle.clone(), cache.clone());
+
+                // Source providers: convert configured marketplaces, build the
+                // registry, register extensions.sources.*, and kick an initial
+                // background catalog sync into the cache.
+                use alephcore::extension::marketplace::types::{
+                    MarketplaceConfig, MarketplaceSourceType,
+                };
+                let marketplace_configs: std::collections::HashMap<String, MarketplaceConfig> = {
+                    let cfg = app_config.read().await;
+                    cfg.plugin_marketplaces
+                        .iter()
+                        .map(|(name, entry)| {
+                            let source_type = match entry.source_type.as_str() {
+                                "local" => MarketplaceSourceType::Local,
+                                _ => MarketplaceSourceType::Github,
+                            };
+                            (
+                                name.clone(),
+                                MarketplaceConfig {
+                                    source: entry.source.clone(),
+                                    source_type,
+                                },
+                            )
+                        })
+                        .collect()
+                };
+                let registry = std::sync::Arc::new(
+                    alephcore::store::provider::registry_builder::build_default_registry(
+                        marketplace_configs.clone(),
+                    ),
+                );
+                register_extensions_sources_handlers(&mut server, registry.clone(), cache.clone());
+
+                // Trust-gated install façade: extensions.disclosure/.configure/.install.
+                // Reuses the same marketplace configs (SHA256 + atomic copy) and the
+                // vault for per-server secret storage.
+                let marketplace = std::sync::Arc::new(
+                    alephcore::extension::marketplace::MarketplaceManager::new(
+                        marketplace_configs,
+                        None,
+                    ),
+                );
+                register_extensions_install_handlers(
+                    &mut server,
+                    mcp_handle.clone(),
+                    cache.clone(),
+                    registry.clone(),
+                    auth_bundle.auth_ctx.shared_token_mgr.clone(),
+                    marketplace,
+                );
+                {
+                    let registry = registry.clone();
+                    let cache = cache.clone();
+                    tokio::spawn(async move {
+                        let report = registry.sync_all_into(&cache).await;
+                        tracing::info!(
+                            synced = ?report.synced,
+                            failed = ?report.failed,
+                            "initial extensions catalog sync"
+                        );
+                    });
+                }
+                if !args.daemon {
+                    println!("  Extensions store handlers registered (extensions.*)");
+                }
+            }
+            Err(e) => tracing::warn!("Failed to open store catalog cache: {e}"),
         }
     }
 

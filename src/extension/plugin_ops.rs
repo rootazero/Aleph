@@ -254,6 +254,17 @@ impl ExtensionManager {
         self.plugin_registry.read().await.get_plugin(name).cloned()
     }
 
+    /// List all plugin records (cloned) for the store's installed reconciliation.
+    pub async fn list_plugin_records(&self) -> Vec<PluginRecord> {
+        self.plugin_registry
+            .read()
+            .await
+            .list_plugins()
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
     /// Enable or disable a plugin and refresh runtime snapshots.
     pub async fn set_plugin_enabled(&self, plugin_id: &str, enabled: bool) -> bool {
         let changed = {
