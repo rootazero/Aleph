@@ -221,9 +221,18 @@ pub fn builtin_agents() -> Vec<AgentDef> {
         // Main agent - full access. Explicit "flow_run" alongside "*" marks the
         // sub-flow dispatch tool as an intentional capability in the catalog
         // (registration wiring lands in Phase 6 — see orchestrator::flow_run_tool).
+        // Store tools are denied explicitly so the wildcard cannot reach them —
+        // denied_tools short-circuits before the "*" wildcard in is_tool_allowed.
         AgentDef::new("main", AgentMode::Primary)
             .with_description("Primary agent that responds directly to user")
-            .with_allowed_tools(vec!["*".into(), "flow_run".into()]),
+            .with_allowed_tools(vec!["*".into(), "flow_run".into()])
+            .with_denied_tools(vec![
+                "store_catalog_sync".into(),
+                "store_fetch_docs".into(),
+                "store_resolve_spec".into(),
+                "store_install_run".into(),
+                "store_install_verify".into(),
+            ]),
         // Explore agent — INVESTIGATION named set (P2 Stage G demo migration).
         // Effective behavior unchanged: Stage B recursion guard blocks subagent
         // for SubAgent mode; denied_tools preserved. Default wildcard cleared so
@@ -280,13 +289,23 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_denied_tools(vec!["file_write".into(), "file_edit".into()])
             .with_max_iterations(20)
             .with_context_mode(ContextMode::Summary),
-        // Verify agent - adversarial verifier (read-only)
+        // Verify agent - adversarial verifier (read-only).
+        // Store tools are denied explicitly so the wildcard cannot reach them —
+        // denied_tools short-circuits before the "*" wildcard in is_tool_allowed.
         AgentDef::new("verify", AgentMode::SubAgent)
             .with_description("Adversarial verification specialist")
             .with_when_to_use("When you need to independently verify that work was done correctly")
             .with_prompt_sections(vec!["verify_protocol".into()])
             .with_allowed_tools(vec!["*".into()])
-            .with_denied_tools(vec!["file_write".into(), "file_edit".into()])
+            .with_denied_tools(vec![
+                "file_write".into(),
+                "file_edit".into(),
+                "store_catalog_sync".into(),
+                "store_fetch_docs".into(),
+                "store_resolve_spec".into(),
+                "store_install_run".into(),
+                "store_install_verify".into(),
+            ])
             .with_max_iterations(25)
             .with_context_mode(ContextMode::Summary),
         // Store agent - extensions store curator and installer (private STORE_TOOLS only)
@@ -635,5 +654,15 @@ mod tests {
                 .description,
             "project-tuned explore"
         );
+    }
+
+    #[test]
+    fn wildcard_agents_deny_store_tools() {
+        let agents = builtin_agents();
+        let main = agents.iter().find(|a| a.id == "main").unwrap();
+        let verify = agents.iter().find(|a| a.id == "verify").unwrap();
+        assert!(!main.is_tool_allowed("store_install_run"));
+        assert!(!verify.is_tool_allowed("store_install_run"));
+        assert!(main.is_tool_allowed("flow_run")); // unrelated tools still allowed
     }
 }
