@@ -111,6 +111,33 @@ impl DreamStore for SqliteMemoryBackend {
             ))),
         }
     }
+
+    async fn recent_daily_insights(&self, limit: usize) -> Result<Vec<DailyInsight>, AlephError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT date, content, source_memory_count, created_at \
+                 FROM daily_insights ORDER BY date DESC LIMIT ?1",
+            )
+            .map_err(|e| AlephError::config(format!("Failed to prepare recent_daily_insights: {e}")))?;
+
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                Ok(DailyInsight {
+                    date: row.get(0)?,
+                    content: row.get(1)?,
+                    source_memory_count: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })
+            .map_err(|e| AlephError::config(format!("recent_daily_insights query: {e}")))?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AlephError::config(format!("recent_daily_insights row: {e}")))?);
+        }
+        Ok(out)
+    }
 }
 
 // ============================================================================
@@ -188,5 +215,39 @@ impl CompressionStore for SqliteMemoryBackend {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod daily_insight_tests {
+    use crate::memory::dreaming::DailyInsight;
+    use crate::memory::store::DreamStore;
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+
+    #[tokio::test]
+    async fn recent_daily_insights_orders_desc_and_limits() {
+        let backend = SqliteMemoryBackend::in_memory().expect("in-memory backend");
+        for date in ["2026-06-18", "2026-06-19", "2026-06-20"] {
+            backend
+                .upsert_daily_insight(DailyInsight::new(
+                    date.to_string(),
+                    format!("digest for {date}"),
+                    3,
+                ))
+                .await
+                .unwrap();
+        }
+
+        let recent = backend.recent_daily_insights(2).await.unwrap();
+        assert_eq!(recent.len(), 2, "limit honored");
+        assert_eq!(recent[0].date, "2026-06-20", "newest first");
+        assert_eq!(recent[1].date, "2026-06-19");
+    }
+
+    #[tokio::test]
+    async fn recent_daily_insights_empty_ok() {
+        let backend = SqliteMemoryBackend::in_memory().expect("in-memory backend");
+        let recent = backend.recent_daily_insights(10).await.unwrap();
+        assert!(recent.is_empty());
     }
 }
