@@ -744,19 +744,18 @@ async fn check_mcp_servers(server_url: &str) -> DoctorCheck {
 }
 
 async fn check_vault(server_url: &str) -> DoctorCheck {
-    match call_rpc(server_url, "vault.status").await {
+    // Vault health is probed via `secrets.list` — the live secret-store
+    // endpoint. (The old `vault.status` method was removed when key
+    // management consolidated onto the `secrets.*` RPC surface.)
+    match call_rpc(server_url, "secrets.list").await {
         Ok(value) => {
-            let summary = value
-                .get("status")
-                .and_then(|v| v.as_str())
-                .or_else(|| value.get("state").and_then(|v| v.as_str()))
-                .unwrap_or("ok");
+            let count = count_array_or_obj_array(&value, "secrets");
             DoctorCheck::ok(
                 "runtime",
                 "vault",
                 "Secret vault status",
                 false,
-                summary.to_string(),
+                format!("{count} secret(s) stored"),
             )
         }
         Err(e) => DoctorCheck::fail(
@@ -764,7 +763,7 @@ async fn check_vault(server_url: &str) -> DoctorCheck {
             "vault",
             "Secret vault status",
             false,
-            format!("vault.status failed: {e}"),
+            format!("secrets.list failed: {e}"),
         ),
     }
 }
@@ -887,7 +886,7 @@ mod tests {
             "vault",
             "Secret vault",
             false,
-            "vault.status failed",
+            "secrets.list failed",
         );
         let failing = vec![&required, &optional];
 
@@ -901,7 +900,7 @@ mod tests {
         assert!(brief.contains("verify your fixes"));
         // Required failures are ERROR; optional are WARN.
         assert!(brief.contains("[ERROR] config/config.toml: parse error"));
-        assert!(brief.contains("[WARN] runtime/vault: vault.status failed"));
+        assert!(brief.contains("[WARN] runtime/vault: secrets.list failed"));
     }
 
     #[test]
