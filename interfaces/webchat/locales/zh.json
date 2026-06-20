@@ -1291,7 +1291,15 @@
       "official": "官方",
       "verified": "已验证",
       "community": "社区",
-      "unverified": "未验证"
+      "unverified": "未验证",
+      "integrity_label": "完整性",
+      "integrity_verified": "sha256 ✓"
+    },
+    "error": {
+      "catalog_load": "加载目录失败",
+      "installed_load": "加载已安装列表失败",
+      "toggle_failed": "切换失败",
+      "remove_failed": "移除失败"
     },
     "featured": "精选",
     "search_placeholder": "按你想做的事搜索…",

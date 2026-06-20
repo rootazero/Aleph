@@ -12,7 +12,8 @@ use crate::api::extensions::{ExtensionEntry, ExtensionsApi};
 use crate::components::extensions::labels::kind_label;
 use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
-use crate::i18n::{t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n, Locale};
+use leptos_i18n::I18nContext;
 use crate::views::extensions::model::kind_badge_class;
 use crate::views::extensions::StoreState;
 
@@ -21,6 +22,7 @@ fn load_installed(
     items: RwSignal<Vec<ExtensionEntry>>,
     loading: RwSignal<bool>,
     error: RwSignal<Option<String>>,
+    i18n: I18nContext<Locale>,
 ) {
     loading.set(true);
     error.set(None);
@@ -31,7 +33,8 @@ fn load_installed(
                 loading.set(false);
             }
             Err(e) => {
-                error.set(Some(format!("Failed to load installed: {e}")));
+                let prefix = t_string!(i18n, extensions.error.installed_load).to_string();
+                error.set(Some(format!("{prefix}: {e}")));
                 loading.set(false);
             }
         }
@@ -50,7 +53,7 @@ pub fn InstalledPanel() -> impl IntoView {
 
     Effect::new(move || {
         if store.show_installed.get() && state.is_connected.get() {
-            load_installed(state, items, loading, error);
+            load_installed(state, items, loading, error, i18n);
         }
     });
 
@@ -137,7 +140,8 @@ fn InstalledRow(
             match ExtensionsApi::toggle(&state, id, new_val).await {
                 Ok(()) => toggling.set(false),
                 Err(e) => {
-                    error.set(Some(format!("Toggle failed: {e}")));
+                    let prefix = t_string!(i18n, extensions.error.toggle_failed).to_string();
+                    error.set(Some(format!("{prefix}: {e}")));
                     enabled.set(!new_val);
                     toggling.set(false);
                 }
@@ -149,9 +153,10 @@ fn InstalledRow(
         let id = id_for_remove.clone();
         spawn_local(async move {
             match ExtensionsApi::uninstall(&state, id).await {
-                Ok(()) => load_installed(state, items, loading, error),
+                Ok(()) => load_installed(state, items, loading, error, i18n),
                 Err(e) => {
-                    error.set(Some(format!("Remove failed: {e}")));
+                    let prefix = t_string!(i18n, extensions.error.remove_failed).to_string();
+                    error.set(Some(format!("{prefix}: {e}")));
                     confirming.set(false);
                 }
             }

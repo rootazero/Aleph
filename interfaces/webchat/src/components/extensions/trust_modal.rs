@@ -53,8 +53,8 @@ pub fn TrustModal(
                                         <span class="text-text-secondary font-mono">{v}</span>
                                     })}
                                     {d.sha256.clone().map(|_| view! {
-                                        <span class="text-text-tertiary">"integrity"</span>
-                                        <span class="text-success">"sha256 ✓"</span>
+                                        <span class="text-text-tertiary">{t!(i18n, extensions.trust.integrity_label)}</span>
+                                        <span class="text-success">{t!(i18n, extensions.trust.integrity_verified)}</span>
                                     })}
                                     {(secrets_count > 0).then(|| view! {
                                         <span class="text-text-tertiary">"🔑"</span>

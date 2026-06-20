@@ -83,7 +83,7 @@ pub fn InstallFlow() -> impl IntoView {
     // the flow. Writing `install_step = Hidden` settles the effect on its re-run.
     Effect::new(move || {
         if store.install_step.get() == InstallStep::Done {
-            load_catalog(state, store, true);
+            load_catalog(state, store, i18n, true);
             store.disclosure.set(None);
             store.install_missing.set(Vec::new());
             store.install_step.set(InstallStep::Hidden);

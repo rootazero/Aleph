@@ -1291,7 +1291,15 @@
       "official": "Official",
       "verified": "Verified",
       "community": "Community",
-      "unverified": "Unverified"
+      "unverified": "Unverified",
+      "integrity_label": "Integrity",
+      "integrity_verified": "sha256 ✓"
+    },
+    "error": {
+      "catalog_load": "Failed to load catalog",
+      "installed_load": "Failed to load installed",
+      "toggle_failed": "Toggle failed",
+      "remove_failed": "Remove failed"
     },
     "featured": "Featured",
     "search_placeholder": "Search by what you want to do…",
