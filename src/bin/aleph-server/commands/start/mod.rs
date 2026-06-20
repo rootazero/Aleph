@@ -1379,12 +1379,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     let registry = registry.clone();
                     let cache = cache.clone();
                     tokio::spawn(async move {
-                        let report = registry.sync_all_into(&cache).await;
-                        tracing::info!(
-                            synced = ?report.synced,
-                            failed = ?report.failed,
-                            "initial extensions catalog sync"
-                        );
+                        // Initial sync immediately, then refresh every 6h. The
+                        // retired store agent no longer drives this — it is a
+                        // plain background task now (interval fires on first tick).
+                        let mut tick =
+                            tokio::time::interval(std::time::Duration::from_secs(6 * 60 * 60));
+                        loop {
+                            tick.tick().await;
+                            let report = registry.sync_all_into(&cache).await;
+                            tracing::info!(
+                                synced = ?report.synced,
+                                failed = ?report.failed,
+                                "extensions catalog sync"
+                            );
+                        }
                     });
                 }
                 if !args.daemon {
