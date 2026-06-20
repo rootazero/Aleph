@@ -1372,3 +1372,238 @@ async fn grace_turn_payload_has_no_orphaned_tool_calls() {
          grace payload messages:\n{grace_payload_messages:#?}"
     );
 }
+
+// =============================================================================
+// Task-6 CAPSTONE — Fan-out → Thrash → Steer → Partial delivery
+//
+// Script (by non-grace provider call index):
+//   Call 1 (fan-out): 5 distinct web_fetch tool_use blocks (args_hash 0..5).
+//     Ring after: [wf0,wf1,wf2,wf3,wf4] (len=5). Tier-1: trailing_repeat_run=1 <
+//     repeat_threshold=5. Tier-2: same_name_run=5 < TOOL_HISTORY_WINDOW=8. → Continue.
+//   Call 2 (thrash): 8 file_read cycling 3 files (hashes 0,1,2,0,1,2,0,1).
+//     Ring after: last 8 = all file_read. same_name_run=8 >= 8.
+//     distinct=3, distinctness=3/8=0.375 < novelty_min=0.5. silent. → Veto #1.
+//   Call 3 (thrash): same 8 file_read batch. Ring unchanged. → Veto #2.
+//     verifier_veto_count(2) >= steer_max(2) → TerminateReason::VerifierVeto,
+//     fires grace turn with GRACE_NUDGE_VERIFIER_VETO.
+//   Grace turn: detect sentinel "safety cap has now stopped" → return text.
+//
+// Profile: {steer_max:2, ..conservative()} — silence_required=true so thrash
+// must emit no assistant text.
+// =============================================================================
+
+/// Scripted provider that drives: fan-out turn → thrash turns → grace turn.
+///
+/// `calls` counts non-grace invocations (0-based). The grace turn is detected
+/// by GRACE_NUDGE_VERIFIER_VETO's unique sentinel in the last user message.
+struct FanoutThenThrashProvider {
+    /// Total call count including the grace turn.
+    calls: AtomicUsize,
+    /// Records whether the grace turn was seen (for assertion #4).
+    grace_seen: std::sync::atomic::AtomicBool,
+}
+
+impl FanoutThenThrashProvider {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            grace_seen: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+    fn total_calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+    fn grace_was_seen(&self) -> bool {
+        self.grace_seen.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for FanoutThenThrashProvider {
+    fn process<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        // Detect the veto-cap grace turn: the GRACE_NUDGE_VERIFIER_VETO sentinel
+        // ends with a unique phrase about the "safety cap".
+        let is_grace = payload
+            .messages
+            .last()
+            .map(|m| m.text_content().contains("safety cap has now stopped"))
+            .unwrap_or(false);
+        Box::pin(async move {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if is_grace {
+                self.grace_seen.store(true, Ordering::SeqCst);
+                // Grace turn: return meaningful text so assertion #4 (non-empty
+                // delivery) passes.
+                return Ok(ProviderResponse::text_only(
+                    "Based on the 5 pages I fetched: the news cycle shows three recurring \
+                     themes — the task remains incomplete due to ambiguous scope."
+                        .to_string(),
+                ));
+            }
+            match n {
+                // Call 0 (fan-out): 5 distinct web_fetch, all different args_hash.
+                // Ring after: [wf0,wf1,wf2,wf3,wf4]. Tier-1: trailing_repeat=1 < 5.
+                // Tier-2: same_name_run=5 < 8. → Continue (fan-out passes).
+                0 => Ok(ProviderResponse {
+                    text: None, // silent — not needed for fan-out
+                    tool_calls: (0u64..5)
+                        .map(|i| crate::providers::adapter::NativeToolCall {
+                            thought_signature: None,
+                            id: format!("wf-{i}"),
+                            name: "web_fetch".to_string(),
+                            arguments: serde_json::json!({"url": format!("https://example.com/page/{i}")}),
+                        })
+                        .collect(),
+                    ..Default::default()
+                }),
+                // Calls 1 & 2 (thrash): 8 file_read cycling 3 files.
+                // Each batch adds 8 to the ring, pushing out the 5 web_fetch.
+                // After batch: ring = 8 file_read. same_name_run=8 >= 8.
+                // distinct=3, distinctness=0.375 < 0.5. No text (silent). → Veto.
+                _ => Ok(ProviderResponse {
+                    text: None, // must be silent — silence_required=true
+                    tool_calls: (0u64..8)
+                        .map(|i| crate::providers::adapter::NativeToolCall {
+                            thought_signature: None,
+                            id: format!("fr-{n}-{i}"),
+                            name: "file_read".to_string(),
+                            arguments: serde_json::json!({"path": format!("/ref/file_{}.md", i % 3)}),
+                        })
+                        .collect(),
+                    ..Default::default()
+                }),
+            }
+        })
+    }
+    fn name(&self) -> &str {
+        "fanout-then-thrash"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+#[tokio::test]
+async fn weak_model_fanout_then_thrash_steers_and_delivers_partial() {
+    // Profile: steer_max=2 so the grace turn fires after exactly 2 thrash vetoes.
+    // All other fields stay conservative (repeat_threshold=5, halt_threshold=8,
+    // novelty_min=0.5, silence_required=true).
+    let profile = crate::verification::ModelRobustnessProfile {
+        steer_max: 2,
+        ..crate::verification::ModelRobustnessProfile::conservative()
+    };
+
+    let session = MockSession::new(vec![
+        turn_started_event(),
+        user_message_event("fetch the latest news from these 5 sources and summarize"),
+    ]);
+    let provider = FanoutThenThrashProvider::new();
+    let chain = Arc::new(
+        VerifierChain::builder()
+            .with(Arc::new(crate::verification::ToolLoopVerifier::new()))
+            .build(),
+    );
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        robustness_profile: profile,
+        verifier_chain: Some(chain),
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        // High enough that the veto cap (after 2 thrash vetoes) fires first.
+        max_iterations: Some(20),
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let cancel = CancellationToken::new();
+    let mut cb = NoopHarnessCallback;
+    harness
+        .run(&sample_session_id(), &mut cb, &cancel)
+        .await
+        .expect("harness.run should complete via veto cap");
+
+    // ── Assertion 1: fan-out was NOT vetoed ──────────────────────────────────
+    // If the fan-out had been vetoed, total_calls would be ≤ 2 (fan-out call +
+    // grace turn). We need at least 3 non-grace calls (fan-out + 2 thrash).
+    // total_calls includes the grace turn, so ≥ 4 means fan-out + 2 thrash + grace.
+    let total = provider.total_calls();
+    assert!(
+        total >= 4,
+        "expected ≥4 provider calls (fan-out + 2 thrash + grace); got {total} — \
+         fan-out may have been incorrectly vetoed",
+    );
+
+    // Also confirm via session events: no [verifier veto] message after call 0.
+    // The first veto must be on call 1 (thrash), not call 0 (fan-out).
+    let events = session.snapshot().await;
+    let veto_messages: Vec<_> = events
+        .iter()
+        .filter(|r| {
+            matches!(&r.event,
+                SessionEvent::UserMessage { content, .. }
+                if content.text.starts_with("[verifier veto]"))
+        })
+        .collect();
+    // Exactly 2 veto messages (one per thrash call), none from the fan-out turn.
+    assert_eq!(
+        veto_messages.len(),
+        2,
+        "expected exactly 2 [verifier veto] messages (one per thrash call); got {}. \
+         Fan-out should not have been vetoed.\nevents: {events:#?}",
+        veto_messages.len(),
+    );
+
+    // ── Assertion 2: thrash was STEERED (VerifierVeto), not Halted ──────────
+    // The key discriminator: Tier-2 emits Veto (steer path), not Halt.
+    // TerminateReason must be VerifierVeto, never StopHookHalt.
+    assert!(
+        matches!(
+            harness.terminate_reason(),
+            crate::orchestrator::dispatch::TerminateReason::VerifierVeto { .. }
+        ),
+        "thrash must terminate via VerifierVeto (steer path, not Halt); got {:?}",
+        harness.terminate_reason(),
+    );
+
+    // ── Assertion 3: terminated via the veto-cap grace path ─────────────────
+    assert!(
+        harness.hit_limit(),
+        "hit_limit must be set on VerifierVeto termination (grace path fired)",
+    );
+    // The provider must have seen the grace-turn sentinel.
+    assert!(
+        provider.grace_was_seen(),
+        "grace turn must have been fired (provider must detect the veto-cap nudge)",
+    );
+
+    // ── Assertion 4: partial delivery worked — grace text is NON-EMPTY ───────
+    let grace_text_delivered = events.iter().any(|r| {
+        matches!(&r.event,
+            SessionEvent::AssistantMessage { content, .. }
+            if !content.text.is_empty() && content.text.contains("5 pages I fetched"))
+    });
+    assert!(
+        grace_text_delivered,
+        "grace turn text must reach the session log (non-empty partial delivery); \
+         got events: {events:#?}",
+    );
+}
