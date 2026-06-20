@@ -93,7 +93,9 @@ fn test_kimi_alias() {
     let moonshot = get_preset("moonshot").unwrap();
     let kimi = get_preset("kimi").unwrap();
     assert_eq!(moonshot.base_url, kimi.base_url);
-    assert_eq!(moonshot.protocol, "openai");
+    // Default `moonshot`/`kimi` preset now ships the recommended anthropic
+    // endpoint; the OpenAI endpoint lives at `moonshot-openai`/`kimi-openai`.
+    assert_eq!(moonshot.protocol, "anthropic");
 }
 
 #[test]
@@ -105,8 +107,10 @@ fn test_kimi_for_coding_preset_distinct_from_moonshot() {
     assert_eq!(coding.base_url, "https://api.kimi.com/coding/v1");
     assert_eq!(coding.protocol, "anthropic");
     assert_eq!(coding.base_url, coding_alias.base_url);
+    // Distinct preset: kimi-for-coding's dedicated coding endpoint vs the
+    // general moonshot endpoint. (Both now speak the anthropic protocol, so
+    // the distinguisher is the base_url, not the protocol.)
     assert_ne!(coding.base_url, moonshot.base_url);
-    assert_ne!(coding.protocol, moonshot.protocol);
 }
 
 #[test]
@@ -516,4 +520,49 @@ fn test_get_merged_preset_new_provider_no_base_url() {
     );
 
     assert!(get_merged_preset("incomplete-provider", &overrides).is_none());
+}
+
+#[test]
+fn minimax_primary_is_anthropic_endpoint() {
+    let p = PRESETS.get("minimax").expect("minimax preset");
+    assert_eq!(p.protocol, "anthropic");
+    assert!(
+        p.base_url.contains("minimaxi.com/anthropic"),
+        "{}",
+        p.base_url
+    );
+    let openai = PRESETS
+        .get("minimax-openai")
+        .expect("minimax-openai secondary");
+    assert_eq!(openai.protocol, "openai");
+}
+
+#[test]
+fn moonshot_primary_is_anthropic_endpoint() {
+    let p = PRESETS.get("moonshot").expect("moonshot preset");
+    assert_eq!(p.protocol, "anthropic");
+    assert!(
+        p.base_url.contains("moonshot.cn/anthropic"),
+        "{}",
+        p.base_url
+    );
+    let openai = PRESETS
+        .get("moonshot-openai")
+        .expect("moonshot-openai secondary");
+    assert_eq!(openai.protocol, "openai");
+}
+
+#[test]
+fn kimi_minimax_govern_as_strict_regardless_of_protocol() {
+    // Regression guard: switching the default to the anthropic protocol must
+    // NOT loosen governance — vendor_identity still resolves "strict".
+    use crate::providers::model_behaviors::vendor_identity;
+    assert_eq!(
+        vendor_identity(Some("https://api.moonshot.cn/anthropic"), "kimi-k2-0905-preview"),
+        Some("strict")
+    );
+    assert_eq!(
+        vendor_identity(Some("https://api.minimaxi.com/anthropic"), "MiniMax-M2.5"),
+        Some("strict")
+    );
 }

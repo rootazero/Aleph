@@ -130,13 +130,16 @@ pub struct LayerInput<'a> {
     /// the section entirely when the chain is at root (`depth == 0`) or
     /// the field is `None`, so the top-level harness path stays unaffected.
     pub chain_context: Option<&'a crate::harness::chain_context::ChainContext>,
-    /// Wire-protocol family identifier reported by
-    /// `AiProvider::protocol()` (with `model_behavior_override()` taking
-    /// precedence). Used by `ProviderGuidanceLayer` to dispatch the
-    /// appropriate per-family operational guidance block. `None` keeps
-    /// the layer silent — desirable on non-LLM-driven paths (capture,
-    /// snapshot, tests).
-    pub provider_protocol: Option<&'a str>,
+    /// Resolved governance behavior name (`resolve_behavior`: anthropic /
+    /// openai / gemini / ollama / strict / unknown). Drives
+    /// `ProviderGuidanceLayer`'s baseline-block selection. `None` keeps the
+    /// layer silent (capture / snapshot / tests).
+    pub behavior_name: Option<&'a str>,
+    /// Pre-loaded per-family coaching delta from `model_behaviors/{name}.md`
+    /// (overridable at `~/.aleph/model_behaviors/`). Appended verbatim by
+    /// `ProviderGuidanceLayer` after the shared baseline blocks. `None` = no
+    /// delta for this family.
+    pub model_behavior_delta: Option<&'a str>,
     /// Static per-run Think→Act iteration cap, resolved by the harness
     /// bridge from `FlowOverrides.max_iterations` falling back to the
     /// boot-time `[execution] max_iterations` default. Used by
@@ -170,7 +173,8 @@ impl<'a> LayerInput<'a> {
             session_snapshot: None,
             curated_memory_envelope: None,
             chain_context: None,
-            provider_protocol: None,
+            behavior_name: None,
+            model_behavior_delta: None,
             iteration_cap: None,
             extra_files: None,
         }
@@ -196,7 +200,8 @@ impl<'a> LayerInput<'a> {
             session_snapshot: None,
             curated_memory_envelope: None,
             chain_context: None,
-            provider_protocol: None,
+            behavior_name: None,
+            model_behavior_delta: None,
             iteration_cap: None,
             extra_files: None,
         }
@@ -226,7 +231,8 @@ impl<'a> LayerInput<'a> {
             session_snapshot: None,
             curated_memory_envelope: None,
             chain_context: None,
-            provider_protocol: None,
+            behavior_name: None,
+            model_behavior_delta: None,
             iteration_cap: None,
             extra_files: None,
         }
@@ -252,7 +258,8 @@ impl<'a> LayerInput<'a> {
             session_snapshot: None,
             curated_memory_envelope: None,
             chain_context: None,
-            provider_protocol: None,
+            behavior_name: None,
+            model_behavior_delta: None,
             iteration_cap: None,
             extra_files: None,
         }
@@ -395,19 +402,21 @@ impl<'a> LayerInput<'a> {
         self
     }
 
-    /// Attach the wire-protocol family identifier so `ProviderGuidanceLayer`
-    /// can dispatch the right per-family operational directives.
     #[must_use]
-    pub const fn with_provider_protocol(mut self, protocol: &'a str) -> Self {
-        self.provider_protocol = Some(protocol);
+    pub const fn with_behavior_name(mut self, name: &'a str) -> Self {
+        self.behavior_name = Some(name);
         self
     }
 
-    /// Same as `with_provider_protocol` but accepts an `Option` for
-    /// ergonomic threading from optional config.
     #[must_use]
-    pub const fn with_provider_protocol_opt(mut self, protocol: Option<&'a str>) -> Self {
-        self.provider_protocol = protocol;
+    pub const fn with_behavior_name_opt(mut self, name: Option<&'a str>) -> Self {
+        self.behavior_name = name;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_model_behavior_delta_opt(mut self, delta: Option<&'a str>) -> Self {
+        self.model_behavior_delta = delta;
         self
     }
 

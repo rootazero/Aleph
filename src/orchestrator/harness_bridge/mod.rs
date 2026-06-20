@@ -32,6 +32,7 @@ mod llm;
 mod session_seed;
 
 // New siblings carved out of the former single-file module.
+mod behavior_resolve;
 mod context_blocks;
 mod prompt_build;
 mod runner_impl;
@@ -46,6 +47,7 @@ pub use context_blocks::{
 };
 // Crate-internal helpers tests reach via the parent path (`super::X`); keep
 // them addressable at the module root after the split.
+pub(crate) use behavior_resolve::resolve_behavior;
 pub(crate) use prompt_build::{agent_identity_dir_exists, last_user_query, resolve_max_iterations};
 
 /// Stage 7 (#12): emit one `TraceSink::on_init_seam` event per Stage 1-6

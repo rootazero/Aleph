@@ -148,13 +148,37 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     (
         "moonshot",
         ProviderPreset::new(
-            "https://api.moonshot.ai/v1",
-            "openai",
+            "https://api.moonshot.cn/anthropic",
+            "anthropic",
             "#6366f1",
             "kimi-k2-0905-preview",
         )
         .with_aliases(&["kimi"])
         .with_display("Moonshot / Kimi")
+        .with_homepage("https://platform.moonshot.ai")
+        .with_signup("https://platform.moonshot.ai/console/api-keys")
+        .with_description("Anthropic-compatible endpoint (recommended)")
+        // Kimi server-manages temperature — sending one returns a fixed-value error.
+        .with_temperature_policy(super::TemperaturePolicy::Omit)
+        .with_fallback_models(&[
+            "kimi-k2-0905-preview",
+            "kimi-k2-turbo-preview",
+            "kimi-latest",
+            "moonshot-v1-128k",
+            "moonshot-v1-32k",
+            "moonshot-v1-8k",
+        ]),
+    ),
+    (
+        "moonshot-openai",
+        ProviderPreset::new(
+            "https://api.moonshot.ai/v1",
+            "openai",
+            "#6366f1",
+            "kimi-k2-0905-preview",
+        )
+        .with_aliases(&["kimi-openai"])
+        .with_display("Moonshot / Kimi (OpenAI endpoint)")
         .with_homepage("https://platform.moonshot.ai")
         .with_signup("https://platform.moonshot.ai/console/api-keys")
         .with_description("OpenAI-compatible Kimi K2 / Moonshot chat models")
@@ -248,12 +272,26 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     (
         "minimax",
         ProviderPreset::new(
+            "https://api.minimaxi.com/anthropic",
+            "anthropic",
+            "#e84393",
+            "MiniMax-M2.5",
+        )
+        .with_display("MiniMax")
+        .with_description("Anthropic-compatible endpoint (recommended)")
+        .with_homepage("https://www.minimax.io")
+        .with_signup("https://www.minimax.io"),
+    ),
+    (
+        "minimax-openai",
+        ProviderPreset::new(
             "https://api.minimax.io/v1",
             "openai",
             "#e84393",
             "MiniMax-M2.5",
         )
-        .with_display("MiniMax")
+        .with_display("MiniMax (OpenAI endpoint)")
+        .with_description("OpenAI-compatible endpoint")
         .with_homepage("https://www.minimax.io")
         .with_signup("https://www.minimax.io"),
     ),

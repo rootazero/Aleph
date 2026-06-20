@@ -109,6 +109,16 @@ const GRACE_NUDGE_TOOL_LOOP_HALT: &str =
      genuinely missing, state that gap plainly and deliver the rest — do not \
      let one missing item block the whole response.";
 
+/// Ephemeral nudge for the grace turn fired when a per-turn or stall timeout
+/// trips — likely a slow or stuck step. The model gets ONE tool-less, short-
+/// budgeted chance to deliver a partial result instead of the run ending with
+/// no terminal text. The model writes the actual content (R7 — no template).
+const GRACE_NUDGE_TIMEOUT: &str =
+    "The time budget for this step was exhausted (a step may be slow or stuck) \
+     and the run is wrapping up. Do NOT call any more tools. Respond now with a \
+     short summary for the user: what you accomplished, what remains, and any \
+     partial result you can deliver right now.";
+
 /// Maximum re-issues of the LLM call when the provider returns a response
 /// with no text, no `tool_calls` and no thinking. A small bound — an empty
 /// response is usually transient; persistent emptiness is a broken
@@ -170,6 +180,9 @@ pub(crate) enum GraceReason {
     /// `ToolLoopVerifier` halted an unproductive tool-call loop — salvage a
     /// deliverable from what was already gathered instead of cold-terminating.
     ToolLoopHalt,
+    /// Per-turn / stall timeout tripped — salvage a partial deliverable under a
+    /// dedicated short budget instead of cold-terminating on a hung step.
+    Timeout,
 }
 
 impl GraceReason {
@@ -181,6 +194,7 @@ impl GraceReason {
             Self::VerifierVeto => GRACE_NUDGE_VERIFIER_VETO,
             Self::ConsecutiveFailureCap => GRACE_NUDGE_FAILURE_CAP,
             Self::ToolLoopHalt => GRACE_NUDGE_TOOL_LOOP_HALT,
+            Self::Timeout => GRACE_NUDGE_TIMEOUT,
         }
     }
 }
@@ -1849,6 +1863,13 @@ mod tests {
         );
         assert_ne!(GRACE_NUDGE_FAILURE_CAP, GRACE_NUDGE_VERIFIER_VETO);
         assert!(GRACE_NUDGE_FAILURE_CAP.contains("user"));
+    }
+
+    #[test]
+    fn grace_nudge_timeout_is_distinct_and_addresses_user() {
+        assert_eq!(GraceReason::Timeout.nudge(), GRACE_NUDGE_TIMEOUT);
+        assert_ne!(GRACE_NUDGE_TIMEOUT, GRACE_NUDGE_MAX_ITERATIONS);
+        assert!(GRACE_NUDGE_TIMEOUT.contains("summar"));
     }
 
     /// `CallbackSink` must forward text deltas to `on_delta`, thinking deltas

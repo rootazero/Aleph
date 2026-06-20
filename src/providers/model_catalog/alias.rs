@@ -142,6 +142,16 @@ pub fn infer_vendor(model: &str) -> Option<&'static str> {
 #[must_use]
 pub fn canonical_provider_id(provider: &str) -> Option<&'static str> {
     let p = provider.trim().to_ascii_lowercase();
+    // Vendor-native OpenAI-compatible endpoints (MiniMax / Moonshot ship both
+    // an anthropic-protocol primary and an OpenAI-protocol secondary). The
+    // `-openai` suffix here marks the wire PROTOCOL, not the billing vendor, so
+    // these must short-circuit before the generic "openai" substring branch
+    // below — which would otherwise shadow them and mis-price the run as OpenAI.
+    match p.as_str() {
+        "minimax-openai" => return Some("minimax"),
+        "moonshot-openai" | "kimi-openai" => return Some("moonshot"),
+        _ => {}
+    }
     if p.contains("anthropic") || p.contains("claude") {
         Some("anthropic")
     } else if p.contains("openai")
@@ -277,6 +287,20 @@ mod tests {
         assert_eq!(canonical_provider_id("perplexity"), Some("perplexity"));
         assert_eq!(canonical_provider_id("stepfun"), Some("stepfun"));
         assert_eq!(canonical_provider_id("groq-llama"), Some("meta"));
+    }
+
+    #[test]
+    fn vendor_native_openai_secondaries_keep_their_billing_vendor() {
+        // MiniMax / Moonshot ship an OpenAI-protocol secondary alongside their
+        // anthropic primary. The "-openai" suffix is the wire protocol, not the
+        // billing vendor — these must NOT be shadowed by the generic "openai"
+        // branch (which would mis-price the run as OpenAI).
+        assert_eq!(canonical_provider_id("minimax-openai"), Some("minimax"));
+        assert_eq!(canonical_provider_id("moonshot-openai"), Some("moonshot"));
+        assert_eq!(canonical_provider_id("kimi-openai"), Some("moonshot"));
+        // Regression guard: genuine OpenAI / vertex-anthropic semantics intact.
+        assert_eq!(canonical_provider_id("openai"), Some("openai"));
+        assert_eq!(canonical_provider_id("vertex-anthropic"), Some("anthropic"));
     }
 
     #[test]

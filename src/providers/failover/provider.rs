@@ -793,4 +793,11 @@ impl AiProvider for FailoverProvider {
             .model_behavior_override()
             .map(|c| Cow::Owned(c.into_owned()))
     }
+
+    fn behavior_hint(&self) -> Option<Cow<'_, str>> {
+        self.primary
+            .current()
+            .behavior_hint()
+            .map(|c| Cow::Owned(c.into_owned()))
+    }
 }

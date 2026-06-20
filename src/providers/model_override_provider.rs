@@ -67,6 +67,10 @@ impl AiProvider for ModelOverrideProvider {
     fn model_behavior_override(&self) -> Option<std::borrow::Cow<'_, str>> {
         self.inner.model_behavior_override()
     }
+
+    fn behavior_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
+        self.inner.behavior_hint()
+    }
 }
 
 #[cfg(test)]
@@ -155,5 +159,25 @@ mod tests {
             wrapped.model_behavior_override().as_deref(),
             Some("openrouter-anthropic")
         );
+    }
+
+    #[test]
+    fn delegates_behavior_hint_to_inner() {
+        struct HintInner;
+        impl AiProvider for HintInner {
+            fn process<'a>(
+                &'a self,
+                _payload: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+                Box::pin(async { Ok(ProviderResponse::text_only("inner".to_string())) })
+            }
+            fn name(&self) -> &str { "inner" }
+            fn color(&self) -> &str { "#000" }
+            fn behavior_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
+                Some(std::borrow::Cow::Borrowed("strict"))
+            }
+        }
+        let wrapped = ModelOverrideProvider::new(Arc::new(HintInner), "m");
+        assert_eq!(wrapped.behavior_hint().as_deref(), Some("strict"));
     }
 }

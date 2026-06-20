@@ -265,6 +265,15 @@ pub trait AiProvider: Send + Sync {
         None
     }
 
+    /// Self-identified governance behavior name derived from the provider's
+    /// own endpoint/model (e.g. Kimi/Minimax → `"strict"`). Sits ABOVE the
+    /// protocol fallback but BELOW the explicit config `model_behavior`
+    /// override in `resolve_behavior`. Default `None` = "no opinion, use the
+    /// protocol default". Wrappers delegate; `HttpProvider` computes it.
+    fn behavior_hint(&self) -> Option<Cow<'_, str>> {
+        None
+    }
+
     /// Downcast to `HttpProvider` for streaming access.
     ///
     /// Returns Some(&HttpProvider) only for `HttpProvider` instances.
