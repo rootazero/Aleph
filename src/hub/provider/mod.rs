@@ -211,6 +211,8 @@ mod tests {
             installed: false,
             enabled: false,
             update_available: false,
+            via: None,
+            install_spec: None,
         }
     }
 

@@ -156,6 +156,8 @@ pub fn server_to_extension(s: &RegistryServer) -> ExtensionEntry {
         installed: false,
         enabled: false,
         update_available: false,
+        via: None,
+        install_spec: None,
     }
 }
 

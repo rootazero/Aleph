@@ -28,6 +28,8 @@ pub fn plugin_entry_to_extension(provider_id: &str, pe: &MarketplacePluginEntry)
         installed: false,
         enabled: false,
         update_available: false,
+        via: None,
+        install_spec: None,
     }
 }
 

@@ -3,7 +3,8 @@
 //! objective subset of `ExtensionEntry` — no per-user state ever crosses the
 //! wire; `installed`/`enabled` are stamped locally.
 //!
-//! See docs/superpowers/specs/2026-06-20-extension-hub-federation-design.md §4.
+//! See
+//! docs/superpowers/specs/2026-06-20-aleph-hub-single-source-design.md
 
 use serde::Deserialize;
 
@@ -58,6 +59,9 @@ pub struct HubCatalogEntry {
     #[serde(default)]
     pub config_schema: Option<serde_json::Value>,
     pub install_spec: InstallSpec,
+    /// Upstream provenance label set by the publishing hub. Additive/back-compat.
+    #[serde(default)]
+    pub via: Option<String>,
 }
 
 impl HubCatalogEntry {
@@ -83,6 +87,8 @@ impl HubCatalogEntry {
             installed: false,
             enabled: false,
             update_available: false,
+            via: self.via.clone().or_else(|| Some(hub_id.to_string())),
+            install_spec: Some(self.install_spec.clone()),
         }
     }
 }
