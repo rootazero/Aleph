@@ -1017,14 +1017,24 @@ fn DreamInsightsPanel() -> impl IntoView {
                             let daily = resp.daily.clone();
                             let synthesis = resp.synthesis.clone();
                             let is_empty = runs.is_empty() && daily.is_empty() && synthesis.is_empty();
+                            let latest_run_summary = runs.first().map(|latest| {
+                                let label = t_string!(i18n, settings.memory.dream_latest_run).to_string();
+                                format!("{}: {} · {}ms · {} synth",
+                                    label, latest.pipeline_type, latest.duration_ms, latest.synthesis_count)
+                            });
                             view! {
-                                {move || if is_empty {
+                                {if is_empty {
                                     view! { <div class="text-text-tertiary text-sm">{t!(i18n, settings.memory.dream_no_insights)}</div> }.into_any()
                                 } else { view! { <div></div> }.into_any() }}
 
                                 // Recent runs
                                 <div>
                                     <h3 class="text-sm font-semibold mb-2">{t!(i18n, settings.memory.dream_runs)}</h3>
+                                    {latest_run_summary.map(|summary| view! {
+                                        <div class="mb-2 px-3 py-1.5 bg-info-subtle rounded text-sm font-medium text-info">
+                                            {summary}
+                                        </div>
+                                    })}
                                     <div class="space-y-1">
                                         {runs.into_iter().map(|r| {
                                             let err = r.errors.clone();
@@ -1161,8 +1171,18 @@ fn CorrectionsPanel() -> impl IntoView {
                             if items.is_empty() {
                                 return view! { <div class="text-text-tertiary text-sm">{t!(i18n, settings.memory.corrections_none)}</div> }.into_any();
                             }
+                            let pending_count = items.iter().filter(|c| c.status == "pending").count();
+                            let distilled_count = items.len() - pending_count;
+                            let summary = format!(
+                                "{} {} · {} {}",
+                                pending_count,
+                                t_string!(i18n, settings.memory.corrections_pending),
+                                distilled_count,
+                                t_string!(i18n, settings.memory.corrections_distilled),
+                            );
                             view! {
                                 <div class="space-y-2">
+                                    <p class="text-xs text-text-secondary font-medium">{summary}</p>
                                     {items.into_iter().map(|c| {
                                         let is_pending = c.status == "pending";
                                         let badge = if is_pending {

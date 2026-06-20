@@ -777,6 +777,7 @@
       "dream_daily": "Daily Digests",
       "dream_synthesis": "Synthesis Notes",
       "dream_runs": "Recent Dream Runs",
+      "dream_latest_run": "Latest run",
       "dream_no_insights": "No insights yet — the dream daemon has not produced any.",
       "dream_source_count": "sources",
       "corrections": "Corrections",
