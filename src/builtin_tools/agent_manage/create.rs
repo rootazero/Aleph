@@ -13,6 +13,7 @@ use crate::error::Result;
 use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
 use crate::sync_primitives::Arc;
+use crate::thinker::soul_archetypes::{compose_soul, SoulArchetype};
 use crate::tools::AlephTool;
 
 // =============================================================================
@@ -114,6 +115,15 @@ pub struct AgentCreateArgs {
     /// Custom system prompt for this agent
     #[serde(default)]
     pub system_prompt: Option<String>,
+    /// Soul archetype base for this agent's persona: expert | companion | assistant | maker.
+    /// Defaults to assistant when omitted. Ignored if `system_prompt` is provided.
+    #[serde(default)]
+    pub archetype: Option<SoulArchetype>,
+    /// Personalization markdown synthesized from the creation interview
+    /// (domain focus, tone tweaks, hard boundaries, signature behaviors).
+    /// Appended under "## This Agent". Ignored if `system_prompt` is provided.
+    #[serde(default)]
+    pub personalization: Option<String>,
     /// Raw input from slash command fast path (internal, hidden from LLM schema)
     #[serde(default)]
     #[schemars(skip)]
@@ -133,6 +143,24 @@ pub struct AgentCreateOutput {
     pub workspace_path: String,
     /// Human-readable status message
     pub message: String,
+}
+
+/// Decide the SOUL.md content for a new agent.
+///
+/// `system_prompt` (when non-blank) is a verbatim full override. Otherwise the
+/// soul is composed from the chosen archetype (default Assistant) + Base +
+/// optional personalization.
+fn resolve_soul_content(args: &AgentCreateArgs, display_name: &str) -> String {
+    if let Some(prompt) = args.system_prompt.as_deref() {
+        if !prompt.trim().is_empty() {
+            return prompt.to_string();
+        }
+    }
+    compose_soul(
+        args.archetype.unwrap_or_default(),
+        display_name,
+        args.personalization.as_deref(),
+    )
 }
 
 // =============================================================================
@@ -184,17 +212,29 @@ impl AgentCreateTool {
 impl AlephTool for AgentCreateTool {
     const NAME: &'static str = "agent_create";
     const DESCRIPTION: &'static str =
-        "Create a new agent with its own workspace and memory. Use this when the \
-         user wants a specialized assistant (e.g., trading, coding, health). \
-         After creation, make it active for the conversation with agent_switch.";
+        "Create a new agent with its own workspace, memory, and soul. Use when the user \
+         wants a specialized agent (trading, coding, health, a companion, etc.).\n\n\
+         Before creating, if the request is under-specified, run a short creation interview:\n\
+         1) Recommend ONE soul archetype from the user's purpose and confirm it:\n\
+         - expert: analysis, research, decisions — rigorous, argues the counter-case, tags claims.\n\
+         - maker: writing code, building, automation — action-biased, surgical, verifies.\n\
+         - assistant: general getting-things-done — fast, answer-first (default when unclear).\n\
+         - companion: support, journaling, presence — warm, listens.\n\
+         2) Ask up to 2-5 short questions to gather: domain/focus, name, tone tweaks, hard \
+         boundaries, signature behaviors.\n\
+         3) Call agent_create with the chosen `archetype` and a `personalization` markdown \
+         block synthesizing the answers.\n\
+         If the user already gave enough detail or asks you to just create it, skip the \
+         questions. After creation, make it active with agent_switch.";
 
     type Args = AgentCreateArgs;
     type Output = AgentCreateOutput;
 
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
-            "agent_create(id='trader', name='Trading Assistant', description='Specialized in stock analysis', model='claude-sonnet-4-5')".to_string(),
-            "agent_create(id='coder', system_prompt='You are an expert Rust developer.')".to_string(),
+            "agent_create(id='quant', name='Quant', archetype='expert', personalization='Focus: equities and macro. Always show confidence and sourcing. Hard boundary: no trade execution.')".to_string(),
+            "agent_create(id='coder', name='Coder', archetype='maker', personalization='Stack: Rust + tokio. Always run cargo check before claiming done.')".to_string(),
+            "agent_create(id='iris', name='Iris', archetype='companion', personalization='Evening check-ins. Reflect first; never push advice unasked.')".to_string(),
         ])
     }
 
@@ -247,8 +287,25 @@ impl AlephTool for AgentCreateTool {
             .join(".aleph/workspaces");
         let workspace_path = workspaces_dir.join(&args.id);
 
-        // 4. Initialize agent identity directory (SOUL.md, AGENTS.md, etc.)
+        // 4. Compose this agent's soul (archetype + base + personalization, or a
+        // verbatim system_prompt override) and write it BEFORE identity-init so
+        // initialize_agent_identity's write_if_missing keeps it.
         let display_name = args.name.as_deref().unwrap_or(&args.id);
+        let soul_content = resolve_soul_content(&args, display_name);
+        std::fs::create_dir_all(&agent_state_dir).map_err(|e| {
+            crate::error::AlephError::other(format!(
+                "Failed to create agent state dir for '{}': {}",
+                args.id, e
+            ))
+        })?;
+        std::fs::write(agent_state_dir.join("SOUL.md"), &soul_content).map_err(|e| {
+            crate::error::AlephError::other(format!(
+                "Failed to write SOUL.md for '{}': {}",
+                args.id, e
+            ))
+        })?;
+
+        // Initialize the rest of the identity directory (AGENTS.md, MEMORY.md, …).
         initialize_agent_identity(&agent_state_dir, display_name).map_err(|e| {
             crate::error::AlephError::other(format!(
                 "Failed to initialize identity files for '{}': {}",
@@ -285,32 +342,6 @@ impl AlephTool for AgentCreateTool {
             std::fs::write(&agents_md, content).map_err(|e| {
                 crate::error::AlephError::other(format!("Failed to write AGENTS.md: {e}"))
             })?;
-        }
-
-        // 6. Generate template files (non-fatal if write fails)
-        let soul_path = agent_state_dir.join("SOUL.md");
-        if !soul_path.exists() {
-            let soul_content = if let Some(ref prompt) = args.system_prompt {
-                prompt.clone()
-            } else {
-                let soul_name = args.name.as_deref().unwrap_or(&args.id);
-                let specialized = match args.description.as_deref() {
-                    Some(desc) => format!(" specialized in {desc}"),
-                    None => String::new(),
-                };
-                format!(
-                    "You are {soul_name}{specialized}.\n\n\
-                     ## Tone\n\
-                     - Professional, friendly, concise\n\n\
-                     ## Boundaries\n\
-                     - Focus on your area of expertise\n\
-                     - Suggest switching to another agent for out-of-scope requests\n"
-                )
-            };
-            if let Err(e) = std::fs::write(&soul_path, soul_content) {
-                warn!(agent_id = %args.id, path = %soul_path.display(), error = %e,
-                    "Failed to write SOUL.md template (non-fatal)");
-            }
         }
 
         let identity_path = agent_state_dir.join("IDENTITY.md");
@@ -486,6 +517,34 @@ mod tests {
             "Single char should fallback: {}",
             id
         );
+    }
+
+    #[test]
+    fn resolve_soul_expert_with_personalization() {
+        let args: AgentCreateArgs = serde_json::from_str(
+            r#"{"id":"quant","archetype":"expert","personalization":"Focus: equities and macro."}"#,
+        )
+        .unwrap();
+        let soul = resolve_soul_content(&args, "Quant");
+        assert!(soul.contains("Accuracy beats approval.")); // expert
+        assert!(soul.contains("Never fabricate facts, citations")); // base
+        assert!(soul.contains("## This Agent"));
+        assert!(soul.contains("Focus: equities and macro."));
+    }
+
+    #[test]
+    fn resolve_soul_defaults_to_assistant() {
+        let args: AgentCreateArgs = serde_json::from_str(r#"{"id":"helper"}"#).unwrap();
+        let soul = resolve_soul_content(&args, "Helper");
+        assert!(soul.contains("Lead with the answer or the action.")); // assistant
+        assert!(!soul.contains("## This Agent"));
+    }
+
+    #[test]
+    fn resolve_soul_system_prompt_overrides_verbatim() {
+        let args: AgentCreateArgs =
+            serde_json::from_str(r#"{"id":"x","system_prompt":"RAW SOUL TEXT"}"#).unwrap();
+        assert_eq!(resolve_soul_content(&args, "X"), "RAW SOUL TEXT");
     }
 
     #[test]
