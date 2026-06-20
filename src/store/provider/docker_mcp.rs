@@ -2,7 +2,7 @@
 //! `TrustTier::Official`; install spec is a single `OciImage`.
 
 use crate::store::provider::{SourceError, SourceProvider, SyncCtx};
-use crate::store::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
+use crate::store::types::{ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -31,15 +31,21 @@ pub fn docker_install_spec(s: &DockerServer) -> InstallSpec {
 }
 
 pub fn docker_server_to_extension(name: &str, s: &DockerServer) -> ExtensionEntry {
+    let description = s.description.clone();
+    let tags = vec!["mcp".into(), "container".into()];
+    let category = s.category
+        .as_deref()
+        .and_then(crate::store::categorize::category_from_hint)
+        .unwrap_or_else(|| crate::store::categorize::categorize(name, &description, &tags, None));
     ExtensionEntry {
         id: format!("docker-mcp:{name}"),
         kind: ExtensionKind::Mcp,
-        category: ExtensionCategory::Other,
+        category,
         name: name.to_string(),
-        description: s.description.clone(),
+        description,
         author: Some("docker".into()),
         icon: None,
-        tags: vec!["mcp".into(), "container".into()],
+        tags,
         version: None,
         source_id: "docker-mcp".into(),
         repo_url: None,

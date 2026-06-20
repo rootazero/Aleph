@@ -96,7 +96,12 @@ impl ProviderRegistry {
         };
         for (id, res) in results {
             match res {
-                Ok(entries) if !entries.is_empty() => {
+                Ok(mut entries) if !entries.is_empty() => {
+                    for e in &mut entries {
+                        if e.category == crate::store::types::ExtensionCategory::Other {
+                            e.category = crate::store::categorize::categorize(&e.name, &e.description, &e.tags, None);
+                        }
+                    }
                     if let Err(e) = cache.replace_source(&id, &entries).await {
                         report.failed.push((id, e.to_string()));
                     } else {
