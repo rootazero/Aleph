@@ -26,6 +26,7 @@ pub mod protocol_tokens;
 pub mod runtime_context;
 pub mod security_context;
 pub mod soul;
+pub mod soul_archetypes;
 pub mod streaming;
 pub mod user_profile;
 pub mod virtual_tools;
