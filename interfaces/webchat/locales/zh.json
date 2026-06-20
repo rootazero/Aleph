@@ -772,7 +772,19 @@
       "duration_ms": "耗时（毫秒）",
       "input": "输入",
       "output": "输出",
-      "results": "结果"
+      "results": "结果",
+      "dream_insights": "做梦洞察",
+      "dream_daily": "每日摘要",
+      "dream_synthesis": "综合笔记",
+      "dream_runs": "最近做梦运行",
+      "dream_no_insights": "暂无洞察 —— 做梦守护进程尚未产出。",
+      "dream_source_count": "来源",
+      "corrections": "纠正记录",
+      "corrections_pending": "待蒸馏",
+      "corrections_distilled": "已蒸馏",
+      "corrections_suggested_rule": "建议规则",
+      "corrections_none": "暂无纠正记录。",
+      "corrections_show_distilled": "显示已蒸馏"
     },
     "mcp": {
       "title": "MCP 服务器",

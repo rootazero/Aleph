@@ -772,7 +772,19 @@
       "duration_ms": "Duration (ms)",
       "input": "Input",
       "output": "Output",
-      "results": "Results"
+      "results": "Results",
+      "dream_insights": "Dream Insights",
+      "dream_daily": "Daily Digests",
+      "dream_synthesis": "Synthesis Notes",
+      "dream_runs": "Recent Dream Runs",
+      "dream_no_insights": "No insights yet — the dream daemon has not produced any.",
+      "dream_source_count": "sources",
+      "corrections": "Corrections",
+      "corrections_pending": "pending",
+      "corrections_distilled": "distilled",
+      "corrections_suggested_rule": "Suggested rule",
+      "corrections_none": "No corrections recorded yet.",
+      "corrections_show_distilled": "Show distilled"
     },
     "mcp": {
       "title": "MCP Servers",

@@ -88,6 +88,7 @@ pub fn MemoryView() -> impl IntoView {
                                 <ReflectionSettings config=config />
                                 <StorageBackupSettings config=config />
                                 <RetrievalDebugPanel />
+                                <DreamInsightsPanel />
 
                                 <div class="pt-4 border-t border-border">
                                     <button
@@ -938,6 +939,136 @@ fn RetrievalDebugPanel() -> impl IntoView {
                                                 }
                                             }).collect::<Vec<_>>()}
                                         </div>
+                                    </div>
+                                </div>
+                            }
+                        })}
+                    </div>
+                }.into_any()
+            }}
+        </div>
+    }
+}
+
+// ============================================================================
+// Section F: Dream Insights Panel
+// ============================================================================
+
+#[component]
+fn DreamInsightsPanel() -> impl IntoView {
+    use crate::api::memory_config::{DreamInsightsApi, DreamInsightsResponse};
+    let i18n = use_i18n();
+    let expanded = RwSignal::new(false);
+    let loading = RwSignal::new(false);
+    let data = RwSignal::new(Option::<DreamInsightsResponse>::None);
+    let error = RwSignal::new(Option::<String>::None);
+
+    let load = move || {
+        let state = expect_context::<DashboardState>();
+        spawn_local(async move {
+            loading.set(true);
+            error.set(None);
+            match DreamInsightsApi::list(&state, None, Some(30)).await {
+                Ok(resp) => data.set(Some(resp)),
+                Err(e) => error.set(Some(e)),
+            }
+            loading.set(false);
+        });
+    };
+
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <button
+                on:click=move |_| {
+                    let next = !expanded.get();
+                    expanded.set(next);
+                    if next && data.get().is_none() {
+                        load();
+                    }
+                }
+                class="flex items-center w-full text-left"
+            >
+                <span class="text-lg font-semibold">
+                    {move || {
+                        let prefix = if expanded.get() { "- " } else { "+ " };
+                        format!("{}{}", prefix, t_string!(i18n, settings.memory.dream_insights))
+                    }}
+                </span>
+            </button>
+
+            {move || {
+                if !expanded.get() {
+                    return view! { <div></div> }.into_any();
+                }
+                view! {
+                    <div class="mt-4 space-y-4">
+                        {move || if loading.get() {
+                            view! { <div class="text-text-tertiary">{t!(i18n, common.loading)}</div> }.into_any()
+                        } else { view! { <div></div> }.into_any() }}
+
+                        {move || error.get().map(|e| view! {
+                            <div class="p-3 bg-danger-subtle text-danger rounded text-sm">{e}</div>
+                        })}
+
+                        {move || data.get().map(|resp| {
+                            let runs = resp.runs.clone();
+                            let daily = resp.daily.clone();
+                            let synthesis = resp.synthesis.clone();
+                            let is_empty = runs.is_empty() && daily.is_empty() && synthesis.is_empty();
+                            view! {
+                                {move || if is_empty {
+                                    view! { <div class="text-text-tertiary text-sm">{t!(i18n, settings.memory.dream_no_insights)}</div> }.into_any()
+                                } else { view! { <div></div> }.into_any() }}
+
+                                // Recent runs
+                                <div>
+                                    <h3 class="text-sm font-semibold mb-2">{t!(i18n, settings.memory.dream_runs)}</h3>
+                                    <div class="space-y-1">
+                                        {runs.into_iter().map(|r| {
+                                            let err = r.errors.clone();
+                                            view! {
+                                                <div class="p-2 bg-surface-sunken rounded border border-border text-sm flex justify-between">
+                                                    <span>{r.pipeline_type}</span>
+                                                    <span class="text-text-tertiary">{format!("{}ms · {} synth", r.duration_ms, r.synthesis_count)}</span>
+                                                    {err.map(|e| view! { <span class="text-danger">{e}</span> })}
+                                                </div>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                </div>
+
+                                // Daily digests
+                                <div>
+                                    <h3 class="text-sm font-semibold mb-2">{t!(i18n, settings.memory.dream_daily)}</h3>
+                                    <div class="space-y-2">
+                                        {daily.into_iter().map(|d| {
+                                            view! {
+                                                <div class="p-3 bg-surface-sunken rounded border border-border">
+                                                    <div class="flex justify-between mb-1">
+                                                        <span class="text-xs font-mono text-text-tertiary">{d.date}</span>
+                                                        <span class="text-xs">{format!("{} {}", d.source_memory_count, t_string!(i18n, settings.memory.dream_source_count))}</span>
+                                                    </div>
+                                                    <p class="text-sm">{d.content}</p>
+                                                </div>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                </div>
+
+                                // Synthesis notes
+                                <div>
+                                    <h3 class="text-sm font-semibold mb-2">{t!(i18n, settings.memory.dream_synthesis)}</h3>
+                                    <div class="space-y-2">
+                                        {synthesis.into_iter().map(|s| {
+                                            view! {
+                                                <div class="p-3 bg-surface-sunken rounded border border-border">
+                                                    <div class="flex justify-between">
+                                                        <span class="text-sm font-medium">{s.title}</span>
+                                                        <span class="text-xs font-mono text-text-tertiary">{s.path}</span>
+                                                    </div>
+                                                </div>
+                                            }
+                                        }).collect::<Vec<_>>()}
                                     </div>
                                 </div>
                             }
