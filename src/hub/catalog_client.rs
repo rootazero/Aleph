@@ -46,9 +46,11 @@ pub struct SyncReport {
 #[derive(Clone)]
 pub struct AlephHubCatalog {
     id: String,
+    /// Retained for future display / diagnostics; not read during ingestion today.
     #[allow(dead_code)]
     name: String,
     artifact_url: String,
+    /// Retained for future per-source trust policy; not used during ingestion today.
     #[allow(dead_code)]
     trust_tier: TrustTier,
     http: reqwest::Client,
@@ -114,15 +116,21 @@ impl AlephHubCatalog {
 
     /// Fetch + atomically replace this source's cache slice. Never errors out:
     /// a fetch/cache failure yields `synced: 0` and keeps the last-good cache.
+    /// An empty-but-valid response (transient publish glitch) is treated as a
+    /// non-fatal no-op — the last-good cache is preserved rather than wiped.
     pub async fn sync_into(&self, cache: &CatalogCache) -> SyncReport {
         match self.fetch().await {
-            Ok(entries) => {
+            Ok(entries) if !entries.is_empty() => {
                 let synced = entries.len();
                 match cache.replace_source(&self.id, &entries).await {
                     Ok(()) => SyncReport { synced, failed: Vec::new() },
                     Err(e) => SyncReport { synced: 0, failed: vec![format!("cache write: {e}")] },
                 }
             }
+            Ok(_) => SyncReport {
+                synced: 0,
+                failed: vec!["empty catalog; kept last-good cache".into()],
+            },
             Err(e) => SyncReport { synced: 0, failed: vec![e.to_string()] },
         }
     }
@@ -173,5 +181,65 @@ mod tests {
     #[test]
     fn constants_are_pinned() {
         assert_eq!(ALEPH_HUB_URL, "https://hub.heyaleph.com/catalog.json");
+    }
+
+    // --- Tests establishing the two facts the `sync_into` empty-guard depends on ---
+
+    /// Fact 1: `ingest` of a syntactically valid artifact with an empty `entries`
+    /// array returns `Ok(vec![])` — proving the empty-success trigger is reachable.
+    #[test]
+    fn ingest_empty_entries_returns_ok_empty_vec() {
+        let body = r#"{"manifest":{"schema_version":1,"hub_id":"aleph-hub","name":"Aleph Hub"},"entries":[]}"#;
+        let c = AlephHubCatalog::new(ALEPH_HUB_ID, ALEPH_HUB_NAME, "http://unused", TrustTier::Verified);
+        let entries = c.ingest(body).unwrap();
+        assert!(entries.is_empty(), "expected empty vec from empty entries array");
+    }
+
+    /// Fact 2: `CatalogCache::replace_source` with an empty slice is destructive —
+    /// it wipes existing rows. This proves WHY the guard in `sync_into` is necessary:
+    /// without it, an `Ok(vec![])` response would blank the entire cached catalog slice.
+    #[tokio::test]
+    async fn replace_source_with_empty_slice_wipes_existing_rows() {
+        use crate::hub::cache::{CatalogCache, CatalogFilter};
+        use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier as TT};
+
+        let cache = CatalogCache::open_in_memory().unwrap();
+        let entry = ExtensionEntry {
+            id: "aleph-hub:test/entry".into(),
+            kind: ExtensionKind::Mcp,
+            category: ExtensionCategory::Developer,
+            name: "Test".into(),
+            description: "d".into(),
+            author: None,
+            icon: None,
+            tags: vec![],
+            version: None,
+            source_id: ALEPH_HUB_ID.into(),
+            repo_url: None,
+            trust_tier: TT::Verified,
+            requires_config: false,
+            config_schema: None,
+            installed: false,
+            enabled: false,
+            update_available: false,
+            via: None,
+            install_spec: None,
+        };
+        cache.upsert_many(&[entry]).await.unwrap();
+
+        // Confirm the row is present before the wipe.
+        let before = cache
+            .query(&CatalogFilter { source_id: Some(ALEPH_HUB_ID.into()), ..Default::default() })
+            .await
+            .unwrap();
+        assert_eq!(before.len(), 1, "seed row must be present");
+
+        // An empty replace_source is destructive — rows are gone.
+        cache.replace_source(ALEPH_HUB_ID, &[]).await.unwrap();
+        let after = cache
+            .query(&CatalogFilter { source_id: Some(ALEPH_HUB_ID.into()), ..Default::default() })
+            .await
+            .unwrap();
+        assert!(after.is_empty(), "replace_source with empty slice must wipe existing rows");
     }
 }

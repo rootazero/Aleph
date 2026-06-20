@@ -33,7 +33,7 @@ pub struct HubResolveSpecTool {
 impl AlephTool for HubResolveSpecTool {
     const NAME: &'static str = "hub_resolve_spec";
     const DESCRIPTION: &'static str =
-        "Resolve the install spec for a catalog entry by its id, routing through the matching source provider.";
+        "Resolve the install spec for a catalog entry by its id from the local catalog cache.";
     type Args = HubResolveSpecArgs;
     type Output = HubResolveSpecOutput;
 

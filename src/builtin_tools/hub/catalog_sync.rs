@@ -31,7 +31,7 @@ pub struct HubCatalogSyncTool {
 impl AlephTool for HubCatalogSyncTool {
     const NAME: &'static str = "hub_catalog_sync";
     const DESCRIPTION: &'static str =
-        "Sync all extension sources into the local catalog cache and refresh functional categories.";
+        "Sync the Aleph Hub catalog into the local cache.";
     type Args = HubCatalogSyncArgs;
     type Output = HubCatalogSyncOutput;
 

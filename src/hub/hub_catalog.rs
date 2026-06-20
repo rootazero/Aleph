@@ -1,5 +1,5 @@
 //! Wire format for a versioned static Hub catalog artifact (the contract
-//! produced by Aleph-Hub and consumed by `StaticHubProvider`). It is the
+//! produced by Aleph-Hub and consumed by `AlephHubCatalog`). It is the
 //! objective subset of `ExtensionEntry` — no per-user state ever crosses the
 //! wire; `installed`/`enabled` are stamped locally.
 //!
