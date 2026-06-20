@@ -208,3 +208,37 @@ hub 产物已带服务端 `category` → 直接信任、跳过本地分类。现
 - 产物签名链（hub 私钥签 manifest，client 验签）。
 - 大目录分片 + 增量同步。
 - URL 逃生舱的 "Advanced → Install from URL" UI。
+
+---
+
+## 12. 决策增补 (Decision Addendum · 2026-06-20)
+
+会话中追加的决策，与上文同等效力：
+
+| # | 决策 | 选择 |
+|---|------|------|
+| D9 | 代码模块改名 | **`store` → `hub`**：`src/store/`→`src/hub/`、`src/builtin_tools/store/`→`src/builtin_tools/hub/`、工具名 `store_*`→`hub_*`、`STORE_TOOLS`→`HUB_TOOLS`、缓存文件 `store_catalog.db`→`hub_catalog.db`。理由：聚合开源资源，"store" 带 App Store/专有市场暗示，不符开源精神且有商标联想风险。中文名未定，代码不硬编码中文名 |
+| D10 | 改名外科手术性 | **只动扩展子系统**：`src/store/` + `src/builtin_tools/store/`。**绝不碰** `src/memory/store/`、`src/gateway/security/store` 等同名无关模块 |
+| D11 | 来源标注（开源署名） | **P-Provenance 原则**：每条 entry 永远暴露①索引它的 hub（badge，来自 `source_id`→`display_name`）②上游作者仓库（"View source" 链接，来自 `repo_url`）。`repo_url` 在 hub 产物中升为**必填**（无法解析上游的条目排除/标记） |
+| D12 | ClawHub 角色 | **通用标注 + 下次接**：本次把"来源标注+上游链接"做成通用能力；Aleph Hub 接一等浏览源；ClawHub 保留现有 legacy `clawhub` 工具/长尾，作为下一个 adapter |
+| D13 | 署名 UI | **本次一并落地**：Leptos 卡片/详情加 `via {hub}` badge + `View source` 链接（重编 WASM） |
+| D14 | 浏览面词汇 | **保持 "Extensions"**：`extensions.*` RPC 与 "Extensions" UI 词不变（中性、是与 panel 的线协议）。"Hub" 仅用于"源/联邦"概念 |
+| D15 | hub 源注册方式 | **config 驱动 + 内置默认**：Aleph Hub 为内置默认 provider；额外 hub 经 config（新 `[extension_hubs]` 表，镜像 `[plugin_marketplaces]`）。**不**新增 add/remove RPC（现状只有 `list`/`refresh`，够用） |
+| D16 | 后台同步 | **周期后台任务**：退役 store agent 后，sync 不再靠 agent 触发；server 启动后加 tokio interval 周期跑 `sync_all_into`（现状只有启动时一次性 sync） |
+
+### §12.1 Provenance 数据流补充
+
+- `ExtensionEntry.source_id`（已存在）= 机器源 id；`SourceProvider::display_name()`（新增，default=`id()`）= 显示名。gateway 在 `extensions.catalog` 响应里按 `source_id`→`display_name` 附 `source_label`。
+- `ExtensionEntry.repo_url`（已存在，`Option<String>`）= 上游仓库。契约要求 hub 产物每条尽量填；UI 渲染为 "View source"。
+- 命名重叠（本地 `hub` 模块 / 中心 `Aleph-Hub` 网站 / "hub 源"）是有意一致，不冲突。
+
+### §12.2 跨源去重 (Cross-source Dedup · D17)
+
+**重要功能**：Aleph Hub / ClawHub / Hermes Atlas 会索引到**同一上游 GitHub 仓库**的相同扩展，本地必须去重。
+
+- **去重键** = 规范化 `repo_url`（上游仓库）：`trim` → 小写 → 去 `https://`/`http://` 前缀 → 去尾 `.git` 与尾 `/`。正好复用 P-Provenance 的 `repo_url` 字段。
+- **时机** = 读时（gateway `extensions.catalog` 读出 cache 后）。cache 仍按源各存各的（保留每条来源），用纯函数 `hub::dedup::dedup_by_priority` 折叠。sync 保持 per-source 简单。
+- **源优先级**（lower index = higher）：默认 `["aleph-hub", "clawhub", "hermes-atlas"]`，未列出的源排其后；重复组**保留最高优先级源**的条目。同优先级按 `source_id` 字典序兜底（确定性）。可经 config 覆盖。
+- **无 `repo_url`** 的条目（Docker 镜像等）**不参与**跨源去重，原样保留。
+- **已知局限**：monorepo 多扩展共用一个 repo 会被误并（v1 仅按 repo_url）→ fast-follow 可加 subpath/name 进键。
+- 注：ClawHub = OpenClaw 项目的 hub，source_id 用 `clawhub`。
