@@ -22,6 +22,7 @@ use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
 use crate::error::Result as AlephResult;
 use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
+use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 use crate::sandbox::test_util::MockSandbox;
 use crate::sandbox::SandboxOutput;
@@ -1179,5 +1180,195 @@ async fn veto_cap_follows_profile_steer_max() {
     assert!(
         calls < 15,
         "with steer_max=2, run must end well before old-const-10 turn count; got {calls} LLM calls",
+    );
+}
+
+// =============================================================================
+// Task-5 regression guard — grace-turn payload has no orphaned tool_use ids.
+//
+// Drives a Tier-1 Halt (8× identical tool_use → conservative halt_threshold)
+// and inspects the *raw RequestPayload* the grace turn sends to the provider.
+// Every `tool_use` id in any assistant message in the payload must have a
+// matching `ToolResult` or `ToolError` message that follows it.  No orphan →
+// no Anthropic HTTP 400.
+//
+// Resolution: `close_unexecuted_tool_uses` emits a synthetic `ToolError` for
+// every id in `response.tool_calls` *before* `fire_boundary_grace_turn`
+// re-fetches the session log and rebuilds the prompt via `build_prompt`.
+// `build_prompt` scans forward from each `AssistantMessage` to build the
+// `resolved` set (prompt.rs ~line 70-77) — a non-adjacency scan — so the
+// `[stop hook halt]` UserMessage emitted *between* the assistant turn and the
+// synthetic ToolErrors does not break pairing.  The test locks in this
+// invariant as a compile-time regression guard.
+// =============================================================================
+
+/// Loops an identical tool_use until Tier-1 Halt fires, then answers the
+/// grace turn with text. Captures every RequestPayload it receives so the
+/// test can inspect the grace-turn payload for orphaned ids.
+struct RecordingHaltProvider {
+    calls: AtomicUsize,
+    /// Clones of every payload's messages, captured before returning.
+    /// Outer index = call number; inner = the message vector clone.
+    recorded: tokio::sync::Mutex<Vec<Vec<UnifiedMessage>>>,
+}
+
+impl RecordingHaltProvider {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            recorded: tokio::sync::Mutex::new(Vec::new()),
+        })
+    }
+}
+
+impl AiProvider for RecordingHaltProvider {
+    fn process<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        // Clone messages for later inspection before returning.
+        let messages_clone: Vec<UnifiedMessage> = payload.messages.to_vec();
+        // Detect the grace turn: the last message must be a User message
+        // containing the salvage nudge.  `LoopThenSalvageProvider` above uses
+        // the same sentinel text ("produce your best final deliverable").
+        let is_grace = payload
+            .messages
+            .last()
+            .map(|m| {
+                m.text_content()
+                    .contains("produce your best final deliverable")
+            })
+            .unwrap_or(false);
+        Box::pin(async move {
+            self.recorded.lock().await.push(messages_clone);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if is_grace {
+                return Ok(ProviderResponse::text_only(
+                    "salvage answer from recording provider".to_string(),
+                ));
+            }
+            // Non-grace: emit the same tool_use every time so the Tier-1 Halt
+            // fires on the 8th call (conservative profile halt_threshold = 8).
+            Ok(ProviderResponse {
+                text: None,
+                tool_calls: vec![crate::providers::adapter::NativeToolCall {
+                    thought_signature: None,
+                    id: "halt-id".to_string(),
+                    name: "halt_tool".to_string(),
+                    arguments: serde_json::json!({"n": 1}),
+                }],
+                ..Default::default()
+            })
+        })
+    }
+    fn name(&self) -> &str {
+        "recording-halt"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+#[tokio::test]
+async fn grace_turn_payload_has_no_orphaned_tool_calls() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("loop on me")]);
+    let provider = RecordingHaltProvider::new();
+    let chain = Arc::new(
+        VerifierChain::builder()
+            .with(Arc::new(ToolLoopVerifier::new()))
+            .build(),
+    );
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        // conservative: halt_threshold=8; provider loops 8× identical calls
+        // then the grace turn fires.
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: Some(chain),
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: Some(20),
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let cancel = CancellationToken::new();
+    let mut cb = NoopHarnessCallback;
+    harness
+        .run(&sample_session_id(), &mut cb, &cancel)
+        .await
+        .expect("harness.run should complete via halt");
+
+    // Terminated via the Tier-1 Halt (StopHookHalt), not the iteration cap.
+    assert!(
+        matches!(
+            harness.terminate_reason(),
+            crate::orchestrator::dispatch::TerminateReason::StopHookHalt { .. }
+        ),
+        "expected StopHookHalt; got {:?}",
+        harness.terminate_reason()
+    );
+
+    // The grace turn is the LAST payload the provider received.
+    let recorded = provider.recorded.lock().await;
+    assert!(
+        !recorded.is_empty(),
+        "provider must have been called at least once"
+    );
+    let grace_payload_messages = recorded
+        .last()
+        .expect("at least one recorded payload");
+
+    // Build the set of tool_use ids that appear in ANY assistant message
+    // in the grace payload.
+    let mut tool_use_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for msg in grace_payload_messages.iter() {
+        if let UnifiedMessage::Assistant { content } = msg {
+            for block in content {
+                if let crate::providers::message::ContentBlock::ToolCall { id, .. } = block {
+                    tool_use_ids.insert(id.clone());
+                }
+            }
+        }
+    }
+
+    // For every tool_use id, there must be a matching ToolResult (or error)
+    // message later in the payload.  A missing entry means the prompt builder
+    // failed to pair the call — Anthropic-compatible backends reject with 400.
+    let mut answered_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for msg in grace_payload_messages.iter() {
+        if let UnifiedMessage::ToolResult { tool_call_id, .. } = msg {
+            answered_ids.insert(tool_call_id.clone());
+        }
+    }
+
+    let orphans: Vec<&String> = tool_use_ids
+        .iter()
+        .filter(|id| !answered_ids.contains(*id))
+        .collect();
+
+    assert!(
+        orphans.is_empty(),
+        "grace-turn payload has orphaned tool_use ids (no matching tool_result/tool_error): \
+         {orphans:?}\n\
+         grace payload messages:\n{grace_payload_messages:#?}"
     );
 }
