@@ -119,20 +119,20 @@ mod tests {
     #[test]
     fn test_builtin_openai_loads() {
         let content = builtin_behavior("openai").unwrap();
-        assert!(content.contains("Execution Directives"));
-        assert!(content.contains("ALWAYS call tools proactively"));
+        assert!(content.contains("Execution Discipline — OpenAI Family"));
+        assert!(content.contains("Act, don't ask"));
     }
 
     #[test]
     fn test_builtin_gemini_loads() {
         let content = builtin_behavior("gemini").unwrap();
-        assert!(content.contains("Execution Directives"));
+        assert!(content.contains("Google Model Operational Directives"));
     }
 
     #[test]
     fn test_builtin_ollama_loads() {
         let content = builtin_behavior("ollama").unwrap();
-        assert!(content.contains("Tool Usage Guide"));
+        assert!(content.contains("Local / Open-Weight Model Guide"));
     }
 
     #[test]
@@ -143,7 +143,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_falls_back_to_builtin() {
         let content = load_model_behavior("openai").await.unwrap();
-        assert!(content.contains("Execution Directives"));
+        assert!(content.contains("Execution Discipline — OpenAI Family"));
     }
 
     #[tokio::test]

@@ -93,7 +93,9 @@ fn test_kimi_alias() {
     let moonshot = get_preset("moonshot").unwrap();
     let kimi = get_preset("kimi").unwrap();
     assert_eq!(moonshot.base_url, kimi.base_url);
-    assert_eq!(moonshot.protocol, "openai");
+    // Default `moonshot`/`kimi` preset now ships the recommended anthropic
+    // endpoint; the OpenAI endpoint lives at `moonshot-openai`/`kimi-openai`.
+    assert_eq!(moonshot.protocol, "anthropic");
 }
 
 #[test]
@@ -105,8 +107,10 @@ fn test_kimi_for_coding_preset_distinct_from_moonshot() {
     assert_eq!(coding.base_url, "https://api.kimi.com/coding/v1");
     assert_eq!(coding.protocol, "anthropic");
     assert_eq!(coding.base_url, coding_alias.base_url);
+    // Distinct preset: kimi-for-coding's dedicated coding endpoint vs the
+    // general moonshot endpoint. (Both now speak the anthropic protocol, so
+    // the distinguisher is the base_url, not the protocol.)
     assert_ne!(coding.base_url, moonshot.base_url);
-    assert_ne!(coding.protocol, moonshot.protocol);
 }
 
 #[test]
