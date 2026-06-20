@@ -4,6 +4,7 @@
 pub mod cache;
 pub mod categorize;
 pub mod dedup;
+pub mod display;
 pub mod hub_catalog;
 pub mod install;
 pub mod provider;
