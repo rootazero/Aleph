@@ -97,7 +97,7 @@ pub mod skill_install;
 pub mod skill_manage;
 pub mod skill_reader;
 pub mod skill_status;
-pub mod store;
+pub mod hub;
 pub mod strategy_manage;
 pub mod system_tool;
 pub mod task_manage;

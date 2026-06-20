@@ -168,10 +168,10 @@ impl BuiltinToolRegistry {
         });
 
         // Store catalog-sync tool (requires CatalogCache + marketplace configs)
-        let store_catalog_sync_tool = if let Some(ref cache) = config.catalog_cache {
-            let marketplaces = config.store_marketplace_configs.clone().unwrap_or_default();
-            info!("Creating StoreCatalogSyncTool");
-            Some(crate::builtin_tools::store::StoreCatalogSyncTool {
+        let hub_catalog_sync_tool = if let Some(ref cache) = config.catalog_cache {
+            let marketplaces = config.hub_marketplace_configs.clone().unwrap_or_default();
+            info!("Creating HubCatalogSyncTool");
+            Some(crate::builtin_tools::hub::HubCatalogSyncTool {
                 cache: Arc::clone(cache),
                 marketplaces,
             })
@@ -180,10 +180,10 @@ impl BuiltinToolRegistry {
         };
 
         // Store resolve-spec tool (requires CatalogCache + marketplace configs)
-        let store_resolve_spec_tool = if let Some(ref cache) = config.catalog_cache {
-            let marketplaces = config.store_marketplace_configs.clone().unwrap_or_default();
-            info!("Creating StoreResolveSpecTool");
-            Some(crate::builtin_tools::store::StoreResolveSpecTool {
+        let hub_resolve_spec_tool = if let Some(ref cache) = config.catalog_cache {
+            let marketplaces = config.hub_marketplace_configs.clone().unwrap_or_default();
+            info!("Creating HubResolveSpecTool");
+            Some(crate::builtin_tools::hub::HubResolveSpecTool {
                 cache: Arc::clone(cache),
                 marketplaces,
             })
@@ -195,15 +195,15 @@ impl BuiltinToolRegistry {
         // marketplace configs + vault; the live MCP handle is optional (None →
         // MCP-spec installs report "MCP manager unavailable", plugin installs
         // and secret storage still work).
-        let store_install_run_tool = match (&config.catalog_cache, &config.shared_token_manager) {
+        let hub_install_run_tool = match (&config.catalog_cache, &config.shared_token_manager) {
             (Some(cache), Some(vault)) => {
-                let marketplaces = config.store_marketplace_configs.clone().unwrap_or_default();
-                info!("Creating StoreInstallRunTool");
-                Some(crate::builtin_tools::store::StoreInstallRunTool {
+                let marketplaces = config.hub_marketplace_configs.clone().unwrap_or_default();
+                info!("Creating HubInstallRunTool");
+                Some(crate::builtin_tools::hub::HubInstallRunTool {
                     cache: Arc::clone(cache),
                     marketplaces,
                     vault: Arc::clone(vault),
-                    mcp: config.store_mcp_handle.clone(),
+                    mcp: config.hub_mcp_handle.clone(),
                 })
             }
             _ => None,
@@ -212,12 +212,12 @@ impl BuiltinToolRegistry {
         // Store install-verify tool (T8). Dep: optional live MCP handle only.
         // Always constructed (even without CatalogCache) — plugin verification
         // needs no cache; the mcp field is None when the handle isn't available.
-        let store_install_verify_tool = Some(crate::builtin_tools::store::StoreInstallVerifyTool {
-            mcp: config.store_mcp_handle.clone(),
+        let hub_install_verify_tool = Some(crate::builtin_tools::hub::HubInstallVerifyTool {
+            mcp: config.hub_mcp_handle.clone(),
         });
 
         // Store fetch-docs tool (scaffold — no CatalogCache dep; always constructed)
-        let store_fetch_docs_tool = crate::builtin_tools::store::StoreFetchDocsTool;
+        let hub_fetch_docs_tool = crate::builtin_tools::hub::HubFetchDocsTool;
 
         // Build platform-specific DesktopPlatform
         let desktop_platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
@@ -660,9 +660,9 @@ impl BuiltinToolRegistry {
         // cache is configured (matches the dispatch guard in tool_registry_impl.rs).
         if let Some(ref cache) = config.catalog_cache {
             use crate::tools::AlephTool;
-            let marketplaces = config.store_marketplace_configs.clone().unwrap_or_default();
+            let marketplaces = config.hub_marketplace_configs.clone().unwrap_or_default();
 
-            let td = crate::builtin_tools::store::StoreCatalogSyncTool {
+            let td = crate::builtin_tools::hub::HubCatalogSyncTool {
                 cache: cache.clone(),
                 marketplaces: marketplaces.clone(),
             }
@@ -675,9 +675,9 @@ impl BuiltinToolRegistry {
             );
             ut = ut.with_parameters_schema(td.parameters.clone());
             tools.insert(td.name.clone(), ut);
-            info!("Registered schema for store_catalog_sync");
+            info!("Registered schema for hub_catalog_sync");
 
-            let td = crate::builtin_tools::store::StoreResolveSpecTool {
+            let td = crate::builtin_tools::hub::HubResolveSpecTool {
                 cache: cache.clone(),
                 marketplaces,
             }
@@ -690,16 +690,16 @@ impl BuiltinToolRegistry {
             );
             ut = ut.with_parameters_schema(td.parameters.clone());
             tools.insert(td.name.clone(), ut);
-            info!("Registered schema for store_resolve_spec");
+            info!("Registered schema for hub_resolve_spec");
 
-            // store_install_run: register the schema only when a vault is also
+            // hub_install_run: register the schema only when a vault is also
             // present (matches the dispatch-guard construction above).
             if let Some(ref vault) = config.shared_token_manager {
-                let td = crate::builtin_tools::store::StoreInstallRunTool {
+                let td = crate::builtin_tools::hub::HubInstallRunTool {
                     cache: cache.clone(),
-                    marketplaces: config.store_marketplace_configs.clone().unwrap_or_default(),
+                    marketplaces: config.hub_marketplace_configs.clone().unwrap_or_default(),
                     vault: vault.clone(),
-                    mcp: config.store_mcp_handle.clone(),
+                    mcp: config.hub_mcp_handle.clone(),
                 }
                 .definition();
                 let mut ut = UnifiedTool::new(
@@ -710,14 +710,14 @@ impl BuiltinToolRegistry {
                 );
                 ut = ut.with_parameters_schema(td.parameters.clone());
                 tools.insert(td.name.clone(), ut);
-                info!("Registered schema for store_install_run");
+                info!("Registered schema for hub_install_run");
             }
         }
 
-        // store_fetch_docs: scaffold tool, no CatalogCache dep — register unconditionally.
+        // hub_fetch_docs: scaffold tool, no CatalogCache dep — register unconditionally.
         {
             use crate::tools::AlephTool;
-            let td = crate::builtin_tools::store::StoreFetchDocsTool.definition();
+            let td = crate::builtin_tools::hub::HubFetchDocsTool.definition();
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", td.name),
                 &td.name,
@@ -726,14 +726,14 @@ impl BuiltinToolRegistry {
             );
             ut = ut.with_parameters_schema(td.parameters.clone());
             tools.insert(td.name.clone(), ut);
-            info!("Registered schema for store_fetch_docs");
+            info!("Registered schema for hub_fetch_docs");
         }
 
-        // store_install_verify: no CatalogCache dep — register unconditionally.
+        // hub_install_verify: no CatalogCache dep — register unconditionally.
         {
             use crate::tools::AlephTool;
-            let td = crate::builtin_tools::store::StoreInstallVerifyTool {
-                mcp: config.store_mcp_handle.clone(),
+            let td = crate::builtin_tools::hub::HubInstallVerifyTool {
+                mcp: config.hub_mcp_handle.clone(),
             }
             .definition();
             let mut ut = UnifiedTool::new(
@@ -744,7 +744,7 @@ impl BuiltinToolRegistry {
             );
             ut = ut.with_parameters_schema(td.parameters.clone());
             tools.insert(td.name.clone(), ut);
-            info!("Registered schema for store_install_verify");
+            info!("Registered schema for hub_install_verify");
         }
 
         // Register optional tool metadata
@@ -869,11 +869,11 @@ impl BuiltinToolRegistry {
             list_models_tool,
             doctor_tool,
             vault_store_tool,
-            store_catalog_sync_tool,
-            store_resolve_spec_tool,
-            store_install_run_tool,
-            store_install_verify_tool,
-            store_fetch_docs_tool,
+            hub_catalog_sync_tool,
+            hub_resolve_spec_tool,
+            hub_install_run_tool,
+            hub_install_verify_tool,
+            hub_fetch_docs_tool,
             desktop_tool,
             desktop_ax_query_focused_tool,
             desktop_ax_query_tree_tool,

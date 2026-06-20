@@ -11,12 +11,12 @@ use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
 use crate::mcp::manager::McpManagerHandle;
-use crate::store::cache::{CatalogCache, CatalogFilter};
-use crate::store::install::{run_install, InstallContext, InstallOutcome};
-use crate::store::provider::ProviderRegistry;
-use crate::store::secrets::field_key;
-use crate::store::trust::{build_disclosure, scan_for_injection};
-use crate::store::types::{ExtensionEntry, InstallSpec};
+use crate::hub::cache::{CatalogCache, CatalogFilter};
+use crate::hub::install::{run_install, InstallContext, InstallOutcome};
+use crate::hub::provider::ProviderRegistry;
+use crate::hub::secrets::field_key;
+use crate::hub::trust::{build_disclosure, scan_for_injection};
+use crate::hub::types::{ExtensionEntry, InstallSpec};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -133,7 +133,7 @@ async fn resolve_spec(
         .map_err(|e| e.to_string())
 }
 
-fn scan_text(entry: &ExtensionEntry) -> Vec<crate::store::trust::InjectionFinding> {
+fn scan_text(entry: &ExtensionEntry) -> Vec<crate::hub::trust::InjectionFinding> {
     scan_for_injection(&format!("{} {}", entry.name, entry.description))
 }
 
@@ -321,7 +321,7 @@ async fn verify_install(outcome: &InstallOutcome, mcp: Option<&McpManagerHandle>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::types::{EnvDecl, HeaderDecl, McpTransport};
+    use crate::hub::types::{EnvDecl, HeaderDecl, McpTransport};
 
     fn stdio_spec() -> InstallSpec {
         InstallSpec::McpStdio {

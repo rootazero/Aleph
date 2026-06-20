@@ -3,10 +3,10 @@
 
 use crate::extension::marketplace::types::MarketplaceConfig;
 use crate::extension::marketplace::MarketplaceManager;
-use crate::store::provider::docker_mcp::DockerMcpProvider;
-use crate::store::provider::marketplace::MarketplaceProvider;
-use crate::store::provider::mcp_registry::McpRegistryProvider;
-use crate::store::provider::ProviderRegistry;
+use crate::hub::provider::docker_mcp::DockerMcpProvider;
+use crate::hub::provider::marketplace::MarketplaceProvider;
+use crate::hub::provider::mcp_registry::McpRegistryProvider;
+use crate::hub::provider::ProviderRegistry;
 use std::collections::HashMap;
 
 pub fn build_default_registry(

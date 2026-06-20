@@ -8,8 +8,8 @@ pub mod marketplace;
 pub mod mcp_registry;
 pub mod registry_builder;
 
-use crate::store::cache::CatalogCache;
-use crate::store::types::{ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
+use crate::hub::cache::CatalogCache;
+use crate::hub::types::{ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
 
 /// Reserved sync context (cache dir, shared http client) — empty in v1.
 pub struct SyncCtx;
@@ -103,8 +103,8 @@ impl ProviderRegistry {
             match res {
                 Ok(mut entries) if !entries.is_empty() => {
                     for e in &mut entries {
-                        if e.category == crate::store::types::ExtensionCategory::Other {
-                            e.category = crate::store::categorize::categorize(
+                        if e.category == crate::hub::types::ExtensionCategory::Other {
+                            e.category = crate::hub::categorize::categorize(
                                 &e.name,
                                 &e.description,
                                 &e.tags,
@@ -130,8 +130,8 @@ impl ProviderRegistry {
     /// Route an entry to its provider and resolve its install spec.
     pub async fn resolve_for_entry(
         &self,
-        entry: &crate::store::types::ExtensionEntry,
-    ) -> Result<crate::store::types::InstallSpec, SourceError> {
+        entry: &crate::hub::types::ExtensionEntry,
+    ) -> Result<crate::hub::types::InstallSpec, SourceError> {
         let provider = self.get(&entry.source_id).ok_or_else(|| {
             SourceError::Other(format!("no provider for source '{}'", entry.source_id))
         })?;
@@ -148,9 +148,9 @@ impl Default for ProviderRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::cache::CatalogFilter;
-    use crate::store::provider::registry_builder::build_default_registry;
-    use crate::store::types::ExtensionCategory;
+    use crate::hub::cache::CatalogFilter;
+    use crate::hub::provider::registry_builder::build_default_registry;
+    use crate::hub::types::ExtensionCategory;
 
     struct FakeProvider {
         id: String,

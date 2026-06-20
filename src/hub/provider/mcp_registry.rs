@@ -2,8 +2,8 @@
 //! Parses the `/v0/servers` response into `ExtensionEntry`s and builds a
 //! deterministic `InstallSpec` + synthesized config schema for each server.
 
-use crate::store::provider::{SourceError, SourceProvider, SyncCtx};
-use crate::store::types::{
+use crate::hub::provider::{SourceError, SourceProvider, SyncCtx};
+use crate::hub::types::{
     EnvDecl, ExtensionCategory, ExtensionEntry, ExtensionKind, InstallSpec, McpTransport, TrustTier,
 };
 use serde::Deserialize;

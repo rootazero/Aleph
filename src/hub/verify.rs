@@ -1,6 +1,6 @@
 //! Post-install verification (spec §10). MCP: started + lists ≥1 tool.
 //! Plugin: artifact present on disk. Honest report — never silent "success".
-use crate::store::install::InstallOutcome;
+use crate::hub::install::InstallOutcome;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct VerifyReport {

@@ -1,4 +1,4 @@
-//! `store_fetch_docs` — fetch a repo/URL's README/manifest for the long-tail
+//! `hub_fetch_docs` — fetch a repo/URL's README/manifest for the long-tail
 //! install path. SCAFFOLD (v1): implemented + injection-scanned, but NOT wired
 //! to any user-facing install flow. The supported install path is the
 //! deterministic fast-path (P2/P3 UI).
@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AlephError, Result};
-use crate::store::trust::{scan_for_injection, InjectionFinding};
+use crate::hub::trust::{scan_for_injection, InjectionFinding};
 use crate::tools::AlephTool;
 
 /// Maximum number of bytes accepted from the remote response body.
@@ -31,11 +31,11 @@ pub struct StoreFetchDocsOutput {
 /// to `DOC_BYTE_BUDGET`, and runs the injection scanner before returning.
 /// Not wired to any user install surface.
 #[derive(Clone)]
-pub struct StoreFetchDocsTool;
+pub struct HubFetchDocsTool;
 
 #[async_trait]
-impl AlephTool for StoreFetchDocsTool {
-    const NAME: &'static str = "store_fetch_docs";
+impl AlephTool for HubFetchDocsTool {
+    const NAME: &'static str = "hub_fetch_docs";
     const DESCRIPTION: &'static str =
         "Fetch a URL (README/manifest) for the long-tail install path and scan for prompt-injection. SCAFFOLD — not wired to any install surface.";
     type Args = StoreFetchDocsArgs;

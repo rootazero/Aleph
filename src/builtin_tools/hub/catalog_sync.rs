@@ -1,4 +1,4 @@
-//! `store_catalog_sync` — run all provider syncs into the local catalog cache.
+//! `hub_catalog_sync` — run all provider syncs into the local catalog cache.
 //! Categorization (Task 1) runs inside sync_all_into, so this also refreshes
 //! functional categories. The deterministic curation entry point.
 
@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::extension::marketplace::types::MarketplaceConfig;
-use crate::store::cache::CatalogCache;
-use crate::store::provider::registry_builder::build_default_registry;
-use crate::store::provider::SyncReport;
+use crate::hub::cache::CatalogCache;
+use crate::hub::provider::registry_builder::build_default_registry;
+use crate::hub::provider::SyncReport;
 use crate::tools::AlephTool;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -36,14 +36,14 @@ impl StoreCatalogSyncOutput {
 }
 
 #[derive(Clone)]
-pub struct StoreCatalogSyncTool {
+pub struct HubCatalogSyncTool {
     pub cache: Arc<CatalogCache>,
     pub marketplaces: HashMap<String, MarketplaceConfig>,
 }
 
 #[async_trait]
-impl AlephTool for StoreCatalogSyncTool {
-    const NAME: &'static str = "store_catalog_sync";
+impl AlephTool for HubCatalogSyncTool {
+    const NAME: &'static str = "hub_catalog_sync";
     const DESCRIPTION: &'static str =
         "Sync all extension sources into the local catalog cache and refresh functional categories.";
     type Args = StoreCatalogSyncArgs;
@@ -59,7 +59,7 @@ impl AlephTool for StoreCatalogSyncTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::provider::SyncReport;
+    use crate::hub::provider::SyncReport;
 
     #[test]
     fn output_from_report() {

@@ -4,7 +4,7 @@
 //! optional upstream hint (e.g. the Docker MCP catalog's `category`) taking
 //! precedence. Runs as a post-sync enrichment pass so the panel's category
 //! browse (P3) is populated instead of every entry collapsing to `Other`.
-use crate::store::types::ExtensionCategory;
+use crate::hub::types::ExtensionCategory;
 
 /// Map a raw upstream category string to our enum. `None` when unrecognized.
 #[must_use]
@@ -150,7 +150,7 @@ pub fn categorize(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::types::ExtensionCategory as C;
+    use crate::hub::types::ExtensionCategory as C;
 
     #[test]
     fn hint_maps_known_upstream_categories() {

@@ -232,6 +232,17 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         tools: &["cron_manage", "clawhub"],
     },
     ToolCategory {
+        id: "extensions_store",
+        name: "扩展商店",
+        tools: &[
+            "hub_catalog_sync",
+            "hub_resolve_spec",
+            "hub_fetch_docs",
+            "hub_install_run",
+            "hub_install_verify",
+        ],
+    },
+    ToolCategory {
         id: "acp",
         name: "外部代码 Agent",
         tools: &["acp_delegate", "acp_switch", "acp_session_control"],

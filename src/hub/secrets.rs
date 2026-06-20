@@ -13,7 +13,7 @@
 //! the reference resolves per-server into that child's env only at spawn — see
 //! `src/mcp/manager/secret_resolver.rs`.
 
-use crate::store::types::ExtensionKind;
+use crate::hub::types::ExtensionKind;
 
 /// Map any char outside the placeholder-safe charset (`[A-Za-z0-9_.-]`,
 /// enforced by `crate::secrets::extract_secret_refs`) to `_`.

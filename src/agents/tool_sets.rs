@@ -41,12 +41,12 @@ pub const ASYNC_SAFE: &[&str] = &["file_read", "file_ops", "search"];
 
 /// Private tool set for the built-in `store` agent. Not granted to chat agents
 /// (the wildcard hole on `main`/`verify` is closed via denied_tools — see Task 4).
-pub const STORE_TOOLS: &[&str] = &[
-    "store_catalog_sync",
-    "store_fetch_docs",
-    "store_resolve_spec",
-    "store_install_run",
-    "store_install_verify",
+pub const HUB_TOOLS: &[&str] = &[
+    "hub_catalog_sync",
+    "hub_fetch_docs",
+    "hub_resolve_spec",
+    "hub_install_run",
+    "hub_install_verify",
 ];
 
 /// Resolve a set name to its tool list. Returns None for unknown names so
@@ -57,7 +57,7 @@ pub fn resolve(set_name: &str) -> Option<&'static [&'static str]> {
         "READ_ONLY" => Some(READ_ONLY),
         "INVESTIGATION" => Some(INVESTIGATION),
         "ASYNC_SAFE" => Some(ASYNC_SAFE),
-        "STORE_TOOLS" => Some(STORE_TOOLS),
+        "HUB_TOOLS" => Some(HUB_TOOLS),
         _ => None,
     }
 }
@@ -143,9 +143,9 @@ mod tests {
 
     #[test]
     fn store_tools_resolve_to_five_names() {
-        let set = resolve("STORE_TOOLS").expect("STORE_TOOLS must resolve");
+        let set = resolve("HUB_TOOLS").expect("HUB_TOOLS must resolve");
         assert_eq!(set.len(), 5);
-        assert!(set.contains(&"store_install_run"));
-        assert!(set.contains(&"store_catalog_sync"));
+        assert!(set.contains(&"hub_install_run"));
+        assert!(set.contains(&"hub_catalog_sync"));
     }
 }

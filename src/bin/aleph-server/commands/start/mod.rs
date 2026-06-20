@@ -775,16 +775,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             None
         };
 
-    // P4 T5: open the CatalogCache early so store tools (store_catalog_sync
+    // P4 T5: open the CatalogCache early so store tools (hub_catalog_sync
     // and T6–T8) can be wired into BuiltinToolConfig. Uses the same path as
     // the extensions.* gateway handlers below — both share the same SQLite
     // file via separate connections (rusqlite file-level locking).
     let (early_catalog_cache, early_marketplace_configs) = {
         use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
         let catalog_path = alephcore::discovery::aleph_home_dir()
-            .map(|d| d.join("store_catalog.db"))
-            .unwrap_or_else(|_| std::path::PathBuf::from("store_catalog.db"));
-        match alephcore::store::cache::CatalogCache::open(&catalog_path) {
+            .map(|d| d.join("hub_catalog.db"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("hub_catalog.db"));
+        match alephcore::hub::cache::CatalogCache::open(&catalog_path) {
             Ok(cache) => {
                 let configs: std::collections::HashMap<String, MarketplaceConfig> = {
                     let cfg = app_config.read().await;
@@ -810,7 +810,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    "Failed to open store_catalog.db for store tools; store_catalog_sync will be unavailable"
+                    "Failed to open hub_catalog.db for store tools; hub_catalog_sync will be unavailable"
                 );
                 (None, None)
             }
@@ -1319,9 +1319,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // backed by a local rusqlite catalog cache opened at ~/.aleph.
     {
         let catalog_path = alephcore::discovery::aleph_home_dir()
-            .map(|d| d.join("store_catalog.db"))
-            .unwrap_or_else(|_| std::path::PathBuf::from("store_catalog.db"));
-        match alephcore::store::cache::CatalogCache::open(&catalog_path) {
+            .map(|d| d.join("hub_catalog.db"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("hub_catalog.db"));
+        match alephcore::hub::cache::CatalogCache::open(&catalog_path) {
             Ok(cache) => {
                 let cache = std::sync::Arc::new(cache);
                 register_extensions_handlers(&mut server, mcp_handle.clone(), cache.clone());
@@ -1352,7 +1352,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         .collect()
                 };
                 let registry = std::sync::Arc::new(
-                    alephcore::store::provider::registry_builder::build_default_registry(
+                    alephcore::hub::provider::registry_builder::build_default_registry(
                         marketplace_configs.clone(),
                     ),
                 );

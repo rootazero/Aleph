@@ -11,13 +11,13 @@ use std::collections::HashMap;
 use crate::extension::marketplace::MarketplaceManager;
 use crate::extension::PluginScope;
 use crate::mcp::manager::{McpManagerConfig, McpManagerHandle};
-use crate::store::secrets::secret_ref;
-use crate::store::types::{ExtensionEntry, InstallSpec};
+use crate::hub::secrets::secret_ref;
+use crate::hub::types::{ExtensionEntry, InstallSpec};
 
 /// Build an `McpManagerConfig` from an install spec.
 ///
 /// `secret_refs` maps an env var name to its stored vault secret name (from
-/// `crate::store::secrets::field_key`); `plain_values` maps a non-secret env var
+/// `crate::hub::secrets::field_key`); `plain_values` maps a non-secret env var
 /// name to the user-submitted value. Per field, precedence is: secret reference
 /// (`{{secret:NAME}}`) → submitted plain value → declared `default`. Plaintext
 /// secrets never enter the config.
@@ -123,7 +123,7 @@ pub async fn run_install(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::types::EnvDecl;
+    use crate::hub::types::EnvDecl;
 
     #[test]
     fn stdio_spec_builds_config_with_secret_refs() {

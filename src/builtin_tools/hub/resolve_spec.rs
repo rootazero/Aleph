@@ -1,4 +1,4 @@
-//! `store_resolve_spec` — look up a catalog entry by id and resolve its
+//! `hub_resolve_spec` — look up a catalog entry by id and resolve its
 //! install spec via the matching source provider.
 
 use std::collections::HashMap;
@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AlephError, Result};
 use crate::extension::marketplace::types::MarketplaceConfig;
-use crate::store::cache::{CatalogCache, CatalogFilter};
-use crate::store::provider::registry_builder::build_default_registry;
+use crate::hub::cache::{CatalogCache, CatalogFilter};
+use crate::hub::provider::registry_builder::build_default_registry;
 use crate::tools::AlephTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -27,14 +27,14 @@ pub struct StoreResolveSpecOutput {
 }
 
 #[derive(Clone)]
-pub struct StoreResolveSpecTool {
+pub struct HubResolveSpecTool {
     pub cache: Arc<CatalogCache>,
     pub marketplaces: HashMap<String, MarketplaceConfig>,
 }
 
 #[async_trait]
-impl AlephTool for StoreResolveSpecTool {
-    const NAME: &'static str = "store_resolve_spec";
+impl AlephTool for HubResolveSpecTool {
+    const NAME: &'static str = "hub_resolve_spec";
     const DESCRIPTION: &'static str =
         "Resolve the install spec for a catalog entry by its id, routing through the matching source provider.";
     type Args = StoreResolveSpecArgs;
@@ -75,8 +75,8 @@ impl AlephTool for StoreResolveSpecTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::cache::CatalogCache;
-    use crate::store::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier};
+    use crate::hub::cache::CatalogCache;
+    use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier};
 
     fn sample_entry(id: &str, source_id: &str) -> ExtensionEntry {
         ExtensionEntry {
@@ -103,7 +103,7 @@ mod tests {
     #[tokio::test]
     async fn entry_not_found_returns_error() {
         let cache = CatalogCache::open_in_memory().unwrap();
-        let tool = StoreResolveSpecTool {
+        let tool = HubResolveSpecTool {
             cache: Arc::new(cache),
             marketplaces: HashMap::new(),
         };
@@ -123,7 +123,7 @@ mod tests {
             .upsert_many(&[sample_entry("local:foo", "local")])
             .await
             .unwrap();
-        let tool = StoreResolveSpecTool {
+        let tool = HubResolveSpecTool {
             cache: Arc::new(cache),
             marketplaces: HashMap::new(),
         };

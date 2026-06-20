@@ -1,4 +1,4 @@
-use crate::store::types::{ExtensionCategory, ExtensionEntry, ExtensionKind};
+use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind};
 use rusqlite::{params, Connection};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -158,7 +158,7 @@ impl CatalogCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::types::TrustTier;
+    use crate::hub::types::TrustTier;
 
     fn entry(id: &str, cat: ExtensionCategory, name: &str) -> ExtensionEntry {
         ExtensionEntry {

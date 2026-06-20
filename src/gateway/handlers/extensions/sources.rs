@@ -2,8 +2,8 @@
 //! catalog refresh (concurrent `sync_all_into`).
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
-use crate::store::cache::CatalogCache;
-use crate::store::provider::ProviderRegistry;
+use crate::hub::cache::CatalogCache;
+use crate::hub::provider::ProviderRegistry;
 use serde_json::json;
 use std::sync::Arc;
 

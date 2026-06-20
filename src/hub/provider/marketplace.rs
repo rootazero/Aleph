@@ -4,8 +4,8 @@
 use crate::extension::marketplace::manifest::parse_marketplace_manifest;
 use crate::extension::marketplace::types::MarketplacePluginEntry;
 use crate::extension::marketplace::MarketplaceManager;
-use crate::store::provider::{SourceError, SourceProvider, SyncCtx};
-use crate::store::types::{
+use crate::hub::provider::{SourceError, SourceProvider, SyncCtx};
+use crate::hub::types::{
     ExtensionCategory, ExtensionEntry, ExtensionKind, InstallSpec, TrustTier,
 };
 

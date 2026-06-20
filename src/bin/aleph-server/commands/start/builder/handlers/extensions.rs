@@ -9,8 +9,8 @@ use alephcore::gateway::handlers::extensions;
 use alephcore::gateway::security::SharedTokenManager;
 use alephcore::gateway::GatewayServer;
 use alephcore::mcp::manager::McpManagerHandle;
-use alephcore::store::cache::CatalogCache;
-use alephcore::store::provider::ProviderRegistry;
+use alephcore::hub::cache::CatalogCache;
+use alephcore::hub::provider::ProviderRegistry;
 use std::sync::Arc;
 
 pub(in crate::commands::start) fn register_extensions_handlers(

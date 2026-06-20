@@ -227,11 +227,11 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_description("Primary agent that responds directly to user")
             .with_allowed_tools(vec!["*".into(), "flow_run".into()])
             .with_denied_tools(vec![
-                "store_catalog_sync".into(),
-                "store_fetch_docs".into(),
-                "store_resolve_spec".into(),
-                "store_install_run".into(),
-                "store_install_verify".into(),
+                "hub_catalog_sync".into(),
+                "hub_fetch_docs".into(),
+                "hub_resolve_spec".into(),
+                "hub_install_run".into(),
+                "hub_install_verify".into(),
             ]),
         // Explore agent — INVESTIGATION named set (P2 Stage G demo migration).
         // Effective behavior unchanged: Stage B recursion guard blocks subagent
@@ -300,15 +300,15 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_denied_tools(vec![
                 "file_write".into(),
                 "file_edit".into(),
-                "store_catalog_sync".into(),
-                "store_fetch_docs".into(),
-                "store_resolve_spec".into(),
-                "store_install_run".into(),
-                "store_install_verify".into(),
+                "hub_catalog_sync".into(),
+                "hub_fetch_docs".into(),
+                "hub_resolve_spec".into(),
+                "hub_install_run".into(),
+                "hub_install_verify".into(),
             ])
             .with_max_iterations(25)
             .with_context_mode(ContextMode::Summary),
-        // Store agent - extensions store curator and installer (private STORE_TOOLS only)
+        // Store agent - extensions store curator and installer (private HUB_TOOLS only)
         AgentDef::new("store", AgentMode::SubAgent)
             .with_description(
                 "Extensions Store curator and installer: syncs the catalog, assigns \
@@ -320,7 +320,7 @@ pub fn builtin_agents() -> Vec<AgentDef> {
                 "When curating the extensions catalog or installing an extension on the \
                  user's behalf through the store.",
             )
-            .with_allowed_tool_sets(vec!["STORE_TOOLS".into()])
+            .with_allowed_tool_sets(vec!["HUB_TOOLS".into()])
             .with_max_iterations(15),
     ]
 }
@@ -406,9 +406,9 @@ mod tests {
             .expect("store builtin present");
         assert_eq!(store.mode, AgentMode::SubAgent);
         assert_eq!(store.source, crate::agents::types::AgentSource::Builtin);
-        assert!(store.allowed_tool_sets.iter().any(|s| s == "STORE_TOOLS"));
-        assert!(!store.is_tool_allowed("file_write")); // not in STORE_TOOLS
-        assert!(store.is_tool_allowed("store_catalog_sync"));
+        assert!(store.allowed_tool_sets.iter().any(|s| s == "HUB_TOOLS"));
+        assert!(!store.is_tool_allowed("file_write")); // not in HUB_TOOLS
+        assert!(store.is_tool_allowed("hub_catalog_sync"));
     }
 
     #[test]
@@ -667,11 +667,11 @@ mod tests {
 
         // All 5 store tools must be denied on both wildcard agents.
         let store_tools = [
-            "store_catalog_sync",
-            "store_fetch_docs",
-            "store_resolve_spec",
-            "store_install_run",
-            "store_install_verify",
+            "hub_catalog_sync",
+            "hub_fetch_docs",
+            "hub_resolve_spec",
+            "hub_install_run",
+            "hub_install_verify",
         ];
         for name in &store_tools {
             assert!(

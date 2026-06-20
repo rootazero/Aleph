@@ -1,8 +1,8 @@
 //! Docker MCP catalog `SourceProvider`. Signed, sha-pinned images →
 //! `TrustTier::Official`; install spec is a single `OciImage`.
 
-use crate::store::provider::{SourceError, SourceProvider, SyncCtx};
-use crate::store::types::{ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
+use crate::hub::provider::{SourceError, SourceProvider, SyncCtx};
+use crate::hub::types::{ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -36,8 +36,8 @@ pub fn docker_server_to_extension(name: &str, s: &DockerServer) -> ExtensionEntr
     let category = s
         .category
         .as_deref()
-        .and_then(crate::store::categorize::category_from_hint)
-        .unwrap_or_else(|| crate::store::categorize::categorize(name, &description, &tags, None));
+        .and_then(crate::hub::categorize::category_from_hint)
+        .unwrap_or_else(|| crate::hub::categorize::categorize(name, &description, &tags, None));
     ExtensionEntry {
         id: format!("docker-mcp:{name}"),
         kind: ExtensionKind::Mcp,

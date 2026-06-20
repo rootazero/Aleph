@@ -1,7 +1,7 @@
 //! Trust rails: pre-install disclosure payload + injection scan. Both are pure;
 //! the install handler (P2 T7) enforces them before any side effect.
 
-use crate::store::types::{ExtensionEntry, InstallSpec, TrustTier};
+use crate::hub::types::{ExtensionEntry, InstallSpec, TrustTier};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,7 +152,7 @@ pub fn scan_for_injection(text: &str) -> Vec<InjectionFinding> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::types::{EnvDecl, ExtensionCategory, ExtensionKind};
+    use crate::hub::types::{EnvDecl, ExtensionCategory, ExtensionKind};
 
     fn mcp_entry() -> ExtensionEntry {
         ExtensionEntry {

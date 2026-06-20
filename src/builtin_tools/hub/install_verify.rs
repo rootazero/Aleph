@@ -1,6 +1,6 @@
-//! `store_install_verify` — post-install verifier tool (§10, T8).
+//! `hub_install_verify` — post-install verifier tool (§10, T8).
 //!
-//! Thin wrapper over `crate::store::verify::verify_install`. The tool
+//! Thin wrapper over `crate::hub::verify::verify_install`. The tool
 //! reconstructs an `InstallOutcome` from `{ kind, id_or_path }` args and
 //! delegates all verification logic to the T2 backend.
 
@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AlephError, Result};
 use crate::mcp::manager::McpManagerHandle;
-use crate::store::install::InstallOutcome;
-use crate::store::verify::{verify_install, VerifyReport};
+use crate::hub::install::InstallOutcome;
+use crate::hub::verify::{verify_install, VerifyReport};
 use crate::tools::AlephTool;
 
 // --------------------------------------------------------------------------
@@ -49,15 +49,15 @@ impl StoreInstallVerifyArgs {
 // --------------------------------------------------------------------------
 
 #[derive(Clone)]
-pub struct StoreInstallVerifyTool {
+pub struct HubInstallVerifyTool {
     /// Optional live MCP manager handle. `None` → MCP verification reports
     /// "MCP manager unavailable"; plugin verification still works.
     pub mcp: Option<McpManagerHandle>,
 }
 
 #[async_trait]
-impl AlephTool for StoreInstallVerifyTool {
-    const NAME: &'static str = "store_install_verify";
+impl AlephTool for HubInstallVerifyTool {
+    const NAME: &'static str = "hub_install_verify";
     const DESCRIPTION: &'static str = "Verify that a just-installed extension is healthy. \
          For MCP servers: checks the server is running and exposes ≥1 tool. \
          For plugins: checks the artifact is present on disk.";
@@ -87,7 +87,7 @@ mod tests {
         let outcome = a.to_outcome().unwrap();
         assert!(matches!(
             outcome,
-            crate::store::install::InstallOutcome::Plugin { .. }
+            crate::hub::install::InstallOutcome::Plugin { .. }
         ));
     }
 
@@ -100,7 +100,7 @@ mod tests {
         let outcome = a.to_outcome().unwrap();
         assert!(matches!(
             outcome,
-            crate::store::install::InstallOutcome::Mcp { .. }
+            crate::hub::install::InstallOutcome::Mcp { .. }
         ));
     }
 
