@@ -64,7 +64,9 @@ async fn orientation_layer_end_to_end() {
         .read_snapshot("default", TokenBudget::default())
         .await
         .unwrap();
-    assert!(snap.schema_text.contains("# Memory Schema"));
+    // read_snapshot returns the compacted schema (policy sections only — the
+    // "# Memory Schema" H1 and ## Domain are stripped by compact_for_prompt).
+    assert!(snap.schema_text.contains("## Tag Taxonomy"));
     assert!(snap.index_text.contains("## learning (2)"));
     assert!(snap.recent_log_tail.contains("bootstrap"));
 }
