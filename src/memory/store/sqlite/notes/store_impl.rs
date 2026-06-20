@@ -99,7 +99,7 @@ impl NoteStore for SqliteMemoryBackend {
             // stays raw). Lets `[[Bob]]` link to the "Bob Smith" note aliased
             // "Bob" instead of dangling.
             if paths.is_empty() {
-                let by_alias = resolve_paths_by_alias(&*conn, agent_id, raw_target)
+                let by_alias = resolve_paths_by_alias(&conn, agent_id, raw_target)
                     .map_err(|e| AlephError::config(format!("resolve alias query: {e}")))?;
                 if by_alias.len() == 1 {
                     return Ok(by_alias[0].clone());
@@ -1020,7 +1020,7 @@ impl NoteStore for SqliteMemoryBackend {
             // index_note's resolve_target so links re-resolve to aliased notes
             // that were indexed after the linking note.
             if paths.is_empty() {
-                paths = resolve_paths_by_alias(&*conn, agent_id, &raw)
+                paths = resolve_paths_by_alias(&conn, agent_id, &raw)
                     .map_err(|e| AlephError::config(format!("relink alias query: {e}")))?;
             }
             if paths.len() == 1 {

@@ -125,7 +125,7 @@ pub fn featured_picks(entries: &[ExtensionEntry], max: usize) -> Vec<ExtensionEn
         .filter(|e| e.trust_tier == "official" || e.trust_tier == "verified")
         .cloned()
         .collect();
-    v.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    v.sort_by_key(|a| a.name.to_lowercase());
     v.truncate(max);
     v
 }

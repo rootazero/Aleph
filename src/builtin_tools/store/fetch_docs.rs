@@ -98,7 +98,7 @@ mod tests {
         let at_limit = vec![b'a'; DOC_BYTE_BUDGET];
         let over_limit = vec![b'b'; DOC_BYTE_BUDGET + 1];
         assert!(
-            !(at_limit.len() > DOC_BYTE_BUDGET),
+            at_limit.len() <= DOC_BYTE_BUDGET,
             "at-limit body should not truncate"
         );
         assert!(
