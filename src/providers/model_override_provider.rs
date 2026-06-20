@@ -13,6 +13,7 @@
 //! so wrapping is transparent to name/color/protocol/tool-support.
 
 use crate::sync_primitives::Arc;
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -59,7 +60,7 @@ impl AiProvider for ModelOverrideProvider {
         self.inner.supports_native_tools()
     }
 
-    fn protocol(&self) -> &str {
+    fn protocol(&self) -> Cow<'_, str> {
         self.inner.protocol()
     }
 }

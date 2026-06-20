@@ -38,6 +38,7 @@
 /// `ContentBlock::Image` blocks as the message's base64 `images` array.
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
+use std::borrow::Cow;
 use crate::providers::adapter::{
     NativeToolCall, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
@@ -516,8 +517,8 @@ impl AiProvider for OllamaProvider {
         true
     }
 
-    fn protocol(&self) -> &str {
-        "ollama"
+    fn protocol(&self) -> Cow<'_, str> {
+        Cow::Borrowed("ollama")
     }
 }
 
@@ -609,7 +610,7 @@ mod tests {
         assert_eq!(provider.name(), "ollama");
         assert_eq!(provider.color(), "#0000ff");
         assert!(provider.supports_native_tools());
-        assert_eq!(provider.protocol(), "ollama");
+        assert_eq!(provider.protocol().as_ref(), "ollama");
     }
 
     #[test]

@@ -4,6 +4,7 @@
 
 use crate::config::ProviderConfig;
 use crate::error::Result;
+use std::borrow::Cow;
 use crate::providers::adapter::{
     ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
@@ -623,12 +624,12 @@ impl AiProvider for HttpProvider {
         &self.config.color
     }
 
-    fn protocol(&self) -> &str {
-        self.adapter.name()
+    fn protocol(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.adapter.name())
     }
 
-    fn model_behavior_override(&self) -> Option<&str> {
-        self.config.model_behavior.as_deref()
+    fn model_behavior_override(&self) -> Option<Cow<'_, str>> {
+        self.config.model_behavior.as_deref().map(Cow::Borrowed)
     }
 
     fn as_http_provider(&self) -> Option<&HttpProvider> {

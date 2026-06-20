@@ -439,7 +439,7 @@ impl AgentHarnessRunner {
         // (e.g., `protocol = "openai"`, override = `"anthropic"`).
         let provider_protocol = provider
             .model_behavior_override()
-            .map_or_else(|| provider.protocol().to_string(), |s| s.to_string());
+            .map_or_else(|| provider.protocol().into_owned(), |s| s.into_owned());
         builder = builder.with_provider_protocol(provider_protocol);
         // Phase 4 (F2): surface the resolved iteration cap to
         // `SessionBudgetLayer`. Saturating to `u32::MAX` (instead of

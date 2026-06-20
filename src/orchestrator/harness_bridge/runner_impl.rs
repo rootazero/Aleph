@@ -248,8 +248,8 @@ impl HarnessRunner for AgentHarnessRunner {
         // provider's behavior family (same key the prompt layer uses).
         // Must be resolved before the HarnessDeps literal (which moves `llm`).
         let robustness_profile = crate::verification::ModelRobustnessProfile::for_behavior(
-            llm.model_behavior_override().or_else(|| {
-                crate::providers::model_behaviors::protocol_to_behavior(llm.protocol())
+            llm.model_behavior_override().as_deref().or_else(|| {
+                crate::providers::model_behaviors::protocol_to_behavior(&llm.protocol())
             }),
         )
         .clamped();
