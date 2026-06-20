@@ -142,9 +142,17 @@
 - **写入**：`src/builtin_tools/flag_user_correction.rs`（LLM 调的工具，写 `RawMemorySource::Correction` 到 `aleph://correction/{id}`）；构造于 `src/executor/builtin_registry/builder/constructor.rs:1793`（**有 `memory_db` 即注册，非死代码**），prompt 引导在 `src/thinker/layers/special_actions.rs`。
 - **蒸馏**：`src/memory/dreaming/stages/feedback_distill.rs`（按 `aleph://correction/` 前缀 + watermark 幂等读 → LLM 蒸馏成 `feedback/` note），调度于 `src/memory/dreaming/mod.rs:172,218`（**Consolidate 每日 + Synthesize 两条 dream path 都挂**）。
 - **召回**：`feedback/` note 由 assembler 表面化（`src/memory/assembler/gather.rs:284` / `envelope.rs:34`）；goal 教训另有 `GoalLessonsPromoteStage` → `goal-lessons/` note（类别 `goal-lessons`，已补入 indexer `CATEGORY_DIRS`）。
+- **治理可见性 (2026-06-20 连线)**：raw correction → distillation 生命周期现经 `memory.list_corrections`（只读，`src/gateway/handlers/memory.rs::handle_list_corrections`）暴露给 panel（Settings ▸ Memory「Corrections」区，`interfaces/webchat/src/views/settings/memory.rs::CorrectionsPanel`）。**纯只读**——写入/蒸馏仍 LLM/工具驱动（守上文设计边界）。
 - **状态**：✅ 端到端已连且生产存活（写入工具注册 + distill 双路调度 + 召回消费者，逐跳有单测）。
 - **设计边界（重要）**：沉淀是 **LLM/工具驱动**（R8 工具即一切 / R7 LLM 主权）——LLM 判断"这值得记"才调 `flag_user_correction`。**没有也不应有**"每次工具失败自动写 raw memory"的 harness 错误 hook（违 R10「不做错误恢复」+ R7，且会用瞬时报错噪声淹没记忆）。
-- 话术：「‘错误/纠正沉淀’走 `flag_user_correction` + `FeedbackDistill`，已全连且存活。想要‘自动捕获工具失败 → 教训’——**这是故意不做的设计边界**（R7/R10），别加 harness 错误 hook；要让 LLM 多记教训就强化 prompt 引导它调工具。」
+- 话术：「’错误/纠正沉淀’走 `flag_user_correction` + `FeedbackDistill`，已全连且存活。想要’自动捕获工具失败 → 教训’——**这是故意不做的设计边界**（R7/R10），别加 harness 错误 hook；要让 LLM 多记教训就强化 prompt 引导它调工具。」
+
+### 2.6 做梦洞察可见性 (Dream Insights Visibility)
+- **口语关键词**：做梦、dream insights、每日摘要、synthesis 笔记、做梦运行历史
+- **代码锚点**：`src/memory/dreaming/mod.rs`（`recent_daily_insights`）、`src/memory/store/sqlite/mod.rs`（`DreamStore::recent_daily_insights` 供应日志）、`src/gateway/handlers/dreaming.rs::handle_list_insights`（RPC 入口）、`interfaces/webchat/src/views/settings/memory.rs::DreamInsightsPanel`（前端展示）
+- **职责**：暴露做梦子系统的日报摘要、synthesis 笔记列表、做梦运行历史给 panel 展示。
+- **状态**：✅ 已实现（2026-06-20 连线）——`dreaming.list_insights` RPC（只读，复用 `DreamStore::recent_daily_insights` + `NoteStore::list_notes` 过滤 synthesis + `recent_dream_reports`）经 `src/gateway/handlers/dreaming.rs::handle_list_insights` 注册并暴露给 panel Settings ▸ Memory「Dream Insights」区。
+- **打磨话术**：「做梦日报在 panel 可见经 `dreaming.list_insights` RPC（`src/gateway/handlers/dreaming.rs`）；前端组件在 `interfaces/webchat/src/views/settings/memory.rs::DreamInsightsPanel`；数据源在 `DreamStore::recent_daily_insights`（`src/memory/store/sqlite/mod.rs`）。」
 
 ---
 
