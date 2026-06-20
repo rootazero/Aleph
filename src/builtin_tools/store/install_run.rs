@@ -55,6 +55,15 @@ pub fn gate(ack_required: bool, is_oci: bool) -> GateOutcome {
     GateOutcome::Proceed
 }
 
+/// Plugins (GitDir) write executable code to disk and carry prompt-injection
+/// (InstructsAgent) risk, so the agent must never auto-install them — they
+/// always require a user gesture via the trust-gated UI. MCP specs may
+/// auto-install when their disclosure is not ack-required.
+#[must_use]
+pub fn requires_user_consent(ack_required: bool, spec: &crate::store::types::InstallSpec) -> bool {
+    ack_required || matches!(spec, crate::store::types::InstallSpec::GitDir { .. })
+}
+
 // --------------------------------------------------------------------------
 // Tool
 // --------------------------------------------------------------------------
@@ -141,7 +150,7 @@ impl AlephTool for StoreInstallRunTool {
         // (3) Build the disclosure and run the system-enforced gate.
         let disclosure = build_disclosure(&entry, &spec);
         let is_oci = matches!(spec, InstallSpec::OciImage { .. });
-        match gate(disclosure.ack_required, is_oci) {
+        match gate(requires_user_consent(disclosure.ack_required, &spec), is_oci) {
             GateOutcome::Reject => Ok(InstallToolResult::Rejected {
                 reason: if is_oci {
                     "OCI/Docker MCP containers are not installable in this version".to_string()
@@ -220,6 +229,9 @@ impl StoreInstallRunTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::types::InstallSpec;
+
+    // --- gate (existing 4 tests — unchanged) ---------------------------------
 
     #[test]
     fn oci_is_rejected() {
@@ -236,5 +248,58 @@ mod tests {
     #[test]
     fn clean_spec_proceeds() {
         assert_eq!(gate(false, false), GateOutcome::Proceed);
+    }
+
+    // --- requires_user_consent -----------------------------------------------
+
+    fn git_dir_spec() -> InstallSpec {
+        InstallSpec::GitDir {
+            git_url: "https://github.com/acme/plugin".into(),
+            subdir: None,
+            git_ref: None,
+            sha256: None,
+        }
+    }
+
+    fn mcp_stdio_spec() -> InstallSpec {
+        InstallSpec::McpStdio {
+            command: "npx".into(),
+            args: vec![],
+            env: vec![],
+        }
+    }
+
+    fn mcp_remote_spec() -> InstallSpec {
+        InstallSpec::McpRemote {
+            url: "https://mcp.example.com".into(),
+            transport: crate::store::types::McpTransport::StreamableHttp,
+            headers: vec![],
+        }
+    }
+
+    /// GitDir (plugin) must always require user consent, even when not ack_required.
+    #[test]
+    fn git_dir_always_requires_consent() {
+        assert!(requires_user_consent(false, &git_dir_spec()));
+    }
+
+    /// MCP spec with no ack_required must NOT require user consent.
+    #[test]
+    fn mcp_stdio_no_ack_does_not_require_consent() {
+        assert!(!requires_user_consent(false, &mcp_stdio_spec()));
+    }
+
+    /// MCP remote spec with no ack_required must NOT require user consent.
+    #[test]
+    fn mcp_remote_no_ack_does_not_require_consent() {
+        assert!(!requires_user_consent(false, &mcp_remote_spec()));
+    }
+
+    /// Any spec with ack_required=true must require user consent.
+    #[test]
+    fn ack_required_always_requires_consent_regardless_of_spec() {
+        assert!(requires_user_consent(true, &mcp_stdio_spec()));
+        assert!(requires_user_consent(true, &mcp_remote_spec()));
+        assert!(requires_user_consent(true, &git_dir_spec()));
     }
 }

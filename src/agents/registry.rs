@@ -661,8 +661,27 @@ mod tests {
         let agents = builtin_agents();
         let main = agents.iter().find(|a| a.id == "main").unwrap();
         let verify = agents.iter().find(|a| a.id == "verify").unwrap();
-        assert!(!main.is_tool_allowed("store_install_run"));
-        assert!(!verify.is_tool_allowed("store_install_run"));
-        assert!(main.is_tool_allowed("flow_run")); // unrelated tools still allowed
+
+        // All 5 store tools must be denied on both wildcard agents.
+        let store_tools = [
+            "store_catalog_sync",
+            "store_fetch_docs",
+            "store_resolve_spec",
+            "store_install_run",
+            "store_install_verify",
+        ];
+        for name in &store_tools {
+            assert!(
+                !main.is_tool_allowed(name),
+                "main should deny store tool: {name}"
+            );
+            assert!(
+                !verify.is_tool_allowed(name),
+                "verify should deny store tool: {name}"
+            );
+        }
+
+        // Unrelated tools must still be allowed on main.
+        assert!(main.is_tool_allowed("flow_run"));
     }
 }
