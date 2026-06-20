@@ -36,7 +36,7 @@ use crate::harness::trait_def::{Harness, HarnessError, TurnState, TurnStep};
 use crate::orchestrator::dispatch::{TerminateReason, TokenBreakdown, ToolInvocation};
 use crate::providers::adapter::NativeToolCall;
 
-use crate::session::events::{SessionEvent, SessionEventRecord, TurnId};
+use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord, TurnId};
 use crate::session::service::SessionId;
 use crate::verification::{ToolCallSummary, TOOL_HISTORY_WINDOW};
 
@@ -49,6 +49,29 @@ mod think;
 /// stall timeout means a step is likely slow or hung, so the salvage call must
 /// not itself wait another full `turn_timeout`. Fail-soft on expiry.
 const GRACE_TIMEOUT_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Soft-landing reminder injected one turn before the consecutive-failure cap
+/// fires. Gives a weak model a final chance to change approach or wrap up
+/// before the hard stop. The model writes the user-facing text (R7).
+const SOFT_FAILURE_WARNING: &str = "<system-reminder>\nRepeated tool failures \
+detected. You are one step from the safety cap stopping this run. Either change \
+your approach now (different tool, arguments, or strategy), or stop calling \
+tools and summarize for the user what you attempted and what is blocking you.\n\
+</system-reminder>";
+
+/// A "failure turn" for the consecutive-failure watchdog: the turn made no net
+/// progress because failures outnumber successes. Pure structural count — no
+/// judgment about whether a *successful* call was actually useful (R10-safe).
+const fn is_failure_turn(executed: usize, errors: usize) -> bool {
+    errors > executed
+}
+
+/// A "clean turn" resets the streak: zero tool errors this turn. An interleaved
+/// single success no longer zeroes a churning failure streak — only a fully
+/// clean turn does.
+const fn is_clean_turn(_executed: usize, errors: usize) -> bool {
+    errors == 0
+}
 
 /// Outcome of `AgentHarness::apply_input_guardrail`. The two non-block
 /// variants both carry the (possibly mutated) events vector; the caller
@@ -565,7 +588,10 @@ impl Harness for AgentHarness {
                     }
                     iterations = iterations.saturating_add(1);
                     tool_calls_made = tool_calls_made.saturating_add(executed);
-                    if executed == 0 && !vetoed {
+                    // Consecutive-failure watchdog (structural). Count this
+                    // turn's tool errors vs successful executions over the
+                    // events since the last assistant message.
+                    if !vetoed {
                         let events = self
                             .deps
                             .session
@@ -576,17 +602,45 @@ impl Harness for AgentHarness {
                             .iter()
                             .rposition(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
                             .unwrap_or(0);
-                        let had_failure = events[last_assistant_idx..]
+                        let errors = events[last_assistant_idx..]
                             .iter()
-                            .any(|r| matches!(r.event, SessionEvent::ToolError { .. }));
-                        if had_failure {
+                            .filter(|r| matches!(r.event, SessionEvent::ToolError { .. }))
+                            .count();
+                        if is_clean_turn(executed, errors) {
+                            consecutive_failure_turns = 0;
+                        } else if is_failure_turn(executed, errors) {
                             consecutive_failure_turns = consecutive_failure_turns.saturating_add(1);
                             if let Some(cap) = self.deps.consecutive_failure_cap {
+                                // Soft landing: one turn before the hard cap,
+                                // inject a synthetic reminder so the model can
+                                // self-correct or wrap up (mirrors the G1
+                                // max-steps hint). Structural trigger, R10-safe.
+                                if cap > 1 && consecutive_failure_turns == cap - 1 {
+                                    let warn = SessionEvent::UserMessage {
+                                        turn_id: uuid::Uuid::new_v4(),
+                                        content: MessageContent {
+                                            text: SOFT_FAILURE_WARNING.to_string(),
+                                            blocks: Vec::new(),
+                                            thinking: None,
+                                            thinking_signature: None,
+                                        },
+                                        at: crate::session::events::now_ms(),
+                                        synthetic: true,
+                                    };
+                                    if let Err(e) = self
+                                        .deps
+                                        .session
+                                        .emit_event(&current_session, warn)
+                                        .await
+                                    {
+                                        tracing::warn!(?current_session, ?e, "soft-failure warning emit failed");
+                                    }
+                                }
                                 if consecutive_failure_turns >= cap {
                                     tracing::warn!(
                                         ?current_session,
                                         cap,
-                                        "consecutive total-failure cap reached; forcing Done",
+                                        "consecutive failure cap reached; forcing Done",
                                     );
                                     self.hit_limit.store(true, Ordering::Relaxed);
                                     self.set_terminate_reason(
@@ -596,8 +650,6 @@ impl Harness for AgentHarness {
                                                 .unwrap_or(u32::MAX),
                                         },
                                     );
-                                    // Surface the recurring blocker to the user
-                                    // instead of a silent HitLimit break.
                                     self.fire_boundary_grace_turn(
                                         &current_session,
                                         callback,
@@ -612,11 +664,9 @@ impl Harness for AgentHarness {
                                     );
                                 }
                             }
-                        } else {
-                            consecutive_failure_turns = 0;
                         }
-                    } else if executed > 0 {
-                        consecutive_failure_turns = 0;
+                        // else: minority-failure turn — neither reset nor
+                        // increment (hold the streak).
                     }
                     if vetoed {
                         verifier_veto_count = verifier_veto_count.saturating_add(1);
@@ -964,6 +1014,22 @@ mod tests {
     use crate::session::service::{SessionId, SessionService};
     use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
     use serde_json::{json, Value};
+
+    #[test]
+    fn failure_streak_counts_majority_failure_not_just_total_failure() {
+        // (executed, errors) -> should this turn increment the streak?
+        assert!(super::is_failure_turn(0, 2)); // total failure
+        assert!(super::is_failure_turn(1, 3)); // majority failure (1 ok, 3 err)
+        assert!(!super::is_failure_turn(3, 1)); // mostly success → not a failure turn
+        assert!(!super::is_failure_turn(2, 0)); // clean → not a failure turn
+    }
+
+    #[test]
+    fn failure_streak_resets_only_on_clean_turn() {
+        assert!(super::is_clean_turn(2, 0)); // zero errors → reset
+        assert!(!super::is_clean_turn(2, 1)); // any error → hold/increment, don't reset
+        assert!(!super::is_clean_turn(0, 1));
+    }
 
     struct AlwaysOkTools;
 
