@@ -95,6 +95,45 @@ impl AiProvider for ScriptProvider {
     }
 }
 
+/// Primary whose behavior-resolution fields are configurable, so the
+/// failover wrapper's pass-through can be asserted.
+struct BehaviorProvider {
+    protocol: &'static str,
+    behavior: Option<&'static str>,
+}
+
+impl AiProvider for BehaviorProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async { Ok(ProviderResponse::text_only("primary".to_string())) })
+    }
+    fn name(&self) -> &str {
+        "primary"
+    }
+    fn color(&self) -> &str {
+        "#000"
+    }
+    fn protocol(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed(self.protocol)
+    }
+    fn model_behavior_override(&self) -> Option<std::borrow::Cow<'_, str>> {
+        self.behavior.map(std::borrow::Cow::Borrowed)
+    }
+}
+
+#[test]
+fn failover_reports_live_primary_behavior() {
+    let primary = Arc::new(BehaviorProvider {
+        protocol: "anthropic",
+        behavior: Some("kimi"),
+    });
+    let failover = build(primary, vec![], vec![]);
+    assert_eq!(failover.protocol().as_ref(), "anthropic");
+    assert_eq!(failover.model_behavior_override().as_deref(), Some("kimi"));
+}
+
 /// Assemble a `FailoverProvider` from a primary + fallback nodes.
 fn build(
     primary: Arc<dyn AiProvider>,

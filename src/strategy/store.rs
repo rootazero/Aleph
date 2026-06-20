@@ -212,9 +212,18 @@ mod tests {
             success_criteria: "done".into(),
             goal_id: None,
         };
-        let s2 = Strategy { objective: "second".into(), ..s1.clone() };
-        assert!(store.put_if_absent("team:t1", &s1).unwrap(), "first call inserts");
-        assert!(!store.put_if_absent("team:t1", &s2).unwrap(), "second call is a no-op");
+        let s2 = Strategy {
+            objective: "second".into(),
+            ..s1.clone()
+        };
+        assert!(
+            store.put_if_absent("team:t1", &s1).unwrap(),
+            "first call inserts"
+        );
+        assert!(
+            !store.put_if_absent("team:t1", &s2).unwrap(),
+            "second call is a no-op"
+        );
         assert_eq!(
             store.get("team:t1").unwrap().unwrap().objective,
             "first",

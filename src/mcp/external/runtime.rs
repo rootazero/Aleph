@@ -246,10 +246,7 @@ mod tests {
         // Regression: Python must fall back to `python` so that Windows
         // (python.org installer / `py` launcher) and minimal Linux hosts —
         // where only `python` exists — are not false-skipped.
-        assert_eq!(
-            RuntimeKind::Python.check_commands(),
-            &["python3", "python"]
-        );
+        assert_eq!(RuntimeKind::Python.check_commands(), &["python3", "python"]);
     }
 
     #[test]

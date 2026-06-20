@@ -622,9 +622,7 @@ fn derive_chain_min_budget(config: &Config, primary_provider_key: &str) -> Chain
         // overflow the budget the chain-min design exists to keep safe. An empty
         // models list still contributes one evaluation (config window / default).
         let models: Vec<Option<&str>> = match provider {
-            Some(p) if !p.models.is_empty() => {
-                p.models.iter().map(|m| Some(m.as_str())).collect()
-            }
+            Some(p) if !p.models.is_empty() => p.models.iter().map(|m| Some(m.as_str())).collect(),
             _ => vec![None],
         };
         for model in models {
@@ -956,7 +954,9 @@ pub fn build_strategy_planner_provider(
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::{ContextBudgetToml, FallbackProviderToml, ProviderConfig, StabilityToml, StrategyToml};
+    use crate::{
+        ContextBudgetToml, FallbackProviderToml, ProviderConfig, StabilityToml, StrategyToml,
+    };
 
     fn cfg_with_context_budget(cb: Option<ContextBudgetToml>) -> Config {
         Config {
@@ -1806,11 +1806,7 @@ mod tests {
     /// `primary_model`. Mirrors `cfg_summary_keyed`, but the planner builder
     /// reads `config.strategy` and has NO `default_aux_model` tier-2 fallback —
     /// so the `key` preset is irrelevant to its resolution.
-    fn cfg_strategy_keyed(
-        key: &str,
-        primary_model: &str,
-        planner_model: Option<&str>,
-    ) -> Config {
+    fn cfg_strategy_keyed(key: &str, primary_model: &str, planner_model: Option<&str>) -> Config {
         let mut primary = ProviderConfig::test_config(primary_model);
         primary.protocol = Some("mock".to_string());
         let mut cfg = cfg_with_fallback(None, vec![(key, primary)]);

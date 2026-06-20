@@ -142,6 +142,17 @@ impl FileOpSupersedeStage {
         }
     }
 
+    /// Override just the pressure gate, keeping the default tool-name allowlist
+    /// and `min_ops_per_path`. Production wires this from
+    /// [`ContextBudgetConfig::preventive_floor`](crate::context::budget::ContextBudgetConfig::preventive_floor)
+    /// so all three cheap passes share one config-derived band instead of this
+    /// stage carrying its own hardcoded ratio.
+    #[must_use]
+    pub fn with_min_pressure_ratio(mut self, ratio: f64) -> Self {
+        self.min_pressure_ratio = ratio;
+        self
+    }
+
     /// Classify a tool name against the configured allowlist. Returns
     /// `None` for tools outside the file-op universe (the algorithm only
     /// reasons about file paths).

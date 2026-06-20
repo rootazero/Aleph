@@ -63,6 +63,12 @@ pub struct TurnVerifyContext<'a> {
     /// `ScratchpadGoalVerifier`) can locate per-session state. `None`
     /// in contexts that don't bind a session (some tests / rollback).
     pub session_id: Option<&'a str>,
+    /// Per-model robustness thresholds resolved for THIS run at the
+    /// orchestrator layer. The verifier reads its thresholds from here so a
+    /// shared verifier instance can be tuned per run/model without per-run
+    /// reconstruction. Defaults to `conservative()` in contexts that don't
+    /// resolve a model (tests / rollback).
+    pub robustness_profile: crate::verification::ModelRobustnessProfile,
 }
 
 /// Outcome of one verifier's evaluation.

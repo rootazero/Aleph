@@ -253,6 +253,7 @@ pub(super) fn minimal_deps(
         tools,
         sandbox: Arc::new(crate::sandbox::NoopSandbox),
         llm,
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
         context_budget: None,
         context_compactor: None,

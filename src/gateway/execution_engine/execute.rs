@@ -20,10 +20,7 @@ fn naked_loop_planner_should_fire(
     is_resume: bool,
     input: &str,
 ) -> bool {
-    is_first_message
-        && session_key.is_interactive()
-        && !is_resume
-        && !input.trim().is_empty()
+    is_first_message && session_key.is_interactive() && !is_resume && !input.trim().is_empty()
 }
 
 /// Cap the planner objective at a generous UTF-8 char boundary. Naked-loop input
@@ -54,7 +51,10 @@ where
         &self,
         request: &RunRequest,
         is_first_message: bool,
-    ) -> Option<(String, tokio::task::JoinHandle<Option<crate::strategy::Strategy>>)> {
+    ) -> Option<(
+        String,
+        tokio::task::JoinHandle<Option<crate::strategy::Strategy>>,
+    )> {
         let provider = self.planner_provider.clone()?;
         let is_resume = request.metadata.get("resume").map(String::as_str) == Some("true");
         if !naked_loop_planner_should_fire(
@@ -820,11 +820,11 @@ where
                                                 // turn in this reused session
                                                 // (spec §6). Best-effort.
                                                 if let Some(strat) = crate::strategy::global() {
-                                                    if let Err(e) = strat.delete(
-                                                        &crate::strategy::goal_key(
+                                                    if let Err(e) =
+                                                        strat.delete(&crate::strategy::goal_key(
                                                             &session_key_str,
-                                                        ),
-                                                    ) {
+                                                        ))
+                                                    {
                                                         warn!(error = %e, session = %session_key_str,
                                                             "goal pursuit: failed to clear welded strategy on complete (ignored)");
                                                     }
@@ -1002,7 +1002,8 @@ where
                                 // enqueue, so it is unaffected. `delay` below is computed
                                 // from the un-bumped `&state`, so THIS tick's pacing is
                                 // unchanged — only the NEXT tick is governed by the clear.
-                                let bumped = state.clone().spent_iteration().with_next_wake_ms(None);
+                                let bumped =
+                                    state.clone().spent_iteration().with_next_wake_ms(None);
                                 let delay = crate::looping::pursuit::tick_delay_ms(&state, now_ms);
                                 let prompt = crate::looping::pursuit::tick_prompt(&state);
                                 loop_reg.put(bumped);
@@ -1359,7 +1360,12 @@ mod naked_loop_planner_tests {
     #[test]
     fn gate_fires_for_human_first_message() {
         let k = SessionKey::main("a");
-        assert!(naked_loop_planner_should_fire(&k, true, false, "research X and email Bob"));
+        assert!(naked_loop_planner_should_fire(
+            &k,
+            true,
+            false,
+            "research X and email Bob"
+        ));
     }
 
     #[test]
@@ -1375,10 +1381,30 @@ mod naked_loop_planner_tests {
         let team = SessionKey::task("a", "team_chat", "team-1");
         let eph = SessionKey::ephemeral("a");
         let sub = SessionKey::subagent(SessionKey::main("a"), "s");
-        assert!(!naked_loop_planner_should_fire(&cron, true, false, "do a thing"));
-        assert!(!naked_loop_planner_should_fire(&team, true, false, "do a thing"));
-        assert!(!naked_loop_planner_should_fire(&eph, true, false, "do a thing"));
-        assert!(!naked_loop_planner_should_fire(&sub, true, false, "do a thing"));
+        assert!(!naked_loop_planner_should_fire(
+            &cron,
+            true,
+            false,
+            "do a thing"
+        ));
+        assert!(!naked_loop_planner_should_fire(
+            &team,
+            true,
+            false,
+            "do a thing"
+        ));
+        assert!(!naked_loop_planner_should_fire(
+            &eph,
+            true,
+            false,
+            "do a thing"
+        ));
+        assert!(!naked_loop_planner_should_fire(
+            &sub,
+            true,
+            false,
+            "do a thing"
+        ));
     }
 
     #[test]

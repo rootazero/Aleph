@@ -750,11 +750,9 @@ mod tests {
     async fn loop_start_with_no_provider_succeeds_without_strategy() {
         use crate::strategy::{loop_key, StrategyStore};
         let sdir = tempfile::tempdir().unwrap();
-        crate::strategy::set_global_for_test(
-            crate::sync_primitives::Arc::new(
-                StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
-            ),
-        );
+        crate::strategy::set_global_for_test(crate::sync_primitives::Arc::new(
+            StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+        ));
         let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
         let tool = LoopTool::new(reg).with_session_for_test("sess-lp-noprov");
         let out = tool

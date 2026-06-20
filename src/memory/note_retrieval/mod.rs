@@ -7,9 +7,11 @@
 pub mod expansion;
 pub mod hybrid;
 pub mod scoring;
+pub mod trace;
 
 use std::collections::HashMap;
 
+use self::trace::{StageTrace, TraceSink};
 use crate::config::types::memory::{ExpansionConfig, RetrievalScoringConfig};
 use crate::error::AlephError;
 use crate::memory::context::{MemoryFact, NoteType};
@@ -19,6 +21,7 @@ use crate::memory::rerank::{blend_scores, build_provider, RerankConfig, RerankPr
 use crate::memory::store::types::ScoredFact;
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
+use std::time::Instant;
 
 /// When a cross-encoder reranker is active, over-fetch candidates by this factor
 /// so the reranker has a meaningful pool to reorder before truncation.
@@ -127,32 +130,42 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         facts: Vec<ScoredFact>,
         now: i64,
         reinforcement_counts: &HashMap<String, i64>,
+        sink: &mut TraceSink,
     ) -> Vec<ScoredFact> {
         if !self.scoring.is_active() || facts.len() < 2 {
             return facts;
         }
         let mut facts = facts;
 
-        // 1) Recency + reinforcement reweight, then re-sort by adjusted score.
-        if self.scoring.recency_enabled || self.scoring.reinforcement_enabled {
+        // 1a) Recency reweight.
+        if self.scoring.recency_enabled {
+            let t0 = Instant::now();
+            let n = facts.len();
             for f in facts.iter_mut() {
-                if self.scoring.recency_enabled {
-                    let mult = scoring::recency_multiplier(
-                        f.fact.updated_at,
-                        now,
-                        self.scoring.recency_half_life_days,
-                    );
-                    f.score = scoring::apply_recency(f.score, mult, self.scoring.recency_weight);
-                }
-                if self.scoring.reinforcement_enabled {
-                    let hits = reinforcement_counts.get(&f.fact.id).copied().unwrap_or(0);
-                    f.score = scoring::apply_reinforcement(
-                        f.score,
-                        hits,
-                        self.scoring.reinforcement_weight,
-                    );
-                }
+                let mult = scoring::recency_multiplier(
+                    f.fact.updated_at,
+                    now,
+                    self.scoring.recency_half_life_days,
+                );
+                f.score = scoring::apply_recency(f.score, mult, self.scoring.recency_weight);
             }
+            sink.record("recency_decay", t0.elapsed().as_millis() as u64, n, n);
+        }
+
+        // 1b) Reinforcement reweight.
+        if self.scoring.reinforcement_enabled {
+            let t0 = Instant::now();
+            let n = facts.len();
+            for f in facts.iter_mut() {
+                let hits = reinforcement_counts.get(&f.fact.id).copied().unwrap_or(0);
+                f.score =
+                    scoring::apply_reinforcement(f.score, hits, self.scoring.reinforcement_weight);
+            }
+            sink.record("reinforcement", t0.elapsed().as_millis() as u64, n, n);
+        }
+
+        // 1c) Re-sort by adjusted score (once, after both reweights).
+        if self.scoring.recency_enabled || self.scoring.reinforcement_enabled {
             facts.sort_by(|a, b| {
                 b.score
                     .partial_cmp(&a.score)
@@ -162,6 +175,8 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
 
         // 2) MMR diversity reorder over the (relevance-sorted) pool.
         if self.scoring.mmr_enabled {
+            let t0 = Instant::now();
+            let n = facts.len();
             let contents: Vec<String> = facts.iter().map(|f| f.fact.content.clone()).collect();
             let relevance: Vec<f32> = facts.iter().map(|f| f.score).collect();
             let order = scoring::mmr_reorder(&contents, &relevance, self.scoring.mmr_lambda);
@@ -170,6 +185,12 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                 .into_iter()
                 .filter_map(|i| slots.get_mut(i).and_then(Option::take))
                 .collect();
+            sink.record(
+                "mmr_diversity",
+                t0.elapsed().as_millis() as u64,
+                n,
+                facts.len(),
+            );
         }
 
         facts
@@ -219,7 +240,12 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
     /// with the original retrieval scores via `blend_scores`. Falls back to the
     /// original ordering on any reranker error (graceful degradation). The result
     /// is keyed by note path (unique), so blending never confuses two facts.
-    async fn apply_rerank(&self, query: &str, facts: Vec<ScoredFact>) -> Vec<ScoredFact> {
+    async fn apply_rerank(
+        &self,
+        query: &str,
+        facts: Vec<ScoredFact>,
+        sink: &mut TraceSink,
+    ) -> Vec<ScoredFact> {
         let Some(reranker) = self.reranker.as_ref() else {
             return facts;
         };
@@ -227,6 +253,8 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         if facts.len() < 2 {
             return facts;
         }
+        let t0 = Instant::now();
+        let input = facts.len();
 
         let docs: Vec<String> = facts.iter().map(|f| f.fact.content.clone()).collect();
         let reranked = match reranker.rerank(query, &docs, docs.len()).await {
@@ -255,6 +283,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                 out.push(fact);
             }
         }
+        sink.record("rerank", t0.elapsed().as_millis() as u64, input, out.len());
         out
     }
 
@@ -266,10 +295,38 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         agent_id: &str,
         limit: usize,
     ) -> Result<Vec<ScoredFact>, AlephError> {
+        let mut sink = TraceSink::Off;
+        self.retrieve_inner(query, agent_id, limit, &mut sink).await
+    }
+
+    /// Same as [`retrieve`], but also returns per-stage telemetry for the
+    /// retrieval debug panel. Results and ordering are identical to `retrieve`.
+    pub async fn retrieve_traced(
+        &self,
+        query: &str,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<(Vec<ScoredFact>, Vec<StageTrace>), AlephError> {
+        let mut sink = TraceSink::On(Vec::new());
+        let results = self
+            .retrieve_inner(query, agent_id, limit, &mut sink)
+            .await?;
+        Ok((results, sink.into_stages()))
+    }
+
+    /// Shared orchestration for `retrieve` / `retrieve_traced`. The `sink`
+    /// records stage telemetry only when `On`; `Off` is a no-op hot path with
+    /// byte-identical results.
+    async fn retrieve_inner(
+        &self,
+        query: &str,
+        agent_id: &str,
+        limit: usize,
+        sink: &mut TraceSink,
+    ) -> Result<Vec<ScoredFact>, AlephError> {
         // Embedding requires a remote API call; when that endpoint is
         // unreachable (network outage, provider down) the notes themselves
-        // are still local — degrade to FTS-only search instead of failing
-        // the whole retrieval.
+        // are still local — degrade to FTS-only search instead of failing.
         let embedding = match self.embedder.embed(query).await {
             Ok(e) => e,
             Err(e) => {
@@ -277,18 +334,35 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                     error = %e,
                     "note retrieval: embedding unavailable, falling back to FTS-only search"
                 );
-                return self.text_retrieve(query, agent_id, limit).await;
+                let t0 = Instant::now();
+                let results = self.text_retrieve(query, agent_id, limit).await?;
+                sink.record(
+                    "fts_search",
+                    t0.elapsed().as_millis() as u64,
+                    0,
+                    results.len(),
+                );
+                return Ok(results);
             }
         };
         let dim = embedding.len() as u32;
 
+        let t0 = Instant::now();
         let mut results = self
             .indexer
             .store()
             .hybrid_search_notes(&embedding, query, agent_id, dim, self.fetch_limit(limit))
             .await?;
+        sink.record(
+            "hybrid_search",
+            t0.elapsed().as_millis() as u64,
+            0,
+            results.len(),
+        );
 
         if self.expansion.is_active() {
+            let t0 = Instant::now();
+            let before = results.len();
             let peers = expansion::graph_expand(
                 self.indexer.store().as_ref(),
                 agent_id,
@@ -306,13 +380,27 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                 });
                 results.truncate(RERANK_MAX_CANDIDATES);
             }
+            sink.record(
+                "graph_expand",
+                t0.elapsed().as_millis() as u64,
+                before,
+                results.len(),
+            );
         }
 
         let facts: Vec<ScoredFact> = results.iter().map(|r| r.to_scored_fact(agent_id)).collect();
-        let ranked = self.apply_rerank(query, facts).await;
+        let ranked = self.apply_rerank(query, facts, sink).await;
         let counts = self.fetch_reinforcement_counts(&ranked).await;
-        let mut ranked = self.apply_scoring(ranked, now_unix(), &counts);
+        let mut ranked = self.apply_scoring(ranked, now_unix(), &counts, sink);
+        let before = ranked.len();
+        let t0 = Instant::now();
         ranked.truncate(limit);
+        sink.record(
+            "truncate",
+            t0.elapsed().as_millis() as u64,
+            before,
+            ranked.len(),
+        );
         // Close the hot-floating loop: record the surfaced notes as recall hits.
         self.record_recall(query, agent_id, &ranked).await;
         Ok(ranked)
@@ -412,9 +500,11 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         });
         all_results.truncate(self.fetch_limit(limit));
 
-        let ranked = self.apply_rerank(query, all_results).await;
+        let ranked = self
+            .apply_rerank(query, all_results, &mut TraceSink::Off)
+            .await;
         let counts = self.fetch_reinforcement_counts(&ranked).await;
-        let mut ranked = self.apply_scoring(ranked, now_unix(), &counts);
+        let mut ranked = self.apply_scoring(ranked, now_unix(), &counts, &mut TraceSink::Off);
         ranked.truncate(limit);
         // Close the hot-floating loop across the multi-agent ("smart recall")
         // path too. `namespace` is signal metadata only (not part of the dedup
@@ -823,7 +913,9 @@ mod tests {
             scored("p/c", "gamma", 0.7),
         ];
         let retrieval = with_mock(retrieval, vec![(2, 0.99), (0, 0.5), (1, 0.1)], false, 1.0);
-        let out = retrieval.apply_rerank("q", facts).await;
+        let out = retrieval
+            .apply_rerank("q", facts, &mut TraceSink::Off)
+            .await;
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(order, vec!["p/c", "p/a", "p/b"]);
     }
@@ -833,7 +925,9 @@ mod tests {
         let (retrieval, _dir) = create_retrieval().await;
         let facts = vec![scored("p/a", "alpha", 0.9), scored("p/b", "beta", 0.5)];
         let retrieval = with_mock(retrieval, vec![], true, 1.0);
-        let out = retrieval.apply_rerank("q", facts).await;
+        let out = retrieval
+            .apply_rerank("q", facts, &mut TraceSink::Off)
+            .await;
         // Error → original order preserved, no facts dropped.
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(order, vec!["p/a", "p/b"]);
@@ -843,7 +937,9 @@ mod tests {
     async fn apply_rerank_noop_without_reranker() {
         let (retrieval, _dir) = create_retrieval().await;
         let facts = vec![scored("p/a", "alpha", 0.9), scored("p/b", "beta", 0.5)];
-        let out = retrieval.apply_rerank("q", facts).await;
+        let out = retrieval
+            .apply_rerank("q", facts, &mut TraceSink::Off)
+            .await;
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(order, vec!["p/a", "p/b"]);
     }
@@ -913,7 +1009,7 @@ mod tests {
         // Explicitly-disabled scoring → order preserved, scores untouched.
         let retrieval = retrieval.with_scoring_config(&inactive_scoring());
         let facts = vec![scored("p/a", "alpha", 0.9), scored("p/b", "beta", 0.5)];
-        let out = retrieval.apply_scoring(facts, 1_000_000, &HashMap::new());
+        let out = retrieval.apply_scoring(facts, 1_000_000, &HashMap::new(), &mut TraceSink::Off);
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(order, vec!["p/a", "p/b"]);
         assert!((out[0].score - 0.9).abs() < 1e-6);
@@ -937,7 +1033,7 @@ mod tests {
             scored_at("p/stale", "old knowledge", 0.9, now - 200 * day),
             scored_at("p/fresh", "new knowledge", 0.8, now),
         ];
-        let out = retrieval.apply_scoring(facts, now, &HashMap::new());
+        let out = retrieval.apply_scoring(facts, now, &HashMap::new(), &mut TraceSink::Off);
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(
             order,
@@ -961,7 +1057,7 @@ mod tests {
             scored("p/b", "rust async tokio runtime scheduler details", 0.90),
             scored("p/c", "python pandas dataframe analysis", 0.60),
         ];
-        let out = retrieval.apply_scoring(facts, 1_000_000, &HashMap::new());
+        let out = retrieval.apply_scoring(facts, 1_000_000, &HashMap::new(), &mut TraceSink::Off);
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(order, vec!["p/a", "p/c", "p/b"]);
     }
@@ -984,7 +1080,7 @@ mod tests {
         let mut counts = HashMap::new();
         counts.insert("p/hot".to_string(), 40_i64);
         // 0.70 * (1 + 0.5 * ln(41)) = 0.70 * (1 + 0.5 * 3.714) = 0.70 * 2.857 = 2.0
-        let out = retrieval.apply_scoring(facts, 1_000_000, &counts);
+        let out = retrieval.apply_scoring(facts, 1_000_000, &counts, &mut TraceSink::Off);
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(
             order,
@@ -1001,7 +1097,7 @@ mod tests {
         let facts = vec![scored("p/a", "alpha", 0.9), scored("p/b", "beta", 0.5)];
         let mut counts = HashMap::new();
         counts.insert("p/b".to_string(), 999_i64);
-        let out = retrieval.apply_scoring(facts, 1_000_000, &counts);
+        let out = retrieval.apply_scoring(facts, 1_000_000, &counts, &mut TraceSink::Off);
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(order, vec!["p/a", "p/b"]);
     }
@@ -1021,5 +1117,75 @@ mod tests {
         let retrieval = NoteFactRetrieval::new(indexer, embedder).with_scoring_config(&cfg);
         // No reranker, but MMR active → over-fetch a real pool.
         assert_eq!(retrieval.fetch_limit(5), 15);
+    }
+
+    /// Active scoring config so apply_scoring exercises all three sub-stages.
+    fn active_scoring() -> RetrievalScoringConfig {
+        RetrievalScoringConfig {
+            recency_enabled: true,
+            reinforcement_enabled: true,
+            mmr_enabled: true,
+            ..RetrievalScoringConfig::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_scoring_trace_matches_untraced_and_records_stages() {
+        let (retrieval, _dir) = create_retrieval().await;
+        let retrieval = retrieval.with_scoring_config(&active_scoring());
+
+        let facts = vec![
+            scored("a", "alpha content one", 0.9),
+            scored("b", "beta content two", 0.5),
+            scored("c", "gamma content three", 0.3),
+        ];
+        let counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+
+        // Untraced (Off) reference result.
+        let mut off = TraceSink::Off;
+        let ref_out = retrieval.apply_scoring(facts.clone(), 1_700_000_000, &counts, &mut off);
+
+        // Traced (On) result must be identical in scores + order.
+        let mut on = TraceSink::On(Vec::new());
+        let traced_out = retrieval.apply_scoring(facts, 1_700_000_000, &counts, &mut on);
+
+        let ref_ids: Vec<(&str, f32)> = ref_out
+            .iter()
+            .map(|f| (f.fact.id.as_str(), f.score))
+            .collect();
+        let traced_ids: Vec<(&str, f32)> = traced_out
+            .iter()
+            .map(|f| (f.fact.id.as_str(), f.score))
+            .collect();
+        assert_eq!(ref_ids, traced_ids, "tracing must not change results");
+
+        let stages = on.into_stages();
+        let names: Vec<&str> = stages.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"recency_decay"));
+        assert!(names.contains(&"reinforcement"));
+        assert!(names.contains(&"mmr_diversity"));
+        // Recency/reinforcement preserve cardinality.
+        for s in &stages {
+            if s.name == "recency_decay" || s.name == "reinforcement" {
+                assert_eq!(s.input_count, s.output_count);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn retrieve_traced_on_empty_store_returns_stages() {
+        let (retrieval, _dir) = create_retrieval().await;
+        let (results, stages) = retrieval
+            .retrieve_traced("anything", "main", 5)
+            .await
+            .unwrap();
+        assert!(results.is_empty(), "empty store yields no results");
+        // The search stage always runs; with a mock embedder it is hybrid_search.
+        assert!(
+            stages
+                .iter()
+                .any(|s| s.name == "hybrid_search" || s.name == "fts_search"),
+            "a search stage must be recorded, got {stages:?}"
+        );
     }
 }

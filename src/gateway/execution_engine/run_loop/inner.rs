@@ -535,16 +535,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .provider_registry
                     .get(&resolved.provider_name)
                     .unwrap_or_else(|| self.provider_registry.default_provider());
-                let behavior_name = provider
-                    .model_behavior_override()
-                    .or_else(|| protocol_to_behavior(provider.protocol()));
+                let behavior_override = provider.model_behavior_override();
+                let protocol = provider.protocol();
+                let behavior_name: Option<&str> = behavior_override
+                    .as_deref()
+                    .or_else(|| protocol_to_behavior(&protocol));
                 let content = match behavior_name {
                     Some(name) => load_model_behavior(name).await,
                     None => None,
                 };
                 info!(
                     run_id = run_id,
-                    protocol = %provider.protocol(),
+                    protocol = %protocol,
                     behavior_name = ?behavior_name,
                     loaded = content.is_some(),
                     "Model behavior resolved"

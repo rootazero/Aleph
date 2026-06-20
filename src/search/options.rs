@@ -11,12 +11,12 @@
 ///
 /// Mapping table (kept in sync with the helpers below):
 ///
-/// | field        | Brave         | Bing         | Google CSE   | `SearXNG`      | Tavily   | `DuckDuckGo` |
-/// |--------------|---------------|--------------|--------------|--------------|----------|------------|
-/// | language     | `search_lang`   | setLang      | `lr=lang_XX`   | language     | —        | —          |
-/// | region       | country       | cc           | gl           | —            | —        | kl         |
-/// | `date_range`   | freshness     | freshness    | dateRestrict | `time_range`   | days     | df         |
-/// | `safe_search`  | safesearch    | safeSearch   | safe         | safesearch   | —        | kp         |
+/// | field        | Brave         | Bing         | Google CSE   | `SearXNG`      | Tavily   | `DuckDuckGo` | Firecrawl |
+/// |--------------|---------------|--------------|--------------|--------------|----------|------------|-----------|
+/// | language     | `search_lang`   | setLang      | `lr=lang_XX`   | language     | —        | —          | lang      |
+/// | region       | country       | cc           | gl           | —            | —        | kl         | country   |
+/// | `date_range`   | freshness     | freshness    | dateRestrict | `time_range`   | days     | df         | tbs       |
+/// | `safe_search`  | safesearch    | safeSearch   | safe         | safesearch   | —        | kp         | —         |
 ///
 /// Providers that have no native concept for a field omit it entirely
 /// (the helper returns `None` or the call site simply doesn't push it).
@@ -248,6 +248,18 @@ impl SearchOptions {
             _ => return None,
         })
     }
+
+    /// Firecrawl `tbs` time filter (Google-style `qdr:d`/`qdr:w`/`qdr:m`/`qdr:y`).
+    #[must_use]
+    pub fn firecrawl_tbs(&self) -> Option<&'static str> {
+        Some(match self.date_range.as_deref()? {
+            "day" => "qdr:d",
+            "week" => "qdr:w",
+            "month" => "qdr:m",
+            "year" => "qdr:y",
+            _ => return None,
+        })
+    }
 }
 
 /// Quota information for rate-limited providers
@@ -447,5 +459,15 @@ mod tests {
         assert_eq!(opts_with_range("week").ddg_df(), Some("w"));
         assert_eq!(opts_with_range("month").ddg_df(), Some("m"));
         assert_eq!(opts_with_range("year").ddg_df(), Some("y"));
+    }
+
+    #[test]
+    fn firecrawl_tbs_maps_canonical_tokens() {
+        assert_eq!(opts_with_range("day").firecrawl_tbs(), Some("qdr:d"));
+        assert_eq!(opts_with_range("week").firecrawl_tbs(), Some("qdr:w"));
+        assert_eq!(opts_with_range("month").firecrawl_tbs(), Some("qdr:m"));
+        assert_eq!(opts_with_range("year").firecrawl_tbs(), Some("qdr:y"));
+        assert_eq!(opts_with_range("garbage").firecrawl_tbs(), None);
+        assert_eq!(SearchOptions::default().firecrawl_tbs(), None);
     }
 }

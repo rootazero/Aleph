@@ -52,6 +52,7 @@ fn ctx() -> TurnVerifyContext<'static> {
         recent_tool_calls: &[],
         stop_reason: None,
         session_id: None,
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     }
 }
 
@@ -140,6 +141,7 @@ async fn concurrent_verify_vs_disable_all_is_consistent() {
                 recent_tool_calls: &[],
                 stop_reason: None,
                 session_id: None,
+                robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
             };
             for _ in 0..ITERS {
                 match chain.verify(&c, &cancel).await {

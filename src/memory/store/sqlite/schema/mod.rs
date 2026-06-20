@@ -76,6 +76,8 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
 
     conn.execute_batch(ddl::NOTES_INDEX_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_index table: {e}")))?;
+    migrations::migrate_notes_index_aliases(conn)
+        .map_err(|e| AlephError::config(format!("migrate notes_index.aliases: {e}")))?;
 
     conn.execute_batch(ddl::NOTES_LINKS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_links table: {e}")))?;

@@ -9,6 +9,7 @@ pub mod dashboard_cron;
 pub mod home;
 pub mod logs;
 pub mod memory;
+pub mod memory_hub;
 pub mod runtimes;
 pub mod settings;
 pub mod tasks;

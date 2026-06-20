@@ -51,6 +51,7 @@
 /// let provider = create_provider("my-provider", config)?;
 /// ```
 use crate::error::Result;
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -251,8 +252,8 @@ pub trait AiProvider: Send + Sync {
     ///
     /// Returns the protocol identifier (e.g., "openai", "anthropic", "gemini", "ollama")
     /// used to select appropriate model behavior directives.
-    fn protocol(&self) -> &str {
-        "unknown"
+    fn protocol(&self) -> Cow<'_, str> {
+        Cow::Borrowed("unknown")
     }
 
     /// Model behavior override from provider config.
@@ -260,7 +261,7 @@ pub trait AiProvider: Send + Sync {
     /// When set, this takes precedence over the protocol-based auto-mapping.
     /// Used for providers like `OpenRouter` that use one protocol but route to
     /// a different model family.
-    fn model_behavior_override(&self) -> Option<&str> {
+    fn model_behavior_override(&self) -> Option<Cow<'_, str>> {
         None
     }
 

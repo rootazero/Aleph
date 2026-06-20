@@ -9,8 +9,8 @@
 //!   - this is a *mid-turn* turn (`ctx.stop_reason.is_none()`) — the loop
 //!     is still emitting tool calls; the stop turn belongs to the stop /
 //!     goal verifiers, and firing there would only re-judge stale history
-//!   - `ctx.recent_tool_calls.len() >= threshold`
-//!   - the trailing `threshold` entries all have the same `name` and
+//!   - `ctx.recent_tool_calls.len() >= profile.repeat_threshold`
+//!   - the trailing `repeat_threshold` entries all have the same `name` and
 //!     `args_hash` (identical, redundant calls — varied args reset the run)
 //!
 //! Two-tier escalation:
@@ -24,14 +24,17 @@
 //!     timeout) kills the run with a confusing error. Halting deterministically
 //!     here ends the unproductive loop with a clear reason instead.
 //!
-//! Tier 2 (same name, varying args): when the *entire* history window is the
-//! same tool `name` but the args keep changing — so Tier 1's identical run never
-//! accumulates — and the turn carries no narration text, emit a `Halt`. This
-//! catches a thrash the identical-args check is blind to (e.g. re-reading three
-//! reference files round and round). It is gated on silence: varying-args
-//! exploration *with* narration can be legitimate, and a Tier-2 Halt is
-//! terminal, so only a wholly silent loop is cut. Tier 1 fires regardless of
-//! narration text; Tier 2 only on its absence.
+//! Tier 2 (same name, low-distinctness args): when the *entire* history window
+//! is the same tool `name`, the `(name, args_hash)` pairs revisit a SMALL set
+//! (distinctness < `profile.novelty_min`), and the turn carries no narration
+//! text, emit a `Veto` (steer). This catches a thrash the identical-args check
+//! is blind to (e.g. re-reading three reference files round and round). Unlike
+//! the previous behaviour, Tier-2 now emits `Veto` (not `Halt`): the harness
+//! injects feedback and, only if the model ignores `steer_max` of them, a
+//! wrap-up grace turn fires. High-distinctness fan-out (e.g. 8 distinct
+//! `web_fetch` URLs) has distinctness ≥ `novelty_min` and therefore NEVER
+//! reaches the Tier-2 branch — this is the key fix for the parallel news-fetch
+//! false positive.
 //!
 //! All tiers are pure structural checks over `(name, args_hash)` and the
 //! presence/absence of text — no model reasoning, so this stays scaffolding
@@ -45,57 +48,30 @@ use crate::verification::turn_verifier::{
     ToolCallSummary, TurnVerifier, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
 };
 
-pub struct ToolLoopVerifier {
-    repeat_threshold: usize,
-    halt_threshold: usize,
-}
+pub struct ToolLoopVerifier;
 
 impl ToolLoopVerifier {
-    /// Default thresholds: veto at 5 identical consecutive calls (master spec
-    /// § Stage 6 "纯重复 tool call N 轮"), hard-halt at the full
-    /// [`TOOL_HISTORY_WINDOW`] (8) — i.e. ~3 ignored vetoes before the loop is
-    /// cut off. Both tunable via `with_threshold` / `with_halt_threshold`.
+    /// Construct the verifier. Detection thresholds (`repeat_threshold`,
+    /// `halt_threshold`, etc.) are read from `ctx.robustness_profile` at
+    /// `verify` time — see `ModelRobustnessProfile` and `TurnVerifyContext`.
     #[must_use]
     pub const fn new() -> Self {
-        Self {
-            repeat_threshold: 5,
-            halt_threshold: TOOL_HISTORY_WINDOW,
+        Self
+    }
+}
+
+/// Number of distinct `(name, args_hash)` pairs in the window. A low ratio
+/// of distinct/total means the model is revisiting a small set of calls
+/// (thrash); a high ratio means genuine fan-out / exploration.
+fn distinct_count(calls: &[ToolCallSummary]) -> usize {
+    let mut seen: Vec<(&str, u64)> = Vec::with_capacity(calls.len());
+    for c in calls {
+        let key = (c.name.as_str(), c.args_hash);
+        if !seen.contains(&key) {
+            seen.push(key);
         }
     }
-
-    /// Set the repetition (veto) threshold. Clamped to `[2, TOOL_HISTORY_WINDOW]`:
-    /// the lower bound avoids "single call ⇒ instant veto"; the upper bound
-    /// is the harness ring-buffer capacity — a threshold above it could never
-    /// be satisfied (`recent_tool_calls.len()` is bounded by the window), which
-    /// would silently disable detection. The halt threshold is lifted to stay
-    /// `≥ repeat_threshold` so the two tiers never invert.
-    #[must_use]
-    pub fn with_threshold(mut self, n: usize) -> Self {
-        self.repeat_threshold = n.clamp(2, TOOL_HISTORY_WINDOW);
-        self.halt_threshold = self.halt_threshold.max(self.repeat_threshold);
-        self
-    }
-
-    /// Set the hard-halt threshold. Clamped to `[repeat_threshold,
-    /// TOOL_HISTORY_WINDOW]` so it can always be reached and never fires *before*
-    /// the soft veto tier.
-    #[must_use]
-    pub fn with_halt_threshold(mut self, n: usize) -> Self {
-        self.halt_threshold = n.clamp(self.repeat_threshold, TOOL_HISTORY_WINDOW);
-        self
-    }
-
-    /// Current repetition (veto) threshold (always within `[2, TOOL_HISTORY_WINDOW]`).
-    #[must_use]
-    pub const fn threshold(&self) -> usize {
-        self.repeat_threshold
-    }
-
-    /// Current hard-halt threshold (always within `[repeat_threshold, TOOL_HISTORY_WINDOW]`).
-    #[must_use]
-    pub const fn halt_threshold(&self) -> usize {
-        self.halt_threshold
-    }
+    seen.len()
 }
 
 /// Length of the trailing run of calls identical (same `name` + `args_hash`)
@@ -128,7 +104,7 @@ fn trailing_same_name_run(calls: &[ToolCallSummary]) -> usize {
 
 impl Default for ToolLoopVerifier {
     fn default() -> Self {
-        Self::new()
+        Self
     }
 }
 
@@ -143,75 +119,209 @@ impl TurnVerifier for ToolLoopVerifier {
         ctx: &TurnVerifyContext<'_>,
         _cancel: &CancellationToken,
     ) -> VerifierVerdict {
-        // Death-loop detection is a *mid-turn* concern: every turn of the loop
-        // emits a tool call, so `stop_reason` is `None` while it is happening
-        // (the stop turn is `StopHookVerifier`/`ScratchpadGoalVerifier`'s job).
-        // Evaluating on a stop turn would only re-examine *stale* buffer
-        // entries from earlier turns and could veto a legitimate stop whose
-        // answer text is empty (e.g. a thinking-only finish), flipping a clean
-        // Done into a Continue. Gate it out — this drops no real detection
-        // because the triggering call always lands on a `stop_reason.is_none()`
-        // turn.
+        // Death-loop detection is a *mid-turn* concern (see original rationale).
         if ctx.stop_reason.is_some() {
             return VerifierVerdict::Continue;
         }
-        if ctx.recent_tool_calls.len() < self.repeat_threshold {
+        let profile = ctx.robustness_profile;
+        if ctx.recent_tool_calls.len() < profile.repeat_threshold {
             return VerifierVerdict::Continue;
         }
         let run = trailing_repeat_run(ctx.recent_tool_calls);
+
         // Tier 1 — identical (name + args_hash) consecutive calls. Fires
-        // regardless of narration text: repeating the *exact* same call with
-        // unchanged arguments is never productive, so a thinking-text escape
-        // would only let a loop disguise itself.
-        if run >= self.repeat_threshold {
-            // `run >= repeat_threshold` guarantees a non-empty trailing run, so
-            // the last entry names the offending tool.
+        // regardless of narration: an exact-repeat is never productive.
+        if run >= profile.repeat_threshold {
             let tool = &ctx.recent_tool_calls[ctx.recent_tool_calls.len() - 1].name;
-            // Halt only once the loop has persisted *past* at least one veto —
-            // i.e. when the halt tier sits strictly above the veto tier. In the
-            // degenerate clamp case where both collapse to the window size, there
-            // is no "ignored veto" stage, so keep vetoing (the conservative
-            // original behavior) rather than halting on first detection.
-            if run >= self.halt_threshold && self.halt_threshold > self.repeat_threshold {
+            if run >= profile.halt_threshold && profile.halt_threshold > profile.repeat_threshold {
                 return VerifierVerdict::Halt {
                     reason: format!(
-                        "tool '{tool}' invoked {run} consecutive times with no thinking text despite \
-                         repeated feedback — terminating to avoid an unproductive loop that would run \
-                         into the provider rate limit",
+                        "tool '{tool}' invoked {run} consecutive times with identical arguments \
+                         despite repeated feedback — terminating an unproductive loop",
                     ),
                     class: ErrorClass::Recoverable,
                 };
             }
             return VerifierVerdict::Veto {
                 reason: format!(
-                    "tool '{tool}' invoked {run} consecutive times with no thinking text — try a different approach or summarize what you've found",
+                    "tool '{tool}' invoked {run} consecutive times with identical arguments — \
+                     try a different approach or summarize what you've found",
                 ),
                 class: ErrorClass::Recoverable,
             };
         }
 
-        // Tier 2 — same tool NAME repeated across the *entire* history window
-        // with varying arguments and no narration text. Catches a thrash Tier 1
-        // misses: e.g. re-reading template.html / layouts.md / themes.md in a
-        // loop — all `file_read`, never the same args twice, so the
-        // identical-args run never builds. Gated on silence because varying-args
-        // exploration *with* narration can be legitimate, and a Tier-2 Halt is
-        // terminal; we only cut a loop the model is running with no reasoning
-        // text at all.
+        // Tier 2 — same tool NAME fills the window but arguments revisit a
+        // SMALL set (low distinctness) AND no narration. This is a thrash
+        // (e.g. re-reading 3 files round and round). UNLIKE the old code this
+        // now emits a `Veto` (steer), not a terminal `Halt`: the harness
+        // injects feedback and, only if the model ignores `steer_max` of them,
+        // its veto-cap path fires a wrap-up grace turn. High-distinctness
+        // fan-out (e.g. 8 distinct web_fetch URLs) has distinctness == 1.0,
+        // which is >= novelty_min, so it never reaches here.
         let same_name_run = trailing_same_name_run(ctx.recent_tool_calls);
         let has_text = ctx.final_text.is_some_and(|t| !t.trim().is_empty());
-        if !has_text && same_name_run >= TOOL_HISTORY_WINDOW {
+        let distinct = distinct_count(ctx.recent_tool_calls);
+        let distinctness = distinct as f32 / ctx.recent_tool_calls.len() as f32;
+        let silent_ok = !profile.silence_required || !has_text;
+        if same_name_run >= TOOL_HISTORY_WINDOW && distinctness < profile.novelty_min && silent_ok {
             let tool = &ctx.recent_tool_calls[ctx.recent_tool_calls.len() - 1].name;
-            return VerifierVerdict::Halt {
+            return VerifierVerdict::Veto {
                 reason: format!(
-                    "tool '{tool}' invoked {same_name_run} consecutive times with varying arguments \
-                     and no thinking text — terminating an unproductive exploration loop that would \
-                     run into the provider rate limit",
+                    "tool '{tool}' invoked {same_name_run} times cycling a small set of arguments \
+                     ({distinct} distinct) with no narration — stop and summarize, or take a \
+                     different approach",
                 ),
                 class: ErrorClass::Recoverable,
             };
         }
 
         VerifierVerdict::Continue
+    }
+}
+
+#[cfg(test)]
+mod profile_wiring_tests {
+    use crate::verification::turn_verifier::{ToolCallSummary, TurnVerifyContext};
+    use crate::verification::ModelRobustnessProfile;
+
+    fn ctx_with<'a>(
+        calls: &'a [ToolCallSummary],
+        profile: ModelRobustnessProfile,
+        text: Option<&'a str>,
+    ) -> TurnVerifyContext<'a> {
+        TurnVerifyContext {
+            iterations: 0,
+            tool_calls_made: 0,
+            final_text: text,
+            recent_tool_calls: calls,
+            stop_reason: None,
+            session_id: None,
+            robustness_profile: profile,
+        }
+    }
+
+    #[test]
+    fn context_carries_profile() {
+        let calls: Vec<ToolCallSummary> = Vec::new();
+        let c = ctx_with(&calls, ModelRobustnessProfile::conservative(), None);
+        assert_eq!(c.robustness_profile.repeat_threshold, 5);
+    }
+}
+
+#[cfg(test)]
+mod distinctness_tests {
+    use super::*;
+    use crate::verification::turn_verifier::{ToolCallSummary, TurnVerifyContext};
+    use crate::verification::ModelRobustnessProfile;
+    use tokio_util::sync::CancellationToken;
+
+    fn call(name: &str, args: u64) -> ToolCallSummary {
+        ToolCallSummary {
+            name: name.to_string(),
+            args_hash: args,
+        }
+    }
+
+    fn ctx<'a>(
+        calls: &'a [ToolCallSummary],
+        profile: ModelRobustnessProfile,
+        text: Option<&'a str>,
+    ) -> TurnVerifyContext<'a> {
+        TurnVerifyContext {
+            iterations: 0,
+            tool_calls_made: 0,
+            final_text: text,
+            recent_tool_calls: calls,
+            stop_reason: None,
+            session_id: None,
+            robustness_profile: profile,
+        }
+    }
+
+    // THE NEWS CASE: 8 web_fetch, all distinct URLs → fan-out → Continue.
+    #[tokio::test]
+    async fn high_distinctness_fanout_passes() {
+        let calls: Vec<_> = (0..8).map(|i| call("web_fetch", i)).collect();
+        let v = ToolLoopVerifier::new();
+        let verdict = v
+            .verify(
+                &ctx(&calls, ModelRobustnessProfile::conservative(), None),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            verdict.is_continue(),
+            "distinct fan-out must not trip: {verdict:?}"
+        );
+    }
+
+    // THRASH: 3 files cycling, 8 same-name silent → Tier-2 → VETO (was Halt).
+    #[tokio::test]
+    async fn low_distinctness_thrash_steers_not_halts() {
+        let calls: Vec<_> = (0..8).map(|i| call("file_read", (i % 3) as u64)).collect();
+        let v = ToolLoopVerifier::new();
+        let verdict = v
+            .verify(
+                &ctx(&calls, ModelRobustnessProfile::conservative(), None),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            verdict.is_veto(),
+            "silent thrash must steer (Veto), not Halt: {verdict:?}"
+        );
+    }
+
+    // THRASH WITH NARRATION + silence_required → Continue (legit exploration).
+    #[tokio::test]
+    async fn thrash_with_narration_passes_when_silence_required() {
+        let calls: Vec<_> = (0..8).map(|i| call("file_read", (i % 3) as u64)).collect();
+        let v = ToolLoopVerifier::new();
+        let verdict = v
+            .verify(
+                &ctx(
+                    &calls,
+                    ModelRobustnessProfile::conservative(),
+                    Some("Comparing the three files..."),
+                ),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            verdict.is_continue(),
+            "narrated exploration must pass: {verdict:?}"
+        );
+    }
+
+    // TIER-1 identical run at repeat_threshold → Veto.
+    #[tokio::test]
+    async fn identical_run_vetoes() {
+        let calls: Vec<_> = (0..5).map(|_| call("grep", 42)).collect();
+        let v = ToolLoopVerifier::new();
+        let verdict = v
+            .verify(
+                &ctx(&calls, ModelRobustnessProfile::conservative(), None),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(verdict.is_veto(), "identical run should veto: {verdict:?}");
+    }
+
+    // TIER-1 identical run at full window → Halt (dead loop).
+    #[tokio::test]
+    async fn identical_run_full_window_halts() {
+        let calls: Vec<_> = (0..8).map(|_| call("grep", 42)).collect();
+        let v = ToolLoopVerifier::new();
+        let verdict = v
+            .verify(
+                &ctx(&calls, ModelRobustnessProfile::conservative(), None),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            verdict.is_halt(),
+            "identical full-window run should halt: {verdict:?}"
+        );
     }
 }

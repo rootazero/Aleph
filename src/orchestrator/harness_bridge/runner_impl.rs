@@ -206,35 +206,59 @@ impl HarnessRunner for AgentHarnessRunner {
                     compactor_inner = compactor_inner.with_cheap_provider(Some(cheap));
                 }
                 let compactor = Arc::new(compactor_inner);
-                // Cheap-pass preflight: runs unconditionally before the budget
-                // check so token savings happen even when the compactor's LLM
-                // call fails. Same gating as the compactor (config-presence).
+                // Cheap-pass preflight: runs before the budget check so token
+                // savings happen even when the compactor's LLM call fails.
+                // Gated as a whole by the config-derived preventive band so the
+                // lossy passes only act once the context is genuinely filling
+                // up (headroom's pressure-aware aggressiveness) — see
+                // `ContextBudgetConfig::preventive_floor`.
                 let pipeline = {
                     use crate::context::budget::cheap_passes::{
                         FileOpSupersedeStage, HistoricalImageStrippingStage, ToolResultPruningStage,
                     };
                     use crate::context::budget::preflight::{PreflightPipeline, PreflightStage};
+                    // Single config-derived gate for all three cheap passes:
+                    // the preventive band just below the LLM-compaction warning
+                    // line. file_op_supersede's own ratio is overridden to this
+                    // same value so its standalone gate no longer carries a
+                    // hardcoded constant that could drift above a custom warning.
+                    let preventive_floor = cfg.preventive_floor();
                     // FileOpSupersedeStage runs first so its stubs shrink the
                     // tool_result bodies before ToolResultPruningStage and the
                     // image stripper see them. The three stages are commutative
                     // for correctness (none of them touches the others' targets);
                     // ordering here is for log-readability and minor cache wins.
                     let stages: Vec<Box<dyn PreflightStage>> = vec![
-                        Box::new(FileOpSupersedeStage::default()),
+                        Box::new(
+                            FileOpSupersedeStage::default()
+                                .with_min_pressure_ratio(preventive_floor),
+                        ),
                         Box::new(ToolResultPruningStage::default()),
                         Box::new(HistoricalImageStrippingStage),
                     ];
-                    Arc::new(PreflightPipeline::new(stages))
+                    Arc::new(
+                        PreflightPipeline::new(stages).with_min_pressure_ratio(preventive_floor),
+                    )
                 };
                 (Some(budget), Some(compactor), Some(pipeline))
             }
             None => (None, None, None),
         };
+        // Per-model loop-watchdog thresholds. Resolve from the active
+        // provider's behavior family (same key the prompt layer uses).
+        // Must be resolved before the HarnessDeps literal (which moves `llm`).
+        let robustness_profile = crate::verification::ModelRobustnessProfile::for_behavior(
+            llm.model_behavior_override().as_deref().or_else(|| {
+                crate::providers::model_behaviors::protocol_to_behavior(&llm.protocol())
+            }),
+        )
+        .clamped();
         let deps = HarnessDeps {
             session: self.session_service.clone(),
             tools,
             sandbox,
             llm,
+            robustness_profile,
             verifier_chain: self.verifier_chain.clone(),
             context_budget,
             context_compactor,

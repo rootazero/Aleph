@@ -5,14 +5,13 @@
 use crate::config::types::{
     AcpConfig, AgentsConfig, BehaviorConfig, ContextBudgetToml, CoworkConfigToml,
     DispatcherConfigToml, EvolutionConfig, ExecutionConfig, FallbackProviderToml, GeneralConfig,
-    TeamDispatcherConfigToml,
     GenerationConfig, GroupChatConfig, GuardrailsToml, McpConfig, MediaConfig, MemoryConfig,
     OrchestratorConfig, PersonaConfig, PoliciesConfig, PrivacyConfig, ProfileConfig,
     PromptSectionConfig, ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, SearchConfig,
     SearchConfigInternal, SecretMapping, SecretProviderConfig, SecretsConfig, ShellSecurityConfig,
     SkillsConfig, SmartFlowConfig, SmartMatchingConfig, StabilityToml, StopHookConfig,
-    SubAgentConfig, ToolServiceConfig, ToolsConfig, UnifiedToolsConfig, VoiceLocalConfig,
-    VoiceSection,
+    SubAgentConfig, TeamDispatcherConfigToml, ToolServiceConfig, ToolsConfig, UnifiedToolsConfig,
+    VoiceLocalConfig, VoiceSection,
 };
 use crate::tasks::cron::CronConfig;
 use crate::tasks::heartbeat::config::HeartbeatConfig;

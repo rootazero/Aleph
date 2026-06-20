@@ -45,6 +45,16 @@ pub struct LoadMetric {
     /// of their tier under every strategy (never dropped). `false` when no limit
     /// is set — so the gate is a no-op without `rate_limits`.
     pub over_limit: bool,
+    /// Blended `input + output` price in **milli-USD per million tokens**
+    /// (USD/Mtok × 1000) for this candidate's first model, looked up from the
+    /// static [`crate::pricing`] rate card and folded in by the failover layer —
+    /// the same "derived field, pre-computed outside the policy" contract as
+    /// [`utilization_permille`](Self::utilization_permille). `0` = unpriced
+    /// (on-machine / self-hosted models carry no rate card), which sorts *first*
+    /// under [`CostAware`](crate::config::types::LoadBalanceStrategy::CostAware)
+    /// so effectively-free local inference is preferred. The sort key for
+    /// `CostAware`; ignored by every other strategy.
+    pub price_per_mtok: u64,
 }
 
 /// Operator's explicit per-tier provider preference — "use *this* local /
@@ -391,6 +401,12 @@ where
         LoadBalanceStrategy::UsageBased => sort_by_metric(group, metric_of, name_of, |m| {
             u64::from(m.utilization_permille)
         }),
+        // Cheapest first — lowest blended input+output price (milli-USD/Mtok).
+        // `0` (unpriced local / self-hosted) sorts first, so effectively-free
+        // on-machine inference is preferred over any paid cloud endpoint.
+        LoadBalanceStrategy::CostAware => {
+            sort_by_metric(group, metric_of, name_of, |m| m.price_per_mtok)
+        }
     }
 }
 
@@ -857,5 +873,67 @@ mod tests {
         assert_eq!(limits.assess("p", 0, 1000), (1000, true));
         // Unconfigured provider → no signal.
         assert_eq!(limits.assess("other", 9999, 9999), (0, false));
+    }
+
+    // --- cost-aware strategy tests -----------------------------------------
+
+    /// Order three same-tier locals where `prices` maps name → milli-USD/Mtok,
+    /// under [`LoadBalanceStrategy::CostAware`].
+    fn cost_names(prices: &[(&str, u64)]) -> Vec<&'static str> {
+        let cands = vec![
+            ("a", EndpointTier::Local),
+            ("b", EndpointTier::Local),
+            ("c", EndpointTier::Local),
+        ];
+        let lookup = prices.to_vec();
+        let out = order_candidates_balanced(
+            cands,
+            RouteMode::Auto,
+            false,
+            &RouteTargets::default(),
+            |(_, t)| *t,
+            |(n, _)| *n,
+            LoadBalanceStrategy::CostAware,
+            0,
+            |name| {
+                lookup
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, p)| LoadMetric {
+                        price_per_mtok: *p,
+                        ..Default::default()
+                    })
+                    .unwrap_or_default()
+            },
+        );
+        out.iter().map(|((n, _), _)| *n).collect()
+    }
+
+    #[test]
+    fn cost_aware_prefers_cheapest() {
+        // a=90k, b=30k, c=60k milli-USD/Mtok → ascending price: b, c, a.
+        let names = cost_names(&[("a", 90_000), ("b", 30_000), ("c", 60_000)]);
+        assert_eq!(names, vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn cost_aware_unpriced_sorts_first() {
+        // b unpriced (0 = free local) leads even though a/c are priced.
+        let names = cost_names(&[("a", 50_000), ("b", 0), ("c", 20_000)]);
+        assert_eq!(names, vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn cost_aware_ties_keep_configured_order() {
+        // All equal price → stable sort preserves a, b, c.
+        let names = cost_names(&[("a", 10_000), ("b", 10_000), ("c", 10_000)]);
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn cost_aware_all_unpriced_is_byte_identical() {
+        // No candidate priced → every key 0 → configured order preserved.
+        let names = cost_names(&[]);
+        assert_eq!(names, vec!["a", "b", "c"]);
     }
 }

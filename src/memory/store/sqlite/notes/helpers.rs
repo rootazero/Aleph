@@ -32,6 +32,40 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<NoteIndexEnt
     })
 }
 
+/// Resolve a bare wikilink target to candidate note paths via frontmatter
+/// `aliases`. Returns the paths of notes whose `aliases_json` contains an
+/// exact match for `raw_target` (e.g. `[[Bob]]` → the note titled
+/// "Bob Smith" carrying alias "Bob").
+///
+/// JSON1-free: deserializes `aliases_json` with serde and matches in Rust,
+/// mirroring the `tags_json` idiom — no reliance on the SQLite JSON extension.
+/// Used as a fallback when filename resolution finds no unique match, so a
+/// real filename always takes priority over an alias.
+pub(crate) fn resolve_paths_by_alias(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    raw_target: &str,
+) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT path, aliases_json FROM notes_index \
+         WHERE agent_id = ?1 AND aliases_json != '[]'",
+    )?;
+    let paths = stmt
+        .query_map(rusqlite::params![agent_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .filter_map(|(path, aliases_json)| {
+            let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
+            aliases
+                .iter()
+                .any(|a| a.as_str() == raw_target)
+                .then_some(path)
+        })
+        .collect();
+    Ok(paths)
+}
+
 /// SHA-256 hex digest of a note's body text — used to gate `notes_fts` rewrites.
 pub(crate) fn body_text_sha256(body: &str) -> String {
     use sha2::{Digest, Sha256};

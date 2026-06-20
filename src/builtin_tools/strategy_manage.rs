@@ -137,9 +137,7 @@ impl StrategyTool {
         // Reject a non-strategy (no concrete guardrail) — mirrors the planner's
         // self-gate so the welded prefix never carries noise.
         if new_strategy.is_empty() {
-            return Err(
-                "new_strategy must carry at least one concrete guardrail".to_string(),
-            );
+            return Err("new_strategy must carry at least one concrete guardrail".to_string());
         }
         // Overwrite the in-force Strategy. If none exists yet (a revise before
         // the planner ran), default to the goal key — the dominant flow.
@@ -181,10 +179,7 @@ impl StrategyTool {
 /// Human-readable single-object dump for `show`. Deterministic — no timestamps,
 /// no HashMap iteration (fields are `Vec`/`String`).
 fn render_for_show(s: &Strategy) -> String {
-    let mut out = format!(
-        "objective: {}\napproach: {}",
-        s.objective, s.approach
-    );
+    let mut out = format!("objective: {}\napproach: {}", s.objective, s.approach);
     if !s.phases.is_empty() {
         out.push_str(&format!("\nphases: {}", s.phases.join(" -> ")));
     }
@@ -294,7 +289,10 @@ mod tests {
                 new_strategy: Some(s),
             })
             .await;
-        assert!(out.is_err(), "a strategy with no concrete guardrail must be rejected");
+        assert!(
+            out.is_err(),
+            "a strategy with no concrete guardrail must be rejected"
+        );
     }
 
     #[tokio::test]
@@ -303,7 +301,10 @@ mod tests {
         // Seed a goal-keyed strategy directly in the store.
         let store = tool.store.clone();
         store
-            .put(&goal_key("sess-overwrite"), &concrete_strategy("old objective"))
+            .put(
+                &goal_key("sess-overwrite"),
+                &concrete_strategy("old objective"),
+            )
             .unwrap();
         let mut revised = concrete_strategy("new objective after shock");
         revised.approach = "pivot to the new approach".to_string();
@@ -325,7 +326,10 @@ mod tests {
         let (tool, _d) = tool_with_session("sess-loop-only");
         let store = tool.store.clone();
         store
-            .put(&loop_key("sess-loop-only"), &concrete_strategy("loop objective"))
+            .put(
+                &loop_key("sess-loop-only"),
+                &concrete_strategy("loop objective"),
+            )
             .unwrap();
         let mut revised = concrete_strategy("loop objective revised");
         revised.guardrails = vec!["stay on the watch target".to_string()];

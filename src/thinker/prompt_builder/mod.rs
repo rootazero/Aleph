@@ -398,8 +398,7 @@ impl PromptBuilder {
             .with_resolved_context_opt(self.resolved_context.as_ref())
             .with_provider_protocol_opt(self.provider_protocol.as_deref())
             .with_iteration_cap_opt(self.iteration_cap);
-        self.pipeline
-            .execute(AssemblyPath::Hydration, &input)
+        self.pipeline.execute(AssemblyPath::Hydration, &input)
     }
 
     /// Build system prompt with soul section at the top

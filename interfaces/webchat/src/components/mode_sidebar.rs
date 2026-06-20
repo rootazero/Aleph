@@ -144,8 +144,8 @@ fn SidebarBrand() -> impl IntoView {
     }
 }
 
-/// Memory mode sidebar — agent selector, search, fold threshold slider,
-/// node detail panel, and a footer with a collapse button.
+/// Memory mode sidebar — fold threshold slider and node detail panel.
+/// Agent selector and search now live in the hub toolbar.
 #[component]
 fn MemorySidebar() -> impl IntoView {
     use crate::state::memory::MemoryState;
@@ -157,60 +157,6 @@ fn MemorySidebar() -> impl IntoView {
 
     view! {
         <div class="flex flex-col h-full">
-            <div class="px-3 pt-3 pb-1.5">
-                <label style="font-size:9.5px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">
-                    "Agent"
-                </label>
-                <select
-                    class="w-full mt-1 bg-surface-sunken border border-border rounded text-xs text-text-primary px-2 py-1.5 focus:outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/30"
-                    prop:value=move || mem.agent_id.get()
-                    on:change=move |ev| {
-                        mem.agent_id.set(event_target_value(&ev));
-                    }
-                >
-                    {move || {
-                        let current = mem.agent_id.get();
-                        let agents = mem.agents.get();
-                        if agents.is_empty() {
-                            // Fallback while the list is loading
-                            view! {
-                                <option value=current>{current.clone()}</option>
-                            }.into_any()
-                        } else {
-                            agents.into_iter().map(|a| {
-                                let id = a.id.clone();
-                                let label = a.name.as_deref()
-                                    .map(|n| {
-                                        if let Some(e) = a.emoji.as_deref() {
-                                            format!("{e} {n}")
-                                        } else {
-                                            n.to_string()
-                                        }
-                                    })
-                                    .unwrap_or_else(|| a.id.clone());
-                                let selected = id == mem.agent_id.get_untracked();
-                                view! {
-                                    <option value=id prop:selected=selected>{label}</option>
-                                }
-                            }).collect_view().into_any()
-                        }
-                    }}
-                </select>
-            </div>
-            <div class="px-3 pb-1.5">
-                <label style="font-size:9.5px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">
-                    "Search"
-                </label>
-                <input
-                    type="search"
-                    placeholder="keyword…"
-                    class="w-full mt-1 bg-surface-sunken border border-border rounded text-xs text-text-primary placeholder:text-text-tertiary px-2 py-1.5 focus:outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/30"
-                    prop:value=move || mem.search_query.get()
-                    on:input=move |ev| {
-                        mem.search_query.set(event_target_value(&ev));
-                    }
-                />
-            </div>
             <div class="px-3 pb-2">
                 <label style="font-size:9.5px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">
                     "Fold"

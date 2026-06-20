@@ -319,6 +319,7 @@ fn build_deps(
         tools: Arc::new(EmptyTools),
         sandbox: MockSandbox::new(noop_sandbox_output()),
         llm,
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
         context_budget: None,
         context_compactor,

@@ -454,7 +454,7 @@ mod tests {
         // → 42 (StrategyLayer @70 Stable + StrategyPointerLayer @1756 Dynamic
         // weld the StraTA plan into the cacheable head + per-turn tail,
         // 2026-06-18). See `default_layers`.
-        // → 43 (DoctorRepairHintLayer @1120 — WebRich-only "/doctor → press f"
+        // → 43 (DoctorRepairHintLayer @1715 — WebRich-only "/doctor → press f"
         // hint, 2026-06-19). See `default_layers`.
         assert_eq!(pipeline.layer_count(), 43);
     }
@@ -791,10 +791,12 @@ mod stability_tests {
         // StrategyPointerLayer echoes the Strategy guardrails near the read
         // head per turn — Dynamic. (StrategyLayer @70 is Stable, not counted.)
         assert!(dynamic_names.contains(&"strategy_pointer"));
+        // DoctorRepairHintLayer (@1715) is WebRich-gated per request — Dynamic.
+        assert!(dynamic_names.contains(&"doctor_repair_hint"));
         assert_eq!(
             dynamic_names.len(),
-            15,
-            "Exactly 15 dynamic layers expected"
+            16,
+            "Exactly 16 dynamic layers expected"
         );
     }
 

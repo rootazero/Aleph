@@ -13,6 +13,7 @@ use crate::harness::TraceSink;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -94,11 +95,11 @@ impl AiProvider for MeteringProvider {
         self.inner.supports_native_tools()
     }
 
-    fn protocol(&self) -> &str {
+    fn protocol(&self) -> Cow<'_, str> {
         self.inner.protocol()
     }
 
-    fn model_behavior_override(&self) -> Option<&str> {
+    fn model_behavior_override(&self) -> Option<Cow<'_, str>> {
         self.inner.model_behavior_override()
     }
 

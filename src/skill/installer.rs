@@ -172,11 +172,8 @@ impl InstallExecutor {
         // Pick the platform shell (PowerShell 7 → cmd on Windows, sh on Unix).
         let mut command = build_shell_command(&cmd_str);
         command.kill_on_drop(true);
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(300),
-            command.output(),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(300), command.output()).await;
 
         match result {
             Ok(Ok(output)) => {

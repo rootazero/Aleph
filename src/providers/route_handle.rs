@@ -38,6 +38,7 @@ const LB_ROUND_ROBIN: u8 = 1;
 const LB_LEAST_BUSY: u8 = 2;
 const LB_LATENCY_AWARE: u8 = 3;
 const LB_USAGE_BASED: u8 = 4;
+const LB_COST_AWARE: u8 = 5;
 
 const fn mode_to_u8(mode: RouteMode) -> u8 {
     match mode {
@@ -63,6 +64,7 @@ const fn lb_to_u8(s: LoadBalanceStrategy) -> u8 {
         LoadBalanceStrategy::LeastBusy => LB_LEAST_BUSY,
         LoadBalanceStrategy::LatencyAware => LB_LATENCY_AWARE,
         LoadBalanceStrategy::UsageBased => LB_USAGE_BASED,
+        LoadBalanceStrategy::CostAware => LB_COST_AWARE,
     }
 }
 
@@ -72,6 +74,7 @@ const fn u8_to_lb(raw: u8) -> LoadBalanceStrategy {
         LB_LEAST_BUSY => LoadBalanceStrategy::LeastBusy,
         LB_LATENCY_AWARE => LoadBalanceStrategy::LatencyAware,
         LB_USAGE_BASED => LoadBalanceStrategy::UsageBased,
+        LB_COST_AWARE => LoadBalanceStrategy::CostAware,
         // LB_ORDERED and any out-of-range value fall back to the safe no-op.
         _ => LoadBalanceStrategy::Ordered,
     }
@@ -253,6 +256,12 @@ mod tests {
     }
 
     #[test]
+    fn cost_aware_lb_round_trips() {
+        assert_eq!(lb_to_u8(LoadBalanceStrategy::CostAware), LB_COST_AWARE);
+        assert_eq!(u8_to_lb(LB_COST_AWARE), LoadBalanceStrategy::CostAware);
+    }
+
+    #[test]
     fn limits_default_empty_and_hot_apply() {
         use crate::config::types::ProviderRateLimit;
 
@@ -290,6 +299,7 @@ mod tests {
             LoadBalanceStrategy::RoundRobin,
             LoadBalanceStrategy::LeastBusy,
             LoadBalanceStrategy::LatencyAware,
+            LoadBalanceStrategy::CostAware,
             LoadBalanceStrategy::Ordered,
         ] {
             h.store(&ModelRouteConfig {

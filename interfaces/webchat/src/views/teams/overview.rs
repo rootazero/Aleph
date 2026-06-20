@@ -83,9 +83,7 @@ pub fn OverviewView() -> impl IntoView {
             gloo_timers::future::TimeoutFuture::new(100).await;
         }
         if let Err(e) = topic_state.subscribe_topic("team.changed").await {
-            web_sys::console::error_1(
-                &format!("Failed to subscribe to team.changed: {e}").into(),
-            );
+            web_sys::console::error_1(&format!("Failed to subscribe to team.changed: {e}").into());
         }
     });
     on_cleanup(move || {

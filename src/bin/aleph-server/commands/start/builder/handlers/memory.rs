@@ -76,6 +76,13 @@ pub(in crate::commands::start) fn register_memory_handlers(
         memory_handlers::handle_clear_facts,
         memory_db
     );
+    // Read-only corrections governance: raw correction rows + distillation status.
+    register_handler!(
+        server,
+        "memory.list_corrections",
+        memory_handlers::handle_list_corrections,
+        memory_db
+    );
     register_handler!(
         server,
         "memory.appList",
@@ -87,6 +94,13 @@ pub(in crate::commands::start) fn register_memory_handlers(
         server,
         "insights.tools",
         alephcore::gateway::handlers::insights::handle_tools,
+        memory_db
+    );
+    // Read-only dream insights listing (daily digests + synthesis + run history).
+    register_handler!(
+        server,
+        "dreaming.list_insights",
+        alephcore::gateway::handlers::dreaming::handle_list_insights,
         memory_db
     );
     if let Some(cs) = compression_service {
@@ -210,6 +224,26 @@ pub(in crate::commands::start) fn register_memory_handlers(
                     alephcore::gateway::protocol::INTERNAL_ERROR,
                     "Reembed not available: missing embedding provider".to_string(),
                 )
+            });
+    }
+
+    // memory.retrieve_with_trace — real scoring-pipeline trace for the debug panel.
+    {
+        let memory_db = std::sync::Arc::clone(memory_db);
+        let embedder = embedder.clone();
+        let app_config = std::sync::Arc::clone(app_config);
+        server
+            .handlers_mut()
+            .register("memory.retrieve_with_trace", move |req| {
+                let memory_db = std::sync::Arc::clone(&memory_db);
+                let embedder = embedder.clone();
+                let app_config = std::sync::Arc::clone(&app_config);
+                async move {
+                    alephcore::gateway::handlers::memory_config::handle_retrieve_with_trace(
+                        req, memory_db, embedder, app_config,
+                    )
+                    .await
+                }
             });
     }
 

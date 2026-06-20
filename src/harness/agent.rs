@@ -348,10 +348,6 @@ impl AgentHarness {
         &self.deps.chain_context
     }
 
-    /// Max consecutive verifier vetos before the harness gives up and
-    /// forces Done. Prevents infinite loops when a hook permanently blocks.
-    const MAX_VERIFIER_VETOS: usize = 10;
-
     /// Max times a `Done` turn may be overridden because a steering message
     /// landed during the run's final turn (Pi `getFollowUpMessages` parity).
     /// Bounds a pathological appender that keeps writing user messages so the
@@ -597,10 +593,10 @@ impl Harness for AgentHarness {
                     }
                     if vetoed {
                         verifier_veto_count = verifier_veto_count.saturating_add(1);
-                        if verifier_veto_count >= Self::MAX_VERIFIER_VETOS {
+                        if verifier_veto_count >= self.deps.robustness_profile.steer_max {
                             tracing::warn!(
                                 ?current_session,
-                                max_vetos = Self::MAX_VERIFIER_VETOS,
+                                max_vetos = self.deps.robustness_profile.steer_max,
                                 "verifier veto limit reached; forcing Done to prevent infinite loop",
                             );
                             self.hit_limit.store(true, Ordering::Relaxed);
@@ -694,9 +690,7 @@ impl Harness for AgentHarness {
                                 )
                                 .await;
                                 callback.on_complete();
-                                break Ok(
-                                    crate::harness::trace::LoopTraceSessionOutcome::HitLimit,
-                                );
+                                break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                             }
                         }
                         continue;
@@ -725,14 +719,13 @@ impl Harness for AgentHarness {
                     // when both text and thinking are empty made find_map walk
                     // back and surface an older turn's text as this run's
                     // final_text. Always resolve at the first one encountered.
-                    SessionEvent::AssistantMessage { content, .. } => Some(if content
-                        .text
-                        .is_empty()
-                    {
-                        content.thinking.clone().unwrap_or_default()
-                    } else {
-                        content.text.clone()
-                    }),
+                    SessionEvent::AssistantMessage { content, .. } => {
+                        Some(if content.text.is_empty() {
+                            content.thinking.clone().unwrap_or_default()
+                        } else {
+                            content.text.clone()
+                        })
+                    }
                     _ => None,
                 })
             });
@@ -1129,6 +1122,7 @@ mod tests {
             llm: Arc::new(SleepingProvider {
                 sleep: std::time::Duration::from_secs(0),
             }),
+            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,
@@ -1335,6 +1329,7 @@ mod tests {
             tools,
             sandbox,
             llm: provider,
+            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,
@@ -1407,6 +1402,7 @@ mod tests {
             tools,
             sandbox,
             llm: provider,
+            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,
@@ -1473,6 +1469,7 @@ mod tests {
             tools,
             sandbox,
             llm: provider,
+            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,

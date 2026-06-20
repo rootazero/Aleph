@@ -46,6 +46,7 @@ use crate::providers::AiProvider;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -516,8 +517,8 @@ impl AiProvider for OllamaProvider {
         true
     }
 
-    fn protocol(&self) -> &str {
-        "ollama"
+    fn protocol(&self) -> Cow<'_, str> {
+        Cow::Borrowed("ollama")
     }
 }
 
@@ -609,7 +610,7 @@ mod tests {
         assert_eq!(provider.name(), "ollama");
         assert_eq!(provider.color(), "#0000ff");
         assert!(provider.supports_native_tools());
-        assert_eq!(provider.protocol(), "ollama");
+        assert_eq!(provider.protocol().as_ref(), "ollama");
     }
 
     #[test]

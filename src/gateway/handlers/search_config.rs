@@ -342,8 +342,8 @@ pub async fn handle_test(
 
     // Create a temporary search provider and test it
     use crate::search::providers::{
-        BingProvider, BraveProvider, DuckDuckGoProvider, ExaProvider, GoogleProvider, JinaProvider,
-        SearxngProvider, TavilyProvider,
+        BingProvider, BraveProvider, DuckDuckGoProvider, ExaProvider, FirecrawlProvider,
+        GoogleProvider, JinaProvider, SearxngProvider, TavilyProvider,
     };
     use crate::search::{SearchOptions, SearchProvider};
 
@@ -386,6 +386,36 @@ pub async fn handle_test(
                 );
             };
             match BraveProvider::new(api_key.clone()) {
+                Ok(provider) => {
+                    let opts = SearchOptions {
+                        max_results: 1,
+                        ..Default::default()
+                    };
+                    match provider.search("test", &opts).await {
+                        Ok(_) => SearchTestResult {
+                            success: true,
+                            message: "Connection successful".to_string(),
+                        },
+                        Err(e) => SearchTestResult {
+                            success: false,
+                            message: format!("Search failed: {e}"),
+                        },
+                    }
+                }
+                Err(e) => SearchTestResult {
+                    success: false,
+                    message: format!("Failed to create provider: {e}"),
+                },
+            }
+        }
+        "firecrawl" => {
+            let Some(ref api_key) = params.api_key else {
+                return JsonRpcResponse::success(
+                    request.id,
+                    serde_json::json!({"success": false, "message": "API key is required for Firecrawl"}),
+                );
+            };
+            match FirecrawlProvider::new(api_key.clone(), params.base_url.clone()) {
                 Ok(provider) => {
                     let opts = SearchOptions {
                         max_results: 1,

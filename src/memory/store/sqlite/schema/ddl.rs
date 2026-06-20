@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS notes_index (
     agent_id        TEXT NOT NULL DEFAULT 'default',
     category        TEXT NOT NULL,
     tags_json       TEXT NOT NULL DEFAULT '[]',
+    aliases_json    TEXT NOT NULL DEFAULT '[]',
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL,
     last_accessed_at INTEGER,

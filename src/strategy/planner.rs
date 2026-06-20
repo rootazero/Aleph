@@ -95,7 +95,9 @@ fn build_planner_prompt(objective: &str, ctx: &PlannerContext) -> String {
     p.push_str(&ctx.env_summary);
     p.push_str("\n\nAvailable capabilities (the ONLY ones; do not assume others):\n");
     if ctx.tool_descriptions.is_empty() {
-        p.push_str("(capability surface not enumerated — keep guardrails about scope, not tools)\n");
+        p.push_str(
+            "(capability surface not enumerated — keep guardrails about scope, not tools)\n",
+        );
     } else {
         for d in &ctx.tool_descriptions {
             p.push_str("- ");
@@ -206,9 +208,14 @@ mod tests {
             "success_criteria": "X ships and tests pass"
         }"#;
         let provider: Arc<dyn AiProvider> = Arc::new(MockProvider::new(json));
-        let s = plan_strategy(&provider, "Ship X", &ctx(), Some("goal:sess-1:abc".to_string()))
-            .await
-            .unwrap();
+        let s = plan_strategy(
+            &provider,
+            "Ship X",
+            &ctx(),
+            Some("goal:sess-1:abc".to_string()),
+        )
+        .await
+        .unwrap();
         assert_eq!(s.goal_id.as_deref(), Some("goal:sess-1:abc"));
     }
 }

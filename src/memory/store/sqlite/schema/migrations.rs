@@ -155,6 +155,27 @@ pub fn migrate_notes_links_to_raw(conn: &rusqlite::Connection) -> rusqlite::Resu
     Ok(())
 }
 
+/// Add the `aliases_json` column to existing `notes_index` rows.
+///
+/// Pre-existing rows default to `'[]'` (no aliases) until the next reindex
+/// repopulates them from frontmatter. Enables frontmatter `aliases:` to
+/// participate in `[[wikilink]]` resolution. Idempotent: re-running on a
+/// migrated table is a no-op (checks column existence first).
+pub fn migrate_notes_index_aliases(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let has_col: bool = conn
+        .prepare("PRAGMA table_info(notes_index)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == "aliases_json");
+    if has_col {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE notes_index ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]';",
+    )?;
+    Ok(())
+}
+
 /// Drop legacy tables that were replaced by the notes pipeline.
 ///
 /// Safe to call on fresh databases (uses `DROP TABLE IF EXISTS`).

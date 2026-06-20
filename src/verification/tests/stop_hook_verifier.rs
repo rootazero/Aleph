@@ -52,6 +52,7 @@ async fn skips_when_stop_reason_is_none() {
         recent_tool_calls: &[],
         stop_reason: None,
         session_id: None,
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     assert!(verifier.verify(&ctx, &cancel).await.is_continue());
@@ -67,6 +68,7 @@ async fn fires_when_stop_reason_is_some_and_hook_blocks() {
         recent_tool_calls: &[],
         stop_reason: Some("end_turn"),
         session_id: None,
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     match verifier.verify(&ctx, &cancel).await {
@@ -87,6 +89,7 @@ async fn allows_when_hook_passes() {
         recent_tool_calls: &[],
         stop_reason: Some("end_turn"),
         session_id: None,
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
     };
     let cancel = CancellationToken::new();
     assert!(verifier.verify(&ctx, &cancel).await.is_continue());

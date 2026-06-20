@@ -67,17 +67,30 @@ fn resolve_active_strategy(
     store: &crate::strategy::StrategyStore,
     session_key: &str,
 ) -> Option<crate::strategy::Strategy> {
-    if let Some(s) = store.get(&crate::strategy::goal_key(session_key)).ok().flatten() {
+    if let Some(s) = store
+        .get(&crate::strategy::goal_key(session_key))
+        .ok()
+        .flatten()
+    {
         return Some(s);
     }
-    if let Some(s) = store.get(&crate::strategy::loop_key(session_key)).ok().flatten() {
+    if let Some(s) = store
+        .get(&crate::strategy::loop_key(session_key))
+        .ok()
+        .flatten()
+    {
         return Some(s);
     }
-    if let Some(crate::routing::session_key::SessionKey::Task { task_type, task_id, .. }) =
-        crate::routing::session_key::SessionKey::parse(session_key)
+    if let Some(crate::routing::session_key::SessionKey::Task {
+        task_type, task_id, ..
+    }) = crate::routing::session_key::SessionKey::parse(session_key)
     {
         if task_type == "team_chat" {
-            if let Some(s) = store.get(&crate::strategy::team_key(&task_id)).ok().flatten() {
+            if let Some(s) = store
+                .get(&crate::strategy::team_key(&task_id))
+                .ok()
+                .flatten()
+            {
                 return Some(s);
             }
         }
@@ -224,14 +237,21 @@ mod active_strategy_tests {
             .to_key_string();
 
         // team tier resolves the team-wide row
-        store.put(&crate::strategy::team_key("squad"), &mk_strategy("team-obj")).unwrap();
+        store
+            .put(
+                &crate::strategy::team_key("squad"),
+                &mk_strategy("team-obj"),
+            )
+            .unwrap();
         assert_eq!(
             resolve_active_strategy(&store, &sk).map(|s| s.objective),
             Some("team-obj".to_string())
         );
 
         // a member's own /goal still wins over the team frame
-        store.put(&crate::strategy::goal_key(&sk), &mk_strategy("goal-obj")).unwrap();
+        store
+            .put(&crate::strategy::goal_key(&sk), &mk_strategy("goal-obj"))
+            .unwrap();
         assert_eq!(
             resolve_active_strategy(&store, &sk).map(|s| s.objective),
             Some("goal-obj".to_string())

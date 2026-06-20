@@ -421,8 +421,72 @@ pub async fn handle_app_list(request: JsonRpcRequest, _db: MemoryBackend) -> Jso
 }
 
 // ============================================================================
-// Reembed Migration
+// List Corrections
 // ============================================================================
+
+/// Read-only listing of user corrections (raw `flag_user_correction` rows)
+/// and their distillation status. Surfaces the correction→feedback lifecycle
+/// to the panel; performs NO mutation (R7/R8: distillation stays LLM-driven).
+pub async fn handle_list_corrections(
+    request: JsonRpcRequest,
+    db: MemoryBackend,
+) -> JsonRpcResponse {
+    use crate::memory::store::raw_memory::{RawMemorySource, RawMemoryStore};
+
+    #[derive(serde::Deserialize, Default)]
+    struct Params {
+        agent_id: Option<String>,
+        limit: Option<usize>,
+        include_distilled: Option<bool>,
+    }
+    let params: Params = request
+        .params
+        .as_ref()
+        .and_then(|p| serde_json::from_value(p.clone()).ok())
+        .unwrap_or_default();
+
+    let agent_id = params
+        .agent_id
+        .as_deref()
+        .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+    let limit = params.limit.filter(|n| *n > 0).unwrap_or(50);
+    let include_distilled = params.include_distilled.unwrap_or(true);
+
+    match db
+        .get_raw_by_path_prefix("aleph://correction/", agent_id, limit)
+        .await
+    {
+        Ok(rows) => {
+            let corrections: Vec<_> = rows
+                .into_iter()
+                .filter(|r| include_distilled || !r.is_processed)
+                .map(|r| {
+                    let (severity, suggested_rule) = match &r.source {
+                        RawMemorySource::Correction {
+                            severity,
+                            suggested_rule,
+                        } => (severity.clone(), suggested_rule.clone()),
+                        _ => ("low".to_string(), None),
+                    };
+                    json!({
+                        "id": r.id,
+                        "content": r.content,
+                        "severity": severity,
+                        "suggested_rule": suggested_rule,
+                        "status": if r.is_processed { "distilled" } else { "pending" },
+                        "created_at": r.created_at,
+                    })
+                })
+                .collect();
+            JsonRpcResponse::success(request.id, json!({ "corrections": corrections }))
+        }
+        Err(err) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("memory.list_corrections failed: {err}"),
+        ),
+    }
+}
 
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 use crate::memory::EmbeddingProvider;
@@ -597,6 +661,81 @@ pub async fn handle_reembed_cancel(
 
     reembed_state.cancel.store(true, Ordering::Release);
     JsonRpcResponse::success(request.id, json!({ "status": "cancelled" }))
+}
+
+#[cfg(test)]
+mod list_corrections_tests {
+    use super::*;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+    use serde_json::json;
+
+    async fn seed(db: &SqliteMemoryBackend, id_suffix: &str, processed: bool, sev: &str) {
+        let mut raw = RawMemory::new(
+            format!("correction {id_suffix}"),
+            RawMemorySource::Correction {
+                severity: sev.to_string(),
+                suggested_rule: Some(format!("rule {id_suffix}")),
+            },
+        )
+        .with_agent("main")
+        .with_path(format!("aleph://correction/{id_suffix}"));
+        raw.is_processed = processed;
+        db.insert_raw_memory(&raw).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn maps_status_severity_and_rule() {
+        let backend = SqliteMemoryBackend::in_memory().unwrap();
+        seed(&backend, "c1", false, "high").await;
+        seed(&backend, "c2", true, "low").await;
+        let db: crate::memory::store::MemoryBackend = Arc::new(backend);
+
+        let req = JsonRpcRequest::with_id(
+            "memory.list_corrections",
+            Some(json!({ "agent_id": "main" })),
+            json!(1),
+        );
+        let resp = handle_list_corrections(req, db).await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let items = resp.result.unwrap()["corrections"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(items.len(), 2);
+        // Each entry carries status mapped from is_processed.
+        let statuses: Vec<&str> = items
+            .iter()
+            .map(|i| i["status"].as_str().unwrap())
+            .collect();
+        assert!(statuses.contains(&"pending"));
+        assert!(statuses.contains(&"distilled"));
+        let c1 = items.iter().find(|i| i["status"] == "pending").unwrap();
+        assert_eq!(c1["severity"], "high");
+        assert_eq!(c1["suggested_rule"], "rule c1");
+    }
+
+    #[tokio::test]
+    async fn include_distilled_false_filters_processed() {
+        let backend = SqliteMemoryBackend::in_memory().unwrap();
+        seed(&backend, "c1", false, "high").await;
+        seed(&backend, "c2", true, "low").await;
+        let db: crate::memory::store::MemoryBackend = Arc::new(backend);
+
+        let req = JsonRpcRequest::with_id(
+            "memory.list_corrections",
+            Some(json!({ "agent_id": "main", "include_distilled": false })),
+            json!(1),
+        );
+        let resp = handle_list_corrections(req, db).await;
+        let items = resp.result.unwrap()["corrections"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["status"], "pending");
+    }
 }
 
 #[cfg(test)]

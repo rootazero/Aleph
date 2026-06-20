@@ -101,10 +101,10 @@
 
 ### 2.1 对话历史压缩 (History Compaction)
 - **口语关键词**：对话压缩、history compaction、session summary、窗口管理、token 有效控制
-- **代码锚点**：`src/context/compact/compactor.rs`（三策略：LlmSummary / DeterministicTruncation / SessionMemoryReuse）、`src/context/compact/session_split.rs`（压缩失败后 split 新 epoch）、`src/context/budget/mod.rs`（ContextPressure 计算）、`src/context/budget/pressure.rs`（内容感知 token 估计）
-- **职责**：消息历史压力超 warning 阈值时走侧信道 LLM 摘要，保留 fresh_tail（最近 ~6 条），失败回退确定性截断或旧 summary，极限时 split 新 session。
-- **状态**：✅ 已实现，三层降级 + 缓存复用 + 零 API 成本路径。
-- **打磨话术**：「‘记忆有效传递又控 token’的核心在 `compactor.rs` 的三策略降级；‘何时触发’在 `budget/pressure.rs` 的阈值。」
+- **代码锚点**：`src/context/compact/compactor.rs`（三策略：LlmSummary / DeterministicTruncation / SessionMemoryReuse）、`src/context/compact/session_split.rs`（压缩失败后 split 新 epoch）、`src/context/budget/mod.rs`（ContextPressure 计算 + `ContextBudgetConfig::preventive_floor`）、`src/context/budget/pressure.rs`（内容感知 token 估计）、`src/context/budget/cheap_passes/`（preflight 廉价 pass：file_op_supersede / tool_result_pruning / image_stripping）
+- **职责**：消息历史压力超 warning 阈值时走侧信道 LLM 摘要，保留 fresh_tail（最近 ~6 条），失败回退确定性截断或旧 summary，极限时 split 新 session。**升级阶梯（preventive band，2026-06-19）**：`< floor`（=`warning − 0.10`）保留全部历史；`[floor, warning)` 触发确定性廉价 pass（无 LLM 成本）；`≥ warning` 触发侧信道 LLM 摘要。三个廉价 pass 的压力门控统一由 `PreflightPipeline::with_min_pressure_ratio(cfg.preventive_floor())` 派生，不再各自硬编码——上下文有余量时不做有损丢弃（headroom 的 `live_zone_only` 压力自适应激进度映射）。
+- **状态**：✅ 已实现，三层降级 + 缓存复用 + 零 API 成本路径 + preventive band 升级阶梯。
+- **打磨话术**：「‘记忆有效传递又控 token’的核心在 `compactor.rs` 的三策略降级；‘何时触发’在 `budget/pressure.rs` 的阈值 + `preventive_floor` 的廉价 pass 预备带；廉价 pass 门控连线在 `runner_impl.rs` 构造 `PreflightPipeline` 处。」
 
 ### 2.2 按模型窗口的压缩时机 (Model-Aware Compaction Timing)
 - **口语关键词**：kimi 20 万 vs claude 100 万、不同模型不同压缩时机、模型窗口差异、压缩阈值、per-model 阈值
@@ -131,8 +131,8 @@
 > 三支柱是 Aleph 长期记忆的工程纪律，落在不同文件，分开描述更精准。
 
 **① 关键词链接地基 (Note Keyword Linking)** ✅
-- 锚点：`src/memory/notes/mod.rs`（frontmatter aliases/keywords；**注**：`aliases` 目前仅用于 Obsidian round-trip，未参与链接解析）、`src/memory/notes/graph/relevance.rs`（四信号打分：直接链接 ×3 / IDF 衰减来源重叠 ×4 / Adamic-Adar 共同邻居 ×1.5 / 类型亲和 ×1）、`src/memory/notes/graph/mod.rs`（community detection）
-- 话术：「记忆链接地基 = 笔记 frontmatter 的 aliases/keywords + Note Graph 四信号相关性 + ingest 时自动 peer 链接。」
+- 锚点：`src/memory/notes/note/mod.rs`（frontmatter aliases/keywords）、`src/memory/store/sqlite/notes/store_impl.rs`（`resolve_target` / `relink_unresolved`：`[[wikilink]]` 解析 **filename 优先，无命中回退 frontmatter `aliases` 精确匹配**，2026-06-19 连线；alias→path 查询在 `notes/helpers.rs::resolve_paths_by_alias`，JSON1-free serde 精确匹配，`notes_index.aliases_json` 列由 `migrate_notes_index_aliases` 迁移）、`src/memory/notes/graph/relevance.rs`（四信号打分：直接链接 ×3 / IDF 衰减来源重叠 ×4 / Adamic-Adar 共同邻居 ×1.5 / 类型亲和 ×1）、`src/memory/notes/graph/mod.rs`（community detection）
+- 话术：「记忆链接地基 = 笔记 frontmatter 的 aliases/keywords + Note Graph 四信号相关性 + ingest 时自动 peer 链接。**`aliases` 现已参与链接解析**：`[[别名]]` 会解析到以该别名声明的笔记（filename 仍优先）；改解析逻辑去 `store_impl.rs::resolve_target`，alias 查询在 `helpers.rs::resolve_paths_by_alias`。」
 
 **② 会话结束实时 flush (Session-End Flush)** ✅
 - 锚点：`src/memory/flush/mod.rs`（非阻塞 spawn `session_end_flush`）、`src/memory/flush/registry.rs`（FlushRegistry + await_ready）、`src/memory/compression/mod.rs`（compress_to_notes）
@@ -142,9 +142,17 @@
 - **写入**：`src/builtin_tools/flag_user_correction.rs`（LLM 调的工具，写 `RawMemorySource::Correction` 到 `aleph://correction/{id}`）；构造于 `src/executor/builtin_registry/builder/constructor.rs:1793`（**有 `memory_db` 即注册，非死代码**），prompt 引导在 `src/thinker/layers/special_actions.rs`。
 - **蒸馏**：`src/memory/dreaming/stages/feedback_distill.rs`（按 `aleph://correction/` 前缀 + watermark 幂等读 → LLM 蒸馏成 `feedback/` note），调度于 `src/memory/dreaming/mod.rs:172,218`（**Consolidate 每日 + Synthesize 两条 dream path 都挂**）。
 - **召回**：`feedback/` note 由 assembler 表面化（`src/memory/assembler/gather.rs:284` / `envelope.rs:34`）；goal 教训另有 `GoalLessonsPromoteStage` → `goal-lessons/` note（类别 `goal-lessons`，已补入 indexer `CATEGORY_DIRS`）。
+- **治理可见性 (2026-06-20 连线)**：raw correction → distillation 生命周期现经 `memory.list_corrections`（只读，`src/gateway/handlers/memory.rs::handle_list_corrections`）暴露给 panel（Settings ▸ Memory「Corrections」区，`interfaces/webchat/src/views/settings/memory.rs::CorrectionsPanel`）。**纯只读**——写入/蒸馏仍 LLM/工具驱动（守上文设计边界）。
 - **状态**：✅ 端到端已连且生产存活（写入工具注册 + distill 双路调度 + 召回消费者，逐跳有单测）。
 - **设计边界（重要）**：沉淀是 **LLM/工具驱动**（R8 工具即一切 / R7 LLM 主权）——LLM 判断"这值得记"才调 `flag_user_correction`。**没有也不应有**"每次工具失败自动写 raw memory"的 harness 错误 hook（违 R10「不做错误恢复」+ R7，且会用瞬时报错噪声淹没记忆）。
 - 话术：「‘错误/纠正沉淀’走 `flag_user_correction` + `FeedbackDistill`，已全连且存活。想要‘自动捕获工具失败 → 教训’——**这是故意不做的设计边界**（R7/R10），别加 harness 错误 hook；要让 LLM 多记教训就强化 prompt 引导它调工具。」
+
+### 2.6 做梦洞察可见性 (Dream Insights Visibility)
+- **口语关键词**：做梦、dream insights、每日摘要、synthesis 笔记、做梦运行历史
+- **代码锚点**：`src/memory/store/mod.rs`（`DreamStore::recent_daily_insights` trait 声明）、`src/memory/store/sqlite/sessions.rs`（impl + daily_insights 查询）、`src/memory/dreaming/mod.rs`（`DailyInsight` 结构体）、`src/gateway/handlers/dreaming.rs::handle_list_insights`（RPC 入口）、`interfaces/webchat/src/views/settings/memory.rs::DreamInsightsPanel`（前端展示）
+- **职责**：暴露做梦子系统的日报摘要、synthesis 笔记列表、做梦运行历史给 panel 展示。
+- **状态**：✅ 已实现（2026-06-20 连线）——`dreaming.list_insights` RPC（只读，复用 `DreamStore::recent_daily_insights` + `NoteStore::list_notes` 过滤 synthesis + `recent_dream_reports`）经 `src/gateway/handlers/dreaming.rs::handle_list_insights` 注册并暴露给 panel Settings ▸ Memory「Dream Insights」区。
+- **打磨话术**：「做梦日报在 panel 可见经 `dreaming.list_insights` RPC（`src/gateway/handlers/dreaming.rs`）；前端组件在 `interfaces/webchat/src/views/settings/memory.rs::DreamInsightsPanel`；数据源在 `DreamStore::recent_daily_insights`（trait 在 `src/memory/store/mod.rs`，impl 在 `src/memory/store/sqlite/sessions.rs`）。」
 
 ---
 
@@ -329,8 +337,8 @@
 - **口语关键词**：预设 provider、模型别名、规范化、能力门控、成本路由、failover、metadata
 - **代码锚点**：`src/providers/presets/registry.rs`（PROFILES 单一源 + 别名展开）、`src/providers/model_catalog/`（alias.rs / endpoint.rs / 能力矩阵）、`src/providers/capability_gate.rs`、`src/providers/failover.rs`、`src/providers/metadata.rs`、`src/pricing.rs`
 - **职责**：PROFILES 驱动预设别名（Kimi=Moonshot）；model_catalog 存能力矩阵 + 端点定位（`endpoint.rs` Local/Cloud）；capability_gate 做 per-model 需求匹配；failover + pricing 驱动降级/选型。能力/成本/端点定位三类参考数据统一暴露到 `providers.catalog` RPC（Panel picker）与 `list_models` 工具（LLM 选模，R8 模型可感知）。
-- **状态**：✅ 已实现。端点定位 Local/Cloud 已从 route_policy 内部连出到 catalog + list_models（`EndpointKind::as_str`）；`RateCard` 已补全 cache_creation/reasoning 费率投影。
-- **打磨话术**：「加/改预设别名在 `presets/registry.rs`；‘某模型支不支持 vision/tool-use’在 `model_catalog/capabilities.rs` + `capability_gate.rs`；‘本地还是云端模型’在 `model_catalog/endpoint.rs`（已暴露到 catalog/list_models 的 `endpoint` 字段）；‘成本’在 `pricing.rs`（`RateCard` = picker 用的费率投影）。」
+- **状态**：✅ 已实现。端点定位 Local/Cloud 已从 route_policy 内部连出到 catalog + list_models（`EndpointKind::as_str`）；`RateCard` 已补全 cache_creation/reasoning 费率投影。**成本路由连线（2026-06-19）**：`LoadBalanceStrategy` 新增 `cost_aware`（对标 LiteLLM `lowest-cost` + RouteLLM 成本轴）——此前 `pricing.rs` 价格表只喂事后成本*估算*，从未参与*选型*。现 `failover/provider.rs::price_hint` 把每候选首模型的 blended `input+output` 费率（`pricing::rate_card`，milli-USD/Mtok）折进 `LoadMetric.price_per_mtok`，`route_policy::balance_group` 的 `CostAware` arm 升序排序（未定价的本地模型=0→排最前=最便宜，R7 prompt-blind）；`route_status` 快照新增 `price_milli_per_mtok` 透出排序依据；Panel 路由设置页 + `route_config` RPC 已收口该选项。
+- **打磨话术**：「加/改预设别名在 `presets/registry.rs`；‘某模型支不支持 vision/tool-use’在 `model_catalog/capabilities.rs` + `capability_gate.rs`；‘本地还是云端模型’在 `model_catalog/endpoint.rs`（已暴露到 catalog/list_models 的 `endpoint` 字段）；‘成本’在 `pricing.rs`（`RateCard` = picker 用的费率投影）；‘按成本路由’= `[route] load_balance = "cost_aware"`（同一层级内最便宜优先，连线点 `failover/provider.rs::price_hint`，sort 在 `route_policy::balance_group`）。」
 
 ### 5.5 集群 (Cluster)
 - **口语关键词**：gateway 集群、单中心非对称节点、反向 RPC、node_invoke、node_list、扇出、center approval、LAN-trust

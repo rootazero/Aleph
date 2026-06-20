@@ -340,6 +340,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             tools: scoped_tools,
             sandbox,
             llm,
+            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,

@@ -49,6 +49,20 @@ const CALIBRATION_ALPHA: f64 = 0.3;
 /// are clamped rather than allowed to whipsaw the budget.
 const CALIBRATION_MIN: f64 = 0.25;
 const CALIBRATION_MAX: f64 = 4.0;
+/// Width of the "preventive band" sitting just below the warning threshold.
+/// Inside `[warning - PREVENTIVE_BAND_WIDTH, warning)` the deterministic
+/// preflight cheap passes are allowed to fire; below it they are a no-op.
+///
+/// This is headroom's "compress only when it pays" principle (its
+/// `live_zone_only` / pressure-aware aggressiveness) mapped onto Aleph: the
+/// lossy cheap passes (tool-result pruning, historical image stripping) shed
+/// context the model may still want, so they should act only once the context
+/// is genuinely filling up — not on every turn of a near-empty conversation.
+/// 0.10 below the default 0.70 warning reproduces the historical 0.60 gate of
+/// `FileOpSupersedeStage` exactly, so the default escalation ladder stays
+/// byte-compatible: `< floor` keep everything → `[floor, warning)` cheap passes
+/// → `≥ warning` side-channel LLM compaction.
+const PREVENTIVE_BAND_WIDTH: f64 = 0.10;
 
 impl ContextPressure {
     /// Compute a pressure snapshot.
@@ -186,6 +200,21 @@ pub struct ContextBudgetConfig {
     /// Max session-splits allowed in one run before a circuit-breaker trip
     /// falls back to `FinalReply`. Default 3.
     pub max_splits: usize,
+}
+
+impl ContextBudgetConfig {
+    /// Fill-ratio floor below which the deterministic preflight cheap passes
+    /// are a no-op — the bottom of the "preventive band" (see
+    /// [`PREVENTIVE_BAND_WIDTH`]). Derived from the *configured* (and possibly
+    /// per-model-overridden) [`warning_threshold`](Self::warning_threshold) so
+    /// the cheap-pass gate tracks the same threshold that governs LLM
+    /// compaction, instead of a hardcoded magic ratio that could drift above a
+    /// custom warning line. Clamped at `0.0`, so a tiny warning threshold
+    /// simply keeps the cheap passes always-on (their previous behaviour).
+    #[must_use]
+    pub fn preventive_floor(&self) -> f64 {
+        (self.warning_threshold - PREVENTIVE_BAND_WIDTH).max(0.0)
+    }
 }
 
 // =============================================================================
@@ -583,6 +612,32 @@ mod tests {
             diminishing_threshold: 500,
             max_splits: 3,
         }
+    }
+
+    #[test]
+    fn preventive_floor_is_warning_minus_band() {
+        // Default warning 0.70 → floor 0.60, byte-compatible with the historical
+        // hardcoded FileOpSupersedeStage gate.
+        let cfg = default_config();
+        assert!((cfg.preventive_floor() - 0.60).abs() < 1e-9);
+        // Per-model override of the warning line moves the cheap-pass band with
+        // it — the gate is no longer a magic constant.
+        let high = ContextBudgetConfig {
+            warning_threshold: 0.85,
+            ..default_config()
+        };
+        assert!((high.preventive_floor() - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn preventive_floor_clamps_at_zero() {
+        // A tiny warning threshold must not produce a negative floor — the
+        // cheap passes simply stay always-on (their pre-band behaviour).
+        let cfg = ContextBudgetConfig {
+            warning_threshold: 0.05,
+            ..default_config()
+        };
+        assert!((cfg.preventive_floor() - 0.0).abs() < 1e-9);
     }
 
     #[test]

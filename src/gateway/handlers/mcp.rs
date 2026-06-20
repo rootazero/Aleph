@@ -532,8 +532,10 @@ pub async fn handle_list_presets(
         .await
         .map(|servers| servers.into_iter().map(|s| s.id).collect())
         .unwrap_or_default();
-    let presets: Vec<serde_json::Value> =
-        presets::catalog().iter().map(|p| preset_view(p, &existing)).collect();
+    let presets: Vec<serde_json::Value> = presets::catalog()
+        .iter()
+        .map(|p| preset_view(p, &existing))
+        .collect();
     JsonRpcResponse::success(request.id, json!({ "presets": presets }))
 }
 
@@ -806,7 +808,11 @@ mod tests {
         let plan = amap.plan_install(&HashMap::new(), &[], &|_| true);
         let value = super::install_plan_to_json(plan, "amap");
         assert_eq!(value["status"], "needs_key");
-        assert!(value["missing"].as_array().unwrap().iter().any(|m| m["key"] == "AMAP_MAPS_API_KEY"));
+        assert!(value["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["key"] == "AMAP_MAPS_API_KEY"));
     }
 
     #[test]

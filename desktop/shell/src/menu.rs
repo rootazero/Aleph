@@ -34,8 +34,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     // Dual-purpose, mirroring the tray: a manual update check until an update
     // is found, then the button to apply it. Registered with the updater so it
     // is relabeled (alongside the tray item) once an update is staged.
-    let update_item =
-        MenuItem::with_id(app, ID_CHECK_UPDATE, "Check for Updates…", true, None::<&str>)?;
+    let update_item = MenuItem::with_id(
+        app,
+        ID_CHECK_UPDATE,
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?;
     app.state::<crate::update::Updater>()
         .attach_update_item(update_item.clone());
 
