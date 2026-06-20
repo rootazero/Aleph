@@ -76,6 +76,13 @@ pub(in crate::commands::start) fn register_memory_handlers(
         memory_handlers::handle_clear_facts,
         memory_db
     );
+    // Read-only corrections governance: raw correction rows + distillation status.
+    register_handler!(
+        server,
+        "memory.list_corrections",
+        memory_handlers::handle_list_corrections,
+        memory_db
+    );
     register_handler!(
         server,
         "memory.appList",
