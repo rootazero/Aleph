@@ -46,20 +46,25 @@ pub fn DetailDrawer(target: RwSignal<Option<DrawerTarget>>) -> impl IntoView {
 #[component]
 fn DrawerShell(target: RwSignal<Option<DrawerTarget>>, children: Children) -> impl IntoView {
     view! {
-        <aside class="fixed right-0 top-0 h-full w-[380px] max-w-[90vw] bg-surface-raised border-l border-border shadow-2xl z-40 flex flex-col">
-            <div class="flex items-center justify-end p-3 border-b border-border-subtle">
-                <button
-                    class="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-sunken transition-colors"
-                    on:click=move |_| target.set(None)
-                >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="18" y1="6" x2="6" y2="18" />
-                        <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                </button>
-            </div>
-            <div class="flex-1 min-h-0 overflow-y-auto p-4">{children()}</div>
-        </aside>
+        <div class="fixed inset-0 z-40 flex justify-end">
+            // Scrim: blurs + dims the content behind the drawer (readability) and
+            // closes the drawer on any outside click (mirrors teams task_drawer).
+            <div class="aleph-scrim absolute inset-0 bg-black/30" on:click=move |_| target.set(None)></div>
+            <aside class="relative h-full w-[380px] max-w-[90vw] bg-surface-raised backdrop-blur-[var(--glass-blur-chrome)] border-l border-border shadow-2xl flex flex-col">
+                <div class="flex items-center justify-end p-3 border-b border-border-subtle">
+                    <button
+                        class="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-sunken transition-colors"
+                        on:click=move |_| target.set(None)
+                    >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="flex-1 min-h-0 overflow-y-auto p-4">{children()}</div>
+            </aside>
+        </div>
     }
 }
 

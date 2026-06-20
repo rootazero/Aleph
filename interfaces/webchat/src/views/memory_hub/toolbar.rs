@@ -13,6 +13,9 @@ pub fn MemoryToolbar() -> impl IntoView {
     let mem = expect_context::<MemoryState>();
     let i18n = use_i18n();
     let is_graph = Memo::new(move |_| mem.memory_view.get() == MemoryView::Graph);
+    // Agent picker popover visibility — closes on mouse-leave to mirror the chat
+    // sidebar agent picker (replaces the native <select> dismissal).
+    let agent_open = RwSignal::new(false);
 
     view! {
         <div class="flex items-center gap-3 px-6 py-3 border-b border-border flex-wrap aleph-content-top">
@@ -53,29 +56,84 @@ pub fn MemoryToolbar() -> impl IntoView {
                 />
             </div>
 
-            // Shared agent selector
-            <select
-                class="px-3 py-1.5 bg-surface-raised border border-border rounded-lg text-sm text-text-primary focus:outline-none focus:border-primary/50"
-                prop:value=move || mem.agent_id.get()
-                on:change=move |ev| mem.agent_id.set(event_target_value(&ev))
-            >
-                {move || {
-                    let current = mem.agent_id.get();
-                    let agents = mem.agents.get();
-                    if agents.is_empty() {
-                        view! { <option value=current.clone()>{current.clone()}</option> }.into_any()
-                    } else {
-                        agents.into_iter().map(|a| {
-                            let id = a.id.clone();
-                            let label = a.name.as_deref()
-                                .map(|n| if let Some(e) = a.emoji.as_deref() { format!("{e} {n}") } else { n.to_string() })
-                                .unwrap_or_else(|| a.id.clone());
-                            let selected = id == mem.agent_id.get_untracked();
-                            view! { <option value=id prop:selected=selected>{label}</option> }
-                        }).collect_view().into_any()
-                    }
-                }}
-            </select>
+            // Shared agent selector — custom popover that closes on mouse-leave,
+            // mirroring the chat sidebar agent picker (replaces the native <select>
+            // so its dismissal matches the rest of the app's pickers).
+            <div class="relative min-w-[160px]">
+                <button
+                    type="button"
+                    class="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-raised \
+                           border border-border text-sm text-text-primary hover:border-primary/60 \
+                           focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
+                    on:click=move |_| agent_open.update(|v| *v = !*v)
+                >
+                    <span class="flex-1 min-w-0 truncate text-left">
+                        {move || {
+                            let id = mem.agent_id.get();
+                            mem.agents.get().iter().find(|a| a.id == id)
+                                .map(|a| a.name.as_deref()
+                                    .map(|n| if let Some(e) = a.emoji.as_deref() { format!("{e} {n}") } else { n.to_string() })
+                                    .unwrap_or_else(|| a.id.clone()))
+                                .unwrap_or(id)
+                        }}
+                    </span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+                         class=move || if agent_open.get() {
+                             "flex-shrink-0 text-text-tertiary rotate-180 transition-transform"
+                         } else {
+                             "flex-shrink-0 text-text-tertiary transition-transform"
+                         }
+                    >
+                        <polyline points="18 15 12 9 6 15" />
+                    </svg>
+                </button>
+
+                <Show when=move || agent_open.get()>
+                    <div class="glass animate-pop-in absolute top-full left-0 right-0 mt-2 z-50 \
+                                max-h-[60vh] overflow-y-auto rounded-xl border border-border \
+                                bg-surface-overlay/85 shadow-xl p-1.5 space-y-0.5"
+                        on:mouseleave=move |_| agent_open.set(false)>
+                        {move || {
+                            let cur = mem.agent_id.get();
+                            let agents = mem.agents.get();
+                            if agents.is_empty() {
+                                return view! {
+                                    <div class="px-3 py-2 text-sm text-text-tertiary truncate">{cur.clone()}</div>
+                                }.into_any();
+                            }
+                            agents.into_iter().map(|a| {
+                                let id = a.id.clone();
+                                let id_for_click = id.clone();
+                                let label = a.name.as_deref()
+                                    .map(|n| if let Some(e) = a.emoji.as_deref() { format!("{e} {n}") } else { n.to_string() })
+                                    .unwrap_or_else(|| a.id.clone());
+                                let is_selected = id == cur;
+                                view! {
+                                    <button
+                                        type="button"
+                                        class=move || {
+                                            let base = "w-full flex items-center gap-2 px-3 py-2 \
+                                                        rounded-lg text-sm text-left";
+                                            if is_selected { format!("{base} nav-tile-active") } else { format!("{base} nav-tile") }
+                                        }
+                                        on:click=move |_| { agent_open.set(false); mem.agent_id.set(id_for_click.clone()); }
+                                    >
+                                        <span class="flex-1 min-w-0 truncate">{label}</span>
+                                        {is_selected.then(|| view! {
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                 stroke-width="3" stroke-linecap="round" stroke-linejoin="round"
+                                                 class="flex-shrink-0 text-primary">
+                                                <polyline points="20 6 9 17 4 12" />
+                                            </svg>
+                                        })}
+                                    </button>
+                                }
+                            }).collect_view().into_any()
+                        }}
+                    </div>
+                </Show>
+            </div>
         </div>
     }
 }

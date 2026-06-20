@@ -488,7 +488,7 @@ fn NotesTable(
                                     <td class="p-4 pl-8">
                                         <div class="flex items-start justify-between gap-2">
                                             <div class="min-w-0">
-                                                <div class="text-sm font-medium text-text-primary line-clamp-2 group-hover:line-clamp-none transition-all">{content}</div>
+                                                <div class="text-sm font-medium text-text-primary line-clamp-2">{content}</div>
                                                 <div class="text-xs text-text-tertiary mt-0.5 font-mono">{path}</div>
                                             </div>
                                             <button
@@ -658,7 +658,7 @@ fn RawRow(
                 />
             </td>
             <td class="p-4 cursor-pointer" on:click=move |_| on_open()>
-                <div class="text-sm font-medium text-text-primary line-clamp-1 group-hover:line-clamp-none transition-all">{content}</div>
+                <div class="text-sm font-medium text-text-primary line-clamp-1">{content}</div>
             </td>
             <td class="p-4"><Badge variant=BadgeVariant::Indigo>{agent_id}</Badge></td>
             <td class="p-4">
@@ -670,11 +670,7 @@ fn RawRow(
                 </div>
             </td>
             <td class="p-4 pr-8 text-right">
-                <div class=move || if confirm.get() {
-                    "flex items-center justify-end gap-2 transition-opacity"
-                } else {
-                    "flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                }>
+                <div class="flex items-center justify-end gap-2">
                     {move || if confirm.get() {
                         view! { <ConfirmButton confirming=confirm on_confirm=on_confirm_delete.clone() size_class="px-2.5 py-1 text-xs" /> }.into_any()
                     } else {
