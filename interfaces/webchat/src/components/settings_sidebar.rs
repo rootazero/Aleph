@@ -235,12 +235,7 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
     },
     SettingsGroup {
         label: "Extensions",
-        tabs: &[
-            SettingsTab::Mcp,
-            SettingsTab::Plugins,
-            SettingsTab::Skills,
-            SettingsTab::Acp,
-        ],
+        tabs: &[SettingsTab::Acp],
     },
     SettingsGroup {
         label: "Advanced",
@@ -249,6 +244,9 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
             SettingsTab::Policies,
             SettingsTab::Security,
             SettingsTab::Execution,
+            SettingsTab::Mcp,
+            SettingsTab::Plugins,
+            SettingsTab::Skills,
         ],
     },
     SettingsGroup {
@@ -276,5 +274,27 @@ mod tests {
             !all_tab_paths().contains(&"/settings/clawhub"),
             "ClawHub settings tab must be fully removed from SETTINGS_GROUPS"
         );
+    }
+
+    /// Tab paths in the named settings group.
+    fn group_tab_paths(label: &str) -> Vec<&'static str> {
+        SETTINGS_GROUPS
+            .iter()
+            .find(|g| g.label == label)
+            .map(|g| g.tabs.iter().map(|t| t.path()).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn mcp_plugins_skills_demoted_to_advanced() {
+        let advanced = group_tab_paths("Advanced");
+        assert!(advanced.contains(&"/settings/mcp"), "Advanced must contain MCP");
+        assert!(advanced.contains(&"/settings/plugins"), "Advanced must contain Plugins");
+        assert!(advanced.contains(&"/settings/skills"), "Advanced must contain Skills");
+
+        let extensions = group_tab_paths("Extensions");
+        assert!(!extensions.contains(&"/settings/mcp"), "Extensions must not contain MCP");
+        assert!(!extensions.contains(&"/settings/plugins"), "Extensions must not contain Plugins");
+        assert!(!extensions.contains(&"/settings/skills"), "Extensions must not contain Skills");
     }
 }
