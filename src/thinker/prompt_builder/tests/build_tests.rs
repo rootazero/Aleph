@@ -144,14 +144,14 @@ fn phase3_with_resolved_context_basic_path_emits_operational_guidelines() {
 }
 
 #[test]
-fn phase3_with_provider_protocol_openai_emits_guidance_on_basic_path() {
-    // `PromptBuilder::with_provider_protocol(...)` must thread the
-    // wire-protocol family into the `Basic` assembly path so
-    // `ProviderGuidanceLayer` selects the right per-family block. The
-    // harness bridge sources the protocol from
-    // `AiProvider::model_behavior_override()` falling back to
-    // `AiProvider::protocol()`.
-    let builder = PromptBuilder::new(PromptConfig::default()).with_provider_protocol("openai");
+fn phase3_with_behavior_name_openai_emits_guidance_on_basic_path() {
+    // `PromptBuilder::with_behavior_name(...)` must thread the resolved
+    // governance behavior into the `Basic` assembly path so
+    // `ProviderGuidanceLayer` selects the right baseline block. The harness
+    // bridge sources the name from `resolve_behavior` (override > behavior_hint
+    // > protocol auto-mapping). Without a threaded delta, a non-anthropic
+    // behavior still emits the shared baseline blocks.
+    let builder = PromptBuilder::new(PromptConfig::default()).with_behavior_name("openai");
     let prompt = builder.build_system_prompt(&[]);
     assert!(
         prompt.contains("## Tool-Use Enforcement"),
@@ -164,8 +164,8 @@ fn phase3_with_provider_protocol_openai_emits_guidance_on_basic_path() {
 }
 
 #[test]
-fn phase3_with_provider_protocol_anthropic_stays_silent_on_basic_path() {
-    let builder = PromptBuilder::new(PromptConfig::default()).with_provider_protocol("anthropic");
+fn phase3_with_behavior_name_anthropic_stays_silent_on_basic_path() {
+    let builder = PromptBuilder::new(PromptConfig::default()).with_behavior_name("anthropic");
     let prompt = builder.build_system_prompt(&[]);
     assert!(
         !prompt.contains("## Tool-Use Enforcement"),
