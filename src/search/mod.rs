@@ -25,6 +25,7 @@ mod web_fetch_fallback;
 /// - **Google CSE**: Comprehensive coverage
 /// - **Bing**: Cost-effective
 /// - **Exa.ai**: Semantic search
+/// - **Firecrawl**: Search + full-content scraping
 ///
 /// # Example
 ///
@@ -90,6 +91,8 @@ pub enum SearchProviderType {
     Jina,
     /// `DuckDuckGo` HTML-scrape search
     DuckDuckGo,
+    /// Firecrawl search + full-content scraping
+    Firecrawl,
 }
 
 impl SearchProviderType {
@@ -105,6 +108,7 @@ impl SearchProviderType {
             Self::Exa => "exa",
             Self::Jina => "jina",
             Self::DuckDuckGo => "duckduckgo",
+            Self::Firecrawl => "firecrawl",
         }
     }
 }
@@ -128,6 +132,7 @@ impl std::str::FromStr for SearchProviderType {
             "exa" => Ok(Self::Exa),
             "jina" => Ok(Self::Jina),
             "duckduckgo" => Ok(Self::DuckDuckGo),
+            "firecrawl" => Ok(Self::Firecrawl),
             _ => Err(format!("Unknown provider type: {s}")),
         }
     }
@@ -148,6 +153,7 @@ mod tests {
             SearchProviderType::Exa,
             SearchProviderType::Jina,
             SearchProviderType::DuckDuckGo,
+            SearchProviderType::Firecrawl,
         ] {
             let s = variant.as_str();
             let parsed: SearchProviderType = s.parse().unwrap();

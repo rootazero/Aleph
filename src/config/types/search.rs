@@ -144,7 +144,7 @@ impl Default for PIIConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchBackendConfig {
     /// Provider type: "tavily", "searxng", "brave", "google", "bing", "exa",
-    /// "jina", or "duckduckgo"
+    /// "jina", "duckduckgo", or "firecrawl"
     pub provider_type: String,
 
     /// Runtime-only API key (populated from encrypted vault, never persisted to config.toml)
