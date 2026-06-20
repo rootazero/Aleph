@@ -1,6 +1,6 @@
 //! `hub_install_run` — trust-gated, agent-driven extension install.
 //!
-//! SECURITY: this tool takes NO `ack` argument. The store agent is an LLM; an
+//! SECURITY: this tool takes NO `ack` argument. The calling agent is an LLM; an
 //! `ack` it controlled would let it fabricate user consent. The pure [`gate`]
 //! is the system-enforced core: OCI is always rejected, any ack-required spec
 //! bounces to the user (`NeedsUserConsent`) with ZERO install or secret-storage
@@ -69,7 +69,7 @@ pub fn requires_user_consent(ack_required: bool, spec: &crate::hub::types::Insta
 // --------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct StoreInstallRunArgs {
+pub struct HubInstallRunArgs {
     /// The catalog entry id to install (e.g. "mcp-official:io.github.acme/foo").
     pub entry_id: String,
     /// Submitted config field values (env vars / headers). Secret fields are
@@ -79,7 +79,7 @@ pub struct StoreInstallRunArgs {
 }
 
 /// Three-way install result. `NeedsUserConsent` carries the disclosure the agent
-/// surfaces so the user can complete the risky install through the store UI's
+/// surfaces so the user can complete the risky install through the Extensions UI's
 /// ack flow; this tool performs no side effect in that case.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "status")]
@@ -122,8 +122,8 @@ impl AlephTool for HubInstallRunTool {
     const NAME: &'static str = "hub_install_run";
     const DESCRIPTION: &'static str =
         "Install a catalog entry by id (trust-gated). Clean specs install directly; \
-         ack-required specs bounce to the user for consent via the store UI; OCI is rejected.";
-    type Args = StoreInstallRunArgs;
+         ack-required specs bounce to the user for consent via the Extensions UI; OCI is rejected.";
+    type Args = HubInstallRunArgs;
     type Output = InstallToolResult;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
@@ -162,7 +162,7 @@ impl AlephTool for HubInstallRunTool {
                 },
             }),
             // RETURN HERE — no install, no secret storage. The agent surfaces
-            // the disclosure and directs the user to install via the store UI.
+            // the disclosure and directs the user to install via the Extensions UI.
             GateOutcome::NeedsUserConsent => Ok(InstallToolResult::NeedsUserConsent { disclosure }),
             GateOutcome::Proceed => {
                 self.proceed(&entry, &spec, &disclosure, &args.config_values)

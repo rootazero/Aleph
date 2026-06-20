@@ -19,7 +19,7 @@ use crate::tools::AlephTool;
 // --------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct StoreInstallVerifyArgs {
+pub struct HubInstallVerifyArgs {
     /// `"mcp"` or `"plugin"`.
     pub kind: String,
     /// MCP server id (when `kind == "mcp"`) or plugin path on disk
@@ -27,7 +27,7 @@ pub struct StoreInstallVerifyArgs {
     pub id_or_path: String,
 }
 
-impl StoreInstallVerifyArgs {
+impl HubInstallVerifyArgs {
     /// Map args to an `InstallOutcome`. This is the pure, tested core.
     pub fn to_outcome(&self) -> Result<InstallOutcome> {
         match self.kind.as_str() {
@@ -61,7 +61,7 @@ impl AlephTool for HubInstallVerifyTool {
     const DESCRIPTION: &'static str = "Verify that a just-installed extension is healthy. \
          For MCP servers: checks the server is running and exposes ≥1 tool. \
          For plugins: checks the artifact is present on disk.";
-    type Args = StoreInstallVerifyArgs;
+    type Args = HubInstallVerifyArgs;
     type Output = VerifyReport;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn maps_plugin_outcome_args() {
-        let a = StoreInstallVerifyArgs {
+        let a = HubInstallVerifyArgs {
             kind: "plugin".into(),
             id_or_path: "/tmp/x".into(),
         };
@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn maps_mcp_outcome_args() {
-        let a = StoreInstallVerifyArgs {
+        let a = HubInstallVerifyArgs {
             kind: "mcp".into(),
             id_or_path: "my_server".into(),
         };
@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn unknown_kind_is_error() {
-        let a = StoreInstallVerifyArgs {
+        let a = HubInstallVerifyArgs {
             kind: "oci".into(),
             id_or_path: "irrelevant".into(),
         };

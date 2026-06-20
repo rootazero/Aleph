@@ -75,7 +75,7 @@ pub struct InstallContext<'a> {
     pub plain_values: HashMap<String, String>,
 }
 
-/// Deterministic MCP server id derived from the store entry id.
+/// Deterministic MCP server id derived from the hub entry id.
 fn mcp_server_id(entry_id: &str) -> String {
     entry_id.replace([':', '/'], "_")
 }

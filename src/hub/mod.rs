@@ -1,6 +1,6 @@
-//! Unified Extensions Store: one user-facing `Extension` concept over the
+//! Unified Extensions Hub: one user-facing `Extension` concept over the
 //! existing plugin / MCP / skill backends. See
-//! docs/superpowers/specs/2026-06-19-unified-extensions-store-design.md
+//! docs/superpowers/specs/2026-06-20-extension-hub-federation-design.md
 pub mod cache;
 pub mod categorize;
 pub mod dedup;

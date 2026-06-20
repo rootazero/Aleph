@@ -1,11 +1,11 @@
-//! Store-specific secret helpers over the shared `crate::secrets` vault pipeline.
+//! Hub-specific secret helpers over the shared `crate::secrets` vault pipeline.
 //!
 //! Aleph already has a canonical secret-injection pipeline: secrets live in the
 //! encrypted vault (`SharedTokenManager`), are referenced in text as
 //! `{{secret:NAME}}`, and are resolved at the host boundary by
 //! `crate::secrets::render_with_secrets` (which also records each injection for
-//! leak detection). The Extensions Store reuses that pipeline rather than
-//! inventing a parallel one. This module only adds the store's naming
+//! leak detection). The Extensions Hub reuses that pipeline rather than
+//! inventing a parallel one. This module only adds the hub's naming
 //! convention: a namespaced, placeholder-safe vault name per extension config
 //! field, plus the `{{secret:NAME}}` reference written into mcp_config.json.
 //!
@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn ref_round_trips_through_canonical_parser() {
-        // The store's name must be accepted by the same parser MCP spawn uses.
+        // The hub's name must be accepted by the same parser MCP spawn uses.
         let k = field_key(ExtensionKind::Mcp, "weird id:with/slashes", "API.KEY");
         let refs = crate::secrets::extract_secret_refs(&secret_ref(&k)).unwrap();
         assert_eq!(refs.len(), 1);

@@ -775,7 +775,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             None
         };
 
-    // P4 T5: open the CatalogCache early so store tools (hub_catalog_sync
+    // P4 T5: open the CatalogCache early so hub tools (hub_catalog_sync
     // and T6–T8) can be wired into BuiltinToolConfig. Uses the same path as
     // the extensions.* gateway handlers below — both share the same SQLite
     // file via separate connections (rusqlite file-level locking).
@@ -810,7 +810,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    "Failed to open hub_catalog.db for store tools; hub_catalog_sync will be unavailable"
+                    "Failed to open hub_catalog.db for hub tools; hub_catalog_sync will be unavailable"
                 );
                 (None, None)
             }
@@ -1315,7 +1315,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // Unified Extensions Store — `extensions.*` façade over MCP/plugins/skills,
+    // Unified Extensions Hub — `extensions.*` façade over MCP/plugins/skills,
     // backed by a local rusqlite catalog cache opened at ~/.aleph.
     {
         let catalog_path = alephcore::discovery::aleph_home_dir()
@@ -1379,9 +1379,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     let registry = registry.clone();
                     let cache = cache.clone();
                     tokio::spawn(async move {
-                        // Initial sync immediately, then refresh every 6h. The
-                        // retired store agent no longer drives this — it is a
-                        // plain background task now (interval fires on first tick).
+                        // Initial sync immediately, then refresh every 6h. No
+                        // dedicated agent drives this anymore — it is a plain
+                        // background task now (interval fires on first tick).
                         let mut tick =
                             tokio::time::interval(std::time::Duration::from_secs(6 * 60 * 60));
                         loop {
@@ -1396,10 +1396,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     });
                 }
                 if !args.daemon {
-                    println!("  Extensions store handlers registered (extensions.*)");
+                    println!("  Extensions hub handlers registered (extensions.*)");
                 }
             }
-            Err(e) => tracing::warn!("Failed to open store catalog cache: {e}"),
+            Err(e) => tracing::warn!("Failed to open hub catalog cache: {e}"),
         }
     }
 

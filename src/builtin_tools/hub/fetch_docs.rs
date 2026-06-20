@@ -15,13 +15,13 @@ use crate::tools::AlephTool;
 const DOC_BYTE_BUDGET: usize = 64 * 1024; // 64 KiB
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct StoreFetchDocsArgs {
+pub struct HubFetchDocsArgs {
     /// URL to fetch (README, manifest, or any text document).
     pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct StoreFetchDocsOutput {
+pub struct HubFetchDocsOutput {
     pub text: String,
     pub truncated: bool,
     pub injection_findings: Vec<InjectionFinding>,
@@ -38,8 +38,8 @@ impl AlephTool for HubFetchDocsTool {
     const NAME: &'static str = "hub_fetch_docs";
     const DESCRIPTION: &'static str =
         "Fetch a URL (README/manifest) for the long-tail install path and scan for prompt-injection. SCAFFOLD — not wired to any install surface.";
-    type Args = StoreFetchDocsArgs;
-    type Output = StoreFetchDocsOutput;
+    type Args = HubFetchDocsArgs;
+    type Output = HubFetchDocsOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Build a short-timeout client, mirroring docker_mcp/mcp_registry providers.
@@ -79,7 +79,7 @@ impl AlephTool for HubFetchDocsTool {
 
         let injection_findings = scan_for_injection(&text);
 
-        Ok(StoreFetchDocsOutput {
+        Ok(HubFetchDocsOutput {
             text,
             truncated,
             injection_findings,
@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn injection_findings_included_in_output() {
         // Verify that a fabricated output with findings serializes correctly.
-        let out = StoreFetchDocsOutput {
+        let out = HubFetchDocsOutput {
             text: "clean".into(),
             truncated: false,
             injection_findings: vec![InjectionFinding {

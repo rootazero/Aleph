@@ -15,13 +15,13 @@ use crate::hub::provider::registry_builder::build_default_registry;
 use crate::tools::AlephTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct StoreResolveSpecArgs {
+pub struct HubResolveSpecArgs {
     /// The catalog entry id to resolve (e.g. "mcp-official:io.github.acme/foo").
     pub entry_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct StoreResolveSpecOutput {
+pub struct HubResolveSpecOutput {
     pub entry_id: String,
     pub install_spec: serde_json::Value,
 }
@@ -37,8 +37,8 @@ impl AlephTool for HubResolveSpecTool {
     const NAME: &'static str = "hub_resolve_spec";
     const DESCRIPTION: &'static str =
         "Resolve the install spec for a catalog entry by its id, routing through the matching source provider.";
-    type Args = StoreResolveSpecArgs;
-    type Output = StoreResolveSpecOutput;
+    type Args = HubResolveSpecArgs;
+    type Output = HubResolveSpecOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Load the entry from the cache by id.
@@ -65,7 +65,7 @@ impl AlephTool for HubResolveSpecTool {
         let install_spec = serde_json::to_value(&spec)
             .map_err(|e| AlephError::other(format!("serialize InstallSpec failed: {e}")))?;
 
-        Ok(StoreResolveSpecOutput {
+        Ok(HubResolveSpecOutput {
             entry_id: args.entry_id,
             install_spec,
         })
@@ -108,7 +108,7 @@ mod tests {
             marketplaces: HashMap::new(),
         };
         let result = tool
-            .call(StoreResolveSpecArgs {
+            .call(HubResolveSpecArgs {
                 entry_id: "nonexistent:entry".into(),
             })
             .await;
@@ -128,7 +128,7 @@ mod tests {
             marketplaces: HashMap::new(),
         };
         let result = tool
-            .call(StoreResolveSpecArgs {
+            .call(HubResolveSpecArgs {
                 entry_id: "local:foo".into(),
             })
             .await;

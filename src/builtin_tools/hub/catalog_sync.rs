@@ -17,15 +17,15 @@ use crate::hub::provider::SyncReport;
 use crate::tools::AlephTool;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-pub struct StoreCatalogSyncArgs {}
+pub struct HubCatalogSyncArgs {}
 
 #[derive(Debug, Clone, Serialize)]
-pub struct StoreCatalogSyncOutput {
+pub struct HubCatalogSyncOutput {
     pub synced: Vec<(String, usize)>,
     pub failed: Vec<(String, String)>,
 }
 
-impl StoreCatalogSyncOutput {
+impl HubCatalogSyncOutput {
     #[must_use]
     pub fn from_report(r: &SyncReport) -> Self {
         Self {
@@ -46,13 +46,13 @@ impl AlephTool for HubCatalogSyncTool {
     const NAME: &'static str = "hub_catalog_sync";
     const DESCRIPTION: &'static str =
         "Sync all extension sources into the local catalog cache and refresh functional categories.";
-    type Args = StoreCatalogSyncArgs;
-    type Output = StoreCatalogSyncOutput;
+    type Args = HubCatalogSyncArgs;
+    type Output = HubCatalogSyncOutput;
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output> {
         let registry = build_default_registry(self.marketplaces.clone());
         let report = registry.sync_all_into(&self.cache).await;
-        Ok(StoreCatalogSyncOutput::from_report(&report))
+        Ok(HubCatalogSyncOutput::from_report(&report))
     }
 }
 
@@ -67,7 +67,7 @@ mod tests {
             synced: vec![("mcp-official".into(), 12)],
             failed: vec![("docker-mcp".into(), "timeout".into())],
         };
-        let out = StoreCatalogSyncOutput::from_report(&rep);
+        let out = HubCatalogSyncOutput::from_report(&rep);
         assert_eq!(out.synced, rep.synced);
         assert_eq!(out.failed.len(), 1);
     }
