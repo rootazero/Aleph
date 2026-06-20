@@ -108,6 +108,7 @@ graphify-out/
 # ==============================================================================
 core/test.txt
 newinstall*.txt
+.test-out.txt
 test-results/
 playwright-report/
 agentstructure/
