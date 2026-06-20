@@ -695,9 +695,11 @@ pub async fn resolve_for_entry(
 
 **Interfaces:**
 - Consumes: `store::trust::build_disclosure` (`trust.rs:72`) + `DisclosurePayload.ack_required`, `store::install::run_install` (`install.rs:84`) + `InstallContext`/`InstallOutcome`, `store::secrets::{field_key, secret_ref}`, `ProviderRegistry::resolve_for_entry` (T6), `CatalogCache::query`, `SharedTokenManager::store_secret` (vault), `McpManagerHandle`, `MarketplaceManager`.
-- Produces: `StoreInstallRunTool` (`store_install_run`); pure `fn gate(ack_required: bool, ack: bool, is_oci: bool) -> GateOutcome`.
+- Produces: `StoreInstallRunTool` (`store_install_run`); pure `fn gate(ack_required: bool, is_oci: bool) -> GateOutcome`.
 
-**Args:** `{ entry_id: String, ack: bool, config_values: serde_json::Map<String, Value> }`. **Output:** `enum InstallToolResult { NeedsAck { disclosure }, Installed { outcome }, Rejected { reason } }` (mirror the P3 `extensions.install` contract so the agent path can't bypass the gate).
+**Args:** `{ entry_id: String, config_values: serde_json::Map<String, Value> }` — **deliberately NO `ack` field.** The store agent is an LLM; an `ack` argument it controls would let it fabricate user consent. **Output:** `enum InstallToolResult { NeedsUserConsent { disclosure }, Installed { outcome }, Rejected { reason } }`.
+
+**Security design (gate-faithful — the binding rule, from Global Constraints "the agent cannot self-ack"):** this tool has NO ack input and never completes an ack-required install. Any spec whose disclosure sets `ack_required` (community / LLM-derived / stdio MCP — the risky classes) returns `NeedsUserConsent { disclosure }` with **zero install or secret-storage side effects**; the user must complete it through the trust-gated UI (`extensions.install`, which the P3 flow drives only after a real user gesture). The agent may auto-complete only clean, no-ack-required specs (e.g. Official-tier). OCI is always rejected. The `ack=true` install branch exists ONLY in the `extensions.install` RPC path, never reachable from this tool.
 
 - [ ] **Step 1: Failing test** for the pure gate (`install_run.rs`):
 ```rust
@@ -707,19 +709,19 @@ mod tests {
 
     #[test]
     fn oci_is_rejected() {
-        assert_eq!(gate(false, true, true), GateOutcome::Reject);
+        assert_eq!(gate(false, true), GateOutcome::Reject);
     }
     #[test]
-    fn ack_required_without_ack_needs_ack() {
-        assert_eq!(gate(true, false, false), GateOutcome::NeedsAck);
+    fn oci_rejected_even_when_ack_required() {
+        assert_eq!(gate(true, true), GateOutcome::Reject);
     }
     #[test]
-    fn ack_required_with_ack_proceeds() {
-        assert_eq!(gate(true, true, false), GateOutcome::Proceed);
+    fn ack_required_bounces_to_user() {
+        assert_eq!(gate(true, false), GateOutcome::NeedsUserConsent);
     }
     #[test]
-    fn no_ack_required_proceeds() {
-        assert_eq!(gate(false, false, false), GateOutcome::Proceed);
+    fn clean_spec_proceeds() {
+        assert_eq!(gate(false, false), GateOutcome::Proceed);
     }
 }
 ```
@@ -729,24 +731,25 @@ mod tests {
 - [ ] **Step 3: Implement the gate + tool.** Gate logic (the security core):
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GateOutcome { Reject, NeedsAck, Proceed }
+pub enum GateOutcome { Reject, NeedsUserConsent, Proceed }
 
-/// System-enforced install gate. OCI always rejected; ack-required specs need
-/// an explicit user ack. The agent CANNOT self-ack — `ack` is a tool argument
-/// representing user consent, never fabricated by the model.
+/// System-enforced install gate. OCI is always rejected. Any ack-required spec
+/// bounces to the user (`NeedsUserConsent`) — the agent has NO way to satisfy
+/// the ack, so it cannot self-approve a risky install. Only clean (no-ack)
+/// specs proceed to a direct agent-driven install.
 #[must_use]
-pub fn gate(ack_required: bool, ack: bool, is_oci: bool) -> GateOutcome {
+pub fn gate(ack_required: bool, is_oci: bool) -> GateOutcome {
     if is_oci { return GateOutcome::Reject; }
-    if ack_required && !ack { return GateOutcome::NeedsAck; }
+    if ack_required { return GateOutcome::NeedsUserConsent; }
     GateOutcome::Proceed
 }
 ```
-`call()` flow: load entry by id → `resolve_for_entry` → `build_disclosure(&entry, &spec)` → `gate(disclosure.ack_required, args.ack, spec_is_oci)`:
-  - `Reject` → `Rejected { reason }`.
-  - `NeedsAck` → `NeedsAck { disclosure }` (no install side effect).
+`call()` flow: load entry by id → `resolve_for_entry` → `build_disclosure(&entry, &spec)` → `gate(disclosure.ack_required, spec_is_oci)`:
+  - `Reject` → `Rejected { reason }` (no side effect).
+  - `NeedsUserConsent` → `NeedsUserConsent { disclosure }` (**no install, no secret storage** — the agent surfaces the disclosure and directs the user to install via the store UI's ack flow).
   - `Proceed` → for each secret field in the disclosure, `store_secret(field_key(...), value)` from `config_values`; build `InstallContext { secret_refs, plain_values, mcp, marketplace, entry }`; `run_install(&spec, &ctx)` → `Installed { outcome }`.
 
-This mirrors P2's `handle_install` exactly (same primitives, same ordering: ack before any `store_secret`/install side effect).
+This reuses P2's `handle_install` primitives (`build_disclosure`/`run_install`/`field_key`/`secret_ref`/`store_secret`) but the agent path **cannot reach the `ack=true` install branch** — that branch is exclusive to `extensions.install` driven by a real user gesture. Secrets are stored ONLY on the `Proceed` path (clean specs), never on `NeedsUserConsent`.
 
 - [ ] **Step 4: SHA256 audit (mandatory).** Read `MarketplaceManager::install_to_scope` (`src/extension/marketplace/installer.rs`). Determine whether it verifies the artifact SHA256 (via the marketplace manifest's pinned hash, independent of the spec's `sha256`).
   - **If it verifies internally** (manifest-pinned hash → `verify_plugin_integrity`): document that the spec's `InstallSpec::GitDir.sha256` is redundant for marketplace plugins; no code change. Record the finding.
