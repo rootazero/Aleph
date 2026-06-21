@@ -146,7 +146,7 @@ pub fn McpView() -> impl IntoView {
                                 <div class="space-y-3">
                                     <For
                                         each=move || servers.get()
-                                        key=|server| server.name.clone()
+                                        key=|server| server.id.clone()
                                         children=move |server| {
                                             view! {
                                                 <McpServerCard
@@ -203,7 +203,7 @@ fn McpServerCard(
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
     let deleting = RwSignal::new(false);
-    let server_name = StoredValue::new(server.name.clone());
+    let server_id = StoredValue::new(server.id.clone());
 
     let cmd_summary = if server.args.is_empty() {
         server.command.clone()
@@ -258,7 +258,7 @@ fn McpServerCard(
                         class="p-1.5 text-text-secondary hover:bg-surface-sunken rounded"
                         title="Edit"
                         on:click=move |_| {
-                            editing_server.set(Some(server_name.get_value()));
+                            editing_server.set(Some(server_id.get_value()));
                             show_dialog.set(true);
                         }
                     >
@@ -276,9 +276,9 @@ fn McpServerCard(
                                     title="Delete"
                                     on:click=move |_| {
                                         deleting.set(true);
-                                        let name = server_name.get_value();
+                                        let id = server_id.get_value();
                                         spawn_local(async move {
-                                            match McpConfigApi::delete(&state, name).await {
+                                            match McpConfigApi::delete(&state, id).await {
                                                 Ok(_) => {
                                                     load_servers(state, servers, loading, error);
                                                 }
@@ -321,10 +321,10 @@ fn EditMcpServerDialog(
     let is_new = editing_server.get().is_none();
 
     // Load server data when editing
-    if let Some(server_name) = editing_server.get() {
+    if let Some(server_id) = editing_server.get() {
         let state_clone = state;
         spawn_local(async move {
-            match McpConfigApi::get(&state_clone, server_name).await {
+            match McpConfigApi::get(&state_clone, server_id).await {
                 Ok(server) => {
                     name.set(server.name);
                     command.set(server.command);
@@ -397,11 +397,13 @@ fn EditMcpServerDialog(
         saving.set(true);
         dialog_error.set(None);
 
+        let editing_id = editing_server.get(); // Some(id) when editing, None when new
         spawn_local(async move {
             let result = if is_new {
                 McpConfigApi::create(&state, server_name, config).await
             } else {
-                McpConfigApi::update(&state, server_name, config).await
+                let id = editing_id.unwrap_or_default();
+                McpConfigApi::update(&state, id, config).await
             };
 
             match result {
