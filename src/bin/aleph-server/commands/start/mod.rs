@@ -581,6 +581,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Wrap app config in Arc<RwLock> early so agent handlers can read output_mode dynamically
     let app_config = Arc::new(tokio::sync::RwLock::new(loaded_app_config));
 
+    // One-time migration of legacy Settings-page MCP servers
+    // (config.unified_tools.mcp) into the live actor store. Runs after the actor
+    // is running with its secret resolver, so imported {{secret:..}} servers can
+    // resolve at auto-start. Warn-only; never aborts boot.
+    if let Some(ref h) = mcp_handle {
+        alephcore::gateway::handlers::mcp_config::migrate_unified_to_actor(
+            &app_config,
+            h,
+            &auth_bundle.auth_ctx.shared_token_mgr,
+        )
+        .await;
+    }
+
     // Initialize AgentEnvStore early so agent management tools can use it
     let workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>> = {
         use alephcore::gateway::AgentEnvStore;

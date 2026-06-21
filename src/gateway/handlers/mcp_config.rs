@@ -389,6 +389,104 @@ pub async fn handle_delete(
     JsonRpcResponse::success(request.id, json!({ "ok": true }))
 }
 
+// ============================================================================
+// One-time migration: config.unified_tools.mcp -> actor store
+// ============================================================================
+
+/// Build an actor `McpManagerConfig` from a legacy `unified_tools.mcp` entry,
+/// routing secret env vars into the vault. Returns the config plus the vault
+/// writes the caller must persist. Pure (no I/O) so it is unit-testable.
+pub(crate) fn unified_entry_to_manager_config(
+    name: &str,
+    sc: &crate::config::McpServerConfig,
+) -> (McpManagerConfig, Vec<(String, String)>) {
+    let id = derive_server_id(name);
+    let (env, writes) = plan_secret_env(&id, sc.env.clone(), &HashMap::new());
+    let mut cfg = McpManagerConfig::stdio(&id, name, sc.command.clone())
+        .with_args(sc.args.clone())
+        .with_env(env)
+        .with_auto_start(sc.enabled)
+        .with_timeout(sc.timeout_seconds);
+    if let Some(rt) = sc.requires_runtime.clone() {
+        cfg = cfg.with_runtime(rt);
+    }
+    (cfg, writes)
+}
+
+/// Migrate any legacy `config.unified_tools.mcp` servers into the live actor
+/// store, then clear the migrated entries from `config.toml`. Idempotent: an
+/// entry whose derived id already exists in the actor store is treated as
+/// migrated (cleared, not re-added). Best-effort: failures are warn-logged and
+/// leave the source entry in place; boot continues regardless.
+pub async fn migrate_unified_to_actor(
+    config: &crate::sync_primitives::Arc<tokio::sync::RwLock<crate::config::Config>>,
+    mcp: &McpManagerHandle,
+    vault: &crate::sync_primitives::Arc<crate::gateway::security::SharedTokenManager>,
+) {
+    // Snapshot the legacy entries under a read lock.
+    let entries: Vec<(String, crate::config::McpServerConfig)> = {
+        let cfg = config.read().await;
+        match &cfg.unified_tools {
+            Some(u) if !u.mcp.is_empty() => {
+                u.mcp.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            }
+            _ => return,
+        }
+    };
+
+    let existing_ids: std::collections::HashSet<String> = mcp
+        .list_server_configs()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
+
+    let mut migrated: Vec<String> = Vec::new();
+    for (name, sc) in entries {
+        let id = derive_server_id(&name);
+        if existing_ids.contains(&id) {
+            // Actor store already has it (e.g. Hub-installed) — clear the dup.
+            migrated.push(name);
+            continue;
+        }
+        let (cfg, writes) = unified_entry_to_manager_config(&name, &sc);
+        let mut ok = true;
+        for (vn, vv) in &writes {
+            if let Err(e) = vault.store_secret(vn, vv) {
+                tracing::warn!(server = %name, error = %e, "mcp migration: vault store failed; leaving source entry");
+                ok = false;
+                break;
+            }
+        }
+        if !ok {
+            continue;
+        }
+        match mcp.add_server(cfg).await {
+            Ok(()) => {
+                info!(id = %id, name = %name, "mcp migration: imported into actor store");
+                migrated.push(name);
+            }
+            Err(e) => {
+                tracing::warn!(server = %name, error = %e, "mcp migration: add_server failed; leaving source entry");
+            }
+        }
+    }
+
+    // Clear migrated entries from config.toml (prevents resurrection on delete).
+    if !migrated.is_empty() {
+        let mut cfg = config.write().await;
+        if let Some(u) = cfg.unified_tools.as_mut() {
+            for name in &migrated {
+                u.mcp.remove(name);
+            }
+        }
+        if let Err(e) = cfg.save_incremental(&["unified_tools"]) {
+            tracing::warn!(error = %e, "mcp migration: failed to persist cleared unified_tools.mcp");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,5 +563,32 @@ mod tests {
         let (stored, writes) = super::plan_secret_env("srv", incoming, &HashMap::new());
         assert!(!stored.contains_key("NEW_TOKEN"), "blank secret with no existing entry must be dropped");
         assert!(writes.is_empty());
+    }
+
+    #[test]
+    fn unified_entry_converts_with_vault_secret() {
+        let sc = crate::config::McpServerConfig {
+            command: "npx".to_string(),
+            args: vec!["-y".to_string(), "@x/y".to_string()],
+            env: env(&[("API_TOKEN", "t-real"), ("REGION", "us")]),
+            cwd: None,
+            requires_runtime: Some("node".to_string()),
+            timeout_seconds: 30,
+            enabled: false,
+            triggers: None,
+        };
+        let (cfg, writes) = super::unified_entry_to_manager_config("My Srv", &sc);
+        assert_eq!(cfg.id, "My_Srv");
+        assert_eq!(cfg.name, "My Srv");
+        assert_eq!(cfg.command.as_deref(), Some("npx"));
+        assert!(!cfg.auto_start); // enabled=false -> auto_start=false
+        assert_eq!(cfg.requires_runtime.as_deref(), Some("node"));
+        // secret -> vault ref + a write; non-secret stays inline
+        assert_eq!(
+            cfg.env.get("API_TOKEN"),
+            Some(&"{{secret:ext.mcp.My_Srv.API_TOKEN}}".to_string())
+        );
+        assert_eq!(cfg.env.get("REGION"), Some(&"us".to_string()));
+        assert_eq!(writes, vec![("ext.mcp.My_Srv.API_TOKEN".to_string(), "t-real".to_string())]);
     }
 }
