@@ -320,6 +320,7 @@ deps:
 # standalone aleph-server binary — and uploads artifacts; no tag, no Release.
 # Runs against the current origin/main — push local commits first if needed.
 verify-build:
+    git submodule update --init --recursive
     gh workflow run aleph-app-release.yml --field publish=false
     @echo ""
     @echo "✓ Build-only verification triggered (no tag, no Release)."
@@ -352,8 +353,13 @@ release version:
     echo "$VERSION" > VERSION
     sed -i '' -E "s/^version = \"[0-9.]+\"$/version = \"${VERSION}\"/" Cargo.toml
 
-    # Stage, commit, push
+    # Bump bundled skills/plugins submodules to their latest upstream main so
+    # this release embeds the newest official content (the offline fallback).
+    git submodule update --remote --recursive
+
+    # Stage, commit, push (submodule pointer bump rides along, recorded in the release commit)
     git add -f VERSION Cargo.toml CHANGELOG.md
+    git add skills plugins
     git commit -m "release: v${VERSION}"
     git push origin main
 
