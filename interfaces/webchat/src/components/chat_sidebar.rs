@@ -740,34 +740,36 @@ pub fn ChatSidebar() -> impl IntoView {
     view! {
         <div class="flex flex-col h-full">
             // Top action area
-            <div class="p-2 space-y-2">
+            <div class="p-3 space-y-2">
                 // ── Advanced features zone ──────────────────────────────
-                // Team chat / Project management (placeholder) / Aleph Hub,
-                // collapsed into ONE compact icon row to reclaim vertical height
-                // (was three stacked full-width rows). Each button keeps its own
-                // click / disabled / navigation behavior; the text label is
-                // dropped in favor of an emoji glyph + `title` tooltip.
-                <div class="flex items-center gap-1.5">
+                // Team chat + Project management (placeholder). Each entry is
+                // a full-width row, stacked vertically; future advanced entries
+                // (e.g. workflows) keep getting appended into this block.
+                <div class="flex flex-col gap-1.5">
                     <button
-                        class="flex-1 inline-flex items-center justify-center px-2 py-1.5 rounded-lg
+                        class="w-full inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
                                bg-surface-sunken border border-border text-sm
                                hover:border-primary transition-colors"
                         title=move || t_string!(i18n, chat.team_chat).to_string()
                         on:click=move |_| show_compose.set(true)
                     >
-                        "👥"
+                        {move || format!("👥 {}", t_string!(i18n, chat.team_chat))}
                     </button>
                     <button
-                        class="flex-1 inline-flex items-center justify-center px-2 py-1.5 rounded-lg
+                        class="w-full inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
                                bg-surface-sunken border border-border text-sm
                                opacity-70 cursor-not-allowed"
                         title=move || t_string!(i18n, chat.project_management).to_string()
                         disabled=true
                     >
-                        "📁"
+                        {move || format!("📁 {}", t_string!(i18n, chat.project_management))}
+                        <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded
+                                     bg-surface-raised text-text-tertiary">
+                            {move || t_string!(i18n, chat.coming_soon).to_string()}
+                        </span>
                     </button>
                     <button
-                        class="flex-1 inline-flex items-center justify-center px-2 py-1.5 rounded-lg
+                        class="w-full inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
                                bg-surface-sunken border border-border text-sm
                                hover:border-primary transition-colors"
                         title=move || t_string!(i18n, nav.extensions).to_string()
@@ -776,7 +778,7 @@ pub fn ChatSidebar() -> impl IntoView {
                             move |_| navigate("/extensions", Default::default())
                         }
                     >
-                        "🧩"
+                        {move || format!("🧩 {}", t_string!(i18n, nav.extensions))}
                     </button>
                 </div>
 
@@ -800,7 +802,7 @@ pub fn ChatSidebar() -> impl IntoView {
                 </Show>
 
                 // Faint divider: advanced features zone ↔ normal chat
-                <div class="border-t border-border/40"></div>
+                <div class="border-t border-border/50"></div>
 
                 // ── Normal chat: agent picker + new chat ────────────────
                 <div class="flex items-center gap-2">
@@ -1103,7 +1105,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                         view! {
                                             <div class="relative group">
                                                 <button
-                                                    class="w-full text-left px-2 py-2 rounded-lg text-sm nav-tile flex items-center gap-2"
+                                                    class="w-full text-left px-2 py-1.5 rounded-lg text-sm nav-tile flex items-center gap-2"
                                                     on:click=move |_| on_open_group(id_click.clone())
                                                 >
                                                     // Avatar cluster (overlapping discs, up to 3)
@@ -1384,7 +1386,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                             <div class="relative group">
                                                 <button
                                                     class=move || format!(
-                                                        "w-full text-left px-3 py-2.5 rounded-lg text-sm flex items-center justify-between {}",
+                                                        "w-full text-left px-3 py-1.5 rounded-lg text-sm flex items-center justify-between {}",
                                                         if is_active() {
                                                             "nav-tile-active"
                                                         } else {
