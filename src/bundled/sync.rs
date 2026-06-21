@@ -5,7 +5,7 @@
 //! caller can fall back to the embedded snapshot.
 
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Clone `repo_url` (branch `main`) into `checkout_dir` if absent; otherwise
 /// fetch and hard-reset the working tree to `origin/main`. The checkout dir is
