@@ -3,6 +3,7 @@
 /// Sets up file-based logging with daily rotation and automatic PII scrubbing.
 /// Log files are written to `~/.aleph/logs/aleph-{component}.log.YYYY-MM-DD`.
 use std::path::PathBuf;
+use std::io::IsTerminal;
 use std::sync::OnceLock;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -71,12 +72,20 @@ fn setup_logging(
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
 
-    let console_layer = fmt::layer()
-        .with_target(true)
-        .with_level(true)
-        .with_thread_ids(false)
-        .with_thread_names(false)
-        .event_format(crate::pii_filter::PiiScrubbingFormat);
+    // Console layer only when stdout is an interactive terminal. In daemon
+    // mode `daemonize()` redirects stdout to gateway.log BEFORE this runs, so
+    // is_terminal() is false there — dropping the console layer stops
+    // gateway.log from accumulating a duplicate of the rotating file_layer.
+    // `Option<L>` implements `Layer`, so `None` contributes nothing to the
+    // subscriber and the registry chain below is unchanged.
+    let console_layer = std::io::stdout().is_terminal().then(|| {
+        fmt::layer()
+            .with_target(true)
+            .with_level(true)
+            .with_thread_ids(false)
+            .with_thread_names(false)
+            .event_format(crate::pii_filter::PiiScrubbingFormat)
+    });
 
     let file_layer = fmt::layer()
         .with_writer(non_blocking_file)
