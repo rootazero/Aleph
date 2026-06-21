@@ -51,7 +51,8 @@ mod tests {
         idx.write().unwrap();
         let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
         let sig = git2::Signature::now("t", "t@t").unwrap();
-        repo.commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[]).unwrap();
+        repo.commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
         repo.set_head("refs/heads/main").unwrap();
         dir.to_string_lossy().to_string()
     }
@@ -65,7 +66,10 @@ mod tests {
         let checkout = tmp.path().join("checkout");
 
         clone_or_update(&url, &checkout).expect("clone");
-        assert_eq!(std::fs::read_to_string(checkout.join("SKILL.md")).unwrap(), "v1");
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("SKILL.md")).unwrap(),
+            "v1"
+        );
 
         // New commit upstream, then update → hard reset picks it up.
         let repo = git2::Repository::open(&src).unwrap();
@@ -76,10 +80,14 @@ mod tests {
         let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
         let sig = git2::Signature::now("t", "t@t").unwrap();
         let parent = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.commit(Some("refs/heads/main"), &sig, &sig, "v2", &tree, &[&parent]).unwrap();
+        repo.commit(Some("refs/heads/main"), &sig, &sig, "v2", &tree, &[&parent])
+            .unwrap();
 
         clone_or_update(&url, &checkout).expect("update");
-        assert_eq!(std::fs::read_to_string(checkout.join("SKILL.md")).unwrap(), "v2");
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("SKILL.md")).unwrap(),
+            "v2"
+        );
     }
 
     #[test]

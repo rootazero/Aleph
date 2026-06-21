@@ -34,7 +34,7 @@ pub const BUNDLED_VERSION: &str = env!("ALEPH_VERSION");
 pub const OFFICIAL_SKILLS_REPO: &str = "https://github.com/rootazero/Aleph-skills";
 pub const OFFICIAL_PLUGINS_REPO: &str = "https://github.com/rootazero/Aleph-plugins";
 
-pub(crate) use sync::clone_or_update;
 pub(crate) use extractor::copy_skill_leaf;
+pub(crate) use sync::clone_or_update;
 
 pub use extractor::{extract_bundled_content, sync_official_now, SyncKind, SyncReport};
