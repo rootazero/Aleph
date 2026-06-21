@@ -4,11 +4,10 @@ pub mod installed;
 pub mod model;
 
 use leptos::prelude::*;
-use leptos_router::hooks::use_navigate;
 
 use crate::api::extensions::ExtensionEntry;
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, use_i18n};
+use crate::i18n::{t, use_i18n};
 
 /// Shared store state, provided by `ExtensionsView`, consumed by browse/drawer/installed.
 #[derive(Clone, Copy)]
@@ -86,37 +85,10 @@ pub fn ExtensionsView() -> impl IntoView {
     // Store is now provided by AppContent (parent of both columns) so the
     // left-column CategoryNav and this main-area view share one selection.
     let store = expect_context::<StoreState>();
-    let navigate = use_navigate();
 
     view! {
         <div class="flex-1 flex flex-col h-full overflow-hidden bg-surface aleph-content-top">
             <header class="px-6 py-3 border-b border-border flex items-center gap-4">
-                <button
-                    class="text-sm text-text-secondary hover:text-text-primary transition-colors"
-                    on:click={
-                        let navigate = navigate.clone();
-                        move |_| {
-                            // Leave-guard: if an install is in flight, confirm before navigating.
-                            if store.installing.get() {
-                                let ok = web_sys::window()
-                                    .map(|w| {
-                                        w.confirm_with_message(t_string!(
-                                            i18n,
-                                            extensions.leave_confirm
-                                        ))
-                                        .unwrap_or(false)
-                                    })
-                                    .unwrap_or(false);
-                                if !ok {
-                                    return;
-                                }
-                            }
-                            navigate("/chat", Default::default());
-                        }
-                    }
-                >
-                    {t!(i18n, extensions.back_to_chat)}
-                </button>
                 <div class="flex-1">
                     <h1 class="font-serif text-2xl text-text-primary leading-tight">{t!(i18n, extensions.title)}</h1>
                     <p class="text-xs text-text-tertiary">{t!(i18n, extensions.subtitle)}</p>
