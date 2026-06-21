@@ -9,7 +9,7 @@ use leptos_router::hooks::{use_location, use_navigate};
 use crate::views::agent_trace::AgentTrace;
 use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
-use crate::views::extensions::ExtensionsView;
+use crate::views::extensions::{ExtensionsView, StoreState};
 use crate::views::home::Home;
 use crate::views::logs::Logs;
 use crate::views::memory_hub::MemoryHub;
@@ -95,6 +95,12 @@ fn AppContent() -> impl IntoView {
     // data layer (alert subscriptions on DashboardState) is already wired
     // in `setup_alert_subscriptions()`; this is purely the popover surface.
     provide_context(NotificationsState::new());
+
+    // Extensions (Aleph Hub) store — lifted above both columns so the
+    // left-column category nav (ExtensionsSidebar) and the main-area grid
+    // (BrowsePane) share one `category` selection. Mirrors ChatState's
+    // split-column sharing (see above).
+    provide_context(StoreState::new());
 
     // Esc key: uncollapse sidebar when collapsed. Coexists with the
     // hotkey-installed Esc handler that closes the palette; both only act

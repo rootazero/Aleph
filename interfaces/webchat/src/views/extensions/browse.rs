@@ -4,9 +4,7 @@ use serde_json::json;
 
 use crate::api::extensions::{ExtensionEntry, ExtensionsApi};
 use crate::components::extensions::card::ExtensionCard;
-use crate::components::extensions::chips::{
-    category_label, CategoryChips, FilterSegs, StoreSearch,
-};
+use crate::components::extensions::chips::{category_label, FilterSegs, StoreSearch};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n, Locale};
 use crate::views::extensions::model::{apply_filters, featured_picks, group_into_shelves, Filters};
@@ -69,10 +67,9 @@ pub fn BrowsePane() -> impl IntoView {
     };
 
     view! {
-        // Chrome: search + chips + filter segments
+        // Chrome: search + filter segments (category nav lives in the left column now)
         <div class="flex flex-col gap-3 mb-4">
             <StoreSearch />
-            <CategoryChips />
             <FilterSegs />
         </div>
 

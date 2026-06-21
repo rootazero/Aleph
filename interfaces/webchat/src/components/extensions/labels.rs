@@ -25,7 +25,7 @@ pub fn trust_label(i18n: I18nContext<Locale>, tier: &str) -> String {
 
 /// Localize a category value string using literal i18n key paths.
 /// Covers "featured", "all", and all 13 CATEGORIES values.
-/// Used for BOTH chip labels (CategoryChips) and shelf titles (browse.rs).
+/// Used for BOTH the left-column CategoryNav labels and shelf titles (browse.rs).
 pub fn category_label(i18n: I18nContext<Locale>, value: &str) -> String {
     match value {
         "featured" => t_string!(i18n, extensions.cat.featured).to_string(),
