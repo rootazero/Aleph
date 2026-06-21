@@ -636,6 +636,7 @@ async fn dispatch_plugin(server_url: &str, action: PluginAction, json: bool) -> 
             plugin_cmd::pack(std::path::Path::new(&path), out.as_deref())
         }
         PluginAction::Doctor => plugin_cmd::doctor(json),
+        PluginAction::Sync => commands::skills_cmd::sync(server_url, "plugins", json).await,
         // Marketplace
         PluginAction::Marketplace { action } => {
             dispatch_marketplace(server_url, action, json).await
@@ -707,6 +708,7 @@ async fn dispatch_skills(server_url: &str, action: SkillsAction, json: bool) -> 
         SkillsAction::List => skills_cmd::list(server_url, json).await,
         SkillsAction::Install { source } => skills_cmd::install(server_url, &source, json).await,
         SkillsAction::Delete { name } => skills_cmd::delete(server_url, &name, json).await,
+        SkillsAction::Sync => skills_cmd::sync(server_url, "skills", json).await,
     }
 }
 

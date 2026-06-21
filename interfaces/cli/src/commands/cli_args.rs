@@ -703,6 +703,8 @@ pub enum PluginAction {
     },
     /// Run plugin diagnostics
     Doctor,
+    /// Refresh official plugins from the external repo (git clone/pull)
+    Sync,
     // === Marketplace ===
     /// Plugin marketplace management
     Marketplace {
@@ -765,6 +767,8 @@ pub enum SkillsAction {
     Install { source: String },
     /// Remove an installed skill by name
     Delete { name: String },
+    /// Refresh official skills from the external repo (git clone/pull)
+    Sync,
 }
 
 #[derive(Subcommand)]
