@@ -44,6 +44,7 @@ pub mod arena;
 pub mod auth;
 pub mod behavior_config;
 pub mod browser_config;
+pub mod bundled_sync;
 pub mod channel;
 pub mod chat;
 pub mod clawhub;
@@ -423,6 +424,7 @@ impl HandlerRegistry {
         registry.register("skills.install_dep", skills::handle_install_dep);
         registry.register("skills.remove", skills::handle_remove);
         registry.register("skills.install", markdown_skills::handle_install);
+        registry.register("bundled.sync", bundled_sync::handle_sync);
 
         // ClawHub handlers
         registry.register("clawhub.search", clawhub::handle_search);
@@ -1053,6 +1055,7 @@ mod tests {
         assert!(registry.has_method("skills.update"));
         assert!(registry.has_method("skills.install_dep"));
         assert!(registry.has_method("skills.remove"));
+        assert!(registry.has_method("bundled.sync"));
     }
 
     #[test]

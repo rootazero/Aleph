@@ -105,7 +105,7 @@ impl Lane {
             // skills.remove is package management, not a data delete →
             // System lane. memory.delete / session.delete / session.truncate
             // are data ops that fall through to default Mutate.
-            "skills.remove" => Some(Self::System),
+            "skills.remove" | "bundled.sync" => Some(Self::System),
             // logs.setLevel changes process-wide runtime config →
             // System lane (preserves pre-G1 hardcode behavior).
             "logs.setLevel" => Some(Self::System),
