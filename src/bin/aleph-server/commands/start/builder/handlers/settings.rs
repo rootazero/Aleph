@@ -191,7 +191,6 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::general_config;
     use alephcore::gateway::handlers::generation_config;
     use alephcore::gateway::handlers::generation_providers;
-    use alephcore::gateway::handlers::mcp_config;
     use alephcore::gateway::handlers::memory_config;
     use alephcore::gateway::handlers::providers;
     use alephcore::gateway::handlers::rerank_config;
@@ -377,31 +376,6 @@ pub(in crate::commands::start) fn register_config_handlers(
         server,
         "routing_rules.move",
         routing_rules::handle_move,
-        config,
-        event_bus
-    );
-
-    // MCP config
-    register_handler!(server, "mcp_config.list", mcp_config::handle_list, config);
-    register_handler!(server, "mcp_config.get", mcp_config::handle_get, config);
-    register_handler!(
-        server,
-        "mcp_config.create",
-        mcp_config::handle_create,
-        config,
-        event_bus
-    );
-    register_handler!(
-        server,
-        "mcp_config.update",
-        mcp_config::handle_update,
-        config,
-        event_bus
-    );
-    register_handler!(
-        server,
-        "mcp_config.delete",
-        mcp_config::handle_delete,
         config,
         event_bus
     );
