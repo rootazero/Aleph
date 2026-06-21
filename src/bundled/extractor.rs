@@ -687,6 +687,10 @@ mod tests {
         let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
         let sig = git2::Signature::now("t", "t@t").unwrap();
         repo.commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[]).unwrap();
+        // Point HEAD at main so the clone checks out our commit (libgit2 inits
+        // HEAD to an unborn `master`; without this the clone's working tree is
+        // empty). Mirrors `sync::tests::make_source_repo`.
+        repo.set_head("refs/heads/main").unwrap();
         dir.to_string_lossy().to_string()
     }
 
