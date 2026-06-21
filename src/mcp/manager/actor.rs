@@ -358,6 +358,10 @@ impl McpManagerActor {
                 let servers = self.list_servers().await;
                 let _ = respond_to.send(servers);
             }
+            McpCommand::ListServerConfigs { respond_to } => {
+                let configs = self.config.servers.values().cloned().collect::<Vec<_>>();
+                let _ = respond_to.send(configs);
+            }
             McpCommand::GetStatus {
                 server_id,
                 respond_to,
@@ -1219,5 +1223,27 @@ mod tests {
 
         assert!(handle1.is_running());
         assert!(handle2.is_running());
+    }
+
+    #[tokio::test]
+    async fn list_server_configs_returns_persisted_configs() {
+        let path = std::env::temp_dir().join(format!("aleph_mcp_cfgs_{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let (actor, handle) = McpManagerActor::new(Some(path.clone()))
+            .await
+            .expect("actor builds");
+        tokio::spawn(actor.run());
+
+        handle
+            .add_server(
+                McpManagerConfig::stdio("srv-a", "Server A", "/bin/true").with_auto_start(false),
+            )
+            .await
+            .expect("add_server");
+
+        let configs = handle.list_server_configs().await.expect("list configs");
+        assert!(configs.iter().any(|c| c.id == "srv-a" && c.name == "Server A"));
+
+        let _ = std::fs::remove_file(&path);
     }
 }

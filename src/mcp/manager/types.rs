@@ -502,6 +502,15 @@ pub enum McpCommand {
         respond_to: oneshot::Sender<Vec<McpServerInfo>>,
     },
 
+    /// List all **persisted** server configurations (full config, not the
+    /// lightweight `McpServerInfo`). Excludes transient plugin-owned servers,
+    /// which live only in `clients`. Used by the Settings MCP page to render
+    /// editable command/args/env without per-server status round-trips.
+    ListServerConfigs {
+        /// Response channel
+        respond_to: oneshot::Sender<Vec<McpManagerConfig>>,
+    },
+
     /// Get detailed status for a server
     GetStatus {
         /// Server ID
@@ -601,6 +610,7 @@ impl std::fmt::Debug for McpCommand {
                 .field("server_id", server_id)
                 .finish(),
             Self::ListServers { .. } => f.debug_struct("ListServers").finish(),
+            Self::ListServerConfigs { .. } => f.debug_struct("ListServerConfigs").finish(),
             Self::GetStatus { server_id, .. } => f
                 .debug_struct("GetStatus")
                 .field("server_id", server_id)

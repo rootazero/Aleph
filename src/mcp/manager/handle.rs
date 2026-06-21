@@ -229,6 +229,24 @@ impl McpManagerHandle {
             .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
     }
 
+    /// List all persisted server configurations (full config).
+    ///
+    /// Unlike [`Self::list_servers`] (lightweight `McpServerInfo`), this returns
+    /// the complete `McpManagerConfig` for each persisted server — enough to
+    /// render and edit command/args/env. Transient plugin-owned servers are not
+    /// included.
+    pub async fn list_server_configs(&self) -> Result<Vec<McpManagerConfig>> {
+        let (respond_to, rx) = oneshot::channel();
+
+        self.tx
+            .send(McpCommand::ListServerConfigs { respond_to })
+            .await
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
+
+        rx.await
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
+    }
+
     /// Get detailed status for a specific server
     ///
     /// Returns `None` if the server doesn't exist.
