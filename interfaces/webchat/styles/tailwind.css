@@ -102,11 +102,12 @@
   --radius-3xl:  calc(1.75rem   * var(--control-ui-radius-scale, 1));  /* 28px */
   --radius-full: 9999px;
 
-  /* === Spacing base — Tailwind v4 keys every numeric `p-*/m-*/gap-*/w-*/h-*`
-         utility off this one unit. 0.22rem (~12% under the 0.25rem Tailwind
-         default) bakes a denser baseline; `--control-ui-density` (the Appearance
-         「紧凑度」 knob, default 1) re-scales the whole panel's whitespace from
-         here, exactly as `--control-ui-text-scale` re-scales every rem. === */
+  /* === Spacing base — Tailwind v4 keys every numeric spacing utility
+         (padding, margin, gap, width, height) off this one unit. 0.22rem
+         (~12% under the 0.25rem Tailwind default) bakes a denser baseline;
+         `--control-ui-density` (the Appearance 「紧凑度」 knob, default 1)
+         re-scales the whole panel's whitespace from here, exactly as
+         `--control-ui-text-scale` re-scales every rem. === */
   --spacing: calc(0.22rem * var(--control-ui-density, 1));
 
   /* === Depth — soft, layered shadows in place of heavy borders.
