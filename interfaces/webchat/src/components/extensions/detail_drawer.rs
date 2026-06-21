@@ -49,9 +49,9 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
                 let trust_text = trust_label(i18n, &entry.trust_tier);
                 let category_text = category_label(i18n, &entry.category);
                 view! {
-                    <div class="fixed inset-0 z-40 flex justify-end">
+                    <div class="fixed inset-0 z-[60] flex justify-end">
                         <div class="aleph-scrim absolute inset-0 bg-black/30" on:click=close></div>
-                        <aside class="glass relative w-[480px] max-w-[94vw] h-full bg-surface-overlay/85 border-l border-border shadow-xl flex flex-col">
+                        <aside class="glass relative w-[480px] max-w-[94vw] h-full bg-surface-overlay/90 border-l border-border shadow-xl flex flex-col">
                             <header class="px-4 py-3 border-b border-border flex items-start justify-between gap-2">
                                 <div class="flex items-center gap-3 min-w-0">
                                     <div class="w-12 h-12 rounded-lg bg-primary-subtle flex items-center justify-center text-xl flex-shrink-0">
