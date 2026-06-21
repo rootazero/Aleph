@@ -1,12 +1,13 @@
 //! Single source of truth for panel appearance preferences.
 //!
-//! Five orthogonal, client-side axes — all persisted to `localStorage` and
+//! Six orthogonal, client-side axes — all persisted to `localStorage` and
 //! replayed on boot by [`init_appearance`]:
 //!
 //!   • mode      — System / Light / Dark           → `<html>` class list
 //!   • accent    — colour palette                  → `data-accent` attribute
 //!   • font scale— accessibility text size         → `--control-ui-text-scale`
 //!   • roundness — corner radius density           → `--control-ui-radius-scale`
+//!   • density   — whitespace compactness           → `--control-ui-density`
 //!   • material  — glass material family           → `data-material` attribute
 //!
 //! Each enum carries pure (web_sys-free) conversion logic so it unit-tests on
@@ -24,6 +25,7 @@ const KEY_ACCENT: &str = "aleph-accent";
 const KEY_FONT_SCALE: &str = "aleph-font-scale";
 const KEY_ROUNDNESS: &str = "aleph-roundness";
 const KEY_MATERIAL: &str = "aleph-material";
+const KEY_DENSITY: &str = "aleph-density";
 
 // ---------------------------------------------------------------------------
 // Theme mode
@@ -348,6 +350,62 @@ impl Roundness {
 }
 
 // ---------------------------------------------------------------------------
+// Density (whitespace compactness)
+// ---------------------------------------------------------------------------
+
+/// Whitespace compactness. Drives `--control-ui-density`, the multiplier that
+/// Tailwind v4's `--spacing` base unit keys off of — so every numeric
+/// padding/margin/gap/size utility re-scales from one value. `Compact` is the
+/// cleared-key default: the baked baseline is already ~12% tighter than stock,
+/// and the knob only adds breathing room from there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Density {
+    Compact,  // 1×    — the new compact baseline (default, clears the key)
+    Cozy,     // 1.13× — restores the original ~0.25rem whitespace
+    Spacious, // 1.25× — roomier
+}
+
+impl Density {
+    pub const ALL: [Self; 3] = [Self::Compact, Self::Cozy, Self::Spacious];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Compact => "紧凑",
+            Self::Cozy => "适中",
+            Self::Spacious => "宽松",
+        }
+    }
+
+    /// CSS multiplier applied to the `--spacing` base.
+    #[must_use]
+    pub const fn css_value(self) -> &'static str {
+        match self {
+            Self::Compact => "1",
+            Self::Cozy => "1.13",
+            Self::Spacious => "1.25",
+        }
+    }
+
+    /// `localStorage` value, or `None` for the default (clears the key).
+    #[must_use]
+    pub fn storage_value(self) -> Option<&'static str> {
+        match self {
+            Self::Compact => None,
+            other => Some(other.css_value()),
+        }
+    }
+
+    fn from_storage(raw: Option<&str>) -> Self {
+        match raw {
+            Some("1.13") => Self::Cozy,
+            Some("1.25") => Self::Spacious,
+            _ => Self::Compact,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DOM / storage plumbing
 // ---------------------------------------------------------------------------
 
@@ -412,6 +470,11 @@ pub fn read_material() -> Material {
     Material::from_storage(read_key(KEY_MATERIAL).as_deref())
 }
 
+#[must_use]
+pub fn read_density() -> Density {
+    Density::from_storage(read_key(KEY_DENSITY).as_deref())
+}
+
 // ---------------------------------------------------------------------------
 // Applies (mutate the DOM + persist)
 // ---------------------------------------------------------------------------
@@ -464,6 +527,15 @@ pub fn apply_roundness(roundness: Roundness) {
     persist(KEY_ROUNDNESS, roundness.storage_value());
 }
 
+pub fn apply_density(density: Density) {
+    if let Some(html) = root() {
+        let _ = html
+            .style()
+            .set_property("--control-ui-density", density.css_value());
+    }
+    persist(KEY_DENSITY, density.storage_value());
+}
+
 pub fn apply_material(material: Material) {
     if let Some(html) = root() {
         if material == Material::Luxe {
@@ -511,6 +583,10 @@ pub fn init_appearance() {
     let roundness = read_roundness();
     if roundness != Roundness::Default {
         apply_roundness(roundness);
+    }
+    let density = read_density();
+    if density != Density::Compact {
+        apply_density(density);
     }
     let material = read_material();
     if material != Material::Luxe {
@@ -562,6 +638,23 @@ mod tests {
         }
         assert_eq!(Roundness::Default.storage_value(), None);
         assert_eq!(Roundness::from_storage(None), Roundness::Default);
+    }
+
+    #[test]
+    fn density_round_trips_via_css_value() {
+        for d in Density::ALL {
+            assert_eq!(Density::from_storage(Some(d.css_value())), d);
+        }
+        // Compact is the cleared-key default (the new compact baseline).
+        assert_eq!(Density::Compact.storage_value(), None);
+        assert_eq!(Density::from_storage(None), Density::Compact);
+        assert_eq!(Density::from_storage(Some("garbage")), Density::Compact);
+    }
+
+    #[test]
+    fn density_non_default_values_persist_a_key() {
+        assert!(Density::Cozy.storage_value().is_some());
+        assert!(Density::Spacious.storage_value().is_some());
     }
 
     #[test]
