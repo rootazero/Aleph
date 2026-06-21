@@ -235,7 +235,12 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
     },
     SettingsGroup {
         label: "Extensions",
-        tabs: &[SettingsTab::Acp],
+        tabs: &[
+            SettingsTab::Mcp,
+            SettingsTab::Plugins,
+            SettingsTab::Skills,
+            SettingsTab::Acp,
+        ],
     },
     SettingsGroup {
         label: "Advanced",
@@ -244,9 +249,6 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
             SettingsTab::Policies,
             SettingsTab::Security,
             SettingsTab::Execution,
-            SettingsTab::Mcp,
-            SettingsTab::Plugins,
-            SettingsTab::Skills,
         ],
     },
     SettingsGroup {
@@ -286,33 +288,33 @@ mod tests {
     }
 
     #[test]
-    fn mcp_plugins_skills_demoted_to_advanced() {
-        let advanced = group_tab_paths("Advanced");
-        assert!(
-            advanced.contains(&"/settings/mcp"),
-            "Advanced must contain MCP"
-        );
-        assert!(
-            advanced.contains(&"/settings/plugins"),
-            "Advanced must contain Plugins"
-        );
-        assert!(
-            advanced.contains(&"/settings/skills"),
-            "Advanced must contain Skills"
-        );
-
+    fn mcp_plugins_skills_in_extensions_group() {
         let extensions = group_tab_paths("Extensions");
         assert!(
-            !extensions.contains(&"/settings/mcp"),
-            "Extensions must not contain MCP"
+            extensions.contains(&"/settings/mcp"),
+            "Extensions must contain MCP"
         );
         assert!(
-            !extensions.contains(&"/settings/plugins"),
-            "Extensions must not contain Plugins"
+            extensions.contains(&"/settings/plugins"),
+            "Extensions must contain Plugins"
         );
         assert!(
-            !extensions.contains(&"/settings/skills"),
-            "Extensions must not contain Skills"
+            extensions.contains(&"/settings/skills"),
+            "Extensions must contain Skills"
+        );
+
+        let advanced = group_tab_paths("Advanced");
+        assert!(
+            !advanced.contains(&"/settings/mcp"),
+            "Advanced must not contain MCP"
+        );
+        assert!(
+            !advanced.contains(&"/settings/plugins"),
+            "Advanced must not contain Plugins"
+        );
+        assert!(
+            !advanced.contains(&"/settings/skills"),
+            "Advanced must not contain Skills"
         );
     }
 }
