@@ -92,6 +92,7 @@ fn outcome_json(o: &InstallOutcome) -> Value {
     match o {
         InstallOutcome::Mcp { id } => serde_json::json!({ "kind": "mcp", "id": id }),
         InstallOutcome::Plugin { path } => serde_json::json!({ "kind": "plugin", "path": path }),
+        InstallOutcome::Skill { path } => serde_json::json!({ "kind": "skill", "path": path }),
     }
 }
 

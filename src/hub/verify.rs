@@ -74,6 +74,19 @@ pub async fn verify_install(
                 }
             }
         }
+        InstallOutcome::Skill { path } => {
+            if std::path::Path::new(path).exists() {
+                VerifyReport {
+                    ok: true,
+                    detail: format!("skill present at {path}"),
+                }
+            } else {
+                VerifyReport {
+                    ok: false,
+                    detail: format!("skill path missing: {path}"),
+                }
+            }
+        }
     }
 }
 

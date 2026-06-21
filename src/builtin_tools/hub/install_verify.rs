@@ -20,10 +20,10 @@ use crate::tools::AlephTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HubInstallVerifyArgs {
-    /// `"mcp"` or `"plugin"`.
+    /// `"mcp"`, `"plugin"`, or `"skill"`.
     pub kind: String,
-    /// MCP server id (when `kind == "mcp"`) or plugin path on disk
-    /// (when `kind == "plugin"`).
+    /// MCP server id (when `kind == "mcp"`) or path on disk
+    /// (when `kind == "plugin"` / `"skill"`).
     pub id_or_path: String,
 }
 
@@ -37,8 +37,11 @@ impl HubInstallVerifyArgs {
             "plugin" => Ok(InstallOutcome::Plugin {
                 path: self.id_or_path.clone(),
             }),
+            "skill" => Ok(InstallOutcome::Skill {
+                path: self.id_or_path.clone(),
+            }),
             other => Err(AlephError::tool(format!(
-                "unknown kind '{other}'; expected \"mcp\" or \"plugin\""
+                "unknown kind '{other}'; expected \"mcp\", \"plugin\", or \"skill\""
             ))),
         }
     }
@@ -60,7 +63,7 @@ impl AlephTool for HubInstallVerifyTool {
     const NAME: &'static str = "hub_install_verify";
     const DESCRIPTION: &'static str = "Verify that a just-installed extension is healthy. \
          For MCP servers: checks the server is running and exposes ≥1 tool. \
-         For plugins: checks the artifact is present on disk.";
+         For plugins and skills: checks the artifact is present on disk.";
     type Args = HubInstallVerifyArgs;
     type Output = VerifyReport;
 
@@ -88,6 +91,19 @@ mod tests {
         assert!(matches!(
             outcome,
             crate::hub::install::InstallOutcome::Plugin { .. }
+        ));
+    }
+
+    #[test]
+    fn maps_skill_outcome_args() {
+        let a = HubInstallVerifyArgs {
+            kind: "skill".into(),
+            id_or_path: "/tmp/skills/my-skill".into(),
+        };
+        let outcome = a.to_outcome().unwrap();
+        assert!(matches!(
+            outcome,
+            crate::hub::install::InstallOutcome::Skill { .. }
         ));
     }
 
