@@ -363,6 +363,133 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Filesystem-source analogue of `extract_skills`: walks a cloned checkout
+/// (each top-level dir is one skill) and applies the SAME manifest gating —
+/// official-only overwrite, skip names owned by non-official skills, prune
+/// stale files within each official skill dir. Returns true if all extractions
+/// succeeded.
+pub(crate) fn extract_skill_tree_from_dir(
+    src_root: &Path,
+    skills_dir: &Path,
+    manifest: &mut InstallRegistry,
+) -> bool {
+    let mut all_ok = true;
+    let entries = match std::fs::read_dir(src_root) {
+        Ok(e) => e,
+        Err(e) => {
+            warn!(error = %e, src = %src_root.display(), "Failed to read cloned skills checkout");
+            return false;
+        }
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue; // skip top-level files (.gitignore, README.md, .git)
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name.contains('/') || name.contains('\\') || name.len() > 255 {
+            continue;
+        }
+        // Skip if a non-official skill already owns this name (user/3rd-party wins).
+        if let Some(e) = manifest.skills.get(&name) {
+            if e.source != SkillOrigin::Official {
+                debug!(skill = %name, source = ?e.source, "Skipping user-owned skill name");
+                continue;
+            }
+        }
+        let target = skills_dir.join(&name);
+        match copy_tree_with_prune(&entry.path(), &target) {
+            Ok(()) => {
+                manifest.skills.insert(
+                    name.clone(),
+                    SkillEntry {
+                        source: SkillOrigin::Official,
+                        version: Some(BUNDLED_VERSION.to_string()),
+                        url: None,
+                        installed_at: None,
+                    },
+                );
+            }
+            Err(e) => {
+                manifest.skills.insert(
+                    name.clone(),
+                    SkillEntry { source: SkillOrigin::Official, version: None, url: None, installed_at: None },
+                );
+                warn!(skill = %name, error = %e, "Failed to extract skill from checkout");
+                all_ok = false;
+            }
+        }
+    }
+    all_ok
+}
+
+/// Filesystem-source analogue of `extract_plugins`: atomically swap the cloned
+/// plugins checkout into the official marketplace cache dir.
+pub(crate) fn extract_plugins_from_dir(src_root: &Path, cache_dir: &Path) -> bool {
+    let tmp_dir = cache_dir.with_extension("tmp");
+    if tmp_dir.exists() {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+    if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
+        warn!(error = %e, "Failed to create plugin cache temp dir");
+        return false;
+    }
+    if let Err(e) = copy_dir_into(src_root, &tmp_dir) {
+        warn!(error = %e, "Failed to copy plugins from checkout");
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        return false;
+    }
+    swap_dir_into_place(&tmp_dir, cache_dir)
+}
+
+/// Recursively copy `src` → `dst`, skipping VCS metadata, then prune any
+/// entries in `dst` no longer present in `src` (mirrors `prune_stale_entries`).
+fn copy_tree_with_prune(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    copy_dir_into(src, dst)?;
+    use std::collections::HashSet;
+    let mut keep: HashSet<std::ffi::OsString> = HashSet::new();
+    for e in std::fs::read_dir(src)?.filter_map(|e| e.ok()) {
+        if !is_vcs_meta(&e.file_name()) {
+            keep.insert(e.file_name());
+        }
+    }
+    for e in std::fs::read_dir(dst)?.filter_map(|e| e.ok()) {
+        if !keep.contains(&e.file_name()) {
+            let p = e.path();
+            let ft = e.file_type()?;
+            if ft.is_dir() {
+                let _ = std::fs::remove_dir_all(&p);
+            } else {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Recursively copy directory contents (no prune), skipping `.git`/`.gitignore`.
+fn copy_dir_into(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)?.filter_map(|e| e.ok()) {
+        let name = entry.file_name();
+        if is_vcs_meta(&name) {
+            continue;
+        }
+        let from = entry.path();
+        let to = dst.join(&name);
+        if entry.file_type()?.is_dir() {
+            copy_dir_into(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+fn is_vcs_meta(name: &std::ffi::OsStr) -> bool {
+    matches!(name.to_string_lossy().as_ref(), ".git" | ".gitignore" | ".gitmodules")
+}
+
 /// Remove legacy `~/.aleph/skills-official/` directory if it exists.
 fn cleanup_legacy_dir(aleph_home: &Path) {
     let legacy = aleph_home.join("skills-official");
@@ -428,6 +555,32 @@ mod tests {
 
         assert!(swap_dir_into_place(&staged, &dest));
         assert!(dest.join("f.txt").exists());
+    }
+
+    #[test]
+    fn extract_skill_tree_from_dir_copies_official_and_skips_user_owned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let skills = tmp.path().join("skills");
+        std::fs::create_dir_all(src.join("api-design")).unwrap();
+        std::fs::write(src.join("api-design").join("SKILL.md"), b"# api").unwrap();
+        std::fs::create_dir_all(src.join("search")).unwrap();
+        std::fs::write(src.join("search").join("SKILL.md"), b"# official search").unwrap();
+        std::fs::create_dir_all(&skills).unwrap();
+
+        // User already owns a skill named "search" → official sync must skip it.
+        let mut manifest = InstallRegistry::new("");
+        manifest.skills.insert(
+            "search".to_string(),
+            SkillEntry { source: SkillOrigin::Local, version: None, url: None, installed_at: None },
+        );
+
+        let ok = extract_skill_tree_from_dir(&src, &skills, &mut manifest);
+        assert!(ok);
+        assert!(skills.join("api-design").join("SKILL.md").exists(), "official extracted");
+        assert!(!skills.join("search").exists(), "user-owned name skipped");
+        assert_eq!(manifest.skills.get("api-design").unwrap().source, SkillOrigin::Official);
+        assert_eq!(manifest.skills.get("search").unwrap().source, SkillOrigin::Local);
     }
 
     /// Nested content must survive the swap intact.
