@@ -233,7 +233,6 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .min_inner_size(720.0, 520.0)
         .center()
         .resizable(true)
-        .transparent(true)
         .visible(false)
         .initialization_script(SHELL_MARKER_JS)
         // Turn `target="_blank"` clicks into a top-level navigation so the
@@ -242,11 +241,18 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .initialization_script(external_link::CLICK_INTERCEPTOR_JS)
         .on_navigation(external_link::route);
 
+    // Transparent only on macOS, where `apply_macos_vibrancy` installs an
+    // opaque material behind the webview. On Windows/Linux a transparent window
+    // has no backing, so WebView2 flashes the empty surface white on every
+    // full-surface repaint during the Panel's multi-pass bootstrap render —
+    // keep those platforms opaque so repaints composite over a stable backing.
+    //
     // Overlay traffic lights over the content for a native-mac feel; the
     // Panel's CSS (Phase 2) leaves room for them.
     #[cfg(target_os = "macos")]
     {
         builder = builder
+            .transparent(true)
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true);
     }
