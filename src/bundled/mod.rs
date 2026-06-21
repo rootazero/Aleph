@@ -36,4 +36,4 @@ pub const OFFICIAL_PLUGINS_REPO: &str = "https://github.com/rootazero/Aleph-plug
 
 pub(crate) use sync::clone_or_update;
 
-pub use extractor::extract_bundled_content;
+pub use extractor::{extract_bundled_content, sync_official_now, SyncKind, SyncReport};

@@ -256,7 +256,13 @@ pub(super) async fn initialize_extension_manager(daemon: bool) {
     // extracted into the SAME ~/.aleph as the rest of the daemon's state.
     let aleph_home = alephcore::utils::paths::get_config_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/.aleph"));
-    alephcore::bundled::extract_bundled_content(&aleph_home);
+    // Bundled extraction may perform a one-time network clone on first run;
+    // run it off the async executor so a slow clone never stalls startup.
+    let home_for_extract = aleph_home.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        alephcore::bundled::extract_bundled_content(&home_for_extract)
+    })
+    .await;
 
     match alephcore::extension::ExtensionManager::with_defaults().await {
         Ok(extension_manager) => {

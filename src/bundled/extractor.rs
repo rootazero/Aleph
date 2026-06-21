@@ -10,6 +10,79 @@ use include_dir::Dir;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
+/// Which official content to refresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncKind {
+    Skills,
+    Plugins,
+    All,
+}
+
+/// Result of an explicit sync.
+#[derive(Debug, Clone, Copy)]
+pub struct SyncReport {
+    pub skills: bool,
+    pub plugins: bool,
+}
+
+/// Explicit refresh (the `bundled.sync` RPC / CLI) against the official repos.
+pub fn sync_official_now(aleph_home: &Path, kind: SyncKind) -> Result<SyncReport, String> {
+    sync_official_with_urls(
+        aleph_home,
+        kind,
+        crate::bundled::OFFICIAL_SKILLS_REPO,
+        crate::bundled::OFFICIAL_PLUGINS_REPO,
+    )
+}
+
+/// URL-injectable core of the explicit refresh. Clones each requested repo's
+/// latest `main` into an isolated checkout under `~/.aleph/cache/`, then
+/// re-extracts via the fs-source path. Returns `Err` if every requested clone
+/// failed (nothing was refreshed). Injectable URLs keep this deterministically
+/// testable with local fixture repos (no network).
+pub(crate) fn sync_official_with_urls(
+    aleph_home: &Path,
+    kind: SyncKind,
+    skills_url: &str,
+    plugins_url: &str,
+) -> Result<SyncReport, String> {
+    let skills_dir = aleph_home.join("skills");
+    let plugins_cache = aleph_home.join("plugins").join("cache").join("aleph-official");
+    let cache = aleph_home.join("cache");
+    let _ = std::fs::create_dir_all(&skills_dir);
+    let _ = std::fs::create_dir_all(&plugins_cache);
+
+    let mut report = SyncReport { skills: false, plugins: false };
+    let mut last_err: Option<String> = None;
+
+    if matches!(kind, SyncKind::Skills | SyncKind::All) {
+        let checkout = cache.join("aleph-skills-checkout");
+        match crate::bundled::clone_or_update(skills_url, &checkout) {
+            Ok(()) => {
+                let mut manifest = InstallRegistry::load(&skills_dir)
+                    .unwrap_or_else(|| InstallRegistry::new(""));
+                let _ = manifest.reconcile(&skills_dir);
+                report.skills = extract_skill_tree_from_dir(&checkout, &skills_dir, &mut manifest);
+                let _ = manifest.reconcile(&skills_dir);
+                let _ = manifest.save(&skills_dir);
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    if matches!(kind, SyncKind::Plugins | SyncKind::All) {
+        let checkout = cache.join("aleph-plugins-checkout");
+        match crate::bundled::clone_or_update(plugins_url, &checkout) {
+            Ok(()) => report.plugins = extract_plugins_from_dir(&checkout, &plugins_cache),
+            Err(e) => last_err = Some(e),
+        }
+    }
+
+    if !report.skills && !report.plugins {
+        return Err(last_err.unwrap_or_else(|| "nothing synced".into()));
+    }
+    Ok(report)
+}
+
 /// Main entry point — called during server startup.
 ///
 /// Extracts bundled skills to `~/.aleph/skills/` and plugins to
@@ -44,6 +117,26 @@ pub fn extract_bundled_content(aleph_home: &Path) {
             m
         }
     };
+
+    // First-run bootstrap: try to pull the latest official content from the
+    // external repos; on any failure fall back to the embedded snapshot below.
+    let first_run = manifest.skills.is_empty() && manifest.bundled_version.is_empty();
+    if first_run {
+        match sync_official_now(aleph_home, SyncKind::All) {
+            Ok(r) => {
+                info!(skills = r.skills, plugins = r.plugins, "Bootstrapped official content from remote");
+                if r.skills && r.plugins {
+                    if let Some(m) = InstallRegistry::load(&skills_dir) { manifest = m; }
+                    manifest.bundled_version = BUNDLED_VERSION.to_string();
+                    let _ = manifest.reconcile(&skills_dir);
+                    let _ = manifest.save(&skills_dir);
+                    cleanup_legacy_dir(aleph_home);
+                    return;
+                }
+            }
+            Err(e) => warn!(error = %e, "Remote bootstrap failed, falling back to embedded snapshot"),
+        }
+    }
 
     // Check if extraction is needed
     if manifest.bundled_version == BUNDLED_VERSION {
@@ -581,6 +674,41 @@ mod tests {
         assert!(!skills.join("search").exists(), "user-owned name skipped");
         assert_eq!(manifest.skills.get("api-design").unwrap().source, SkillOrigin::Official);
         assert_eq!(manifest.skills.get("search").unwrap().source, SkillOrigin::Local);
+    }
+
+    /// Build a local git repo containing a single skill leaf `<leaf>/SKILL.md`.
+    fn make_skill_repo(dir: &std::path::Path, leaf: &str, body: &str) -> String {
+        std::fs::create_dir_all(dir.join(leaf)).unwrap();
+        std::fs::write(dir.join(leaf).join("SKILL.md"), body).unwrap();
+        let repo = git2::Repository::init(dir).unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.add_all(["."], git2::IndexAddOption::DEFAULT, None).unwrap();
+        idx.write().unwrap();
+        let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@t").unwrap();
+        repo.commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[]).unwrap();
+        dir.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn sync_official_with_urls_extracts_skills_from_local_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let url = make_skill_repo(&src, "api-design", "# api");
+        let home = tmp.path().join("home");
+
+        let report = sync_official_with_urls(&home, SyncKind::Skills, &url, "").expect("ok");
+        assert!(report.skills);
+        assert!(home.join("skills").join("api-design").join("SKILL.md").exists());
+    }
+
+    #[test]
+    fn sync_official_with_urls_reports_err_on_bad_url() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let report = sync_official_with_urls(&home, SyncKind::Skills, "/nonexistent/repo/path", "");
+        assert!(report.is_err());
     }
 
     /// Nested content must survive the swap intact.
