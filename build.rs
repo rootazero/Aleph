@@ -8,6 +8,10 @@ fn main() {
     // Read version from VERSION file (single source of truth)
     // This overrides CARGO_PKG_VERSION so all code uses the same version
     println!("cargo:rerun-if-changed=VERSION");
+    // Re-embed bundled skills/plugins (include_dir!) when their submodule
+    // checkouts change — without this, edits land only after a clean build.
+    println!("cargo:rerun-if-changed=skills");
+    println!("cargo:rerun-if-changed=plugins");
     if let Ok(version) = std::fs::read_to_string("VERSION") {
         let version = version.trim();
         println!("cargo:rustc-env=ALEPH_VERSION={version}");

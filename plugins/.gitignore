@@ -1,6 +1,0 @@
-node_modules/
-target/
-dist/
-*.wasm
-.DS_Store
-.claude/
