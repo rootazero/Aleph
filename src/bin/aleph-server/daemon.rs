@@ -3,9 +3,39 @@
 //! This module handles PID file management, process lifecycle,
 //! instance locking, and Unix daemonization.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use alephcore::cli::endpoint::{read_endpoint, remove_endpoint, IpcEndpoint};
+
+/// Cap on the daemon's stdout/stderr redirect file (`gateway.log`). Beyond
+/// this it is rotated out at the next daemon start so it never grows unbounded.
+#[cfg(unix)]
+const MAX_GATEWAY_LOG_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Rotate `log_path` out of the way if it already exceeds `max_bytes`, keeping
+/// the daemon's redirect target bounded across restarts. The oversized file is
+/// renamed to `<file_name>.YYYY-MM-DD` (UTC) — a name `cleanup_old_logs` can
+/// later age out — and the next append starts a fresh file. No-op when the
+/// file is absent or within budget. Same-day re-rotation overwrites that day's
+/// backup (atomic rename replace), which is acceptable for a catch-all stream.
+#[cfg(unix)]
+fn rotate_oversized_log(log_path: &Path, max_bytes: u64) -> std::io::Result<()> {
+    let metadata = match std::fs::metadata(log_path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if metadata.len() <= max_bytes {
+        return Ok(());
+    }
+    let file_name = log_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("gateway.log");
+    let date = chrono::Utc::now().format("%Y-%m-%d");
+    let rotated = log_path.with_file_name(format!("{file_name}.{date}"));
+    std::fs::rename(log_path, rotated)
+}
 
 /// Expand ~ to home directory.
 /// When `dirs::home_dir()` returns `None`, falls back to a per-user scratch
@@ -343,6 +373,23 @@ pub fn daemonize(
         let log_path = expand_path(&log_path.to_string_lossy());
         if let Some(parent) = log_path.parent() {
             std::fs::create_dir_all(parent)?;
+
+            // Keep the redirect target bounded: rotate it out if it has grown
+            // past the cap, then age out old rotations with the same 7-day
+            // retention aleph-server.log uses. Best-effort — logging hygiene
+            // must never block daemon startup.
+            if let Err(e) = rotate_oversized_log(&log_path, MAX_GATEWAY_LOG_BYTES) {
+                eprintln!("Warning: failed to rotate {}: {e}", log_path.display());
+            }
+            if let Some(prefix) = log_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(".log"))
+            {
+                // best-effort: cleanup logs internally via tracing (not yet
+                // initialized here), so a failure is silently non-fatal.
+                let _ = aleph_logging::cleanup_old_logs(parent, 7, Some(prefix));
+            }
         }
 
         let log_file = OpenOptions::new()
@@ -398,6 +445,64 @@ pub fn daemonize(
     _log_file: Option<&PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     Err("Daemon mode is only supported on Unix systems".into())
+}
+
+#[cfg(all(test, unix))]
+mod rotation_tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    fn write_file(path: &Path, bytes: usize) {
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(&vec![b'x'; bytes]).unwrap();
+    }
+
+    fn siblings(dir: &Path, except: &str) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n != except)
+            .collect()
+    }
+
+    #[test]
+    fn under_cap_is_not_rotated() {
+        let dir = TempDir::new().unwrap();
+        let log = dir.path().join("gateway.log");
+        write_file(&log, 100);
+        rotate_oversized_log(&log, 1024).unwrap();
+        assert!(log.exists());
+        assert!(
+            siblings(dir.path(), "gateway.log").is_empty(),
+            "no rotation expected under cap"
+        );
+    }
+
+    #[test]
+    fn over_cap_is_rotated_to_dated_sibling() {
+        let dir = TempDir::new().unwrap();
+        let log = dir.path().join("gateway.log");
+        write_file(&log, 2048);
+        rotate_oversized_log(&log, 1024).unwrap();
+        // Original name freed for a fresh file; exactly one dated backup exists.
+        assert!(!log.exists());
+        let rotated = siblings(dir.path(), "gateway.log");
+        assert_eq!(rotated.len(), 1, "expected one rotation, got {rotated:?}");
+        let suffix = rotated[0].strip_prefix("gateway.log.").expect("gateway.log. prefix");
+        assert_eq!(suffix.len(), 10, "date suffix must be YYYY-MM-DD");
+        assert_eq!(suffix.as_bytes()[4], b'-');
+        assert_eq!(suffix.as_bytes()[7], b'-');
+    }
+
+    #[test]
+    fn missing_file_is_noop() {
+        let dir = TempDir::new().unwrap();
+        let log = dir.path().join("gateway.log");
+        rotate_oversized_log(&log, 1024).unwrap();
+        assert!(!log.exists());
+    }
 }
 
 #[cfg(test)]
