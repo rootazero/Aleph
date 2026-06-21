@@ -90,14 +90,25 @@ pub fn install_git_skill(
     spec: &InstallSpec,
     skills_dir: &std::path::Path,
 ) -> Result<String, String> {
-    let InstallSpec::GitDir { git_url, subdir, .. } = spec else {
+    let InstallSpec::GitDir {
+        git_url, subdir, ..
+    } = spec
+    else {
         return Err("install_git_skill requires a GitDir spec".into());
     };
     let leaf = subdir.clone().unwrap_or_else(|| entry.name.clone());
-    let safe_name = leaf.rsplit('/').next().unwrap_or(&leaf).to_string();
-    if safe_name.is_empty() || safe_name.contains("..") {
-        return Err(format!("unsafe skill name '{safe_name}'"));
+    // Reject traversal in the SOURCE path too (not just the destination name):
+    // `leaf` is joined onto the checkout to pick the copy source, so a `..`
+    // segment from a crafted catalog entry could read outside the clone.
+    if leaf
+        .split(['/', '\\'])
+        .any(|seg| seg == ".." || seg.is_empty())
+    {
+        return Err(format!("unsafe skill subdir '{leaf}'"));
     }
+    // Last path segment is the on-disk skill name; the guard above guarantees it
+    // is non-empty and free of `..`.
+    let safe_name = leaf.rsplit(['/', '\\']).next().unwrap_or(&leaf).to_string();
     // Clone into an isolated per-source checkout (never the live skills dir).
     let checkout = skills_dir.join(".git-cache").join(mcp_server_id(&entry.id));
     crate::bundled::clone_or_update(git_url, &checkout)?;
@@ -241,11 +252,13 @@ mod tests {
         std::fs::write(src.join("my-skill").join("SKILL.md"), b"# hi").unwrap();
         let repo = git2::Repository::init(&src).unwrap();
         let mut idx = repo.index().unwrap();
-        idx.add_all(["."], git2::IndexAddOption::DEFAULT, None).unwrap();
+        idx.add_all(["."], git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
         idx.write().unwrap();
         let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
         let sig = git2::Signature::now("t", "t@t").unwrap();
-        repo.commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[]).unwrap();
+        repo.commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
         // Point HEAD at main so the clone checks out our commit (libgit2 inits
         // HEAD to an unborn `master`; without this the clone's working tree is empty).
         repo.set_head("refs/heads/main").unwrap();

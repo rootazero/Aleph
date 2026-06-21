@@ -4,7 +4,7 @@
 
 use crate::bundled::SyncKind;
 use crate::gateway::handlers::parse_params;
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -33,7 +33,14 @@ pub async fn handle_sync(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => return e,
     };
     let Some(kind) = parse_kind(&params.kind) else {
-        return JsonRpcResponse::error(request.id, INTERNAL_ERROR, "invalid kind".to_string());
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!(
+                "invalid kind '{}'; expected \"skills\", \"plugins\", or \"all\"",
+                params.kind
+            ),
+        );
     };
     let aleph_home = match crate::utils::paths::get_config_dir() {
         Ok(p) => p,

@@ -47,20 +47,35 @@ pub(crate) fn sync_official_with_urls(
     plugins_url: &str,
 ) -> Result<SyncReport, String> {
     let skills_dir = aleph_home.join("skills");
-    let plugins_cache = aleph_home.join("plugins").join("cache").join("aleph-official");
+    let plugins_cache = aleph_home
+        .join("plugins")
+        .join("cache")
+        .join("aleph-official");
     let cache = aleph_home.join("cache");
     let _ = std::fs::create_dir_all(&skills_dir);
     let _ = std::fs::create_dir_all(&plugins_cache);
 
-    let mut report = SyncReport { skills: false, plugins: false };
+    let mut report = SyncReport {
+        skills: false,
+        plugins: false,
+    };
     let mut last_err: Option<String> = None;
 
     if matches!(kind, SyncKind::Skills | SyncKind::All) {
         let checkout = cache.join("aleph-skills-checkout");
         match crate::bundled::clone_or_update(skills_url, &checkout) {
+            Ok(()) if !checkout_has_content(&checkout) => {
+                // A clone whose remote HEAD is unborn yields an empty working
+                // tree. Treat that as a failed refresh so the caller falls back
+                // to the embedded snapshot instead of recording a hollow success.
+                last_err = Some(format!(
+                    "cloned skills checkout is empty: {}",
+                    checkout.display()
+                ));
+            }
             Ok(()) => {
-                let mut manifest = InstallRegistry::load(&skills_dir)
-                    .unwrap_or_else(|| InstallRegistry::new(""));
+                let mut manifest =
+                    InstallRegistry::load(&skills_dir).unwrap_or_else(|| InstallRegistry::new(""));
                 let _ = manifest.reconcile(&skills_dir);
                 report.skills = extract_skill_tree_from_dir(&checkout, &skills_dir, &mut manifest);
                 let _ = manifest.reconcile(&skills_dir);
@@ -72,6 +87,12 @@ pub(crate) fn sync_official_with_urls(
     if matches!(kind, SyncKind::Plugins | SyncKind::All) {
         let checkout = cache.join("aleph-plugins-checkout");
         match crate::bundled::clone_or_update(plugins_url, &checkout) {
+            Ok(()) if !checkout_has_content(&checkout) => {
+                last_err = Some(format!(
+                    "cloned plugins checkout is empty: {}",
+                    checkout.display()
+                ));
+            }
             Ok(()) => report.plugins = extract_plugins_from_dir(&checkout, &plugins_cache),
             Err(e) => last_err = Some(e),
         }
@@ -124,9 +145,21 @@ pub fn extract_bundled_content(aleph_home: &Path) {
     if first_run {
         match sync_official_now(aleph_home, SyncKind::All) {
             Ok(r) => {
-                info!(skills = r.skills, plugins = r.plugins, "Bootstrapped official content from remote");
+                info!(
+                    skills = r.skills,
+                    plugins = r.plugins,
+                    "Bootstrapped official content from remote"
+                );
+                // sync_official_now already wrote the manifest to disk with the
+                // cloned skills stamped Official. Adopt it unconditionally — even
+                // on a partial success (e.g. skills cloned, plugins failed) — so
+                // the embedded fall-through below does not reconcile the freshly
+                // cloned Official skills back into Local (which would make a later
+                // official sync skip them).
+                if let Some(m) = InstallRegistry::load(&skills_dir) {
+                    manifest = m;
+                }
                 if r.skills && r.plugins {
-                    if let Some(m) = InstallRegistry::load(&skills_dir) { manifest = m; }
                     manifest.bundled_version = BUNDLED_VERSION.to_string();
                     let _ = manifest.reconcile(&skills_dir);
                     let _ = manifest.save(&skills_dir);
@@ -134,7 +167,9 @@ pub fn extract_bundled_content(aleph_home: &Path) {
                     return;
                 }
             }
-            Err(e) => warn!(error = %e, "Remote bootstrap failed, falling back to embedded snapshot"),
+            Err(e) => {
+                warn!(error = %e, "Remote bootstrap failed, falling back to embedded snapshot")
+            }
         }
     }
 
@@ -505,7 +540,12 @@ pub(crate) fn extract_skill_tree_from_dir(
             Err(e) => {
                 manifest.skills.insert(
                     name.clone(),
-                    SkillEntry { source: SkillOrigin::Official, version: None, url: None, installed_at: None },
+                    SkillEntry {
+                        source: SkillOrigin::Official,
+                        version: None,
+                        url: None,
+                        installed_at: None,
+                    },
                 );
                 warn!(skill = %name, error = %e, "Failed to extract skill from checkout");
                 all_ok = false;
@@ -586,7 +626,22 @@ fn copy_dir_into(src: &Path, dst: &Path) -> std::io::Result<()> {
 }
 
 fn is_vcs_meta(name: &std::ffi::OsStr) -> bool {
-    matches!(name.to_string_lossy().as_ref(), ".git" | ".gitignore" | ".gitmodules")
+    matches!(
+        name.to_string_lossy().as_ref(),
+        ".git" | ".gitignore" | ".gitmodules"
+    )
+}
+
+/// True if `dir` holds at least one non-VCS-metadata entry. An empty working
+/// tree (e.g. a clone whose remote HEAD is unborn) contains only `.git`, so this
+/// distinguishes a real checkout from a broken/empty clone.
+fn checkout_has_content(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .any(|e| !is_vcs_meta(&e.file_name()))
+        })
+        .unwrap_or(false)
 }
 
 /// Remove legacy `~/.aleph/skills-official/` directory if it exists.
@@ -671,15 +726,29 @@ mod tests {
         let mut manifest = InstallRegistry::new("");
         manifest.skills.insert(
             "search".to_string(),
-            SkillEntry { source: SkillOrigin::Local, version: None, url: None, installed_at: None },
+            SkillEntry {
+                source: SkillOrigin::Local,
+                version: None,
+                url: None,
+                installed_at: None,
+            },
         );
 
         let ok = extract_skill_tree_from_dir(&src, &skills, &mut manifest);
         assert!(ok);
-        assert!(skills.join("api-design").join("SKILL.md").exists(), "official extracted");
+        assert!(
+            skills.join("api-design").join("SKILL.md").exists(),
+            "official extracted"
+        );
         assert!(!skills.join("search").exists(), "user-owned name skipped");
-        assert_eq!(manifest.skills.get("api-design").unwrap().source, SkillOrigin::Official);
-        assert_eq!(manifest.skills.get("search").unwrap().source, SkillOrigin::Local);
+        assert_eq!(
+            manifest.skills.get("api-design").unwrap().source,
+            SkillOrigin::Official
+        );
+        assert_eq!(
+            manifest.skills.get("search").unwrap().source,
+            SkillOrigin::Local
+        );
     }
 
     /// Build a local git repo containing a single skill leaf `<leaf>/SKILL.md`.
@@ -688,11 +757,13 @@ mod tests {
         std::fs::write(dir.join(leaf).join("SKILL.md"), body).unwrap();
         let repo = git2::Repository::init(dir).unwrap();
         let mut idx = repo.index().unwrap();
-        idx.add_all(["."], git2::IndexAddOption::DEFAULT, None).unwrap();
+        idx.add_all(["."], git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
         idx.write().unwrap();
         let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
         let sig = git2::Signature::now("t", "t@t").unwrap();
-        repo.commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[]).unwrap();
+        repo.commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
         // Point HEAD at main so the clone checks out our commit (libgit2 inits
         // HEAD to an unborn `master`; without this the clone's working tree is
         // empty). Mirrors `sync::tests::make_source_repo`.
@@ -710,7 +781,11 @@ mod tests {
 
         let report = sync_official_with_urls(&home, SyncKind::Skills, &url, "").expect("ok");
         assert!(report.skills);
-        assert!(home.join("skills").join("api-design").join("SKILL.md").exists());
+        assert!(home
+            .join("skills")
+            .join("api-design")
+            .join("SKILL.md")
+            .exists());
     }
 
     #[test]
@@ -719,6 +794,38 @@ mod tests {
         let home = tmp.path().join("home");
         let report = sync_official_with_urls(&home, SyncKind::Skills, "/nonexistent/repo/path", "");
         assert!(report.is_err());
+    }
+
+    /// A clone whose remote HEAD is unborn (commit on `main`, HEAD left on the
+    /// default `master`) yields an EMPTY working tree. The sync must report that
+    /// as a failure so the startup bootstrap falls back to the embedded snapshot
+    /// instead of recording a hollow success that suppresses the fallback.
+    #[test]
+    fn sync_official_with_urls_treats_empty_checkout_as_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(src.join("api-design")).unwrap();
+        std::fs::write(src.join("api-design").join("SKILL.md"), b"# api").unwrap();
+        let repo = git2::Repository::init(&src).unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.add_all(["."], git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        idx.write().unwrap();
+        let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@t").unwrap();
+        repo.commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        // Deliberately do NOT set HEAD to main → clone checks out unborn `master`.
+        let url = src.to_string_lossy().to_string();
+        let home = tmp.path().join("home");
+
+        let report = sync_official_with_urls(&home, SyncKind::Skills, &url, "");
+        assert!(report.is_err(), "empty checkout must fail, got {report:?}");
+        assert!(!home
+            .join("skills")
+            .join("api-design")
+            .join("SKILL.md")
+            .exists());
     }
 
     /// Nested content must survive the swap intact.

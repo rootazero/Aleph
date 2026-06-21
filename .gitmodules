@@ -1,6 +1,8 @@
 [submodule "skills"]
 	path = skills
 	url = https://github.com/rootazero/Aleph-skills.git
+	branch = main
 [submodule "plugins"]
 	path = plugins
 	url = https://github.com/rootazero/Aleph-plugins.git
+	branch = main
