@@ -4,6 +4,7 @@
 // Auto-refreshed via stream.session_updated Gateway events.
 //
 use leptos::prelude::*;
+use leptos_router::hooks::use_navigate;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -207,6 +208,8 @@ pub fn ChatSidebar() -> impl IntoView {
     // session-gesture closure without panicking if the pane isn't mounted.
     let workspace = use_context::<WorkspaceState>();
     let i18n = use_i18n();
+    // Router handle for the Aleph Hub launcher in the advanced-features zone.
+    let navigate = use_navigate();
 
     let agents = RwSignal::new(Vec::<AgentEntry>::new());
     let sessions = RwSignal::new(Vec::<SessionEntry>::new());
@@ -768,6 +771,21 @@ pub fn ChatSidebar() -> impl IntoView {
                                      bg-surface-raised text-text-tertiary">
                             {move || t_string!(i18n, chat.coming_soon).to_string()}
                         </span>
+                    </button>
+                    // Aleph Hub — active launcher for the extensions/plugins hub.
+                    // Migrated here from the bottom NavMenu popup; unlike the
+                    // disabled "项目管理" placeholder above it navigates on click.
+                    <button
+                        class="w-full inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                               bg-surface-sunken border border-border text-sm
+                               hover:border-primary transition-colors"
+                        title=move || t_string!(i18n, nav.extensions).to_string()
+                        on:click={
+                            let navigate = navigate.clone();
+                            move |_| navigate("/extensions", Default::default())
+                        }
+                    >
+                        {move || format!("🧩 {}", t_string!(i18n, nav.extensions))}
                     </button>
                 </div>
 
