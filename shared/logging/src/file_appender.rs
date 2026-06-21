@@ -1,9 +1,9 @@
+use std::io::IsTerminal;
 /// Log file appender with rotation and PII scrubbing
 ///
 /// Sets up file-based logging with daily rotation and automatic PII scrubbing.
 /// Log files are written to `~/.aleph/logs/aleph-{component}.log.YYYY-MM-DD`.
 use std::path::PathBuf;
-use std::io::IsTerminal;
 use std::sync::OnceLock;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};

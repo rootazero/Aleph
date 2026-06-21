@@ -386,8 +386,9 @@ pub fn daemonize(
                 .and_then(|n| n.to_str())
                 .and_then(|n| n.strip_suffix(".log"))
             {
-                // best-effort: cleanup logs internally via tracing (not yet
-                // initialized here), so a failure is silently non-fatal.
+                // best-effort filesystem cleanup of aged rotations; rotation
+                // already bounded the live file, so a retention failure here is
+                // non-fatal and we discard the result.
                 let _ = aleph_logging::cleanup_old_logs(parent, 7, Some(prefix));
             }
         }
@@ -490,7 +491,9 @@ mod rotation_tests {
         assert!(!log.exists());
         let rotated = siblings(dir.path(), "gateway.log");
         assert_eq!(rotated.len(), 1, "expected one rotation, got {rotated:?}");
-        let suffix = rotated[0].strip_prefix("gateway.log.").expect("gateway.log. prefix");
+        let suffix = rotated[0]
+            .strip_prefix("gateway.log.")
+            .expect("gateway.log. prefix");
         assert_eq!(suffix.len(), 10, "date suffix must be YYYY-MM-DD");
         assert_eq!(suffix.as_bytes()[4], b'-');
         assert_eq!(suffix.as_bytes()[7], b'-');
