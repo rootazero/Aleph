@@ -62,6 +62,7 @@ pub fn mcp_config_from_spec(
 pub enum InstallOutcome {
     Mcp { id: String },
     Plugin { path: String },
+    Skill { path: String },
 }
 
 /// Inputs the install router needs from the handler layer.
@@ -78,6 +79,49 @@ pub struct InstallContext<'a> {
 /// Deterministic MCP server id derived from the hub entry id.
 pub(crate) fn mcp_server_id(entry_id: &str) -> String {
     entry_id.replace([':', '/'], "_")
+}
+
+/// Install a single skill from a `GitDir` spec: clone the repo into an isolated
+/// checkout, copy the `<subdir>` leaf into `<skills_dir>/<name>`, and stamp
+/// it `Github` in the manifest (so official sync never overwrites it). Pure
+/// w.r.t. the gateway — takes the resolved skills dir.
+pub fn install_git_skill(
+    entry: &crate::hub::types::ExtensionEntry,
+    spec: &InstallSpec,
+    skills_dir: &std::path::Path,
+) -> Result<String, String> {
+    let InstallSpec::GitDir { git_url, subdir, .. } = spec else {
+        return Err("install_git_skill requires a GitDir spec".into());
+    };
+    let leaf = subdir.clone().unwrap_or_else(|| entry.name.clone());
+    let safe_name = leaf.rsplit('/').next().unwrap_or(&leaf).to_string();
+    if safe_name.is_empty() || safe_name.contains("..") {
+        return Err(format!("unsafe skill name '{safe_name}'"));
+    }
+    // Clone into an isolated per-source checkout (never the live skills dir).
+    let checkout = skills_dir.join(".git-cache").join(mcp_server_id(&entry.id));
+    crate::bundled::clone_or_update(git_url, &checkout)?;
+    let src_leaf = checkout.join(&leaf);
+    if !src_leaf.is_dir() {
+        return Err(format!("subdir '{leaf}' not found in {git_url}"));
+    }
+    let target = skills_dir.join(&safe_name);
+    crate::bundled::copy_skill_leaf(&src_leaf, &target).map_err(|e| e.to_string())?;
+
+    // Stamp manifest as Github so official sync skips it.
+    let mut manifest = crate::bundled::manifest::InstallRegistry::load(skills_dir)
+        .unwrap_or_else(|| crate::bundled::manifest::InstallRegistry::new(""));
+    manifest.skills.insert(
+        safe_name.clone(),
+        crate::bundled::manifest::SkillEntry {
+            source: crate::bundled::manifest::SkillOrigin::Github,
+            version: entry.version.clone(),
+            url: Some(git_url.clone()),
+            installed_at: None,
+        },
+    );
+    let _ = manifest.save(skills_dir);
+    Ok(target.display().to_string())
 }
 
 /// Route a resolved install spec to its backend and perform the install.
@@ -103,19 +147,27 @@ pub async fn run_install(
             Err("OCI/Docker MCP containers are not installable in this version".into())
         }
         InstallSpec::GitDir { .. } => {
-            // Plugin install via the marketplace path (SHA-256 + atomic copy).
-            let marketplace = ctx.marketplace.ok_or("marketplace unavailable")?;
-            let marketplace_name =
-                (ctx.entry.source_id != "local").then_some(ctx.entry.source_id.as_str());
-            let path = marketplace.install_to_scope(
-                &ctx.entry.name,
-                marketplace_name,
-                PluginScope::User,
-                None,
-            )?;
-            Ok(InstallOutcome::Plugin {
-                path: path.display().to_string(),
-            })
+            if ctx.entry.kind == crate::hub::types::ExtensionKind::Skill {
+                let skills_dir = crate::utils::paths::get_config_dir()
+                    .map_err(|e| e.to_string())?
+                    .join("skills");
+                let path = install_git_skill(ctx.entry, spec, &skills_dir)?;
+                Ok(InstallOutcome::Skill { path })
+            } else {
+                // Plugin install via the marketplace path (SHA-256 + atomic copy).
+                let marketplace = ctx.marketplace.ok_or("marketplace unavailable")?;
+                let marketplace_name =
+                    (ctx.entry.source_id != "local").then_some(ctx.entry.source_id.as_str());
+                let path = marketplace.install_to_scope(
+                    &ctx.entry.name,
+                    marketplace_name,
+                    PluginScope::User,
+                    None,
+                )?;
+                Ok(InstallOutcome::Plugin {
+                    path: path.display().to_string(),
+                })
+            }
         }
     }
 }
@@ -177,5 +229,62 @@ mod tests {
         let err = mcp_config_from_spec("x", "Y", &spec, &Default::default(), &Default::default())
             .unwrap_err();
         assert!(err.contains("not installable"));
+    }
+
+    #[test]
+    fn install_git_skill_clones_subdir_and_stamps_source() {
+        use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier};
+        let tmp = tempfile::tempdir().unwrap();
+        // Source repo with a `my-skill/SKILL.md` leaf.
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(src.join("my-skill")).unwrap();
+        std::fs::write(src.join("my-skill").join("SKILL.md"), b"# hi").unwrap();
+        let repo = git2::Repository::init(&src).unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.add_all(["."], git2::IndexAddOption::DEFAULT, None).unwrap();
+        idx.write().unwrap();
+        let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@t").unwrap();
+        repo.commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[]).unwrap();
+        // Point HEAD at main so the clone checks out our commit (libgit2 inits
+        // HEAD to an unborn `master`; without this the clone's working tree is empty).
+        repo.set_head("refs/heads/main").unwrap();
+
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        let entry = ExtensionEntry {
+            id: "aleph-hub:x/my-skill".into(),
+            kind: ExtensionKind::Skill,
+            category: ExtensionCategory::Developer,
+            name: "my-skill".into(),
+            description: "d".into(),
+            author: None,
+            icon: None,
+            tags: vec![],
+            version: None,
+            source_id: "aleph-hub".into(),
+            repo_url: None,
+            trust_tier: TrustTier::Community,
+            requires_config: false,
+            config_schema: None,
+            installed: false,
+            enabled: false,
+            update_available: false,
+            via: None,
+            install_spec: None,
+        };
+        let spec = InstallSpec::GitDir {
+            git_url: src.to_string_lossy().to_string(),
+            subdir: Some("my-skill".into()),
+            git_ref: Some("main".into()),
+            sha256: None,
+        };
+        let path = install_git_skill(&entry, &spec, &skills_dir).expect("install");
+        assert!(std::path::Path::new(&path).join("SKILL.md").exists());
+        let manifest = crate::bundled::manifest::InstallRegistry::load(&skills_dir).unwrap();
+        assert_eq!(
+            manifest.skills.get("my-skill").unwrap().source,
+            crate::bundled::manifest::SkillOrigin::Github
+        );
     }
 }

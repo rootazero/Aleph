@@ -534,6 +534,12 @@ pub(crate) fn extract_plugins_from_dir(src_root: &Path, cache_dir: &Path) -> boo
     swap_dir_into_place(&tmp_dir, cache_dir)
 }
 
+/// Public alias for installing a single skill leaf from a filesystem source
+/// (used by the hub GitDir→skill installer). Copies + prunes like an official sync.
+pub(crate) fn copy_skill_leaf(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    copy_tree_with_prune(src, dst)
+}
+
 /// Recursively copy `src` → `dst`, skipping VCS metadata, then prune any
 /// entries in `dst` no longer present in `src` (mirrors `prune_stale_entries`).
 fn copy_tree_with_prune(src: &Path, dst: &Path) -> std::io::Result<()> {

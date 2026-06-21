@@ -267,6 +267,7 @@ fn outcome_json(o: &InstallOutcome) -> Value {
     match o {
         InstallOutcome::Mcp { id } => json!({ "kind": "mcp", "id": id }),
         InstallOutcome::Plugin { path } => json!({ "kind": "plugin", "path": path }),
+        InstallOutcome::Skill { path } => json!({ "kind": "skill", "path": path }),
     }
 }
 
@@ -291,13 +292,15 @@ async fn verify_install(outcome: &InstallOutcome, mcp: Option<&McpManagerHandle>
                 Err(e) => json!({ "ok": false, "error": e.to_string() }),
             }
         }
-        InstallOutcome::Plugin { .. } => match crate::extension::try_extension_manager() {
-            Some(mgr) => {
-                let _ = mgr.reload().await;
-                json!({ "ok": true })
+        InstallOutcome::Plugin { .. } | InstallOutcome::Skill { .. } => {
+            match crate::extension::try_extension_manager() {
+                Some(mgr) => {
+                    let _ = mgr.reload().await;
+                    json!({ "ok": true })
+                }
+                None => json!({ "ok": false, "error": "extension manager unavailable" }),
             }
-            None => json!({ "ok": false, "error": "extension manager unavailable" }),
-        },
+        }
     }
 }
 
