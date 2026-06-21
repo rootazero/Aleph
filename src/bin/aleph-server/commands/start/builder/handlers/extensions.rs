@@ -19,11 +19,13 @@ pub(in crate::commands::start) fn register_extensions_handlers(
 ) {
     {
         let cache = cache.clone();
+        let mcp = mcp.clone();
         server
             .handlers_mut()
             .register("extensions.catalog", move |req| {
                 let cache = cache.clone();
-                async move { extensions::catalog::handle_catalog(req, cache).await }
+                let mcp = mcp.clone();
+                async move { extensions::catalog::handle_catalog(req, cache, mcp).await }
             });
     }
     {

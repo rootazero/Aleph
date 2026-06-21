@@ -76,7 +76,7 @@ pub struct InstallContext<'a> {
 }
 
 /// Deterministic MCP server id derived from the hub entry id.
-fn mcp_server_id(entry_id: &str) -> String {
+pub(crate) fn mcp_server_id(entry_id: &str) -> String {
     entry_id.replace([':', '/'], "_")
 }
 
