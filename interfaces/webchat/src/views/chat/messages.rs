@@ -190,7 +190,7 @@ pub(super) fn MessageList() -> impl IntoView {
                     when=move || chat.messages.get().is_empty()
                     fallback=move || view! {
                         <div class=move || format!(
-                            "max-w-3xl mx-auto px-4 {} pb-[calc(var(--composer-clearance,150px)+1rem)] space-y-3",
+                            "max-w-3xl mx-auto px-4 {} pb-[calc(var(--composer-clearance,150px)+1rem)] space-y-2",
                             // pt-14 = band height (~33px: 2*py-1 + 24px pill + 1px border) + headroom
                             if sessions.tab_strip_visible() { "pt-14" } else { "pt-6" }
                         )>
