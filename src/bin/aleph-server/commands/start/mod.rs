@@ -1902,14 +1902,25 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // would need lifting before the reaper can reach it; the unwired
     // `DedupEngine::cleanup` API stays in place for the future hookup.
     {
-        let reaper_cfg = {
+        let (reaper_cfg, cron_retention_days) = {
             let app_cfg = app_config.read().await;
-            app_cfg.tasks_reaper.clone()
+            (
+                app_cfg.tasks_reaper.clone(),
+                app_cfg.cron.history_retention_days,
+            )
         };
         let mut subs: Vec<Arc<dyn alephcore::tasks::shared::reaper::HistoryReap>> = Vec::new();
         if let Some(ref svc) = cron_service {
             subs.push(Arc::new(
                 alephcore::tasks::shared::reaper::CronHistoryReaper(svc.clone()),
+            ));
+            // Reap the per-run session directories isolated cron runs leave
+            // behind, on the same retention horizon as the run-history rows.
+            subs.push(Arc::new(
+                alephcore::tasks::shared::reaper::CronSessionReaper {
+                    store: session_store.clone(),
+                    retention_days: cron_retention_days,
+                },
             ));
         }
         if let Some(ref svc) = heartbeat_service {

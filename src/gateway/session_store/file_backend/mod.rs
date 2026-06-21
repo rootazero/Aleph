@@ -918,6 +918,42 @@ impl SessionStore for FileSessionStore {
         Ok(deleted)
     }
 
+    async fn reap_task_sessions(
+        &self,
+        task_type: &str,
+        cutoff_secs: i64,
+    ) -> Result<usize, SessionStoreError> {
+        let sessions = self.list_sessions(SessionFilter::default()).await?;
+        let mut deleted = 0usize;
+        for meta in sessions {
+            // Cheap pre-filter on the persisted type before parsing the key.
+            if meta.session_type != "task" {
+                continue;
+            }
+            // The sub-type (e.g. "cron") lives only in the key string, not in
+            // `session_type` ("task" for every Task variant), so parse it back
+            // and match exactly — this leaves sibling task sub-types
+            // (team / heartbeat / a2a) untouched.
+            let is_target = matches!(
+                SessionKey::from_key_string(&meta.key),
+                Some(SessionKey::Task { task_type: t, .. }) if t == task_type
+            );
+            if !is_target || meta.last_active_at >= cutoff_secs {
+                continue;
+            }
+            // Hard delete (not the archive-rename of `delete_session`): the
+            // whole point is to bound disk growth, so moving the dir to
+            // `.archive/` would just relocate the bloat. The run's summary row
+            // in `cron_job_runs` is reaped on the same horizon, keeping audit
+            // state and transcripts consistent.
+            let dir = self.session_dir(&meta.key);
+            if tokio::fs::remove_dir_all(&dir).await.is_ok() {
+                deleted += 1;
+            }
+        }
+        Ok(deleted)
+    }
+
     async fn patch_session(
         &self,
         key: &SessionKey,
@@ -1019,6 +1055,64 @@ impl SessionStore for FileSessionStore {
 }
 
 use tokio::io::AsyncWriteExt;
+
+#[cfg(test)]
+mod reap_tests {
+    use super::*;
+
+    fn temp_store() -> (FileSessionStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        (FileSessionStore::new(config).expect("store"), dir)
+    }
+
+    /// Create a session and stamp its `last_active_at` to `age_secs` ago.
+    async fn seed(store: &FileSessionStore, key: &SessionKey, age_secs: i64) {
+        store.get_or_create(key).await.unwrap();
+        let key_str = key.to_key_string();
+        let mut meta = store.read_metadata(&key_str).await.unwrap().unwrap();
+        meta.last_active_at = chrono::Utc::now().timestamp() - age_secs;
+        store.write_metadata(&key_str, &meta).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reaps_only_old_cron_sessions() {
+        let (store, _dir) = temp_store();
+        let day = 86_400_i64;
+
+        let old_cron = SessionKey::task("main", "cron", "daily-1");
+        let fresh_cron = SessionKey::task("main", "cron", "daily-2");
+        let old_team = SessionKey::task("main", "team", "t-1"); // sibling task sub-type
+        let main = SessionKey::main("main");
+
+        seed(&store, &old_cron, 100 * day).await;
+        seed(&store, &fresh_cron, day).await;
+        seed(&store, &old_team, 100 * day).await;
+        seed(&store, &main, 100 * day).await;
+
+        let cutoff = chrono::Utc::now().timestamp() - 30 * day;
+        let deleted = store.reap_task_sessions("cron", cutoff).await.unwrap();
+
+        assert_eq!(deleted, 1, "only the aged cron session should be reaped");
+        assert!(!store.session_dir(&old_cron.to_key_string()).exists());
+        assert!(store.session_dir(&fresh_cron.to_key_string()).exists());
+        assert!(
+            store.session_dir(&old_team.to_key_string()).exists(),
+            "sibling task sub-types must survive"
+        );
+        assert!(store.session_dir(&main.to_key_string()).exists());
+    }
+
+    #[tokio::test]
+    async fn empty_store_reaps_nothing() {
+        let (store, _dir) = temp_store();
+        let cutoff = chrono::Utc::now().timestamp();
+        assert_eq!(store.reap_task_sessions("cron", cutoff).await.unwrap(), 0);
+    }
+}
 
 #[cfg(test)]
 mod emit_tests {

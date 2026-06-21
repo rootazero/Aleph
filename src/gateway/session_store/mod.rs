@@ -171,6 +171,25 @@ pub trait SessionStore: Send + Sync {
     ) -> Result<Option<String>, SessionStoreError>;
     async fn cleanup_expired(&self) -> Result<usize, SessionStoreError>;
 
+    /// Hard-delete `task`-type sessions of the given `task_type` whose last
+    /// activity predates `cutoff_secs` (UNIX seconds). Returns the number of
+    /// session directories removed.
+    ///
+    /// Default: no-op (`Ok(0)`). Only the file backend materializes a
+    /// directory per `SessionTarget::Isolated` run, so it is the only backend
+    /// that accumulates these. The cron session reaper drives this on the same
+    /// retention horizon as `cron_job_runs`, which is otherwise the only cron
+    /// state that gets trimmed — the per-run transcript directories had no
+    /// reaper at all.
+    async fn reap_task_sessions(
+        &self,
+        task_type: &str,
+        cutoff_secs: i64,
+    ) -> Result<usize, SessionStoreError> {
+        let _ = (task_type, cutoff_secs);
+        Ok(0)
+    }
+
     async fn patch_session(
         &self,
         key: &SessionKey,

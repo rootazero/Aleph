@@ -221,6 +221,38 @@ impl HistoryReap for CronHistoryReaper {
     }
 }
 
+/// `HistoryReap` adapter that hard-deletes aged cron isolated-run session
+/// directories.
+///
+/// [`CronHistoryReaper`] trims the `cron_job_runs` rows, but every
+/// `SessionTarget::Isolated` run also materializes an
+/// `agent:<id>:cron:<job>-<ts>` session directory that no other cleanup path
+/// touched — they accumulated without bound (this adapter is the missing
+/// consumer, mirroring how the reaper module first lit up the dead history
+/// cleanups). Trims them on the same `history_retention_days` horizon as the
+/// run-history rows so audit state and transcripts stay consistent.
+pub struct CronSessionReaper {
+    pub store: Arc<dyn crate::gateway::session_store::SessionStore>,
+    pub retention_days: u32,
+}
+
+#[async_trait::async_trait]
+impl HistoryReap for CronSessionReaper {
+    fn name(&self) -> &'static str {
+        "cron_sessions"
+    }
+
+    async fn reap(&self) -> Result<u64, String> {
+        let cutoff_secs =
+            chrono::Utc::now().timestamp() - i64::from(self.retention_days) * 86_400;
+        self.store
+            .reap_task_sessions("cron", cutoff_secs)
+            .await
+            .map(|n| n as u64)
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// `HistoryReap` adapter that calls `HeartbeatService::reap_history`.
 pub struct HeartbeatHistoryReaper(pub SharedHeartbeatService);
 
