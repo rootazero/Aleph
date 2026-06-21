@@ -102,6 +102,13 @@
   --radius-3xl:  calc(1.75rem   * var(--control-ui-radius-scale, 1));  /* 28px */
   --radius-full: 9999px;
 
+  /* === Spacing base — Tailwind v4 keys every numeric `p-*/m-*/gap-*/w-*/h-*`
+         utility off this one unit. 0.22rem (~12% under the 0.25rem Tailwind
+         default) bakes a denser baseline; `--control-ui-density` (the Appearance
+         「紧凑度」 knob, default 1) re-scales the whole panel's whitespace from
+         here, exactly as `--control-ui-text-scale` re-scales every rem. === */
+  --spacing: calc(0.22rem * var(--control-ui-density, 1));
+
   /* === Depth — soft, layered shadows in place of heavy borders.
          `--shadow-glow` is accent-tinted so it follows the active palette. === */
   --shadow-xs: 0 1px 2px oklch(0.20 0.02 310 / 0.05);
@@ -110,15 +117,15 @@
   /* md/lg/xl carry a tight contact layer + a mid layer + a soft ambient
      layer. Three stops read as genuine elevation (a single blur reads flat);
      all hues are mauve-tinted so the depth belongs to the palette. */
-  --shadow-md: 0 1px 2px oklch(0.20 0.02 310 / 0.06),
-               0 3px 6px oklch(0.20 0.02 310 / 0.08),
-               0 8px 20px oklch(0.20 0.02 310 / 0.11);
-  --shadow-lg: 0 2px 4px oklch(0.20 0.02 310 / 0.07),
-               0 6px 12px oklch(0.20 0.02 310 / 0.10),
-               0 18px 40px oklch(0.20 0.02 310 / 0.16);
-  --shadow-xl: 0 4px 8px oklch(0.20 0.02 310 / 0.09),
-               0 12px 24px oklch(0.20 0.02 310 / 0.12),
-               0 32px 68px oklch(0.20 0.02 310 / 0.22);
+  --shadow-md: 0 1px 2px oklch(0.20 0.02 310 / 0.05),
+               0 3px 6px oklch(0.20 0.02 310 / 0.07),
+               0 8px 18px oklch(0.20 0.02 310 / 0.09);
+  --shadow-lg: 0 2px 4px oklch(0.20 0.02 310 / 0.06),
+               0 6px 12px oklch(0.20 0.02 310 / 0.08),
+               0 16px 34px oklch(0.20 0.02 310 / 0.12);
+  --shadow-xl: 0 3px 6px oklch(0.20 0.02 310 / 0.07),
+               0 10px 20px oklch(0.20 0.02 310 / 0.10),
+               0 24px 52px oklch(0.20 0.02 310 / 0.16);
   --shadow-glow: 0 0 0 1px color-mix(in oklch, var(--color-primary) 28%, transparent),
                  0 0 20px color-mix(in oklch, var(--color-primary) 22%, transparent);
 
@@ -154,6 +161,7 @@
      settings page (字号 / 圆角); defaults of 1 reproduce the base design. */
   --control-ui-text-scale: 1;
   --control-ui-radius-scale: 1;
+  --control-ui-density: 1;
 
   /* OS safe-area pass-through for PWA / full-screen Tauri shells. */
   --safe-area-top:    env(safe-area-inset-top, 0px);
@@ -194,8 +202,8 @@ html {
 
 body {
   font-family: var(--font-sans);
-  font-size: 0.875rem;        /* 14px @ scale=1 */
-  line-height: 1.55;
+  font-size: 0.8125rem;       /* 13px @ scale=1 — denser baseline */
+  line-height: 1.5;
   letter-spacing: -0.005em;   /* sub-pixel calm; Inter ships slightly loose */
   font-feature-settings: "cv11", "ss01", "ss03";  /* Inter alternate forms */
   -webkit-font-smoothing: antialiased;
@@ -216,7 +224,7 @@ body {
 /* Large-viewport step-up — at desktop widths the base ticks up one notch
    so the panel breathes in 27" monitors without distorting smaller screens. */
 @media (min-width: 1600px) {
-  body { font-size: 0.9375rem; }   /* 15px */
+  body { font-size: 0.875rem; }    /* 14px */
 }
 
 /* Headings get a slightly tighter tracking — Inter renders crisper at -0.02em.
@@ -898,7 +906,7 @@ html[data-material="aurora"].dark {
   --msg-glass-sheen: linear-gradient(160deg, var(--mat-bubble-sheen), transparent 42%);
   --msg-glass-border: var(--mat-edge);
   --msg-glass-border-top: var(--mat-edge-top);
-  --msg-glass-shadow: 0 4px 16px var(--mat-shadow);
+  --msg-glass-shadow: 0 2px 10px var(--mat-shadow);
   --glass-inset-bg: color-mix(in oklch, var(--mat-ink-sink) var(--mat-fill-inset), transparent);
   --glass-inset-border: var(--mat-edge-sunken);
   --glass-inset-border-top: var(--mat-edge-sunken-top);

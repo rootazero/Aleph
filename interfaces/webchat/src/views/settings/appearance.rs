@@ -1,15 +1,16 @@
 //! Appearance settings page.
 //!
-//! Surfaces the four client-side appearance axes (theme mode, accent, font
-//! scale, roundness) that previously lived only in the topbar `ThemeToggle`
-//! popover (mode/accent) or had no UI at all (font scale, roundness). All
-//! read/apply/persist logic is delegated to [`crate::appearance`] — this view
-//! is pure I/O: render the choices, apply on click, no business logic.
+//! Surfaces the client-side appearance axes (theme mode, accent, material,
+//! font scale, roundness, density) that previously lived only in the topbar
+//! `ThemeToggle` popover (mode/accent) or had no UI at all (font scale,
+//! roundness). All read/apply/persist logic is delegated to
+//! [`crate::appearance`] — this view is pure I/O: render the choices, apply
+//! on click, no business logic.
 
 use crate::appearance::{
-    apply_accent, apply_font_scale, apply_material, apply_mode, apply_roundness, read_accent,
-    read_font_scale, read_material, read_mode, read_roundness, Accent, FontScale, Material,
-    Roundness, ThemeMode,
+    apply_accent, apply_density, apply_font_scale, apply_material, apply_mode, apply_roundness,
+    read_accent, read_density, read_font_scale, read_material, read_mode, read_roundness, Accent,
+    Density, FontScale, Material, Roundness, ThemeMode,
 };
 use crate::components::ui::SwatchButton;
 use leptos::prelude::*;
@@ -22,6 +23,7 @@ pub fn AppearanceView() -> impl IntoView {
     let material = RwSignal::new(read_material());
     let font_scale = RwSignal::new(read_font_scale());
     let roundness = RwSignal::new(read_roundness());
+    let density = RwSignal::new(read_density());
 
     let reset = move |_| {
         apply_mode(ThemeMode::System);
@@ -29,11 +31,13 @@ pub fn AppearanceView() -> impl IntoView {
         apply_material(Material::Luxe);
         apply_font_scale(FontScale::Default);
         apply_roundness(Roundness::Default);
+        apply_density(Density::Compact);
         mode.set(ThemeMode::System);
         accent.set(Accent::Mauve);
         material.set(Material::Luxe);
         font_scale.set(FontScale::Default);
         roundness.set(Roundness::Default);
+        density.set(Density::Compact);
     };
 
     view! {
@@ -41,7 +45,7 @@ pub fn AppearanceView() -> impl IntoView {
             <div class="mb-8">
                 <h1 class="text-3xl font-bold mb-2 text-text-primary">"外观"</h1>
                 <p class="text-text-secondary">
-                    "调整主题、强调色、字号与圆角。所有设置保存在本机浏览器，立即生效。"
+                    "调整主题、强调色、字号、圆角与紧凑度。所有设置保存在本机浏览器，立即生效。"
                 </p>
             </div>
 
@@ -128,6 +132,22 @@ pub fn AppearanceView() -> impl IntoView {
                                     label=r.label()
                                     active=Signal::derive(active)
                                     on_pick=move || { apply_roundness(r); roundness.set(r); }
+                                />
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </SettingCard>
+
+                // --- Density ----------------------------------------------------
+                <SettingCard title="紧凑度" desc="界面留白与控件间距。「紧凑」更省空间，单屏显示更多内容。">
+                    <div class="flex flex-wrap gap-2">
+                        {Density::ALL.into_iter().map(|d| {
+                            let active = move || density.get() == d;
+                            view! {
+                                <ChoiceButton
+                                    label=d.label()
+                                    active=Signal::derive(active)
+                                    on_pick=move || { apply_density(d); density.set(d); }
                                 />
                             }
                         }).collect::<Vec<_>>()}
