@@ -1,39 +1,9 @@
 use leptos::prelude::*;
 
 use crate::i18n::{t_string, use_i18n};
-use crate::views::extensions::model::CATEGORIES;
 use crate::views::extensions::StoreState;
 
 pub use crate::components::extensions::labels::category_label;
-
-#[component]
-#[must_use]
-pub fn CategoryChips() -> impl IntoView {
-    let store = expect_context::<StoreState>();
-    let i18n = use_i18n();
-    let chip = move |value: &'static str, label: String, emoji: &'static str| {
-        let active = move || store.category.get() == value;
-        view! {
-            <button
-                class=move || if active() {
-                    "flex items-center gap-1 px-3 py-1.5 rounded-full text-sm bg-text-primary text-surface whitespace-nowrap"
-                } else {
-                    "flex items-center gap-1 px-3 py-1.5 rounded-full text-sm bg-surface-sunken text-text-secondary hover:text-text-primary whitespace-nowrap"
-                }
-                on:click=move |_| store.category.set(value.to_string())
-            >
-                <span>{emoji}</span>
-                <span>{label}</span>
-            </button>
-        }
-    };
-    view! {
-        <div class="flex gap-2 overflow-x-auto pb-2">
-            {chip("featured", category_label(i18n, "featured"), "★")}
-            {CATEGORIES.iter().map(|c| chip(c.value, category_label(i18n, c.value), c.emoji)).collect_view()}
-        </div>
-    }
-}
 
 #[component]
 #[must_use]

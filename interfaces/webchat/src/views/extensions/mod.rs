@@ -41,7 +41,7 @@ pub struct StoreState {
 }
 
 impl StoreState {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         use crate::components::extensions::install_flow::InstallStep;
         Self {
             entries: RwSignal::new(Vec::new()),
@@ -83,8 +83,9 @@ impl StoreState {
 pub fn ExtensionsView() -> impl IntoView {
     let _state = expect_context::<DashboardState>();
     let i18n = use_i18n();
-    let store = StoreState::new();
-    provide_context(store);
+    // Store is now provided by AppContent (parent of both columns) so the
+    // left-column CategoryNav and this main-area view share one selection.
+    let store = expect_context::<StoreState>();
     let navigate = use_navigate();
 
     view! {
@@ -142,7 +143,7 @@ pub fn ExtensionsView() -> impl IntoView {
 #[component]
 #[must_use]
 pub fn ExtensionsSidebar() -> impl IntoView {
-    // Minimal secondary column; the store's own topbar (chips/search/installed) lives in the
-    // main area per the mockup. Category quick-nav is added with browse in Task 5.
-    view! { <div class="flex flex-col h-full"></div> }
+    // Left-column category navigation (Featured / All / 13 facets); shares the
+    // app-level StoreState so selections drive the main-area BrowsePane grid.
+    view! { <crate::components::extensions::category_nav::CategoryNav /> }
 }

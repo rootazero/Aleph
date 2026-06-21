@@ -76,8 +76,10 @@ pub fn ModeSidebar() -> impl IntoView {
                 }}
             </div>
 
-            // Persistent bottom-left section switcher
-            <NavMenu />
+            // Bottom-left section switcher — hidden inside the Aleph Hub
+            // (Extensions) full-screen takeover, which exits via its own
+            // header "Back to Chat"; the switcher reappears in every other mode.
+            {move || (mode.get() != PanelMode::Extensions).then(|| view! { <NavMenu /> })}
         </aside>
     }
 }
