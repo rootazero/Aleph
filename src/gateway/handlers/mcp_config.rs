@@ -1,27 +1,37 @@
-//! MCP Configuration RPC Handlers
+//! MCP Configuration RPC Handlers (`mcp_config.*`)
 //!
-//! Handlers for MCP server configuration management: list, create, update, delete.
-//! These handlers manage MCP server configurations in the config file.
+//! The Settings → MCP page's CRUD surface. These handlers operate on the live
+//! `McpManagerActor` store (`~/.aleph/mcp_config.json`) — the same store the Hub
+//! and the runtime use — so servers added here actually run and stay in sync
+//! with the Hub. Secret-looking env vars are stored in the vault as
+//! `{{secret:NAME}}` references (never plaintext on disk), mirroring the Hub
+//! install path.
 
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use tokio::sync::RwLock;
 use tracing::{error, info};
 
 use super::super::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::parse_params;
-use crate::config::{Config, McpServerConfig};
+use crate::gateway::security::SharedTokenManager;
+use crate::hub::secrets::{field_key, secret_ref};
+use crate::hub::types::ExtensionKind;
+use crate::mcp::manager::{McpManagerConfig, McpManagerHandle};
 
 // ============================================================================
 // Types
 // ============================================================================
 
-/// MCP server info for JSON serialization
+/// MCP server info for JSON serialization (panel read DTO).
 #[derive(Debug, Clone, Serialize)]
 pub struct McpServerInfo {
+    /// Stable server id (actor key). Hub-installed servers carry derived ids
+    /// like `aleph-hub_github`; Settings-created servers derive theirs from the
+    /// name. The panel keys/edits/deletes by this.
+    pub id: String,
     pub name: String,
     pub command: String,
     #[serde(default)]
@@ -31,8 +41,6 @@ pub struct McpServerInfo {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requires_runtime: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
 }
 
 /// MCP server config from JSON
@@ -84,69 +92,82 @@ fn redact_secret_env(env: &HashMap<String, String>) -> HashMap<String, String> {
         .collect()
 }
 
-/// Merge an incoming env (from the Panel) with the stored env: a secret-looking
-/// key whose incoming value is blank keeps the previously stored value (stable
-/// echo — blank means "unchanged"). A non-blank value replaces it (rotation),
-/// and non-secret keys pass through as sent.
-fn merge_secret_env(
-    incoming: HashMap<String, String>,
-    existing: &HashMap<String, String>,
-) -> HashMap<String, String> {
-    incoming
-        .into_iter()
-        .map(|(k, v)| {
-            if v.is_empty() && is_secret_env_key(&k) {
-                if let Some(prev) = existing.get(&k) {
-                    return (k, prev.clone());
-                }
+/// Derive a deterministic, placeholder-safe server id from a user-given name.
+/// Mirrors the charset enforced by `crate::secrets::extract_secret_refs`.
+pub(crate) fn derive_server_id(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.') {
+                c
+            } else {
+                '_'
             }
-            (k, v)
         })
         .collect()
+}
+
+/// Plan how an incoming env (from the Panel) is persisted.
+///
+/// Returns `(env_to_store, vault_writes)`:
+/// - secret-looking key + non-blank value → store the value in the vault and
+///   write a `{{secret:NAME}}` reference into the env; the (name, value) pair is
+///   returned in `vault_writes` for the caller to persist.
+/// - secret-looking key + blank value → keep the existing stored ref (stable
+///   echo: blank means "unchanged"); dropped if there was none.
+/// - non-secret key → plaintext, unchanged.
+pub(crate) fn plan_secret_env(
+    id: &str,
+    incoming: HashMap<String, String>,
+    existing: &HashMap<String, String>,
+) -> (HashMap<String, String>, Vec<(String, String)>) {
+    let mut env = HashMap::new();
+    let mut writes = Vec::new();
+    for (k, v) in incoming {
+        if is_secret_env_key(&k) {
+            if v.is_empty() {
+                if let Some(prev) = existing.get(&k) {
+                    env.insert(k, prev.clone());
+                }
+            } else {
+                let name = field_key(ExtensionKind::Mcp, id, &k);
+                env.insert(k, secret_ref(&name));
+                writes.push((name, v));
+            }
+        } else {
+            env.insert(k, v);
+        }
+    }
+    (env, writes)
+}
+
+/// Build the panel read DTO from an actor config. Secret env values are blanked
+/// for display (the stored `{{secret:..}}` ref never leaves the host); the keys
+/// stay so the panel shows the var is configured.
+fn info_from_config(cfg: &McpManagerConfig) -> McpServerInfo {
+    McpServerInfo {
+        id: cfg.id.clone(),
+        name: cfg.name.clone(),
+        command: cfg.command.clone().unwrap_or_default(),
+        args: cfg.args.clone(),
+        env: redact_secret_env(&cfg.env),
+        enabled: cfg.auto_start,
+        requires_runtime: cfg.requires_runtime.clone(),
+    }
 }
 
 // ============================================================================
 // List
 // ============================================================================
 
-/// List all MCP servers
-pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
-    let config = config.read().await;
-
-    // Check if unified_tools is used
-    let servers: Vec<McpServerInfo> = if let Some(ref unified) = config.unified_tools {
-        unified
-            .mcp
-            .iter()
-            .map(|(name, cfg)| McpServerInfo {
-                name: name.clone(),
-                command: cfg.command.clone(),
-                args: cfg.args.clone(),
-                env: redact_secret_env(&cfg.env),
-                enabled: cfg.enabled,
-                requires_runtime: cfg.requires_runtime.clone(),
-                cwd: cfg.cwd.clone(),
-            })
-            .collect()
-    } else {
-        // Fall back to legacy mcp.external_servers
-        config
-            .mcp
-            .external_servers
-            .iter()
-            .map(|cfg| McpServerInfo {
-                name: cfg.name.clone(),
-                command: cfg.command.clone(),
-                args: cfg.args.clone(),
-                env: redact_secret_env(&cfg.env),
-                enabled: true, // Legacy servers don't have enabled field
-                requires_runtime: cfg.requires_runtime.clone(),
-                cwd: cfg.cwd.clone(),
-            })
-            .collect()
-    };
-
-    JsonRpcResponse::success(request.id, json!({ "servers": servers }))
+/// List all MCP servers (persisted actor configs).
+pub async fn handle_list(request: JsonRpcRequest, mcp: McpManagerHandle) -> JsonRpcResponse {
+    match mcp.list_server_configs().await {
+        Ok(configs) => {
+            let servers: Vec<McpServerInfo> = configs.iter().map(info_from_config).collect();
+            JsonRpcResponse::success(request.id, json!({ "servers": servers }))
+        }
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+    }
 }
 
 // ============================================================================
@@ -156,58 +177,29 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -
 /// Parameters for `mcp_config.get`
 #[derive(Debug, Deserialize)]
 pub struct GetParams {
-    pub name: String,
+    pub id: String,
 }
 
-/// Get a single MCP server
-pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
+/// Get a single MCP server by id.
+pub async fn handle_get(request: JsonRpcRequest, mcp: McpManagerHandle) -> JsonRpcResponse {
     let params: GetParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
-
-    let config = config.read().await;
-
-    // Check unified_tools first
-    if let Some(ref unified) = config.unified_tools {
-        if let Some(cfg) = unified.mcp.get(&params.name) {
-            let info = McpServerInfo {
-                name: params.name.clone(),
-                command: cfg.command.clone(),
-                args: cfg.args.clone(),
-                env: redact_secret_env(&cfg.env),
-                enabled: cfg.enabled,
-                requires_runtime: cfg.requires_runtime.clone(),
-                cwd: cfg.cwd.clone(),
-            };
-            return JsonRpcResponse::success(request.id, json!({ "server": info }));
+    let configs = match mcp.list_server_configs().await {
+        Ok(c) => c,
+        Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+    };
+    match configs.iter().find(|c| c.id == params.id) {
+        Some(cfg) => {
+            JsonRpcResponse::success(request.id, json!({ "server": info_from_config(cfg) }))
         }
+        None => JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("MCP server not found: {}", params.id),
+        ),
     }
-
-    // Fall back to legacy
-    if let Some(cfg) = config
-        .mcp
-        .external_servers
-        .iter()
-        .find(|s| s.name == params.name)
-    {
-        let info = McpServerInfo {
-            name: cfg.name.clone(),
-            command: cfg.command.clone(),
-            args: cfg.args.clone(),
-            env: cfg.env.clone(),
-            enabled: true,
-            requires_runtime: cfg.requires_runtime.clone(),
-            cwd: cfg.cwd.clone(),
-        };
-        return JsonRpcResponse::success(request.id, json!({ "server": info }));
-    }
-
-    JsonRpcResponse::error(
-        request.id,
-        INVALID_PARAMS,
-        format!("MCP server not found: {}", params.name),
-    )
 }
 
 // ============================================================================
@@ -221,80 +213,78 @@ pub struct CreateParams {
     pub config: McpServerConfigJson,
 }
 
-/// Create a new MCP server
+/// Broadcast a `ConfigChanged(section="mcp")` event (best-effort, keeps panel
+/// live-refresh subscribers working).
+fn publish_mcp_change(event_bus: &GatewayEventBus, action: &str, server: &str) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
+        section: Some("mcp".to_string()),
+        value: json!({ "action": action, "server": server }),
+        timestamp,
+    });
+    if let Err(e) = event_bus.publish_json(&event) {
+        error!(error = %e, "Failed to broadcast MCP config event");
+    }
+}
+
+/// Create a new MCP server in the actor store.
 pub async fn handle_create(
     request: JsonRpcRequest,
-    config: Arc<RwLock<Config>>,
+    mcp: McpManagerHandle,
+    vault: Arc<SharedTokenManager>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: CreateParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+    let id = derive_server_id(&params.name);
 
-    // Convert JSON config to McpServerConfig
-    let server_config = McpServerConfig {
-        command: params.config.command.clone(),
-        args: params.config.args,
-        env: params.config.env,
-        cwd: params.config.cwd,
-        requires_runtime: params.config.requires_runtime,
-        timeout_seconds: params.config.timeout_seconds.unwrap_or(30),
-        enabled: params.config.enabled.unwrap_or(true),
-        triggers: params.config.triggers,
-    };
-
-    // Add server
-    {
-        let mut cfg = config.write().await;
-
-        // Ensure unified_tools exists
-        if cfg.unified_tools.is_none() {
-            cfg.unified_tools = Some(crate::config::UnifiedToolsConfig::default());
+    // Duplicate check against the live store.
+    match mcp.list_server_configs().await {
+        Ok(configs) if configs.iter().any(|c| c.id == id) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("MCP server already exists: {}", params.name),
+            );
         }
+        Ok(_) => {}
+        Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+    }
 
-        if let Some(ref mut unified) = cfg.unified_tools {
-            // Check if server already exists
-            if unified.mcp.contains_key(&params.name) {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("MCP server already exists: {}", params.name),
-                );
-            }
-
-            // Insert server
-            unified.mcp.insert(params.name.clone(), server_config);
-        }
-
-        // Save to file
-        if let Err(e) = cfg.save_incremental(&["unified_tools"]) {
-            error!(error = %e, "Failed to save config");
+    // Route secret env vars into the vault; build the env with `{{secret:..}}`.
+    let (env, writes) = plan_secret_env(&id, params.config.env, &HashMap::new());
+    for (name, value) in &writes {
+        if let Err(e) = vault.store_secret(name, value) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {e}"),
+                format!("Failed to store secret {name}: {e}"),
             );
         }
     }
 
-    // Broadcast event
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
-
-    let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
-        section: Some("mcp".to_string()),
-        value: json!({ "action": "created", "server": params.name }),
-        timestamp,
-    });
-
-    if let Err(e) = event_bus.publish_json(&event) {
-        error!(error = %e, "Failed to broadcast event");
+    let mut cfg = McpManagerConfig::stdio(&id, &params.name, params.config.command)
+        .with_args(params.config.args)
+        .with_env(env)
+        .with_auto_start(params.config.enabled.unwrap_or(true));
+    if let Some(rt) = params.config.requires_runtime {
+        cfg = cfg.with_runtime(rt);
+    }
+    if let Some(t) = params.config.timeout_seconds {
+        cfg = cfg.with_timeout(t);
     }
 
-    info!(name = %params.name, "MCP server created");
+    if let Err(e) = mcp.add_server(cfg).await {
+        return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string());
+    }
+
+    publish_mcp_change(&event_bus, "created", &params.name);
+    info!(id = %id, name = %params.name, "MCP server created");
     JsonRpcResponse::success(request.id, json!({ "ok": true }))
 }
 
@@ -305,14 +295,15 @@ pub async fn handle_create(
 /// Parameters for `mcp_config.update`
 #[derive(Debug, Deserialize)]
 pub struct UpdateParams {
-    pub name: String,
+    pub id: String,
     pub config: McpServerConfigJson,
 }
 
-/// Update an MCP server
+/// Update an MCP server in the actor store (restart with new config).
 pub async fn handle_update(
     request: JsonRpcRequest,
-    config: Arc<RwLock<Config>>,
+    mcp: McpManagerHandle,
+    vault: Arc<SharedTokenManager>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: UpdateParams = match parse_params(&request) {
@@ -320,77 +311,50 @@ pub async fn handle_update(
         Err(e) => return e,
     };
 
-    // Convert JSON config to McpServerConfig. The env is merged with the stored
-    // env inside the lock so blanked secrets keep their previous value.
-    let incoming_env = params.config.env;
-    let mut server_config = McpServerConfig {
-        command: params.config.command.clone(),
-        args: params.config.args,
-        env: HashMap::new(),
-        cwd: params.config.cwd,
-        requires_runtime: params.config.requires_runtime,
-        timeout_seconds: params.config.timeout_seconds.unwrap_or(30),
-        enabled: params.config.enabled.unwrap_or(true),
-        triggers: params.config.triggers,
+    let configs = match mcp.list_server_configs().await {
+        Ok(c) => c,
+        Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+    };
+    let Some(existing) = configs.into_iter().find(|c| c.id == params.id) else {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("MCP server not found: {}", params.id),
+        );
     };
 
-    // Update server
-    {
-        let mut cfg = config.write().await;
-
-        // Ensure unified_tools exists
-        if cfg.unified_tools.is_none() {
-            cfg.unified_tools = Some(crate::config::UnifiedToolsConfig::default());
-        }
-
-        if let Some(ref mut unified) = cfg.unified_tools {
-            // Check if server exists, capturing its stored env for stable-echo merge.
-            let existing_env = match unified.mcp.get(&params.name) {
-                Some(existing) => existing.env.clone(),
-                None => {
-                    return JsonRpcResponse::error(
-                        request.id,
-                        INVALID_PARAMS,
-                        format!("MCP server not found: {}", params.name),
-                    );
-                }
-            };
-
-            // Blank secret values keep the stored secret; new values rotate it.
-            server_config.env = merge_secret_env(incoming_env, &existing_env);
-
-            // Update server
-            unified.mcp.insert(params.name.clone(), server_config);
-        }
-
-        // Save to file
-        if let Err(e) = cfg.save_incremental(&["unified_tools"]) {
-            error!(error = %e, "Failed to save config");
+    // Blank secrets keep the stored ref; new values rotate into the vault.
+    let (env, writes) = plan_secret_env(&params.id, params.config.env, &existing.env);
+    for (name, value) in &writes {
+        if let Err(e) = vault.store_secret(name, value) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("Failed to save config: {e}"),
+                format!("Failed to store secret {name}: {e}"),
             );
         }
     }
 
-    // Broadcast event
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
-
-    let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
-        section: Some("mcp".to_string()),
-        value: json!({ "action": "updated", "server": params.name }),
-        timestamp,
-    });
-
-    if let Err(e) = event_bus.publish_json(&event) {
-        error!(error = %e, "Failed to broadcast event");
+    // Preserve transport/url/auto_start/timeout/tool_filter; for stdio servers
+    // also update command/args/requires_runtime from the panel. A remote
+    // (url-bearing) server is env-only-editable here so its url is never lost.
+    let is_remote = existing.url.is_some();
+    let mut new_cfg = existing.clone();
+    new_cfg.env = env;
+    if !is_remote {
+        new_cfg.command = Some(params.config.command);
+        new_cfg.args = params.config.args;
+        new_cfg.requires_runtime = params.config.requires_runtime;
     }
 
-    info!(name = %params.name, "MCP server updated");
+    // Restart cleanly so the running client picks up the new config.
+    let _ = mcp.remove_server(&params.id).await;
+    if let Err(e) = mcp.add_server(new_cfg).await {
+        return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string());
+    }
+
+    publish_mcp_change(&event_bus, "updated", &existing.name);
+    info!(id = %params.id, "MCP server updated");
     JsonRpcResponse::success(request.id, json!({ "ok": true }))
 }
 
@@ -401,13 +365,13 @@ pub async fn handle_update(
 /// Parameters for `mcp_config.delete`
 #[derive(Debug, Deserialize)]
 pub struct DeleteParams {
-    pub name: String,
+    pub id: String,
 }
 
-/// Delete an MCP server
+/// Delete an MCP server from the actor store.
 pub async fn handle_delete(
     request: JsonRpcRequest,
-    config: Arc<RwLock<Config>>,
+    mcp: McpManagerHandle,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: DeleteParams = match parse_params(&request) {
@@ -415,58 +379,12 @@ pub async fn handle_delete(
         Err(e) => return e,
     };
 
-    // Delete server
-    {
-        let mut cfg = config.write().await;
-
-        if let Some(ref mut unified) = cfg.unified_tools {
-            // Check if server exists
-            if !unified.mcp.contains_key(&params.name) {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("MCP server not found: {}", params.name),
-                );
-            }
-
-            // Remove server
-            unified.mcp.remove(&params.name);
-        } else {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("MCP server not found: {}", params.name),
-            );
-        }
-
-        // Save to file
-        if let Err(e) = cfg.save_incremental(&["unified_tools"]) {
-            error!(error = %e, "Failed to save config");
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to save config: {e}"),
-            );
-        }
+    if let Err(e) = mcp.remove_server(&params.id).await {
+        return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string());
     }
 
-    // Broadcast event
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
-
-    let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
-        section: Some("mcp".to_string()),
-        value: json!({ "action": "deleted", "server": params.name }),
-        timestamp,
-    });
-
-    if let Err(e) = event_bus.publish_json(&event) {
-        error!(error = %e, "Failed to broadcast event");
-    }
-
-    info!(name = %params.name, "MCP server deleted");
+    publish_mcp_change(&event_bus, "deleted", &params.id);
+    info!(id = %params.id, "MCP server deleted");
     JsonRpcResponse::success(request.id, json!({ "ok": true }))
 }
 
@@ -509,28 +427,34 @@ mod tests {
     }
 
     #[test]
-    fn merge_blank_secret_keeps_stored_value() {
-        let existing = env(&[("ACCESS_KEY", "ak-stored"), ("SERVICE_ID", "old")]);
-        // Panel echoes back a blanked secret + an edited non-secret.
-        let incoming = env(&[("ACCESS_KEY", ""), ("SERVICE_ID", "new")]);
-        let merged = merge_secret_env(incoming, &existing);
-        assert_eq!(merged.get("ACCESS_KEY"), Some(&"ak-stored".to_string()));
-        assert_eq!(merged.get("SERVICE_ID"), Some(&"new".to_string()));
+    fn derive_server_id_sanitizes_to_placeholder_safe() {
+        assert_eq!(super::derive_server_id("My Server"), "My_Server");
+        assert_eq!(super::derive_server_id("a:b/c"), "a_b_c");
+        assert_eq!(super::derive_server_id("github.mcp-1"), "github.mcp-1");
     }
 
     #[test]
-    fn merge_nonblank_secret_rotates() {
-        let existing = env(&[("ACCESS_KEY", "ak-old")]);
-        let incoming = env(&[("ACCESS_KEY", "ak-new")]);
-        let merged = merge_secret_env(incoming, &existing);
-        assert_eq!(merged.get("ACCESS_KEY"), Some(&"ak-new".to_string()));
+    fn plan_secret_env_routes_secret_to_vault_ref() {
+        let incoming = env(&[("GITHUB_TOKEN", "ghp_real"), ("REGION", "us")]);
+        let (stored, writes) = super::plan_secret_env("srv", incoming, &HashMap::new());
+        // secret value never stored inline; a {{secret:..}} ref is written instead
+        assert_eq!(
+            stored.get("GITHUB_TOKEN"),
+            Some(&"{{secret:ext.mcp.srv.GITHUB_TOKEN}}".to_string())
+        );
+        assert_eq!(stored.get("REGION"), Some(&"us".to_string()));
+        assert_eq!(writes, vec![("ext.mcp.srv.GITHUB_TOKEN".to_string(), "ghp_real".to_string())]);
     }
 
     #[test]
-    fn merge_blank_secret_without_existing_stays_blank() {
-        let existing = env(&[]);
-        let incoming = env(&[("NEW_TOKEN", "")]);
-        let merged = merge_secret_env(incoming, &existing);
-        assert_eq!(merged.get("NEW_TOKEN"), Some(&String::new()));
+    fn plan_secret_env_blank_secret_keeps_existing_ref() {
+        let existing = env(&[("API_KEY", "{{secret:ext.mcp.srv.API_KEY}}")]);
+        let incoming = env(&[("API_KEY", "")]); // panel echoes blank for an unchanged secret
+        let (stored, writes) = super::plan_secret_env("srv", incoming, &existing);
+        assert_eq!(
+            stored.get("API_KEY"),
+            Some(&"{{secret:ext.mcp.srv.API_KEY}}".to_string())
+        );
+        assert!(writes.is_empty(), "blank secret must not write to the vault");
     }
 }
