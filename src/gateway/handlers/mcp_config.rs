@@ -348,6 +348,7 @@ pub async fn handle_update(
     }
 
     // Restart cleanly so the running client picks up the new config.
+    // Ignore removal error — the server may already be stopped/absent; add_server below is the authoritative step.
     let _ = mcp.remove_server(&params.id).await;
     if let Err(e) = mcp.add_server(new_cfg).await {
         return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string());
@@ -456,5 +457,13 @@ mod tests {
             Some(&"{{secret:ext.mcp.srv.API_KEY}}".to_string())
         );
         assert!(writes.is_empty(), "blank secret must not write to the vault");
+    }
+
+    #[test]
+    fn plan_secret_env_blank_secret_without_existing_is_dropped() {
+        let incoming = env(&[("NEW_TOKEN", "")]);
+        let (stored, writes) = super::plan_secret_env("srv", incoming, &HashMap::new());
+        assert!(!stored.contains_key("NEW_TOKEN"), "blank secret with no existing entry must be dropped");
+        assert!(writes.is_empty());
     }
 }
