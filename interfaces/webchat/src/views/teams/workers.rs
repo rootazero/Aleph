@@ -65,8 +65,8 @@ pub fn WorkersView() -> impl IntoView {
     on_cleanup(move || dash.unsubscribe_events(sub_id));
 
     view! {
-        <div class="flex-1 flex flex-col h-full overflow-hidden aleph-content-top">
-            <div class="flex items-center justify-between px-6 py-4 border-b border-border">
+        <div class="flex-1 flex flex-col h-full overflow-hidden">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-border aleph-content-top">
                 <div>
                     <h1 class="text-lg font-semibold text-text-primary">{t!(i18n, teams.workers_title)}</h1>
                     <p class="text-xs text-text-tertiary">

@@ -107,7 +107,7 @@ pub fn ReplayView() -> impl IntoView {
     on_cleanup(move || dash.unsubscribe_events(sub_id));
 
     view! {
-        <div class="flex-1 flex h-full overflow-hidden aleph-content-top">
+        <div class="flex-1 flex h-full overflow-hidden">
             <TaskListPane
                 tasks=tasks
                 journals=journals
@@ -141,7 +141,7 @@ fn TaskListPane(
     let i18n = use_i18n();
     view! {
         <div class="w-72 border-r border-border flex flex-col">
-            <div class="px-4 py-3 border-b border-border">
+            <div class="px-4 py-3 border-b border-border aleph-content-top">
                 <h2 class="text-sm font-semibold text-text-primary">{t!(i18n, teams.replay_title)}</h2>
                 <p class="text-xs text-text-tertiary mt-0.5">
                     {t!(i18n, teams.replay_subtitle)}
@@ -231,7 +231,7 @@ fn TracePane(
     let i18n = use_i18n();
     view! {
         <div class="flex-1 flex flex-col overflow-hidden">
-            <div class="px-6 py-4 border-b border-border flex items-center justify-between">
+            <div class="px-6 py-4 border-b border-border flex items-center justify-between aleph-content-top">
                 <div>
                     <h1 class="text-lg font-semibold text-text-primary">{t!(i18n, teams.replay_audit_title)}</h1>
                     <p class="text-xs text-text-tertiary">

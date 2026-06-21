@@ -171,9 +171,9 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
     let is_discord = definition.id == "discord";
 
     view! {
-        <div class="flex-1 flex flex-col overflow-hidden bg-surface aleph-content-top">
+        <div class="flex-1 flex flex-col overflow-hidden bg-surface">
             // ---- Header: back link + platform identity ----
-            <div class="p-6 pb-4 border-b border-border">
+            <div class="p-6 pb-4 border-b border-border aleph-content-top">
                 <A
                     href="/settings/channels"
                     attr:class="inline-flex items-center gap-1 text-sm text-text-tertiary hover:text-text-primary transition-colors mb-3"

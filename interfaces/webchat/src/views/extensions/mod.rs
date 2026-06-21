@@ -87,8 +87,8 @@ pub fn ExtensionsView() -> impl IntoView {
     let store = expect_context::<StoreState>();
 
     view! {
-        <div class="flex-1 flex flex-col h-full overflow-hidden bg-surface aleph-content-top">
-            <header class="px-6 py-3 border-b border-border flex items-center gap-4">
+        <div class="flex-1 flex flex-col h-full overflow-hidden bg-surface">
+            <header class="px-6 py-3 border-b border-border flex items-center gap-4 aleph-content-top">
                 <div class="flex-1">
                     <h1 class="font-serif text-2xl text-text-primary leading-tight">{t!(i18n, extensions.title)}</h1>
                     <p class="text-xs text-text-tertiary">{t!(i18n, extensions.subtitle)}</p>

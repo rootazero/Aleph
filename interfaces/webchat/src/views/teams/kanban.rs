@@ -112,7 +112,7 @@ pub fn KanbanView() -> impl IntoView {
                 } else {
                     view! {
                         <div class="flex flex-col flex-1 min-h-0">
-                            <div class="flex items-center gap-2 px-3 pt-3">
+                            <div class="flex items-center gap-2 px-3 pt-0">
                                 <input
                                     class="flex-1 px-2 py-1.5 rounded bg-surface-sunken border border-border text-sm text-text-primary focus:outline-none focus:border-border-strong"
                                     type="text"
