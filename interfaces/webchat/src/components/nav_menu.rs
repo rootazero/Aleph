@@ -13,14 +13,17 @@ use leptos::prelude::*;
 use leptos_i18n::I18nContext;
 use leptos_router::hooks::{use_location, use_navigate};
 
-/// Sections offered in the switcher, in display order.
-const ALL_MODES: [PanelMode; 7] = [
+/// Sections offered in the switcher, in display order. Extensions (Aleph Hub)
+/// is intentionally absent: its launcher lives in the Chat sidebar's
+/// advanced-features zone, below "项目管理". The `Extensions` arms in
+/// `route_of`/`label_of`/`icon_of` are still needed for the trigger button,
+/// which mirrors the current section whenever the route is `/extensions`.
+const ALL_MODES: [PanelMode; 6] = [
     PanelMode::Chat,
     PanelMode::Dashboard,
     PanelMode::Memory,
     PanelMode::Agents,
     PanelMode::Teams,
-    PanelMode::Extensions,
     PanelMode::Settings,
 ];
 
