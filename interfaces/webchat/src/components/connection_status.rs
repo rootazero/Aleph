@@ -11,12 +11,12 @@ use leptos_router::components::A;
 /// move together. The phase enum is the source of truth — see
 /// [`crate::state::connection`] for the derivation rules and tests.
 ///
-/// The second line names the *core this Panel is talking to* — `Local` for
-/// the bundled daemon, or the remote `host:port` — so a user who has switched
-/// targets (shell-core separation) can always see which brain is live. The
-/// target is read once on mount: in the desktop shell via the Tauri bridge
-/// (`get_connection_target`), in a plain browser from the page origin (the
-/// origin that served the Panel *is* the core).
+/// The second line names the *core this Panel is talking to* — `Local` for a
+/// loopback origin (the full app's embedded core) or the remote `host:port`.
+/// It is read once on mount from the page origin: the origin that served this
+/// Panel *is* the core it talks to (full app = loopback, lite shell = remote,
+/// browser = whatever was typed). A target switch reloads the Panel, so a
+/// fresh mount re-resolves.
 #[component]
 #[must_use]
 pub fn ConnectionStatus() -> impl IntoView {
