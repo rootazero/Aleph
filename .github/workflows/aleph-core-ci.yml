@@ -12,6 +12,8 @@ on:
       - 'shared/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'interfaces/webchat/dist/**'
+      - 'scripts/check_panel_dist.mjs'
       - '.github/workflows/aleph-core-ci.yml'
   pull_request:
     paths:
@@ -23,11 +25,24 @@ on:
       - 'shared/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'interfaces/webchat/dist/**'
+      - 'scripts/check_panel_dist.mjs'
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Fast gate: the committed panel dist must be a matched js+wasm pair. A
+  # js-only rebuild (closure-trampoline drift) shipped the v26.6.22 blank-panel
+  # bug; this catches it on push instead of at release. Node-only, no Rust.
+  panel-dist:
+    name: Panel dist pairing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify panel js+wasm are a matched pair
+        run: node scripts/check_panel_dist.mjs
+
   test:
     name: Test (${{ matrix.os }})
     strategy:

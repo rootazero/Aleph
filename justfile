@@ -180,7 +180,15 @@ wasm:
       </body>
     </html>
     HTMLEOF
+    # 5. Guard: the freshly-written js + wasm MUST be a matched pair. Catches a
+    #    js-only rebuild (the v26.6.22 blank-panel bug) before it can be committed.
+    node scripts/check_panel_dist.mjs {{panel_dist}}
     echo "✓ WASM: {{panel_dist}}/"
+
+# Verify the committed panel dist is a matched js+wasm pair (no closure-trampoline
+# drift). Run by `just wasm`, in CI on every dist change, and gating each release.
+check-dist:
+    node scripts/check_panel_dist.mjs {{panel_dist}}
 
 # ─── Testing ───
 

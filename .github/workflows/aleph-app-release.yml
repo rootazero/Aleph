@@ -24,8 +24,20 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Hard gate: never ship a release whose committed panel dist is a mismatched
+  # js+wasm pair (the v26.6.22 blank-panel bug). Runs first; all builds depend
+  # on it, so a broken dist fails fast before the expensive matrix build.
+  panel-dist-check:
+    name: Panel dist pairing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify panel js+wasm are a matched pair
+        run: node scripts/check_panel_dist.mjs
+
   desktop-app:
     name: Desktop App (${{ matrix.asset }})
+    needs: panel-dist-check
     strategy:
       fail-fast: false
       matrix:
