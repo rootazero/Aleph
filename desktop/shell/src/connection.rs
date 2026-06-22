@@ -4,18 +4,39 @@
 //! same-machine `aleph-server` it launches and supervises (Local, the
 //! default and today's behaviour), or a remote Gateway by URL (Remote, which
 //! never touches the local daemon). The choice persists in
-//! `~/.aleph/.desktop-shell-target`; a missing file means Local (zero
-//! regression on first run).
+//! `~/.aleph/<prefix>-target` (`<prefix>` = `.desktop-shell` for the full app,
+//! `.desktop-shell-panel` for the lite shell — see [`MARKER_PREFIX`], so both
+//! can run on one machine with independent targets); a missing file means Local
+//! (zero regression on first run).
 
 use url::Url;
 
 /// Default Gateway port when the user omits one.
 const DEFAULT_PORT: u16 = 18790;
 
-/// Where the chosen target persists. Mirrors the sibling
-/// `.desktop-shell-autostart` / `.desktop-shell-daemon-version` markers.
+/// Filename prefix for this build's shell-state markers under `~/.aleph/`.
+/// The full app and the panel-only (lite) shell keep *independent* connection +
+/// autostart state so both can run on one machine without clobbering each other
+/// (the full app driving its loopback server while the lite shell points at a
+/// remote). The full app keeps the historical unprefixed names (zero migration
+/// for existing installs); the lite shell namespaces under `-panel`.
+#[cfg(feature = "embedded-core")]
+const MARKER_PREFIX: &str = ".desktop-shell";
+#[cfg(not(feature = "embedded-core"))]
+const MARKER_PREFIX: &str = ".desktop-shell-panel";
+
+/// Path to a per-build shell-state marker `~/.aleph/<prefix>-<name>`. Variant-
+/// namespaced (see [`MARKER_PREFIX`]) so the full app and lite shell never share
+/// connection / autostart state. `None` if the home directory can't be resolved.
+pub(crate) fn marker_path(name: &str) -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|h| h.join(".aleph").join(format!("{MARKER_PREFIX}-{name}")))
+}
+
+/// Where the chosen target persists. Mirrors the sibling autostart marker
+/// (`<prefix>-autostart`); the full-app-only `.desktop-shell-daemon-version`
+/// stays unprefixed (the lite shell has no daemon to version).
 fn target_marker() -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|h| h.join(".aleph/.desktop-shell-target"))
+    marker_path("target")
 }
 
 /// Where the shared Gateway token for a remote target persists. The remote
@@ -28,7 +49,7 @@ fn target_marker() -> Option<std::path::PathBuf> {
 /// token-protected Gateway (R5 — desktop banners on remote). Sibling of the
 /// other `.desktop-shell-*` markers.
 fn gateway_token_marker() -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|h| h.join(".aleph/.desktop-shell-gateway-token"))
+    marker_path("gateway-token")
 }
 
 /// Load the persisted Gateway token, if any. Missing/unreadable/empty → None

@@ -826,7 +826,7 @@ fn show_connection_page(handle: &tauri::AppHandle, message: &str) {
 fn ensure_autostart(app: &tauri::AppHandle) {
     use tauri_plugin_autostart::ManagerExt;
 
-    let Some(marker) = dirs::home_dir().map(|h| h.join(".aleph/.desktop-shell-autostart")) else {
+    let Some(marker) = connection::marker_path("autostart") else {
         return;
     };
     if marker.exists() {
