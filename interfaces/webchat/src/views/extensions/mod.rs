@@ -93,15 +93,20 @@ pub fn ExtensionsView() -> impl IntoView {
                     <h1 class="font-serif text-2xl text-text-primary leading-tight">{t!(i18n, extensions.title)}</h1>
                     <p class="text-xs text-text-tertiary">{t!(i18n, extensions.subtitle)}</p>
                 </div>
-                <button
-                    class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded-lg text-sm hover:text-text-primary"
-                    on:click=move |_| store.show_installed.set(true)
-                >
-                    {t!(i18n, extensions.installed)}
-                </button>
             </header>
             <div class="flex-1 overflow-y-auto px-6 pb-6">
                 <div class="max-w-5xl mx-auto py-6">
+                    // Installed entry relocated out of the chrome header into the
+                    // content area — on Windows the fixed notification bell (z-[50])
+                    // overlapped the old top-right header button.
+                    <div class="flex justify-end mb-2">
+                        <button
+                            class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded-lg text-sm hover:text-text-primary whitespace-nowrap flex-shrink-0"
+                            on:click=move |_| store.show_installed.set(true)
+                        >
+                            {t!(i18n, extensions.installed)}
+                        </button>
+                    </div>
                     <crate::views::extensions::browse::BrowsePane />
                 </div>
             </div>

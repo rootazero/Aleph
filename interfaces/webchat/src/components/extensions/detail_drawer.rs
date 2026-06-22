@@ -44,7 +44,7 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
         <Show when=move || store.selected.get().is_some()>
             {move || {
                 let entry = store.selected.get().unwrap();
-                let badge_cls = format!("px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase {}", kind_badge_class(&entry.kind));
+                let badge_cls = format!("px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase whitespace-nowrap flex-shrink-0 {}", kind_badge_class(&entry.kind));
                 let kind_text = kind_label(i18n, &entry.kind);
                 let trust_text = trust_label(i18n, &entry.trust_tier);
                 let category_text = category_label(i18n, &entry.category);
@@ -76,7 +76,7 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
                                 <div class="grid grid-cols-3 gap-2 py-2 border-y border-border-subtle text-center">
                                     <div><p class="text-xs text-text-tertiary uppercase tracking-wider">{t!(i18n, extensions.version)}</p><p class="font-mono">{entry.version.clone().unwrap_or_else(|| "—".into())}</p></div>
                                     <div><p class="text-xs text-text-tertiary uppercase tracking-wider">{t!(i18n, extensions.category_label)}</p><p>{category_text}</p></div>
-                                    <div><p class="text-xs text-text-tertiary uppercase tracking-wider">{t!(i18n, extensions.trust_label)}</p><p class="flex items-center justify-center gap-1"><span class=format!("inline-block w-2 h-2 rounded-full {}", trust_dot_class(&entry.trust_tier))></span>{trust_text}</p></div>
+                                    <div><p class="text-xs text-text-tertiary uppercase tracking-wider">{t!(i18n, extensions.trust_label)}</p><p class="flex items-center justify-center gap-1 whitespace-nowrap"><span class=format!("inline-block w-2 h-2 rounded-full flex-shrink-0 {}", trust_dot_class(&entry.trust_tier))></span>{trust_text}</p></div>
                                 </div>
                                 // what it does — full untruncated description (spec §11 injection-hardening: no clamp here)
                                 <div><h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider mb-1">{t!(i18n, extensions.what_it_does)}</h3><p class="text-text-secondary">{entry.description.clone()}</p></div>
@@ -108,7 +108,7 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
                             <footer class="px-4 py-3 border-t border-border flex gap-2">
                                 {{
                                     let install_entry = entry.clone();
-                                    view! { <button class="flex-1 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover text-sm" on:click=move |_| { store.start_install(install_entry.clone()); store.selected.set(None); }>{t!(i18n, extensions.install)}</button> }
+                                    view! { <button class="flex-1 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover text-sm whitespace-nowrap" on:click=move |_| { store.start_install(install_entry.clone()); store.selected.set(None); }>{t!(i18n, extensions.install)}</button> }
                                 }}
                                 {entry.repo_url.clone().map(|url| view! { <a class="px-4 py-2 bg-surface-sunken text-text-secondary rounded-lg text-sm" href=url target="_blank" rel="noopener">{t!(i18n, extensions.docs)}</a> })}
                             </footer>

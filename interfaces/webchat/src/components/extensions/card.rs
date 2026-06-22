@@ -15,7 +15,7 @@ pub fn ExtensionCard(entry: ExtensionEntry) -> impl IntoView {
     let select = move |_| store.selected.set(Some(e.clone()));
 
     let badge_cls = format!(
-        "px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider {}",
+        "px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider whitespace-nowrap flex-shrink-0 {}",
         kind_badge_class(&entry.kind)
     );
     let glyph = entry.icon.clone().unwrap_or_else(|| {
@@ -54,7 +54,7 @@ pub fn ExtensionCard(entry: ExtensionEntry) -> impl IntoView {
             <p class="text-sm text-text-secondary line-clamp-2">{entry.description.clone()}</p>
             <div class="flex items-center gap-2 mt-1">
                 <span class=trust_cls></span>
-                <span class="text-xs text-text-tertiary">{trust_text}</span>
+                <span class="text-xs text-text-tertiary whitespace-nowrap flex-shrink-0">{trust_text}</span>
                 {
                     let source_label = source_label.clone();
                     (!source_label.is_empty()).then(move || view! {
@@ -65,10 +65,10 @@ pub fn ExtensionCard(entry: ExtensionEntry) -> impl IntoView {
                 {{
                     let install_entry = entry.clone();
                     move || if installed {
-                        view! { <span class="px-3 py-1 rounded-lg text-xs bg-success-subtle text-success">{t!(i18n, extensions.installed)}</span> }.into_any()
+                        view! { <span class="px-3 py-1 rounded-lg text-xs bg-success-subtle text-success whitespace-nowrap flex-shrink-0">{t!(i18n, extensions.installed)}</span> }.into_any()
                     } else {
                         let install_entry = install_entry.clone();
-                        view! { <button class="px-3 py-1 rounded-lg text-xs bg-primary text-white hover:bg-primary-hover" on:click=move |ev| { ev.stop_propagation(); store.start_install(install_entry.clone()); }>{t!(i18n, extensions.install)}</button> }.into_any()
+                        view! { <button class="px-3 py-1 rounded-lg text-xs bg-primary text-white hover:bg-primary-hover whitespace-nowrap flex-shrink-0" on:click=move |ev| { ev.stop_propagation(); store.start_install(install_entry.clone()); }>{t!(i18n, extensions.install)}</button> }.into_any()
                     }
                 }}
             </div>

@@ -15,23 +15,23 @@ pub fn FilterSegs() -> impl IntoView {
         view! {
             <button
                 class=move || if active() {
-                    "px-2.5 py-1 rounded-md text-xs font-mono bg-text-primary text-surface"
+                    "px-2.5 py-1 rounded-md text-xs font-mono whitespace-nowrap bg-text-primary text-surface"
                 } else {
-                    "px-2.5 py-1 rounded-md text-xs font-mono text-text-secondary hover:text-text-primary"
+                    "px-2.5 py-1 rounded-md text-xs font-mono whitespace-nowrap text-text-secondary hover:text-text-primary"
                 }
                 on:click=move |_| sig.set(value.to_string())
             >{label}</button>
         }
     };
     view! {
-        <div class="flex items-center gap-4">
-            <div class="flex items-center gap-1 bg-surface-sunken rounded-lg p-1">
+        <div class="flex items-center gap-4 overflow-x-auto">
+            <div class="flex items-center gap-1 bg-surface-sunken rounded-lg p-1 flex-shrink-0">
                 {seg(store.kind_filter, "all",    t_string!(i18n, extensions.cat.all).to_string())}
                 {seg(store.kind_filter, "skill",  t_string!(i18n, extensions.kind.skill).to_string())}
                 {seg(store.kind_filter, "plugin", t_string!(i18n, extensions.kind.plugin).to_string())}
                 {seg(store.kind_filter, "mcp",    t_string!(i18n, extensions.kind.mcp).to_string())}
             </div>
-            <div class="flex items-center gap-1 bg-surface-sunken rounded-lg p-1">
+            <div class="flex items-center gap-1 bg-surface-sunken rounded-lg p-1 flex-shrink-0">
                 {seg(store.trust_filter, "all",       t_string!(i18n, extensions.cat.all).to_string())}
                 {seg(store.trust_filter, "official",  t_string!(i18n, extensions.trust.official).to_string())}
                 {seg(store.trust_filter, "verified",  t_string!(i18n, extensions.trust.verified).to_string())}

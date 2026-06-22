@@ -61,9 +61,9 @@ pub fn InstalledPanel() -> impl IntoView {
 
     view! {
         <Show when=move || store.show_installed.get()>
-            <div class="fixed inset-0 z-40 flex justify-end">
+            <div class="fixed inset-0 z-[60] flex justify-end">
                 <div class="aleph-scrim absolute inset-0 bg-black/30" on:click=close></div>
-                <aside class="glass relative w-[480px] max-w-[94vw] h-full bg-surface-overlay/85 border-l border-border shadow-xl flex flex-col">
+                <aside class="glass relative w-[480px] max-w-[94vw] h-full bg-surface-overlay/90 border-l border-border shadow-xl flex flex-col">
                     <header class="px-4 py-3 border-b border-border flex items-center justify-between">
                         <h2 class="font-serif text-lg text-text-primary">{t!(i18n, extensions.installed_title)}</h2>
                         <button class="text-text-tertiary hover:text-text-primary" on:click=close>"✕"</button>
@@ -119,7 +119,7 @@ fn InstalledRow(
     let id_for_remove = entry.id.clone();
 
     let badge_cls = format!(
-        "px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase {}",
+        "px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase whitespace-nowrap flex-shrink-0 {}",
         kind_badge_class(&entry.kind)
     );
     // Heuristic: unverified tier → "manual · not in catalog" tag (v1 proxy).
