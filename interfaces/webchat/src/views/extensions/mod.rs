@@ -82,9 +82,6 @@ impl StoreState {
 pub fn ExtensionsView() -> impl IntoView {
     let _state = expect_context::<DashboardState>();
     let i18n = use_i18n();
-    // Store is now provided by AppContent (parent of both columns) so the
-    // left-column CategoryNav and this main-area view share one selection.
-    let store = expect_context::<StoreState>();
 
     view! {
         <div class="flex-1 flex flex-col h-full overflow-hidden bg-surface">
@@ -96,17 +93,6 @@ pub fn ExtensionsView() -> impl IntoView {
             </header>
             <div class="flex-1 overflow-y-auto px-6 pb-6">
                 <div class="max-w-5xl mx-auto py-6">
-                    // Installed entry relocated out of the chrome header into the
-                    // content area — on Windows the fixed notification bell (z-[50])
-                    // overlapped the old top-right header button.
-                    <div class="flex justify-end mb-2">
-                        <button
-                            class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded-lg text-sm hover:text-text-primary whitespace-nowrap flex-shrink-0"
-                            on:click=move |_| store.show_installed.set(true)
-                        >
-                            {t!(i18n, extensions.installed)}
-                        </button>
-                    </div>
                     <crate::views::extensions::browse::BrowsePane />
                 </div>
             </div>

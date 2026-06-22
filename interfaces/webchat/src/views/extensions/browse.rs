@@ -67,9 +67,20 @@ pub fn BrowsePane() -> impl IntoView {
     };
 
     view! {
-        // Chrome: search + filter segments (category nav lives in the left column now)
+        // Chrome: search (left) + installed entry (right) on one row, filter
+        // segments below (category nav lives in the left column now). The
+        // installed button stays in the scrollable content area so Windows'
+        // fixed notification bell (z-[50]) never overlaps it.
         <div class="flex flex-col gap-3 mb-4">
-            <StoreSearch />
+            <div class="flex items-center justify-between gap-4">
+                <StoreSearch />
+                <button
+                    class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded-lg text-sm hover:text-text-primary whitespace-nowrap flex-shrink-0"
+                    on:click=move |_| store.show_installed.set(true)
+                >
+                    {t!(i18n, extensions.installed)}
+                </button>
+            </div>
             <FilterSegs />
         </div>
 
