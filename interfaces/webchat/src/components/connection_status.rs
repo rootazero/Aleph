@@ -2,7 +2,6 @@ use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
 use crate::state::connection::ConnectionPhase;
 use leptos::prelude::*;
-use leptos::task::spawn_local;
 use leptos_router::components::A;
 
 /// Compact connection-state chip rendered in the dashboard chrome.
@@ -38,10 +37,7 @@ pub fn ConnectionStatus() -> impl IntoView {
 
     // Which core is live (Local / remote host). Resolved once on mount; a
     // target switch reloads the whole Panel, so a fresh mount re-resolves.
-    let target = RwSignal::new(String::new());
-    spawn_local(async move {
-        target.set(resolve_target_label().await);
-    });
+    let target = RwSignal::new(resolve_target_label());
 
     let dot_class = move || match phase.get() {
         ConnectionPhase::Connected => "bg-success",
@@ -119,38 +115,17 @@ pub fn ConnectionStatus() -> impl IntoView {
     }
 }
 
-/// Resolve the human-readable label for the live core. Desktop shell →
-/// the Tauri bridge's persisted target; plain browser → the page origin.
-/// Loopback origins collapse to `Local` so both surfaces agree.
-async fn resolve_target_label() -> String {
-    if crate::api::tauri_bridge::is_shell() {
-        match crate::api::tauri_bridge::get_connection_target().await {
-            Ok(t) if t.trim().is_empty() || t.eq_ignore_ascii_case("local") => "Local".to_string(),
-            Ok(t) => host_of(&t),
-            Err(_) => String::new(),
-        }
-    } else {
-        // The origin that served this Panel IS the core it talks to.
-        let host = web_sys::window()
-            .and_then(|w| w.location().host().ok())
-            .unwrap_or_default();
-        if host.is_empty() || is_loopback_host(&host) {
-            "Local".to_string()
-        } else {
-            host
-        }
-    }
-}
-
-/// Extract `host[:port]` from a persisted target (`http(s)://host:port`),
-/// collapsing loopback to `Local`. Pure string work — no URL crate in WASM.
-fn host_of(raw: &str) -> String {
-    let after_scheme = raw.split_once("://").map(|(_, r)| r).unwrap_or(raw);
-    let host = after_scheme.split('/').next().unwrap_or(after_scheme);
-    if is_loopback_host(host) {
+/// Resolve the human-readable label for the live core. The origin that served
+/// this Panel IS the core it talks to — loopback (the full app's embedded core)
+/// collapses to `Local`, a remote origin (lite shell / browser) shows its host.
+fn resolve_target_label() -> String {
+    let host = web_sys::window()
+        .and_then(|w| w.location().host().ok())
+        .unwrap_or_default();
+    if host.is_empty() || is_loopback_host(&host) {
         "Local".to_string()
     } else {
-        host.to_string()
+        host
     }
 }
 
@@ -170,19 +145,6 @@ fn is_loopback_host(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn host_of_strips_scheme_and_path() {
-        assert_eq!(host_of("http://box.lan:9000"), "box.lan:9000");
-        assert_eq!(host_of("https://gw.example.com:443"), "gw.example.com:443");
-        assert_eq!(host_of("http://box.lan:9000/"), "box.lan:9000");
-    }
-
-    #[test]
-    fn host_of_collapses_loopback_to_local() {
-        assert_eq!(host_of("http://127.0.0.1:18790"), "Local");
-        assert_eq!(host_of("http://localhost:18790"), "Local");
-    }
 
     #[test]
     fn loopback_detection() {
