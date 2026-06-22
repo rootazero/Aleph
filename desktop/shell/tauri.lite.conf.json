@@ -3,7 +3,19 @@
   "productName": "Aleph Panel",
   "identifier": "ai.aleph.panel",
   "bundle": {
-    "externalBin": []
+    "externalBin": [],
+    "icon": [
+      "icons/panel/32x32.png",
+      "icons/panel/128x128.png",
+      "icons/panel/128x128@2x.png",
+      "icons/panel/icon.icns",
+      "icons/panel/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/panel/icon.ico"
+      }
+    }
   },
   "plugins": {
     "updater": {

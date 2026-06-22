@@ -42,3 +42,29 @@ Composite the full-bleed art onto a 1024 transparent canvas at 824×824 centered
 
 Effect takes hold only after a macOS rebuild — `just shell-build` (icons are
 embedded at Tauri bundle time). / 图标在 Tauri 打包时嵌入，改完需 `just shell-build` 才生效。
+
+## Panel (lite) variant / 纯壳变体图标 `panel/`
+
+The Aleph Panel lite shell (`ai.aleph.panel`) uses the same artwork with a small
+floating **"P"** in the bottom-right corner — cyan fill + white keyline + soft
+cyan glow (no disc), so it is visually distinct from the full desktop app. These live in `panel/` and are wired only via
+`bundle.icon` (+ `windows.nsis.installerIcon`) in `tauri.lite.conf.json` — the
+full-app `icons/*` are never touched.
+
+Regenerate (macOS, no external deps — uses CoreGraphics + `iconutil`):
+
+```bash
+cd desktop/shell/icons && swift make_panel_icons.swift
+```
+
+The script composites the badge onto `source.png` (the full-bleed master), then
+derives the full-bleed PNGs, the **safe-area-padded** `panel/icon.icns`, and the
+multi-size `panel/icon.ico` — i.e. it already applies the 824/1024 padding above,
+so the panel `.icns` is dock-correct too. `panel/panel-source.png` is the badged
+1024 master kept for reference.
+
+Aleph Panel 纯壳（`ai.aleph.panel`）复用同一图案，仅在右下角加一个青色实心圆 + 深色
+**"P"** 角标以区分完整版。文件在 `panel/`，仅通过 `tauri.lite.conf.json` 的
+`bundle.icon`（+ `windows.nsis.installerIcon`）接入，**完整版 `icons/*` 一字不动**。
+重生成执行上面的 `swift make_panel_icons.swift`（无外部依赖，脚本已自动给 `.icns`
+加好留白）。
