@@ -136,7 +136,10 @@ graph**, **streaming voice**, and project workspaces.
   connection as local; (3) the shell injects a one-way `data-shell-variant`
   marker so the panel can tell a lite shell apart from the full app / a plain
   browser and offer the right read-only guidance (switch via the tray's
-  "Connect to Remote…" / "Back to Local").
+  "Connect to Remote…" / "Back to Local"); and (4) namespaced the lite shell's
+  connection/autostart markers under `~/.aleph/.desktop-shell-panel-*` (the full
+  app keeps the historical `.desktop-shell-*`) so both can run on one machine
+  with independent targets instead of clobbering each other's connection state.
 - **Security sweep** — anchored `sk-` secret-leak patterns at word boundaries
   (killing false positives like `elon-musk-`), a PII email-detection leak, path
   traversal in notes / extensions-uninstall / exec, SSRF allowlist + metadata-IP
