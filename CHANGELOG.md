@@ -117,6 +117,14 @@ graph**, **streaming voice**, and project workspaces.
 
 ### Fixed
 
+- **Panel blank/stuck-connecting on remote (hotfix re-release)** — the committed
+  `interfaces/webchat/dist/` shipped a js-only rebuild whose `aleph_panel.js`
+  referenced wasm-bindgen closure trampolines absent from `aleph_panel_bg.wasm`.
+  The panel rendered but the connect coroutine invoked a missing trampoline
+  (`TypeError: …closures…invoke is not a function`) and aborted before opening
+  the WebSocket, so it hung on "connecting" / blank against any remote core
+  (CI embeds the committed dist verbatim — no WASM build — so the broken pair
+  shipped). Rebuilt so js + wasm are a matched pair.
 - **Security sweep** — anchored `sk-` secret-leak patterns at word boundaries
   (killing false positives like `elon-musk-`), a PII email-detection leak, path
   traversal in notes / extensions-uninstall / exec, SSRF allowlist + metadata-IP
