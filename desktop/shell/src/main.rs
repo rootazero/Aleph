@@ -82,21 +82,6 @@ const SHELL_MARKER_JS: &str = "var e=document.documentElement;\
 #[cfg(not(target_os = "macos"))]
 const SHELL_MARKER_JS: &str = "document.documentElement.setAttribute('data-shell','aleph-tauri');";
 
-/// Static build-variant marker, injected (one-way) into every document
-/// alongside [`SHELL_MARKER_JS`]. Lets the Panel know which shell hosts it —
-/// the full app embeds a loopback `aleph-server`, the lite (panel-only) shell
-/// points the webview at a remote core. Because it rides the init-script path,
-/// the marker is present even on a *remote*-origin Panel, where the Tauri IPC
-/// bridge is scoped out (the capability is loopback-only). The Panel's
-/// "服务连接" section reads `data-shell-variant` to label the connection
-/// honestly without invoking any command — no native authority is handed to web
-/// content (R2/R4). The *current* core is taken from `location.host` at render
-/// time (always fresh); this only carries the static build identity.
-#[cfg(feature = "embedded-core")]
-const SHELL_VARIANT_JS: &str = "document.documentElement.setAttribute('data-shell-variant','full');";
-#[cfg(not(feature = "embedded-core"))]
-const SHELL_VARIANT_JS: &str = "document.documentElement.setAttribute('data-shell-variant','lite');";
-
 /// The window-geometry facets the shell persists across restarts. Visibility
 /// stays out of it — the shell drives that itself (created hidden so geometry is
 /// restored off-screen, shown with the splash as soon as setup finishes, hidden
@@ -288,7 +273,6 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .resizable(true)
         .visible(false)
         .initialization_script(SHELL_MARKER_JS)
-        .initialization_script(SHELL_VARIANT_JS)
         // Turn `target="_blank"` clicks into a top-level navigation so the
         // guard below can externalise them; pin the lone webview to the
         // Panel origin and hand outside URLs to the OS browser (R5).
@@ -371,64 +355,39 @@ fn spawn_background(handle: tauri::AppHandle) {
     }
 }
 
-/// Bring the configured target online and reveal the Panel. Returns whether
-/// the target is believed up (the full-app supervisor's initial state).
+/// Bring the embedded local core online and reveal the Panel. Returns whether
+/// the daemon is believed up (the full-app supervisor's initial state).
 ///
-/// Full app: Local owns + supervises the bundled daemon (reconcile any stale
-/// daemon offline, launch the bundled one, wait for `/ready`, then reveal);
-/// Remote only probes TCP reachability and navigates the webview.
+/// The full app is local-only: it owns + supervises the bundled daemon
+/// (reconcile any stale daemon offline, launch the bundled one, wait for
+/// `/ready`, then reveal) and never honors a remote target.
 #[cfg(feature = "embedded-core")]
 async fn bring_target_online(handle: &tauri::AppHandle) -> bool {
     let version = handle.package_info().version.to_string();
-    let target = connection::load_target();
-    match &target {
-        connection::ConnectionTarget::Local => {
-            // Explicitly clear the remote allow-list (idempotent): Local
-            // navigations only ever touch loopback.
-            external_link::set_remote_host(None);
-            // First launch / post-update: force any stale daemon offline so the
-            // `aleph-server` bundled in this app takes over.
-            daemon::reconcile_for_version(&version).await;
-            match daemon::ensure_ready().await {
-                Ok(()) => {
-                    reveal_panel(handle);
-                    true
-                }
-                Err(e) => {
-                    tracing::error!("daemon did not become ready: {e}");
-                    show_daemon_error(handle, &e);
-                    false
-                }
-            }
+    // The full app is local-only: it always serves its embedded loopback core
+    // and never honors a remote target. Reconcile any legacy persisted remote
+    // (from a previous build that allowed switching) back to Local so every
+    // surface — menu reload, open-in-browser — agrees on local.
+    if !matches!(
+        connection::load_target(),
+        connection::ConnectionTarget::Local
+    ) {
+        let _ = connection::save_target(&connection::ConnectionTarget::Local);
+    }
+    // Local navigations only ever touch loopback — clear any remote allow-list.
+    external_link::set_remote_host(None);
+    // First launch / post-update: force any stale daemon offline so the
+    // `aleph-server` bundled in this app takes over.
+    daemon::reconcile_for_version(&version).await;
+    match daemon::ensure_ready().await {
+        Ok(()) => {
+            reveal_panel(handle);
+            true
         }
-        connection::ConnectionTarget::Remote(url) => {
-            // Allow the remote origin in the link guard so in-Panel navigations
-            // stay in the webview instead of escaping to the OS browser.
-            external_link::set_remote_host(Some(url.clone()));
-            let host = url.host_str().unwrap_or("").to_string();
-            let port = url.port_or_known_default().unwrap_or(18790);
-            let reachable = daemon::tcp_reachable(&host, port).await;
-            if reachable {
-                if let Some(window) = handle.get_webview_window("main") {
-                    let _ = window.navigate(url.clone());
-                }
-                focus_window(handle);
-            } else {
-                // Spec §5.5: a remote that is unreachable at startup must land
-                // on the bundled connection page (retry / back-to-local), never
-                // on the dead remote origin — otherwise the user stares at the
-                // webview's native "can't connect" page until the supervisor's
-                // first tick (one HEALTH_POLL_INTERVAL later) corrects it.
-                tracing::warn!(
-                    "remote Gateway {host}:{port} not reachable at startup — showing connection page"
-                );
-                show_connection_page(
-                    handle,
-                    "Remote Gateway unreachable. Retry or go back to local.",
-                );
-                focus_window(handle);
-            }
-            reachable
+        Err(e) => {
+            tracing::error!("daemon did not become ready: {e}");
+            show_daemon_error(handle, &e);
+            false
         }
     }
 }
