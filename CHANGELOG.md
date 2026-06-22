@@ -125,6 +125,18 @@ graph**, **streaming voice**, and project workspaces.
   the WebSocket, so it hung on "connecting" / blank against any remote core
   (CI embeds the committed dist verbatim — no WASM build — so the broken pair
   shipped). Rebuilt so js + wasm are a matched pair.
+- **Lite Panel shell ↔ remote core** — three fixes so the panel-only app works
+  against a remote core over the public internet: (1) lifted App Transport
+  Security (`NSAllowsArbitraryLoads`) so the macOS WKWebView can load a
+  user-chosen remote core over cleartext HTTP (default ATS silently blocked it →
+  blank webview; the trust boundary here is network + Gateway token, not TLS);
+  (2) Settings → 服务与集群 now reflects the **actual** connected core, derived
+  from the document origin (`location.host`) instead of the shell's loopback-only
+  IPC — a remote-origin panel could never read that IPC and always mislabeled the
+  connection as local; (3) the shell injects a one-way `data-shell-variant`
+  marker so the panel can tell a lite shell apart from the full app / a plain
+  browser and offer the right read-only guidance (switch via the tray's
+  "Connect to Remote…" / "Back to Local").
 - **Security sweep** — anchored `sk-` secret-leak patterns at word boundaries
   (killing false positives like `elon-musk-`), a PII email-detection leak, path
   traversal in notes / extensions-uninstall / exec, SSRF allowlist + metadata-IP
