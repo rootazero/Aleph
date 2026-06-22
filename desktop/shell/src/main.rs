@@ -262,6 +262,13 @@ fn main() {
 
 /// Create the single main window, hosting the splash until the daemon is up.
 fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
+    // If this build starts pointed at a remote Gateway, authorize that origin
+    // for the window-drag IPC before the webview is created (belt-and-braces
+    // with the `navigate_to_target` grant) so the Panel's drag strip is live on
+    // the first remote load.
+    if let connection::ConnectionTarget::Remote(url) = connection::load_target() {
+        grant_remote_drag(app, &url);
+    }
     // `mut` is only needed on macOS, where the title-bar overlay is applied
     // via reassignment below; other platforms never rebind `builder`.
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
@@ -277,7 +284,21 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         // guard below can externalise them; pin the lone webview to the
         // Panel origin and hand outside URLs to the OS browser (R5).
         .initialization_script(external_link::CLICK_INTERCEPTOR_JS)
-        .on_navigation(external_link::route);
+        .on_navigation(external_link::route)
+        // `SHELL_MARKER_JS` (which sets `data-platform=macos`) is injected via
+        // `initialization_script`, but that runs reliably only for same-origin
+        // pages (custom protocol + loopback). A panel-only shell pointed at a
+        // *remote* Gateway loads the Panel from a foreign origin where the init
+        // script does not run — leaving `data-platform` unset, so the Panel's
+        // macOS `-webkit-app-region: drag` band never activates and the
+        // frameless window can't be dragged (full app is unaffected: it loads
+        // the loopback Panel). Re-assert the marker on every page-load via
+        // `eval` (host→webview, origin-independent). Idempotent same-origin.
+        .on_page_load(|window, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                let _ = window.eval(SHELL_MARKER_JS);
+            }
+        });
 
     // Transparent only on macOS, where `apply_macos_vibrancy` installs an
     // opaque material behind the webview. On Windows/Linux a transparent window
@@ -455,10 +476,44 @@ pub(crate) fn navigate_to_target(handle: &tauri::AppHandle, target: &connection:
                 return;
             }
         },
-        connection::ConnectionTarget::Remote(url) => url.clone(),
+        connection::ConnectionTarget::Remote(url) => {
+            // Authorize this remote origin for the window-drag IPC *before*
+            // navigating, so the Panel's `data-tauri-drag-region` strip drags
+            // the window there too (see `grant_remote_drag`).
+            grant_remote_drag(handle, url);
+            url.clone()
+        }
     };
     if let Err(e) = window.navigate(url) {
         tracing::error!("failed to navigate to the Panel: {e}");
+    }
+}
+
+/// Grant the configured remote Gateway origin the *minimal* window-drag
+/// permission so the Panel's `data-tauri-drag-region` strip can drag the window
+/// on a remote target. Tauri scopes `core:window:allow-start-dragging` (and the
+/// injected drag handler) to a capability's `remote.urls`; the static `default`
+/// capability lists only loopback, so a panel-only shell pointed at a remote
+/// Gateway otherwise gets no drag region at all — and the macOS Overlay
+/// title-bar has no native drag area to fall back on (full app is unaffected: it
+/// serves the loopback Panel, already covered by the static grant).
+///
+/// Scoped to this one origin and this one permission: the remote page gains
+/// window dragging and nothing else (no fs/shell/config IPC).
+fn grant_remote_drag(app: &tauri::AppHandle, url: &url::Url) {
+    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
+        return;
+    };
+    let scheme = url.scheme();
+    let cap = tauri::ipc::CapabilityBuilder::new(format!("remote-drag-{host}-{port}"))
+        .remote(format!("{scheme}://{host}:{port}/*"))
+        .window("main")
+        .local(false)
+        .permission("core:window:allow-start-dragging");
+    if let Err(e) = app.add_capability(cap) {
+        // A duplicate identifier (same remote re-selected this session) lands
+        // here; the existing grant already covers it, so this is benign.
+        tracing::debug!("remote drag capability not added: {e}");
     }
 }
 

@@ -38,6 +38,20 @@
         -webkit-user-select: none;
         user-select: none;
       }
+      /* macOS Overlay title-bar has no OS titlebar to grab. Provide a 30px top
+         drag strip (mirrors the Panel's drag band) so the panel-only shell is
+         movable here — without making page content un-selectable. Gated on the
+         shell-injected data-platform; Win/Linux keep native chrome dragging. */
+      .aleph-drag-strip {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 30px;
+      }
+      html[data-platform="macos"] .aleph-drag-strip {
+        -webkit-app-region: drag;
+      }
       body {
         display: flex;
         align-items: center;
@@ -127,6 +141,7 @@
     </style>
   </head>
   <body>
+    <div class="aleph-drag-strip" data-tauri-drag-region=""></div>
     <div class="wrap" id="wrap">
       <div class="wordmark" id="title">Aleph</div>
       <div class="sub" id="sub">starting your local assistant</div>

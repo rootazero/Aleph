@@ -7,6 +7,12 @@
 <style>
   body { font: 14px -apple-system, system-ui, sans-serif; background:#0d0d10; color:#e8e8ea;
          display:flex; min-height:100vh; align-items:center; justify-content:center; margin:0; }
+  /* macOS Overlay title-bar has no OS titlebar to grab. Provide a 30px top
+     drag strip (mirrors the Panel's drag band) so the dialog is movable
+     without blocking text selection or the controls below. Gated on the
+     shell-injected data-platform (Win/Linux keep native chrome dragging). */
+  .aleph-drag-strip { position:fixed; top:0; left:0; right:0; height:30px; }
+  html[data-platform="macos"] .aleph-drag-strip { -webkit-app-region:drag; }
   .card { width:340px; padding:28px; background:#17171c; border-radius:14px; box-shadow:0 10px 40px #0008; }
   h1 { font-size:18px; margin:0 0 4px; }
   p { color:#9a9aa2; margin:0 0 18px; font-size:13px; }
@@ -32,6 +38,7 @@
 </style>
 </head>
 <body>
+  <div class="aleph-drag-strip" data-tauri-drag-region=""></div>
   <div class="card">
     <h1>Connect to a Gateway</h1>
     <p>Enter a remote Aleph address (e.g. <code>192.168.1.5</code> or <code>https://gw.example.com</code>), or go back to the local daemon.</p>
