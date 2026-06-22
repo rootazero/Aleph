@@ -82,6 +82,21 @@ const SHELL_MARKER_JS: &str = "var e=document.documentElement;\
 #[cfg(not(target_os = "macos"))]
 const SHELL_MARKER_JS: &str = "document.documentElement.setAttribute('data-shell','aleph-tauri');";
 
+/// Static build-variant marker, injected (one-way) into every document
+/// alongside [`SHELL_MARKER_JS`]. Lets the Panel know which shell hosts it —
+/// the full app embeds a loopback `aleph-server`, the lite (panel-only) shell
+/// points the webview at a remote core. Because it rides the init-script path,
+/// the marker is present even on a *remote*-origin Panel, where the Tauri IPC
+/// bridge is scoped out (the capability is loopback-only). The Panel's
+/// "服务连接" section reads `data-shell-variant` to label the connection
+/// honestly without invoking any command — no native authority is handed to web
+/// content (R2/R4). The *current* core is taken from `location.host` at render
+/// time (always fresh); this only carries the static build identity.
+#[cfg(feature = "embedded-core")]
+const SHELL_VARIANT_JS: &str = "document.documentElement.setAttribute('data-shell-variant','full');";
+#[cfg(not(feature = "embedded-core"))]
+const SHELL_VARIANT_JS: &str = "document.documentElement.setAttribute('data-shell-variant','lite');";
+
 /// The window-geometry facets the shell persists across restarts. Visibility
 /// stays out of it — the shell drives that itself (created hidden so geometry is
 /// restored off-screen, shown with the splash as soon as setup finishes, hidden
@@ -273,6 +288,7 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .resizable(true)
         .visible(false)
         .initialization_script(SHELL_MARKER_JS)
+        .initialization_script(SHELL_VARIANT_JS)
         // Turn `target="_blank"` clicks into a top-level navigation so the
         // guard below can externalise them; pin the lone webview to the
         // Panel origin and hand outside URLs to the OS browser (R5).

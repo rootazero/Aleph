@@ -371,7 +371,13 @@
       "local_target": "本地",
       "confirm_switch": "将切换到 {{ target }} 并重新加载 Panel，确认？",
       "confirm_switch_action": "确认切换",
-      "local_stays_running": "切到远程后本地服务仍会在后台运行（可能还在服务 CLI 或其他通道）。如需停止，请用托盘的「Quit & Stop Aleph」。"
+      "local_stays_running": "切到远程后本地服务仍会在后台运行（可能还在服务 CLI 或其他通道）。如需停止，请用托盘的「Quit & Stop Aleph」。",
+      "connected_label": "当前连接：",
+      "badge_remote": "远程核心",
+      "badge_local": "本地核心",
+      "remote_readonly_lite": "纯壳 App 已连接到远程核心，此处为只读视图。",
+      "remote_readonly_full": "桌面 App 当前连接到远程核心，此处为只读视图。",
+      "remote_readonly_hint": "切换连接请使用托盘菜单的「Connect to Remote…」或「Back to Local」。"
     },
     "title": "设置",
     "welcome": "欢迎使用设置",
