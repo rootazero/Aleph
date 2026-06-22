@@ -125,6 +125,13 @@ graph**, **streaming voice**, and project workspaces.
   the WebSocket, so it hung on "connecting" / blank against any remote core
   (CI embeds the committed dist verbatim — no WASM build — so the broken pair
   shipped). Rebuilt so js + wasm are a matched pair.
+- **Stale panel embed in production builds** — `build.rs` now emits the
+  `interfaces/webchat/dist/` rerun-if-changed triggers unconditionally. They were
+  gated behind the `control-plane` feature, which production server builds
+  (`just build`, `default = []`) don't enable, while the panel embed
+  (`rust_embed` in `control_plane/assets.rs`) is unconditional — so an incremental
+  build after `just wasm` reused the cached embed and served a stale panel. The
+  trigger now matches the embed, so a fresh `dist/` always re-embeds.
 - **Lite Panel shell ↔ remote core** — three fixes so the panel-only app works
   against a remote core over the public internet: (1) lifted App Transport
   Security (`NSAllowsArbitraryLoads`) so the macOS WKWebView can load a
@@ -133,10 +140,12 @@ graph**, **streaming voice**, and project workspaces.
   (2) Settings → 服务与集群 now reflects the **actual** connected core, derived
   from the document origin (`location.host`) instead of the shell's loopback-only
   IPC — a remote-origin panel could never read that IPC and always mislabeled the
-  connection as local; (3) the shell injects a one-way `data-shell-variant`
-  marker so the panel can tell a lite shell apart from the full app / a plain
-  browser and offer the right read-only guidance (switch via the tray's
-  "Connect to Remote…" / "Back to Local"); and (4) namespaced the lite shell's
+  connection as local; (3) the connection target is now fixed by build form — the
+  full app is always local-only, the lite shell always remote — so 服务与集群 drops
+  the local/remote switcher for a read-only indicator and the one-way
+  `data-shell-variant` shell marker was removed (the panel reads `location.host`
+  directly, eliminating the "stale shell binary → wrong mode" failure class); and
+  (4) namespaced the lite shell's
   connection/autostart markers under `~/.aleph/.desktop-shell-panel-*` (the full
   app keeps the historical `.desktop-shell-*`) so both can run on one machine
   with independent targets instead of clobbering each other's connection state.
