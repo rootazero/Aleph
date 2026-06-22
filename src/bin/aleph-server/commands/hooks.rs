@@ -14,6 +14,7 @@ use std::io::{self, Write};
 
 use alephcore::diagnostics::checks::HooksConsentCheck;
 use alephcore::extension::hooks::{ConsentStatus, ShellHookConsent};
+use alephcore::utils::no_window::NoWindow;
 
 use crate::cli::HooksAction;
 
@@ -89,6 +90,7 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
     let output = std::process::Command::new(shell)
         .arg(flag)
         .arg(&entry.command)
+        .no_window()
         .output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);

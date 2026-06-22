@@ -296,7 +296,9 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .stdin(std::process::Stdio::piped())
-                .creation_flags(CREATE_NEW_PROCESS_GROUP)
+                .creation_flags(
+                    CREATE_NEW_PROCESS_GROUP | crate::utils::no_window::CREATE_NO_WINDOW,
+                )
                 // Belt-and-braces: if our future is dropped (e.g. upstream
                 // cancellation) the OS terminates the child instead of
                 // leaking it. The job object below provides the same

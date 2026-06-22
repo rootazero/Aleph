@@ -4,6 +4,7 @@
 use crate::domain::skill::{InstallKind, InstallSpec};
 use crate::skill::config::InstallPreferences;
 use crate::skill::eligibility::current_os;
+use crate::utils::no_window::NoWindow;
 use serde::Serialize;
 
 /// Build a shell command string for the given install spec.
@@ -172,8 +173,11 @@ impl InstallExecutor {
         // Pick the platform shell (PowerShell 7 → cmd on Windows, sh on Unix).
         let mut command = build_shell_command(&cmd_str);
         command.kill_on_drop(true);
-        let result =
-            tokio::time::timeout(std::time::Duration::from_secs(300), command.output()).await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(300),
+            command.no_window().output(),
+        )
+        .await;
 
         match result {
             Ok(Ok(output)) => {

@@ -10,6 +10,7 @@ use tracing::debug;
 
 use super::{ProviderStatus, SecretMetadata, SecretProvider};
 use crate::secrets::types::{DecryptedSecret, SecretError};
+use crate::utils::no_window::NoWindow;
 
 /// Secret provider backed by the 1Password CLI (`op`).
 ///
@@ -42,6 +43,7 @@ impl OnePasswordProvider {
         if let Some(ref token) = self.service_account_token {
             cmd.env("OP_SERVICE_ACCOUNT_TOKEN", token.expose_secret());
         }
+        cmd.no_window();
         cmd
     }
 

@@ -11,6 +11,7 @@
 //! - other / killed by signal / timeout: hook error (logged, does not block)
 
 use crate::sync_primitives::Arc;
+use crate::utils::no_window::NoWindow;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -323,6 +324,7 @@ async fn execute_shell_hook(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
+        .no_window()
         .spawn()
     {
         Ok(c) => c,

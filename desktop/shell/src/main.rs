@@ -34,6 +34,8 @@ mod tray;
 mod update;
 mod webview_perms;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_window_state::{StateFlags, WindowExt};
 
@@ -49,6 +51,17 @@ const HEALTH_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs
 /// ride out a brief stall, short enough to recover quickly. Full-app-only.
 #[cfg(feature = "embedded-core")]
 const FAILURES_TO_DECLARE_DOWN: u32 = 3;
+
+/// Tracks whether the main window has been revealed for the first time. Set the
+/// instant any real show path runs (`focus_window`); read by the single-instance
+/// handler so a relaunch *during cold boot* (the user double-clicks the icon
+/// again while the window is still hidden and the Panel is bootstrapping) cannot
+/// surface the half-loaded window early — which is exactly the Windows startup
+/// flicker/jump. Once revealed, relaunches focus the window as usual.
+#[derive(Default)]
+struct RevealGate {
+    done: AtomicBool,
+}
 
 /// Injected into every document the webview loads (splash and Panel).
 /// Marks the page as shell-hosted, and on macOS records the platform so
@@ -70,8 +83,9 @@ const SHELL_MARKER_JS: &str = "var e=document.documentElement;\
 const SHELL_MARKER_JS: &str = "document.documentElement.setAttribute('data-shell','aleph-tauri');";
 
 /// The window-geometry facets the shell persists across restarts. Visibility
-/// stays out of it — the shell drives that itself (hidden until the daemon
-/// is ready, hidden again when the user closes to the tray).
+/// stays out of it — the shell drives that itself (created hidden so geometry is
+/// restored off-screen, shown with the splash as soon as setup finishes, hidden
+/// again when the user closes to the tray).
 fn window_state_flags() -> StateFlags {
     StateFlags::SIZE | StateFlags::POSITION
 }
@@ -85,7 +99,16 @@ fn main() {
         // `deep-link` feature also routes a second-launch `aleph://` link to
         // the running shell on Windows and Linux.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            focus_window(app);
+            // A relaunch focuses the running shell — but NOT before the first
+            // reveal. During cold boot the window is intentionally hidden until
+            // the Panel has painted; surfacing it early (the user double-clicks
+            // again while it is still starting) shows a blank, still-bootstrapping
+            // window that then navigates and re-lays-out on screen — the Windows
+            // startup flicker/jump. Until the window has been revealed once, drop
+            // the relaunch; the reveal path will show it when it is ready.
+            if app.state::<RevealGate>().done.load(Ordering::SeqCst) {
+                focus_window(app);
+            }
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
@@ -141,6 +164,11 @@ fn main() {
     // menu all read it.
     let builder = builder.manage(update::Updater::default());
 
+    // Tracks the first Panel reveal (see `RevealGate`). Managed in both variants
+    // so the single-instance handler can always read it; the full app's reveal
+    // path is what flips it.
+    let builder = builder.manage(RevealGate::default());
+
     // macOS shows an app menu in the system menu bar regardless of window
     // chrome; give it shell-aware items. Windows and Linux stay chromeless.
     #[cfg(target_os = "macos")]
@@ -153,6 +181,16 @@ fn main() {
             let handle = app.handle().clone();
 
             build_main_window(&handle)?;
+
+            // Show the window immediately, displaying the bundled splash. Rust
+            // boots fast and the user should see the window promptly — we do NOT
+            // wait for the daemon. The splash gives branded feedback for the few
+            // seconds the bundled `aleph-server` takes to reach `/ready`, then
+            // the Panel is navigated into the same window. This path is identical
+            // on every platform (macOS/Linux/Windows) for a consistent cold-start
+            // experience; only the backing differs (macOS gets the transparent
+            // vibrancy material, Windows/Linux stay opaque).
+            focus_window(&handle);
 
             // System tray — the resident, always-available face of the app.
             tray::build(&handle)?;
@@ -455,6 +493,15 @@ pub(crate) fn focus_window(handle: &tauri::AppHandle) {
     let Some(window) = handle.get_webview_window("main") else {
         return;
     };
+    // Latch "the window has been revealed at least once": a relaunch / tray /
+    // Reopen after this point is a legitimate bring-to-front, but any focus
+    // request *before* it (a re-click during cold boot) must be dropped so the
+    // window is never surfaced mid-bootstrap (the single-instance handler reads
+    // this). Every real show path funnels through here.
+    handle
+        .state::<RevealGate>()
+        .done
+        .store(true, Ordering::SeqCst);
     let _ = window.show();
     let _ = window.unminimize();
     let _ = window.set_focus();
@@ -517,10 +564,11 @@ pub(crate) fn reroute_for_target(app: &tauri::AppHandle, target: connection::Con
     }
 }
 
-/// Reveal the Panel for the first time: navigate to it and bring the window
-/// forward. The window starts hidden, so this is what the user sees on a
-/// normal launch. Full-app-only — the panel-only shell reveals via
-/// `bring_target_online` directly.
+/// Reveal the Panel for the first time: point the webview at the Panel and show
+/// the window. The window appears as soon as the daemon is `/ready` — the shell
+/// does not artificially defer it (Rust boots fast; the user should see the
+/// window promptly). Full-app-only — the panel-only shell reveals via
+/// `bring_target_online`.
 #[cfg(feature = "embedded-core")]
 fn reveal_panel(handle: &tauri::AppHandle) {
     let handle = handle.clone();

@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 
 use crate::runtimes::{ensure_capability, ledger::CapabilityLedger};
 use crate::sync_primitives::RwLock;
+use crate::utils::no_window::NoWindow;
 
 use super::error::BrowserError;
 use super::profile::PlaywrightCliConfig;
@@ -142,7 +143,7 @@ impl PlaywrightCliDriver {
             }
         }
 
-        let child = cmd.spawn().map_err(|e| match e.kind() {
+        let child = cmd.no_window().spawn().map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => BrowserError::PlaywrightCliNotInstalled,
             _ => BrowserError::Io(e),
         })?;

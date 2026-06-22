@@ -6,6 +6,7 @@ use tracing::debug;
 
 use crate::acp::session::{AcpSession, AdapterConfig};
 use crate::error::Result;
+use crate::utils::no_window::NoWindow;
 
 /// Execution mode for a harness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +85,7 @@ pub trait AcpAdapter: Send + Sync {
                 .arg("--version")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
+                .no_window()
                 .status(),
         )
         .await;

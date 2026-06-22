@@ -8,6 +8,7 @@ pub use generic::GenericAcpAdapter;
 
 use crate::acp::output_format::OutputFormat;
 use crate::error::{AlephError, Result};
+use crate::utils::no_window::NoWindow;
 use std::time::Duration;
 use tokio::process::Command;
 use tracing::{debug, error};
@@ -41,7 +42,7 @@ pub(super) async fn run_oneshot_command(
         "Spawning oneshot harness process"
     );
 
-    let output = tokio::time::timeout(timeout, cmd.output())
+    let output = tokio::time::timeout(timeout, cmd.no_window().output())
         .await
         .map_err(|_| {
             AlephError::tool(format!(

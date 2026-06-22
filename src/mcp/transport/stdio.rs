@@ -24,6 +24,8 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+
+use crate::utils::no_window::NoWindow;
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -154,7 +156,7 @@ impl StdioTransport {
             cmd.current_dir(dir);
         }
 
-        let mut child = cmd.spawn().map_err(|e| {
+        let mut child = cmd.no_window().spawn().map_err(|e| {
             AlephError::IoError(format!(
                 "Failed to spawn MCP server '{name}' ({command_str}): {e}"
             ))

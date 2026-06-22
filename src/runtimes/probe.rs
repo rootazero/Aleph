@@ -14,6 +14,7 @@ use tracing::{debug, trace, warn};
 
 use crate::runtimes::ledger::CapabilitySource;
 use crate::runtimes::specs::{find_spec, RuntimeSpec};
+use crate::utils::no_window::NoWindow;
 
 /// Result of probing for a capability.
 #[derive(Debug)]
@@ -101,11 +102,9 @@ fn find_on_path(bin_name: &str) -> Option<PathBuf> {
         "which"
     };
     trace!("looking for '{}' via {}", bin_name, locator);
-    if let Ok(output) = Command::new(locator)
-        .arg(bin_name)
-        .env("PATH", &search_path)
-        .output()
-    {
+    let mut cmd = Command::new(locator);
+    cmd.arg(bin_name).env("PATH", &search_path);
+    if let Ok(output) = cmd.no_window().output() {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let path_str = stdout.lines().next().unwrap_or("").trim();
@@ -269,7 +268,9 @@ fn get_compiled_regex(pattern: &'static str) -> Option<Regex> {
 }
 
 fn get_version(bin_path: &Path, version_flag: &str, version_regex: &'static str) -> Option<String> {
-    let output = Command::new(bin_path).arg(version_flag).output().ok()?;
+    let mut cmd = Command::new(bin_path);
+    cmd.arg(version_flag);
+    let output = cmd.no_window().output().ok()?;
     let combined = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),

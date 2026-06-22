@@ -2,6 +2,7 @@
 //!
 //! Uses the system `git` binary. No libgit2 dependency.
 
+use crate::utils::no_window::NoWindow;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -20,6 +21,7 @@ pub fn clone_github_repo(owner_repo: &str, target: &Path) -> Result<(), String> 
             &url,
             target.to_string_lossy().as_ref(),
         ])
+        .no_window()
         .output()
         .map_err(|e| format!("Failed to run git: {e}"))?;
 
@@ -42,6 +44,7 @@ pub fn pull_github_repo(repo_dir: &Path) -> Result<(), String> {
             "pull",
             "--ff-only",
         ])
+        .no_window()
         .output()
         .map_err(|e| format!("Failed to run git: {e}"))?;
 

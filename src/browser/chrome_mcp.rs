@@ -17,6 +17,7 @@ use super::error::BrowserError;
 use super::profile::ChromeMcpConfig;
 use crate::mcp::{ExternalServerConfig, McpClient};
 use crate::sync_primitives::Mutex;
+use crate::utils::no_window::NoWindow;
 
 /// A running Chrome `DevTools` MCP session.
 struct ChromeMcpSession {
@@ -216,6 +217,7 @@ impl ChromeMcpDriver {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .no_window()
             .spawn()
             .map_err(|e| BrowserError::LaunchFailed(format!("Failed to launch Chrome: {e}")))?;
 
@@ -272,6 +274,7 @@ impl ChromeMcpDriver {
                     .arg("/FI")
                     .arg("IMAGENAME eq chrome.exe")
                     .stderr(Stdio::null())
+                    .no_window()
                     .output()
                     .map(|o| {
                         String::from_utf8_lossy(&o.stdout)

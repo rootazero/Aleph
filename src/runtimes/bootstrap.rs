@@ -9,6 +9,7 @@ use super::os::TargetOs;
 use super::post_install;
 use super::probe;
 use super::specs::{find_spec, select_install, InstallStrategy};
+use crate::utils::no_window::NoWindow;
 
 /// Result of a bootstrap attempt.
 #[derive(Debug)]
@@ -143,7 +144,12 @@ enum CmdOutcome {
 const BOOTSTRAP_TIMEOUT_SECS: u64 = 600;
 
 async fn run_cmd(cmd: &mut Command) -> Result<CmdOutcome, BootstrapError> {
-    let output = match timeout(Duration::from_secs(BOOTSTRAP_TIMEOUT_SECS), cmd.output()).await {
+    let output = match timeout(
+        Duration::from_secs(BOOTSTRAP_TIMEOUT_SECS),
+        cmd.no_window().output(),
+    )
+    .await
+    {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => return Err(BootstrapError::Io(e)),
         Err(_) => return Err(BootstrapError::Timeout(BOOTSTRAP_TIMEOUT_SECS)),
@@ -277,6 +283,7 @@ async fn fnm_lts_bin_dir() -> Option<PathBuf> {
                 "-e",
                 "process.stdout.write(require('path').dirname(process.execPath))",
             ])
+            .no_window()
             .output(),
     )
     .await;

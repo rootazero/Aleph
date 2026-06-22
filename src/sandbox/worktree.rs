@@ -30,6 +30,7 @@ use std::sync::Arc;
 use tokio::process::Command;
 
 use crate::harness::TraceSink;
+use crate::utils::no_window::NoWindow;
 
 /// RAII handle to a git worktree. Call `cleanup()` to remove it; `Drop` is the safety net.
 pub struct WorktreeHandle {
@@ -105,6 +106,7 @@ impl Drop for WorktreeHandle {
                 .arg("remove")
                 .arg("--force")
                 .arg(&path)
+                .no_window()
                 .status();
             if let Err(e) = status {
                 tracing::error!(
@@ -151,6 +153,7 @@ pub async fn create(
         .arg("--detach")
         .arg(&path)
         .arg("HEAD")
+        .no_window()
         .output()
         .await
         .map_err(|e| WorktreeError::Create(format!("spawn git: {e}")))?;
@@ -182,6 +185,7 @@ async fn remove_worktree(repo_root: &Path, path: &Path) -> Result<(), WorktreeEr
         .arg("remove")
         .arg("--force")
         .arg(path)
+        .no_window()
         .output()
         .await
         .map_err(|e| WorktreeError::Cleanup {
@@ -240,7 +244,7 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
             .env("CARGO_TARGET_DIR", self.worktree_path.join("target"));
 
         let exec = if let Some(timeout) = command.timeout {
-            match tokio::time::timeout(timeout, cmd.output()).await {
+            match tokio::time::timeout(timeout, cmd.no_window().output()).await {
                 Ok(Ok(out)) => out,
                 Ok(Err(e)) => return Err(crate::sandbox::SandboxError::Io(e.to_string())),
                 Err(_) => {
@@ -258,7 +262,8 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
                 }
             }
         } else {
-            cmd.output()
+            cmd.no_window()
+                .output()
                 .await
                 .map_err(|e| crate::sandbox::SandboxError::Io(e.to_string()))?
         };

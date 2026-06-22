@@ -2,6 +2,7 @@
 //!
 //! Checks availability of Node.js, Python, Bun, etc. before starting servers.
 
+use crate::utils::no_window::NoWindow;
 use std::process::Command;
 
 /// Runtime types that external MCP servers may require
@@ -130,7 +131,7 @@ pub fn check_runtime(kind: RuntimeKind) -> RuntimeCheckResult {
     // reports a version wins. This lets Python fall back from `python3` to
     // `python` on Windows / minimal Linux hosts.
     for cmd in candidates {
-        let version_output = Command::new(cmd).arg("--version").output();
+        let version_output = Command::new(cmd).arg("--version").no_window().output();
 
         if let Ok(output) = version_output {
             if output.status.success() {
@@ -179,6 +180,7 @@ fn get_runtime_path(cmd: &str) -> Option<String> {
 
     Command::new(which_cmd)
         .arg(cmd)
+        .no_window()
         .output()
         .ok()
         .filter(|o| o.status.success())

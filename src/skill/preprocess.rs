@@ -28,6 +28,7 @@
 //!   This keeps arbitrary command execution off by default (P7 defensive
 //!   design) while still giving skill authors the capability when they ask.
 
+use crate::utils::no_window::NoWindow;
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -240,7 +241,7 @@ async fn run_snippet(cmd: &str, ctx: &SkillPreprocessContext) -> String {
         command.env("ALEPH_SESSION_ID", session_id);
     }
 
-    match tokio::time::timeout(ctx.timeout, command.output()).await {
+    match tokio::time::timeout(ctx.timeout, command.no_window().output()).await {
         Ok(Ok(output)) => {
             let mut s = String::from_utf8_lossy(&output.stdout).into_owned();
             // Strip trailing newlines like POSIX command substitution.

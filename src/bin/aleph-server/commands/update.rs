@@ -11,6 +11,7 @@
 //! same battle-tested path the user originally installed with. The installer
 //! places the new binary; the running daemon must be restarted to pick it up.
 
+use alephcore::utils::no_window::NoWindow;
 use std::error::Error;
 use std::time::Duration;
 
@@ -112,6 +113,7 @@ fn run_installer() -> Result<(), Box<dyn Error>> {
     };
 
     let status = cmd
+        .no_window()
         .status()
         .map_err(|e| format!("failed to launch the installer: {e}"))?;
     if !status.success() {

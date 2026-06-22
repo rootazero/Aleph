@@ -2,6 +2,7 @@
 //!
 //! Implements host, Docker, and `VirtualFs` execution modes for Markdown CLI tools.
 
+use crate::utils::no_window::NoWindow;
 use anyhow::Result;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -145,7 +146,7 @@ impl MarkdownCliTool {
 
         // Execute with timeout
         let timeout = self.execution_timeout();
-        let output = tokio::time::timeout(timeout, cmd.output())
+        let output = tokio::time::timeout(timeout, cmd.no_window().output())
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
@@ -260,6 +261,7 @@ impl MarkdownCliTool {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .stdin(Stdio::null())
+                .no_window()
                 .output(),
         )
         .await
@@ -418,7 +420,7 @@ impl MarkdownCliTool {
 
         // Execute with timeout
         let timeout = self.execution_timeout();
-        let output = tokio::time::timeout(timeout, cmd.output())
+        let output = tokio::time::timeout(timeout, cmd.no_window().output())
             .await
             .map_err(|_| {
                 anyhow::anyhow!(

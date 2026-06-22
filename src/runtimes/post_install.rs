@@ -7,6 +7,7 @@ use tokio::time::{timeout, Duration};
 use tracing::warn;
 
 use super::specs::PostInstallAction;
+use crate::utils::no_window::NoWindow;
 
 /// Errors from post-install actions.
 #[derive(Debug, thiserror::Error)]
@@ -50,7 +51,12 @@ fn expand_home(template: &str) -> Result<String, PostInstallError> {
 const POST_INSTALL_TIMEOUT_SECS: u64 = 300;
 
 async fn run_cmd_with_timeout(cmd: &mut Command) -> Result<std::process::Output, PostInstallError> {
-    match timeout(Duration::from_secs(POST_INSTALL_TIMEOUT_SECS), cmd.output()).await {
+    match timeout(
+        Duration::from_secs(POST_INSTALL_TIMEOUT_SECS),
+        cmd.no_window().output(),
+    )
+    .await
+    {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(e)) => Err(PostInstallError::Io(e)),
         Err(_) => Err(PostInstallError::Timeout(POST_INSTALL_TIMEOUT_SECS)),

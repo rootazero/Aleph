@@ -1,6 +1,7 @@
 //! ACP session — manages a single CLI subprocess lifecycle.
 
 use crate::sync_primitives::{Arc, RwLock};
+use crate::utils::no_window::NoWindow;
 use std::time::Duration;
 use tokio::process::{Child, Command};
 use tracing::{debug, error, info, warn};
@@ -141,7 +142,7 @@ impl AcpSession {
             cmd.env(key, val);
         }
 
-        let mut child = cmd.spawn().map_err(|e| {
+        let mut child = cmd.no_window().spawn().map_err(|e| {
             crate::acp::protocol::AcpOperationError::new(
                 crate::acp::protocol::AcpErrorCode::SpawnFailed,
                 format!(

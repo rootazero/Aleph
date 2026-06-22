@@ -7,6 +7,7 @@ use super::{
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
 use crate::extension::ExtensionError;
 use crate::sync_primitives::Arc;
+use crate::utils::no_window::NoWindow;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
@@ -567,7 +568,7 @@ impl HookExecutor {
         // Execute with timeout (per-hook override > executor default)
         let effective = self.effective_timeout(timeout_override.map(|d| d.as_secs()));
         let output = match timeout(effective, async {
-            let mut child = cmd.spawn().map_err(|e| {
+            let mut child = cmd.no_window().spawn().map_err(|e| {
                 ExtensionError::HookExecution(format!("Failed to spawn command: {e}"))
             })?;
             if let Some(mut stdin) = child.stdin.take() {
