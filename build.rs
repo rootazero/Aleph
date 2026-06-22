@@ -12,6 +12,20 @@ fn main() {
     // checkouts change — without this, edits land only after a clean build.
     println!("cargo:rerun-if-changed=skills");
     println!("cargo:rerun-if-changed=plugins");
+    // The Panel UI (interfaces/webchat/dist) is embedded UNCONDITIONALLY via
+    // rust_embed (src/gateway/control_plane/assets.rs compiles regardless of the
+    // `control-plane` feature). rust_embed emits no rerun-if-changed for its
+    // folder, so without this an incremental `cargo build` after `just wasm`
+    // reuses the cached embed and serves a STALE panel. This MUST stay outside
+    // the `control-plane` cfg block below: production server builds (`just
+    // build`) don't enable that feature, so a gated trigger never fires and the
+    // panel never re-embeds.
+    println!("cargo:rerun-if-changed=interfaces/webchat/dist");
+    if let Ok(entries) = std::fs::read_dir("interfaces/webchat/dist") {
+        for entry in entries.flatten() {
+            println!("cargo:rerun-if-changed={}", entry.path().display());
+        }
+    }
     if let Ok(version) = std::fs::read_to_string("VERSION") {
         let version = version.trim();
         println!("cargo:rustc-env=ALEPH_VERSION={version}");
@@ -31,15 +45,8 @@ fn main() {
         let control_plane_dir = Path::new("interfaces/webchat");
         let dist_dir = control_plane_dir.join("dist");
 
-        // Watch dist/ files so cargo recompiles when assets change (rust-embed)
-        println!("cargo:rerun-if-changed=interfaces/webchat/dist");
-        if dist_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&dist_dir) {
-                for entry in entries.flatten() {
-                    println!("cargo:rerun-if-changed={}", entry.path().display());
-                }
-            }
-        }
+        // (dist/ rerun-if-changed is emitted unconditionally above — the embed
+        // is not gated by `control-plane`, so its trigger must not be either.)
 
         // Watch source for fallback trunk build trigger
         println!("cargo:rerun-if-changed=interfaces/webchat/src");
