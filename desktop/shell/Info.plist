@@ -7,5 +7,18 @@
          access outright, regardless of the in-webview grant wry performs. -->
     <key>NSMicrophoneUsageDescription</key>
     <string>Aleph uses the microphone to transcribe your speech into chat messages. Audio is sent only to your local Aleph daemon for transcription.</string>
+    <!-- The Panel-only (lite) shell points WKWebView at a user-chosen remote
+         aleph-server over plain HTTP (a LAN IP, or a direct host:18790). Default
+         ATS blocks cleartext HTTP and does NOT exempt IP-literal hosts inside
+         WKWebView, so without this the webview silently fails to load the remote
+         core and the Panel stays blank. The trust boundary here is the network +
+         Gateway token (see SECURITY.md), not TLS, so cleartext to the operator's
+         chosen core is intentional. (The full app talks to loopback, already
+         exempt — this is harmless there.) -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
 </dict>
 </plist>
