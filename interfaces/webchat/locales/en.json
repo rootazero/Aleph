@@ -361,23 +361,11 @@
   },
   "settings": {
     "network": {
-      "local_service": "Local Service",
-      "remote_service": "Remote Service",
       "section_title": "Service Connection",
-      "description": "Choose which Aleph service this Panel connects to (local or remote).",
-      "browser_only": "Running in a browser — connection switching is only available inside the desktop app.",
-      "preview": "Preview:",
-      "apply": "Apply",
-      "local_target": "Local",
-      "confirm_switch": "Switch to {{ target }} and reload the Panel — confirm?",
-      "confirm_switch_action": "Confirm switch",
-      "local_stays_running": "The local service keeps running in the background after switching to remote (it may still be serving CLI or other channels). To stop it, use Quit & Stop Aleph from the tray.",
+      "description": "The Aleph service this Panel is connected to. The full app is fixed to its local core; the panel-only app connects to a remote core.",
       "connected_label": "Connected to:",
       "badge_remote": "Remote core",
-      "badge_local": "Local core",
-      "remote_readonly_lite": "This panel-only app is connected to a remote core — read-only here.",
-      "remote_readonly_full": "This desktop app is currently connected to a remote core — read-only here.",
-      "remote_readonly_hint": "To change the connection, use \"Connect to Remote…\" or \"Back to Local\" from the tray menu."
+      "badge_local": "Local core"
     },
     "title": "Settings",
     "welcome": "Welcome to Settings",
