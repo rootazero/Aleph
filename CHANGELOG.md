@@ -7,6 +7,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.6.22]
+
+A large release. The headline is **Aleph Hub** — a single federated marketplace
+for MCP servers, plugins, and skills — alongside multi-agent **Teams**, a
+**Strategy** planner, a self-paced **Loop** tool, an associative **memory
+graph**, **streaming voice**, and project workspaces.
+
+### Added
+
+- **Aleph Hub — one federated extension marketplace** — a new top-level Hub
+  unifies MCP servers, plugins, and skills into a single browsable catalog
+  (replacing the separate ClawHub / extensions tabs). Browse by category with
+  featured shelves, type/trust filters, and full-text search, then open a
+  detail drawer with up-front permission disclosure.
+- **Trust-gated install flow** — a trust modal plus a schema-driven config
+  wizard (`json_schema_form`) collects required env/secrets, routes the install
+  (MCP add / plugin / skill), runs post-install verification, and exposes an
+  Installed view to toggle or remove items.
+- **Source federation with provenance** — the catalog aggregates multiple
+  sources (Aleph Hub, marketplace, MCP registry, Docker-MCP), dedups across
+  them by priority, stamps a "via {source}" provenance badge, and refreshes via
+  background periodic sync with a last-good cache.
+- **LLM-driven extension install** — operator-gated Hub builtin tools (catalog
+  sync, resolve spec, fetch docs, trust-gated install + verify) let the agent
+  install extensions through conversation.
+- **Multi-agent Teams (group-chat orchestration)** — create a team with an
+  explicit leader + members and run them as a group chat. The leader
+  orchestrates tracked tasks (assign → member submits → leader reviews
+  accept/reject) behind a leader-first gate and a fire-once team planner, with
+  bounded task retry (exponential backoff + jitter) and cascade hard-delete on
+  disband. Panel gains attributed bubbles with emoji avatars, a participants
+  popover, `@`-mention autocomplete, live-refreshing 任务/deliverables tabs,
+  durable history replay, and rename/disband controls.
+- **Mixture-of-Agents synthesis** — subagent batch fan-out can synthesize
+  multiple agent answers into one.
+- **Strategy planner** — a tool-free, fail-soft planner fires once at goal-set,
+  loop-start, and team-chat, writes a Strategy artifact, and welds the
+  run-global strategy into spawned subagents. Surfaced through `<strategy>` /
+  `<strategy_reminder>` prompt layers and configurable under `[strategy]`.
+- **Loop tool (self-paced recurring runs)** — a `loop` builtin
+  (start/stop/status/update) with a default soft iteration cap, token-budget
+  enforcement, fail-closed tick handling, and continuation-hook re-fire.
+- **Associative memory graph** — 4-signal community-aware recall on the primary
+  retrieval path, backed by a hand-rolled Louvain community detection (no
+  external crate), graph snapshot/cache/insights tables, and graph-health
+  insights (isolated / sparse / bridge / surprising) exposed to the LLM.
+- **Obsidian-compatible vault** — emit/parse frontmatter (type/title/aliases)
+  for byte-compatible round-trip, auto-generated `.obsidian` config,
+  frontmatter `aliases` now resolving inside `[[wikilinks]]`, and
+  LLM-maintained `overview.md` / `purpose.md` orientation files.
+- **Memory Hub & governance (Panel)** — the graph canvas and the vault table
+  merge into one Memory Hub with a shared toolbar, search, and forward/reverse
+  links between nodes and rows; new Dream Insights and Corrections governance
+  views; and a retrieval-trace debug panel backed by `memory.retrieve_with_trace`
+  with real per-stage scoring telemetry.
+- **Streaming voice** — a streaming speech-to-text contract with Deepgram and
+  WhisperLive adapters, `voice.stream.{start,audio,stop}` RPC + delta topic, a
+  `voice.format` fast-model regularization pass, an immersive streaming session
+  (wave-wipe lock, interim/committed/locked captions), and echo-aware barge-in.
+- **Project workspaces** — a session can bind a project folder as CWD with its
+  own project `CLAUDE.md`, persisted across restarts; the sidebar gains pinned
+  / recent / projects sections with pin/unpin.
+- **Firecrawl search provider** — a 9th search provider over `/v2/search` with
+  date-range mapping and Test Connection support.
+- **Cost-aware route load balancing** — LiteLLM lowest-cost and RouteLLM
+  cost-axis routing across a model pool.
+- **MCP presets & secrets** — a built-in preset catalog with
+  `mcp.list_presets` / `mcp.install_preset` planning
+  (NeedsKey/AlreadyInstalled/NoRuntime/Ready) and per-server vault secret
+  injection at spawn.
+- **Soul archetypes** — three-layer soul composition (Base + Archetype +
+  Personalization) with four built-in archetypes (Expert / Companion /
+  Assistant / Maker) and an agent-creation interview.
+- **Bundled official content** — official skills/plugins are sourced from git
+  submodules and embedded at build time, with first-run clone-with-fallback,
+  git2 hard-reset sync, `aleph skills sync` / `aleph plugin sync`, and a
+  `bundled.sync` RPC; `skill-creator` ships as a built-in skill.
+- **Generation presets** — Volcengine Ark image/video presets (Seedream /
+  Seedance) + veImageX MCP mount, speaking-speed honored in ElevenLabs / Azure
+  / Cartesia TTS, plus Cohere rerank and Jina/Mistral embed presets.
+- **/doctor self-repair** — a `/doctor` command and an `f`-hotkey that run
+  doctor + LLM repair, backed by a WebRich-gated repair-hint prompt layer.
+- **Platform & ops** — a Windows `install.ps1` server installer, Windows
+  `screen_record` via ffmpeg gdigrab, console child-window suppression, a
+  standalone `aleph-server update [--check]`, a third Panel appearance axis
+  (紧凑度 density knob) with a redesigned mode-nav sidebar, glob-pattern
+  tool-name permission overrides, and an `agent_switch` tool.
+
+### Changed
+
+- **Multi-model robustness** — per-model `ModelRobustnessProfile` loop
+  thresholds with distinctness-based loop detection: legitimate fan-out is
+  allowed and a thrashing loop is steered instead of halted. `resolve_behavior`
+  is the single source of truth driving per-family coaching deltas; Kimi/Minimax
+  ship anthropic-primary presets; grace salvage covers per-turn/stall timeouts
+  and a majority-failure soft-landing precedes the hard cap.
+- **Context management** — per-model compaction thresholds tuned to each
+  model's context window, a cheap-tier summarization provider from
+  `[context_budget]`, a preventive-band gate for cheap preflight passes, and
+  proportional CJK/code token blending in the pressure sensor.
+- **Panel auth** collapses to a single-tier Gateway-token model with a 2-tier
+  device permission (Chat / Config).
+- **Routing** dissolves the vestigial regex intent classifier (R7/P8) —
+  semantic routing only.
+- Large modules (>1000 lines) split into directory submodules; `gateway.log`
+  rotates on start with 7-day retention; console logging attaches only on an
+  interactive TTY.
+
+### Fixed
+
+- **Security sweep** — anchored `sk-` secret-leak patterns at word boundaries
+  (killing false positives like `elon-musk-`), a PII email-detection leak, path
+  traversal in notes / extensions-uninstall / exec, SSRF allowlist + metadata-IP
+  hardening, OAuth callback HTML escaping, and lock-poisoning recovery across
+  subsystems.
+- **Cross-platform** — Windows daemon lifecycle / process-liveness,
+  `atomic_write` fsync, the NSIS installer icon, and a broad
+  check/test/clippy clean-up; UTF-8 char/byte truncation panics across model-id
+  parse, ACP/cluster windows, and CJK content.
+- **web_fetch** now preserves link URLs and `<time>` timestamps in the selector
+  fallback (fixes "页面未提供" on index pages).
+- **Voice** — round-2 silent TTS, a dropped final sentence in the splitter, and
+  stale keep-alive stalls on OpenAI-compatible TTS.
+- **Auto-update** — the macOS path now applies staged updates; Linux deb/rpm
+  degrade gracefully to the releases page.
+- **Memory** — correction agent-id routing, wikilink re-resolution after a
+  concurrent rebuild, and staged-write dedup to prevent commit ENOENT.
+
 ## [26.6.14]
 
 ### Added
