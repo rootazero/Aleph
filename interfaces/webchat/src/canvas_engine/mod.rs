@@ -9,7 +9,6 @@ pub mod interaction;
 pub mod json_canvas;
 pub mod layout;
 pub mod markdown_excerpt;
-pub mod mini_map;
 pub mod navigation;
 pub mod prefetch;
 pub mod renderer;

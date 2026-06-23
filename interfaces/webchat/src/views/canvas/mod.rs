@@ -2,16 +2,10 @@ mod edge_label;
 mod galaxy_canvas;
 pub mod gl;
 mod graph_canvas;
-#[cfg(target_arch = "wasm32")]
-mod minimap_view;
 pub mod node_card;
 mod node_detail_panel;
 
 pub use node_detail_panel::{NodeDetailPanel, NodeExcerpt};
-
-use crate::canvas_engine::mini_map::GlobalMiniMap;
-#[cfg(target_arch = "wasm32")]
-use minimap_view::MiniMapOverlay;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -259,16 +253,6 @@ fn RadialCanvasView() -> impl IntoView {
     // Non-reactive 60fps canvas state
     let graph_state = Rc::new(RefCell::new(GraphState::new()));
 
-    // Minimap state — rebuilt once on mount, repainted reactively on focus changes
-    let minimap: Rc<RefCell<GlobalMiniMap>> = Rc::new(RefCell::new(GlobalMiniMap::empty(200.0)));
-    let (focus_id, set_focus_id) = signal(None::<String>);
-    let (focus_neighbors, set_focus_neighbors) = signal(Vec::<String>::new());
-    // `view!` consumes these signals only when targeting WASM; silence the
-    // unused-variable warning on the native (cargo check) target.
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = (focus_id, focus_neighbors);
-    let (_visible_counts, set_visible_counts) = signal((0usize, 0usize));
-
     // -----------------------------------------------------------------------
     // Agent-switch reset Effect.
     // Subscribes to `agent_id`; on a real change (prev != current), wipes all
@@ -294,9 +278,6 @@ fn RadialCanvasView() -> impl IntoView {
                 set_selected_node.set(None);
                 search_query.set(String::new());
                 set_fold_threshold.set(12);
-                set_focus_id.set(None);
-                set_focus_neighbors.set(Vec::new());
-                set_visible_counts.set((0, 0));
                 last_response.set(None);
                 prefetch_request.set(None);
                 all_dtos.set(Vec::new());
@@ -342,7 +323,6 @@ fn RadialCanvasView() -> impl IntoView {
     // -----------------------------------------------------------------------
     let nav_init = nav.clone();
     let gs_init = graph_state.clone();
-    let minimap_init = minimap.clone();
     let prefetch_init = prefetch.clone();
     Effect::new(move || {
         if !state.is_connected.get() {
@@ -351,7 +331,6 @@ fn RadialCanvasView() -> impl IntoView {
         let agent = agent_id.get();
         let nav_inner = nav_init.clone();
         let gs_inner = gs_init.clone();
-        let minimap_inner = minimap_init.clone();
         let prefetch_inner = prefetch_init.clone();
 
         spawn_local(async move {
@@ -362,8 +341,6 @@ fn RadialCanvasView() -> impl IntoView {
             let query_result = GraphApi::query(&state, &agent, 500, vec![]).await.ok();
             if let Some(ref r) = query_result {
                 all_dtos.set(r.nodes.clone());
-                let mm = GlobalMiniMap::build(&r.nodes, &r.edges, 200.0);
-                *minimap_inner.borrow_mut() = mm;
                 // Build deterministic 3D galaxy seed from full-graph topology.
                 galaxy_data.set(Some(build_galaxy(r)));
             }
@@ -390,15 +367,6 @@ fn RadialCanvasView() -> impl IntoView {
                     let dtos = all_dtos.get_untracked();
                     populate_orphans(&mut nbhd, &dtos);
                     let name = nbhd.center.name.clone();
-                    let one_hop_len = nbhd.one_hop.len();
-                    let total_len = one_hop_len
-                        + nbhd
-                            .clusters
-                            .iter()
-                            .map(|c| c.member_ids.len())
-                            .sum::<usize>();
-                    let neighbor_ids: Vec<String> =
-                        nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
                     seed_graph_state(&gs_inner, &nbhd, Some(entry_id.clone()));
                     nav_inner
                         .borrow_mut()
@@ -408,9 +376,6 @@ fn RadialCanvasView() -> impl IntoView {
                         .put(entry_id.clone(), resp.clone(), now_ms);
                     last_response.set(Some((entry_id.clone(), resp)));
                     active_request.set(Some(entry_id.clone()));
-                    set_focus_id.set(Some(entry_id));
-                    set_focus_neighbors.set(neighbor_ids);
-                    set_visible_counts.set((one_hop_len, total_len));
                 }
                 Err(e) => {
                     web_sys::console::error_1(
@@ -448,20 +413,9 @@ fn RadialCanvasView() -> impl IntoView {
             let dtos = all_dtos.get_untracked();
             populate_orphans(&mut nbhd, &dtos);
             let name = nbhd.center.name.clone();
-            let one_hop_len = nbhd.one_hop.len();
-            let total_len = one_hop_len
-                + nbhd
-                    .clusters
-                    .iter()
-                    .map(|c| c.member_ids.len())
-                    .sum::<usize>();
-            let neighbor_ids: Vec<String> = nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
             seed_graph_state(&gs_req, &nbhd, Some(id.clone()));
             nav_req.borrow_mut().fulfilled(id.clone(), name, nbhd);
             last_response.set(Some((id.clone(), raw)));
-            set_focus_id.set(Some(id));
-            set_focus_neighbors.set(neighbor_ids);
-            set_visible_counts.set((one_hop_len, total_len));
             return;
         }
 
@@ -477,24 +431,12 @@ fn RadialCanvasView() -> impl IntoView {
                     let dtos = all_dtos.get_untracked();
                     populate_orphans(&mut nbhd, &dtos);
                     let name = nbhd.center.name.clone();
-                    let one_hop_len = nbhd.one_hop.len();
-                    let total_len = one_hop_len
-                        + nbhd
-                            .clusters
-                            .iter()
-                            .map(|c| c.member_ids.len())
-                            .sum::<usize>();
-                    let neighbor_ids: Vec<String> =
-                        nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
                     seed_graph_state(&gs_fetch, &nbhd, Some(id.clone()));
                     nav_fetch.borrow_mut().fulfilled(id.clone(), name, nbhd);
                     prefetch_fetch
                         .borrow_mut()
                         .put(id.clone(), resp.clone(), now_ms);
                     last_response.set(Some((id.clone(), resp)));
-                    set_focus_id.set(Some(id));
-                    set_focus_neighbors.set(neighbor_ids);
-                    set_visible_counts.set((one_hop_len, total_len));
                 }
                 Err(e) => {
                     nav_fetch.borrow_mut().fail(id.clone(), e.clone());
@@ -606,22 +548,10 @@ fn RadialCanvasView() -> impl IntoView {
         let dtos = all_dtos.get_untracked();
         populate_orphans(&mut nbhd, &dtos);
 
-        let one_hop_len = nbhd.one_hop.len();
-        let total_len = one_hop_len
-            + nbhd
-                .clusters
-                .iter()
-                .map(|c| c.member_ids.len())
-                .sum::<usize>();
-        let neighbor_ids: Vec<String> = nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
-
         update_graph_state_nodes_only(&gs_refold, &nbhd);
         nav_refold
             .borrow_mut()
             .retarget(nbhd, now, RETARGET_DURATION_MS);
-
-        set_focus_neighbors.set(neighbor_ids);
-        set_visible_counts.set((one_hop_len, total_len));
     });
 
     // -----------------------------------------------------------------------
@@ -788,24 +718,6 @@ fn RadialCanvasView() -> impl IntoView {
                     <NodeDetailPanel excerpts=detail_panel_excerpts />
                 </div>
             })}
-            {
-                #[cfg(target_arch = "wasm32")]
-                {
-                    view! {
-                        <MiniMapOverlay
-                            minimap=minimap.clone()
-                            focus_id=focus_id
-                            focus_neighbor_ids=focus_neighbors
-                            on_pick=move |id: String| {
-                                set_selected_node.set(Some(id.clone()));
-                                active_request.set(Some(id));
-                            }
-                        />
-                    }
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                {  }
-            }
         </div>
     }
 }
