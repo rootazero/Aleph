@@ -23,6 +23,14 @@ const DRIFT_AMPLITUDE: f32 = 3.0;
 /// Idle drift: period of one full oscillation in milliseconds.
 const DRIFT_PERIOD_MS: f32 = 5000.0;
 
+/// Wheel-zoom sensitivity. The zoom factor is `exp(normalized_delta * this)`,
+/// where `normalized_delta = wheel_delta / 100` clamped to ±2. This makes zoom
+/// *proportional* to how far the wheel actually moved (a light flick nudges; a
+/// firm scroll moves more) instead of a fixed ±10% per event — which compounded
+/// rapidly when one physical gesture fires many wheel events (trackpads,
+/// smooth-scroll mice). A standard mouse notch (~100px) ≈ 5% zoom.
+const ZOOM_SENSITIVITY: f32 = 0.05;
+
 pub struct Scene {
     ctx: GlContext,
     nodes: NodeRenderer,
@@ -218,7 +226,13 @@ impl Scene {
     }
 
     pub fn on_wheel(&mut self, delta: f32, t_ms: f64) {
-        let factor = if delta > 0.0 { 1.1 } else { 0.9 };
+        // Zoom proportional to the actual wheel delta (device-normalized) so the
+        // camera follows the wheel instead of jumping a fixed step per event.
+        // Exponential keeps it smooth and symmetric across zoom in/out; the ±2
+        // clamp caps a single outsized delta while letting many small trackpad
+        // events accumulate naturally.
+        let normalized = (delta / 100.0).clamp(-2.0, 2.0);
+        let factor = (normalized * ZOOM_SENSITIVITY).exp();
         self.camera.zoom(factor);
         self.camera.note_interaction(t_ms);
     }
@@ -286,7 +300,7 @@ impl Scene {
         let vp = self.camera.view_proj(aspect);
         // Store for picking (uses stable canonical positions, not drifted).
         self.last_vp = vp;
-        self.edges.draw(gl, &vp);
+        self.edges.draw(gl, &vp, (self.width as f32, self.height as f32));
         self.nodes.draw(gl, &vp, (self.width as f32, self.height as f32));
         // Restore blend state after scene draw — bloom passes will disable blend.
         gl.disable(Gl::BLEND);

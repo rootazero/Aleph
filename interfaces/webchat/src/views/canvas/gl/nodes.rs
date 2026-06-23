@@ -80,13 +80,13 @@ impl NodeRenderer {
             offsets.extend_from_slice(&[pos.x, pos.y, pos.z]);
             let base = 6.0 + (node.link_count as f32).sqrt() * 4.0;
             let lit = !has_hl || hl.map(|s| s.contains(&(i as u32))).unwrap_or(true);
-            sizes.push(if lit { base } else { base * 0.5 });
+            sizes.push(if lit { base } else { base * 0.9 });
             let [r, g, b] = node.color;
             if lit {
                 let [br, bg, bb] = crate::canvas_engine::category_color::hdr_boost(node.color);
                 colors.extend_from_slice(&[br, bg, bb]);
             } else {
-                colors.extend_from_slice(&[r * 0.15, g * 0.15, b * 0.15]);
+                colors.extend_from_slice(&[r * 0.7, g * 0.7, b * 0.7]);
             }
         }
         self.count = n as i32;
@@ -106,14 +106,14 @@ impl NodeRenderer {
             // size grows with degree; highlighted 0.5x, dimmed base.
             let base = 6.0 + (node.link_count as f32).sqrt() * 4.0;
             let lit = !has_hl || hl.map(|s| s.contains(&(i as u32))).unwrap_or(true);
-            sizes.push(if lit { base } else { base * 0.5 });
+            sizes.push(if lit { base } else { base * 0.9 });
             let [r, g, b] = node.color;
             if lit {
                 // HDR boost so bloom picks up a glow corona.
                 let [br, bg, bb] = crate::canvas_engine::category_color::hdr_boost(node.color);
                 colors.extend_from_slice(&[br, bg, bb]);
             } else {
-                colors.extend_from_slice(&[r * 0.15, g * 0.15, b * 0.15]);
+                colors.extend_from_slice(&[r * 0.7, g * 0.7, b * 0.7]);
             }
         }
         self.count = n as i32;
