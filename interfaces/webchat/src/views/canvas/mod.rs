@@ -662,18 +662,23 @@ fn RadialCanvasView() -> impl IntoView {
         _ => {}
     };
 
-    // Search: on_search is driven by the hub toolbar's search field via mem.search_query.
-    // The toolbar writes search_query live on every keystroke; the canvas subscribes live
-    // (matching the pattern noted in toolbar.rs: "the graph reads search_query live").
+    // Search: driven by the hub toolbar's Enter-submit pulse (`mem.search_nonce`).
+    // The toolbar writes `search_query` live on every keystroke but only bumps
+    // `search_nonce` on Enter (same pattern as views/memory/mod.rs:149-157).
+    // Subscribing to `search_nonce` here prevents a graph.search RPC + camera
+    // fly-to on every keystroke; the query is read untracked to avoid a second
+    // subscription.
+    //
     // On a match, drive the 3D galaxy's intent channels: fly-to + highlight + open panel.
     // active_request is NOT set here — it drove the retired radial-fetch path; leaving
     // it disconnected from search prevents stale graph.neighbors fetches in the console.
     Effect::new(move || {
-        let query = search_query.get();
+        mem.search_nonce.get(); // subscribe to Enter-submit pulses only
+        let query = search_query.get_untracked();
         if query.is_empty() {
             return;
         }
-        let agent = agent_id.get();
+        let agent = agent_id.get_untracked();
         spawn_local(async move {
             match GraphApi::search(&state, &agent, &query, 20).await {
                 Ok(response) => {
@@ -706,14 +711,16 @@ fn RadialCanvasView() -> impl IntoView {
     // and drives the 3D galaxy intent channels to fly to and highlight the node.
     //
     // Feedback-loop avoidance:
-    // - `mem.memory_view` is read with `get_untracked()` — the Effect only
-    //   subscribes to `mem.selected_node` changes, not to memory_view.
-    // - When SelectNode fires inside the canvas (on_event), it writes
-    //   `set_selected_node` (= mem.selected_node) too. To avoid re-triggering
-    //   the fly-to for in-canvas selections, we only act when memory_view is
-    //   Graph AND the change came in as a list-originated locate. In practice,
-    //   flying to an already-visible node is idempotent, so over-triggering
-    //   is benign; we still gate on Graph view to avoid no-op work.
+    // 1. `mem.memory_view` is read with `get_untracked()` — the Effect only
+    //    subscribes to `mem.selected_node` changes, not to memory_view.
+    // 2. In-canvas clicks (on_event::SelectNode) and the search Effect BOTH
+    //    write `focus_request` BEFORE (synchronously, in the same handler as)
+    //    writing `mem.selected_node`. By the time this async Effect runs,
+    //    `focus_request` already holds the id they initiated. The dedupe guard
+    //    below detects that and returns early, so the fly-to animation is not
+    //    restarted mid-flight (no visible stutter on galaxy clicks).
+    //    List-originated locates (on_locate) do NOT pre-set `focus_request`,
+    //    so the guard passes and a fresh fly-to is triggered — the intended path.
     // -----------------------------------------------------------------------
     Effect::new(move || {
         let Some(node_id) = mem.selected_node.get() else {
@@ -722,6 +729,13 @@ fn RadialCanvasView() -> impl IntoView {
         // Only act when the memory hub is showing the Graph view; list-originated
         // locates always flip to Graph first (see on_locate in memory/mod.rs).
         if mem.memory_view.get_untracked() != MemoryView::Graph {
+            return;
+        }
+        // Dedupe guard: if focus_request already holds this id, the fly-to was
+        // initiated by an in-canvas click or the search Effect (which both set
+        // focus_request synchronously before setting selected_node). Skip to
+        // avoid restarting the camera animation mid-flight.
+        if focus_request.get_untracked().as_deref() == Some(node_id.as_str()) {
             return;
         }
         // Drive 3D galaxy: fly camera to the located node.
