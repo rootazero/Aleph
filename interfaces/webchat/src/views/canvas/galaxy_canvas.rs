@@ -110,7 +110,6 @@ pub fn GalaxyCanvas(
         }
         ptr_down_pd.set(true);
         last_ptr_pd.set((ev.client_x() as f32, ev.client_y() as f32));
-        let _ = (scene_pd.borrow(), ev); // keep scene alive
     };
 
     let scene_pm = scene.clone();
