@@ -47,7 +47,7 @@ if [[ -n "${REAL_VIOLATIONS// /}" ]]; then
     exit 1
 fi
 
-ALLOWED_MARKED=$(grep -rn 'PHASE-6-LEGACY' src/ --include='*.rs' | wc -l | tr -d ' ')
+ALLOWED_MARKED=$({ grep -rn 'PHASE-6-LEGACY' src/ --include='*.rs' || true; } | wc -l | tr -d ' ')
 if [[ "$ALLOWED_MARKED" -gt 5 ]]; then
     echo "❌ Too many PHASE-6-LEGACY markers ($ALLOWED_MARKED > 5). Clean up or ask for exception."
     exit 1
