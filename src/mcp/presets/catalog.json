@@ -76,7 +76,7 @@
     "official": true,
     "reachability": "cn-native",
     "transports": [
-      { "kind": "stdio", "command": "uvx", "args": ["--from", "git+https://github.com/rootazero/Aleph-mcp#subdirectory=siliconflow", "aleph-siliconflow-mcp"], "requires_runtime": "python" }
+      { "kind": "stdio", "command": "uvx", "args": ["--from", "git+https://github.com/rootazero/Aleph-mcp@v0.1.0#subdirectory=siliconflow", "aleph-siliconflow-mcp"], "requires_runtime": "python" }
     ],
     "required_env": [
       { "key": "SILICONFLOW_API_KEY", "label": "SiliconFlow API Key", "description": "平台 API Key", "secret": true, "required": true, "how_to_get_url": "https://cloud.siliconflow.cn/account/ak" },
