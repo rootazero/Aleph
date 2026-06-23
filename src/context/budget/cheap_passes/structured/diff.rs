@@ -71,14 +71,14 @@ pub(super) fn reduce_diff(text: &str) -> Option<Reduction> {
     // Keep a little context around anchors so each hunk stays readable. Context
     // never chains off context — the window is tested against the original
     // anchor predicate, not the (mutating) keep array.
-    for i in 0..total {
-        if keep[i] {
+    for (i, keep_i) in keep.iter_mut().enumerate() {
+        if *keep_i {
             continue;
         }
         let lo = i.saturating_sub(MAX_CONTEXT);
         let hi = (i + MAX_CONTEXT).min(total - 1);
         if (lo..=hi).any(|j| is_anchor(lines[j])) {
-            keep[i] = true;
+            *keep_i = true;
         }
     }
 
