@@ -3,7 +3,10 @@
 //! Pure-logic functions (`gaussian_weights`) are unit-tested on native target.
 //! GL-bound code (`BloomPipeline`) is verified by WASM compile gate + browser visual check.
 
-use web_sys::{WebGl2RenderingContext as Gl, WebGlFramebuffer, WebGlProgram, WebGlTexture};
+use web_sys::{
+    WebGl2RenderingContext as Gl, WebGlFramebuffer, WebGlProgram, WebGlTexture,
+    WebGlVertexArrayObject,
+};
 
 use super::context::compile_program;
 use super::shaders::{BLUR_FRAG, BRIGHT_FRAG, COMPOSITE_FRAG, FULLSCREEN_VERT};
@@ -117,6 +120,8 @@ pub struct BloomPipeline {
     prog_composite: WebGlProgram,
     /// Whether EXT_color_buffer_float was available.
     float_ext: bool,
+    /// Reusable empty VAO for gl_VertexID-based fullscreen draws (created once).
+    empty_vao: WebGlVertexArrayObject,
 }
 
 impl BloomPipeline {
@@ -132,6 +137,8 @@ impl BloomPipeline {
         let prog_blur = compile_program(gl, FULLSCREEN_VERT, BLUR_FRAG)?;
         let prog_composite = compile_program(gl, FULLSCREEN_VERT, COMPOSITE_FRAG)?;
 
+        let empty_vao = gl.create_vertex_array().ok_or("bloom vao")?;
+
         Ok(BloomPipeline {
             scene,
             pp,
@@ -139,6 +146,7 @@ impl BloomPipeline {
             prog_blur,
             prog_composite,
             float_ext,
+            empty_vao,
         })
     }
 
@@ -182,7 +190,7 @@ impl BloomPipeline {
         let loc = gl.get_uniform_location(&self.prog_bright, "u_threshold");
         gl.uniform1f(loc.as_ref(), 0.3);
 
-        draw_fullscreen(gl);
+        self.draw_fullscreen(gl);
 
         // --- Pass 2: Horizontal blur (pp[0] → pp[1]) ---
         gl.bind_framebuffer(Gl::FRAMEBUFFER, Some(&self.pp[1].fbo));
@@ -198,7 +206,7 @@ impl BloomPipeline {
         let loc = gl.get_uniform_location(&self.prog_blur, "u_texel");
         gl.uniform2f(loc.as_ref(), 1.0 / hw as f32, 1.0 / hh as f32);
 
-        draw_fullscreen(gl);
+        self.draw_fullscreen(gl);
 
         // --- Pass 3: Vertical blur (pp[1] → pp[0]) ---
         gl.bind_framebuffer(Gl::FRAMEBUFFER, Some(&self.pp[0].fbo));
@@ -215,7 +223,7 @@ impl BloomPipeline {
         let loc = gl.get_uniform_location(&self.prog_blur, "u_texel");
         gl.uniform2f(loc.as_ref(), 1.0 / hw as f32, 1.0 / hh as f32);
 
-        draw_fullscreen(gl);
+        self.draw_fullscreen(gl);
 
         // --- Pass 4: Composite (scene + bloom → default framebuffer) ---
         gl.bind_framebuffer(Gl::FRAMEBUFFER, None);
@@ -236,7 +244,7 @@ impl BloomPipeline {
         let loc = gl.get_uniform_location(&self.prog_composite, "u_intensity");
         gl.uniform1f(loc.as_ref(), 1.2);
 
-        draw_fullscreen(gl);
+        self.draw_fullscreen(gl);
 
         // Clean up texture bindings.
         gl.active_texture(Gl::TEXTURE1);
@@ -244,21 +252,15 @@ impl BloomPipeline {
         gl.active_texture(Gl::TEXTURE0);
         gl.bind_texture(Gl::TEXTURE_2D, None);
     }
-}
 
-/// Draw a fullscreen triangle via gl_VertexID trick (no vertex buffer needed).
-/// A throwaway VAO must be bound before calling this; we create and immediately
-/// discard it to satisfy the VAO requirement of WebGL2.
-fn draw_fullscreen(gl: &Gl) {
-    // WebGL2 requires a VAO to be bound for draw calls, but since the fullscreen
-    // triangle vertex shader uses only gl_VertexID (no attributes), we bind an
-    // empty VAO with no enabled attribs.
-    let vao = gl.create_vertex_array();
-    gl.bind_vertex_array(vao.as_ref());
-    gl.draw_arrays(Gl::TRIANGLES, 0, 3);
-    gl.bind_vertex_array(None);
-    // The VAO is leaked (not deleted) to avoid repeated allocation overhead;
-    // in practice WebGL will clean it up when the context is lost.
+    /// Draw a fullscreen triangle via the gl_VertexID trick (no vertex buffer needed).
+    /// Binds the shared `empty_vao` (created once in `new`) to satisfy the WebGL2
+    /// requirement that a VAO is bound before draw calls.
+    fn draw_fullscreen(&self, gl: &Gl) {
+        gl.bind_vertex_array(Some(&self.empty_vao));
+        gl.draw_arrays(Gl::TRIANGLES, 0, 3);
+        gl.bind_vertex_array(None);
+    }
 }
 
 // ---------------------------------------------------------------------------
