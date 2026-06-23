@@ -31,10 +31,10 @@ use builder::{
     register_daemon_handlers, register_extensions_handlers, register_extensions_install_handlers,
     register_fs_handlers, register_graph_handlers, register_group_chat_handlers,
     register_heartbeat_handlers, register_identity_handlers, register_mcp_config_handlers,
-    register_mcp_handlers,
-    register_memory_handlers, register_oauth_handlers, register_projects_handlers,
-    register_session_handlers, register_teams_handlers, register_voice_capability_handlers,
-    register_workspace_handlers, setup_config_watcher, start_webchat_server,
+    register_mcp_handlers, register_memory_handlers, register_oauth_handlers,
+    register_projects_handlers, register_session_handlers, register_teams_handlers,
+    register_voice_capability_handlers, register_workspace_handlers, setup_config_watcher,
+    start_webchat_server,
 };
 
 mod orchestrator_init;

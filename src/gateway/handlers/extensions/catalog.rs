@@ -45,7 +45,13 @@ pub async fn collect_installed(mcp: Option<McpManagerHandle>) -> Vec<ExtensionEn
         out.extend(mgr.list_plugin_records().await.iter().map(plugin_to_entry));
     }
 
-    out.extend(shared_system().full_status().await.iter().map(skill_to_entry));
+    out.extend(
+        shared_system()
+            .full_status()
+            .await
+            .iter()
+            .map(skill_to_entry),
+    );
 
     out
 }
@@ -131,7 +137,10 @@ pub async fn handle_catalog(
 }
 
 /// extensions.installed — live reconciled list across all backends.
-pub async fn handle_installed(req: JsonRpcRequest, mcp: Option<McpManagerHandle>) -> JsonRpcResponse {
+pub async fn handle_installed(
+    req: JsonRpcRequest,
+    mcp: Option<McpManagerHandle>,
+) -> JsonRpcResponse {
     let out = collect_installed(mcp).await;
     JsonRpcResponse::success(req.id, json!({ "extensions": out }))
 }
@@ -178,7 +187,11 @@ mod tests {
     fn mcp_entry_marked_installed_by_derived_id() {
         // catalog id "aleph-hub:github" -> install id "aleph-hub_github"
         // -> reconciled installed id "local:mcp:aleph-hub_github"
-        let mut catalog = vec![catalog_entry("aleph-hub:github", ExtensionKind::Mcp, "GitHub")];
+        let mut catalog = vec![catalog_entry(
+            "aleph-hub:github",
+            ExtensionKind::Mcp,
+            "GitHub",
+        )];
         let installed = vec![installed_entry(
             "local:mcp:aleph-hub_github",
             ExtensionKind::Mcp,
@@ -192,7 +205,11 @@ mod tests {
 
     #[test]
     fn mcp_entry_not_installed_when_no_match() {
-        let mut catalog = vec![catalog_entry("aleph-hub:absent", ExtensionKind::Mcp, "Nope")];
+        let mut catalog = vec![catalog_entry(
+            "aleph-hub:absent",
+            ExtensionKind::Mcp,
+            "Nope",
+        )];
         let installed = vec![installed_entry(
             "local:mcp:something-else",
             ExtensionKind::Mcp,
@@ -224,7 +241,11 @@ mod tests {
 
     #[test]
     fn name_match_does_not_cross_kinds() {
-        let mut catalog = vec![catalog_entry("aleph-hub:x", ExtensionKind::Skill, "Shared Name")];
+        let mut catalog = vec![catalog_entry(
+            "aleph-hub:x",
+            ExtensionKind::Skill,
+            "Shared Name",
+        )];
         let installed = vec![installed_entry(
             "local:plugin:x",
             ExtensionKind::Plugin,

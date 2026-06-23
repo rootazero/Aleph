@@ -213,7 +213,10 @@ mod tests {
         let r = reduce_log(&s).expect("should reduce");
         // Adjacent dedup means we keep far fewer than 40 warning lines.
         let warns = r.body.matches("warning: unused variable").count();
-        assert!(warns <= 2, "repeated identical warnings collapsed; got {warns}");
+        assert!(
+            warns <= 2,
+            "repeated identical warnings collapsed; got {warns}"
+        );
     }
 
     #[test]

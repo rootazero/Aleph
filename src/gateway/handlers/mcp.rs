@@ -484,7 +484,6 @@ pub async fn handle_cancel_approval(request: JsonRpcRequest) -> JsonRpcResponse 
     JsonRpcResponse::success(request.id, json!({"success": true}))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,5 +699,4 @@ mod tests {
 
         assert!(response.is_error());
     }
-
 }

@@ -49,8 +49,7 @@ fn is_header(l: &str) -> bool {
 /// An actual added/removed line. `+++ `/`--- ` are file headers (handled by
 /// [`is_header`]) and must not count as changes.
 fn is_change(l: &str) -> bool {
-    (l.starts_with('+') && !l.starts_with("+++ "))
-        || (l.starts_with('-') && !l.starts_with("--- "))
+    (l.starts_with('+') && !l.starts_with("+++ ")) || (l.starts_with('-') && !l.starts_with("--- "))
 }
 
 /// True for lines that anchor kept context (headers and changes).

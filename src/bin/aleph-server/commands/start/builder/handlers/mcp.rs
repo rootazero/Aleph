@@ -43,7 +43,6 @@ pub(in crate::commands::start) fn register_mcp_handlers(
     reg!("mcp.tools", mcp::handle_list_tools);
     reg!("mcp.resources", mcp::handle_list_resources);
     reg!("mcp.prompts", mcp::handle_list_prompts);
-
 }
 
 /// Register the Settings-page MCP CRUD handlers (`mcp_config.*`) against the
@@ -61,47 +60,57 @@ pub(in crate::commands::start) fn register_mcp_config_handlers(
 
     {
         let handle = handle.clone();
-        server.handlers_mut().register("mcp_config.list", move |req| {
-            let handle = handle.clone();
-            async move { mcp_config::handle_list(req, handle).await }
-        });
+        server
+            .handlers_mut()
+            .register("mcp_config.list", move |req| {
+                let handle = handle.clone();
+                async move { mcp_config::handle_list(req, handle).await }
+            });
     }
     {
         let handle = handle.clone();
-        server.handlers_mut().register("mcp_config.get", move |req| {
-            let handle = handle.clone();
-            async move { mcp_config::handle_get(req, handle).await }
-        });
-    }
-    {
-        let handle = handle.clone();
-        let vault = vault.clone();
-        let event_bus = event_bus.clone();
-        server.handlers_mut().register("mcp_config.create", move |req| {
-            let handle = handle.clone();
-            let vault = vault.clone();
-            let event_bus = event_bus.clone();
-            async move { mcp_config::handle_create(req, handle, vault, event_bus).await }
-        });
+        server
+            .handlers_mut()
+            .register("mcp_config.get", move |req| {
+                let handle = handle.clone();
+                async move { mcp_config::handle_get(req, handle).await }
+            });
     }
     {
         let handle = handle.clone();
         let vault = vault.clone();
         let event_bus = event_bus.clone();
-        server.handlers_mut().register("mcp_config.update", move |req| {
-            let handle = handle.clone();
-            let vault = vault.clone();
-            let event_bus = event_bus.clone();
-            async move { mcp_config::handle_update(req, handle, vault, event_bus).await }
-        });
+        server
+            .handlers_mut()
+            .register("mcp_config.create", move |req| {
+                let handle = handle.clone();
+                let vault = vault.clone();
+                let event_bus = event_bus.clone();
+                async move { mcp_config::handle_create(req, handle, vault, event_bus).await }
+            });
+    }
+    {
+        let handle = handle.clone();
+        let vault = vault.clone();
+        let event_bus = event_bus.clone();
+        server
+            .handlers_mut()
+            .register("mcp_config.update", move |req| {
+                let handle = handle.clone();
+                let vault = vault.clone();
+                let event_bus = event_bus.clone();
+                async move { mcp_config::handle_update(req, handle, vault, event_bus).await }
+            });
     }
     {
         let handle = handle.clone();
         let event_bus = event_bus.clone();
-        server.handlers_mut().register("mcp_config.delete", move |req| {
-            let handle = handle.clone();
-            let event_bus = event_bus.clone();
-            async move { mcp_config::handle_delete(req, handle, event_bus).await }
-        });
+        server
+            .handlers_mut()
+            .register("mcp_config.delete", move |req| {
+                let handle = handle.clone();
+                let event_bus = event_bus.clone();
+                async move { mcp_config::handle_delete(req, handle, event_bus).await }
+            });
     }
 }

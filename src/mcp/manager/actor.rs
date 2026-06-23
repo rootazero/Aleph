@@ -1242,7 +1242,9 @@ mod tests {
             .expect("add_server");
 
         let configs = handle.list_server_configs().await.expect("list configs");
-        assert!(configs.iter().any(|c| c.id == "srv-a" && c.name == "Server A"));
+        assert!(configs
+            .iter()
+            .any(|c| c.id == "srv-a" && c.name == "Server A"));
 
         let _ = std::fs::remove_file(&path);
     }

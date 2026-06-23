@@ -3,9 +3,9 @@
 //! This module handles PID file management, process lifecycle,
 //! instance locking, and Unix daemonization.
 
-use std::path::PathBuf;
 #[cfg(unix)]
 use std::path::Path;
+use std::path::PathBuf;
 
 use alephcore::cli::endpoint::{read_endpoint, remove_endpoint, IpcEndpoint};
 

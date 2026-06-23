@@ -142,8 +142,17 @@ pub(super) fn render_selected(lines: &[&str], kept: &[usize]) -> String {
 pub(super) fn is_error_signal(line: &str) -> bool {
     let l = line.to_ascii_lowercase();
     const NEEDLES: [&str; 11] = [
-        "error", "warning", "failed", "failure", "panic", "exception", "traceback", "fatal",
-        "assert", " e/", "✗",
+        "error",
+        "warning",
+        "failed",
+        "failure",
+        "panic",
+        "exception",
+        "traceback",
+        "fatal",
+        "assert",
+        " e/",
+        "✗",
     ];
     NEEDLES.iter().any(|n| l.contains(n))
 }

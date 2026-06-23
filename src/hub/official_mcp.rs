@@ -21,7 +21,11 @@ fn map_category(c: PresetCategory) -> ExtensionCategory {
 }
 
 fn map_env(ev: &PresetEnvVar) -> EnvDecl {
-    let description = if ev.description.is_empty() { ev.label.clone() } else { ev.description.clone() };
+    let description = if ev.description.is_empty() {
+        ev.label.clone()
+    } else {
+        ev.description.clone()
+    };
     EnvDecl {
         name: ev.key.clone(),
         description: Some(description),
@@ -38,7 +42,9 @@ fn is_projectable(t: &PresetTransport) -> bool {
     let clean = |s: &str| !s.contains('<');
     match t.kind {
         McpTransportType::Stdio => t.args.iter().all(|a| clean(a)),
-        McpTransportType::Http | McpTransportType::Sse => t.url.as_deref().map(clean).unwrap_or(false),
+        McpTransportType::Http | McpTransportType::Sse => {
+            t.url.as_deref().map(clean).unwrap_or(false)
+        }
     }
 }
 
@@ -78,7 +84,11 @@ fn map_entry(p: &McpPreset) -> Option<ExtensionEntry> {
         version: None,
         source_id: ALEPH_HUB_ID.to_string(),
         repo_url: None,
-        trust_tier: if p.official { TrustTier::Official } else { TrustTier::Community },
+        trust_tier: if p.official {
+            TrustTier::Official
+        } else {
+            TrustTier::Community
+        },
         requires_config: spec.requires_config(),
         config_schema: None,
         installed: false,
@@ -102,7 +112,10 @@ pub async fn prime_official_mcp_if_empty(cache: &crate::hub::cache::CatalogCache
         Ok(0) => {
             let entries = primer_entries();
             match cache.replace_source(ALEPH_HUB_ID, &entries).await {
-                Ok(()) => tracing::info!(count = entries.len(), "primed official MCP catalog (cold start)"),
+                Ok(()) => tracing::info!(
+                    count = entries.len(),
+                    "primed official MCP catalog (cold start)"
+                ),
                 Err(e) => tracing::warn!(error = %e, "failed to prime official MCP catalog"),
             }
         }
@@ -138,7 +151,9 @@ pub async fn migrate_legacy_preset_servers(mcp: &McpManagerHandle) {
         if is_legacy_preset_server(&cfg) {
             let id = cfg.id.clone();
             match mcp.remove_server(id.clone()).await {
-                Ok(()) => tracing::info!(%id, "removed retired-preset MCP server; re-install from Aleph Hub"),
+                Ok(()) => {
+                    tracing::info!(%id, "removed retired-preset MCP server; re-install from Aleph Hub")
+                }
                 Err(e) => tracing::warn!(%id, error = %e, "preset migration: remove_server failed"),
             }
         }
@@ -147,11 +162,18 @@ pub async fn migrate_legacy_preset_servers(mcp: &McpManagerHandle) {
 
 #[cfg(test)]
 mod tests {
-    use crate::hub::types::{ExtensionKind, InstallSpec, TrustTier};
     use super::{is_legacy_preset_server, prime_official_mcp_if_empty, primer_entries};
+    use crate::hub::types::{ExtensionKind, InstallSpec, TrustTier};
 
-    fn by_id(entries: &[crate::hub::types::ExtensionEntry], id: &str) -> crate::hub::types::ExtensionEntry {
-        entries.iter().find(|e| e.id == id).cloned().unwrap_or_else(|| panic!("missing {id}"))
+    fn by_id(
+        entries: &[crate::hub::types::ExtensionEntry],
+        id: &str,
+    ) -> crate::hub::types::ExtensionEntry {
+        entries
+            .iter()
+            .find(|e| e.id == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("missing {id}"))
     }
 
     #[test]
@@ -181,7 +203,9 @@ mod tests {
         match amap.install_spec.unwrap() {
             InstallSpec::McpStdio { command, env, .. } => {
                 assert_eq!(command, "npx");
-                assert!(env.iter().any(|d| d.name == "AMAP_MAPS_API_KEY" && d.required && d.secret));
+                assert!(env
+                    .iter()
+                    .any(|d| d.name == "AMAP_MAPS_API_KEY" && d.required && d.secret));
             }
             other => panic!("expected McpStdio (http url has <KEY>), got {other:?}"),
         }
@@ -227,7 +251,10 @@ mod tests {
         let cache = CatalogCache::open_in_memory().unwrap();
         prime_official_mcp_if_empty(&cache).await;
         let after = cache
-            .query(&CatalogFilter { source_id: Some("aleph-hub".into()), ..Default::default() })
+            .query(&CatalogFilter {
+                source_id: Some("aleph-hub".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert!(after.iter().any(|e| e.id == "aleph-hub:context7"));
@@ -235,7 +262,10 @@ mod tests {
         // Second call is a no-op (slot already non-empty).
         prime_official_mcp_if_empty(&cache).await;
         let again = cache
-            .query(&CatalogFilter { source_id: Some("aleph-hub".into()), ..Default::default() })
+            .query(&CatalogFilter {
+                source_id: Some("aleph-hub".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(again.len(), count);

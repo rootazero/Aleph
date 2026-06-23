@@ -542,7 +542,13 @@ mod tests {
             Some(&"{{secret:ext.mcp.srv.GITHUB_TOKEN}}".to_string())
         );
         assert_eq!(stored.get("REGION"), Some(&"us".to_string()));
-        assert_eq!(writes, vec![("ext.mcp.srv.GITHUB_TOKEN".to_string(), "ghp_real".to_string())]);
+        assert_eq!(
+            writes,
+            vec![(
+                "ext.mcp.srv.GITHUB_TOKEN".to_string(),
+                "ghp_real".to_string()
+            )]
+        );
     }
 
     #[test]
@@ -554,14 +560,20 @@ mod tests {
             stored.get("API_KEY"),
             Some(&"{{secret:ext.mcp.srv.API_KEY}}".to_string())
         );
-        assert!(writes.is_empty(), "blank secret must not write to the vault");
+        assert!(
+            writes.is_empty(),
+            "blank secret must not write to the vault"
+        );
     }
 
     #[test]
     fn plan_secret_env_blank_secret_without_existing_is_dropped() {
         let incoming = env(&[("NEW_TOKEN", "")]);
         let (stored, writes) = super::plan_secret_env("srv", incoming, &HashMap::new());
-        assert!(!stored.contains_key("NEW_TOKEN"), "blank secret with no existing entry must be dropped");
+        assert!(
+            !stored.contains_key("NEW_TOKEN"),
+            "blank secret with no existing entry must be dropped"
+        );
         assert!(writes.is_empty());
     }
 
@@ -589,6 +601,9 @@ mod tests {
             Some(&"{{secret:ext.mcp.My_Srv.API_TOKEN}}".to_string())
         );
         assert_eq!(cfg.env.get("REGION"), Some(&"us".to_string()));
-        assert_eq!(writes, vec![("ext.mcp.My_Srv.API_TOKEN".to_string(), "t-real".to_string())]);
+        assert_eq!(
+            writes,
+            vec![("ext.mcp.My_Srv.API_TOKEN".to_string(), "t-real".to_string())]
+        );
     }
 }

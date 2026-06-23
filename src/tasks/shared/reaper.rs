@@ -243,8 +243,7 @@ impl HistoryReap for CronSessionReaper {
     }
 
     async fn reap(&self) -> Result<u64, String> {
-        let cutoff_secs =
-            chrono::Utc::now().timestamp() - i64::from(self.retention_days) * 86_400;
+        let cutoff_secs = chrono::Utc::now().timestamp() - i64::from(self.retention_days) * 86_400;
         self.store
             .reap_task_sessions("cron", cutoff_secs)
             .await

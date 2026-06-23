@@ -153,7 +153,10 @@ mod tests {
 
     #[test]
     fn parses_plain_grep_line() {
-        assert_eq!(match_path("src/main.rs:42:    let x = 1;"), Some("src/main.rs"));
+        assert_eq!(
+            match_path("src/main.rs:42:    let x = 1;"),
+            Some("src/main.rs")
+        );
     }
 
     #[test]
