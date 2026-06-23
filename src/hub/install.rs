@@ -8,8 +8,9 @@
 
 use std::collections::HashMap;
 
-use crate::extension::marketplace::MarketplaceManager;
+use crate::extension::marketplace::{MarketplaceManager, BUILTIN_MARKETPLACE_NAME};
 use crate::extension::PluginScope;
+use crate::hub::catalog_client::ALEPH_HUB_ID;
 use crate::hub::secrets::secret_ref;
 use crate::hub::types::{ExtensionEntry, InstallSpec};
 use crate::mcp::manager::{McpManagerConfig, McpManagerHandle};
@@ -141,6 +142,21 @@ pub fn install_git_skill(
     Ok(target.display().to_string())
 }
 
+/// Resolve which marketplace an install entry's plugin lives in.
+///
+/// Hub-official plugin entries are primed with `source_id == ALEPH_HUB_ID`, but
+/// the slot key is not a marketplace name — these plugins are bundled into the
+/// builtin `aleph-official` marketplace, so they install from it. `"local"` means
+/// "search all marketplaces by name"; any other source id is a registered peer
+/// marketplace, taken verbatim.
+fn plugin_marketplace_name(source_id: &str) -> Option<&str> {
+    match source_id {
+        ALEPH_HUB_ID => Some(BUILTIN_MARKETPLACE_NAME),
+        "local" => None,
+        other => Some(other),
+    }
+}
+
 /// Route a resolved install spec to its backend and perform the install.
 pub async fn run_install(
     spec: &InstallSpec,
@@ -180,8 +196,7 @@ pub async fn run_install(
             } else {
                 // Plugin install via the marketplace path (SHA-256 + atomic copy).
                 let marketplace = ctx.marketplace.ok_or("marketplace unavailable")?;
-                let marketplace_name =
-                    (ctx.entry.source_id != "local").then_some(ctx.entry.source_id.as_str());
+                let marketplace_name = plugin_marketplace_name(&ctx.entry.source_id);
                 let path = marketplace.install_to_scope(
                     &ctx.entry.name,
                     marketplace_name,
@@ -317,5 +332,17 @@ mod tests {
     #[test]
     fn absent_command_is_unavailable() {
         assert!(!command_available("definitely-not-a-real-command-xyz-123"));
+    }
+
+    #[test]
+    fn plugin_marketplace_name_maps_hub_to_builtin() {
+        // Hub-official plugin entries (source_id == ALEPH_HUB_ID) install from the
+        // builtin "aleph-official" marketplace — NOT a marketplace literally named
+        // "aleph-hub" (which does not exist). "local" searches all marketplaces;
+        // any other id is a registered peer marketplace, taken verbatim.
+        assert_eq!(plugin_marketplace_name(ALEPH_HUB_ID), Some(BUILTIN_MARKETPLACE_NAME));
+        assert_eq!(plugin_marketplace_name("aleph-hub"), Some("aleph-official"));
+        assert_eq!(plugin_marketplace_name("local"), None);
+        assert_eq!(plugin_marketplace_name("peer-market"), Some("peer-market"));
     }
 }

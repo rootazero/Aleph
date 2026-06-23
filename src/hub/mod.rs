@@ -7,6 +7,7 @@ pub mod catalog_client;
 pub mod hub_catalog;
 pub mod install;
 pub mod official_mcp;
+pub mod official_plugins;
 pub mod official_skills;
 pub mod primer;
 pub mod reconcile;
