@@ -1324,6 +1324,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // MCP server management — only when the manager actor spawned. The handle
     // was created above next to the tool bridge.
     if let Some(ref h) = mcp_handle {
+        alephcore::hub::official_mcp::migrate_legacy_preset_servers(h).await;
         register_mcp_handlers(&mut server, h);
         register_mcp_config_handlers(
             &mut server,

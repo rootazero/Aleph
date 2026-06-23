@@ -9,7 +9,7 @@ use crate::hub::catalog_client::ALEPH_HUB_ID;
 use crate::hub::types::{
     EnvDecl, ExtensionCategory, ExtensionEntry, ExtensionKind, InstallSpec, McpTransport, TrustTier,
 };
-use crate::mcp::manager::McpTransportType;
+use crate::mcp::manager::{McpManagerConfig, McpManagerHandle, McpTransportType};
 use crate::mcp::presets::{self, McpPreset, PresetCategory, PresetEnvVar, PresetTransport};
 
 fn map_category(c: PresetCategory) -> ExtensionCategory {
@@ -111,10 +111,44 @@ pub async fn prime_official_mcp_if_empty(cache: &crate::hub::cache::CatalogCache
     }
 }
 
+/// True iff `cfg` was installed via the retired preset path: its id is a known
+/// preset slug AND its launch shape matches that preset. New Hub installs use
+/// `aleph-hub_<slug>` ids, so a raw-slug id never collides with a Hub install.
+pub fn is_legacy_preset_server(cfg: &McpManagerConfig) -> bool {
+    let Some(preset) = presets::find(&cfg.id) else {
+        return false;
+    };
+    preset.transports.iter().any(|t| match t.kind {
+        McpTransportType::Stdio => t.command == cfg.command,
+        McpTransportType::Http | McpTransportType::Sse => cfg.command.is_none(),
+    })
+}
+
+/// Boot migration (D9): remove servers installed via the retired preset path so
+/// the user re-installs from the Hub. Warn-only; never aborts boot.
+pub async fn migrate_legacy_preset_servers(mcp: &McpManagerHandle) {
+    let configs = match mcp.list_server_configs().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "preset migration: list_server_configs failed");
+            return;
+        }
+    };
+    for cfg in configs {
+        if is_legacy_preset_server(&cfg) {
+            let id = cfg.id.clone();
+            match mcp.remove_server(id.clone()).await {
+                Ok(()) => tracing::info!(%id, "removed retired-preset MCP server; re-install from Aleph Hub"),
+                Err(e) => tracing::warn!(%id, error = %e, "preset migration: remove_server failed"),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::hub::types::{ExtensionKind, InstallSpec, TrustTier};
-    use super::{prime_official_mcp_if_empty, primer_entries};
+    use super::{is_legacy_preset_server, prime_official_mcp_if_empty, primer_entries};
 
     fn by_id(entries: &[crate::hub::types::ExtensionEntry], id: &str) -> crate::hub::types::ExtensionEntry {
         entries.iter().find(|e| e.id == id).cloned().unwrap_or_else(|| panic!("missing {id}"))
@@ -165,6 +199,26 @@ mod tests {
             }
             other => panic!("expected McpStdio, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn legacy_detection_matches_old_slug_and_shape() {
+        use crate::mcp::manager::McpManagerConfig;
+        // minimax old install: raw slug id + matching stdio command.
+        let minimax = McpManagerConfig::stdio("minimax", "MiniMax", "uvx");
+        assert!(is_legacy_preset_server(&minimax));
+        // amap old install: raw slug id + remote (no command) matches its http transport.
+        let amap = McpManagerConfig::http("amap", "高德地图", "https://mcp.amap.com/mcp?key=k");
+        assert!(is_legacy_preset_server(&amap));
+        // New Hub install id is never a raw slug -> not legacy.
+        let hub = McpManagerConfig::stdio("aleph-hub_minimax", "MiniMax", "uvx");
+        assert!(!is_legacy_preset_server(&hub));
+        // User custom server that merely shares a slug name but a different command.
+        let custom = McpManagerConfig::stdio("minimax", "My MiniMax", "/opt/custom");
+        assert!(!is_legacy_preset_server(&custom));
+        // Unknown id -> not legacy.
+        let other = McpManagerConfig::stdio("totally-custom", "X", "node");
+        assert!(!is_legacy_preset_server(&other));
     }
 
     #[tokio::test]
