@@ -37,3 +37,29 @@ void main() {
     frag = vec4(v_color * (0.4 + core), a);
 }
 "#;
+
+pub const EDGE_VERT: &str = r#"#version 300 es
+precision highp float;
+layout(location=0) in vec3 a_pos;
+layout(location=1) in vec3 a_color;
+uniform mat4 u_view_proj;
+out vec3 v_color;
+out float v_depth;
+void main() {
+    vec4 clip = u_view_proj * vec4(a_pos, 1.0);
+    gl_Position = clip;
+    v_color = a_color;
+    v_depth = clip.z / clip.w; // [-1,1] for distance fade
+}
+"#;
+
+pub const EDGE_FRAG: &str = r#"#version 300 es
+precision highp float;
+in vec3 v_color;
+in float v_depth;
+out vec4 frag;
+void main() {
+    float fade = clamp(1.0 - (v_depth * 0.5 + 0.5) * 0.7, 0.15, 1.0);
+    frag = vec4(v_color * fade, fade * 0.35); // thin, faint, additive
+}
+"#;

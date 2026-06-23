@@ -5,6 +5,7 @@
 //! are verified by wasm compile + browser.
 pub mod camera;
 pub mod context;
+pub mod edges;
 pub mod layout3d;
 pub mod math;
 pub mod nodes;
