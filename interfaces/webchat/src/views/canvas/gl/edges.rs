@@ -1,0 +1,132 @@
+//! Instanced thick-line edge renderer (screen-space quads = crisp star filaments).
+//!
+//! `gl.lineWidth()` is clamped to 1px on desktop browsers, so edges are drawn as
+//! instanced ribbons: one quad per edge, expanded to a constant pixel width in
+//! the vertex shader. Per-instance attributes carry the two endpoints and their
+//! colors; a static 6-vertex corner buffer (two triangles) is shared.
+
+use web_sys::{WebGl2RenderingContext as Gl, WebGlBuffer, WebGlProgram, WebGlVertexArrayObject};
+
+use super::context::compile_program;
+use super::math::Mat4;
+use super::nodes::{set_mat4, set_vec2};
+use super::shaders;
+
+/// Edge line width in framebuffer pixels.
+const EDGE_WIDTH_PX: f32 = 3.0;
+
+/// Quad corners: (along ∈ {0,1}, side ∈ {-1,+1}) — two triangles forming the
+/// a→b ribbon. `along` selects the endpoint, `side` the perpendicular offset.
+const CORNERS: [f32; 12] = [
+    0.0, -1.0, 1.0, -1.0, 0.0, 1.0, // tri 1
+    0.0, 1.0, 1.0, -1.0, 1.0, 1.0,  // tri 2
+];
+
+pub struct EdgeRenderer {
+    prog: WebGlProgram,
+    vao: WebGlVertexArrayObject,
+    pos_a_buf: WebGlBuffer,
+    pos_b_buf: WebGlBuffer,
+    col_a_buf: WebGlBuffer,
+    col_b_buf: WebGlBuffer,
+    count: i32,
+}
+
+impl EdgeRenderer {
+    pub fn new(gl: &Gl) -> Result<EdgeRenderer, String> {
+        let prog = compile_program(gl, shaders::EDGE_VERT, shaders::EDGE_FRAG)?;
+        let vao = gl.create_vertex_array().ok_or("edge vao")?;
+        gl.bind_vertex_array(Some(&vao));
+
+        // a_corner (location 0) — static quad, per-vertex (divisor 0).
+        let corner_buf = gl.create_buffer().ok_or("edge corner")?;
+        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&corner_buf));
+        unsafe {
+            // SAFETY: `view` is consumed immediately by the buffer upload before
+            // any allocation that could move `CORNERS` (a `'static` array).
+            let view = js_sys::Float32Array::view(&CORNERS);
+            gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &view, Gl::STATIC_DRAW);
+        }
+        gl.enable_vertex_attrib_array(0);
+        gl.vertex_attrib_pointer_with_i32(0, 2, Gl::FLOAT, false, 0, 0);
+
+        let pos_a_buf = gl.create_buffer().ok_or("edge pos_a")?;
+        let pos_b_buf = gl.create_buffer().ok_or("edge pos_b")?;
+        let col_a_buf = gl.create_buffer().ok_or("edge col_a")?;
+        let col_b_buf = gl.create_buffer().ok_or("edge col_b")?;
+        // a_pos_a(1) a_pos_b(2) a_color_a(3) a_color_b(4) — all per-instance.
+        Self::setup_instanced(gl, &pos_a_buf, 1, 3);
+        Self::setup_instanced(gl, &pos_b_buf, 2, 3);
+        Self::setup_instanced(gl, &col_a_buf, 3, 3);
+        Self::setup_instanced(gl, &col_b_buf, 4, 3);
+
+        gl.bind_vertex_array(None);
+        Ok(EdgeRenderer {
+            prog,
+            vao,
+            pos_a_buf,
+            pos_b_buf,
+            col_a_buf,
+            col_b_buf,
+            count: 0,
+        })
+    }
+
+    fn setup_instanced(gl: &Gl, buf: &WebGlBuffer, loc: u32, size: i32) {
+        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(buf));
+        gl.enable_vertex_attrib_array(loc);
+        gl.vertex_attrib_pointer_with_i32(loc, size, Gl::FLOAT, false, 0, 0);
+        gl.vertex_attrib_divisor(loc, 1);
+    }
+
+    /// Upload edges from an explicit nodes slice + edge-index slice.
+    /// Builds one per-instance record (endpoints + colors) per edge; avoids
+    /// cloning GraphData.
+    pub fn upload_indexed(
+        &mut self,
+        gl: &Gl,
+        nodes: &[super::GalaxyNode],
+        edges: &[(u32, u32)],
+    ) {
+        let mut pos_a = Vec::with_capacity(edges.len() * 3);
+        let mut pos_b = Vec::with_capacity(edges.len() * 3);
+        let mut col_a = Vec::with_capacity(edges.len() * 3);
+        let mut col_b = Vec::with_capacity(edges.len() * 3);
+        for &(a, b) in edges {
+            let (na, nb) = (&nodes[a as usize], &nodes[b as usize]);
+            pos_a.extend_from_slice(&[na.pos.x, na.pos.y, na.pos.z]);
+            pos_b.extend_from_slice(&[nb.pos.x, nb.pos.y, nb.pos.z]);
+            col_a.extend_from_slice(&na.color);
+            col_b.extend_from_slice(&nb.color);
+        }
+        self.count = edges.len() as i32;
+        bind_upload(gl, &self.pos_a_buf, &pos_a);
+        bind_upload(gl, &self.pos_b_buf, &pos_b);
+        bind_upload(gl, &self.col_a_buf, &col_a);
+        bind_upload(gl, &self.col_b_buf, &col_b);
+    }
+
+    pub fn draw(&self, gl: &Gl, view_proj: &Mat4, viewport: (f32, f32)) {
+        if self.count == 0 {
+            return;
+        }
+        gl.use_program(Some(&self.prog));
+        gl.bind_vertex_array(Some(&self.vao));
+        set_mat4(gl, &self.prog, "u_view_proj", view_proj);
+        set_vec2(gl, &self.prog, "u_viewport", viewport);
+        let loc = gl.get_uniform_location(&self.prog, "u_width");
+        gl.uniform1f(loc.as_ref(), EDGE_WIDTH_PX);
+        gl.draw_arrays_instanced(Gl::TRIANGLES, 0, 6, self.count);
+        gl.bind_vertex_array(None);
+    }
+}
+
+fn bind_upload(gl: &Gl, buf: &WebGlBuffer, data: &[f32]) {
+    gl.bind_buffer(Gl::ARRAY_BUFFER, Some(buf));
+    unsafe {
+        // SAFETY: `view` is consumed immediately by `buffer_data_with_array_buffer_view`
+        // before any allocation that could move `data` occurs.
+        let view = js_sys::Float32Array::view(data);
+        gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &view, Gl::DYNAMIC_DRAW);
+    }
+}
