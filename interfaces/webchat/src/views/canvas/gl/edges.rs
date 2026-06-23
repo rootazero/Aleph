@@ -5,7 +5,7 @@ use web_sys::{WebGl2RenderingContext as Gl, WebGlBuffer, WebGlProgram, WebGlVert
 use super::context::compile_program;
 use super::math::Mat4;
 use super::nodes::set_mat4;
-use super::{shaders, GraphData};
+use super::shaders;
 
 pub struct EdgeRenderer {
     prog: WebGlProgram,
@@ -33,10 +33,6 @@ impl EdgeRenderer {
 
         gl.bind_vertex_array(None);
         Ok(EdgeRenderer { prog, vao, pos_buf, col_buf, vert_count: 0 })
-    }
-
-    pub fn upload(&mut self, gl: &Gl, data: &GraphData) {
-        self.upload_indexed(gl, &data.nodes, &data.edges);
     }
 
     /// Upload edges from an explicit nodes slice + edge-index slice.

@@ -5,19 +5,12 @@ mod node_detail_panel;
 
 pub use node_detail_panel::{NodeDetailPanel, NodeExcerpt};
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
-
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::graph::GraphApi;
-use crate::canvas_engine::adapter::{GraphQueryResponse, NoteDetailResponse, NoteNodeDto};
+use crate::canvas_engine::adapter::{GraphQueryResponse, NoteNodeDto};
 use crate::canvas_engine::interaction::CanvasEvent;
-use crate::canvas_engine::markdown_excerpt::render_excerpt;
-use crate::canvas_engine::prefetch::{PrefetchCache, HOVER_DEBOUNCE_MS};
-use gloo_timers::callback::Timeout;
 use leptos::callback::Callback;
 
 use crate::context::DashboardState;
@@ -36,10 +29,8 @@ pub fn CanvasView() -> impl IntoView {
 /// 3D WebGL galaxy canvas host.
 ///
 /// Architecture note: `Callback::new` in Leptos 0.8 requires `Send + Sync + 'static`, but WASM
-/// is single-threaded and `Rc<RefCell<_>>` is not `Send`. To work around this, the `on_event`
-/// closure captures only `Copy` reactive signals. Non-`Send` work (hover-debounce timer, detail
-/// cache) is driven via signal-based intent channels: `on_event` writes a signal and a separate
-/// `Effect` reads it and performs the side effect using `Rc<RefCell<_>>`.
+/// is single-threaded. The `on_event` closure captures only `Copy` reactive signals so it can
+/// satisfy the `Send + Sync` bound.
 #[component]
 fn RadialCanvasView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
@@ -111,11 +102,6 @@ fn RadialCanvasView() -> impl IntoView {
     let fold_threshold = mem.fold_threshold;
     let set_fold_threshold = mem.fold_threshold;
 
-    // Hover prefetch intent channel. The hover-debounce Effect writes the
-    // dwelt-on node id here once the dwell threshold is met; the excerpt
-    // lazy-fetch Effect reads it to fetch that node's detail.
-    let prefetch_request: RwSignal<Option<String>> = RwSignal::new(None);
-
     // Full-graph node cache — populated once on mount, used to compute the
     // ghost-dot ring of orphans (nodes outside the current connected component).
     let all_dtos: RwSignal<Vec<NoteNodeDto>> = RwSignal::new(Vec::new());
@@ -135,94 +121,9 @@ fn RadialCanvasView() -> impl IntoView {
         RwSignal::new(std::collections::HashMap::new());
 
     // Raw hover intent — written by the (Send+Sync) on_event callback on every
-    // HoverNode transition. A separate Effect (below) reads this, manages a
-    // 150ms gloo Timeout, and only writes `prefetch_request` once the dwell
-    // threshold is met. Stored as RwSignal so on_event (write) and the Effect
+    // HoverNode transition. Stored as RwSignal so on_event (write) and Effects
     // (read) can both reach it without sharing a non-Send Rc.
     let hover_intent: RwSignal<Option<String>> = RwSignal::new(None);
-
-    // Outstanding hover debounce timer. Cleared / replaced inside the hover
-    // Effect; `None` means no pending dwell. Held in an Rc so the Effect
-    // closure can cancel-on-replace across runs.
-    let pending_hover_timer: Rc<RefCell<Option<Timeout>>> = Rc::new(RefCell::new(None));
-
-    // Non-reactive detail-response cache; keyed by node id.
-    let detail_cache: Rc<RefCell<PrefetchCache<NoteDetailResponse>>> =
-        Rc::new(RefCell::new(PrefetchCache::<NoteDetailResponse>::new()));
-
-    // Reactive map of node id → pre-rendered excerpt HTML.
-    // Populated lazily when a card enters FULL mode (hover or select).
-    let excerpt_by_id: RwSignal<HashMap<String, String>> = RwSignal::new(HashMap::new());
-
-    // -----------------------------------------------------------------------
-    // Effect: lazy-fetch note detail for cards that need a FULL-mode excerpt.
-    //
-    // BUG FIX (canvas hover markdown): this Effect previously resolved a single
-    // `target = selected_node.or_else(prefetch_request)`. Once any node was
-    // selected (the center stays selected after a click/navigation),
-    // `selected_node` is `Some` indefinitely and permanently SHADOWED the
-    // hover-driven `prefetch_request` — so hovering a neighbor while a node was
-    // focused never fetched that neighbor's excerpt, and its FULL card rendered
-    // title-only ("markdown often doesn't show on hover").
-    //
-    // Fix: subscribe to BOTH signals and fetch the *union* of {selected, hovered}
-    // (de-duplicated). Each fetch is idempotent — guarded by the raw-response
-    // cache and the rendered-excerpt map — so spawning per target is cheap.
-    // -----------------------------------------------------------------------
-    let detail_cache_eff = detail_cache.clone();
-    Effect::new(move || {
-        // Read both signals unconditionally so the Effect subscribes to each;
-        // neither must shadow the other.
-        let selected = selected_node.get();
-        let hovered = prefetch_request.get();
-
-        // De-duplicate: hovering the already-selected node must not fan out
-        // into two identical RPCs (the async fetch hasn't populated the cache
-        // yet, so the per-id guards below can't catch the same-frame dup).
-        let mut targets: Vec<String> = Vec::with_capacity(2);
-        if let Some(s) = selected {
-            targets.push(s);
-        }
-        if let Some(h) = hovered {
-            if !targets.contains(&h) {
-                targets.push(h);
-            }
-        }
-
-        let now = now_ms();
-        for id in targets {
-            // Already in raw-response cache — skip if content is fresh.
-            if detail_cache_eff.borrow().has(&id, now) {
-                continue;
-            }
-            // Already rendered — nothing to do.
-            if excerpt_by_id.with(|m| m.contains_key(&id)) {
-                continue;
-            }
-
-            let detail_cache_spawn = detail_cache_eff.clone();
-            let agent = agent_id.get_untracked();
-            let id_spawn = id.clone();
-
-            spawn_local(async move {
-                match GraphApi::node_detail(&state, &agent, &id_spawn).await {
-                    Ok(detail) => {
-                        let html = render_excerpt(&detail.content);
-                        excerpt_by_id.update(|m| {
-                            m.insert(id_spawn.clone(), html);
-                        });
-                        let now = now_ms();
-                        detail_cache_spawn.borrow_mut().put(id_spawn, detail, now);
-                    }
-                    Err(e) => {
-                        web_sys::console::warn_1(
-                            &format!("canvas: note_detail fetch failed for {id_spawn}: {e}").into(),
-                        );
-                    }
-                }
-            });
-        }
-    });
 
     // -----------------------------------------------------------------------
     // Agent-switch reset Effect.
@@ -235,8 +136,6 @@ fn RadialCanvasView() -> impl IntoView {
     // it as `prev`. On first mount `prev == None` and the reset body is skipped
     // (avoids clearing empty state before the galaxy-build Effect's first fetch).
     // -----------------------------------------------------------------------
-    let detail_cache_reset = detail_cache;
-    let pending_hover_timer_reset = pending_hover_timer.clone();
     Effect::new(move |prev: Option<String>| {
         let current = agent_id.get();
         if let Some(p) = prev.as_ref() {
@@ -245,20 +144,13 @@ fn RadialCanvasView() -> impl IntoView {
                 set_selected_node.set(None);
                 search_query.set(String::new());
                 set_fold_threshold.set(12);
-                prefetch_request.set(None);
                 all_dtos.set(Vec::new());
-                excerpt_by_id.set(HashMap::new());
                 // Clear 3D galaxy signals so the new agent's galaxy rebuilds from scratch.
                 // The galaxy-build Effect repopulates galaxy_data when it re-runs.
                 galaxy_data.set(None);
                 focus_request.set(None);
                 highlight_request.set(None);
                 lod_request.set(0.0);
-
-                // Reset non-reactive state
-                *detail_cache_reset.borrow_mut() = PrefetchCache::<NoteDetailResponse>::new();
-                // Cancel any pending hover-debounce timer on agent switch.
-                *pending_hover_timer_reset.borrow_mut() = None;
                 hover_intent.set(None);
             }
         }
@@ -287,31 +179,6 @@ fn RadialCanvasView() -> impl IntoView {
     });
 
     // -----------------------------------------------------------------------
-    // Hover debounce Effect: HOVER_DEBOUNCE_MS dwell gate.
-    //
-    // `hover_intent` mirrors the raw `CanvasEvent::HoverNode` transitions
-    // (edge-triggered: changes only when the hovered node changes). This
-    // Effect translates "pointer landed on node X" into "pointer has rested on
-    // node X for ≥HOVER_DEBOUNCE_MS, schedule a prefetch" by arming a
-    // gloo_timers::Timeout and writing `prefetch_request` only when the timer
-    // fires. Re-arms (= cancels previous, starts new) on each hover change, so
-    // skimming across nodes never reaches the fire path.
-    // -----------------------------------------------------------------------
-    let pending_hover_timer_e = pending_hover_timer;
-    Effect::new(move || {
-        let target = hover_intent.get();
-        // Drop any pending timer; replacing the Option cancels the underlying
-        // gloo Timeout via Drop.
-        *pending_hover_timer_e.borrow_mut() = None;
-        let Some(id) = target else { return };
-        let id_for_timer = id;
-        let timer = Timeout::new(HOVER_DEBOUNCE_MS as u32, move || {
-            prefetch_request.set(Some(id_for_timer));
-        });
-        *pending_hover_timer_e.borrow_mut() = Some(timer);
-    });
-
-    // -----------------------------------------------------------------------
     // Canvas event handler — captures only Copy signals, safe for Callback::new
     // -----------------------------------------------------------------------
     let on_event = move |event: CanvasEvent| match event {
@@ -334,14 +201,8 @@ fn RadialCanvasView() -> impl IntoView {
         }
         CanvasEvent::HoverNode(hovered_id) => {
             // Edge-triggered: `HoverNode` only fires on transition (see
-            // galaxy_canvas.rs hit-test). The dwell-threshold work happens in
-            // the hover-debounce Effect above, which reads this signal and
-            // schedules a 150ms `gloo_timers::callback::Timeout`.
-            //
-            // We only write `Copy` signals here because the `on_event`
-            // callback is wrapped in `Callback::new` (Send + Sync). The
-            // `Rc<RefCell<Option<Timeout>>>` lives outside this callback in
-            // the Effect's capture set, where Send is not required.
+            // galaxy_canvas.rs hit-test). `hover_intent` is passed directly
+            // to `GalaxyCanvas` as `hovered_node` to drive the label overlay.
             hover_intent.set(hovered_id);
         }
     };
@@ -475,14 +336,6 @@ fn RadialCanvasView() -> impl IntoView {
 // ---------------------------------------------------------------------------
 // Private helpers shared by RadialCanvasView Effects
 // ---------------------------------------------------------------------------
-
-/// Returns `performance.now()` in milliseconds, falling back to 0.0.
-fn now_ms() -> f64 {
-    web_sys::window()
-        .and_then(|w| w.performance())
-        .map(|p| p.now())
-        .unwrap_or(0.0)
-}
 
 /// Build the initial 3D galaxy GraphData from a full-graph query response.
 ///
