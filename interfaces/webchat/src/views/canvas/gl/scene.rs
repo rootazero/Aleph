@@ -1,7 +1,8 @@
-//! Per-frame orchestration: camera update → clear → edges → nodes.
+//! Per-frame orchestration: camera update → scene FBO → bloom → screen.
 
 use web_sys::{HtmlCanvasElement, WebGl2RenderingContext as Gl};
 
+use super::bloom::BloomPipeline;
 use super::camera::OrbitCamera;
 use super::context::GlContext;
 use super::edges::EdgeRenderer;
@@ -24,6 +25,7 @@ pub struct Scene {
     ctx: GlContext,
     nodes: NodeRenderer,
     edges: EdgeRenderer,
+    bloom: BloomPipeline,
     pub camera: OrbitCamera,
     data: GraphData,
     width: i32,
@@ -39,14 +41,18 @@ impl Scene {
         let ctx = GlContext::from_canvas(canvas)?;
         let nodes = NodeRenderer::new(&ctx.gl)?;
         let edges = EdgeRenderer::new(&ctx.gl)?;
+        let w = canvas.width() as i32;
+        let h = canvas.height() as i32;
+        let bloom = BloomPipeline::new(&ctx.gl, w, h)?;
         Ok(Scene {
             ctx,
             nodes,
             edges,
+            bloom,
             camera: OrbitCamera::new(800.0),
             data: GraphData::default(),
-            width: canvas.width() as i32,
-            height: canvas.height() as i32,
+            width: w,
+            height: h,
             last_t: 0.0,
             layout: None,
             settling: false,
@@ -72,6 +78,9 @@ impl Scene {
         self.width = w;
         self.height = h;
         self.ctx.resize(w, h);
+        // Ignore resize errors — if FBO realloc fails the bloom is degraded
+        // but the scene still draws (composite falls back to default FBO).
+        let _ = self.bloom.resize(&self.ctx.gl, w, h);
     }
 
     pub fn on_drag(&mut self, dx: f32, dy: f32, t_ms: f64) {
@@ -126,7 +135,13 @@ impl Scene {
         }
 
         let gl = &self.ctx.gl;
+
+        // --- Scene pass: render into the bloom scene FBO ---
+        // Bind the scene FBO before clearing so we draw into it, not the screen.
+        gl.bind_framebuffer(Gl::FRAMEBUFFER, Some(self.bloom.scene_fbo()));
+        gl.viewport(0, 0, self.width, self.height);
         gl.clear_color(0.024, 0.035, 0.059, 1.0); // #06090f-ish
+        // Enable additive blend for the scene geometry (edges + nodes).
         gl.enable(Gl::BLEND);
         gl.blend_func(Gl::SRC_ALPHA, Gl::ONE); // additive
         gl.clear(Gl::COLOR_BUFFER_BIT | Gl::DEPTH_BUFFER_BIT);
@@ -134,6 +149,12 @@ impl Scene {
         let vp = self.camera.view_proj(aspect);
         self.edges.draw(gl, &vp);
         self.nodes.draw(gl, &vp, (self.width as f32, self.height as f32));
+        // Restore blend state after scene draw — bloom passes will disable blend.
+        gl.disable(Gl::BLEND);
+
+        // --- Bloom pass: bright-pass → blur → composite to default FBO ---
+        // bloom.run() manages all blend state internally (BLEND disabled).
+        self.bloom.run(gl);
     }
 
     /// Suppress unused-field warning for `data` on non-WASM targets (pure struct holder).

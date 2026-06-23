@@ -3,6 +3,7 @@
 //! Pure-logic submodules (`math`, `camera`, `layout3d`, `picking`) are
 //! `web-sys`-free and unit-tested on the native target. GL-bound submodules
 //! are verified by wasm compile + browser.
+pub mod bloom;
 pub mod camera;
 pub mod context;
 pub mod edges;

@@ -63,3 +63,59 @@ void main() {
     frag = vec4(v_color * fade, fade * 0.35); // thin, faint, additive
 }
 "#;
+
+// ---------------------------------------------------------------------------
+// Bloom post-processing shaders (Task 9)
+// ---------------------------------------------------------------------------
+
+/// Fullscreen triangle vertex shader. Uses gl_VertexID — no vertex buffer required.
+pub const FULLSCREEN_VERT: &str = r#"#version 300 es
+precision highp float;
+out vec2 v_uv;
+void main() {
+    vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    v_uv = p;
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+"#;
+
+/// Bright-pass fragment shader: extracts luminance above threshold.
+pub const BRIGHT_FRAG: &str = r#"#version 300 es
+precision highp float;
+in vec2 v_uv; out vec4 frag;
+uniform sampler2D u_tex; uniform float u_threshold;
+void main() {
+    vec3 c = texture(u_tex, v_uv).rgb;
+    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    frag = vec4(c * max(l - u_threshold, 0.0) / max(l, 1e-4), 1.0);
+}
+"#;
+
+/// Separable gaussian blur fragment shader. Set `u_dir` to (1,0) or (0,1).
+pub const BLUR_FRAG: &str = r#"#version 300 es
+precision highp float;
+in vec2 v_uv; out vec4 frag;
+uniform sampler2D u_tex; uniform vec2 u_dir; uniform vec2 u_texel;
+const float W[5] = float[](0.227, 0.194, 0.121, 0.054, 0.016);
+void main() {
+    vec3 c = texture(u_tex, v_uv).rgb * W[0];
+    for (int i = 1; i < 5; i++) {
+        vec2 off = u_dir * u_texel * float(i);
+        c += texture(u_tex, v_uv + off).rgb * W[i];
+        c += texture(u_tex, v_uv - off).rgb * W[i];
+    }
+    frag = vec4(c, 1.0);
+}
+"#;
+
+/// Composite fragment shader: additively blends bloom over the scene.
+pub const COMPOSITE_FRAG: &str = r#"#version 300 es
+precision highp float;
+in vec2 v_uv; out vec4 frag;
+uniform sampler2D u_scene; uniform sampler2D u_bloom; uniform float u_intensity;
+void main() {
+    vec3 s = texture(u_scene, v_uv).rgb;
+    vec3 b = texture(u_bloom, v_uv).rgb;
+    frag = vec4(s + b * u_intensity, 1.0);
+}
+"#;
