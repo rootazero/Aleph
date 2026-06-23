@@ -818,7 +818,18 @@
       "env_value_placeholder": "值",
       "env_value_saved": "已保存 — 留空保持不变",
       "env_remove": "移除",
-      "cancel": "取消"
+      "cancel": "取消",
+      "recommended": "推荐 MCP",
+      "recommended_hint": "官方推荐的 MCP 服务，填好密钥即可一键配置并启用。",
+      "preset_configure": "配置并启用",
+      "preset_install_title": "配置 MCP 预设",
+      "preset_install": "安装",
+      "preset_installing": "安装中...",
+      "preset_official": "官方",
+      "preset_required": "必填",
+      "preset_how_to_get": "如何获取",
+      "preset_needs_key": "请填写所有必填密钥。",
+      "preset_no_runtime": "缺少所需运行时，请先安装后重试。"
     },
     "plugins": {
       "title": "插件",

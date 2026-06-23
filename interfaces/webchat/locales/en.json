@@ -818,7 +818,18 @@
       "env_value_placeholder": "value",
       "env_value_saved": "saved — leave blank to keep",
       "env_remove": "Remove",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "recommended": "Recommended MCP",
+      "recommended_hint": "Officially recommended MCP servers — fill in the keys to configure and enable in one click.",
+      "preset_configure": "Configure & Enable",
+      "preset_install_title": "Configure MCP Preset",
+      "preset_install": "Install",
+      "preset_installing": "Installing...",
+      "preset_official": "Official",
+      "preset_required": "Required",
+      "preset_how_to_get": "How to get",
+      "preset_needs_key": "Please fill in all required keys.",
+      "preset_no_runtime": "Required runtime is missing — install it and retry."
     },
     "plugins": {
       "title": "Plugins",
