@@ -1,9 +1,9 @@
-//! Cold-start primer + legacy migration for official MCP presets.
+//! Official MCP preset projection + legacy migration.
 //!
 //! Projects the in-binary `src/mcp/presets/catalog.json` into `ExtensionEntry`s
-//! under the `aleph-hub` source slot so official MCP is browsable/installable
-//! offline and before the remote catalog is first fetched. The remote fetch
-//! later overwrites the slot wholesale (no peer source, no local dedup).
+//! for the `aleph-hub` source slot (consumed by `hub::primer`). Also migrates
+//! servers installed via the retired preset path. The cold-start gate that
+//! writes the slot lives in `hub::primer`.
 
 use crate::hub::catalog_client::ALEPH_HUB_ID;
 use crate::hub::types::{
@@ -104,26 +104,6 @@ pub fn primer_entries() -> Vec<ExtensionEntry> {
     presets::catalog().iter().filter_map(map_entry).collect()
 }
 
-/// Cold-start primer: if the `aleph-hub` slot is empty (never fetched), fill it
-/// with the official preset projection so official MCP is available offline.
-/// The async remote fetch later `replace_source`s the slot wholesale.
-pub async fn prime_official_mcp_if_empty(cache: &crate::hub::cache::CatalogCache) {
-    match cache.count_source(ALEPH_HUB_ID).await {
-        Ok(0) => {
-            let entries = primer_entries();
-            match cache.replace_source(ALEPH_HUB_ID, &entries).await {
-                Ok(()) => tracing::info!(
-                    count = entries.len(),
-                    "primed official MCP catalog (cold start)"
-                ),
-                Err(e) => tracing::warn!(error = %e, "failed to prime official MCP catalog"),
-            }
-        }
-        Ok(_) => {}
-        Err(e) => tracing::warn!(error = %e, "count_source failed; skipping official MCP primer"),
-    }
-}
-
 /// True iff `cfg` was installed via the retired preset path: its id is a known
 /// preset slug AND its launch shape matches that preset. New Hub installs use
 /// `aleph-hub_<slug>` ids, so a raw-slug id never collides with a Hub install.
@@ -162,7 +142,7 @@ pub async fn migrate_legacy_preset_servers(mcp: &McpManagerHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_legacy_preset_server, prime_official_mcp_if_empty, primer_entries};
+    use super::{is_legacy_preset_server, primer_entries};
     use crate::hub::types::{ExtensionKind, InstallSpec, TrustTier};
 
     fn by_id(
@@ -245,29 +225,4 @@ mod tests {
         assert!(!is_legacy_preset_server(&other));
     }
 
-    #[tokio::test]
-    async fn primes_when_empty_then_is_noop_when_populated() {
-        use crate::hub::cache::{CatalogCache, CatalogFilter};
-        let cache = CatalogCache::open_in_memory().unwrap();
-        prime_official_mcp_if_empty(&cache).await;
-        let after = cache
-            .query(&CatalogFilter {
-                source_id: Some("aleph-hub".into()),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert!(after.iter().any(|e| e.id == "aleph-hub:context7"));
-        let count = after.len();
-        // Second call is a no-op (slot already non-empty).
-        prime_official_mcp_if_empty(&cache).await;
-        let again = cache
-            .query(&CatalogFilter {
-                source_id: Some("aleph-hub".into()),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert_eq!(again.len(), count);
-    }
 }
