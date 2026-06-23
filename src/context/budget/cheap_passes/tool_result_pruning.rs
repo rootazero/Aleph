@@ -6,6 +6,7 @@
 //! preserves the "what did this tool do" signal at a fraction of the token
 //! cost — far better continuity than a bare token count.
 
+use crate::context::budget::cheap_passes::structured;
 use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::budget::ContextPressure;
 use crate::providers::message::UnifiedMessage;
@@ -33,6 +34,18 @@ fn result_hint(text: &str) -> String {
         (true, _) => format!("{excerpt}…"),
         (false, n) if n > 1 => format!("{excerpt} ({n} lines)"),
         (false, _) => excerpt,
+    }
+}
+
+/// Build the first-line placeholder for unstructured content (the fallback when
+/// no [`structured`] reducer matches). Preserves the original
+/// `[pruned tool_result: …]` shape so downstream conventions stay intact.
+fn first_line_placeholder(tool_name: &str, original_tokens: usize, text: &str) -> String {
+    let hint = result_hint(text);
+    if hint.is_empty() {
+        format!("[pruned tool_result: {tool_name}, ~{original_tokens} tokens]")
+    } else {
+        format!("[pruned tool_result: {tool_name}, ~{original_tokens} tokens — {hint}]")
     }
 }
 
@@ -93,19 +106,27 @@ impl crate::context::budget::preflight::PreflightStage for ToolResultPruningStag
                 continue;
             }
             let tool_name_owned = tool_name.to_string();
-            let hint = result_hint(&original_text);
-            let placeholder = if hint.is_empty() {
-                format!("[pruned tool_result: {tool_name_owned}, ~{original_tokens} tokens]")
-            } else {
-                format!(
-                    "[pruned tool_result: {tool_name_owned}, ~{original_tokens} tokens — {hint}]"
-                )
+            // Content-type-aware structured reduction (headroom's routing
+            // insight): a stale log / search result / diff keeps its *signal*
+            // (errors, matched lines, +/- changes) instead of collapsing to a
+            // bare first line. Prose and unrecognized content fall through to
+            // the first-line placeholder, preserving the old behaviour.
+            let replacement = match structured::reduce(&original_text) {
+                Some(reduction) => {
+                    let rendered = reduction.render();
+                    if estimate_tokens_smart(&rendered) < original_tokens {
+                        rendered
+                    } else {
+                        first_line_placeholder(&tool_name_owned, original_tokens, &original_text)
+                    }
+                }
+                None => first_line_placeholder(&tool_name_owned, original_tokens, &original_text),
             };
-            let new_tokens = estimate_tokens_smart(&placeholder);
+            let new_tokens = estimate_tokens_smart(&replacement);
             if new_tokens >= original_tokens {
                 continue;
             }
-            msg.replace_tool_result_content(placeholder);
+            msg.replace_tool_result_content(replacement);
             total_freed += original_tokens - new_tokens;
         }
         total_freed
@@ -174,9 +195,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pruned_placeholder_keeps_an_informative_hint() {
-        // Realistic multi-line tool result: the first line is the signal the
-        // model needs to avoid re-running the tool.
+    async fn structured_log_reduction_keeps_signal() {
+        // Realistic command output: a test summary followed by hundreds of
+        // detail lines. The content-type router recognizes a log and keeps the
+        // summary signal while dropping the noise — strictly better than the
+        // old first-line placeholder.
         let body = format!("PASS: 312 tests passed in 4.1s\n{}", "detail\n".repeat(400));
         let mut messages = vec![
             UnifiedMessage::tool_result("call-1", "bash", body, false),
@@ -184,16 +207,37 @@ mod tests {
         ];
         let stage = ToolResultPruningStage::default();
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
-        assert!(freed > 0, "a large multi-line result must be pruned");
+        assert!(freed > 0, "a large multi-line log must be reduced");
         let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
-        assert!(text.starts_with("[pruned tool_result: bash"), "got: {text}");
         assert!(
-            text.contains("PASS: 312 tests passed"),
-            "hint must carry the first line; got: {text}"
+            text.starts_with("[compacted log:"),
+            "structured log path should be taken; got: {text}"
         );
         assert!(
-            text.contains("lines)"),
-            "multi-line hint must note the line count; got: {text}"
+            text.contains("PASS: 312 tests passed"),
+            "the summary signal must survive; got: {text}"
+        );
+        assert!(
+            text.contains("lines omitted"),
+            "dropped noise must be marked; got: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unstructured_result_uses_first_line_placeholder() {
+        // A single huge line of opaque content has no structure to route on, so
+        // the first-line placeholder fallback still applies.
+        let mut messages = vec![
+            UnifiedMessage::tool_result("call-1", "Read", "z".repeat(3000), false),
+            UnifiedMessage::user("recent"),
+        ];
+        let stage = ToolResultPruningStage::default();
+        let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
+        assert!(freed > 0, "a large opaque result must be pruned");
+        let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
+        assert!(
+            text.starts_with("[pruned tool_result: Read"),
+            "unstructured content falls back to first-line placeholder; got: {text}"
         );
     }
 

@@ -8,9 +8,14 @@
 //! Borrows the staging idea from hermes-agent: `tool_result` pruning and
 //! historical image stripping are cheap deterministic transforms that
 //! deliver consistent savings without LLM cost.
+//!
+//! [`structured`] adds headroom's content-type routing on top of the pruning
+//! stage: stale logs/search-results/diffs are reduced to their signal rather
+//! than truncated to a single line.
 
 pub mod file_op_supersede;
 pub mod image_stripping;
+pub mod structured;
 pub mod tool_result_pruning;
 
 pub use file_op_supersede::FileOpSupersedeStage;
