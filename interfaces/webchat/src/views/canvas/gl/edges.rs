@@ -36,15 +36,27 @@ impl EdgeRenderer {
     }
 
     pub fn upload(&mut self, gl: &Gl, data: &GraphData) {
-        let mut pos = Vec::with_capacity(data.edges.len() * 6);
-        let mut col = Vec::with_capacity(data.edges.len() * 6);
-        for &(a, b) in &data.edges {
-            let (na, nb) = (&data.nodes[a as usize], &data.nodes[b as usize]);
+        self.upload_indexed(gl, &data.nodes, &data.edges);
+    }
+
+    /// Upload edges from an explicit nodes slice + edge-index slice.
+    /// Avoids cloning GraphData: callers can pass current node positions and a
+    /// pre-filtered edge list without allocating a temporary GraphData.
+    pub fn upload_indexed(
+        &mut self,
+        gl: &Gl,
+        nodes: &[super::GalaxyNode],
+        edges: &[(u32, u32)],
+    ) {
+        let mut pos = Vec::with_capacity(edges.len() * 6);
+        let mut col = Vec::with_capacity(edges.len() * 6);
+        for &(a, b) in edges {
+            let (na, nb) = (&nodes[a as usize], &nodes[b as usize]);
             pos.extend_from_slice(&[na.pos.x, na.pos.y, na.pos.z, nb.pos.x, nb.pos.y, nb.pos.z]);
             col.extend_from_slice(&na.color);
             col.extend_from_slice(&nb.color);
         }
-        self.vert_count = (data.edges.len() * 2) as i32;
+        self.vert_count = (edges.len() * 2) as i32;
         bind_upload(gl, &self.pos_buf, &pos);
         bind_upload(gl, &self.col_buf, &col);
     }
