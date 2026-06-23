@@ -818,6 +818,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         })
                         .collect()
                 };
+                // Cold-start: seed official MCP into the aleph-hub slot if empty.
+                alephcore::hub::official_mcp::prime_official_mcp_if_empty(&cache).await;
                 (Some(std::sync::Arc::new(cache)), Some(configs))
             }
             Err(e) => {

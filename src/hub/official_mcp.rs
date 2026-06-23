@@ -94,10 +94,27 @@ pub fn primer_entries() -> Vec<ExtensionEntry> {
     presets::catalog().iter().filter_map(map_entry).collect()
 }
 
+/// Cold-start primer: if the `aleph-hub` slot is empty (never fetched), fill it
+/// with the official preset projection so official MCP is available offline.
+/// The async remote fetch later `replace_source`s the slot wholesale.
+pub async fn prime_official_mcp_if_empty(cache: &crate::hub::cache::CatalogCache) {
+    match cache.count_source(ALEPH_HUB_ID).await {
+        Ok(0) => {
+            let entries = primer_entries();
+            match cache.replace_source(ALEPH_HUB_ID, &entries).await {
+                Ok(()) => tracing::info!(count = entries.len(), "primed official MCP catalog (cold start)"),
+                Err(e) => tracing::warn!(error = %e, "failed to prime official MCP catalog"),
+            }
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "count_source failed; skipping official MCP primer"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::hub::types::{ExtensionKind, InstallSpec, TrustTier};
-    use super::primer_entries;
+    use super::{prime_official_mcp_if_empty, primer_entries};
 
     fn by_id(entries: &[crate::hub::types::ExtensionEntry], id: &str) -> crate::hub::types::ExtensionEntry {
         entries.iter().find(|e| e.id == id).cloned().unwrap_or_else(|| panic!("missing {id}"))
@@ -148,5 +165,25 @@ mod tests {
             }
             other => panic!("expected McpStdio, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn primes_when_empty_then_is_noop_when_populated() {
+        use crate::hub::cache::{CatalogCache, CatalogFilter};
+        let cache = CatalogCache::open_in_memory().unwrap();
+        prime_official_mcp_if_empty(&cache).await;
+        let after = cache
+            .query(&CatalogFilter { source_id: Some("aleph-hub".into()), ..Default::default() })
+            .await
+            .unwrap();
+        assert!(after.iter().any(|e| e.id == "aleph-hub:context7"));
+        let count = after.len();
+        // Second call is a no-op (slot already non-empty).
+        prime_official_mcp_if_empty(&cache).await;
+        let again = cache
+            .query(&CatalogFilter { source_id: Some("aleph-hub".into()), ..Default::default() })
+            .await
+            .unwrap();
+        assert_eq!(again.len(), count);
     }
 }
