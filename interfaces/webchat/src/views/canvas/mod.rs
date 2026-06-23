@@ -143,8 +143,7 @@ fn RadialCanvasView() -> impl IntoView {
     // ghost-dot ring of orphans (nodes outside the current connected component).
     let all_dtos: RwSignal<Vec<NoteNodeDto>> = RwSignal::new(Vec::new());
 
-    // TEMP (Task 6): mock 3D galaxy data built from the full graph.query response.
-    // Replaced by real force-layout output in Task 8.
+    // 3D galaxy data built from the full graph.query response via force-layout seed.
     let galaxy_data: RwSignal<Option<gl::GraphData>> = RwSignal::new(None);
 
     // Non-reactive radial navigation state (Rc<RefCell<_>> — WASM single-thread safe)
@@ -348,8 +347,8 @@ fn RadialCanvasView() -> impl IntoView {
                 all_dtos.set(r.nodes.clone());
                 let mm = GlobalMiniMap::build(&r.nodes, &r.edges, 200.0);
                 *minimap_inner.borrow_mut() = mm;
-                // TEMP (Task 6): build mock 3D galaxy from full-graph topology.
-                galaxy_data.set(Some(mock_galaxy(r)));
+                // Build deterministic 3D galaxy seed from full-graph topology.
+                galaxy_data.set(Some(build_galaxy(r)));
             }
 
             // Entry point: localStorage "canvas_entry" → highest-degree node
@@ -663,7 +662,7 @@ fn RadialCanvasView() -> impl IntoView {
 
     view! {
         <div class="relative w-full h-full bg-[#080818]">
-            // TEMP (Task 6): GalaxyCanvas replaces GraphCanvas during Phase 1.
+            // GalaxyCanvas: 3D force-layout nebula (Phase 1).
             // GraphCanvas + GraphState imports retained for Phase 4 removal.
             <GalaxyCanvas
                 graph=galaxy_data
@@ -757,37 +756,41 @@ fn seed_graph_state(
     gs.viewport.fit_to_content(&gs.nodes, 0.10);
 }
 
-// TEMP (Task 6): mock galaxy from graph.query topology, random-sphere layout.
-// Replaced by real force layout in Task 8.
-fn mock_galaxy(resp: &GraphQueryResponse) -> gl::GraphData {
+/// Build the initial 3D galaxy GraphData from a full-graph query response.
+///
+/// Node positions come from `ForceLayout::seed` (deterministic, hash-derived)
+/// so the scene's starting positions match what the layout engine expects.
+/// Scene::set_graph then builds a ForceLayout over these positions and animates
+/// them to their settled state over up to MAX_SETTLE_STEPS frames.
+fn build_galaxy(resp: &GraphQueryResponse) -> gl::GraphData {
+    use gl::layout3d::ForceLayout;
     use gl::{GalaxyNode, GraphData};
-    use gl::math::Vec3;
-    use crate::canvas_engine::fnv1a::fnv1a_32;
     use crate::canvas_engine::category_color::category_rgb;
 
     let mut id_index = std::collections::HashMap::new();
-    let nodes: Vec<GalaxyNode> = resp.nodes.iter().enumerate().map(|(i, n)| {
+    for (i, n) in resp.nodes.iter().enumerate() {
         id_index.insert(n.id.clone(), i as u32);
-        let h = fnv1a_32(n.id.as_bytes());
-        let theta = (h & 0xffff) as f32 / 65535.0 * std::f32::consts::TAU;
-        let phi = ((h >> 16) & 0xffff) as f32 / 65535.0 * std::f32::consts::PI;
-        let r = 300.0_f32;
+    }
+
+    let edges: Vec<(u32, u32)> = resp.edges.iter().filter_map(|e| {
+        Some((*id_index.get(&e.from)?, *id_index.get(&e.to)?))
+    }).collect();
+
+    let ids: Vec<String> = resp.nodes.iter().map(|n| n.id.clone()).collect();
+    let layout = ForceLayout::new(ids.len(), &edges);
+    let positions = layout.seed(&ids);
+
+    let nodes: Vec<GalaxyNode> = resp.nodes.iter().zip(positions).map(|(n, pos)| {
         GalaxyNode {
             id: n.id.clone(),
             name: n.name.clone(),
             category: n.category.clone(),
             link_count: n.link_count as u32,
-            pos: Vec3::new(
-                r * phi.sin() * theta.cos(),
-                r * phi.sin() * theta.sin(),
-                r * phi.cos(),
-            ),
+            pos,
             color: category_rgb(&n.category),
         }
     }).collect();
-    let edges = resp.edges.iter().filter_map(|e| {
-        Some((*id_index.get(&e.from)?, *id_index.get(&e.to)?))
-    }).collect();
+
     GraphData { nodes, edges }
 }
 
