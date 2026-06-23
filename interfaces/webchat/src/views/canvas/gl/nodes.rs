@@ -73,9 +73,9 @@ impl NodeRenderer {
             sizes.push(if lit { base } else { base * 0.5 });
             let [r, g, b] = node.color;
             if lit {
-                // HDR boost so bloom picks up a glow corona (1.2 + brightness*0.8).
-                let boost = 1.2 + ((r + g + b) / 3.0) * 0.8;
-                colors.extend_from_slice(&[r * boost, g * boost, b * boost]);
+                // HDR boost so bloom picks up a glow corona.
+                let [br, bg, bb] = crate::canvas_engine::category_color::hdr_boost(node.color);
+                colors.extend_from_slice(&[br, bg, bb]);
             } else {
                 colors.extend_from_slice(&[r * 0.15, g * 0.15, b * 0.15]);
             }
