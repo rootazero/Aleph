@@ -4,8 +4,13 @@
 //! → it is NOT `Send`. Keep it in `Rc<RefCell<Option<Scene>>>` captured by the
 //! rAF closure and Effects. The `on_event` `Callback` captures only `Copy`
 //! reactive signals so it satisfies `Send + Sync`.
+//!
+//! Intent channels (`focus_request`, `highlight_request`) let the host drive
+//! the scene without violating the non-Send constraint: the host writes to a
+//! `RwSignal`, an Effect inside `GalaxyCanvas` reads it and calls the Scene.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use leptos::callback::Callback;
@@ -17,11 +22,19 @@ use crate::canvas_engine::interaction::CanvasEvent;
 use super::gl::scene::Scene;
 use super::gl::GraphData;
 
+/// Click threshold in CSS pixels. A pointer-up within this distance of
+/// pointer-down counts as a click; larger = drag (no selection).
+const CLICK_THRESHOLD_PX: f32 = 5.0;
+
 #[component]
 #[must_use]
 pub fn GalaxyCanvas(
     graph: RwSignal<Option<GraphData>>,
-    #[allow(unused)] on_event: Callback<CanvasEvent>,
+    on_event: Callback<CanvasEvent>,
+    /// Intent channel: when `Some(id)`, fly the camera to that node.
+    focus_request: RwSignal<Option<String>>,
+    /// Intent channel: when `Some(indices)`, highlight those node indices.
+    highlight_request: RwSignal<Option<HashSet<u32>>>,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
@@ -31,6 +44,16 @@ pub fn GalaxyCanvas(
     // Last pointer position for computing drag deltas (screen pixels).
     let last_ptr: Rc<Cell<(f32, f32)>> = Rc::new(Cell::new((0.0, 0.0)));
     let ptr_down: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+
+    // Pointer-down position (client pixels) for click-vs-drag detection.
+    let down_pos: Rc<Cell<(f32, f32)>> = Rc::new(Cell::new((0.0, 0.0)));
+
+    // Last hovered node id — used to emit HoverNode only on transition.
+    let last_hover: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+
+    // Canvas element bounding-rect origin (updated on pointerdown for perf).
+    // Used to convert client coords → canvas-local coords for picking.
+    let canvas_origin: Rc<Cell<(f32, f32)>> = Rc::new(Cell::new((0.0, 0.0)));
 
     // --- Init Effect: mount scene once the <canvas> is in the DOM ---
     let scene_init = scene.clone();
@@ -94,48 +117,116 @@ pub fn GalaxyCanvas(
         }
     });
 
-    // --- Pointer events ---
-    // Drag delta → scene.on_drag; wheel → scene.on_wheel.
-    // All captures are Rc (non-Send), safe for WASM single-thread.
+    // --- Intent channel Effect: fly-to ---
+    // Reads `focus_request`; applies to the owned scene (non-Send, safe here).
+    let scene_focus = scene.clone();
+    Effect::new(move |_| {
+        let Some(id) = focus_request.get() else { return };
+        let t_ms = perf_now();
+        if let Some(s) = scene_focus.borrow_mut().as_mut() {
+            s.fly_to_node(&id, t_ms);
+        }
+    });
 
-    let _scene_pd = scene.clone();
+    // --- Intent channel Effect: highlight ---
+    let scene_hl = scene.clone();
+    Effect::new(move |_| {
+        let hl = highlight_request.get();
+        if let Some(s) = scene_hl.borrow_mut().as_mut() {
+            s.set_highlight(hl);
+        }
+    });
+
+    // --- Pointer events ---
+    // Drag delta → scene.on_drag; click → pick → on_event; hover → pick → on_event.
+
     let last_ptr_pd = last_ptr.clone();
     let ptr_down_pd = ptr_down.clone();
+    let down_pos_pd = down_pos.clone();
+    let canvas_origin_pd = canvas_origin.clone();
     let on_pointerdown = move |ev: web_sys::PointerEvent| {
         // Capture so move/up fire even when pointer leaves canvas.
         if let Some(target) = ev.target() {
             if let Ok(el) = target.dyn_into::<web_sys::Element>() {
+                // Snapshot canvas origin for this gesture.
+                let rect = el.get_bounding_client_rect();
+                canvas_origin_pd.set((rect.left() as f32, rect.top() as f32));
                 let _ = el.set_pointer_capture(ev.pointer_id());
             }
         }
         ptr_down_pd.set(true);
-        last_ptr_pd.set((ev.client_x() as f32, ev.client_y() as f32));
+        let pos = (ev.client_x() as f32, ev.client_y() as f32);
+        last_ptr_pd.set(pos);
+        down_pos_pd.set(pos);
     };
 
     let scene_pm = scene.clone();
     let last_ptr_pm = last_ptr.clone();
     let ptr_down_pm = ptr_down.clone();
+    let canvas_origin_pm = canvas_origin.clone();
+    let last_hover_pm = last_hover.clone();
+    let on_event_pm = on_event;
     let on_pointermove = move |ev: web_sys::PointerEvent| {
-        if !ptr_down_pm.get() {
-            return;
-        }
-        let (lx, ly) = last_ptr_pm.get();
         let cx = ev.client_x() as f32;
         let cy = ev.client_y() as f32;
-        let dx = cx - lx;
-        let dy = cy - ly;
-        last_ptr_pm.set((cx, cy));
-        let t_ms = perf_now();
-        if let Some(s) = scene_pm.borrow_mut().as_mut() {
-            s.on_drag(dx, dy, t_ms);
+
+        if ptr_down_pm.get() {
+            // Drag: update orbit camera.
+            let (lx, ly) = last_ptr_pm.get();
+            let dx = cx - lx;
+            let dy = cy - ly;
+            last_ptr_pm.set((cx, cy));
+            let t_ms = perf_now();
+            if let Some(s) = scene_pm.borrow_mut().as_mut() {
+                s.on_drag(dx, dy, t_ms);
+            }
+        } else {
+            // Hover (no button down): pick and emit HoverNode on transition.
+            // Refresh canvas origin from the event target so hover picks work
+            // before the first pointerdown.
+            if let Some(target) = ev.target() {
+                if let Ok(el) = target.dyn_into::<web_sys::Element>() {
+                    let rect = el.get_bounding_client_rect();
+                    canvas_origin_pm.set((rect.left() as f32, rect.top() as f32));
+                }
+            }
+            let (ox, oy) = canvas_origin_pm.get();
+            let local = (cx - ox, cy - oy);
+            let hit = scene_pm.borrow().as_ref().and_then(|s| s.pick(local));
+            let mut lh = last_hover_pm.borrow_mut();
+            if *lh != hit {
+                *lh = hit.clone();
+                on_event_pm.run(CanvasEvent::HoverNode(hit));
+            }
         }
     };
 
+    let scene_pu = scene.clone();
     let ptr_down_pu = ptr_down.clone();
+    let down_pos_pu = down_pos.clone();
+    let canvas_origin_pu = canvas_origin.clone();
+    let on_event_pu = on_event;
     let on_pointerup = move |ev: web_sys::PointerEvent| {
         if let Some(target) = ev.target() {
             if let Ok(el) = target.dyn_into::<web_sys::Element>() {
                 let _ = el.release_pointer_capture(ev.pointer_id());
+            }
+        }
+        if ptr_down_pu.get() {
+            let cx = ev.client_x() as f32;
+            let cy = ev.client_y() as f32;
+            let (dx_start, dy_start) = down_pos_pu.get();
+            let dist = ((cx - dx_start).powi(2) + (cy - dy_start).powi(2)).sqrt();
+
+            // Click (not drag): pick the node under the cursor.
+            if dist < CLICK_THRESHOLD_PX {
+                let (ox, oy) = canvas_origin_pu.get();
+                let local = (cx - ox, cy - oy);
+                let hit = scene_pu.borrow().as_ref().and_then(|s| s.pick(local));
+                match hit {
+                    Some(id) => on_event_pu.run(CanvasEvent::SelectNode(id)),
+                    None => on_event_pu.run(CanvasEvent::DeselectNode),
+                }
             }
         }
         ptr_down_pu.set(false);

@@ -146,6 +146,15 @@ fn RadialCanvasView() -> impl IntoView {
     // 3D galaxy data built from the full graph.query response via force-layout seed.
     let galaxy_data: RwSignal<Option<gl::GraphData>> = RwSignal::new(None);
 
+    // Intent channels: host → GalaxyCanvas → Scene (non-Send bridge via signals).
+    // `focus_request` triggers fly_to_node; `highlight_request` triggers set_highlight.
+    let focus_request: RwSignal<Option<String>> = RwSignal::new(None);
+    let highlight_request: RwSignal<Option<std::collections::HashSet<u32>>> = RwSignal::new(None);
+
+    // Per-node excerpt cache for NodeDetailPanel.
+    let detail_panel_excerpts: RwSignal<std::collections::HashMap<String, NodeExcerpt>> =
+        RwSignal::new(std::collections::HashMap::new());
+
     // Non-reactive radial navigation state (Rc<RefCell<_>> — WASM single-thread safe)
     let nav = Rc::new(RefCell::new(NavController::new()));
     let prefetch = Rc::new(RefCell::new(PrefetchCache::<GraphNeighborsResponse>::new()));
@@ -613,10 +622,21 @@ fn RadialCanvasView() -> impl IntoView {
     let on_event = move |event: CanvasEvent| match event {
         CanvasEvent::SelectNode(id) => {
             set_selected_node.set(Some(id.clone()));
-            active_request.set(Some(id));
+            active_request.set(Some(id.clone()));
+            // Drive the scene via intent channels:
+            // 1. Fly camera to selected node.
+            focus_request.set(Some(id.clone()));
+            // 2. Highlight selected node + topological neighbors.
+            //    Read galaxy_data (untracked — we don't want re-runs on data changes).
+            if let Some(data) = galaxy_data.get_untracked() {
+                let hl = compute_highlight_set(&data, &id);
+                highlight_request.set(Some(hl));
+            }
         }
         CanvasEvent::DeselectNode => {
             set_selected_node.set(None);
+            // Clear highlight when deselecting.
+            highlight_request.set(None);
         }
         CanvasEvent::EnterLocalView(id) => {
             // Drive the same fetch path via the intent signal
@@ -667,7 +687,17 @@ fn RadialCanvasView() -> impl IntoView {
             <GalaxyCanvas
                 graph=galaxy_data
                 on_event=Callback::new(on_event)
+                focus_request=focus_request
+                highlight_request=highlight_request
             />
+            // NodeDetailPanel: overlay when a node is selected in the galaxy.
+            {move || selected_node.get().map(|_| view! {
+                <div class="absolute bottom-0 right-0 w-72 max-h-[60%] overflow-y-auto
+                            bg-[#0d1120cc] border border-[#2a3060] rounded-tl-lg shadow-xl
+                            backdrop-blur-sm">
+                    <NodeDetailPanel excerpts=detail_panel_excerpts />
+                </div>
+            })}
             {
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -792,6 +822,31 @@ fn build_galaxy(resp: &GraphQueryResponse) -> gl::GraphData {
     }).collect();
 
     GraphData { nodes, edges }
+}
+
+/// Compute the highlight set for a selected node: the selected node's index
+/// plus all topologically adjacent node indices (one hop).
+///
+/// Returns a `HashSet<u32>` of node indices (matching `GraphData.nodes` order).
+/// The scene's `set_highlight` will dim any node NOT in this set.
+fn compute_highlight_set(data: &gl::GraphData, selected_id: &str) -> std::collections::HashSet<u32> {
+    // Find the selected node's index.
+    let Some(sel_idx) = data.nodes.iter().position(|n| n.id == selected_id) else {
+        return std::collections::HashSet::new();
+    };
+    let sel_idx = sel_idx as u32;
+
+    // Collect direct neighbors via edges.
+    let mut hl = std::collections::HashSet::new();
+    hl.insert(sel_idx);
+    for &(a, b) in &data.edges {
+        if a == sel_idx {
+            hl.insert(b);
+        } else if b == sel_idx {
+            hl.insert(a);
+        }
+    }
+    hl
 }
 
 /// Refresh `GraphState`'s node/edge buffers from a freshly folded `Neighborhood`

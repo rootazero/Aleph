@@ -1,5 +1,7 @@
 //! Per-frame orchestration: camera update → scene FBO → bloom → screen.
 
+use std::collections::HashSet;
+
 use web_sys::{HtmlCanvasElement, WebGl2RenderingContext as Gl};
 
 use super::bloom::BloomPipeline;
@@ -7,7 +9,7 @@ use super::camera::OrbitCamera;
 use super::context::GlContext;
 use super::edges::EdgeRenderer;
 use super::layout3d::ForceLayout;
-use super::math::Vec3;
+use super::math::{Mat4, Vec3};
 use super::nodes::NodeRenderer;
 use super::GraphData;
 use crate::canvas_engine::fnv1a::fnv1a_32;
@@ -34,6 +36,11 @@ pub struct Scene {
     layout: Option<ForceLayout>,
     settling: bool,
     settle_steps: u32,
+    /// Last view-projection matrix, stored each frame for picking.
+    last_vp: Mat4,
+    /// Current highlight set (selected node index + topological neighbors).
+    /// Stored on the struct so settling/drift re-uploads preserve it.
+    highlight: Option<HashSet<u32>>,
 }
 
 impl Scene {
@@ -57,6 +64,8 @@ impl Scene {
             layout: None,
             settling: false,
             settle_steps: 0,
+            last_vp: Mat4::identity(),
+            highlight: None,
         })
     }
 
@@ -67,11 +76,42 @@ impl Scene {
         self.layout = Some(layout);
         self.settling = true;
         self.settle_steps = 0;
+        // Clear highlight when the graph changes — indices shift on a new graph.
+        self.highlight = None;
 
         // Upload initial state so the first frame has something to draw.
         self.edges.upload(&self.ctx.gl, &data);
         self.nodes.upload(&self.ctx.gl, &data, None);
         self.data = data;
+    }
+
+    /// Screen-space picking: project all nodes through the last-frame view-proj
+    /// and return the node id nearest the cursor (within 18 px), or `None`.
+    pub fn pick(&self, cursor: (f32, f32)) -> Option<String> {
+        super::picking::pick_node(
+            &self.last_vp,
+            &self.data.nodes,
+            (self.width as f32, self.height as f32),
+            cursor,
+            18.0,
+        )
+        .map(|i| self.data.nodes[i as usize].id.clone())
+    }
+
+    /// Set the highlight set (selected node index + neighbors). Stored so that
+    /// settling/drift re-uploads in `render` don't silently clear it.
+    pub fn set_highlight(&mut self, hl: Option<HashSet<u32>>) {
+        self.highlight = hl;
+        self.nodes
+            .upload(&self.ctx.gl, &self.data, self.highlight.as_ref());
+    }
+
+    /// Fly the camera to the node with the given id, if found.
+    pub fn fly_to_node(&mut self, id: &str, t_ms: f64) {
+        if let Some(n) = self.data.nodes.iter().find(|n| n.id == id) {
+            self.camera.fly_to(n.pos, 250.0);
+            self.camera.note_interaction(t_ms);
+        }
     }
 
     pub fn resize(&mut self, w: i32, h: i32) {
@@ -113,14 +153,16 @@ impl Scene {
                     self.settling = false;
                 }
                 // Re-upload both edges and nodes (positions changed).
+                // Pass through the stored highlight so it survives settling.
                 self.edges.upload(&self.ctx.gl, &self.data);
-                self.nodes.upload(&self.ctx.gl, &self.data, None);
+                self.nodes
+                    .upload(&self.ctx.gl, &self.data, self.highlight.as_ref());
             }
         } else {
             // --- Phase 2: Idle drift ---
             // Build a scratch copy with per-node sine wobble applied.
             // The canonical `self.data.nodes[*].pos` is NEVER mutated here,
-            // preserving stable settled positions for Task 11 picking.
+            // preserving stable settled positions for picking.
             let drifted: Vec<Vec3> = self.data.nodes.iter().map(|n| {
                 drift_offset_3d(t_ms, &n.id, DRIFT_AMPLITUDE, DRIFT_PERIOD_MS, n.pos)
             }).collect();
@@ -131,7 +173,9 @@ impl Scene {
                 node.pos = pos;
             }
             // Re-upload nodes only (edges remain at stable settled positions).
-            self.nodes.upload(&self.ctx.gl, &scratch, None);
+            // Pass through the stored highlight so it survives drift re-uploads.
+            self.nodes
+                .upload(&self.ctx.gl, &scratch, self.highlight.as_ref());
         }
 
         let gl = &self.ctx.gl;
@@ -147,6 +191,8 @@ impl Scene {
         gl.clear(Gl::COLOR_BUFFER_BIT | Gl::DEPTH_BUFFER_BIT);
         let aspect = self.width as f32 / self.height.max(1) as f32;
         let vp = self.camera.view_proj(aspect);
+        // Store for picking (uses stable canonical positions, not drifted).
+        self.last_vp = vp;
         self.edges.draw(gl, &vp);
         self.nodes.draw(gl, &vp, (self.width as f32, self.height as f32));
         // Restore blend state after scene draw — bloom passes will disable blend.
@@ -157,11 +203,6 @@ impl Scene {
         self.bloom.run(gl);
     }
 
-    /// Suppress unused-field warning for `data` on non-WASM targets (pure struct holder).
-    #[allow(dead_code)]
-    fn _data_ref(&self) -> &GraphData {
-        &self.data
-    }
 }
 
 // ---------------------------------------------------------------------------
