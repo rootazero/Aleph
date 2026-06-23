@@ -55,6 +55,10 @@ web-sys = { version = "0.3", features = [
     # createMediaElementSource silent-bridge bug. Blob URL kept only for the
     # degraded <audio> fallback (no graph / decode failure / remote URL).
     "Url", "AudioContextState", "AudioBufferSourceNode", "AudioScheduledSourceNode",
+    # 3D memory nebula — WebGL2 renderer (views/canvas/gl)
+    "WebGl2RenderingContext", "WebGlProgram", "WebGlShader", "WebGlBuffer",
+    "WebGlVertexArrayObject", "WebGlUniformLocation", "WebGlFramebuffer",
+    "WebGlTexture", "WebGlActiveInfo",
 ] }
 console_error_panic_hook = "0.1"
 
