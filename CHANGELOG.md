@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.6.23]
+
+A focused follow-up to the Aleph Hub release. The headline is a **3D nebula
+memory-canvas** — the memory graph is now a WebGL2 galaxy you fly through —
+alongside the **Aleph Hub convergence**: official MCP servers, skills, and
+plugins now all flow through a single cold-start primer so the Hub is the one
+place to discover and install them.
+
+### Added
+
+- **3D nebula memory-canvas (WebGL2 galaxy view)** — the memory graph is
+  re-rendered as an interactive 3D galaxy: an orbit camera with damping,
+  fly-to, and idle rotation; instanced billboard node sprites; a batched
+  additive line edge renderer; an FBO bloom pipeline for the nebula glow;
+  3D force-directed layout with animated settling and idle drift; screen-space
+  node picking; theme-palette category colors with HDR boost; and LOD edge
+  density driven by the fold threshold. Pick / select / hover wire through to
+  fly-to + highlight + detail panel, and search / agent-switch / list
+  cross-links all retarget the galaxy. The legacy Canvas2D renderer, radial
+  navigation engine, 2D minimap, and dead prefetch/excerpt subsystem are
+  retired.
+
+### Changed
+
+- **Aleph Hub is the single source for official MCP / skills / plugins** — a
+  unified cold-start primer projects the bundled official MCP presets, skills,
+  and plugins into the `aleph-hub` catalog slot at boot (only when that source
+  is empty; a live fetch overwrites it). MCP discovery/install converges onto
+  the Hub: the standalone preset install engine and the
+  `mcp.list_presets` / `mcp.install_preset` RPCs are retired (catalog.json is
+  now Hub seed data), the Settings → MCP recommended section is dropped
+  (discovery moves to the Hub), boot migrates off retired preset installs, and
+  an stdio MCP install now fails fast when its command is missing.
+- **First-party SiliconFlow + t8star MCP presets** — SiliconFlow ships as a
+  built-in preset (Aleph-mcp self-built, rewritten to TypeScript and launched
+  via `npx`) and t8star is added as the 6th default preset (npx/node); both are
+  pinned to `@0.2.2`.
+- **Content-type-aware tool-result reduction (context §2.7)** — a deterministic
+  cheap preflight pass classifies tool output as log / search / diff and
+  compresses it structurally — preserving head/tail and error lines with
+  stack-frame context, per-file first/last grep matches, and diff context
+  trimmed to ±2 — instead of a flat first-line placeholder, and never grows the
+  context.
+
+### Fixed
+
+- **openai_compat video** — the video request body now also carries a
+  top-level `prompt`, which OpenAI-compatible aggregators (e.g. T8star) require
+  alongside the Ark-style `content` array.
+- **macOS Dock icon oversized** — the `.icns` is padded to Apple's 824/1024
+  grid so the Dock icon no longer renders ~12% larger than native apps (PNG/ICO
+  stay full-bleed for the Windows taskbar).
+- **Lite Panel window drag on remote core (macOS)** — the frameless lite Panel
+  window is draggable again when connected to a remote Gateway: a runtime
+  capability grant authorizes `start_dragging` for the remote origin and the
+  platform marker is injected so the drag band renders.
+- **Panel polish** — a distinct lite Panel app icon (cyan "P" badge) so it is
+  visually separable from the full app on one machine, and the Help card links
+  on the welcome settings page are wired up (support link points to the contact
+  email).
+- **Windows build** — `ListenerState` now compiles on all targets.
+
 ## [26.6.22]
 
 A large release. The headline is **Aleph Hub** — a single federated marketplace
