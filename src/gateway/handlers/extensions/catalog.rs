@@ -273,4 +273,24 @@ mod tests {
         mark_installed(&mut catalog, &installed);
         assert!(catalog[0].installed);
     }
+
+    #[test]
+    fn skill_entry_marked_installed_by_name_case_insensitive() {
+        // The primer's "aleph-hub:pdf-tools" Skill entry collapses against a live
+        // local:skill entry of the same name — this is why official skills show
+        // installed with NO reconcile change (the convergence's load-bearing fact).
+        let mut catalog = vec![catalog_entry("aleph-hub:pdf-tools", ExtensionKind::Skill, "PDF Tools")];
+        let installed = vec![installed_entry("local:skill:pdf-tools", ExtensionKind::Skill, "pdf tools", true)];
+        mark_installed(&mut catalog, &installed);
+        assert!(catalog[0].installed);
+        assert!(catalog[0].enabled);
+    }
+
+    #[test]
+    fn skill_entry_not_installed_when_name_differs() {
+        let mut catalog = vec![catalog_entry("aleph-hub:pdf-tools", ExtensionKind::Skill, "PDF Tools")];
+        let installed = vec![installed_entry("local:skill:other", ExtensionKind::Skill, "Other Skill", true)];
+        mark_installed(&mut catalog, &installed);
+        assert!(!catalog[0].installed);
+    }
 }
