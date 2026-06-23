@@ -76,7 +76,7 @@
     "official": true,
     "reachability": "cn-native",
     "transports": [
-      { "kind": "stdio", "command": "uvx", "args": ["aleph-siliconflow-mcp@0.1.0"], "requires_runtime": "python" }
+      { "kind": "stdio", "command": "npx", "args": ["-y", "aleph-siliconflow-mcp@0.2.0"], "requires_runtime": "node" }
     ],
     "required_env": [
       { "key": "SILICONFLOW_API_KEY", "label": "SiliconFlow API Key", "description": "平台 API Key", "secret": true, "required": true, "how_to_get_url": "https://cloud.siliconflow.cn/account/ak" },
