@@ -44,9 +44,6 @@ pub(in crate::commands::start) fn register_mcp_handlers(
     reg!("mcp.resources", mcp::handle_list_resources);
     reg!("mcp.prompts", mcp::handle_list_prompts);
 
-    // Preset catalog (built-in recommended MCP servers)
-    reg!("mcp.list_presets", mcp::handle_list_presets);
-    reg!("mcp.install_preset", mcp::handle_install_preset);
 }
 
 /// Register the Settings-page MCP CRUD handlers (`mcp_config.*`) against the
