@@ -777,6 +777,8 @@ fn RadialCanvasView() -> impl IntoView {
                 focus_request=focus_request
                 highlight_request=highlight_request
                 lod_request=lod_request
+                selected_node=selected_node
+                hovered_node=hover_intent
             />
             // NodeDetailPanel: overlay when a node is selected in the galaxy.
             {move || selected_node.get().map(|_| view! {

@@ -48,6 +48,9 @@ pub struct Scene {
     /// Recomputed only when `data` or `lod` changes; used every settling frame
     /// to avoid per-frame clone + O(n log n) sort.
     filtered_edges: Vec<(u32, u32)>,
+    /// Reusable scratch buffer for idle-drift drifted positions (C: perf cleanup).
+    /// Avoids cloning the full GraphData (incl. String ids) every frame.
+    drift_scratch: Vec<Vec3>,
 }
 
 impl Scene {
@@ -75,6 +78,7 @@ impl Scene {
             highlight: None,
             lod: 0.0,
             filtered_edges: Vec::new(),
+            drift_scratch: Vec::new(),
         })
     }
 
@@ -154,6 +158,35 @@ impl Scene {
         .map(|i| self.data.nodes[i as usize].id.clone())
     }
 
+    /// Project a node's canonical (settled) position to canvas screen coordinates
+    /// using the last-frame view-projection matrix. Returns `None` if the node
+    /// is behind the camera or not found.
+    pub fn screen_pos_of(&self, id: &str) -> Option<(f32, f32)> {
+        let node = self.data.nodes.iter().find(|n| n.id == id)?;
+        let m = self.last_vp.as_slice();
+        let p = &node.pos;
+        let cx = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12];
+        let cy = m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13];
+        let cw = m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15];
+        if cw <= 0.0 {
+            return None; // behind camera
+        }
+        let ndc_x = cx / cw;
+        let ndc_y = cy / cw;
+        // Clamp to a reasonable on-screen range (don't return extreme off-screen coords).
+        if ndc_x < -1.5 || ndc_x > 1.5 || ndc_y < -1.5 || ndc_y > 1.5 {
+            return None;
+        }
+        let sx = (ndc_x * 0.5 + 0.5) * self.width as f32;
+        let sy = (1.0 - (ndc_y * 0.5 + 0.5)) * self.height as f32;
+        Some((sx, sy))
+    }
+
+    /// Look up a node name by its id. Returns `None` if not found.
+    pub fn node_name(&self, id: &str) -> Option<&str> {
+        self.data.nodes.iter().find(|n| n.id == id).map(|n| n.name.as_str())
+    }
+
     /// Set the highlight set (selected node index + neighbors). Stored so that
     /// settling/drift re-uploads in `render` don't silently clear it.
     pub fn set_highlight(&mut self, hl: Option<HashSet<u32>>) {
@@ -217,22 +250,25 @@ impl Scene {
             }
         } else {
             // --- Phase 2: Idle drift ---
-            // Build a scratch copy with per-node sine wobble applied.
-            // The canonical `self.data.nodes[*].pos` is NEVER mutated here,
-            // preserving stable settled positions for picking.
-            let drifted: Vec<Vec3> = self.data.nodes.iter().map(|n| {
-                drift_offset_3d(t_ms, &n.id, DRIFT_AMPLITUDE, DRIFT_PERIOD_MS, n.pos)
-            }).collect();
-
-            // Build a temporary GraphData with drifted positions for the upload.
-            let mut scratch = self.data.clone();
-            for (node, pos) in scratch.nodes.iter_mut().zip(drifted) {
-                node.pos = pos;
+            // Reuse `drift_scratch` (Vec<Vec3>) to avoid cloning the full GraphData
+            // (incl. String ids) every frame. Canonical `self.data.nodes[*].pos` is
+            // NEVER mutated here, preserving stable settled positions for picking.
+            let n = self.data.nodes.len();
+            self.drift_scratch.clear();
+            self.drift_scratch.reserve(n);
+            for node in &self.data.nodes {
+                self.drift_scratch.push(
+                    drift_offset_3d(t_ms, &node.id, DRIFT_AMPLITUDE, DRIFT_PERIOD_MS, node.pos)
+                );
             }
             // Re-upload nodes only (edges remain at stable settled positions).
             // Pass through the stored highlight so it survives drift re-uploads.
-            self.nodes
-                .upload(&self.ctx.gl, &scratch, self.highlight.as_ref());
+            self.nodes.upload_positions(
+                &self.ctx.gl,
+                &self.drift_scratch,
+                &self.data,
+                self.highlight.as_ref(),
+            );
         }
 
         let gl = &self.ctx.gl;

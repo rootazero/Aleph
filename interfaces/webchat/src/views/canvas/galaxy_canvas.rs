@@ -26,6 +26,14 @@ use super::gl::GraphData;
 /// pointer-down counts as a click; larger = drag (no selection).
 const CLICK_THRESHOLD_PX: f32 = 5.0;
 
+/// Label data: node name + canvas-local screen position.
+#[derive(Clone, PartialEq)]
+struct LabelInfo {
+    name: String,
+    x: f32,
+    y: f32,
+}
+
 #[component]
 #[must_use]
 pub fn GalaxyCanvas(
@@ -38,6 +46,10 @@ pub fn GalaxyCanvas(
     /// Intent channel: LOD level in [0, 1] controlling edge density.
     /// 0 = all edges; 1 = only high-degree backbone. Updated by the density slider.
     lod_request: RwSignal<f32>,
+    /// Intent channel: currently selected node id (for label overlay).
+    selected_node: RwSignal<Option<String>>,
+    /// Intent channel: currently hovered node id (for label overlay).
+    hovered_node: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
@@ -54,12 +66,18 @@ pub fn GalaxyCanvas(
     // Last hovered node id — used to emit HoverNode only on transition.
     let last_hover: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
-    // Canvas element bounding-rect origin (updated on pointerdown for perf).
-    // Used to convert client coords → canvas-local coords for picking.
+    // Canvas element bounding-rect origin cached to avoid forced-reflow on every
+    // pointermove (D: perf cleanup). Refreshed on pointerdown and on resize.
     let canvas_origin: Rc<Cell<(f32, f32)>> = Rc::new(Cell::new((0.0, 0.0)));
+
+    // Label overlay signals: Option<LabelInfo> for hovered + selected node.
+    // Written by the rAF loop each frame; read by the reactive view below.
+    let hover_label: RwSignal<Option<LabelInfo>> = RwSignal::new(None);
+    let select_label: RwSignal<Option<LabelInfo>> = RwSignal::new(None);
 
     // --- Init Effect: mount scene once the <canvas> is in the DOM ---
     let scene_init = scene.clone();
+    let canvas_origin_init = canvas_origin.clone();
     Effect::new(move |_| {
         let Some(canvas) = canvas_ref.get() else { return };
         let el: web_sys::HtmlCanvasElement = canvas.unchecked_into();
@@ -75,6 +93,12 @@ pub fn GalaxyCanvas(
         el.set_width(cw);
         el.set_height(ch);
 
+        // Snapshot the initial canvas origin for hover coordinate mapping.
+        {
+            let rect = el.get_bounding_client_rect();
+            canvas_origin_init.set((rect.left() as f32, rect.top() as f32));
+        }
+
         match Scene::new(&el) {
             Ok(s) => *scene_init.borrow_mut() = Some(s),
             Err(e) => {
@@ -83,8 +107,10 @@ pub fn GalaxyCanvas(
             }
         }
 
-        // ResizeObserver: keep canvas dimensions in sync with its CSS container.
+        // ResizeObserver: keep canvas dimensions in sync with its CSS container
+        // and refresh cached canvas_origin (D: avoid per-hover reflow).
         let scene_resize = scene_init.clone();
+        let canvas_origin_resize = canvas_origin_init.clone();
         let resize_cb: Closure<dyn FnMut(js_sys::Array)> =
             Closure::new(move |entries: js_sys::Array| {
                 if let Ok(entry) = entries.get(0).dyn_into::<web_sys::ResizeObserverEntry>() {
@@ -95,6 +121,9 @@ pub fn GalaxyCanvas(
                     if let Some(target) = entry.target().dyn_into::<web_sys::HtmlCanvasElement>().ok() {
                         target.set_width(w as u32);
                         target.set_height(h as u32);
+                        // Refresh cached origin after layout change.
+                        let r = target.get_bounding_client_rect();
+                        canvas_origin_resize.set((r.left() as f32, r.top() as f32));
                     }
                     if let Some(s) = scene_resize.borrow_mut().as_mut() {
                         s.resize(w, h);
@@ -107,7 +136,7 @@ pub fn GalaxyCanvas(
         // Leak for panel lifetime — parent uses display:none keep-alive, never unmounts.
         resize_cb.forget();
 
-        start_raf_loop(scene_init.clone());
+        start_raf_loop(scene_init.clone(), selected_node, hovered_node, hover_label, select_label);
     });
 
     // --- Data Effect: push GraphData into scene when it changes ---
@@ -194,14 +223,8 @@ pub fn GalaxyCanvas(
             }
         } else {
             // Hover (no button down): pick and emit HoverNode on transition.
-            // Refresh canvas origin from the event target so hover picks work
-            // before the first pointerdown.
-            if let Some(target) = ev.target() {
-                if let Ok(el) = target.dyn_into::<web_sys::Element>() {
-                    let rect = el.get_bounding_client_rect();
-                    canvas_origin_pm.set((rect.left() as f32, rect.top() as f32));
-                }
-            }
+            // Use the cached canvas origin (refreshed on pointerdown and on resize)
+            // to avoid get_bounding_client_rect() forced-reflow on every move (D).
             let (ox, oy) = canvas_origin_pm.get();
             let local = (cx - ox, cy - oy);
             let hit = scene_pm.borrow().as_ref().and_then(|s| s.pick(local));
@@ -261,22 +284,65 @@ pub fn GalaxyCanvas(
     };
 
     view! {
-        <canvas
-            node_ref=canvas_ref
-            class="w-full h-full block"
-            style="touch-action: none; cursor: grab;"
-            on:pointerdown=on_pointerdown
-            on:pointermove=on_pointermove
-            on:pointerup=on_pointerup
-            on:pointercancel=on_pointercancel
-            on:wheel=on_wheel
-        />
+        // Wrapper with relative positioning so label divs (absolute) are anchored to the canvas.
+        <div class="relative w-full h-full">
+            <canvas
+                node_ref=canvas_ref
+                class="w-full h-full block"
+                style="touch-action: none; cursor: grab;"
+                on:pointerdown=on_pointerdown
+                on:pointermove=on_pointermove
+                on:pointerup=on_pointerup
+                on:pointercancel=on_pointercancel
+                on:wheel=on_wheel
+            />
+            // Hovered node label overlay (A).
+            {move || hover_label.get().map(|l| {
+                let style = format!(
+                    "left:{:.1}px; top:{:.1}px; transform: translate(-50%, -130%);",
+                    l.x, l.y
+                );
+                view! {
+                    <div
+                        class="pointer-events-none absolute text-xs text-white/80 bg-black/40 \
+                               rounded px-1.5 py-0.5 whitespace-nowrap select-none"
+                        style=style
+                    >
+                        {l.name}
+                    </div>
+                }
+            })}
+            // Selected node label overlay (A).
+            {move || select_label.get().map(|l| {
+                let style = format!(
+                    "left:{:.1}px; top:{:.1}px; transform: translate(-50%, -130%);",
+                    l.x, l.y
+                );
+                view! {
+                    <div
+                        class="pointer-events-none absolute text-xs font-semibold text-white \
+                               bg-black/55 rounded px-1.5 py-0.5 whitespace-nowrap select-none \
+                               ring-1 ring-white/20"
+                        style=style
+                    >
+                        {l.name}
+                    </div>
+                }
+            })}
+        </div>
     }
 }
 
 /// Start the `requestAnimationFrame` recursive loop.
+/// Also updates label overlay signals each frame from screen-projected node positions (A).
 /// The closure holds a strong reference to itself through the `Rc<RefCell<Option<…>>>` trick.
-fn start_raf_loop(scene: Rc<RefCell<Option<Scene>>>) {
+fn start_raf_loop(
+    scene: Rc<RefCell<Option<Scene>>>,
+    selected_node: RwSignal<Option<String>>,
+    hovered_node: RwSignal<Option<String>>,
+    hover_label: RwSignal<Option<LabelInfo>>,
+    select_label: RwSignal<Option<LabelInfo>>,
+) {
     // `cb` holds the closure; `cb2` is the clone captured inside the closure.
     let cb: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>> = Rc::new(RefCell::new(None));
     let cb2 = cb.clone();
@@ -285,6 +351,25 @@ fn start_raf_loop(scene: Rc<RefCell<Option<Scene>>>) {
         if let Some(s) = scene.borrow_mut().as_mut() {
             s.render(t);
         }
+
+        // Update label overlays (A): project hovered + selected node to screen.
+        // Read scene immutably after render so last_vp is current.
+        let new_hover = scene.borrow().as_ref().and_then(|s| {
+            let id = hovered_node.get_untracked()?;
+            let name = s.node_name(&id)?.to_owned();
+            let (x, y) = s.screen_pos_of(&id)?;
+            Some(LabelInfo { name, x, y })
+        });
+        hover_label.set(new_hover);
+
+        let new_select = scene.borrow().as_ref().and_then(|s| {
+            let id = selected_node.get_untracked()?;
+            let name = s.node_name(&id)?.to_owned();
+            let (x, y) = s.screen_pos_of(&id)?;
+            Some(LabelInfo { name, x, y })
+        });
+        select_label.set(new_select);
+
         request_af(cb2.borrow().as_ref().unwrap());
     }) as Box<dyn FnMut(f64)>));
 

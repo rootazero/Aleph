@@ -59,6 +59,42 @@ impl NodeRenderer {
         gl.vertex_attrib_divisor(loc, 1);
     }
 
+    /// Upload nodes using an override positions slice (for idle drift).
+    /// `positions` must have the same length as `data.nodes`; all other
+    /// per-node attributes (color, size, highlight) are read from `data`.
+    /// Canonical `data.nodes[*].pos` is NEVER read here — callers supply
+    /// pre-computed drifted positions.
+    pub fn upload_positions(
+        &mut self,
+        gl: &Gl,
+        positions: &[super::math::Vec3],
+        data: &GraphData,
+        hl: Option<&HashSet<u32>>,
+    ) {
+        let n = data.nodes.len();
+        let mut offsets = Vec::with_capacity(n * 3);
+        let mut sizes = Vec::with_capacity(n);
+        let mut colors = Vec::with_capacity(n * 3);
+        let has_hl = hl.map(|s| !s.is_empty()).unwrap_or(false);
+        for (i, (node, pos)) in data.nodes.iter().zip(positions.iter()).enumerate() {
+            offsets.extend_from_slice(&[pos.x, pos.y, pos.z]);
+            let base = 6.0 + (node.link_count as f32).sqrt() * 4.0;
+            let lit = !has_hl || hl.map(|s| s.contains(&(i as u32))).unwrap_or(true);
+            sizes.push(if lit { base } else { base * 0.5 });
+            let [r, g, b] = node.color;
+            if lit {
+                let [br, bg, bb] = crate::canvas_engine::category_color::hdr_boost(node.color);
+                colors.extend_from_slice(&[br, bg, bb]);
+            } else {
+                colors.extend_from_slice(&[r * 0.15, g * 0.15, b * 0.15]);
+            }
+        }
+        self.count = n as i32;
+        upload_f32(gl, &self.inst_offset, &offsets);
+        upload_f32(gl, &self.inst_size, &sizes);
+        upload_f32(gl, &self.inst_color, &colors);
+    }
+
     pub fn upload(&mut self, gl: &Gl, data: &GraphData, hl: Option<&HashSet<u32>>) {
         let n = data.nodes.len();
         let mut offsets = Vec::with_capacity(n * 3);
