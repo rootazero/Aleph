@@ -110,6 +110,15 @@ pub fn clear_source(conn: &Connection, source_id: &str) -> rusqlite::Result<usiz
     )
 }
 
+pub fn count_source(conn: &Connection, source_id: &str) -> rusqlite::Result<usize> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM catalog WHERE source_id = ?1",
+        params![source_id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n as usize)
+}
+
 pub struct CatalogCache {
     conn: Arc<Mutex<Connection>>,
 }
@@ -152,6 +161,11 @@ impl CatalogCache {
             upsert_entry(&guard, e)?;
         }
         Ok(())
+    }
+    /// Number of cached rows for a source. Used by the cold-start primer.
+    pub async fn count_source(&self, source_id: &str) -> rusqlite::Result<usize> {
+        let guard = self.conn.lock().await;
+        count_source(&guard, source_id)
     }
 }
 
@@ -268,5 +282,17 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn count_source_counts_only_that_source() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        let mut a = entry("a", ExtensionCategory::Developer, "Alpha");
+        a.source_id = "aleph-hub".into();
+        upsert_entry(&conn, &a).unwrap();
+        upsert_entry(&conn, &entry("b", ExtensionCategory::Data, "Beta")).unwrap(); // mcp-official
+        assert_eq!(count_source(&conn, "aleph-hub").unwrap(), 1);
+        assert_eq!(count_source(&conn, "nope").unwrap(), 0);
     }
 }
