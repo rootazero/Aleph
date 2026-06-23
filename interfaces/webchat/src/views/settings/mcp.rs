@@ -9,10 +9,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use std::collections::HashMap;
 
-use crate::api::{
-    McpConfigApi, McpPresetApi, McpPresetEnvVar, McpPresetInfo, McpServerConfig, McpServerInfo,
-    PresetInstallOutcome,
-};
+use crate::api::{McpConfigApi, McpServerConfig, McpServerInfo};
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
@@ -60,34 +57,21 @@ fn load_servers(
     });
 }
 
-/// Load the recommended-preset catalog (best-effort; failures are silent so the
-/// configured-servers list still renders).
-fn load_presets(state: DashboardState, presets: RwSignal<Vec<McpPresetInfo>>) {
-    spawn_local(async move {
-        if let Ok(list) = McpPresetApi::list(&state).await {
-            presets.set(list);
-        }
-    });
-}
-
 #[component]
 #[must_use]
 pub fn McpView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
     let servers = RwSignal::new(Vec::<McpServerInfo>::new());
-    let presets = RwSignal::new(Vec::<McpPresetInfo>::new());
-    let installing_preset = RwSignal::new(Option::<McpPresetInfo>::None);
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
     let show_dialog = RwSignal::new(false);
     let editing_server = RwSignal::new(Option::<String>::None);
 
-    // Load servers + presets when connected
+    // Load servers when connected
     Effect::new(move || {
         if state.is_connected.get() {
             load_servers(state, servers, loading, error);
-            load_presets(state, presets);
         } else {
             loading.set(false);
         }
@@ -182,58 +166,6 @@ pub fn McpView() -> impl IntoView {
                     }}
                 </div>
 
-                // Recommended Presets Section — surfaces catalog presets not yet
-                // installed, so the user can configure keys and enable in one click.
-                {move || {
-                    let available: Vec<McpPresetInfo> =
-                        presets.get().into_iter().filter(|p| !p.installed).collect();
-                    (!available.is_empty()).then(|| view! {
-                        <div class="space-y-4">
-                            <div>
-                                <h2 class="text-lg font-medium text-text-primary">
-                                    {t!(i18n, settings.mcp.recommended)}
-                                </h2>
-                                <p class="text-xs text-text-tertiary mt-1">
-                                    {t!(i18n, settings.mcp.recommended_hint)}
-                                </p>
-                            </div>
-                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                {available.into_iter().map(|preset| {
-                                    let p_for_click = preset.clone();
-                                    view! {
-                                        <div class="p-4 bg-surface-raised border border-border rounded flex flex-col gap-2">
-                                            <div class="flex items-center gap-2">
-                                                <span class="text-sm font-medium text-text-primary">
-                                                    {preset.name.clone()}
-                                                </span>
-                                                {preset.official.then(|| view! {
-                                                    <span class="px-2 py-0.5 rounded text-xs bg-primary-subtle text-primary">
-                                                        {t_string!(i18n, settings.mcp.preset_official).to_string()}
-                                                    </span>
-                                                })}
-                                            </div>
-                                            <p class="text-xs text-text-secondary">
-                                                {preset.description.clone()}
-                                            </p>
-                                            <div class="flex items-center justify-between mt-1">
-                                                <span class="text-xs text-text-tertiary">
-                                                    {preset.vendor.clone()}
-                                                </span>
-                                                <button
-                                                    class="px-3 py-1.5 bg-primary text-white rounded hover:bg-primary-hover text-xs"
-                                                    on:click=move |_| installing_preset.set(Some(p_for_click.clone()))
-                                                >
-                                                    {t!(i18n, settings.mcp.preset_configure)}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    }
-                                }).collect_view()}
-                            </div>
-                        </div>
-                    })
-                }}
-
                 // Info Box
                 <div class="p-4 bg-primary-subtle border border-primary/20 rounded">
                     <div class="flex items-start gap-2">
@@ -256,19 +188,6 @@ pub fn McpView() -> impl IntoView {
                 />
             </Show>
 
-            // Preset Install Dialog
-            <Show when=move || installing_preset.get().is_some()>
-                {move || installing_preset.get().map(|preset| view! {
-                    <InstallPresetDialog
-                        preset=preset
-                        on_close=move || installing_preset.set(None)
-                        servers=servers
-                        presets=presets
-                        loading=loading
-                        error=error
-                    />
-                })}
-            </Show>
         </div>
     }
 }
@@ -658,162 +577,3 @@ fn EditMcpServerDialog(
     }
 }
 
-/// Install a catalog preset: renders one key field per declared env var (secret
-/// fields masked) and calls `mcp.install_preset`. On success the server becomes
-/// a persisted config and shows up in the configured list.
-#[component]
-fn InstallPresetDialog(
-    preset: McpPresetInfo,
-    on_close: impl Fn() + 'static + Copy,
-    servers: RwSignal<Vec<McpServerInfo>>,
-    presets: RwSignal<Vec<McpPresetInfo>>,
-    loading: RwSignal<bool>,
-    error: RwSignal<Option<String>>,
-) -> impl IntoView {
-    let state = expect_context::<DashboardState>();
-    let i18n = use_i18n();
-    let saving = RwSignal::new(false);
-    let dialog_error = RwSignal::new(Option::<String>::None);
-
-    let preset_id = preset.id.clone();
-    let preset_name = preset.name.clone();
-
-    // One value signal per declared env var, prefilled with its default (if any).
-    let rows: Vec<(McpPresetEnvVar, RwSignal<String>)> = preset
-        .required_env
-        .iter()
-        .map(|e| (e.clone(), RwSignal::new(e.default.clone().unwrap_or_default())))
-        .collect();
-    let rows = StoredValue::new(rows);
-
-    let handle_install = move |_| {
-        let env: HashMap<String, String> = rows
-            .get_value()
-            .into_iter()
-            .filter_map(|(ev, sig)| {
-                let v = sig.get().trim().to_string();
-                (!v.is_empty()).then_some((ev.key, v))
-            })
-            .collect();
-
-        saving.set(true);
-        dialog_error.set(None);
-        let id = preset_id.clone();
-        spawn_local(async move {
-            match McpPresetApi::install(&state, id, env).await {
-                Ok(PresetInstallOutcome::Installed | PresetInstallOutcome::AlreadyInstalled) => {
-                    saving.set(false);
-                    load_servers(state, servers, loading, error);
-                    load_presets(state, presets);
-                    on_close();
-                }
-                Ok(PresetInstallOutcome::NeedsKey(_)) => {
-                    dialog_error
-                        .set(Some(t_string!(i18n, settings.mcp.preset_needs_key).to_string()));
-                    saving.set(false);
-                }
-                Ok(PresetInstallOutcome::NoRuntime(_)) => {
-                    dialog_error
-                        .set(Some(t_string!(i18n, settings.mcp.preset_no_runtime).to_string()));
-                    saving.set(false);
-                }
-                Err(e) => {
-                    dialog_error.set(Some(e));
-                    saving.set(false);
-                }
-            }
-        });
-    };
-
-    view! {
-        <div class="aleph-scrim fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div class="glass bg-surface-overlay/85 border border-border rounded-lg p-6 max-w-md w-full mx-4 max-h-[85vh] overflow-y-auto">
-                <h2 class="text-lg font-semibold text-text-primary mb-1">
-                    {t!(i18n, settings.mcp.preset_install_title)}
-                </h2>
-                <p class="text-sm text-text-secondary mb-4 font-medium">{preset_name}</p>
-
-                <div class="space-y-4">
-                    {rows.get_value().into_iter().map(|(ev, sig)| {
-                        let secret = ev.secret;
-                        let required = ev.required;
-                        let label = if ev.label.is_empty() { ev.key.clone() } else { ev.label.clone() };
-                        let desc = ev.description.clone();
-                        let how_to = ev.how_to_get_url.clone();
-                        let placeholder = ev.default.clone().unwrap_or_default();
-                        view! {
-                            <div>
-                                <div class="flex items-center justify-between mb-1">
-                                    <label class="block text-sm font-medium text-text-secondary">
-                                        {label}
-                                        {required.then(|| view! {
-                                            <span class="text-danger ml-1">"*"</span>
-                                        })}
-                                    </label>
-                                    {how_to.map(|url| view! {
-                                        <a
-                                            href=url
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            class="text-xs text-primary hover:text-primary-hover"
-                                        >
-                                            {t!(i18n, settings.mcp.preset_how_to_get)}
-                                        </a>
-                                    })}
-                                </div>
-                                {(!desc.is_empty()).then(|| view! {
-                                    <p class="text-xs text-text-tertiary mb-1">{desc.clone()}</p>
-                                })}
-                                {move || {
-                                    if secret {
-                                        view! {
-                                            <SecretInput
-                                                value=sig.into()
-                                                on_change=move |v| sig.set(v)
-                                                placeholder=placeholder.clone()
-                                                monospace=true
-                                            />
-                                        }.into_any()
-                                    } else {
-                                        view! {
-                                            <input
-                                                type="text"
-                                                class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm font-mono"
-                                                placeholder=placeholder.clone()
-                                                value=move || sig.get()
-                                                on:input=move |ev| sig.set(event_target_value(&ev))
-                                            />
-                                        }.into_any()
-                                    }
-                                }}
-                            </div>
-                        }
-                    }).collect_view()}
-
-                    {move || dialog_error.get().map(|err| view! {
-                        <div class="flex items-center gap-2 text-danger text-sm">
-                            <span>"⚠️"</span>
-                            <span>{err}</span>
-                        </div>
-                    })}
-                </div>
-
-                <div class="flex gap-2 mt-6">
-                    <button
-                        class="flex-1 px-4 py-2 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm"
-                        on:click=move |_| on_close()
-                    >
-                        {t!(i18n, settings.mcp.cancel)}
-                    </button>
-                    <button
-                        class="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover text-sm disabled:opacity-50"
-                        disabled=move || saving.get()
-                        on:click=handle_install
-                    >
-                        {move || if saving.get() { t_string!(i18n, settings.mcp.preset_installing).to_string() } else { t_string!(i18n, settings.mcp.preset_install).to_string() }}
-                    </button>
-                </div>
-            </div>
-        </div>
-    }
-}
