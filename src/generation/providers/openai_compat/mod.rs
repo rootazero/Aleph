@@ -840,6 +840,9 @@ mod tests {
                 assert!(text.contains("--resolution 1080p"));
                 assert!(text.contains("--duration 5"));
                 assert!(text.contains("--seed 42"));
+                // OpenAI-style proxies (T8star) read the top-level `prompt`,
+                // which must mirror the Ark content text verbatim (flags included).
+                assert_eq!(&body.prompt, text);
             }
             VideoContentPart::ImageUrl { .. } => panic!("expected text part first"),
         }
@@ -874,6 +877,8 @@ mod tests {
         assert!(json.contains("\"model\":\"doubao-seedance-2-0-260128\""));
         assert!(json.contains("\"type\":\"text\""));
         assert!(json.contains("\"content\":["));
+        // Top-level `prompt` is required by OpenAI-style video proxies (T8star).
+        assert!(json.contains("\"prompt\":\"hello\""));
     }
 
     #[test]

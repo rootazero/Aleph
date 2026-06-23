@@ -79,11 +79,13 @@ impl OpenAiCompatProvider {
         }
     }
 
-    /// Build the Volcengine Ark video task request body from a `GenerationRequest`.
+    /// Build the async video task request body from a `GenerationRequest`.
     ///
-    /// The Ark video API (`/contents/generations/tasks`) takes a `content`
-    /// array: a text prompt (with Seedance `--flag value` parameter suffixes)
-    /// plus an optional reference image for image-to-video.
+    /// Emits both conventions so one body works with either backend behind a
+    /// generic proxy: the Volcengine Ark `content` array (text prompt with
+    /// Seedance `--flag value` suffixes plus an optional reference image) and a
+    /// top-level `prompt` string for OpenAI-style video proxies (e.g. T8star)
+    /// that require it. The `prompt` mirrors the first content text part.
     pub(crate) fn build_video_task_body(&self, request: &GenerationRequest) -> VideoTaskRequest {
         let model = request
             .params
@@ -91,8 +93,10 @@ impl OpenAiCompatProvider {
             .clone()
             .unwrap_or_else(|| self.model.clone());
 
+        let prompt_text = build_video_prompt_text(&request.prompt, &request.params);
+
         let mut content = vec![VideoContentPart::Text {
-            text: build_video_prompt_text(&request.prompt, &request.params),
+            text: prompt_text.clone(),
         }];
 
         if let Some(reference) = request
@@ -108,7 +112,11 @@ impl OpenAiCompatProvider {
             });
         }
 
-        VideoTaskRequest { model, content }
+        VideoTaskRequest {
+            model,
+            prompt: prompt_text,
+            content,
+        }
     }
 
     /// Parse API error response and convert to `GenerationError`

@@ -139,16 +139,27 @@ impl AsyncTaskData {
     }
 }
 
-/// Request body for the Volcengine Ark video task API
-/// (`POST /api/v3/contents/generations/tasks`).
+/// Request body for async video task APIs.
 ///
-/// Unlike the OpenAI image format, the Ark video API takes a `content` array
-/// of typed parts (a text prompt plus optional reference images).
+/// Two vendor conventions are unified into one body so a single request works
+/// with both backends behind a generic OpenAI-compatible proxy:
+/// - **Volcengine Ark** (`/contents/generations/tasks`) reads the `content`
+///   array of typed parts (a text prompt plus optional reference images).
+/// - **OpenAI-style video proxies** (e.g. T8star `/v2/videos/generations`)
+///   require a top-level `prompt` string and ignore `content`.
+///
+/// Both fields are always sent: `prompt` mirrors the text of the first
+/// `content` part, so each backend reads the field it understands and ignores
+/// the other.
 #[derive(Debug, Clone, Serialize)]
 pub struct VideoTaskRequest {
     /// Model to use (e.g., "doubao-seedance-2-0-260128")
     pub model: String,
-    /// Ordered content parts (text prompt + optional reference images)
+    /// Top-level prompt for OpenAI-style video proxies that require it.
+    /// Mirrors the first `content` text part (with Seedance `--flag` suffixes).
+    pub prompt: String,
+    /// Ordered content parts (text prompt + optional reference images),
+    /// consumed by Volcengine Ark.
     pub content: Vec<VideoContentPart>,
 }
 
