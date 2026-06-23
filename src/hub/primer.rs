@@ -9,7 +9,7 @@ use crate::hub::cache::CatalogCache;
 use crate::hub::catalog_client::ALEPH_HUB_ID;
 
 /// Cold-start primer: if the `aleph-hub` slot is empty (never fetched), fill it
-/// with the official MCP + skill projections so official extensions are
+/// with the official MCP + skill + plugin projections so official extensions are
 /// available offline. The async remote fetch later `replace_source`s the slot.
 pub async fn prime_official_catalog_if_empty(cache: &CatalogCache) {
     match cache.count_source(ALEPH_HUB_ID).await {
