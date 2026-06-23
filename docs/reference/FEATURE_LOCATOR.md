@@ -101,7 +101,7 @@
 
 ### 2.1 对话历史压缩 (History Compaction)
 - **口语关键词**：对话压缩、history compaction、session summary、窗口管理、token 有效控制
-- **代码锚点**：`src/context/compact/compactor.rs`（三策略：LlmSummary / DeterministicTruncation / SessionMemoryReuse）、`src/context/compact/session_split.rs`（压缩失败后 split 新 epoch）、`src/context/budget/mod.rs`（ContextPressure 计算 + `ContextBudgetConfig::preventive_floor`）、`src/context/budget/pressure.rs`（内容感知 token 估计）、`src/context/budget/cheap_passes/`（preflight 廉价 pass：file_op_supersede / tool_result_pruning / image_stripping）
+- **代码锚点**：`src/context/compact/compactor.rs`（三策略：LlmSummary / DeterministicTruncation / SessionMemoryReuse）、`src/context/compact/session_split.rs`（压缩失败后 split 新 epoch）、`src/context/budget/mod.rs`（ContextPressure 计算 + `ContextBudgetConfig::preventive_floor`）、`src/context/budget/pressure.rs`（内容感知 token 估计）、`src/context/budget/cheap_passes/`（preflight 廉价 pass：file_op_supersede / tool_result_pruning / image_stripping）；**tool_result_pruning 的内容类型路由见 §2.7**
 - **职责**：消息历史压力超 warning 阈值时走侧信道 LLM 摘要，保留 fresh_tail（最近 ~6 条），失败回退确定性截断或旧 summary，极限时 split 新 session。**升级阶梯（preventive band，2026-06-19）**：`< floor`（=`warning − 0.10`）保留全部历史；`[floor, warning)` 触发确定性廉价 pass（无 LLM 成本）；`≥ warning` 触发侧信道 LLM 摘要。三个廉价 pass 的压力门控统一由 `PreflightPipeline::with_min_pressure_ratio(cfg.preventive_floor())` 派生，不再各自硬编码——上下文有余量时不做有损丢弃（headroom 的 `live_zone_only` 压力自适应激进度映射）。
 - **状态**：✅ 已实现，三层降级 + 缓存复用 + 零 API 成本路径 + preventive band 升级阶梯。
 - **打磨话术**：「‘记忆有效传递又控 token’的核心在 `compactor.rs` 的三策略降级；‘何时触发’在 `budget/pressure.rs` 的阈值 + `preventive_floor` 的廉价 pass 预备带；廉价 pass 门控连线在 `runner_impl.rs` 构造 `PreflightPipeline` 处。」
@@ -153,6 +153,13 @@
 - **职责**：暴露做梦子系统的日报摘要、synthesis 笔记列表、做梦运行历史给 panel 展示。
 - **状态**：✅ 已实现（2026-06-20 连线）——`dreaming.list_insights` RPC（只读，复用 `DreamStore::recent_daily_insights` + `NoteStore::list_notes` 过滤 synthesis + `recent_dream_reports`）经 `src/gateway/handlers/dreaming.rs::handle_list_insights` 注册并暴露给 panel Settings ▸ Memory「Dream Insights」区。
 - **打磨话术**：「做梦日报在 panel 可见经 `dreaming.list_insights` RPC（`src/gateway/handlers/dreaming.rs`）；前端组件在 `interfaces/webchat/src/views/settings/memory.rs::DreamInsightsPanel`；数据源在 `DreamStore::recent_daily_insights`（trait 在 `src/memory/store/mod.rs`，impl 在 `src/memory/store/sqlite/sessions.rs`）。」
+
+### 2.7 内容类型路由压缩 (Content-Type-Aware Tool-Result Reduction)
+- **口语关键词**：按内容类型压缩、ContentRouter、结构化压缩、日志/grep/diff 缩减、tool_result 智能裁剪、headroom 路由
+- **代码锚点**：`src/context/budget/cheap_passes/structured/`——`mod.rs`（`ContentKind` 枚举 + `classify()` 分类 + `reduce()` dispatch + `Reduction::render` 诚实头部 + 共享 `render_selected`/`is_error_signal`）、`log.rs`（命令/构建/测试日志：保留 head/tail/error+context，burst 去重）、`search.rs`（grep/rg `path:line:content`：每文件首末匹配 + error 加权，**携带 headroom Rust-port 修复**：Windows 盘符冒号 + 带横杠文件名解析）、`diff.rs`（unified diff：保留 `+/-` 行 + 头部，裁剪上下文到 ±2 行）；连线点 `src/context/budget/cheap_passes/tool_result_pruning.rs`（`structured::reduce` 优先，prose/不识别回退首行 placeholder）。
+- **职责**：把 headroom 的核心洞见「按内容类型路由到专用压缩器」落地为**确定性廉价 pass**——stale tool_result 不再一律砍成首行，而是按类型保留**信号**（error/summary 行、首末匹配、`+/-` 改动）。零 LLM、零新依赖（纯 Rust 行处理，不引 tree-sitter/Magika/regex 引擎，守 R3/R10）；只作用于 fresh-tail 之外、压力 ≥ `preventive_floor` 时；最终 token 守卫保证永不增长上下文（structured 不更小则回退首行）。
+- **状态**：✅ 已实现（2026-06-23）——log/search/diff 三类缩减器。**下一站（未做）**：JSON 数组/结构化数据缩减（headroom `SmartCrusher`：无损 schema 因子化 → 有损行选择 dedup/variance/Kneedle），是当前最复杂、agent 工具结果中占比较低的剩余缺口；新增 `structured/json.rs` 接入 `classify()`/`reduce()` dispatch 即可扩展（OCP）。headroom 参考实现在 `/Volumes/TBU4/Github/headroom/headroom/transforms/{smart_crusher,adaptive_sizer}.py` + `crates/headroom-core`（Rust SmartCrusher 后端）。
+- **打磨话术**：「‘按类型压缩 tool_result’落在 `cheap_passes/structured/`，分类→dispatch；要新增类型（如 JSON）加一个 `structured/<kind>.rs` + 接 `classify()`/`reduce()`，不改其它缩减器（OCP）。它是 §2.1 preventive band 廉价 pass 里 `tool_result_pruning` 的智能化升级，不是新子系统。可检索压缩（CCR）的 Aleph 对等物是 `ContentIndex`(FTS5) + `result_store` + `ctx_search` + `[Full output persisted]` 标记，见检索/工具层。」
 
 ---
 
