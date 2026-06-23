@@ -172,10 +172,39 @@ pub fn Settings() -> impl IntoView {
                         {t!(i18n, settings.help.description)}
                     </p>
                     <ul class="space-y-2 text-sm text-text-secondary">
-                        <li>"• " {t!(i18n, settings.help.docs)}</li>
-                        <li>"• " {t!(i18n, settings.help.community)}</li>
-                        <li>"• " {t!(i18n, settings.help.issues)}</li>
-                        <li>"• " {t!(i18n, settings.help.support)}</li>
+                        <li>
+                            "• "
+                            <a
+                                href="https://docs.heyaleph.com"
+                                target="_blank"
+                                rel="noopener"
+                                class="text-primary hover:underline"
+                            >
+                                {t!(i18n, settings.help.docs)}
+                            </a>
+                        </li>
+                        <li>
+                            "• "
+                            <a
+                                href="https://github.com/rootazero/Aleph/issues/"
+                                target="_blank"
+                                rel="noopener"
+                                class="text-primary hover:underline"
+                            >
+                                {t!(i18n, settings.help.issues)}
+                            </a>
+                        </li>
+                        <li>
+                            "• "
+                            <a
+                                href="https://heyaleph.com"
+                                target="_blank"
+                                rel="noopener"
+                                class="text-primary hover:underline"
+                            >
+                                {t!(i18n, settings.help.support)}
+                            </a>
+                        </li>
                     </ul>
                 </div>
             </section>
