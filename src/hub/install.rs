@@ -81,6 +81,12 @@ pub(crate) fn mcp_server_id(entry_id: &str) -> String {
     entry_id.replace([':', '/'], "_")
 }
 
+/// True if `command` resolves on PATH (PATHEXT-aware via `which`). Used to
+/// fail an install fast rather than persist a server that can't spawn.
+fn command_available(command: &str) -> bool {
+    which::which(command).is_ok()
+}
+
 /// Install a single skill from a `GitDir` spec: clone the repo into an isolated
 /// checkout, copy the `<subdir>` leaf into `<skills_dir>/<name>`, and stamp
 /// it `Github` in the manifest (so official sync never overwrites it). Pure
@@ -142,6 +148,13 @@ pub async fn run_install(
 ) -> Result<InstallOutcome, String> {
     match spec {
         InstallSpec::McpStdio { .. } | InstallSpec::McpRemote { .. } => {
+            if let InstallSpec::McpStdio { command, .. } = spec {
+                if !command_available(command) {
+                    return Err(format!(
+                        "required command '{command}' not found on PATH — install its runtime (e.g. node/python) and retry"
+                    ));
+                }
+            }
             let mcp = ctx.mcp.ok_or("MCP manager unavailable")?;
             let id = mcp_server_id(&ctx.entry.id);
             let cfg = mcp_config_from_spec(
@@ -299,5 +312,10 @@ mod tests {
             manifest.skills.get("my-skill").unwrap().source,
             crate::bundled::manifest::SkillOrigin::Github
         );
+    }
+
+    #[test]
+    fn absent_command_is_unavailable() {
+        assert!(!command_available("definitely-not-a-real-command-xyz-123"));
     }
 }

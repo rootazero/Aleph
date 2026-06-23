@@ -6,6 +6,7 @@ pub mod cache;
 pub mod catalog_client;
 pub mod hub_catalog;
 pub mod install;
+pub mod official_mcp;
 pub mod reconcile;
 pub mod secrets;
 pub mod trust;

@@ -234,4 +234,22 @@ mod tests {
         mark_installed(&mut catalog, &installed);
         assert!(!catalog[0].installed);
     }
+
+    #[test]
+    fn official_primer_slug_reconciles_against_live_server() {
+        // primer id "aleph-hub:volcengine-veimagex" -> server id "aleph-hub_volcengine-veimagex"
+        let mut catalog = vec![catalog_entry(
+            "aleph-hub:volcengine-veimagex",
+            ExtensionKind::Mcp,
+            "veImageX",
+        )];
+        let installed = vec![installed_entry(
+            "local:mcp:aleph-hub_volcengine-veimagex",
+            ExtensionKind::Mcp,
+            "veImageX",
+            true,
+        )];
+        mark_installed(&mut catalog, &installed);
+        assert!(catalog[0].installed);
+    }
 }

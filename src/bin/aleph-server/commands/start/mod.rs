@@ -818,6 +818,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         })
                         .collect()
                 };
+                // Cold-start: seed official MCP into the aleph-hub slot if empty.
+                alephcore::hub::official_mcp::prime_official_mcp_if_empty(&cache).await;
                 (Some(std::sync::Arc::new(cache)), Some(configs))
             }
             Err(e) => {
@@ -1322,6 +1324,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // MCP server management — only when the manager actor spawned. The handle
     // was created above next to the tool bridge.
     if let Some(ref h) = mcp_handle {
+        alephcore::hub::official_mcp::migrate_legacy_preset_servers(h).await;
         register_mcp_handlers(&mut server, h);
         register_mcp_config_handlers(
             &mut server,

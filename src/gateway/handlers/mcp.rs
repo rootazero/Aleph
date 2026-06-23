@@ -6,15 +6,11 @@
 //! These handlers are wired to the `McpManagerHandle` actor for server lifecycle
 //! management and capability discovery.
 
-use std::collections::HashMap;
-
 use serde::Deserialize;
 use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, RESOURCE_NOT_FOUND};
 use crate::mcp::manager::{McpManagerConfig, McpManagerHandle};
-use crate::mcp::presets::{self, InstallPlan, McpPreset};
-use crate::mcp::{check_runtime, RuntimeKind};
 
 // ============================================================================
 // Param Types
@@ -488,102 +484,6 @@ pub async fn handle_cancel_approval(request: JsonRpcRequest) -> JsonRpcResponse 
     JsonRpcResponse::success(request.id, json!({"success": true}))
 }
 
-// ============================================================================
-// Preset Handlers
-// ============================================================================
-
-/// View row for `mcp.list_presets`: the preset plus an `installed` flag.
-fn preset_view(preset: &McpPreset, existing_ids: &[String]) -> serde_json::Value {
-    let mut value = serde_json::to_value(preset).unwrap_or_else(|_| json!({}));
-    let installed = existing_ids.iter().any(|id| id == &preset.id);
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert("installed".to_string(), json!(installed));
-    }
-    value
-}
-
-/// Map a pure `InstallPlan` to the JSON-RPC result body. `Ready` is handled by
-/// the caller (it performs the side-effecting `add_server`); passing `Ready`
-/// here yields a generic `installed` ack used after a successful start.
-fn install_plan_to_json(plan: InstallPlan, id: &str) -> serde_json::Value {
-    match plan {
-        InstallPlan::Ready(_) => json!({ "status": "installed", "id": id }),
-        InstallPlan::NeedsKey(missing) => json!({ "status": "needs_key", "missing": missing }),
-        InstallPlan::AlreadyInstalled => json!({ "status": "already_installed", "id": id }),
-        InstallPlan::NoRuntime(runtime) => json!({ "status": "no_runtime", "runtime": runtime }),
-    }
-}
-
-/// Parameters for `mcp.install_preset`.
-#[derive(Debug, Deserialize)]
-pub struct InstallPresetParams {
-    pub id: String,
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-}
-
-/// `mcp.list_presets` — return the built-in catalog with installed flags.
-pub async fn handle_list_presets(
-    request: JsonRpcRequest,
-    handle: McpManagerHandle,
-) -> JsonRpcResponse {
-    let existing: Vec<String> = handle
-        .list_servers()
-        .await
-        .map(|servers| servers.into_iter().map(|s| s.id).collect())
-        .unwrap_or_default();
-    let presets: Vec<serde_json::Value> = presets::catalog()
-        .iter()
-        .map(|p| preset_view(p, &existing))
-        .collect();
-    JsonRpcResponse::success(request.id, json!({ "presets": presets }))
-}
-
-/// `mcp.install_preset` — plan + (if Ready) hot-start via the manager.
-pub async fn handle_install_preset(
-    request: JsonRpcRequest,
-    handle: McpManagerHandle,
-) -> JsonRpcResponse {
-    let params: InstallPresetParams = match super::parse_params(&request) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    let Some(preset) = presets::find(&params.id) else {
-        return JsonRpcResponse::error(
-            request.id,
-            RESOURCE_NOT_FOUND,
-            format!("unknown MCP preset: {}", params.id),
-        );
-    };
-
-    let existing: Vec<String> = handle
-        .list_servers()
-        .await
-        .map(|servers| servers.into_iter().map(|s| s.id).collect())
-        .unwrap_or_default();
-
-    let plan = preset.plan_install(&params.env, &existing, &|rt| {
-        check_runtime(RuntimeKind::from_str_or_default(rt)).available
-    });
-
-    // Ready is the only side-effecting branch.
-    if let InstallPlan::Ready(config) = plan {
-        return match handle.add_server(*config).await {
-            Ok(()) => JsonRpcResponse::success(
-                request.id,
-                json!({ "status": "installed", "id": preset.id }),
-            ),
-            Err(e) => JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("failed to start preset {}: {e}", preset.id),
-            ),
-        };
-    }
-
-    JsonRpcResponse::success(request.id, install_plan_to_json(plan, &preset.id))
-}
 
 #[cfg(test)]
 mod tests {
@@ -801,35 +701,4 @@ mod tests {
         assert!(response.is_error());
     }
 
-    #[test]
-    fn install_plan_maps_to_wire_status_needs_key() {
-        use crate::mcp::presets::find;
-        let amap = find("amap").unwrap();
-        let plan = amap.plan_install(&HashMap::new(), &[], &|_| true);
-        let value = super::install_plan_to_json(plan, "amap");
-        assert_eq!(value["status"], "needs_key");
-        assert!(value["missing"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|m| m["key"] == "AMAP_MAPS_API_KEY"));
-    }
-
-    #[test]
-    fn install_plan_maps_to_wire_status_already_installed() {
-        use crate::mcp::presets::find;
-        let p = find("context7").unwrap();
-        let plan = p.plan_install(&HashMap::new(), &["context7".to_string()], &|_| true);
-        let value = super::install_plan_to_json(plan, "context7");
-        assert_eq!(value["status"], "already_installed");
-        assert_eq!(value["id"], "context7");
-    }
-
-    #[test]
-    fn preset_view_marks_installed() {
-        use crate::mcp::presets::find;
-        let view = super::preset_view(find("context7").unwrap(), &["context7".to_string()]);
-        assert_eq!(view["installed"], true);
-        assert_eq!(view["id"], "context7");
-    }
 }
