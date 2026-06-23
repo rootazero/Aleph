@@ -4,9 +4,11 @@
 //! `web-sys`-free and unit-tested on the native target. GL-bound submodules
 //! are verified by wasm compile + browser.
 pub mod camera;
+pub mod context;
 pub mod layout3d;
 pub mod math;
 pub mod picking;
+pub mod shaders;
 
 use math::Vec3;
 
