@@ -10,6 +10,7 @@ pub mod layout3d;
 pub mod math;
 pub mod nodes;
 pub mod picking;
+pub mod scene;
 pub mod shaders;
 
 use math::Vec3;

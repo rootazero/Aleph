@@ -1,4 +1,5 @@
 //! Map a free-form `category` string to a CSS color expression for the node stripe.
+//! Also provides `category_rgb` for WebGL renderers that need `[f32;3]` linear RGB.
 
 use crate::canvas_engine::fnv1a::fnv1a_32;
 
@@ -17,6 +18,29 @@ pub fn category_color(category: &str) -> String {
             format!("hsl({hue}, 55%, 65%)")
         }
     }
+}
+
+/// Returns a linear RGB `[f32;3]` colour for WebGL renderers.
+///
+/// Five curated hex constants mirror the CSS `--cat-*` theme values.
+/// Unknown categories fall back to neutral gray; Task 10 will replace
+/// the fallback with an `hsl→rgb` conversion using the FNV hue.
+#[must_use]
+pub fn category_rgb(category: &str) -> [f32; 3] {
+    // Hex literals → sRGB [0,1] (no gamma correction — matches GPU pipeline).
+    match category {
+        "feedback" => hex_rgb(0xa7, 0x8b, 0xfa), // #a78bfa
+        "project" => hex_rgb(0x34, 0xd3, 0x99),  // #34d399
+        "reference" => hex_rgb(0x60, 0xa5, 0xfa), // #60a5fa
+        "user" => hex_rgb(0xfb, 0xbf, 0x24),     // #fbbf24
+        "error" | "broken" | "contradiction" => hex_rgb(0xf4, 0x43, 0x36), // #f44336
+        _ => [0.55, 0.55, 0.60], // neutral gray; Task 10 replaces with hsl→rgb
+    }
+}
+
+#[inline]
+fn hex_rgb(r: u8, g: u8, b: u8) -> [f32; 3] {
+    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0]
 }
 
 #[cfg(test)]
@@ -39,5 +63,21 @@ mod tests {
         let b = category_color("custom-xyz");
         assert_eq!(a, b);
         assert!(a.starts_with("hsl("));
+    }
+
+    #[test]
+    fn category_rgb_known_values() {
+        let fb = category_rgb("feedback");
+        // #a78bfa → ~[0.655, 0.545, 0.980]
+        assert!((fb[0] - 0xa7 as f32 / 255.0).abs() < 0.001);
+        assert!((fb[1] - 0x8b as f32 / 255.0).abs() < 0.001);
+        assert!((fb[2] - 0xfa as f32 / 255.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn category_rgb_fallback_is_gray() {
+        let [r, g, b] = category_rgb("unknown-xyz");
+        // All channels should be roughly equal for gray.
+        assert!((r - g).abs() < 0.1 && (g - b).abs() < 0.1);
     }
 }

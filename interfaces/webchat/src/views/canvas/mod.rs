@@ -1,4 +1,5 @@
 mod edge_label;
+mod galaxy_canvas;
 pub mod gl;
 mod graph_canvas;
 #[cfg(target_arch = "wasm32")]
@@ -36,7 +37,9 @@ use leptos::callback::Callback;
 use crate::context::DashboardState;
 use crate::state::memory::MemoryState;
 
+#[allow(unused_imports)]
 use graph_canvas::{GraphCanvas, GraphState};
+use galaxy_canvas::GalaxyCanvas;
 
 use crate::api::agents::AgentsApi;
 
@@ -139,6 +142,10 @@ fn RadialCanvasView() -> impl IntoView {
     // Full-graph node cache — populated once on mount, used to compute the
     // ghost-dot ring of orphans (nodes outside the current connected component).
     let all_dtos: RwSignal<Vec<NoteNodeDto>> = RwSignal::new(Vec::new());
+
+    // TEMP (Task 6): mock 3D galaxy data built from the full graph.query response.
+    // Replaced by real force-layout output in Task 8.
+    let galaxy_data: RwSignal<Option<gl::GraphData>> = RwSignal::new(None);
 
     // Non-reactive radial navigation state (Rc<RefCell<_>> — WASM single-thread safe)
     let nav = Rc::new(RefCell::new(NavController::new()));
@@ -341,6 +348,8 @@ fn RadialCanvasView() -> impl IntoView {
                 all_dtos.set(r.nodes.clone());
                 let mm = GlobalMiniMap::build(&r.nodes, &r.edges, 200.0);
                 *minimap_inner.borrow_mut() = mm;
+                // TEMP (Task 6): build mock 3D galaxy from full-graph topology.
+                galaxy_data.set(Some(mock_galaxy(r)));
             }
 
             // Entry point: localStorage "canvas_entry" → highest-degree node
@@ -654,11 +663,11 @@ fn RadialCanvasView() -> impl IntoView {
 
     view! {
         <div class="relative w-full h-full bg-[#080818]">
-            <GraphCanvas
-                graph_state=graph_state
+            // TEMP (Task 6): GalaxyCanvas replaces GraphCanvas during Phase 1.
+            // GraphCanvas + GraphState imports retained for Phase 4 removal.
+            <GalaxyCanvas
+                graph=galaxy_data
                 on_event=Callback::new(on_event)
-                nav=nav
-                excerpt_by_id=excerpt_by_id
             />
             {
                 #[cfg(target_arch = "wasm32")]
@@ -746,6 +755,40 @@ fn seed_graph_state(
     // GraphState rather than two simultaneous borrows of the RefMut wrapper.
     let gs = &mut *gs;
     gs.viewport.fit_to_content(&gs.nodes, 0.10);
+}
+
+// TEMP (Task 6): mock galaxy from graph.query topology, random-sphere layout.
+// Replaced by real force layout in Task 8.
+fn mock_galaxy(resp: &GraphQueryResponse) -> gl::GraphData {
+    use gl::{GalaxyNode, GraphData};
+    use gl::math::Vec3;
+    use crate::canvas_engine::fnv1a::fnv1a_32;
+    use crate::canvas_engine::category_color::category_rgb;
+
+    let mut id_index = std::collections::HashMap::new();
+    let nodes: Vec<GalaxyNode> = resp.nodes.iter().enumerate().map(|(i, n)| {
+        id_index.insert(n.id.clone(), i as u32);
+        let h = fnv1a_32(n.id.as_bytes());
+        let theta = (h & 0xffff) as f32 / 65535.0 * std::f32::consts::TAU;
+        let phi = ((h >> 16) & 0xffff) as f32 / 65535.0 * std::f32::consts::PI;
+        let r = 300.0_f32;
+        GalaxyNode {
+            id: n.id.clone(),
+            name: n.name.clone(),
+            category: n.category.clone(),
+            link_count: n.link_count as u32,
+            pos: Vec3::new(
+                r * phi.sin() * theta.cos(),
+                r * phi.sin() * theta.sin(),
+                r * phi.cos(),
+            ),
+            color: category_rgb(&n.category),
+        }
+    }).collect();
+    let edges = resp.edges.iter().filter_map(|e| {
+        Some((*id_index.get(&e.from)?, *id_index.get(&e.to)?))
+    }).collect();
+    GraphData { nodes, edges }
 }
 
 /// Refresh `GraphState`'s node/edge buffers from a freshly folded `Neighborhood`
