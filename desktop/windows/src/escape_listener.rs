@@ -11,7 +11,11 @@ use aleph_desktop::Result;
 /// State shared between the listener and the global low-level keyboard hook.
 /// Kept on the heap so that moving the `WindowsEscapeListener` value does not
 /// invalidate the pointer published to `LISTENER_PTR`.
-#[cfg(windows)]
+///
+/// Compiled on every platform because the always-present `WindowsEscapeListener`
+/// stores it (and `is_aborted`/`reset` read it); only its construction is
+/// Windows-only, hence `allow(dead_code)` off-Windows.
+#[cfg_attr(not(windows), allow(dead_code))]
 struct ListenerState {
     aborted: AtomicBool,
 }
