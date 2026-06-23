@@ -175,6 +175,17 @@ pub fn Settings() -> impl IntoView {
                         <li>
                             "• "
                             <a
+                                href="https://heyaleph.com"
+                                target="_blank"
+                                rel="noopener"
+                                class="text-primary hover:underline"
+                            >
+                                {t!(i18n, settings.help.homepage)}
+                            </a>
+                        </li>
+                        <li>
+                            "• "
+                            <a
                                 href="https://docs.heyaleph.com"
                                 target="_blank"
                                 rel="noopener"

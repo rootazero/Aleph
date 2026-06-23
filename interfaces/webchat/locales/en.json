@@ -380,6 +380,7 @@
     "help": {
       "title": "Need Help?",
       "description": "Learn more about Aleph's features and configuration options",
+      "homepage": "Visit the homepage",
       "docs": "Check the documentation",
       "issues": "Report issues on GitHub",
       "support": "Contact support"
