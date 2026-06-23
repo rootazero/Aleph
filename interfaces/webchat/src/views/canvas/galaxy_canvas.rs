@@ -98,7 +98,7 @@ pub fn GalaxyCanvas(
     // Drag delta → scene.on_drag; wheel → scene.on_wheel.
     // All captures are Rc (non-Send), safe for WASM single-thread.
 
-    let scene_pd = scene.clone();
+    let _scene_pd = scene.clone();
     let last_ptr_pd = last_ptr.clone();
     let ptr_down_pd = ptr_down.clone();
     let on_pointerdown = move |ev: web_sys::PointerEvent| {
