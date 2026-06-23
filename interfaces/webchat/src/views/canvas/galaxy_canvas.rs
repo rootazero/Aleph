@@ -118,7 +118,7 @@ pub fn GalaxyCanvas(
                     let w = rect.width().max(1.0) as i32;
                     let h = rect.height().max(1.0) as i32;
                     // Also resize the canvas backing store.
-                    if let Some(target) = entry.target().dyn_into::<web_sys::HtmlCanvasElement>().ok() {
+                    if let Ok(target) = entry.target().dyn_into::<web_sys::HtmlCanvasElement>() {
                         target.set_width(w as u32);
                         target.set_height(h as u32);
                         // Refresh cached origin after layout change.

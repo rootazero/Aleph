@@ -174,7 +174,7 @@ impl Scene {
         let ndc_x = cx / cw;
         let ndc_y = cy / cw;
         // Clamp to a reasonable on-screen range (don't return extreme off-screen coords).
-        if ndc_x < -1.5 || ndc_x > 1.5 || ndc_y < -1.5 || ndc_y > 1.5 {
+        if !(-1.5..=1.5).contains(&ndc_x) || !(-1.5..=1.5).contains(&ndc_y) {
             return None;
         }
         let sx = (ndc_x * 0.5 + 0.5) * self.width as f32;

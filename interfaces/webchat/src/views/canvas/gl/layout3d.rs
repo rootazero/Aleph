@@ -92,7 +92,6 @@ impl ForceLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::views::canvas::gl::math::Vec3;
 
     fn line_graph(n: usize) -> Vec<(u32, u32)> {
         (0..n as u32 - 1).map(|i| (i, i + 1)).collect()

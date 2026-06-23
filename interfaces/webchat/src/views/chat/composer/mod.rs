@@ -86,7 +86,7 @@ pub(super) fn InputArea() -> impl IntoView {
     // Composer height → `--composer-clearance` on <html>, so the scroll
     // content + jump pill always clear the floating bar (queue bar /
     // attachments / multiline growth included). Mirrors the ResizeObserver
-    // pattern in views/canvas/graph_canvas.rs; the chat view is kept alive
+    // pattern in the galaxy canvas gl engine; the chat view is kept alive
     // by MainContent, so the leaked closure is one-per-app, not per-visit.
     Effect::new(move |_| {
         let Some(el) = stack_ref.get() else { return };
