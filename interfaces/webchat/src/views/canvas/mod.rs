@@ -1,7 +1,5 @@
-mod edge_label;
 mod galaxy_canvas;
 pub mod gl;
-mod graph_canvas;
 pub mod node_card;
 mod node_detail_panel;
 
@@ -15,24 +13,16 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::graph::GraphApi;
-use crate::canvas_engine::adapter::{
-    populate_orphans, to_neighborhood, GraphNeighborsResponse, GraphQueryResponse,
-    NoteDetailResponse, NoteNodeDto,
-};
+use crate::canvas_engine::adapter::{GraphQueryResponse, NoteDetailResponse, NoteNodeDto};
 use crate::canvas_engine::interaction::CanvasEvent;
 use crate::canvas_engine::markdown_excerpt::render_excerpt;
-use crate::canvas_engine::navigation::{NavController, RETARGET_DURATION_MS};
-use crate::canvas_engine::prefetch::{
-    try_acquire_in_flight, InFlightSet, PrefetchCache, HOVER_DEBOUNCE_MS, MAX_IN_FLIGHT,
-};
+use crate::canvas_engine::prefetch::{PrefetchCache, HOVER_DEBOUNCE_MS};
 use gloo_timers::callback::Timeout;
 use leptos::callback::Callback;
 
 use crate::context::DashboardState;
 use crate::state::memory::{MemoryState, MemoryView};
 
-#[allow(unused_imports)]
-use graph_canvas::{GraphCanvas, GraphState};
 use galaxy_canvas::GalaxyCanvas;
 
 use crate::api::agents::AgentsApi;
@@ -43,13 +33,13 @@ pub fn CanvasView() -> impl IntoView {
     view! { <RadialCanvasView /> }
 }
 
-/// New radial navigation canvas — wired in T22.
+/// 3D WebGL galaxy canvas host.
 ///
 /// Architecture note: `Callback::new` in Leptos 0.8 requires `Send + Sync + 'static`, but WASM
 /// is single-threaded and `Rc<RefCell<_>>` is not `Send`. To work around this, the `on_event`
-/// closure captures only `Copy` reactive signals. Nav/prefetch mutations are driven by a
-/// signal-based intent channel: `on_event` writes to `active_request` (a signal), and a
-/// separate `Effect` reads it and performs the actual fetch + nav update using `Rc<RefCell<_>>`.
+/// closure captures only `Copy` reactive signals. Non-`Send` work (hover-debounce timer, detail
+/// cache) is driven via signal-based intent channels: `on_event` writes a signal and a separate
+/// `Effect` reads it and performs the side effect using `Rc<RefCell<_>>`.
 #[component]
 fn RadialCanvasView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
@@ -120,17 +110,10 @@ fn RadialCanvasView() -> impl IntoView {
     let search_query = mem.search_query;
     let fold_threshold = mem.fold_threshold;
     let set_fold_threshold = mem.fold_threshold;
-    // Raw-response snapshot for the current center. Set after a successful Effect-fetch
-    // (or prefetch hit), cleared at the start of every Effect-fetch invocation.
-    // Effect-refold reads this to perform local re-fold without a network round-trip.
-    let last_response: RwSignal<Option<(String, GraphNeighborsResponse)>> = RwSignal::new(None);
 
-    // Intent channel: on_event writes an id here, Effect picks it up and fetches.
-    // Using RwSignal so both on_event (write) and Effect (read) can access it.
-    let active_request: RwSignal<Option<String>> = RwSignal::new(None);
-
-    // Hover prefetch intent channel — same pattern as active_request.
-    // HoverNode event writes here; Effect 4 reads and fires the background fetch.
+    // Hover prefetch intent channel. The hover-debounce Effect writes the
+    // dwelt-on node id here once the dwell threshold is met; the excerpt
+    // lazy-fetch Effect reads it to fetch that node's detail.
     let prefetch_request: RwSignal<Option<String>> = RwSignal::new(None);
 
     // Full-graph node cache — populated once on mount, used to compute the
@@ -150,15 +133,6 @@ fn RadialCanvasView() -> impl IntoView {
     // Per-node excerpt cache for NodeDetailPanel.
     let detail_panel_excerpts: RwSignal<std::collections::HashMap<String, NodeExcerpt>> =
         RwSignal::new(std::collections::HashMap::new());
-
-    // Non-reactive radial navigation state (Rc<RefCell<_>> — WASM single-thread safe)
-    let nav = Rc::new(RefCell::new(NavController::new()));
-    let prefetch = Rc::new(RefCell::new(PrefetchCache::<GraphNeighborsResponse>::new()));
-
-    // Bounded in-flight tracker: dedup per-id + ≤MAX_IN_FLIGHT concurrent RPCs.
-    // Without this, a hover-skim across 50 nodes spawned 50 parallel
-    // `graph.neighbors` calls (one per pointer frame).
-    let in_flight = Rc::new(RefCell::new(InFlightSet::new(MAX_IN_FLIGHT)));
 
     // Raw hover intent — written by the (Send+Sync) on_event callback on every
     // HoverNode transition. A separate Effect (below) reads this, manages a
@@ -250,25 +224,18 @@ fn RadialCanvasView() -> impl IntoView {
         }
     });
 
-    // Non-reactive 60fps canvas state
-    let graph_state = Rc::new(RefCell::new(GraphState::new()));
-
     // -----------------------------------------------------------------------
     // Agent-switch reset Effect.
     // Subscribes to `agent_id`; on a real change (prev != current), wipes all
-    // canvas view state so the new agent's graph renders from a clean slate.
-    // The four graph-fetch Effects also subscribe to `agent_id` and re-fire
+    // canvas view state so the new agent's galaxy renders from a clean slate.
+    // The galaxy-build Effect also subscribes to `agent_id` and re-fires
     // automatically — this Effect's only job is the reset.
     //
     // The closure returns the current `agent_id`, so the next invocation sees
     // it as `prev`. On first mount `prev == None` and the reset body is skipped
-    // (avoids clearing empty state before Effect 1's initial fetch).
+    // (avoids clearing empty state before the galaxy-build Effect's first fetch).
     // -----------------------------------------------------------------------
-    let nav_reset = nav.clone();
-    let gs_reset = graph_state.clone();
-    let prefetch_reset = prefetch.clone();
     let detail_cache_reset = detail_cache;
-    let in_flight_reset = in_flight.clone();
     let pending_hover_timer_reset = pending_hover_timer.clone();
     Effect::new(move |prev: Option<String>| {
         let current = agent_id.get();
@@ -278,180 +245,46 @@ fn RadialCanvasView() -> impl IntoView {
                 set_selected_node.set(None);
                 search_query.set(String::new());
                 set_fold_threshold.set(12);
-                last_response.set(None);
                 prefetch_request.set(None);
                 all_dtos.set(Vec::new());
                 excerpt_by_id.set(HashMap::new());
                 // Clear 3D galaxy signals so the new agent's galaxy rebuilds from scratch.
-                // Effect 1 repopulates galaxy_data when it re-runs for the new agent_id.
+                // The galaxy-build Effect repopulates galaxy_data when it re-runs.
                 galaxy_data.set(None);
                 focus_request.set(None);
                 highlight_request.set(None);
                 lod_request.set(0.0);
 
                 // Reset non-reactive state
-                *nav_reset.borrow_mut() = NavController::new();
-                *prefetch_reset.borrow_mut() = PrefetchCache::<GraphNeighborsResponse>::new();
                 *detail_cache_reset.borrow_mut() = PrefetchCache::<NoteDetailResponse>::new();
-                *in_flight_reset.borrow_mut() = InFlightSet::new(MAX_IN_FLIGHT);
                 // Cancel any pending hover-debounce timer on agent switch.
                 *pending_hover_timer_reset.borrow_mut() = None;
                 hover_intent.set(None);
-                {
-                    let mut gs = gs_reset.borrow_mut();
-                    gs.nodes.clear();
-                    gs.edges.clear();
-                    gs.selected_node = None;
-                    gs.viewport.offset.x = gs.viewport.width / 2.0;
-                    gs.viewport.offset.y = gs.viewport.height / 2.0;
-                    gs.viewport.scale = 1.0;
-                    gs.drag_offset = (0.0, 0.0);
-                }
-
-                // Defensive clear: Effect-fetch (which subscribes to active_request)
-                // would otherwise re-fire with the old agent's center id. Effect 1
-                // re-runs automatically (it subscribes to agent_id) and will set
-                // active_request to the new entry node.
-                active_request.set(None);
             }
         }
         current
     });
 
     // -----------------------------------------------------------------------
-    // Effect 1: initial mount — pick entry point and fetch first neighborhood
+    // Galaxy-build Effect: on mount (and agent switch) fetch the full graph and
+    // build the deterministic 3D galaxy seed from its topology.
     // -----------------------------------------------------------------------
-    let nav_init = nav.clone();
-    let gs_init = graph_state.clone();
-    let prefetch_init = prefetch.clone();
     Effect::new(move || {
         if !state.is_connected.get() {
             return;
         }
         let agent = agent_id.get();
-        let nav_inner = nav_init.clone();
-        let gs_inner = gs_init.clone();
-        let prefetch_inner = prefetch_init.clone();
 
         spawn_local(async move {
-            let now_ms = now_ms();
-
-            // Always fetch the full graph: needed for entry pick fallback AND
-            // for the ghost-dot ring (orphans = all nodes - in-view nodes).
+            // Fetch the full graph and build the 3D galaxy seed from its topology.
             let query_result = GraphApi::query(&state, &agent, 500, vec![]).await.ok();
             if let Some(ref r) = query_result {
                 all_dtos.set(r.nodes.clone());
                 // Build deterministic 3D galaxy seed from full-graph topology.
                 galaxy_data.set(Some(build_galaxy(r)));
             }
-
-            // Entry point: localStorage "canvas_entry" → highest-degree node
-            let entry_id: Option<String> = web_sys::window()
-                .and_then(|w| w.local_storage().ok().flatten())
-                .and_then(|ls| ls.get_item("canvas_entry").ok().flatten())
-                .filter(|s| !s.is_empty());
-
-            let entry_id = match entry_id {
-                Some(id) => Some(id),
-                None => query_result.as_ref().and_then(pick_highest_degree),
-            };
-
-            let Some(entry_id) = entry_id else { return };
-
-            nav_inner.borrow_mut().enter(entry_id.clone(), now_ms);
-
-            let threshold = fold_threshold.get_untracked();
-            match GraphApi::neighbors(&state, &agent, &entry_id, 3, 200).await {
-                Ok(resp) => {
-                    let mut nbhd = to_neighborhood(&resp, now_ms, threshold);
-                    let dtos = all_dtos.get_untracked();
-                    populate_orphans(&mut nbhd, &dtos);
-                    let name = nbhd.center.name.clone();
-                    seed_graph_state(&gs_inner, &nbhd, Some(entry_id.clone()));
-                    nav_inner
-                        .borrow_mut()
-                        .fulfilled(entry_id.clone(), name, nbhd);
-                    prefetch_inner
-                        .borrow_mut()
-                        .put(entry_id.clone(), resp.clone(), now_ms);
-                    last_response.set(Some((entry_id.clone(), resp)));
-                    active_request.set(Some(entry_id.clone()));
-                }
-                Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("RadialCanvasView: entry fetch failed: {e}").into(),
-                    );
-                }
-            }
         });
     });
-
-    // -----------------------------------------------------------------------
-    // Effect-fetch: subscribes to `active_request` only.
-    // Fired on center change (node click / search / breadcrumb). Network fetch
-    // path; transitions to Loading then Active. Slider re-folds use Effect-refold.
-    // -----------------------------------------------------------------------
-    let nav_req = nav.clone();
-    let prefetch_req = prefetch.clone();
-    let gs_req = graph_state.clone();
-    Effect::new(move || {
-        let Some(id) = active_request.get() else {
-            return;
-        };
-        let now_ms = now_ms();
-        let agent = agent_id.get();
-
-        // Sync prelude — invalidate stale snapshot, enter Loading
-        last_response.set(None);
-        nav_req.borrow_mut().enter(id.clone(), now_ms);
-
-        // Prefetch cache hit → fold + apply locally, no network
-        let cached = prefetch_req.borrow().get(&id, now_ms).cloned();
-        if let Some(raw) = cached {
-            let threshold = fold_threshold.get_untracked();
-            let mut nbhd = to_neighborhood(&raw, now_ms, threshold);
-            let dtos = all_dtos.get_untracked();
-            populate_orphans(&mut nbhd, &dtos);
-            let name = nbhd.center.name.clone();
-            seed_graph_state(&gs_req, &nbhd, Some(id.clone()));
-            nav_req.borrow_mut().fulfilled(id.clone(), name, nbhd);
-            last_response.set(Some((id.clone(), raw)));
-            return;
-        }
-
-        // Cache miss — fetch from network
-        let nav_fetch = nav_req.clone();
-        let gs_fetch = gs_req.clone();
-        let prefetch_fetch = prefetch_req.clone();
-        spawn_local(async move {
-            match GraphApi::neighbors(&state, &agent, &id, 3, 200).await {
-                Ok(resp) => {
-                    let threshold = fold_threshold.get_untracked();
-                    let mut nbhd = to_neighborhood(&resp, now_ms, threshold);
-                    let dtos = all_dtos.get_untracked();
-                    populate_orphans(&mut nbhd, &dtos);
-                    let name = nbhd.center.name.clone();
-                    seed_graph_state(&gs_fetch, &nbhd, Some(id.clone()));
-                    nav_fetch.borrow_mut().fulfilled(id.clone(), name, nbhd);
-                    prefetch_fetch
-                        .borrow_mut()
-                        .put(id.clone(), resp.clone(), now_ms);
-                    last_response.set(Some((id.clone(), resp)));
-                }
-                Err(e) => {
-                    nav_fetch.borrow_mut().fail(id.clone(), e.clone());
-                    web_sys::console::error_1(
-                        &format!("RadialCanvasView: neighbor fetch failed: {e}").into(),
-                    );
-                }
-            }
-        });
-    });
-
-    // NOTE: a redundant "Effect 3" used to re-fetch `graph.node_detail` on every
-    // `selected_node` change and discard the result (`Ok(_) => {}`) — a duplicate
-    // RPC with no caching side-effect, since the lazy-fetch Effect above already
-    // fetches AND caches the selected node's detail. Removed (entropy reduction).
 
     // -----------------------------------------------------------------------
     // Hover debounce Effect: HOVER_DEBOUNCE_MS dwell gate.
@@ -479,88 +312,11 @@ fn RadialCanvasView() -> impl IntoView {
     });
 
     // -----------------------------------------------------------------------
-    // Effect 4: hover prefetch — background-fetch when pointer dwells on a node
-    //
-    // Guarded by InFlightSet: at most MAX_IN_FLIGHT concurrent fetches, and a
-    // single in-flight per id (no parallel RPC for the same target). The guard
-    // is moved into the spawned future and freed by RAII on completion / error
-    // / panic.
-    //
-    // TODO(memory-events): once the gateway publishes `memory.note.changed`
-    // (server emits `MemoryEvent::NoteDeleted` but the topic is not yet
-    // bridged), subscribe here and call `prefetch.invalidate(id)` so edits
-    // bust the cache before the 90s TTL expires.
-    // -----------------------------------------------------------------------
-    let prefetch_e4 = prefetch;
-    let in_flight_e4 = in_flight;
-    Effect::new(move || {
-        let Some(id) = prefetch_request.get() else {
-            return;
-        };
-
-        let now = now_ms();
-        // Skip if already cached and not stale
-        if prefetch_e4.borrow().has(&id, now) {
-            return;
-        }
-
-        // Concurrency cap + per-id de-dup. None means: already in flight, or
-        // we'd exceed MAX_IN_FLIGHT. Both cases drop this prefetch silently.
-        let Some(guard) = try_acquire_in_flight(&in_flight_e4, &id) else {
-            return;
-        };
-
-        let agent = agent_id.get();
-        let prefetch_inner = prefetch_e4.clone();
-        spawn_local(async move {
-            let _g = guard; // released on future completion
-            match GraphApi::neighbors(&state, &agent, &id, 3, 200).await {
-                Ok(resp) => {
-                    prefetch_inner.borrow_mut().put(id, resp, now);
-                }
-                Err(_) => {
-                    // Prefetch failures are silently ignored — they will retry on next dwell
-                }
-            }
-        });
-    });
-
-    // -----------------------------------------------------------------------
-    // Effect-refold: subscribes to `fold_threshold` only.
-    // Fired on slider drag. Locally re-folds the cached raw response and drives
-    // an interruptible NavController.retarget tween. No network, no Loading frame.
-    // -----------------------------------------------------------------------
-    let nav_refold = nav.clone();
-    let gs_refold = graph_state.clone();
-    Effect::new(move || {
-        let threshold = fold_threshold.get().clamp(1, 1000);
-
-        // Snapshot last_response and active id without subscribing to them.
-        let Some((cached_id, raw)) = last_response.get_untracked() else {
-            return;
-        };
-        if active_request.get_untracked().as_ref() != Some(&cached_id) {
-            return; // race: slider fired during a center transition
-        }
-
-        let now = now_ms();
-        let mut nbhd = to_neighborhood(&raw, now, threshold);
-        let dtos = all_dtos.get_untracked();
-        populate_orphans(&mut nbhd, &dtos);
-
-        update_graph_state_nodes_only(&gs_refold, &nbhd);
-        nav_refold
-            .borrow_mut()
-            .retarget(nbhd, now, RETARGET_DURATION_MS);
-    });
-
-    // -----------------------------------------------------------------------
     // Canvas event handler — captures only Copy signals, safe for Callback::new
     // -----------------------------------------------------------------------
     let on_event = move |event: CanvasEvent| match event {
         CanvasEvent::SelectNode(id) => {
             set_selected_node.set(Some(id.clone()));
-            active_request.set(Some(id.clone()));
             // Drive the scene via intent channels:
             // 1. Fly camera to selected node.
             focus_request.set(Some(id.clone()));
@@ -576,14 +332,10 @@ fn RadialCanvasView() -> impl IntoView {
             // Clear highlight when deselecting.
             highlight_request.set(None);
         }
-        CanvasEvent::EnterLocalView(id) => {
-            // Drive the same fetch path via the intent signal
-            active_request.set(Some(id));
-        }
         CanvasEvent::HoverNode(hovered_id) => {
             // Edge-triggered: `HoverNode` only fires on transition (see
-            // graph_canvas.rs hit-test). The dwell-threshold work happens in
-            // the hover-debounce Effect below, which reads this signal and
+            // galaxy_canvas.rs hit-test). The dwell-threshold work happens in
+            // the hover-debounce Effect above, which reads this signal and
             // schedules a 150ms `gloo_timers::callback::Timeout`.
             //
             // We only write `Copy` signals here because the `on_event`
@@ -592,7 +344,6 @@ fn RadialCanvasView() -> impl IntoView {
             // the Effect's capture set, where Send is not required.
             hover_intent.set(hovered_id);
         }
-        _ => {}
     };
 
     // Search: driven by the hub toolbar's Enter-submit pulse (`mem.search_nonce`).
@@ -699,8 +450,7 @@ fn RadialCanvasView() -> impl IntoView {
 
     view! {
         <div class="relative w-full h-full bg-[#080818]">
-            // GalaxyCanvas: 3D force-layout nebula (Phase 1).
-            // GraphCanvas + GraphState imports retained for Phase 4 removal.
+            // GalaxyCanvas: 3D force-layout nebula.
             <GalaxyCanvas
                 graph=galaxy_data
                 on_event=Callback::new(on_event)
@@ -722,23 +472,6 @@ fn RadialCanvasView() -> impl IntoView {
     }
 }
 
-/// Pick the most-connected node from a `GraphQueryResponse` as the radial entry point.
-///
-/// Falls back to the first node if the response contains no edges, so an isolated
-/// vault still renders at least one center node.
-fn pick_highest_degree(resp: &GraphQueryResponse) -> Option<String> {
-    use std::collections::HashMap;
-    let mut degree: HashMap<&str, usize> = HashMap::new();
-    for e in &resp.edges {
-        *degree.entry(e.from.as_str()).or_insert(0) += 1;
-        *degree.entry(e.to.as_str()).or_insert(0) += 1;
-    }
-    resp.nodes
-        .iter()
-        .max_by_key(|n| degree.get(n.id.as_str()).copied().unwrap_or(0))
-        .map(|n| n.id.clone())
-}
-
 // ---------------------------------------------------------------------------
 // Private helpers shared by RadialCanvasView Effects
 // ---------------------------------------------------------------------------
@@ -749,43 +482,6 @@ fn now_ms() -> f64 {
         .and_then(|w| w.performance())
         .map(|p| p.now())
         .unwrap_or(0.0)
-}
-
-/// Flatten a `Neighborhood` into `GraphState.nodes/edges` and wake the physics engine.
-///
-/// Also recenters the viewport so the radial layout's world origin (where the
-/// active center sits) maps to the canvas geometric center. Without this,
-/// switching focus could leave the new center anywhere on screen depending on
-/// previous pan/zoom state.
-fn seed_graph_state(
-    gs: &Rc<RefCell<GraphState>>,
-    nbhd: &crate::canvas_engine::types::Neighborhood,
-    selected: Option<String>,
-) {
-    let nodes: Vec<_> = std::iter::once(nbhd.center.clone())
-        .chain(nbhd.one_hop.iter().cloned())
-        .chain(nbhd.two_hop.iter().cloned())
-        // Orphans land here too so the click hit-test (which iterates gs.nodes)
-        // can resolve a ghost-dot click into a re-center request.
-        .chain(nbhd.orphans.iter().cloned())
-        .collect();
-    let edges = nbhd.edges.clone();
-    let mut gs = gs.borrow_mut();
-    gs.nodes = nodes;
-    gs.edges = edges;
-    gs.selected_node = selected;
-    // Recenter: world (0,0) → canvas center, reset zoom + drag
-    gs.viewport.offset.x = gs.viewport.width / 2.0;
-    gs.viewport.offset.y = gs.viewport.height / 2.0;
-    gs.viewport.scale = 1.0;
-    gs.drag_offset = (0.0, 0.0);
-    // Auto-fit viewport to the freshly seeded layout so we don't lose nodes off-screen.
-    // Safe when nodes is empty (fit_to_content early-returns) or when width/height are
-    // still zero pre-mount (T10 will refit on resize).
-    // Reborrow through `&mut *gs` so the borrow checker sees disjoint field borrows on
-    // GraphState rather than two simultaneous borrows of the RefMut wrapper.
-    let gs = &mut *gs;
-    gs.viewport.fit_to_content(&gs.nodes, 0.10);
 }
 
 /// Build the initial 3D galaxy GraphData from a full-graph query response.
@@ -849,24 +545,4 @@ fn compute_highlight_set(data: &gl::GraphData, selected_id: &str) -> std::collec
         }
     }
     hl
-}
-
-/// Refresh `GraphState`'s node/edge buffers from a freshly folded `Neighborhood`
-/// without resetting viewport, scale, drag offset, selected node, or layout.
-/// Used by the slider re-fold path so the user's pan/zoom/drag survives a slider tick.
-fn update_graph_state_nodes_only(
-    gs: &Rc<RefCell<GraphState>>,
-    nbhd: &crate::canvas_engine::types::Neighborhood,
-) {
-    let nodes: Vec<_> = std::iter::once(nbhd.center.clone())
-        .chain(nbhd.one_hop.iter().cloned())
-        .chain(nbhd.two_hop.iter().cloned())
-        .chain(nbhd.orphans.iter().cloned())
-        .collect();
-    let edges = nbhd.edges.clone();
-    let mut gs = gs.borrow_mut();
-    gs.nodes = nodes;
-    gs.edges = edges;
-    // Intentionally NOT modified: viewport.{offset,scale}, drag_offset,
-    // selected_node, layout (no wake — radial uses target_positions, not physics).
 }

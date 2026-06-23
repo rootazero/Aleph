@@ -11,8 +11,8 @@
 //! 3. `fromSide`/`toSide` are derived from the relative geometry: the closest
 //!    cardinal direction along the chord. This matches Obsidian's own
 //!    auto-anchoring when you drag an edge between two nodes.
-//! 4. Edges whose `kind` is in [`super::super::edge_curve::DIRECTIONAL_KINDS`]
-//!    get `toEnd: arrow`; everything else gets `toEnd: none`. Aleph's `label`
+//! 4. Edges whose `kind` is in [`DIRECTIONAL_KINDS`] get `toEnd: arrow`;
+//!    everything else gets `toEnd: none`. Aleph's `label`
 //!    is forwarded verbatim.
 //! 5. On import, only `File` and `Text` nodes are lifted into `NoteNodeDto`.
 //!    `Link` and `Group` are preserved in `ImportResult::dropped` so callers
@@ -21,9 +21,14 @@
 use std::collections::HashMap;
 
 use super::super::adapter::{GraphNeighborsResponse, NoteLinkDto, NoteNodeDto};
-use super::super::edge_curve::DIRECTIONAL_KINDS;
 use super::super::types::Vec2;
 use super::spec::{facing_sides, Document, EndShape, Node, NodeCommon, Side};
+
+/// Edge kinds that are *directional* in the JSON Canvas export: these get
+/// `toEnd: arrow`, everything else (`None`, `"related"`, any unknown string)
+/// exports as a plain edge. Relocated here from the retired `edge_curve`
+/// module (Task 17) since this export is now the only consumer.
+const DIRECTIONAL_KINDS: &[&str] = &["refers", "derives", "follows"];
 
 /// Tunables for `graph_to_canvas`.
 #[derive(Debug, Clone)]
