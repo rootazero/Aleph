@@ -76,7 +76,7 @@
     "official": true,
     "reachability": "cn-native",
     "transports": [
-      { "kind": "stdio", "command": "npx", "args": ["-y", "aleph-siliconflow-mcp@0.2.0"], "requires_runtime": "node" }
+      { "kind": "stdio", "command": "npx", "args": ["-y", "aleph-siliconflow-mcp@0.2.1"], "requires_runtime": "node" }
     ],
     "required_env": [
       { "key": "SILICONFLOW_API_KEY", "label": "SiliconFlow API Key", "description": "平台 API Key", "secret": true, "required": true, "how_to_get_url": "https://cloud.siliconflow.cn/account/ak" },
@@ -95,7 +95,7 @@
     "official": true,
     "reachability": "cn-native",
     "transports": [
-      { "kind": "stdio", "command": "npx", "args": ["-y", "aleph-t8star-mcp@0.1.0"], "requires_runtime": "node" }
+      { "kind": "stdio", "command": "npx", "args": ["-y", "aleph-t8star-mcp@0.2.1"], "requires_runtime": "node" }
     ],
     "required_env": [
       { "key": "T8STAR_API_KEY", "label": "T8star API Key", "description": "平台 API Key", "secret": true, "required": true, "how_to_get_url": "https://ai.t8star.org" },
