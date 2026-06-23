@@ -197,9 +197,7 @@ pub fn Settings() -> impl IntoView {
                         <li>
                             "• "
                             <a
-                                href="https://heyaleph.com"
-                                target="_blank"
-                                rel="noopener"
+                                href="mailto:rootazerox@gmail.com"
                                 class="text-primary hover:underline"
                             >
                                 {t!(i18n, settings.help.support)}
