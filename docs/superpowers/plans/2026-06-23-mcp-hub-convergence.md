@@ -14,7 +14,7 @@
 - **No new crates.** `which` is already an alephcore dependency (used under `src/.../browser`); confirm with `grep -n '^which' Cargo.toml` before Task 8. No second async runtime; tokio only. No non-serde serialization. No platform-API crates in `src`.
 - **Single source slot:** the primer writes to `source_id = "aleph-hub"` (`alephcore::hub::catalog_client::ALEPH_HUB_ID`). No new source, no local dedup.
 - **Canonical id:** official MCP entry id = `format!("aleph-hub:{}", preset.id)`. `mcp_server_id` turns `:`/`/` into `_`, so reconcile (`local:mcp:aleph-hub_<slug>`) is unchanged.
-- **Cargo discipline (from CLAUDE.md):** default to `cargo test -p alephcore --lib <filter>` for Rust units; **at most one** `cargo check -p alephcore --lib` before merge; panel verified with `cargo check -p aleph-panel --target wasm32-unknown-unknown`. No full `cargo test`.
+- **Cargo discipline (from CLAUDE.md):** per task, run ONLY the targeted `cargo test -p alephcore --lib <filter>` for that task's units (red→green). Do **not** run a full `cargo check` inside a task. The controller runs **one** structural gate after the structural tasks land — `cargo check -p alephcore --bin aleph-server` (compiles the lib **and** the `aleph-server` bin, so boot/registration edits in Tasks 3/4/6 are validated; `--lib` alone would not compile the bin). Panel verified with `cargo check -p aleph-panel --target wasm32-unknown-unknown`. No full `cargo test`.
 - **Commits:** English, `<scope>: <description>`. Attribution disabled globally — **no `Co-Authored-By` trailer**.
 - **Redlines:** R3/R7/R10 + single-source. Net deletion expected. Gateway handlers stay pure I/O (R4); do not touch auth/origin logic.
 
@@ -389,12 +389,7 @@ Expected: PASS (confirms the canonical-id chain needs no change).
 
 (Place it immediately before `(Some(std::sync::Arc::new(cache)), Some(configs))`. The block is already `async` — `app_config.read().await` runs just above.)
 
-- [ ] **Step 7: Compile-check the binary touch**
-
-Run: `cargo check -p alephcore --lib`
-Expected: clean (this is the single allowed pre-merge `cargo check`).
-
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit** (do NOT run a full `cargo check` here — the boot edit is validated by the controller's consolidated `cargo check -p alephcore --bin aleph-server` after the structural tasks)
 
 ```bash
 git add src/hub/official_mcp.rs src/gateway/handlers/extensions/catalog.rs src/bin/aleph-server/commands/start/mod.rs
@@ -568,9 +563,7 @@ With the panel no longer calling them, remove the handlers + their helpers + the
 
 - [ ] **Step 2: Delete the handlers + helpers.** In `src/gateway/handlers/mcp.rs` delete the entire `// === Preset Handlers ===` section: `preset_view`, `install_plan_to_json`, `InstallPresetParams`, `handle_list_presets`, `handle_install_preset`.
 
-- [ ] **Step 3: Prune now-unused imports.** Build and let the compiler flag unused imports in `mcp.rs` (e.g. `presets`, `InstallPlan`, `check_runtime`, `RuntimeKind`, `RESOURCE_NOT_FOUND`). Remove exactly those the compiler reports as unused. Do not remove imports still used by surviving handlers.
-
-Run: `cargo check -p alephcore --lib` is **not** spent here (budget: one check, used in Task 3). Instead rely on the next task's test pass + a final pre-merge check. If you must verify now, prefer `cargo build -p alephcore --lib 2>&1 | grep -E "unused|error"` mentally; otherwise proceed — Task 7 ends with the allowed check.
+- [ ] **Step 3: Prune now-unused imports.** Remove the imports that only the deleted preset handlers used (candidates: `presets`, `InstallPlan`, `check_runtime`, `RuntimeKind`, `RESOURCE_NOT_FOUND`). Do not remove imports still used by surviving handlers. Do **not** run a full `cargo check` here — the controller's consolidated `cargo check -p alephcore --bin aleph-server` (after the structural tasks) flags any unused-import warnings; resolve them then. Reason carefully about which surviving handlers in this file still use each import before removing.
 
 - [ ] **Step 4: Commit**
 
@@ -600,12 +593,7 @@ git commit -m "gateway: retire mcp.list_presets/install_preset (superseded by Al
 Run: `cargo test -p alephcore --lib mcp::presets`
 Expected: PASS — `bundled_catalog_parses_and_has_first_batch` + `amap_requires_secret_key_and_has_remote_first` only.
 
-- [ ] **Step 4: Final compile check (the one allowed pre-merge check if Task 3's was long ago)**
-
-Run: `cargo check -p alephcore --lib`
-Expected: clean. Resolve any unused-import warnings introduced by Tasks 6–7.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit** (do NOT run a full `cargo check` — the controller runs the consolidated `cargo check -p alephcore --bin aleph-server` right after this task to validate Tasks 3/4/6/7 together)
 
 ```bash
 git add src/mcp/presets/mod.rs
