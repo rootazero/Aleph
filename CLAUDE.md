@@ -285,12 +285,15 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 
 | 仓库 | 路径 | 说明 |
 |------|------|------|
-| Aleph (主项目) | `/Users/zouguojun/Workspace/Aleph` | Rust Core + 多端架构 |
-| Aleph-docs | `/Users/zouguojun/Workspace/Aleph-docs` | 官方文档 |
-| Aleph-homepage | `/Users/zouguojun/Workspace/Aleph-homepage` | 官方首页 |
-| Aleph-mcp | `/Users/zouguojun/Workspace/Aleph-mcp` | 官方 MCP 项目 |
-| Aleph-plugins | `/Users/zouguojun/Workspace/Aleph-plugins` | 官方插件 |
-| Aleph-skills | `/Users/zouguojun/Workspace/Aleph-skills` | 官方技能 |
+| Aleph (主项目) | `/Volumes/TBU4/Workspace/Aleph` | Rust Core + 多端架构 |
+| Aleph-docs | `/Volumes/TBU4/Workspace/Aleph-docs` | 官方文档 |
+| Aleph-homepage | `/Volumes/TBU4/Workspace/Aleph-homepage` | 官方首页 (Next.js) |
+| Aleph-Hub | `/Volumes/TBU4/Workspace/Aleph-Hub` | 官方扩展目录中心（策展远程 MCP/Skill/Plugin） |
+| Aleph-mcp | `/Volumes/TBU4/Workspace/Aleph-mcp` | 官方 MCP 项目 |
+| Aleph-plugins | `/Volumes/TBU4/Workspace/Aleph-plugins` | 官方插件市场 |
+| Aleph-skills | `/Volumes/TBU4/Workspace/Aleph-skills` | 官方技能 |
+
+> **生态统一管理约定**: 以上 7 仓为同级兄弟目录（共处 `/Volumes/TBU4/Workspace/`），同属 Aleph 官方生态，远端均在 `github.com/rootazero/`。**始终从主项目 `Aleph/` 启动会话**，周边仓作为兄弟目录就地操作——这样跨会话长期记忆统一沉淀到主项目的全局 memory 库（按工作目录路径编码），spec/plan 统一落在主项目本地的 `docs/plans|brainstorms|ideation`（均 gitignore），周边仓的 spec 以子项目名作文件名前缀（如 `2026-06-23-aleph-mcp-xxx-plan.md`）。避免直接进周边仓启动会话导致记忆库分裂。
 
 ---
 
