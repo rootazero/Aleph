@@ -85,5 +85,24 @@
       { "key": "SILICONFLOW_AUDIO_DIR", "label": "音频保存目录", "description": "默认回退到图片目录", "secret": false, "required": false }
     ],
     "tags": ["image", "video", "tts", "model-provider"]
+  },
+  {
+    "id": "t8star",
+    "name": "T8star 中转",
+    "category": "model-provider",
+    "description": "聚合中转：图像 / 语音 生成 + 模型列表 / 账户余额（Aleph 自建官方 MCP，视频迭代加入）。",
+    "vendor": "T8star · 贞贞的AI工坊",
+    "official": true,
+    "reachability": "cn-native",
+    "transports": [
+      { "kind": "stdio", "command": "npx", "args": ["-y", "aleph-t8star-mcp@0.1.0"], "requires_runtime": "node" }
+    ],
+    "required_env": [
+      { "key": "T8STAR_API_KEY", "label": "T8star API Key", "description": "平台 API Key", "secret": true, "required": true, "how_to_get_url": "https://ai.t8star.org" },
+      { "key": "T8STAR_API_BASE", "label": "API Base", "description": "默认 .org，可改 .cn 镜像", "secret": false, "required": false, "default": "https://ai.t8star.org/v1" },
+      { "key": "T8STAR_IMAGE_DIR", "label": "图片保存目录", "description": "本地落盘目录（留空只返回远程 URL）", "secret": false, "required": false },
+      { "key": "T8STAR_AUDIO_DIR", "label": "音频保存目录", "description": "默认回退到图片目录", "secret": false, "required": false }
+    ],
+    "tags": ["image", "tts", "model-provider", "relay"]
   }
 ]

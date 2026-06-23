@@ -118,13 +118,14 @@ mod tests {
     #[test]
     fn bundled_catalog_parses_and_has_first_batch() {
         let all = catalog();
-        // 内置 5 个官方预设 id 必须都在
+        // 内置 6 个官方预设 id 必须都在
         for id in [
             "context7",
             "amap",
             "minimax",
             "volcengine-veimagex",
             "siliconflow",
+            "t8star",
         ] {
             assert!(find(id).is_some(), "missing preset: {id}");
         }
