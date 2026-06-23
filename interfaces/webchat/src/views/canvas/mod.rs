@@ -148,8 +148,10 @@ fn RadialCanvasView() -> impl IntoView {
 
     // Intent channels: host → GalaxyCanvas → Scene (non-Send bridge via signals).
     // `focus_request` triggers fly_to_node; `highlight_request` triggers set_highlight.
+    // `lod_request` controls edge density (0 = all edges, 1 = backbone only).
     let focus_request: RwSignal<Option<String>> = RwSignal::new(None);
     let highlight_request: RwSignal<Option<std::collections::HashSet<u32>>> = RwSignal::new(None);
+    let lod_request: RwSignal<f32> = RwSignal::new(0.0);
 
     // Per-node excerpt cache for NodeDetailPanel.
     let detail_panel_excerpts: RwSignal<std::collections::HashMap<String, NodeExcerpt>> =
@@ -304,6 +306,7 @@ fn RadialCanvasView() -> impl IntoView {
                 galaxy_data.set(None);
                 focus_request.set(None);
                 highlight_request.set(None);
+                lod_request.set(0.0);
 
                 // Reset non-reactive state
                 *nav_reset.borrow_mut() = NavController::new();
@@ -747,6 +750,23 @@ fn RadialCanvasView() -> impl IntoView {
         }
     });
 
+    // -----------------------------------------------------------------------
+    // LOD mapping Effect: fold_threshold (1..1000) → lod_request (0..1).
+    //
+    // Mapping: lod = 1.0 - (threshold - 1) / 999.0
+    //   threshold=1    → lod=1.0  (most aggressive thinning, fewest edges)
+    //   threshold=1000 → lod=0.0  (all edges visible, densest display)
+    //
+    // This is monotonic and intuitive: dragging the slider to the right
+    // (higher threshold) increases edge density. The slider's former cluster-fold
+    // semantics are retired; the range is reused as a visual-density knob.
+    // -----------------------------------------------------------------------
+    Effect::new(move || {
+        let ft = fold_threshold.get().clamp(1, 1000) as f32;
+        let lod = 1.0 - (ft - 1.0) / 999.0;
+        lod_request.set(lod);
+    });
+
     view! {
         <div class="relative w-full h-full bg-[#080818]">
             // GalaxyCanvas: 3D force-layout nebula (Phase 1).
@@ -756,6 +776,7 @@ fn RadialCanvasView() -> impl IntoView {
                 on_event=Callback::new(on_event)
                 focus_request=focus_request
                 highlight_request=highlight_request
+                lod_request=lod_request
             />
             // NodeDetailPanel: overlay when a node is selected in the galaxy.
             {move || selected_node.get().map(|_| view! {

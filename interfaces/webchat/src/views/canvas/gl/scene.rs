@@ -41,6 +41,9 @@ pub struct Scene {
     /// Current highlight set (selected node index + topological neighbors).
     /// Stored on the struct so settling/drift re-uploads preserve it.
     highlight: Option<HashSet<u32>>,
+    /// LOD level in [0, 1]. 0 = show all edges; 1 = show only high-degree backbone.
+    /// Stored so all edge-upload sites (set_graph, settling, set_lod) apply it consistently.
+    lod: f32,
 }
 
 impl Scene {
@@ -66,6 +69,7 @@ impl Scene {
             settle_steps: 0,
             last_vp: Mat4::identity(),
             highlight: None,
+            lod: 0.0,
         })
     }
 
@@ -80,9 +84,53 @@ impl Scene {
         self.highlight = None;
 
         // Upload initial state so the first frame has something to draw.
-        self.edges.upload(&self.ctx.gl, &data);
-        self.nodes.upload(&self.ctx.gl, &data, None);
         self.data = data;
+        self.upload_edges_lod(&self.data.clone());
+        self.nodes.upload(&self.ctx.gl, &self.data, None);
+    }
+
+    /// Set the LOD level (0.0 = all edges visible, 1.0 = only high-degree backbone).
+    /// Immediately re-uploads the edge buffer with the new floor applied.
+    pub fn set_lod(&mut self, lod: f32) {
+        self.lod = lod.clamp(0.0, 1.0);
+        self.upload_edges_lod(&self.data.clone());
+    }
+
+    /// Upload edges to the GPU, dropping weak edges according to the current LOD.
+    ///
+    /// LOD floor: edges where BOTH endpoints have `link_count < floor` are dropped.
+    /// At lod=0 the floor is 0 (all edges pass). At lod=1 the floor equals the
+    /// 90th-percentile link_count of the graph, retaining only the structural backbone.
+    fn upload_edges_lod(&mut self, data: &GraphData) {
+        if self.lod <= 0.0 || data.nodes.is_empty() {
+            self.edges.upload(&self.ctx.gl, data);
+            return;
+        }
+
+        // Compute the link_count floor from the LOD level.
+        // lod=0.5 → median; lod=1.0 → ~90th percentile (index = 90% of sorted counts).
+        let mut counts: Vec<u32> = data.nodes.iter().map(|n| n.link_count).collect();
+        counts.sort_unstable();
+        let idx = ((self.lod * 0.9 * (counts.len().saturating_sub(1)) as f32) as usize)
+            .min(counts.len().saturating_sub(1));
+        let floor = counts[idx];
+
+        if floor == 0 {
+            self.edges.upload(&self.ctx.gl, data);
+            return;
+        }
+
+        // Build a filtered GraphData with only edges where at least one endpoint
+        // is above the floor (weak spokes into strong hubs are still drawn; only
+        // weak-to-weak edges are culled, preserving cluster connectivity).
+        let filtered_edges: Vec<(u32, u32)> = data.edges.iter().copied().filter(|&(a, b)| {
+            let lc_a = data.nodes.get(a as usize).map_or(0, |n| n.link_count);
+            let lc_b = data.nodes.get(b as usize).map_or(0, |n| n.link_count);
+            lc_a >= floor || lc_b >= floor
+        }).collect();
+
+        let filtered = GraphData { nodes: data.nodes.clone(), edges: filtered_edges };
+        self.edges.upload(&self.ctx.gl, &filtered);
     }
 
     /// Screen-space picking: project all nodes through the last-frame view-proj
@@ -154,7 +202,8 @@ impl Scene {
                 }
                 // Re-upload both edges and nodes (positions changed).
                 // Pass through the stored highlight so it survives settling.
-                self.edges.upload(&self.ctx.gl, &self.data);
+                // Clone data first to satisfy the borrow checker (upload_edges_lod takes &self).
+                self.upload_edges_lod(&self.data.clone());
                 self.nodes
                     .upload(&self.ctx.gl, &self.data, self.highlight.as_ref());
             }

@@ -35,6 +35,9 @@ pub fn GalaxyCanvas(
     focus_request: RwSignal<Option<String>>,
     /// Intent channel: when `Some(indices)`, highlight those node indices.
     highlight_request: RwSignal<Option<HashSet<u32>>>,
+    /// Intent channel: LOD level in [0, 1] controlling edge density.
+    /// 0 = all edges; 1 = only high-degree backbone. Updated by the density slider.
+    lod_request: RwSignal<f32>,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
@@ -134,6 +137,15 @@ pub fn GalaxyCanvas(
         let hl = highlight_request.get();
         if let Some(s) = scene_hl.borrow_mut().as_mut() {
             s.set_highlight(hl);
+        }
+    });
+
+    // --- Intent channel Effect: LOD / edge density ---
+    let scene_lod = scene.clone();
+    Effect::new(move |_| {
+        let lod = lod_request.get();
+        if let Some(s) = scene_lod.borrow_mut().as_mut() {
+            s.set_lod(lod);
         }
     });
 
