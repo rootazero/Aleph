@@ -66,5 +66,24 @@
       { "key": "DOMAIN_NAME", "label": "Domain", "description": "veImageX 加速域名", "secret": false, "required": true, "how_to_get_url": null }
     ],
     "tags": ["image", "model-provider"]
+  },
+  {
+    "id": "siliconflow",
+    "name": "硅基流动 SiliconFlow",
+    "category": "model-provider",
+    "description": "文生图 / 图生视频 / 语音合成（Aleph 自建官方 MCP）。",
+    "vendor": "硅基流动 SiliconFlow",
+    "official": true,
+    "reachability": "cn-native",
+    "transports": [
+      { "kind": "stdio", "command": "uvx", "args": ["--from", "git+https://github.com/rootazero/Aleph-mcp#subdirectory=siliconflow", "aleph-siliconflow-mcp"], "requires_runtime": "python" }
+    ],
+    "required_env": [
+      { "key": "SILICONFLOW_API_KEY", "label": "SiliconFlow API Key", "description": "平台 API Key", "secret": true, "required": true, "how_to_get_url": "https://cloud.siliconflow.cn/account/ak" },
+      { "key": "SILICONFLOW_API_BASE", "label": "API Base", "description": "区域接入点（默认 .cn，海外可改 .com）", "secret": false, "required": false, "default": "https://api.siliconflow.cn/v1" },
+      { "key": "SILICONFLOW_IMAGE_DIR", "label": "图片/视频保存目录", "description": "本地落盘目录（留空只返回远程 URL）", "secret": false, "required": false },
+      { "key": "SILICONFLOW_AUDIO_DIR", "label": "音频保存目录", "description": "默认回退到图片目录", "secret": false, "required": false }
+    ],
+    "tags": ["image", "video", "tts", "model-provider"]
   }
 ]
