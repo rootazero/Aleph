@@ -35,7 +35,7 @@ use gloo_timers::callback::Timeout;
 use leptos::callback::Callback;
 
 use crate::context::DashboardState;
-use crate::state::memory::MemoryState;
+use crate::state::memory::{MemoryState, MemoryView};
 
 #[allow(unused_imports)]
 use graph_canvas::{GraphCanvas, GraphState};
@@ -299,6 +299,11 @@ fn RadialCanvasView() -> impl IntoView {
                 prefetch_request.set(None);
                 all_dtos.set(Vec::new());
                 excerpt_by_id.set(HashMap::new());
+                // Clear 3D galaxy signals so the new agent's galaxy rebuilds from scratch.
+                // Effect 1 repopulates galaxy_data when it re-runs for the new agent_id.
+                galaxy_data.set(None);
+                focus_request.set(None);
+                highlight_request.set(None);
 
                 // Reset non-reactive state
                 *nav_reset.borrow_mut() = NavController::new();
@@ -657,8 +662,12 @@ fn RadialCanvasView() -> impl IntoView {
         _ => {}
     };
 
-    // Search: on_search is driven by the sidebar's search field via mem.search_query.
-    // Subscribe to search_query changes and trigger a graph navigation when non-empty.
+    // Search: on_search is driven by the hub toolbar's search field via mem.search_query.
+    // The toolbar writes search_query live on every keystroke; the canvas subscribes live
+    // (matching the pattern noted in toolbar.rs: "the graph reads search_query live").
+    // On a match, drive the 3D galaxy's intent channels: fly-to + highlight + open panel.
+    // active_request is NOT set here — it drove the retired radial-fetch path; leaving
+    // it disconnected from search prevents stale graph.neighbors fetches in the console.
     Effect::new(move || {
         let query = search_query.get();
         if query.is_empty() {
@@ -670,7 +679,15 @@ fn RadialCanvasView() -> impl IntoView {
                 Ok(response) => {
                     if let Some(first) = response.results.first() {
                         let id = first.id.clone();
-                        active_request.set(Some(id));
+                        // Drive 3D galaxy: fly camera to matched node.
+                        focus_request.set(Some(id.clone()));
+                        // Highlight matched node + its topological neighbors.
+                        if let Some(data) = galaxy_data.get_untracked() {
+                            let hl = compute_highlight_set(&data, &id);
+                            highlight_request.set(Some(hl));
+                        }
+                        // Open the node detail panel by selecting the node.
+                        mem.selected_node.set(Some(id));
                     }
                 }
                 Err(e) => {
@@ -678,6 +695,42 @@ fn RadialCanvasView() -> impl IntoView {
                 }
             }
         });
+    });
+
+    // -----------------------------------------------------------------------
+    // Reverse-link Effect: list → graph cross-link.
+    //
+    // When the Memory table's "view in graph" button is clicked, `on_locate`
+    // sets `mem.selected_node` and flips `mem.memory_view` to Graph
+    // (see views/memory/mod.rs on_locate callback). This Effect detects that
+    // and drives the 3D galaxy intent channels to fly to and highlight the node.
+    //
+    // Feedback-loop avoidance:
+    // - `mem.memory_view` is read with `get_untracked()` — the Effect only
+    //   subscribes to `mem.selected_node` changes, not to memory_view.
+    // - When SelectNode fires inside the canvas (on_event), it writes
+    //   `set_selected_node` (= mem.selected_node) too. To avoid re-triggering
+    //   the fly-to for in-canvas selections, we only act when memory_view is
+    //   Graph AND the change came in as a list-originated locate. In practice,
+    //   flying to an already-visible node is idempotent, so over-triggering
+    //   is benign; we still gate on Graph view to avoid no-op work.
+    // -----------------------------------------------------------------------
+    Effect::new(move || {
+        let Some(node_id) = mem.selected_node.get() else {
+            return;
+        };
+        // Only act when the memory hub is showing the Graph view; list-originated
+        // locates always flip to Graph first (see on_locate in memory/mod.rs).
+        if mem.memory_view.get_untracked() != MemoryView::Graph {
+            return;
+        }
+        // Drive 3D galaxy: fly camera to the located node.
+        focus_request.set(Some(node_id.clone()));
+        // Highlight it and its topological neighbors.
+        if let Some(data) = galaxy_data.get_untracked() {
+            let hl = compute_highlight_set(&data, &node_id);
+            highlight_request.set(Some(hl));
+        }
     });
 
     view! {
