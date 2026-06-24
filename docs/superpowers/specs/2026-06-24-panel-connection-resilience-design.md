@@ -165,9 +165,16 @@ rotate → reset_token() 后发布 `gateway.token.rotated` 信号到事件总线
 panel `onclose` 已把 code+reason 送进流;`classify` 判 `token_rotated`/4001 → `AuthRequired` →
 不重连、清旧 token、弹墙"令牌已更新,请重新输入"。
 
+**可行性已核实(随主 PR 做)**:
+- 事件总线句柄就在 rotate handler 注册处(`start/mod.rs:327` 的 `event_bus`,L438 注册闭包同作用域)→
+  闭包 `event_bus.clone()` 捕获,rotate 成功后 publish;**纯 `handle_token_rotate(req)` 签名不动**(R4 守住)。
+- `GatewayEventFrame`(`src/gateway/events/frame.rs:23`)加 `TokenRotated` 变体 + topic(L437 映射处)。
+- 连接循环(`handler.rs`)每连接已持有 `peer_addr.ip().is_loopback()` 与 `conns` 里的 `caller_role`;
+  事件转发 `select!` 臂收到 `TokenRotated` 时:远程(非 loopback)→ `Close(4001,"token_rotated")` + break;
+  loopback → 忽略并不转发给客户端。
+
 **红线遵守(`src/gateway/CLAUDE.md`)**:改授权行为**必须同步加测试**(关远程、不关 loopback);
-保持最小,不引入新注册表。rotate handler 当前无总线句柄,**如何拿 publisher 是 planning 细节**;
-若拿句柄须侵入式改 handler 签名(违 R4),本节降级为**独立后续 PR**,前 5 节不依赖它即可独立交付。
+复用现有 broadcast,不引入新 session 注册表。
 
 ## 4. 测试
 
