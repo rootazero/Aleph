@@ -81,11 +81,20 @@ pub fn TeamParticipants() -> impl IntoView {
     let open = RwSignal::new(false);
     let root_ref = NodeRef::<leptos::html::Div>::new();
 
+    // Holds the active ResizeObserver so the effect and cleanup can disconnect it.
+    let observer_store: StoredValue<Option<web_sys::ResizeObserver>> = StoredValue::new(None);
+
     // Publish the bar's rendered height to `--aleph-team-roster-h` so the
     // message list can pad its top and not hide the first bubbles behind the
     // floating bar. Mirrors the composer's `--composer-clearance` observer.
     Effect::new(move |_| {
         let Some(el) = root_ref.get() else { return };
+        // Disconnect any observer created by a prior run of this effect.
+        observer_store.update_value(|slot| {
+            if let Some(prev) = slot.take() {
+                prev.disconnect();
+            }
+        });
         let cb: Closure<dyn FnMut(js_sys::Array)> = Closure::new(move |entries: js_sys::Array| {
             if let Ok(entry) = entries.get(0).dyn_into::<web_sys::ResizeObserverEntry>() {
                 let target: web_sys::Element = entry.target();
@@ -103,11 +112,17 @@ pub fn TeamParticipants() -> impl IntoView {
         });
         if let Ok(observer) = web_sys::ResizeObserver::new(cb.as_ref().unchecked_ref()) {
             observer.observe(&el);
+            observer_store.set_value(Some(observer));
         }
         cb.forget();
     });
     // Reset the var when leaving team mode so single chat keeps its normal pad.
     on_cleanup(move || {
+        observer_store.update_value(|slot| {
+            if let Some(obs) = slot.take() {
+                obs.disconnect();
+            }
+        });
         if let Some(root) = web_sys::window()
             .and_then(|w| w.document())
             .and_then(|d| d.document_element())
