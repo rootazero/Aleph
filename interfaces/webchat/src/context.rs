@@ -828,46 +828,49 @@ impl DashboardState {
         Ok(())
     }
 
-    /// Attempt to reconnect with exponential backoff
+    /// Attempt to reconnect. Differentiated by failure type: an `AuthRequired`
+    /// failure breaks out immediately to the login wall (retrying the same bad
+    /// token is wasted); every other class uses exponential backoff with
+    /// downward jitter, reusing the shared `ReconnectStrategy`.
     pub async fn reconnect(&self) -> Result<(), String> {
-        let max_attempts = 5;
+        use crate::state::connection::MAX_RECONNECT_ATTEMPTS;
+        use shared_ui_logic::connection::{ConnectionFailure, ReconnectStrategy};
+
+        if matches!(self.connection_failure.get_untracked(), Some(ConnectionFailure::AuthRequired)) {
+            self.needs_token.set(true);
+            self.is_reconnecting.set(false);
+            return Ok(());
+        }
 
         self.is_reconnecting.set(true);
-
-        for attempt in 0..max_attempts {
+        let mut strategy = ReconnectStrategy::new(MAX_RECONNECT_ATTEMPTS, 1000);
+        let mut attempt: u32 = 0;
+        while let Some(delay) = {
+            // ~±10% downward jitter; Math::random is wasm-only.
+            #[cfg(target_arch = "wasm32")]
+            let permille = (js_sys::Math::random() * 100.0) as u64;
+            #[cfg(not(target_arch = "wasm32"))]
+            let permille = 0u64;
+            strategy.next_delay_jittered(permille)
+        } {
             self.reconnect_count.set(attempt);
-
-            // Exponential backoff: 1s, 2s, 4s, 8s, 16s
-            let delay_ms = (1000 * 2_u32.pow(attempt)).min(16000);
-
-            web_sys::console::log_1(
-                &format!("Reconnecting in {}ms (attempt {})", delay_ms, attempt + 1).into(),
-            );
-
-            TimeoutFuture::new(delay_ms).await;
-
+            TimeoutFuture::new(delay as u32).await;
             match self.connect().await {
                 Ok(()) => {
-                    web_sys::console::log_1(&"Reconnection successful".into());
+                    // connect() returns Ok for both Authorized and NeedsToken;
+                    // if it walled, stop here (TokenWall covers it).
                     self.is_reconnecting.set(false);
                     return Ok(());
                 }
-                Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("Reconnection attempt {} failed: {}", attempt + 1, e).into(),
-                    );
-
-                    if attempt + 1 >= max_attempts {
-                        let error_msg =
-                            format!("Failed to reconnect after {max_attempts} attempts");
-                        self.connection_error.set(Some(error_msg.clone()));
-                        self.is_reconnecting.set(false);
-                        return Err(error_msg);
-                    }
+                Err(_) => {
+                    attempt += 1;
                 }
             }
         }
 
+        // Budget exhausted — leave the classified failure in place (connect()
+        // already set it) so the gate shows the right copy.
+        self.reconnect_count.set(MAX_RECONNECT_ATTEMPTS);
         self.is_reconnecting.set(false);
         Err("Reconnection failed".to_string())
     }
