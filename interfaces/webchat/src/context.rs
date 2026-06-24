@@ -138,8 +138,27 @@ fn read_gateway_token() -> Option<String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn persist_gateway_token(_token: &str) {}
 
+/// Drop the persisted Gateway token. Called when a previously-stored token is
+/// rejected (rotation / mismatch) so it can't silently re-fail on the next
+/// load and the login box starts empty.
+#[cfg(target_arch = "wasm32")]
+fn clear_gateway_token() {
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = s.remove_item(GATEWAY_TOKEN_KEY);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_gateway_token() {}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn scrub_token_from_url() {}
+
+enum Handshake {
+    Authorized,
+    NeedsToken,
+    Failed(ConnectionFailure),
+}
 
 #[derive(Clone, Copy)]
 pub struct DashboardState {
@@ -506,18 +525,9 @@ impl DashboardState {
         }
     }
 
-    /// Complete the session handshake after the WebSocket connection is
-    /// established.
-    ///
-    /// Gateway-token model: the handshake is a single `connect` frame carrying
-    /// this Panel's `device_id` and, for a remote connection, the shared
-    /// Gateway token (from `?token=` URL or persisted localStorage). The gateway
-    /// replies with the session baseline plus the authorization verdict
-    /// (`role` / `authorized` / `needs_token`). Loopback is always authorized
-    /// (operator); a remote needs a valid token. A token that authorizes is
-    /// persisted so refreshes stay logged in; an unauthorized verdict drives the
-    /// login wall via `needs_token`.
-    async fn handshake(&self) -> Result<(), String> {
+    /// Handshake outcome — distinguishes "authorized", "needs a token"
+    /// (login wall, NOT a transport failure), and a transport-level failure.
+    async fn handshake(&self) -> Handshake {
         let (device_id, device_name) = panel_device_identity();
         let token = read_gateway_token();
         let mut params = serde_json::json!({
@@ -527,18 +537,23 @@ impl DashboardState {
         if let Some(t) = token.as_ref() {
             params["token"] = serde_json::json!(t);
         }
-        let resp = self.rpc_call("connect", params).await?;
+        let resp = match self.rpc_call("connect", params).await {
+            Ok(r) => r,
+            Err(e) => return Handshake::Failed(classify(FailureStage::Handshake, Some(&e), false)),
+        };
+        self.capture_role(&resp);
         if resp.get("authorized").and_then(serde_json::Value::as_bool) == Some(true) {
             if let Some(t) = token {
                 persist_gateway_token(&t);
             }
-            // Token is now in localStorage (or this is loopback). Strip any
-            // `?token=` from the address bar so the secret does not linger in
-            // history/bookmarks and a stale link can't shadow localStorage.
             scrub_token_from_url();
+            Handshake::Authorized
+        } else {
+            // Reachable but unauthorized: a stale/rotated/mismatched token (if
+            // any) must not silently re-fail next load. Login wall takes over.
+            clear_gateway_token();
+            Handshake::NeedsToken
         }
-        self.capture_role(&resp);
-        Ok(())
     }
 
     /// Connect to the gateway
@@ -738,14 +753,14 @@ impl DashboardState {
                 // Complete the session handshake before marking as connected.
                 let handshake_state = *self;
                 match handshake_state.handshake().await {
-                    Ok(()) => {
+                    Handshake::Authorized => {
                         self.is_connected.set(true);
                         self.connection_error.set(None);
+                        self.connection_failure.set(None);
                         self.reconnect_count.set(0);
                         self.is_reconnecting.set(false);
                         self.has_connected_once.set(true);
 
-                        // Subscribe to config events automatically
                         let state_for_subscribe = *self;
                         spawn_local(async move {
                             if let Err(e) = state_for_subscribe.subscribe_topic("config.**").await {
@@ -754,15 +769,29 @@ impl DashboardState {
                                 );
                             }
                         });
-
                         Ok(())
                     }
-                    Err(e) => {
-                        // Handshake failed (transport-level) — surface the error
-                        // so the boot/service gate offers a Retry path.
+                    Handshake::NeedsToken => {
+                        // Reachable but walled — do NOT mark connected and do NOT
+                        // spawn subscriptions (only `connect` is allowed unauthorized).
                         self.is_connected.set(false);
-                        self.connection_error.set(Some(e.clone()));
-                        Err(e)
+                        self.needs_token.set(true);
+                        self.set_failure(ConnectionFailure::AuthRequired);
+                        // Returning Ok keeps the boot/reconnect path from treating
+                        // the wall as a transport failure; TokenWall (z-100) covers it.
+                        Ok(())
+                    }
+                    Handshake::Failed(f) => {
+                        self.is_connected.set(false);
+                        let msg = match &f {
+                            ConnectionFailure::Unreachable { detail }
+                            | ConnectionFailure::Timeout { detail }
+                            | ConnectionFailure::Dropped { detail }
+                            | ConnectionFailure::Unknown { detail } => detail.clone(),
+                            ConnectionFailure::AuthRequired => "auth required".to_string(),
+                        };
+                        self.set_failure(f);
+                        Err(msg)
                     }
                 }
             }
