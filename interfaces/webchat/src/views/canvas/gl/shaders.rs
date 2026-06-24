@@ -23,7 +23,8 @@ void main() {
 }
 "#;
 
-/// Node fragment shader: soft radial star sprite with HDR color (toneMapped off).
+/// Node fragment: crisp solid core + soft outer halo (HDR; bloom adds the corona).
+/// The core stays sharp (tight smoothstep) so stars read as bright points, not blobs.
 pub const NODE_FRAG: &str = r#"#version 300 es
 precision highp float;
 in vec2 v_corner;
@@ -32,9 +33,14 @@ out vec4 frag;
 void main() {
     float r = length(v_corner);
     if (r > 1.0) discard;
-    float a = smoothstep(1.0, 0.0, r);     // soft edge
-    float core = smoothstep(0.6, 0.0, r);  // bright core
-    frag = vec4(v_color * (0.4 + core), a);
+    // Crisp core: hard, tight falloff → a defined bright point.
+    float core = smoothstep(0.30, 0.0, r);
+    core = core * core;                       // sharpen the core profile
+    // Soft halo: wide gentle falloff, low weight; bloom turns this into the glow.
+    float halo = smoothstep(1.0, 0.0, r) * 0.35;
+    vec3  rgb  = v_color * (core * 1.6 + halo);
+    float a    = clamp(core + halo * 0.6, 0.0, 1.0);
+    frag = vec4(rgb, a);
 }
 "#;
 
