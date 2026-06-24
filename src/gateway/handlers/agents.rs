@@ -19,6 +19,7 @@ use tracing::{debug, info};
 use crate::config::agent_manager::{AgentManager, AgentPatch};
 use crate::config::types::agents_def::{AgentDefinition, AgentIdentity, AgentModelRef};
 use crate::sync_primitives::Arc;
+use crate::thinker::soul_archetypes::SoulArchetype;
 
 use super::super::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
@@ -70,6 +71,10 @@ pub struct CreateAgentParams {
     pub name: Option<String>,
     pub identity: Option<AgentIdentity>,
     pub skills: Option<Vec<String>>,
+    /// Soul archetype template (`expert | companion | assistant | maker`).
+    /// `None` lets `AgentManager::create` fall back to `assistant`.
+    #[serde(default)]
+    pub archetype: Option<SoulArchetype>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,6 +173,7 @@ pub async fn handle_create(
         name: params.name,
         identity: params.identity,
         skills: params.skills,
+        archetype: params.archetype,
         ..Default::default()
     };
 

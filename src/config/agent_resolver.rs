@@ -264,7 +264,9 @@ impl AgentDefinitionResolver {
             );
         }
         // Identity files (SOUL.md, AGENTS.md, etc.) go in agent_dir
-        if let Err(e) = initialize_agent_identity(&agent_dir, agent_name) {
+        if let Err(e) =
+            initialize_agent_identity(&agent_dir, agent_name, agent.archetype.unwrap_or_default())
+        {
             tracing::warn!(
                 agent_id = %agent.id,
                 path = %agent_dir.display(),
@@ -412,12 +414,16 @@ pub fn initialize_agent_dir(path: &Path) -> Result<(), io::Error> {
 /// └── MEMORY.md         # Persistent memory notes
 /// ```
 ///
-pub fn initialize_agent_identity(path: &Path, agent_name: &str) -> Result<(), io::Error> {
+pub fn initialize_agent_identity(
+    path: &Path,
+    agent_name: &str,
+    archetype: SoulArchetype,
+) -> Result<(), io::Error> {
     // Ensure directory exists
     fs::create_dir_all(path)?;
 
     // Write each identity file (skip if already exists — never overwrite user content)
-    write_if_missing(path, "SOUL.md", &default_soul(agent_name))?;
+    write_if_missing(path, "SOUL.md", &default_soul(agent_name, archetype))?;
     write_if_missing(path, "AGENTS.md", &default_agents(agent_name))?;
     write_if_missing(path, "IDENTITY.md", &default_identity(agent_name))?;
     write_if_missing(path, "MEMORY.md", DEFAULT_MEMORY)?;
@@ -440,10 +446,10 @@ fn write_if_missing(dir: &Path, filename: &str, content: &str) -> Result<(), io:
 // Default Workspace File Templates
 // =============================================================================
 
-fn default_soul(agent_name: &str) -> String {
-    // Non-interactive / bootstrap agents get the lightest archetype. The
-    // interactive `agent_create` path overrides this with a chosen archetype.
-    compose_soul(SoulArchetype::Assistant, agent_name, None)
+fn default_soul(agent_name: &str, archetype: SoulArchetype) -> String {
+    // Bootstrap/non-interactive callers pass `SoulArchetype::default()`
+    // (= Assistant); the Panel and `agent_create` paths pass the chosen one.
+    compose_soul(archetype, agent_name, None)
 }
 
 fn default_agents(agent_name: &str) -> String {
@@ -792,7 +798,7 @@ mod tests {
 
     #[test]
     fn default_soul_uses_assistant_archetype() {
-        let soul = default_soul("Nova");
+        let soul = default_soul("Nova", SoulArchetype::default());
         assert!(soul.contains("_You are Nova._"));
         assert!(soul.contains("Never fabricate facts, citations")); // base honesty floor
         assert!(soul.contains("Lead with the answer or the action.")); // assistant archetype
@@ -801,11 +807,18 @@ mod tests {
     }
 
     #[test]
+    fn default_soul_honors_chosen_archetype() {
+        let soul = default_soul("Quant", SoulArchetype::Expert);
+        assert!(soul.contains("_You are Quant._"));
+        assert!(soul.contains("Accuracy beats approval.")); // expert archetype marker
+    }
+
+    #[test]
     fn test_workspace_initialization() {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path().join("test-agent");
 
-        initialize_agent_identity(&workspace, "Test Agent").unwrap();
+        initialize_agent_identity(&workspace, "Test Agent", SoulArchetype::default()).unwrap();
 
         // AGENTS.md should exist with template content
         let agents_md = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
@@ -824,7 +837,7 @@ mod tests {
 
         // Running again should not overwrite AGENTS.md
         fs::write(workspace.join("AGENTS.md"), "Custom content").unwrap();
-        initialize_agent_identity(&workspace, "Test Agent").unwrap();
+        initialize_agent_identity(&workspace, "Test Agent", SoulArchetype::default()).unwrap();
         let agents_md_after = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
         assert_eq!(agents_md_after, "Custom content");
     }

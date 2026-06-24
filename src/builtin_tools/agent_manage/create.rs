@@ -306,7 +306,14 @@ impl AlephTool for AgentCreateTool {
         })?;
 
         // Initialize the rest of the identity directory (AGENTS.md, MEMORY.md, …).
-        initialize_agent_identity(&agent_state_dir, display_name).map_err(|e| {
+        // SOUL.md was already written above, so the archetype here only matters
+        // for the unreachable case where that write was skipped.
+        initialize_agent_identity(
+            &agent_state_dir,
+            display_name,
+            args.archetype.unwrap_or_default(),
+        )
+        .map_err(|e| {
             crate::error::AlephError::other(format!(
                 "Failed to initialize identity files for '{}': {}",
                 args.id, e
@@ -399,6 +406,7 @@ impl AlephTool for AgentCreateTool {
                 id: args.id.clone(),
                 name: args.name.clone(),
                 model: Some(AgentModelRef::Legacy(model.to_string())),
+                archetype: args.archetype,
                 ..Default::default()
             };
             if let Err(e) = manager.create(def) {

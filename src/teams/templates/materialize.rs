@@ -355,13 +355,17 @@ async fn provision_member(
 
     let display_name = member.name.as_deref().unwrap_or(&member.id);
 
-    crate::config::agent_resolver::initialize_agent_identity(&agent_state_dir, display_name)
-        .map_err(|e| {
-            TeamTemplateError::Materialize(format!(
-                "initialize_agent_identity for `{}` failed: {e}",
-                member.id
-            ))
-        })?;
+    crate::config::agent_resolver::initialize_agent_identity(
+        &agent_state_dir,
+        display_name,
+        crate::thinker::soul_archetypes::SoulArchetype::default(),
+    )
+    .map_err(|e| {
+        TeamTemplateError::Materialize(format!(
+            "initialize_agent_identity for `{}` failed: {e}",
+            member.id
+        ))
+    })?;
 
     crate::config::agent_resolver::initialize_agent_dir(&agent_state_dir).map_err(|e| {
         TeamTemplateError::Materialize(format!(

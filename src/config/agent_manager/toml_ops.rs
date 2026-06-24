@@ -158,6 +158,10 @@ impl AgentManager {
             agent["skills"] = toml_edit::value(arr);
         }
 
+        if let Some(archetype) = def.archetype {
+            agent["archetype"] = toml_edit::value(archetype.as_str());
+        }
+
         if let Some(ref identity) = def.identity {
             let mut t = Table::new();
             if let Some(ref emoji) = identity.emoji {

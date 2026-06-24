@@ -96,11 +96,13 @@ impl AgentsApi {
         id: &str,
         name: Option<&str>,
         identity: Option<&AgentIdentity>,
+        archetype: Option<&str>,
     ) -> Result<(), String> {
         let params = json!({
             "id": id,
             "name": name,
             "identity": identity,
+            "archetype": archetype,
         });
         state.rpc_call("agents.create", params).await?;
         Ok(())
