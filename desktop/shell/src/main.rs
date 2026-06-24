@@ -868,24 +868,31 @@ async fn supervise_remote_lite(handle: tauri::AppHandle) {
     // Outer failure counter: native relocation fires only after this many
     // consecutive `ShowConnectionError` ticks — 5s × 8 = 40s total.
     let mut relocation_ticks: u32 = 0;
+    // Latch: true after `show_lite_connect_page` fires; cleared on any healthy
+    // or recovery tick so a *future* outage re-arms the one-shot relocation.
+    // This prevents the connect page from being re-shown (and focus stolen)
+    // every 40s while the remote stays down — an R5 violation.
+    let mut relocated = false;
     loop {
         tokio::time::sleep(LITE_REMOTE_POLL).await;
         let ready = connect_setup::target_reachable(&connection::load_target()).await;
         match supervisor.tick(ready) {
             SupervisorAction::ShowConnectionError => {
                 relocation_ticks += 1;
-                if relocation_ticks >= LITE_FAILURES_TO_RELOCATE {
+                if relocation_ticks >= LITE_FAILURES_TO_RELOCATE && !relocated {
                     tracing::warn!(
                         "remote Gateway unreachable for {}s — relocating to connect page",
                         LITE_REMOTE_POLL.as_secs() * u64::from(LITE_FAILURES_TO_RELOCATE)
                     );
                     connect_setup::show_lite_connect_page(&handle);
-                    relocation_ticks = 0;
+                    relocated = true;
                 }
             }
-            // Remote recovered while we were on the connect page → re-point at it.
+            // Remote recovered while we were on the connect page → re-point at it
+            // and re-arm the latch so a future outage triggers relocation again.
             SupervisorAction::ReloadPanel => {
                 relocation_ticks = 0;
+                relocated = false;
                 if let connection::ConnectionTarget::Remote(url) = connection::load_target() {
                     if let Some(window) =
                         tauri::Manager::get_webview_window(&handle, "main")
@@ -896,6 +903,7 @@ async fn supervise_remote_lite(handle: tauri::AppHandle) {
             }
             SupervisorAction::Idle => {
                 relocation_ticks = 0;
+                relocated = false;
             }
             SupervisorAction::Relaunch => {}
         }
