@@ -181,12 +181,14 @@ mod tests {
     #[test]
     fn failed_wraps_error_string_as_unknown() {
         use shared_ui_logic::connection::ConnectionFailure;
-        let p = ConnectionPhase::derive(false, false, 5, Some("WebSocket closed"), true);
+        // Any error string is preserved verbatim into the Unknown detail —
+        // distinct content + state from failed_after_max_attempts.
+        let p = ConnectionPhase::derive(false, true, 2, Some("custom transport glitch 42"), true);
         assert_eq!(
             p,
             ConnectionPhase::Failed {
                 failure: ConnectionFailure::Unknown {
-                    detail: "WebSocket closed".to_string()
+                    detail: "custom transport glitch 42".to_string()
                 }
             }
         );
