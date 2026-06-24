@@ -45,7 +45,9 @@ pub(super) async fn runtime_startup_warmup() {
                 last_probed: now,
             });
         } else if runtimes::supported_on_current_os(spec.name) {
-            g.update_status(spec.name, CapabilityStatus::Missing);
+            // mark_missing (not update_status) so a stale path/version from a
+            // ledger copied off another machine is cleared, not persisted.
+            g.mark_missing(spec.name);
             missing.push(spec.name);
         }
     }

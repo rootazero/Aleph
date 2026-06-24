@@ -186,6 +186,28 @@ impl CapabilityLedger {
         }
     }
 
+    /// Mark a capability `Missing`, clearing any stale `bin_path`/`version`.
+    ///
+    /// Unlike [`update_status`](Self::update_status), this also wipes the
+    /// recorded path and version. A re-probe that fails to find a binary means
+    /// whatever path/version was recorded is no longer valid — e.g. a ledger
+    /// copied from another machine (Homebrew/`/Users/...` paths on a Linux
+    /// server) or a tool that was uninstalled. Keeping the stale data makes the
+    /// Panel show a version number next to a "missing" badge. The entry is kept
+    /// (not removed) so the capability still lists as a known-but-absent tool.
+    ///
+    /// Returns `false` if the name was unknown (caller may treat as a no-op).
+    pub fn mark_missing(&mut self, name: &str) -> bool {
+        if let Some(entry) = self.entries.get_mut(name) {
+            entry.status = CapabilityStatus::Missing;
+            entry.bin_path = PathBuf::new();
+            entry.version = String::new();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Build an enhanced PATH string with Ready entries' bin directories
     /// prepended to the system PATH.
     pub fn build_path(&self) -> String {
@@ -449,6 +471,40 @@ mod tests {
         // Updating unknown name is a no-op
         ledger.update_status("ghost", CapabilityStatus::Probing);
         assert_eq!(ledger.status("ghost"), CapabilityStatus::Missing);
+    }
+
+    #[test]
+    fn test_mark_missing_clears_stale_path_and_version() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = CapabilityLedger::new(tmp_ledger_path(&dir));
+
+        // Simulate a ledger copied from another machine: an entry carrying a
+        // path/version that don't exist on this host (e.g. Homebrew on Linux).
+        ledger.update(CapabilityEntry {
+            name: "uv".to_string(),
+            bin_path: PathBuf::from("/opt/homebrew/bin/uv"),
+            version: "0.11.21".to_string(),
+            status: CapabilityStatus::Ready,
+            source: CapabilitySource::System,
+            last_probed: 1_700_000_000,
+        });
+
+        assert!(ledger.mark_missing("uv"));
+        let entry = ledger.entries.get("uv").expect("entry kept, not removed");
+        assert_eq!(entry.status, CapabilityStatus::Missing);
+        assert!(
+            entry.bin_path.as_os_str().is_empty(),
+            "stale bin_path must be cleared, got {:?}",
+            entry.bin_path
+        );
+        assert!(
+            entry.version.is_empty(),
+            "stale version must be cleared, got {:?}",
+            entry.version
+        );
+
+        // Unknown name is a no-op returning false.
+        assert!(!ledger.mark_missing("ghost"));
     }
 
     #[test]

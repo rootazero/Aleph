@@ -160,22 +160,27 @@ fn extend_path(base: &OsStr, candidates: &[PathBuf]) -> OsString {
 }
 
 /// Directories where runtimes commonly install but a GUI-launched daemon's
-/// minimal PATH won't include: Homebrew, cargo/rustup, fnm-managed node, Xcode
-/// CLT, winget shims. Mirrors `bootstrap::enrich_path_for_reprobe`'s candidate
-/// set, plus the fnm node bin dir (node + npm-global CLIs like playwright-cli).
+/// minimal PATH won't include: Homebrew, cargo/rustup, fnm + fnm-managed node,
+/// Xcode CLT, winget shims. Covers `uv` (`~/.local/bin`), `cargo` (`~/.cargo/bin`),
+/// `fnm` (its data-dir root), and `node` / `playwright-cli` (the fnm-managed
+/// `<root>/aliases/<alias>/bin`).
 fn install_dir_candidates() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     if let Some(h) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         let home = PathBuf::from(h);
         dirs.push(home.join(".cargo").join("bin"));
         dirs.push(home.join(".local").join("bin"));
-        // fnm's own binary lands here (pinned `--install-dir "$HOME/.fnm"`);
-        // mirrors bootstrap::enrich_path_for_reprobe so a cold probe of `fnm`
-        // finds it without an FNM_DIR env var.
-        dirs.push(home.join(".fnm"));
     }
-    if let Some(d) = fnm_node_bin_dir() {
-        dirs.push(d);
+    // fnm: the binary sits directly in its data-dir root, and fnm-managed node
+    // (plus npm-global CLIs such as playwright-cli) live under
+    // `<root>/aliases/{default,lts}/bin`. The root differs by install method —
+    // Aleph pins `~/.fnm`, a manual install uses the XDG default
+    // `~/.local/share/fnm`, `$FNM_DIR` overrides both — so probe every known
+    // root. Resolving only the XDG default (the old behaviour) silently missed
+    // node/playwright-cli whenever fnm was the Aleph-pinned `~/.fnm`.
+    for root in fnm_data_dir_candidates() {
+        dirs.extend(fnm_node_bin_dirs(&root));
+        dirs.push(root);
     }
     #[cfg(target_os = "macos")]
     {
@@ -204,47 +209,50 @@ fn install_dir_candidates() -> Vec<PathBuf> {
     dirs
 }
 
-/// Resolve the fnm-managed node bin dir *without invoking fnm* (fnm itself may
-/// be off PATH). fnm keeps the active node under
-/// `$FNM_DIR/aliases/{default,lts}/bin` (Unix) — default `$FNM_DIR` is
-/// `~/.local/share/fnm`. On Windows `node.exe` sits directly in the alias dir
-/// and the default data dir is `%LOCALAPPDATA%\fnm`.
-fn fnm_node_bin_dir() -> Option<PathBuf> {
-    let fnm_dir = std::env::var_os("FNM_DIR")
-        .map(PathBuf::from)
-        .or_else(default_fnm_data_dir)?;
-    for alias in ["default", "lts"] {
-        let alias_dir = fnm_dir.join("aliases").join(alias);
-        // Unix: node lives under <alias>/bin; Windows: directly in <alias>.
-        let bin = alias_dir.join("bin");
-        if bin.is_dir() {
-            return Some(bin);
-        }
-        if alias_dir.is_dir() {
-            return Some(alias_dir);
-        }
+/// All fnm data-dir roots to probe *without invoking fnm* (fnm itself may be off
+/// PATH). The root holds the `fnm` binary directly and the managed node under
+/// `<root>/aliases/<alias>/bin`. fnm's location depends on how it was installed:
+/// `$FNM_DIR` (explicit override), `~/.fnm` (Aleph pins this via
+/// `--install-dir`), or the XDG default (`~/.local/share/fnm` on Unix,
+/// `%LOCALAPPDATA%\fnm` on Windows). A service-launched Windows daemon has no
+/// `HOME` (only `USERPROFILE`), so fall back accordingly.
+fn fnm_data_dir_candidates() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(d) = std::env::var_os("FNM_DIR") {
+        roots.push(PathBuf::from(d));
     }
-    None
-}
-
-/// fnm's default data dir when `FNM_DIR` is unset. The layout differs per OS,
-/// and a service-launched Windows daemon has no `HOME` (only `USERPROFILE`), so
-/// the old bare-`HOME` fallback returned `None` on Windows and pointed at the
-/// Unix path elsewhere. Windows winget builds use `%LOCALAPPDATA%\fnm` (legacy
-/// `%USERPROFILE%\.fnm`); Unix uses the XDG default `~/.local/share/fnm`.
-fn default_fnm_data_dir() -> Option<PathBuf> {
+    if let Some(h) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        let home = PathBuf::from(h);
+        roots.push(home.join(".fnm"));
+        #[cfg(not(target_os = "windows"))]
+        roots.push(home.join(".local").join("share").join("fnm"));
+    }
     #[cfg(target_os = "windows")]
     {
-        std::env::var_os("LOCALAPPDATA")
-            .map(|p| PathBuf::from(p).join("fnm"))
-            .or_else(|| std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join(".fnm")))
+        if let Some(p) = std::env::var_os("LOCALAPPDATA") {
+            roots.push(PathBuf::from(p).join("fnm"));
+        }
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(|h| PathBuf::from(h).join(".local").join("share").join("fnm"))
+    roots
+}
+
+/// fnm-managed node bin dirs under one data-dir `root`. fnm keeps the active
+/// node — and every npm-global CLI installed through it, such as
+/// `playwright-cli` — under `<root>/aliases/{default,lts}/bin` (Unix). Aleph
+/// creates the `lts` alias post-install; `default` is fnm's own default alias.
+/// On Windows `node.exe` sits directly in the alias dir (no `bin` subdir).
+fn fnm_node_bin_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for alias in ["default", "lts"] {
+        let alias_dir = root.join("aliases").join(alias);
+        let bin = alias_dir.join("bin");
+        if bin.is_dir() {
+            dirs.push(bin);
+        } else if alias_dir.is_dir() {
+            dirs.push(alias_dir);
+        }
     }
+    dirs
 }
 
 static REGEX_CACHE: Lazy<Mutex<HashMap<&'static str, Regex>>> =
@@ -393,6 +401,28 @@ mod tests {
         let out = extend_path(&base, std::slice::from_ref(&cand));
         let count = std::env::split_paths(&out).filter(|d| d == &cand).count();
         assert_eq!(count, 1, "candidate already on PATH must not be duplicated");
+    }
+
+    /// fnm-managed node lives under `<root>/aliases/<alias>/bin` (Unix). The
+    /// resolver must find it under whichever data-dir root fnm was installed to
+    /// — the Aleph-pinned `~/.fnm` just as much as the XDG default. This is the
+    /// regression that hid node/playwright-cli on Linux when fnm was `~/.fnm`.
+    #[test]
+    fn test_fnm_node_bin_dirs_resolves_alias_bin_under_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // No aliases yet → nothing resolved.
+        assert!(fnm_node_bin_dirs(root).is_empty());
+
+        // Lay out `<root>/aliases/lts/bin` as fnm would after `fnm alias .. lts`.
+        let lts_bin = root.join("aliases").join("lts").join("bin");
+        std::fs::create_dir_all(&lts_bin).unwrap();
+        assert_eq!(
+            fnm_node_bin_dirs(root),
+            vec![lts_bin],
+            "the `lts` alias bin dir under the given root must be resolved"
+        );
     }
 
     /// Reproduces the GUI-minimal-PATH root cause: a binary that lives in a dir

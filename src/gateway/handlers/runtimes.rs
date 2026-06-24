@@ -86,7 +86,9 @@ pub async fn handle_refresh(
                 last_probed: now,
             });
         } else {
-            guard.update_status(spec.name, CapabilityStatus::Missing);
+            // mark_missing (not update_status) so a stale path/version left from
+            // a previous probe / a ledger copied off another machine is cleared.
+            guard.mark_missing(spec.name);
         }
     }
     let guard = ledger.read().await;
