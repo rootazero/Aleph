@@ -37,6 +37,17 @@ impl SoulArchetype {
         }
     }
 
+    /// Lowercase wire/storage identifier (matches the serde representation).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Expert => "expert",
+            Self::Companion => "companion",
+            Self::Assistant => "assistant",
+            Self::Maker => "maker",
+        }
+    }
+
     /// One-line catalog blurb used by the creation interview protocol.
     #[must_use]
     pub fn summary(self) -> &'static str {

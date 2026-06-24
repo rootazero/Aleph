@@ -10,7 +10,7 @@ use crate::views::extensions::StoreState;
 ///
 /// A "Back to Chat" exit guide is pinned at the very top (the Hub's only way
 /// out of its full-screen takeover), followed by the two "global" entries
-/// (Featured / All) and the 13 functional-category facets below dividers. Each
+/// (Featured / All) and the functional-category facets below dividers. Each
 /// facet drives `store.category` — identical behavior to the old horizontal
 /// CategoryChips, just relocated to the left column to declutter the main area.
 #[component]

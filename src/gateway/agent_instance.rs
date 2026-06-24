@@ -803,7 +803,12 @@ impl AgentRegistry {
         })?;
 
         // Initialize all identity files (SOUL.md, AGENTS.md, IDENTITY.md, etc.)
-        crate::config::agent_resolver::initialize_agent_identity(&agent_dir, id).map_err(|e| {
+        crate::config::agent_resolver::initialize_agent_identity(
+            &agent_dir,
+            id,
+            crate::thinker::soul_archetypes::SoulArchetype::default(),
+        )
+        .map_err(|e| {
             AgentInstanceError::InitFailed(format!(
                 "Failed to initialize identity files for '{id}': {e}"
             ))

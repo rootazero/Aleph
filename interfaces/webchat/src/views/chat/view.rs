@@ -11,6 +11,8 @@ use super::state::{ChatState, PendingAttachment};
 use super::team_events::subscribe_team_events;
 use crate::components::session_tabs::SessionTabs;
 use crate::components::team_participants::TeamParticipants;
+use crate::components::team_task_strip::TaskDrawerOpen;
+use crate::components::team_task_strip::TeamTaskDrawer;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
@@ -36,6 +38,32 @@ pub fn ChatView() -> impl IntoView {
     // Team chat: subscribe to team.<id>.* events alongside the single-agent stream.
     // Harmless when not in team mode (the handler short-circuits on topic prefix).
     let team_sub_id = subscribe_team_events(&dashboard, chat);
+
+    // Team chat: hydrate the task strip/drawer from teams.list_tasks whenever
+    // the active team changes (and we're connected). Incremental updates after
+    // this come from the team.<id>.task.<verb> branch in team_events.rs.
+    let dash_for_tasks = dashboard;
+    Effect::new(move |_| {
+        let Some(team_id) = chat.team_id.get() else {
+            chat.team_tasks.set(Vec::new());
+            return;
+        };
+        if !dash_for_tasks.is_connected.get() {
+            return;
+        }
+        let chat2 = chat;
+        spawn_local(async move {
+            if let Ok(tasks) = crate::api::teams::TeamsApi::list_tasks(
+                &dash_for_tasks,
+                &team_id,
+                crate::api::teams::TaskFilter::default(),
+            )
+            .await
+            {
+                chat2.team_tasks.set(tasks);
+            }
+        });
+    });
 
     // Tell the Gateway to start forwarding stream.* events
     // (backend publishes events with method "stream.run_accepted", "stream.response_chunk", etc.)
@@ -99,6 +127,12 @@ pub fn ChatView() -> impl IntoView {
             el.scroll_into_view();
         }
     });
+
+    // Team task drawer open-state — provided at the chat-view level so both the
+    // composer's TeamTaskStrip and the chat-column TeamTaskDrawer (Task 6) read
+    // the same signal via expect_context.
+    let task_drawer_open = RwSignal::new(false);
+    provide_context(TaskDrawerOpen(task_drawer_open));
 
     // ---- G5: chat-surface drop zone ----
     // Listening on the root div so a Finder/Explorer drop anywhere over
@@ -189,7 +223,7 @@ pub fn ChatView() -> impl IntoView {
                     // fully-draggable band with no dead "can't-drag-here" zone.
                     <Show when=move || chat.team_id.get().is_some()>
                         <div
-                            class="absolute top-2 left-2 z-[60] aleph-no-drag"
+                            class="absolute top-0 inset-x-0 z-[60] aleph-no-drag"
                             data-tauri-drag-region="false"
                         >
                             <TeamParticipants />
@@ -197,6 +231,9 @@ pub fn ChatView() -> impl IntoView {
                     </Show>
                     // Input area (floating glass bar pinned over the flow)
                     <InputArea />
+                    <Show when=move || chat.team_id.get().is_some()>
+                        <TeamTaskDrawer />
+                    </Show>
                 </div>
             </div>
             // Workspace pane — always mounted; eases open/closed on Split.

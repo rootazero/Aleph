@@ -23,6 +23,7 @@ pub fn AgentsSidebar() -> impl IntoView {
     let show_create = RwSignal::new(false);
     let new_agent_id = RwSignal::new(String::new());
     let new_agent_name = RwSignal::new(String::new());
+    let new_agent_archetype = RwSignal::new("assistant".to_string());
     let create_error = RwSignal::new(Option::<String>::None);
 
     // Filter state: "all" | "channel" | "standalone"
@@ -104,6 +105,18 @@ pub fn AgentsSidebar() -> impl IntoView {
                         on:input=move |ev| new_agent_name.set(event_target_value(&ev))
                         class="w-full px-2 py-1.5 bg-surface-sunken border border-border rounded text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
                     />
+                    // Soul archetype (template) selector
+                    <select
+                        title=move || t_string!(i18n, agents.sidebar.archetype_label).to_string()
+                        on:change=move |ev| new_agent_archetype.set(event_target_value(&ev))
+                        prop:value=move || new_agent_archetype.get()
+                        class="w-full px-2 py-1.5 bg-surface-sunken border border-border rounded text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
+                    >
+                        <option value="assistant">{t!(i18n, agents.sidebar.archetype_assistant)}</option>
+                        <option value="expert">{t!(i18n, agents.sidebar.archetype_expert)}</option>
+                        <option value="maker">{t!(i18n, agents.sidebar.archetype_maker)}</option>
+                        <option value="companion">{t!(i18n, agents.sidebar.archetype_companion)}</option>
+                    </select>
                     {move || create_error.get().map(|e| view! {
                         <p class="text-xs text-danger">{e}</p>
                     })}
@@ -118,13 +131,15 @@ pub fn AgentsSidebar() -> impl IntoView {
                                 }
                                 create_error.set(None);
                                 let name = if name_val.is_empty() { None } else { Some(name_val) };
+                                let archetype = new_agent_archetype.get();
                                 let dash = state;
                                 spawn_local(async move {
-                                    match AgentsApi::create(&dash, &id, name.as_deref(), None).await {
+                                    match AgentsApi::create(&dash, &id, name.as_deref(), None, Some(&archetype)).await {
                                         Ok(()) => {
                                             show_create.set(false);
                                             new_agent_id.set(String::new());
                                             new_agent_name.set(String::new());
+                                            new_agent_archetype.set("assistant".to_string());
                                             reload();
                                         }
                                         Err(e) => {

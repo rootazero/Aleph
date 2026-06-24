@@ -225,8 +225,14 @@ impl AgentManager {
         })?;
         let agent_name = def.name.as_deref().unwrap_or(&def.id);
 
-        // Identity files (SOUL.md, AGENTS.md, etc.) go in agent state directory
-        initialize_agent_identity(&agent_state_dir, agent_name).map_err(|e| {
+        // Identity files (SOUL.md, AGENTS.md, etc.) go in agent state directory.
+        // The chosen archetype (Panel template selector) is baked into SOUL.md here.
+        initialize_agent_identity(
+            &agent_state_dir,
+            agent_name,
+            def.archetype.unwrap_or_default(),
+        )
+        .map_err(|e| {
             AlephError::IoError(format!(
                 "Failed to initialize identity files for '{}': {}",
                 def.id, e

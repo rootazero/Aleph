@@ -1,5 +1,6 @@
 //! Chat reactive state — signals for chat messages, streaming, and UI mode.
 
+use crate::api::teams::CoordTaskDto;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -354,6 +355,10 @@ pub struct ChatState {
     pub team_id: RwSignal<Option<String>>,
     /// Team roster + live status (left roster rail data source). Empty = non-team.
     pub team_members: RwSignal<Vec<TeamMemberView>>,
+    /// Team chat: coordination tasks for the active team (drives the bottom
+    /// task strip + drawer). Empty when not in team mode. Fetched from
+    /// `teams.list_tasks` and upserted by `team.<id>.task.<verb>` events.
+    pub team_tasks: RwSignal<Vec<CoordTaskDto>>,
     /// Per-run step-strip expand/collapse override, keyed by `run_id`.
     /// Absent = use the default (running strips open, completed collapsed);
     /// present = the user's explicit toggle. Lives here — not as a strip-local
@@ -397,6 +402,7 @@ impl ChatState {
             next_msg_id: RwSignal::new(0),
             team_id: RwSignal::new(None),
             team_members: RwSignal::new(Vec::new()),
+            team_tasks: RwSignal::new(Vec::new()),
             strip_open: RwSignal::new(std::collections::HashMap::new()),
         }
     }

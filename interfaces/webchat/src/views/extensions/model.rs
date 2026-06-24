@@ -14,17 +14,12 @@ pub const CATEGORIES: &[CategoryFacet] = &[
     CategoryFacet {
         value: "search",
         label_key: "extensions.cat.search",
-        emoji: "🔍",
+        emoji: "🌐",
     },
     CategoryFacet {
         value: "developer",
         label_key: "extensions.cat.developer",
         emoji: "🛠",
-    },
-    CategoryFacet {
-        value: "data",
-        label_key: "extensions.cat.data",
-        emoji: "🗄",
     },
     CategoryFacet {
         value: "productivity",

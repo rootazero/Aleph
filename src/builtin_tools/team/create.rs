@@ -263,13 +263,17 @@ impl TeamCreateTool {
         let display_name = spec.name.as_deref().unwrap_or(&spec.id);
 
         // Initialize identity files
-        crate::config::agent_resolver::initialize_agent_identity(&agent_state_dir, display_name)
-            .map_err(|e| {
-                AlephError::other(format!(
-                    "Failed to initialize identity files for '{}': {}",
-                    spec.id, e
-                ))
-            })?;
+        crate::config::agent_resolver::initialize_agent_identity(
+            &agent_state_dir,
+            display_name,
+            crate::thinker::soul_archetypes::SoulArchetype::default(),
+        )
+        .map_err(|e| {
+            AlephError::other(format!(
+                "Failed to initialize identity files for '{}': {}",
+                spec.id, e
+            ))
+        })?;
 
         crate::config::agent_resolver::initialize_agent_dir(&agent_state_dir).map_err(|e| {
             AlephError::other(format!(

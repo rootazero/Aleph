@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::thinker::soul_archetypes::SoulArchetype;
+
 // =============================================================================
 // AgentsConfig
 // =============================================================================
@@ -223,6 +225,12 @@ pub struct AgentDefinition {
     /// Skills blacklist (blocked tools) for this agent (overrides defaults)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills_blacklist: Option<Vec<String>>,
+
+    /// Soul archetype base for this agent's persona.
+    /// Consumed once, when SOUL.md is first composed (`expert | companion |
+    /// assistant | maker`). `None` falls back to `assistant`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archetype: Option<SoulArchetype>,
 
     /// Agent identity (emoji, description, avatar, theme)
     #[serde(default, skip_serializing_if = "Option::is_none")]

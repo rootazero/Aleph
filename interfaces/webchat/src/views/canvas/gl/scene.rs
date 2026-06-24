@@ -12,16 +12,9 @@ use super::layout3d::ForceLayout;
 use super::math::{Mat4, Vec3};
 use super::nodes::NodeRenderer;
 use super::GraphData;
-use crate::canvas_engine::fnv1a::fnv1a_32;
 
 /// Maximum force-layout steps per new graph before switching to idle drift.
 const MAX_SETTLE_STEPS: u32 = 400;
-
-/// Idle drift: peak displacement from settled position (scene units, not px).
-const DRIFT_AMPLITUDE: f32 = 3.0;
-
-/// Idle drift: period of one full oscillation in milliseconds.
-const DRIFT_PERIOD_MS: f32 = 5000.0;
 
 /// Wheel-zoom sensitivity. The zoom factor is `exp(normalized_delta * this)`,
 /// where `normalized_delta = wheel_delta / 100` clamped to ±2. This makes zoom
@@ -49,6 +42,9 @@ pub struct Scene {
     /// Current highlight set (selected node index + topological neighbors).
     /// Stored on the struct so settling/drift re-uploads preserve it.
     highlight: Option<HashSet<u32>>,
+    /// Current edge highlight set (normalized (min,max) incident-edge pairs for selected node).
+    /// Stored so every upload_indexed re-applies the correct per-edge flags.
+    highlight_edges: Option<HashSet<(u32, u32)>>,
     /// LOD level in [0, 1]. 0 = show all edges; 1 = show only high-degree backbone.
     /// Stored so all edge-upload sites (set_graph, settling, set_lod) apply it consistently.
     lod: f32,
@@ -56,9 +52,6 @@ pub struct Scene {
     /// Recomputed only when `data` or `lod` changes; used every settling frame
     /// to avoid per-frame clone + O(n log n) sort.
     filtered_edges: Vec<(u32, u32)>,
-    /// Reusable scratch buffer for idle-drift drifted positions (C: perf cleanup).
-    /// Avoids cloning the full GraphData (incl. String ids) every frame.
-    drift_scratch: Vec<Vec3>,
 }
 
 impl Scene {
@@ -84,9 +77,9 @@ impl Scene {
             settle_steps: 0,
             last_vp: Mat4::identity(),
             highlight: None,
+            highlight_edges: None,
             lod: 0.0,
             filtered_edges: Vec::new(),
-            drift_scratch: Vec::new(),
         })
     }
 
@@ -99,11 +92,13 @@ impl Scene {
         self.settle_steps = 0;
         // Clear highlight when the graph changes — indices shift on a new graph.
         self.highlight = None;
+        self.highlight_edges = None;
 
         // Assign data and compute the filtered edge list once for (graph, lod).
         self.data = data;
         self.recompute_filtered_edges();
         self.edges.upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
+        self.edges.set_highlight(&self.ctx.gl, &self.filtered_edges, self.highlight_edges.as_ref());
         self.nodes.upload(&self.ctx.gl, &self.data, None);
     }
 
@@ -113,6 +108,7 @@ impl Scene {
         self.lod = lod.clamp(0.0, 1.0);
         self.recompute_filtered_edges();
         self.edges.upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
+        self.edges.set_highlight(&self.ctx.gl, &self.filtered_edges, self.highlight_edges.as_ref());
     }
 
     /// Recompute `self.filtered_edges` from `self.data` and `self.lod`.
@@ -203,6 +199,13 @@ impl Scene {
             .upload(&self.ctx.gl, &self.data, self.highlight.as_ref());
     }
 
+    /// Set the edge highlight set (normalized (min,max) incident-edge pairs).
+    /// Stored so every upload_indexed re-applies the correct per-edge flags.
+    pub fn set_highlight_edges(&mut self, edges: Option<HashSet<(u32, u32)>>) {
+        self.edges.set_highlight(&self.ctx.gl, &self.filtered_edges, edges.as_ref());
+        self.highlight_edges = edges;
+    }
+
     /// Fly the camera to the node with the given id, if found.
     pub fn fly_to_node(&mut self, id: &str, t_ms: f64) {
         if let Some(n) = self.data.nodes.iter().find(|n| n.id == id) {
@@ -259,30 +262,14 @@ impl Scene {
                 // Use the cached filtered_edges list — no clone, no re-sort.
                 // Pass through the stored highlight so it survives settling.
                 self.edges.upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
+                self.edges.set_highlight(&self.ctx.gl, &self.filtered_edges, self.highlight_edges.as_ref());
                 self.nodes
                     .upload(&self.ctx.gl, &self.data, self.highlight.as_ref());
             }
         } else {
-            // --- Phase 2: Idle drift ---
-            // Reuse `drift_scratch` (Vec<Vec3>) to avoid cloning the full GraphData
-            // (incl. String ids) every frame. Canonical `self.data.nodes[*].pos` is
-            // NEVER mutated here, preserving stable settled positions for picking.
-            let n = self.data.nodes.len();
-            self.drift_scratch.clear();
-            self.drift_scratch.reserve(n);
-            for node in &self.data.nodes {
-                self.drift_scratch.push(
-                    drift_offset_3d(t_ms, &node.id, DRIFT_AMPLITUDE, DRIFT_PERIOD_MS, node.pos)
-                );
-            }
-            // Re-upload nodes only (edges remain at stable settled positions).
-            // Pass through the stored highlight so it survives drift re-uploads.
-            self.nodes.upload_positions(
-                &self.ctx.gl,
-                &self.drift_scratch,
-                &self.data,
-                self.highlight.as_ref(),
-            );
+            // Idle: drift is computed in the vertex shader from u_time; no CPU work,
+            // no per-frame buffer re-upload. Canonical node.pos stays authoritative
+            // for picking.
         }
 
         let gl = &self.ctx.gl;
@@ -300,8 +287,8 @@ impl Scene {
         let vp = self.camera.view_proj(aspect);
         // Store for picking (uses stable canonical positions, not drifted).
         self.last_vp = vp;
-        self.edges.draw(gl, &vp, (self.width as f32, self.height as f32));
-        self.nodes.draw(gl, &vp, (self.width as f32, self.height as f32));
+        self.edges.draw(gl, &vp, (self.width as f32, self.height as f32), t_ms as f32);
+        self.nodes.draw(gl, &vp, (self.width as f32, self.height as f32), t_ms as f32, self.camera.distance);
         // Restore blend state after scene draw — bloom passes will disable blend.
         gl.disable(Gl::BLEND);
 
@@ -312,22 +299,3 @@ impl Scene {
 
 }
 
-// ---------------------------------------------------------------------------
-// 3D idle drift helper
-// ---------------------------------------------------------------------------
-
-/// Returns `base_pos` offset by three independent phase-shifted sine components
-/// (x, y, z) derived from the node id hash. The `base_pos` argument is passed
-/// by value; this function never touches `data.nodes[*].pos`.
-fn drift_offset_3d(t_ms: f64, node_id: &str, amplitude: f32, period_ms: f32, base: Vec3) -> Vec3 {
-    let h = fnv1a_32(node_id.as_bytes());
-    let phase = h as f32 / u32::MAX as f32; // [0, 1)
-    let omega = std::f32::consts::TAU / (period_ms / 1000.0);
-    let t = (t_ms as f32) / 1000.0;
-    // Three axes with phase offsets (0, +0.27, +0.54 of TAU) so motion is
-    // non-planar and adjacent nodes move out of sync.
-    let dx = amplitude * (omega * t + phase * std::f32::consts::TAU).sin();
-    let dy = amplitude * (omega * t + (phase + 0.27) * std::f32::consts::TAU).sin();
-    let dz = amplitude * (omega * t + (phase + 0.54) * std::f32::consts::TAU).sin();
-    Vec3::new(base.x + dx, base.y + dy, base.z + dz)
-}
