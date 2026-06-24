@@ -472,10 +472,16 @@ impl DashboardState {
             }
         }
 
-        // Wait for response
-        response_rx
-            .await
-            .map_err(|_| "Response channel closed".to_string())?
+        // Wait for response, but don't hang forever. `onclose` covers the
+        // socket-close case (it drops the pending sender → "Response channel
+        // closed"); this 30s ceiling additionally covers a server that accepts
+        // the request and then never replies without closing the socket,
+        // converting an infinite spinner into a surfaced, retryable error.
+        use futures::future::{select, Either};
+        match select(response_rx, TimeoutFuture::new(30_000)).await {
+            Either::Left((res, _)) => res.map_err(|_| "Response channel closed".to_string())?,
+            Either::Right(((), _)) => Err("Request timed out".to_string()),
+        }
     }
 
     /// Complete the session handshake after the WebSocket connection is

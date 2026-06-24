@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::pin::Pin;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{ErrorEvent, MessageEvent, WebSocket};
+use web_sys::{CloseEvent, ErrorEvent, MessageEvent, WebSocket};
 
 #[derive(Default)]
 pub struct WasmConnector {
@@ -44,10 +44,11 @@ impl AlephConnector for WasmConnector {
         onopen_callback.forget();
 
         // OnMessage
+        let msg_tx = tx.clone();
         let onmessage_callback = Closure::wrap(Box::new(move |e: MessageEvent| {
             if let Some(txt) = e.data().as_string() {
                 if let Ok(val) = serde_json::from_str::<Value>(&txt) {
-                    let _ = tx.unbounded_send(Ok(val));
+                    let _ = msg_tx.unbounded_send(Ok(val));
                 }
             }
         }) as Box<dyn FnMut(MessageEvent)>);
@@ -60,6 +61,23 @@ impl AlephConnector for WasmConnector {
         }) as Box<dyn FnMut(ErrorEvent)>);
         ws.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
         onerror_callback.forget();
+
+        // OnClose — surface the close to the receive stream so the message
+        // loop's `Err` branch fires, drains pending RPCs, flips is_connected,
+        // and triggers auto-reconnect. Without this, a silent socket close is
+        // never observed: the leaked onmessage sender keeps the stream alive
+        // forever, the loop blocks, is_connected stays `true`, and the only
+        // recovery is a full panel restart.
+        let close_tx = tx.clone();
+        let onclose_callback = Closure::wrap(Box::new(move |e: CloseEvent| {
+            let _ = close_tx.unbounded_send(Err(ConnectionError::ConnectionLost(format!(
+                "WebSocket closed: code={} reason={}",
+                e.code(),
+                e.reason()
+            ))));
+        }) as Box<dyn FnMut(CloseEvent)>);
+        ws.set_onclose(Some(onclose_callback.as_ref().unchecked_ref()));
+        onclose_callback.forget();
 
         self.ws = Some(ws);
         self.receiver = Some(rx);
