@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.6.24]
+
+A small, focused follow-up centered on **faster remote-panel cold-load** and
+**Windows runtime polish**.
+
+### Changed
+
+- **Remote panel cold-load is dramatically faster** — the control-plane now
+  gzip-compresses its static assets on the wire (the ~15.5 MB panel WASM ships
+  as ~3.7 MB) and serves every asset with a content-hash `ETag` +
+  `Cache-Control: no-cache`. A repeat open revalidates with `If-None-Match` and
+  gets a body-less `304`, turning a multi-MB re-download into a tiny round-trip
+  while still guaranteeing a fresh panel after every deploy. This cuts the
+  lite-shell-over-LAN blank-screen wait from ~40 s to a few seconds.
+
+### Added
+
+- **Homepage link in Settings → Help** — the Help section now links out to the
+  Aleph homepage (with `en` / `zh` strings).
+
+### Fixed
+
+- **Windows WebView2 connect page** — the desktop shell now resolves the
+  connect-page URL per platform, so the connection-setup screen loads correctly
+  under Windows WebView2.
+- **`aleph-server stop` on Windows / foreground** — `stop` now resolves the
+  target PID from the IPC endpoint, so stopping a foreground or Windows server
+  instance reliably targets the right process.
+
 ## [26.6.23]
 
 A focused follow-up to the Aleph Hub release. The headline is a **3D nebula
