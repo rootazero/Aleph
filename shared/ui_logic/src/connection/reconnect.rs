@@ -31,7 +31,43 @@ impl ReconnectStrategy {
         Some(delay)
     }
 
+    /// Like [`next_delay`], but shaves a deterministic *downward* fraction off
+    /// the delay to avoid every client re-connecting in lockstep after a server
+    /// restart. `jitter_permille` is 0..=1000 (0 = no jitter, 100 = minus 10%).
+    /// Only ever reduces the delay, so it can never exceed the backoff ceiling.
+    pub fn next_delay_jittered(&mut self, jitter_permille: u64) -> Option<u64> {
+        let base = self.next_delay()?;
+        let permille = jitter_permille.min(1000);
+        let cut = base.saturating_mul(permille) / 1000;
+        Some(base.saturating_sub(cut))
+    }
+
     pub const fn reset(&mut self) {
         self.current_attempt = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jitter_zero_equals_base_delay() {
+        let mut s = ReconnectStrategy::new(5, 1000);
+        assert_eq!(s.next_delay_jittered(0), Some(1000));
+    }
+
+    #[test]
+    fn jitter_subtracts_proportional_fraction_only_downward() {
+        let mut s = ReconnectStrategy::new(5, 1000);
+        // 100 permille = 10% 下偏 → 1000 - 100 = 900,绝不超过 base。
+        assert_eq!(s.next_delay_jittered(100), Some(900));
+    }
+
+    #[test]
+    fn jitter_respects_attempt_exhaustion() {
+        let mut s = ReconnectStrategy::new(1, 1000);
+        assert!(s.next_delay_jittered(50).is_some());
+        assert_eq!(s.next_delay_jittered(50), None);
     }
 }
