@@ -433,11 +433,24 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         .register("gateway.token.current", |req| async move {
             alephcore::gateway::handlers::gateway_token::handle_token_current(req).await
         });
-    server
-        .handlers_mut()
-        .register("gateway.token.rotate", |req| async move {
-            alephcore::gateway::handlers::gateway_token::handle_token_rotate(req).await
-        });
+    {
+        let rotate_bus = event_bus.clone();
+        server
+            .handlers_mut()
+            .register("gateway.token.rotate", move |req| {
+                let bus = rotate_bus.clone();
+                async move {
+                    let resp = alephcore::gateway::handlers::gateway_token::handle_token_rotate(req).await;
+                    // Only broadcast when rotation succeeded — don't kick sessions on failure.
+                    if resp.error.is_none() {
+                        let _ = bus.publish_frame(
+                            &alephcore::gateway::events::GatewayEventFrame::TokenRotated,
+                        );
+                    }
+                    resp
+                }
+            });
+    }
     // Wire the security store so the WS node connect/disconnect paths can
     // stamp enrolled-node last_seen_at (offline fleet view honesty).
     server.set_security_store(auth_bundle.security_store.clone());
