@@ -2190,11 +2190,20 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
   container-type: inline-size;
   padding: 6px 8px;
 }
-/* macOS: clear the traffic lights + sidebar toggle (left:72px) and the
-   top-right chrome (workspace toggle + notification bell). */
+/* macOS: always clear the top-right chrome (workspace toggle + notification
+   bell), which is anchored to the chat surface's right edge regardless of
+   sidebar state. */
 html[data-platform="macos"] .aleph-roster-wrap {
-  padding-left: 84px;
   padding-right: 96px;
+}
+/* The LEFT side only needs clearing when the sidebar is collapsed: then the
+   chat surface reaches the window's left edge and the overlay traffic lights +
+   fixed sidebar toggle (left:72px) sit over its top-left. With the sidebar
+   expanded the chat surface starts at the 256px-wide sidebar's right edge, so
+   that chrome floats over the SIDEBAR — and the avatar cluster should hug the
+   chat's own left edge (default 8px) instead of stranding 84px of dead space. */
+html[data-platform="macos"] .aleph-shell.sidebar-collapsed .aleph-roster-wrap {
+  padding-left: 84px;
 }
 /* Width swap: default (narrow) shows the cluster; >=560px shows the pill bar.
    560px ~= CLUSTER_CAP(4) * ~140px per pill. */
