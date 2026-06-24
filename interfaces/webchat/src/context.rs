@@ -750,6 +750,19 @@ impl DashboardState {
                                 .into(),
                             );
                         }
+                        // If the drop carries an auth signal — e.g. the gateway closed us with
+                        // `token_rotated` after a token rotation — route straight to the login
+                        // wall instead of burning a backoff cycle: set the typed failure so
+                        // reconnect()'s AuthRequired short-circuit fires immediately. Set ONLY
+                        // connection_failure (NOT connection_error): ConnectionPhase::derive keys
+                        // "Failed" off connection_error, so leaving it None keeps the chip showing
+                        // "Reconnecting N/5" for ordinary drops while still routing auth kicks.
+                        if matches!(
+                            classify(FailureStage::AfterOpen, drop_reason.as_deref(), false),
+                            ConnectionFailure::AuthRequired
+                        ) {
+                            state.connection_failure.set(Some(ConnectionFailure::AuthRequired));
+                        }
                         state.is_connected.set(false);
                         // Clear the dead rpc_tx so the next rpc_call() won't
                         // block on a sender whose receiver task just exited.

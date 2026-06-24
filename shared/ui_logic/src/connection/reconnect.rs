@@ -60,7 +60,7 @@ mod tests {
     #[test]
     fn jitter_subtracts_proportional_fraction_only_downward() {
         let mut s = ReconnectStrategy::new(5, 1000);
-        // 100 permille = 10% 下偏 → 1000 - 100 = 900,绝不超过 base。
+        // 100 permille = 10% downward → 1000 - 100 = 900; never exceeds base.
         assert_eq!(s.next_delay_jittered(100), Some(900));
     }
 
