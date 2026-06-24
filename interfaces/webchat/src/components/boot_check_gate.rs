@@ -32,6 +32,7 @@ pub fn BootCheckGate() -> impl IntoView {
     // The gate disengages permanently once we've ever connected. After
     // that, ServiceBlockingGate owns runtime recovery.
     let has_connected_once = state.has_connected_once;
+    let failure = state.connection_failure;
 
     // Derived: should the overlay be visible at all? We hide on two signals:
     //   * Connected at least once (handed off to ServiceBlockingGate)
@@ -68,26 +69,35 @@ pub fn BootCheckGate() -> impl IntoView {
             >
                 <div class="w-full max-w-md rounded-2xl border border-border bg-surface-raised p-6 shadow-2xl">
                     {move || match phase.get() {
-                        ConnectionPhase::Failed { failure } => {
-                            let body = match failure {
-                                shared_ui_logic::connection::ConnectionFailure::AuthRequired => String::new(),
-                                shared_ui_logic::connection::ConnectionFailure::Unreachable { detail }
-                                | shared_ui_logic::connection::ConnectionFailure::Timeout { detail }
-                                | shared_ui_logic::connection::ConnectionFailure::Dropped { detail }
-                                | shared_ui_logic::connection::ConnectionFailure::Unknown { detail } => detail,
-                            };
+                        ConnectionPhase::Failed { .. } => {
                             view! {
                                 <h2 class="text-xl font-semibold text-text-primary">
-                                    {move || t_string!(i18n, boot_gate.trouble_title).to_string()}
+                                    {move || match failure.get() {
+                                        Some(shared_ui_logic::connection::ConnectionFailure::Timeout { .. }) => {
+                                            t_string!(i18n, conn_error.timeout_title).to_string()
+                                        }
+                                        _ => t_string!(i18n, conn_error.unreachable_title).to_string(),
+                                    }}
                                 </h2>
                                 <p class="mt-2 text-sm text-text-secondary">
-                                    {move || t_string!(i18n, boot_gate.trouble_body).to_string()}
+                                    {move || match failure.get() {
+                                        Some(shared_ui_logic::connection::ConnectionFailure::Timeout { .. }) => {
+                                            t_string!(i18n, conn_error.timeout_body).to_string()
+                                        }
+                                        _ => t_string!(i18n, conn_error.unreachable_body).to_string(),
+                                    }}
                                 </p>
                                 <p class="mt-3 text-xs text-text-tertiary">
                                     {move || t_string!(i18n, boot_gate.trouble_hint).to_string()}
                                 </p>
                                 <div class="mt-3 rounded-lg border border-danger/20 bg-danger-subtle p-3 text-xs font-mono text-danger break-all">
-                                    {body}
+                                    {move || match failure.get() {
+                                        Some(shared_ui_logic::connection::ConnectionFailure::Unreachable { detail })
+                                        | Some(shared_ui_logic::connection::ConnectionFailure::Timeout { detail })
+                                        | Some(shared_ui_logic::connection::ConnectionFailure::Dropped { detail })
+                                        | Some(shared_ui_logic::connection::ConnectionFailure::Unknown { detail }) => detail,
+                                        _ => String::new(),
+                                    }}
                                 </div>
                                 <div class="mt-5 flex justify-end">
                                     <button
