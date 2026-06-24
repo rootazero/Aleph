@@ -14,7 +14,11 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
 /// Collapsed cluster shows at most this many discs; the rest fold into "+N".
-const CLUSTER_CAP: usize = 4;
+/// Also the expand/collapse cutoff: a team with ≤ this many members renders
+/// the expanded pill bar, more collapses to the avatar cluster. 5 is chosen
+/// to fit the default 1180px window (with the name cap below bounding each
+/// pill); see the matching container-query threshold in `tailwind.css`.
+const CLUSTER_CAP: usize = 5;
 
 /// Muted grey shared by the idle status dot and the overflow "+N" disc.
 const MUTED_GREY: &str = "#6b7280";
@@ -161,7 +165,16 @@ pub fn TeamParticipants() -> impl IntoView {
                                         >
                                             {glyph}
                                         </span>
-                                        <span class="text-xs font-semibold">{m.name}</span>
+                                        // Cap the name width and ellipsize the
+                                        // overflow so one long name can't balloon
+                                        // the pill. 68px shows the leader "Main
+                                        // Agent" (~66px at this font) in full — the
+                                        // must-fit reference; 5 Chinese chars (~60px)
+                                        // also fit, while a 6th char or a long latin
+                                        // name truncates with an ellipsis. Bounds
+                                        // each pill so up to CLUSTER_CAP(5) fit the
+                                        // default 1180px window.
+                                        <span class="text-xs font-semibold max-w-[68px] truncate">{m.name}</span>
                                         {m.is_leader.then(|| view! {
                                             <span class="text-[10px] px-1 rounded \
                                                          bg-primary/15 text-primary">"队长"</span>
@@ -181,9 +194,13 @@ pub fn TeamParticipants() -> impl IntoView {
             <div class="aleph-roster-collapsed relative">
                 <button
                     type="button"
-                    class="flex items-center gap-1 rounded-full px-1.5 py-1 \
-                           bg-surface-raised/70 backdrop-blur border border-border/60 \
-                           hover:bg-surface-raised/90 transition-colors"
+                    // The roster wrapper is `pointer-events-none` so the drag
+                    // band + top chrome stay reachable through it; this button
+                    // opts back in (clickable) and out of the drag region
+                    // (`aleph-no-drag`) so pressing it does not drag the window.
+                    class="aleph-no-drag pointer-events-auto flex items-center gap-1 \
+                           rounded-full px-1.5 py-1 bg-surface-raised/70 backdrop-blur \
+                           border border-border/60 hover:bg-surface-raised/90 transition-colors"
                     on:click=move |_| open.update(|o| *o = !*o)
                 >
                     <div class="flex items-center">
@@ -236,10 +253,10 @@ pub fn TeamParticipants() -> impl IntoView {
                 // Expanded popover — backdrop catcher + roster card (per-member
                 // status dot + Chinese label + 队长 marker).
                 <Show when=move || open.get()>
-                    <div class="fixed inset-0 z-10" on:click=move |_| open.set(false)></div>
+                    <div class="fixed inset-0 z-10 pointer-events-auto" on:click=move |_| open.set(false)></div>
                     <div class="absolute left-0 top-full mt-1 z-20 min-w-[180px] \
-                                rounded-lg border border-border bg-surface-raised/95 \
-                                backdrop-blur shadow-lg p-1.5 space-y-0.5">
+                                pointer-events-auto rounded-lg border border-border \
+                                bg-surface-raised/95 backdrop-blur shadow-lg p-1.5 space-y-0.5">
                         {move || {
                             chat.team_members
                                 .get()
@@ -300,13 +317,13 @@ mod tests {
     #[test]
     fn cluster_overflow_none_at_or_below_cap() {
         assert_eq!(cluster_overflow(0), None);
-        assert_eq!(cluster_overflow(4), None);
+        assert_eq!(cluster_overflow(5), None); // == CLUSTER_CAP, no overflow
     }
 
     #[test]
     fn cluster_overflow_counts_excess_above_cap() {
-        assert_eq!(cluster_overflow(5), Some(1)); // 5 = first value to overflow the cap
-        assert_eq!(cluster_overflow(7), Some(3));
+        assert_eq!(cluster_overflow(6), Some(1)); // 6 = first value to overflow the cap
+        assert_eq!(cluster_overflow(8), Some(3));
     }
 
     #[test]
@@ -352,8 +369,8 @@ mod tests {
     #[test]
     fn collapse_only_above_cluster_cap() {
         assert!(!collapse_for_count(0));
-        assert!(!collapse_for_count(4)); // == CLUSTER_CAP, still expandable
-        assert!(collapse_for_count(5)); // first count that forces collapse
+        assert!(!collapse_for_count(5)); // == CLUSTER_CAP, still expandable
+        assert!(collapse_for_count(6)); // first count that forces collapse
         assert!(collapse_for_count(9));
     }
 }

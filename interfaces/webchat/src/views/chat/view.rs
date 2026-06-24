@@ -213,19 +213,16 @@ pub fn ChatView() -> impl IntoView {
                     //
                     // The macOS `aleph-main-drag-band` (app.rs, z-50,
                     // `-webkit-app-region: drag`) floats over the top 30px of
-                    // `<main>` and would otherwise swallow this button's
-                    // clicks. Mirror the band's chrome chips (LayoutToggle):
-                    // sit ABOVE the band (`z-[60]`, matching
-                    // `.aleph-sidebar-toggle`) and opt the button's own
-                    // footprint out of the drag region (`aleph-no-drag` +
-                    // `data-tauri-drag-region="false"`). Because this whole
-                    // affordance only renders in team mode, single chat keeps a
-                    // fully-draggable band with no dead "can't-drag-here" zone.
+                    // `<main>`. This full-width wrapper sits ABOVE the band
+                    // (`z-[60]`) but is `pointer-events-none`: window-drag and
+                    // the top chrome (sidebar/workspace toggles, notification
+                    // bell) stay reachable THROUGH it — it carves no `no-drag`
+                    // hole and steals no clicks. Only the roster's own cluster
+                    // button + popover opt back in with `pointer-events-auto` +
+                    // `aleph-no-drag` (see team_participants.rs); the expanded
+                    // pill bar is display-only, so the band drags over it.
                     <Show when=move || chat.team_id.get().is_some()>
-                        <div
-                            class="absolute top-0 inset-x-0 z-[60] aleph-no-drag"
-                            data-tauri-drag-region="false"
-                        >
+                        <div class="absolute top-0 inset-x-0 z-[60] pointer-events-none">
                             <TeamParticipants />
                         </div>
                     </Show>

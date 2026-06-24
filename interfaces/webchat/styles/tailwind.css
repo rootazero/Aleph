@@ -2184,11 +2184,18 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
   animation: aleph-spin-once 0.5s var(--ease-out);
 }
 
-/* Team roster bar wrapper: full-width no-drag float over the top chrome.
+/* Team roster bar wrapper: full-width float over the top chrome. It is
+   `pointer-events: none` so window-drag (the macOS band beneath) AND the top
+   chrome (sidebar toggle, workspace toggle, notification bell) stay reachable
+   THROUGH it — the wrapper carves no `no-drag` hole and steals no clicks. Only
+   the interactive cluster button + popover opt back in with `pointer-events:
+   auto` + `aleph-no-drag`; the expanded pill bar is display-only, so the band
+   drags right over it.
    container-type lets the inner expanded/collapsed views swap by width. */
 .aleph-roster-wrap {
   container-type: inline-size;
   padding: 6px 8px;
+  pointer-events: none;
 }
 /* macOS: always clear the top-right chrome (workspace toggle + notification
    bell), which is anchored to the chat surface's right edge regardless of
@@ -2196,20 +2203,32 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
 html[data-platform="macos"] .aleph-roster-wrap {
   padding-right: 96px;
 }
-/* The LEFT side only needs clearing when the sidebar is collapsed: then the
-   chat surface reaches the window's left edge and the overlay traffic lights +
-   fixed sidebar toggle (left:72px) sit over its top-left. With the sidebar
-   expanded the chat surface starts at the 256px-wide sidebar's right edge, so
-   that chrome floats over the SIDEBAR — and the avatar cluster should hug the
-   chat's own left edge (default 8px) instead of stranding 84px of dead space. */
-html[data-platform="macos"] .aleph-shell.sidebar-collapsed .aleph-roster-wrap {
-  padding-left: 84px;
+/* When the sidebar is collapsed the fixed sidebar toggle
+   (`.aleph-sidebar-toggle`) sits at the chat surface's top-left and the roster
+   must start past it so the first avatar doesn't cover the button. The toggle's
+   x differs by platform, so the left clearance does too:
+
+   • Web / Win / Linux: toggle at `left: 10px`, 28px wide → right edge 38px, so
+     content starts at 38 + 8px gap = 46px.
+   • macOS: toggle at `left: 72px` (clears the overlay traffic lights), 28px
+     wide → right edge 100px, so content starts at 100 + 8px = 108px.
+
+   With the sidebar expanded the chat surface starts at the sidebar's right edge
+   so the toggle floats over the SIDEBAR, not the chat — the roster then hugs
+   the chat's own left edge (default 8px) and no clearance is needed. */
+.aleph-shell.sidebar-collapsed .aleph-roster-wrap {
+  padding-left: 46px;
 }
-/* Width swap: default (narrow) shows the cluster; >=560px shows the pill bar.
-   560px ~= CLUSTER_CAP(4) * ~140px per pill. */
+html[data-platform="macos"] .aleph-shell.sidebar-collapsed .aleph-roster-wrap {
+  padding-left: 108px;
+}
+/* Width swap: default (narrow) shows the cluster; >=700px shows the pill bar.
+   700px ~= CLUSTER_CAP(5) * ~140px per pill. With the name cap bounding each
+   pill (see team_participants.rs), 5 pills clear the default 1180px window;
+   when a narrower surface can't seat them the bar `overflow-x-auto` scrolls. */
 .aleph-roster-expanded { display: none; }
 .aleph-roster-collapsed { display: flex; }
-@container (min-width: 560px) {
+@container (min-width: 700px) {
   .aleph-roster-expanded { display: flex; }
   .aleph-roster-collapsed { display: none; }
 }

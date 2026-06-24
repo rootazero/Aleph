@@ -302,32 +302,41 @@ fn ChatBandChrome() -> impl IntoView {
         return ().into_any();
     };
     let i18n = use_i18n();
+    // Team mode swaps the workspace pane for a self-labelled "交付物 | 任务"
+    // tab header parked at the same top-leading position. The generic
+    // "工作区 · …" band label would sit right on top of those tabs (and
+    // "工具详情" is a single-agent tool-activity concept that doesn't apply
+    // to a team pane), so gate it off whenever a team is active. `ChatState`
+    // may be absent during early boot races — treat that as "not a team".
+    let chat = use_context::<ChatState>();
 
     view! {
         <Show when=move || mode.get() == PanelMode::Chat>
-            // Workspace label — always mounted (not `<Show>`-gated) so it can
-            // glide + fade in lockstep with the pane (same 200ms ease-out via
-            // `.aleph-ws-label`), instead of popping. When not in Split it
-            // carries `workspace-collapsed`, which slides it off the right
-            // edge and fades it out.
-            <div
-                class="aleph-ws-label aleph-no-drag pointer-events-none absolute aleph-chrome-top
-                       left-[calc(100%_-_var(--aleph-workspace-w)_+_16px)] flex items-center gap-2
-                       text-xs uppercase tracking-wider text-text-tertiary h-7"
-                class:workspace-collapsed=move || workspace.mode.get() != LayoutMode::Split
-                data-tauri-drag-region="false"
-            >
-                <span>{move || t_string!(i18n, common.workspace_title).to_string()}</span>
-                <span class="text-text-tertiary/60">
-                    {move || {
-                        if workspace.tool_payloads.with(|m| !m.is_empty()) {
-                            t_string!(i18n, common.workspace_state_tool).to_string()
-                        } else {
-                            t_string!(i18n, common.workspace_state_idle).to_string()
-                        }
-                    }}
-                </span>
-            </div>
+            // Workspace label — single-agent only. Within that case it stays
+            // always-mounted (not Split-gated) so it can glide + fade in
+            // lockstep with the pane (same 200ms ease-out via `.aleph-ws-label`)
+            // instead of popping; `workspace-collapsed` slides it off the right
+            // edge when not in Split.
+            <Show when=move || chat.is_none_or(|c| c.team_id.get().is_none())>
+                <div
+                    class="aleph-ws-label aleph-no-drag pointer-events-none absolute aleph-chrome-top
+                           left-[calc(100%_-_var(--aleph-workspace-w)_+_16px)] flex items-center gap-2
+                           text-xs uppercase tracking-wider text-text-tertiary h-7"
+                    class:workspace-collapsed=move || workspace.mode.get() != LayoutMode::Split
+                    data-tauri-drag-region="false"
+                >
+                    <span>{move || t_string!(i18n, common.workspace_title).to_string()}</span>
+                    <span class="text-text-tertiary/60">
+                        {move || {
+                            if workspace.tool_payloads.with(|m| !m.is_empty()) {
+                                t_string!(i18n, common.workspace_state_tool).to_string()
+                            } else {
+                                t_string!(i18n, common.workspace_state_idle).to_string()
+                            }
+                        }}
+                    </span>
+                </div>
+            </Show>
             // LayoutToggle — right-edge tracks the chat / workspace
             // boundary. `pointer-events-auto` re-enables clicks because
             // the band itself is `pointer-events:none` on web / Win /

@@ -119,8 +119,14 @@ pub fn WorkspacePanel() -> impl IntoView {
                         }
                     }
                 >
-                    // Team-mode tab header
-                    <div class="flex gap-1 px-3 py-2 border-b border-border text-xs shrink-0">
+                    // Team-mode tab header. `aleph-content-top` clears the
+                    // macOS overlay-titlebar drag band (30px) so the tabs
+                    // aren't jammed under the traffic lights / band (their top
+                    // would otherwise be unclickable); on web/Win/Linux the
+                    // token is the smaller sidebar-logo inset, aligning the
+                    // header with the brand row. Single-agent path already
+                    // applies the same token to its scroll container.
+                    <div class="aleph-content-top flex gap-1 px-3 py-2 border-b border-border text-xs shrink-0">
                         <button
                             class=move || {
                                 if active_tab.get() == 0 {
