@@ -82,7 +82,16 @@
     "browser_new_name_placeholder": "my-project",
     "browser_create": "创建",
     "browser_cancel": "取消",
-    "browser_loading": "加载中……"
+    "browser_loading": "加载中……",
+    "token_wall_instruction_rejected": "服务器的访问令牌已更新或失效,请输入新的 Gateway token 重新连接。"
+  },
+  "conn_error": {
+    "unreachable_title": "找不到服务器",
+    "unreachable_body": "无法连接到服务器。请检查网络连接,并确认服务器地址和端口是否正确。",
+    "timeout_title": "服务器无响应",
+    "timeout_body": "已连上服务器但它没有回应,可能正在重启。请稍候重试。",
+    "dropped_body": "连接中断,正在重连…",
+    "lite_relocating": "服务器不可达,正在为你重新连接服务器…"
   },
   "boot_gate": {
     "checking_title": "正在连接 Aleph",

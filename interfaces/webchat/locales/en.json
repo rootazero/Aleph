@@ -82,7 +82,16 @@
     "browser_new_name_placeholder": "my-project",
     "browser_create": "Create",
     "browser_cancel": "Cancel",
-    "browser_loading": "Loading…"
+    "browser_loading": "Loading…",
+    "token_wall_instruction_rejected": "The server's access token was rotated or is no longer valid. Enter the new Gateway token to reconnect."
+  },
+  "conn_error": {
+    "unreachable_title": "Server not found",
+    "unreachable_body": "Couldn't reach the server. Check your network connection, and confirm the server address and port are correct.",
+    "timeout_title": "Server not responding",
+    "timeout_body": "Connected to the server but it isn't responding — it may be restarting. Please retry shortly.",
+    "dropped_body": "Connection interrupted — reconnecting…",
+    "lite_relocating": "Server unreachable — reconnecting you to the server…"
   },
   "boot_gate": {
     "checking_title": "Connecting to Aleph",
