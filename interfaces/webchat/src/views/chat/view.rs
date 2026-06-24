@@ -37,6 +37,32 @@ pub fn ChatView() -> impl IntoView {
     // Harmless when not in team mode (the handler short-circuits on topic prefix).
     let team_sub_id = subscribe_team_events(&dashboard, chat);
 
+    // Team chat: hydrate the task strip/drawer from teams.list_tasks whenever
+    // the active team changes (and we're connected). Incremental updates after
+    // this come from the team.<id>.task.<verb> branch in team_events.rs.
+    let dash_for_tasks = dashboard;
+    Effect::new(move |_| {
+        let Some(team_id) = chat.team_id.get() else {
+            chat.team_tasks.set(Vec::new());
+            return;
+        };
+        if !dash_for_tasks.is_connected.get() {
+            return;
+        }
+        let chat2 = chat;
+        spawn_local(async move {
+            if let Ok(tasks) = crate::api::teams::TeamsApi::list_tasks(
+                &dash_for_tasks,
+                &team_id,
+                crate::api::teams::TaskFilter::default(),
+            )
+            .await
+            {
+                chat2.team_tasks.set(tasks);
+            }
+        });
+    });
+
     // Tell the Gateway to start forwarding stream.* events
     // (backend publishes events with method "stream.run_accepted", "stream.response_chunk", etc.)
     // Wait until connected before subscribing, since ChatView may mount before WebSocket is ready.

@@ -3,8 +3,10 @@
 //! (single-agent), kept separate for zero-regression of the single-agent path.
 
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 
 use super::state::{ChatMessage, ChatState, MemberStatus};
+use crate::api::teams::{TaskFilter, TeamsApi};
 use crate::context::{DashboardState, GatewayEvent};
 
 /// Stable per-agent color by roster slot index. Used by the workspace
@@ -23,6 +25,7 @@ pub fn agent_color(index: usize) -> &'static str {
 /// the subscription id for cleanup (caller `unsubscribe_events` on teardown).
 #[must_use]
 pub fn subscribe_team_events(dashboard: &DashboardState, chat: ChatState) -> usize {
+    let dash = *dashboard;
     dashboard.subscribe_events(move |event: GatewayEvent| {
         if !event.topic.starts_with("team.") {
             return;
@@ -68,6 +71,45 @@ pub fn subscribe_team_events(dashboard: &DashboardState, chat: ChatState) -> usi
                     m.status = status;
                 }
             });
+        } else if event.topic.contains(".task.") {
+            // 4-segment topic `team.<id>.task.<verb>`; payload carries
+            // {task_id, status, ...} but NO subject. Upsert status in place for
+            // known tasks; refetch the list for an unknown id (new task needs
+            // its subject). Idempotent + order-independent: unknown/terminal/
+            // deleted ids are tolerated.
+            let task_id = data
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if task_id.is_empty() {
+                return;
+            }
+            let status = data
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let known = chat
+                .team_tasks
+                .with_untracked(|ts| ts.iter().any(|t| t.id == task_id));
+            if known {
+                chat.team_tasks.update(|ts| {
+                    if let Some(t) = ts.iter_mut().find(|t| t.id == task_id) {
+                        if let Some(s) = status {
+                            t.status = s;
+                        }
+                    }
+                });
+            } else if let Some(team_id) = chat.team_id.get_untracked() {
+                let chat2 = chat;
+                spawn_local(async move {
+                    if let Ok(tasks) =
+                        TeamsApi::list_tasks(&dash, &team_id, TaskFilter::default()).await
+                    {
+                        chat2.team_tasks.set(tasks);
+                    }
+                });
+            }
         }
     })
 }
