@@ -229,6 +229,27 @@ pub fn save_target(target: &ConnectionTarget) -> Result<(), String> {
     std::fs::write(&marker, target.to_persisted()).map_err(|e| format!("write target: {e}"))
 }
 
+/// The bundled connection page (`splash/connect.html`) as a navigable URL for
+/// the current platform. Tauri serves app assets from `tauri://localhost` on
+/// macOS/Linux, but from `http://tauri.localhost` on Windows — WebView2 has no
+/// `tauri://` scheme. A single hardcoded `tauri://localhost/connect.html`
+/// therefore navigates to nothing on Windows, leaving the first-run wizard a
+/// blank white window. Build it per platform so every navigation target (the
+/// first-run wizard, the unreachable-target fallback, and the tray / app-menu
+/// "connect" items) resolves on all three. The `route` guard already treats
+/// `http://tauri.localhost` as internal (see `external_link::is_internal`), so
+/// the corrected navigation is allowed.
+pub(crate) fn connect_page_url() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "http://tauri.localhost/connect.html"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "tauri://localhost/connect.html"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands — the shell's *only* invoke surface, strictly limited to
 // connection configuration (spec §5.2 explicit exception to "no invoke_handler";
@@ -384,6 +405,19 @@ mod tests {
     fn token_from_url_reads_the_query_token() {
         let url = Url::parse("https://gw.example.com:8443/?token=aleph-abc123").unwrap();
         assert_eq!(token_from_url(&url).as_deref(), Some("aleph-abc123"));
+    }
+
+    #[test]
+    fn connect_page_url_is_platform_correct_and_parses() {
+        let url = connect_page_url();
+        // Must parse as a valid URL the webview can navigate to.
+        assert!(Url::parse(url).is_ok());
+        // macOS/Linux use the `tauri://` asset scheme; Windows (WebView2) has
+        // no `tauri://` scheme and serves bundled assets over http.
+        #[cfg(target_os = "windows")]
+        assert_eq!(url, "http://tauri.localhost/connect.html");
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(url, "tauri://localhost/connect.html");
     }
 
     #[test]

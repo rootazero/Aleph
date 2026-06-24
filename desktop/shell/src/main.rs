@@ -824,7 +824,7 @@ fn show_connection_page(handle: &tauri::AppHandle, message: &str) {
         return;
     };
     let _ = window.show();
-    if let Ok(url) = tauri::Url::parse("tauri://localhost/connect.html") {
+    if let Ok(url) = tauri::Url::parse(connection::connect_page_url()) {
         if let Err(e) = window.navigate(url) {
             tracing::warn!("could not navigate to the connection page: {e}");
         }

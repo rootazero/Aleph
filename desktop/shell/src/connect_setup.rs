@@ -120,8 +120,9 @@ pub async fn target_reachable(target: &connection::ConnectionTarget) -> bool {
 /// Navigate the main window to the bundled connection page and bring it
 /// forward. This is the panel-only shell's first-run surface and its
 /// not-reachable fallback — never a white screen (spec §8). Both `connect.html`
-/// and `index.html` are served from the bundled `splash/` frontendDist, so the
-/// `tauri://localhost/connect.html` URL resolves in both variants.
+/// and `index.html` are served from the bundled `splash/` frontendDist; the
+/// page URL is resolved per platform by [`connection::connect_page_url`]
+/// (`tauri://localhost` on macOS/Linux, `http://tauri.localhost` on Windows).
 ///
 /// Named with the `lite_` prefix to stay distinct from the full-app-only
 /// `main.rs::show_connection_page` (same page, different plumbing: that one
@@ -132,7 +133,7 @@ pub fn show_lite_connect_page(handle: &tauri::AppHandle) {
         tracing::error!("main window missing — cannot show the connection page");
         return;
     };
-    match tauri::Url::parse("tauri://localhost/connect.html") {
+    match tauri::Url::parse(connection::connect_page_url()) {
         Ok(url) => {
             if let Err(e) = window.navigate(url) {
                 tracing::error!("failed to navigate to the connection page: {e}");

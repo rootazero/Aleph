@@ -70,7 +70,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             // remote Gateway address.
             "connect_remote" => {
                 if let Some(w) = app.get_webview_window("main") {
-                    if let Ok(url) = tauri::Url::parse("tauri://localhost/connect.html") {
+                    if let Ok(url) = tauri::Url::parse(crate::connection::connect_page_url()) {
                         let _ = w.navigate(url);
                     }
                     crate::focus_window(app);

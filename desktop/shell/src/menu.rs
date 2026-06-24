@@ -170,7 +170,7 @@ pub fn on_event(app: &AppHandle, id: &str) {
         }
         ID_CONNECT_REMOTE => {
             if let Some(window) = app.get_webview_window("main") {
-                if let Ok(url) = tauri::Url::parse("tauri://localhost/connect.html") {
+                if let Ok(url) = tauri::Url::parse(crate::connection::connect_page_url()) {
                     let _ = window.navigate(url);
                 }
                 crate::focus_window(app);
