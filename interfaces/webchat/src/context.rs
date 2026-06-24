@@ -9,9 +9,12 @@ use leptos::task::spawn_local;
 use serde_json::Value;
 use shared_ui_logic::connection::connector::AlephConnector;
 use shared_ui_logic::connection::wasm::WasmConnector;
+use shared_ui_logic::connection::{classify, ConnectionError, ConnectionFailure, FailureStage};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+
+const WS_OPEN_TIMEOUT_MS: u32 = 8_000;
 
 // RPC request sent to the message loop
 struct RpcRequest {
@@ -189,6 +192,10 @@ pub struct DashboardState {
     /// connection without a valid Gateway token. Drives the full-screen login
     /// wall (token box). False for loopback / authorized connections.
     pub needs_token: RwSignal<bool>,
+
+    /// Typed classification of the latest connection failure. Single source of
+    /// truth; `connection_error` (String) is derived from it for legacy readers.
+    pub connection_failure: RwSignal<Option<ConnectionFailure>>,
 }
 
 /// Derive the Gateway WebSocket URL from the current page location.
@@ -308,6 +315,7 @@ impl DashboardState {
             ),
             role: RwSignal::new(None),
             needs_token: RwSignal::new(false),
+            connection_failure: RwSignal::new(None),
         }
     }
 
@@ -331,6 +339,20 @@ impl DashboardState {
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
         );
+    }
+
+    /// Record a typed failure and derive its legacy string. Centralised so the
+    /// two never drift.
+    fn set_failure(&self, f: ConnectionFailure) {
+        let legacy = match &f {
+            ConnectionFailure::AuthRequired => "auth required".to_string(),
+            ConnectionFailure::Unreachable { detail }
+            | ConnectionFailure::Timeout { detail }
+            | ConnectionFailure::Dropped { detail }
+            | ConnectionFailure::Unknown { detail } => detail.clone(),
+        };
+        self.connection_failure.set(Some(f));
+        self.connection_error.set(Some(legacy));
     }
 
     /// Submit a Gateway token from the login wall: persist it, then reload the
@@ -524,7 +546,20 @@ impl DashboardState {
         let url = self.gateway_url.get();
         let mut connector = WasmConnector::new();
 
-        match connector.connect(&url).await {
+        use futures::future::{select, Either};
+        let open_result = {
+            let connect_fut = Box::pin(connector.connect(&url));
+            let open = select(connect_fut, TimeoutFuture::new(WS_OPEN_TIMEOUT_MS)).await;
+            match open {
+                Either::Left((res, _)) => res,
+                Either::Right(((), _)) => {
+                    // TCP may be up but WS upgrade hung — fail closed instead of
+                    // spinning the boot gate forever.
+                    Err(ConnectionError::ConnectFailed("WebSocket open timed out".into()))
+                }
+            }
+        };
+        match open_result {
             Ok(()) => {
                 // Get the message stream
                 let stream = connector.receive();
@@ -733,9 +768,9 @@ impl DashboardState {
             }
             Err(e) => {
                 self.is_connected.set(false);
-                let error_msg = e.to_string();
-                self.connection_error.set(Some(error_msg.clone()));
-                Err(error_msg)
+                let detail = e.to_string();
+                self.set_failure(classify(FailureStage::BeforeOpen, Some(&detail), false));
+                Err(detail)
             }
         }
     }
