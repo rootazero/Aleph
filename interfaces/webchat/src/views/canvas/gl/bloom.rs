@@ -188,7 +188,7 @@ impl BloomPipeline {
         let loc = gl.get_uniform_location(&self.prog_bright, "u_tex");
         gl.uniform1i(loc.as_ref(), 0);
         let loc = gl.get_uniform_location(&self.prog_bright, "u_threshold");
-        gl.uniform1f(loc.as_ref(), 0.3);
+        gl.uniform1f(loc.as_ref(), 0.5);
 
         self.draw_fullscreen(gl);
 
@@ -242,7 +242,7 @@ impl BloomPipeline {
         gl.uniform1i(loc.as_ref(), 1);
 
         let loc = gl.get_uniform_location(&self.prog_composite, "u_intensity");
-        gl.uniform1f(loc.as_ref(), 1.2);
+        gl.uniform1f(loc.as_ref(), 0.9);
 
         self.draw_fullscreen(gl);
 

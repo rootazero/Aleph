@@ -115,6 +115,7 @@ fn RadialCanvasView() -> impl IntoView {
     let focus_request: RwSignal<Option<String>> = RwSignal::new(None);
     let highlight_request: RwSignal<Option<std::collections::HashSet<u32>>> = RwSignal::new(None);
     let lod_request: RwSignal<f32> = RwSignal::new(0.0);
+    let highlight_edges_request: RwSignal<Option<std::collections::HashSet<(u32, u32)>>> = RwSignal::new(None);
 
     // Per-node excerpt cache for NodeDetailPanel.
     let detail_panel_excerpts: RwSignal<std::collections::HashMap<String, NodeExcerpt>> =
@@ -150,6 +151,7 @@ fn RadialCanvasView() -> impl IntoView {
                 galaxy_data.set(None);
                 focus_request.set(None);
                 highlight_request.set(None);
+                highlight_edges_request.set(None);
                 lod_request.set(0.0);
                 hover_intent.set(None);
             }
@@ -192,12 +194,14 @@ fn RadialCanvasView() -> impl IntoView {
             if let Some(data) = galaxy_data.get_untracked() {
                 let hl = compute_highlight_set(&data, &id);
                 highlight_request.set(Some(hl));
+                highlight_edges_request.set(Some(crate::views::canvas::gl::compute_highlight_edges(&data, &id)));
             }
         }
         CanvasEvent::DeselectNode => {
             set_selected_node.set(None);
             // Clear highlight when deselecting.
             highlight_request.set(None);
+            highlight_edges_request.set(None);
         }
         CanvasEvent::HoverNode(hovered_id) => {
             // Edge-triggered: `HoverNode` only fires on transition (see
@@ -235,6 +239,7 @@ fn RadialCanvasView() -> impl IntoView {
                         if let Some(data) = galaxy_data.get_untracked() {
                             let hl = compute_highlight_set(&data, &id);
                             highlight_request.set(Some(hl));
+                            highlight_edges_request.set(Some(crate::views::canvas::gl::compute_highlight_edges(&data, &id)));
                         }
                         // Open the node detail panel by selecting the node.
                         mem.selected_node.set(Some(id));
@@ -289,6 +294,7 @@ fn RadialCanvasView() -> impl IntoView {
         if let Some(data) = galaxy_data.get_untracked() {
             let hl = compute_highlight_set(&data, &node_id);
             highlight_request.set(Some(hl));
+            highlight_edges_request.set(Some(crate::views::canvas::gl::compute_highlight_edges(&data, &node_id)));
         }
     });
 
@@ -320,6 +326,7 @@ fn RadialCanvasView() -> impl IntoView {
                 lod_request=lod_request
                 selected_node=selected_node
                 hovered_node=hover_intent
+                highlight_edges_request=highlight_edges_request
             />
             // NodeDetailPanel: overlay when a node is selected in the galaxy.
             {move || selected_node.get().map(|_| view! {

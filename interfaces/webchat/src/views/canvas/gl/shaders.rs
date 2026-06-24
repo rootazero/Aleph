@@ -1,94 +1,173 @@
 //! GLSL ES 3.00 shader sources. Filled per-renderer in Tasks 4-6 + Phase 2.
 
 /// Node billboard vertex shader. Per-instance: a_offset(vec3), a_size(float),
-/// a_color(vec3). Per-vertex: a_corner(vec2 in [-1,1]).
+/// a_color(vec3), a_phase(float), a_spike(float). Per-vertex: a_corner(vec2 in [-1,1]).
+/// Idle drift is computed entirely on the GPU from u_time + a_phase so that
+/// idle frames upload nothing and do no CPU sine work.
 pub const NODE_VERT: &str = r#"#version 300 es
 precision highp float;
 layout(location=0) in vec2 a_corner;
 layout(location=1) in vec3 a_offset;
 layout(location=2) in float a_size;
 layout(location=3) in vec3 a_color;
+layout(location=4) in float a_phase;
+layout(location=5) in float a_spike;
 uniform mat4 u_view_proj;
 uniform vec2 u_viewport;
+uniform float u_time;        // ms
+uniform float u_cam_dist;    // camera distance for spike near-fade
 out vec2 v_corner;
 out vec3 v_color;
+out float v_spike;
+out float v_twinkle;
+const float AMP = 3.0;
+const float TAU = 6.28318530718;
+const float OMEGA = TAU / 5.0;   // period 5000ms → rad/s over t(sec)
 void main() {
-    vec4 clip = u_view_proj * vec4(a_offset, 1.0);
-    // Billboard: expand in clip space by pixel size, perspective-correct.
+    float t = u_time / 1000.0;
+    float ph = a_phase * TAU;
+    vec3 drift = AMP * vec3(
+        sin(OMEGA * t + ph),
+        sin(OMEGA * t + ph + 0.27 * TAU),
+        sin(OMEGA * t + ph + 0.54 * TAU)
+    );
+    vec4 clip = u_view_proj * vec4(a_offset + drift, 1.0);
     vec2 px = a_corner * a_size / u_viewport * clip.w * 2.0;
     clip.xy += px;
     gl_Position = clip;
     v_corner = a_corner;
     v_color = a_color;
+    // Near-fade: spikes only show at distance; vanish when zoomed in / clustered.
+    float fade = smoothstep(300.0, 900.0, u_cam_dist);
+    v_spike = a_spike * fade;
+    // Subtle per-node brightness twinkle: slow sine wave modulated by per-node phase.
+    v_twinkle = 0.9 + 0.1 * sin(u_time / 1000.0 * 1.7 + a_phase * 6.2831853);
 }
 "#;
 
-/// Node fragment shader: soft radial star sprite with HDR color (toneMapped off).
+/// Node fragment: crisp solid core + soft outer halo (HDR; bloom adds the corona).
+/// Hub nodes additionally draw a weak diffraction cross (v_spike <= 0.3) that fades
+/// out at close zoom (v_spike is pre-multiplied by a smoothstep in the vertex shader).
 pub const NODE_FRAG: &str = r#"#version 300 es
 precision highp float;
 in vec2 v_corner;
 in vec3 v_color;
+in float v_spike;
+in float v_twinkle;
 out vec4 frag;
 void main() {
     float r = length(v_corner);
     if (r > 1.0) discard;
-    float a = smoothstep(1.0, 0.0, r);     // soft edge
-    float core = smoothstep(0.6, 0.0, r);  // bright core
-    frag = vec4(v_color * (0.4 + core), a);
+    // Crisp core: hard, tight falloff → a defined bright point.
+    float core = smoothstep(0.30, 0.0, r);
+    core = core * core;                       // sharpen the core profile
+    // Soft halo: wide gentle falloff, low weight; bloom turns this into the glow.
+    float halo = smoothstep(1.0, 0.0, r) * 0.35;
+    // Weak diffraction cross for hubs only. abs() arms along the two axes; very
+    // thin, alpha-capped by v_spike (<=0.3). Never drawn when v_spike == 0.
+    float cross = 0.0;
+    if (v_spike > 0.0) {
+        float ax = 1.0 - smoothstep(0.0, 0.06, abs(v_corner.x));
+        float ay = 1.0 - smoothstep(0.0, 0.06, abs(v_corner.y));
+        float radial = 1.0 - smoothstep(0.0, 1.0, r); // fade arms toward rim
+        cross = max(ax, ay) * radial * v_spike;
+    }
+    vec3  rgb  = v_color * (core * 1.6 * v_twinkle + halo + cross);
+    float a    = clamp(core + halo * 0.6 + cross, 0.0, 1.0);
+    frag = vec4(rgb, a);
 }
 "#;
 
-/// Edge vertex shader: expands each segment into a screen-space-oriented quad
-/// of constant pixel width. `gl.lineWidth()` is clamped to 1px on desktop, so
-/// thick filaments must be drawn as instanced ribbons. Per-instance: the two
-/// endpoints (a_pos_a/a_pos_b) and their colors (a_color_a/a_color_b).
-/// Per-vertex: a_corner = (along ∈ {0,1}, side ∈ {-1,+1}).
+/// Edge vertex shader: evaluates a gentle quadratic Bézier arc tessellated into
+/// SEGMENTS steps, with endpoint taper so the ribbon visually welds into the star
+/// core. Per-instance: the two endpoints (a_pos_a/a_pos_b) and their colors
+/// (a_color_a/a_color_b). Per-vertex: a_corner = (along ∈ [0,1], side ∈ {-1,+1}).
 pub const EDGE_VERT: &str = r#"#version 300 es
 precision highp float;
-layout(location=0) in vec2 a_corner;
+layout(location=0) in vec2 a_corner;   // (along 0..1, side -1/+1)
 layout(location=1) in vec3 a_pos_a;
 layout(location=2) in vec3 a_pos_b;
 layout(location=3) in vec3 a_color_a;
 layout(location=4) in vec3 a_color_b;
+layout(location=5) in float a_highlight; // 1.0 = neighbor of selected, 0.0 = other
 uniform mat4 u_view_proj;
 uniform vec2 u_viewport;
-uniform float u_width;       // line width in framebuffer pixels
+uniform float u_width;
+uniform float u_time;        // ms (used by flow effect in frag)
 out vec3 v_color;
-out float v_side;
+out float v_along;
 out float v_depth;
+out float v_hl;
+
+vec3 bezier(vec3 a, vec3 c, vec3 b, float t) {
+    float u = 1.0 - t;
+    return u*u*a + 2.0*u*t*c + t*t*b;
+}
 void main() {
-    vec4 ca = u_view_proj * vec4(a_pos_a, 1.0);
-    vec4 cb = u_view_proj * vec4(a_pos_b, 1.0);
-    vec4 clip = mix(ca, cb, a_corner.x);
-    // Endpoint directions in pixel space (NDC * viewport; common scale cancels
-    // in normalize, so this is a valid pixel-space direction incl. aspect).
-    vec2 pa = ca.xy / max(ca.w, 1e-4) * u_viewport;
-    vec2 pb = cb.xy / max(cb.w, 1e-4) * u_viewport;
-    vec2 d = pb - pa;
-    vec2 dir = length(d) > 1e-4 ? normalize(d) : vec2(1.0, 0.0);
-    vec2 nrm = vec2(-dir.y, dir.x);
-    // Perpendicular offset (px) → NDC (×2/viewport) → clip (×w).
-    vec2 off_px = nrm * (a_corner.y * u_width * 0.5);
-    clip.xy += off_px * 2.0 / u_viewport * clip.w;
-    gl_Position = clip;
-    v_color = mix(a_color_a, a_color_b, a_corner.x);
-    v_side = a_corner.y;                 // [-1,1] across ribbon width
-    v_depth = clip.z / max(clip.w, 1e-4);
+    float t = a_corner.x;
+    // Control point: midpoint bowed along a world-perp of the chord.
+    vec3 chord = a_pos_b - a_pos_a;
+    float len = length(chord);
+    vec3 dir = len > 1e-4 ? chord / len : vec3(1.0, 0.0, 0.0);
+    vec3 up = abs(dir.y) < 0.95 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0);
+    vec3 perp = normalize(cross(dir, up));
+    vec3 ctrl = (a_pos_a + a_pos_b) * 0.5 + perp * (len * 0.12);
+    // Sample curve point and a neighbor for screen-space tangent.
+    vec3 p  = bezier(a_pos_a, ctrl, a_pos_b, t);
+    float dt = 0.01;
+    vec3 p2 = bezier(a_pos_a, ctrl, a_pos_b, clamp(t + dt, 0.0, 1.0));
+    vec4 cp  = u_view_proj * vec4(p, 1.0);
+    vec4 cp2 = u_view_proj * vec4(p2, 1.0);
+    vec2 sp  = cp.xy  / max(cp.w, 1e-4)  * u_viewport;
+    vec2 sp2 = cp2.xy / max(cp2.w, 1e-4) * u_viewport;
+    vec2 tdir = sp2 - sp;
+    tdir = length(tdir) > 1e-4 ? normalize(tdir) : vec2(1.0, 0.0);
+    vec2 nrm = vec2(-tdir.y, tdir.x);
+    // Endpoint taper: thinner near both ends so the line welds into the star.
+    float edge = min(t, 1.0 - t);
+    float taper = mix(0.55, 1.0, smoothstep(0.0, 0.12, edge));
+    vec2 off_px = nrm * (a_corner.y * u_width * 0.5 * taper);
+    cp.xy += off_px * 2.0 / u_viewport * cp.w;
+    gl_Position = cp;
+    v_color = mix(a_color_a, a_color_b, t);
+    v_along = t;
+    v_depth = cp.z / max(cp.w, 1e-4);
+    v_hl = a_highlight;
 }
 "#;
 
-/// Edge fragment shader: solid core with a narrow anti-aliased rim (crisp, not
-/// blurry) and a gentle depth fade that keeps distant filaments readable.
+/// Edge fragment shader: endpoint weld brightening + depth fade.
+/// When a node is selected (`u_select_active`): neighbor edges (`v_hl`) get an
+/// animated energy-flow band; non-neighbor edges dim to focus the selected chain.
 pub const EDGE_FRAG: &str = r#"#version 300 es
 precision highp float;
 in vec3 v_color;
-in float v_side;
+in float v_along;
 in float v_depth;
+in float v_hl;
 out vec4 frag;
+uniform float u_time;          // ms
+uniform float u_select_active; // 1.0 when a node is selected
 void main() {
-    float aa = 1.0 - smoothstep(0.6, 1.0, abs(v_side)); // crisp core, thin rim
+    float edge = min(v_along, 1.0 - v_along);
+    float weld = mix(1.4, 1.0, smoothstep(0.0, 0.12, edge));
     float fade = clamp(1.0 - (v_depth * 0.5 + 0.5) * 0.5, 0.4, 1.0);
-    frag = vec4(v_color * (1.1 * fade), aa * fade * 0.65); // bright, additive
+    vec3  rgb = v_color * (weld * fade);
+    float a   = fade * 0.55;
+    if (u_select_active > 0.5) {
+        if (v_hl > 0.5) {
+            // Energy flow: a bright band travels along the highlighted link.
+            float pulse = fract(v_along * 1.5 - u_time * 0.0006);
+            float band = smoothstep(0.0, 0.06, pulse) * (1.0 - smoothstep(0.10, 0.45, pulse));
+            rgb += v_color * band * 1.8;
+            a = clamp(a + band * 0.5, 0.0, 1.0);
+        } else {
+            // Non-neighbor edge: dim to focus the selected chain.
+            rgb *= 0.25;
+            a   *= 0.35;
+        }
+    }
+    frag = vec4(rgb, a);
 }
 "#;
 
