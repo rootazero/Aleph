@@ -113,75 +113,110 @@ pub fn remove_pid_file(pid_file: &str) {
     }
 }
 
-/// Handle stop command
+/// Handle stop command.
+///
+/// Resolves the live PID from the IPC endpoint file (`.ipc-endpoint.json`,
+/// written on every start path) first, falling back to the Unix-only PID file.
+/// This makes `stop` work on Windows and for foreground servers, where no PID
+/// file is ever written — previously `stop` was a silent no-op there, so the
+/// daemon kept running after "Quit & Stop Aleph".
 pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(pid) = read_pid_file(pid_file) {
-        if is_process_running(pid) {
-            #[cfg(unix)]
-            {
-                println!("Sending SIGTERM to gateway process (PID {pid})");
-                // SAFETY: kill() with SIGTERM is the standard way to request graceful
-                // process termination on Unix. PID was validated by is_process_running().
-                if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
-                    eprintln!(
-                        "Warning: failed to send SIGTERM to PID {}: {}",
-                        pid,
-                        std::io::Error::last_os_error()
-                    );
-                }
+    let Some(pid) = read_pid_file(pid_file)
+        .or_else(|| read_endpoint_best_effort().and_then(|ep| i32::try_from(ep.pid).ok()))
+    else {
+        println!("No gateway daemon is running (no PID file or endpoint)");
+        return Ok(());
+    };
 
-                // Wait for process to exit (max 5 seconds)
-                for _ in 0..50 {
-                    if !is_process_running(pid) {
-                        println!("Gateway stopped successfully");
-                        remove_pid_file(pid_file);
-                        cleanup_endpoint_file();
-                        return Ok(());
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-
-                println!("Gateway did not stop gracefully, sending SIGKILL");
-                // SAFETY: kill() with SIGKILL is the standard way to forcefully terminate
-                // a process on Unix. PID was validated at the start of this function.
-                if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
-                    return Err(format!(
-                        "Failed to send SIGKILL to PID {}: {}",
-                        pid,
-                        std::io::Error::last_os_error()
-                    )
-                    .into());
-                }
-
-                // Wait for process to exit after SIGKILL (max 2 seconds)
-                for _ in 0..20 {
-                    if !is_process_running(pid) {
-                        println!("Gateway stopped successfully");
-                        remove_pid_file(pid_file);
-                        cleanup_endpoint_file();
-                        return Ok(());
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-
-                return Err(
-                    format!("Gateway process (PID {pid}) did not exit even after SIGKILL").into(),
-                );
-            }
-
-            #[cfg(not(unix))]
-            {
-                eprintln!("Daemon mode is only supported on Unix systems");
-                return Err("Unsupported platform".into());
-            }
-        }
-        println!("Gateway is not running (stale PID file)");
+    if !is_process_running(pid) {
+        println!("Gateway is not running (stale record for PID {pid})");
         remove_pid_file(pid_file);
         cleanup_endpoint_file();
-    } else {
-        println!("No gateway daemon is running (no PID file found)");
+        return Ok(());
     }
+
+    stop_running_process(pid)?;
+    println!("Gateway stopped successfully");
+    remove_pid_file(pid_file);
+    cleanup_endpoint_file();
     Ok(())
+}
+
+/// Terminate a running gateway process, escalating from a graceful request to a
+/// forced kill. Unix: SIGTERM (≤5s) → SIGKILL (≤2s).
+#[cfg(unix)]
+fn stop_running_process(pid: i32) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Sending SIGTERM to gateway process (PID {pid})");
+    // SAFETY: kill() with SIGTERM is the standard graceful-termination request
+    // on Unix. PID was validated by is_process_running() in the caller.
+    if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
+        eprintln!(
+            "Warning: failed to send SIGTERM to PID {pid}: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    if wait_for_exit(pid, 50) {
+        return Ok(());
+    }
+
+    println!("Gateway did not stop gracefully, sending SIGKILL");
+    // SAFETY: kill() with SIGKILL forcefully terminates the process. PID was
+    // validated by is_process_running() in the caller.
+    if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
+        return Err(format!(
+            "Failed to send SIGKILL to PID {pid}: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    if wait_for_exit(pid, 20) {
+        return Ok(());
+    }
+    Err(format!("Gateway process (PID {pid}) did not exit even after SIGKILL").into())
+}
+
+/// Terminate a running gateway process on Windows. The bundled daemon is spawned
+/// detached with no console (`DETACHED_PROCESS | CREATE_NO_WINDOW`), so it cannot
+/// receive a console Ctrl event for graceful shutdown — `taskkill /F /T` is the
+/// reliable path, and `/T` also reaps the children the daemon would otherwise
+/// orphan (it can't clean them up under a forced kill). The OS releases the
+/// singleton flock on process death and SQLite (WAL) is crash-safe, so a forced
+/// kill is safe (see PROCESS_MANAGEMENT.md).
+#[cfg(windows)]
+fn stop_running_process(pid: i32) -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::windows::process::CommandExt;
+    // Never flash a console window from the windowless daemon / tray context.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    println!("Stopping gateway process (PID {pid})");
+    let out = std::process::Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| format!("failed to run taskkill for PID {pid}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "taskkill failed for PID {pid}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )
+        .into());
+    }
+    if wait_for_exit(pid, 20) {
+        return Ok(());
+    }
+    Err(format!("Gateway process (PID {pid}) did not exit after taskkill /F").into())
+}
+
+/// Poll until `pid` is no longer alive, up to `max_attempts` × 100ms. Returns
+/// true if it exited within the window.
+fn wait_for_exit(pid: i32, max_attempts: u32) -> bool {
+    for _ in 0..max_attempts {
+        if !is_process_running(pid) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
 }
 
 /// Consolidated daemon liveness, assembled from the PID file AND the IPC
