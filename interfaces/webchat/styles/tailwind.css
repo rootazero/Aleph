@@ -2220,4 +2220,7 @@ html[data-platform="macos"] .aleph-roster-wrap {
   border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
   white-space: nowrap;
 }
+/* Team task strip pill sits in the composer stack; truncation keeps it on one
+   line regardless of subject length. */
+.aleph-task-strip-subject { min-width: 0; }
 

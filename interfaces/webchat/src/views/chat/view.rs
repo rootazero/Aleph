@@ -11,6 +11,7 @@ use super::state::{ChatState, PendingAttachment};
 use super::team_events::subscribe_team_events;
 use crate::components::session_tabs::SessionTabs;
 use crate::components::team_participants::TeamParticipants;
+use crate::components::team_task_strip::TaskDrawerOpen;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
@@ -125,6 +126,12 @@ pub fn ChatView() -> impl IntoView {
             el.scroll_into_view();
         }
     });
+
+    // Team task drawer open-state — provided at the chat-view level so both the
+    // composer's TeamTaskStrip and the chat-column TeamTaskDrawer (Task 6) read
+    // the same signal via expect_context.
+    let task_drawer_open = RwSignal::new(false);
+    provide_context(TaskDrawerOpen(task_drawer_open));
 
     // ---- G5: chat-surface drop zone ----
     // Listening on the root div so a Finder/Explorer drop anywhere over
