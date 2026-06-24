@@ -156,7 +156,7 @@ fn scrub_token_from_url() {}
 
 enum Handshake {
     Authorized,
-    NeedsToken,
+    NeedsToken { was_rejected: bool },
     Failed(ConnectionFailure),
 }
 
@@ -211,6 +211,12 @@ pub struct DashboardState {
     /// connection without a valid Gateway token. Drives the full-screen login
     /// wall (token box). False for loopback / authorized connections.
     pub needs_token: RwSignal<bool>,
+
+    /// True when `needs_token` was triggered by a rejected (stale/rotated)
+    /// token rather than a first-time connection. Set by the `NeedsToken`
+    /// handshake outcome before `clear_gateway_token()` erases the evidence.
+    /// Read by `TokenWall` to select the appropriate instruction copy.
+    pub token_was_rejected: RwSignal<bool>,
 
     /// Typed classification of the latest connection failure. Single source of
     /// truth; `connection_error` (String) is derived from it for legacy readers.
@@ -334,6 +340,7 @@ impl DashboardState {
             ),
             role: RwSignal::new(None),
             needs_token: RwSignal::new(false),
+            token_was_rejected: RwSignal::new(false),
             connection_failure: RwSignal::new(None),
         }
     }
@@ -551,8 +558,11 @@ impl DashboardState {
         } else {
             // Reachable but unauthorized: a stale/rotated/mismatched token (if
             // any) must not silently re-fail next load. Login wall takes over.
+            // Capture whether a token was present *before* clearing it so
+            // TokenWall can distinguish first-time vs rejected-token copy.
+            let was_rejected = read_gateway_token().is_some();
             clear_gateway_token();
-            Handshake::NeedsToken
+            Handshake::NeedsToken { was_rejected }
         }
     }
 
@@ -771,11 +781,12 @@ impl DashboardState {
                         });
                         Ok(())
                     }
-                    Handshake::NeedsToken => {
+                    Handshake::NeedsToken { was_rejected } => {
                         // Reachable but walled — do NOT mark connected and do NOT
                         // spawn subscriptions (only `connect` is allowed unauthorized).
                         self.is_connected.set(false);
                         self.needs_token.set(true);
+                        self.token_was_rejected.set(was_rejected);
                         self.set_failure(ConnectionFailure::AuthRequired);
                         // Returning Ok keeps the boot/reconnect path from treating
                         // the wall as a transport failure; TokenWall (z-100) covers it.

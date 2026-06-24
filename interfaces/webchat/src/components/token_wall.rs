@@ -5,7 +5,7 @@
 //! full app with the same authority as the local App. Loopback never sees this.
 
 use crate::context::DashboardState;
-use crate::i18n::{t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 
 #[component]
@@ -30,7 +30,13 @@ pub fn TokenWall() -> impl IntoView {
                         {t!(i18n, common.token_wall_title)}
                     </h2>
                     <p class="text-sm text-text-secondary mb-6">
-                        {t!(i18n, common.token_wall_instruction)}
+                        {move || {
+                            if state.token_was_rejected.get() {
+                                t_string!(i18n, common.token_wall_instruction_rejected).to_string()
+                            } else {
+                                t_string!(i18n, common.token_wall_instruction).to_string()
+                            }
+                        }}
                     </p>
                     <input
                         type="password"
