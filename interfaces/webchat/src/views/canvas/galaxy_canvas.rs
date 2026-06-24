@@ -138,7 +138,7 @@ pub fn GalaxyCanvas(
         // Leak for panel lifetime — parent uses display:none keep-alive, never unmounts.
         resize_cb.forget();
 
-        start_raf_loop(scene_init.clone(), selected_node, hovered_node, hover_label, select_label);
+        start_raf_loop(el.clone(), scene_init.clone(), selected_node, hovered_node, hover_label, select_label);
     });
 
     // --- Data Effect: push GraphData into scene when it changes ---
@@ -347,7 +347,13 @@ pub fn GalaxyCanvas(
 /// Start the `requestAnimationFrame` recursive loop.
 /// Also updates label overlay signals each frame from screen-projected node positions (A).
 /// The closure holds a strong reference to itself through the `Rc<RefCell<Option<…>>>` trick.
+///
+/// `canvas_el` is used each frame to gate rendering: when the canvas is hidden via
+/// `display:none` keep-alive, `offset_parent()` returns `None` and we skip `render`
+/// and label-overlay updates. The rAF reschedule always fires so the loop stays alive
+/// and resumes instantly when the canvas becomes visible again.
 fn start_raf_loop(
+    canvas_el: web_sys::HtmlCanvasElement,
     scene: Rc<RefCell<Option<Scene>>>,
     selected_node: RwSignal<Option<String>>,
     hovered_node: RwSignal<Option<String>>,
@@ -359,28 +365,37 @@ fn start_raf_loop(
     let cb2 = cb.clone();
 
     *cb.borrow_mut() = Some(Closure::wrap(Box::new(move |t: f64| {
-        if let Some(s) = scene.borrow_mut().as_mut() {
-            s.render(t);
+        // Skip render and label updates when the canvas is hidden (display:none keep-alive).
+        // offset_parent() is None under display:none; also guard against zero client size.
+        let visible = canvas_el.offset_parent().is_some()
+            && canvas_el.client_width() > 0
+            && canvas_el.client_height() > 0;
+
+        if visible {
+            if let Some(s) = scene.borrow_mut().as_mut() {
+                s.render(t);
+            }
+
+            // Update label overlays (A): project hovered + selected node to screen.
+            // Read scene immutably after render so last_vp is current.
+            let new_hover = scene.borrow().as_ref().and_then(|s| {
+                let id = hovered_node.get_untracked()?;
+                let name = s.node_name(&id)?.to_owned();
+                let (x, y) = s.screen_pos_of(&id)?;
+                Some(LabelInfo { name, x, y })
+            });
+            hover_label.set(new_hover);
+
+            let new_select = scene.borrow().as_ref().and_then(|s| {
+                let id = selected_node.get_untracked()?;
+                let name = s.node_name(&id)?.to_owned();
+                let (x, y) = s.screen_pos_of(&id)?;
+                Some(LabelInfo { name, x, y })
+            });
+            select_label.set(new_select);
         }
 
-        // Update label overlays (A): project hovered + selected node to screen.
-        // Read scene immutably after render so last_vp is current.
-        let new_hover = scene.borrow().as_ref().and_then(|s| {
-            let id = hovered_node.get_untracked()?;
-            let name = s.node_name(&id)?.to_owned();
-            let (x, y) = s.screen_pos_of(&id)?;
-            Some(LabelInfo { name, x, y })
-        });
-        hover_label.set(new_hover);
-
-        let new_select = scene.borrow().as_ref().and_then(|s| {
-            let id = selected_node.get_untracked()?;
-            let name = s.node_name(&id)?.to_owned();
-            let (x, y) = s.screen_pos_of(&id)?;
-            Some(LabelInfo { name, x, y })
-        });
-        select_label.set(new_select);
-
+        // Always reschedule — loop must never stop so it resumes instantly when shown.
         request_af(cb2.borrow().as_ref().unwrap());
     }) as Box<dyn FnMut(f64)>));
 
