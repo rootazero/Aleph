@@ -249,6 +249,23 @@ async fn forward_bus_to_client(mut rx: broadcast::Receiver<String>, buffer: PerC
     }
 }
 
+/// Whether the given serialized event frame is a `token_rotated` notification.
+/// Parses the JSON once and checks `type == "token_rotated"`. Pure, host-testable.
+fn is_token_rotated_frame(event_json: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(event_json)
+        .ok()
+        .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(|s| s == "token_rotated"))
+        .unwrap_or(false)
+}
+
+/// Whether this connection must be torn down because the shared token was
+/// rotated. True only for a `token_rotated` event on a *remote* (non-loopback)
+/// connection — loopback is always operator and never token-gated, so it is
+/// unaffected. Pure for host testing.
+fn rotated_should_close_remote(event_json: &str, is_loopback: bool) -> bool {
+    !is_loopback && is_token_rotated_frame(event_json)
+}
+
 /// Handle a single WebSocket connection
 async fn handle_connection(
     socket: WebSocket,
@@ -896,6 +913,23 @@ async fn handle_connection(
             event = client_event_rx.recv() => {
                 match event {
                     Ok(event_json) => {
+                        // Token rotation kick: close remote (token-authorized)
+                        // sessions so they re-authenticate; never forward this
+                        // frame to clients verbatim, and never close loopback.
+                        if rotated_should_close_remote(&event_json, ctx.client_ip.is_loopback()) {
+                            info!("token rotated — closing remote session {}", conn_id);
+                            let _ = write
+                                .send(WsMessage::Close(Some(CloseFrame {
+                                    code: 4001,
+                                    reason: "token_rotated".into(),
+                                })))
+                                .await;
+                            break;
+                        }
+                        // Loopback receives token_rotated: swallow silently, do not forward.
+                        if is_token_rotated_frame(&event_json) {
+                            continue;
+                        }
                         // Try to extract topic from event for filtering
                         let should_forward = if let Ok(event_obj) = serde_json::from_str::<serde_json::Value>(&event_json) {
                             // Check for topic in event (TopicEvent format)
@@ -1188,6 +1222,29 @@ fn node_connect_identity(params: Option<&serde_json::Value>, conn_id: &str) -> O
             .or_else(|| p.get("device_name").and_then(|v| v.as_str()))
             .map_or_else(|| conn_id.to_string(), String::from),
     )
+}
+
+#[cfg(test)]
+mod token_rotation_tests {
+    use super::rotated_should_close_remote;
+
+    const ROTATED: &str = r#"{"type":"token_rotated"}"#;
+
+    #[test]
+    fn remote_session_closes_on_token_rotated() {
+        assert!(rotated_should_close_remote(ROTATED, false));
+    }
+
+    #[test]
+    fn loopback_session_ignores_token_rotated() {
+        assert!(!rotated_should_close_remote(ROTATED, true));
+    }
+
+    #[test]
+    fn other_events_never_trigger_close() {
+        assert!(!rotated_should_close_remote(r#"{"type":"acp_sessions_changed"}"#, false));
+        assert!(!rotated_should_close_remote(r#"{"topic":"alerts.system"}"#, false));
+    }
 }
 
 #[cfg(test)]
