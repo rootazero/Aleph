@@ -19,6 +19,7 @@ uniform float u_cam_dist;    // camera distance for spike near-fade
 out vec2 v_corner;
 out vec3 v_color;
 out float v_spike;
+out float v_twinkle;
 const float AMP = 3.0;
 const float TAU = 6.28318530718;
 const float OMEGA = TAU / 5.0;   // period 5000ms → rad/s over t(sec)
@@ -39,6 +40,8 @@ void main() {
     // Near-fade: spikes only show at distance; vanish when zoomed in / clustered.
     float fade = smoothstep(300.0, 900.0, u_cam_dist);
     v_spike = a_spike * fade;
+    // Subtle per-node brightness twinkle: slow sine wave modulated by per-node phase.
+    v_twinkle = 0.9 + 0.1 * sin(u_time / 1000.0 * 1.7 + a_phase * 6.2831853);
 }
 "#;
 
@@ -50,6 +53,7 @@ precision highp float;
 in vec2 v_corner;
 in vec3 v_color;
 in float v_spike;
+in float v_twinkle;
 out vec4 frag;
 void main() {
     float r = length(v_corner);
@@ -68,7 +72,7 @@ void main() {
         float radial = 1.0 - smoothstep(0.0, 1.0, r); // fade arms toward rim
         cross = max(ax, ay) * radial * v_spike;
     }
-    vec3  rgb  = v_color * (core * 1.6 + halo + cross);
+    vec3  rgb  = v_color * (core * 1.6 * v_twinkle + halo + cross);
     float a    = clamp(core + halo * 0.6 + cross, 0.0, 1.0);
     frag = vec4(rgb, a);
 }
