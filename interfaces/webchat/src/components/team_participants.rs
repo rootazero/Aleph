@@ -45,6 +45,26 @@ pub fn status_color(s: MemberStatus) -> &'static str {
     }
 }
 
+/// Chinese status word shown beside a member's name in the expanded roster bar.
+/// Reuses the 4 existing `MemberStatus` variants (no "审阅中" state — spec §2).
+#[must_use]
+pub fn member_status_label(s: MemberStatus) -> &'static str {
+    match s {
+        MemberStatus::Working => "工作中",
+        MemberStatus::Idle => "空闲",
+        MemberStatus::Done => "完成",
+        MemberStatus::Error => "错误",
+    }
+}
+
+/// Count-driven collapse: more than `CLUSTER_CAP` members always render as the
+/// avatar cluster (narrow-width collapse is handled separately by a CSS
+/// container query). Mirrors the cluster's own `CLUSTER_CAP` cutoff.
+#[must_use]
+pub fn collapse_for_count(n: usize) -> bool {
+    n > CLUSTER_CAP
+}
+
 /// Top-left participants affordance for team chat. Collapsed: overlapping
 /// avatar discs + chevron. Expanded: a popover card (leader + members with
 /// status dots), dismissed by clicking the transparent backdrop.
@@ -215,5 +235,21 @@ mod tests {
         assert_eq!(status_color(MemberStatus::Done), "#4ec9b0");
         assert_eq!(status_color(MemberStatus::Error), "#d16969");
         assert_eq!(status_color(MemberStatus::Idle), "#6b7280");
+    }
+
+    #[test]
+    fn member_status_label_maps_all_variants() {
+        assert_eq!(member_status_label(MemberStatus::Working), "工作中");
+        assert_eq!(member_status_label(MemberStatus::Idle), "空闲");
+        assert_eq!(member_status_label(MemberStatus::Done), "完成");
+        assert_eq!(member_status_label(MemberStatus::Error), "错误");
+    }
+
+    #[test]
+    fn collapse_only_above_cluster_cap() {
+        assert!(!collapse_for_count(0));
+        assert!(!collapse_for_count(4)); // == CLUSTER_CAP, still expandable
+        assert!(collapse_for_count(5)); // first count that forces collapse
+        assert!(collapse_for_count(9));
     }
 }
