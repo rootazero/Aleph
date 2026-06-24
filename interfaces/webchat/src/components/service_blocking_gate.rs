@@ -83,9 +83,15 @@ pub fn ServiceBlockingGate() -> impl IntoView {
                     </p>
 
                     {move || match phase.get() {
-                        ConnectionPhase::Failed { reason } => view! {
+                        ConnectionPhase::Failed { failure } => view! {
                             <div class="mt-3 rounded-lg border border-danger/20 bg-danger-subtle p-3 text-xs font-mono text-danger break-all">
-                                {reason}
+                                {match failure {
+                                    shared_ui_logic::connection::ConnectionFailure::AuthRequired => String::new(),
+                                    shared_ui_logic::connection::ConnectionFailure::Unreachable { detail }
+                                    | shared_ui_logic::connection::ConnectionFailure::Timeout { detail }
+                                    | shared_ui_logic::connection::ConnectionFailure::Dropped { detail }
+                                    | shared_ui_logic::connection::ConnectionFailure::Unknown { detail } => detail,
+                                }}
                             </div>
                         }.into_any(),
                         _ => ().into_any(),

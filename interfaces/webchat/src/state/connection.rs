@@ -6,6 +6,8 @@
 //! into a single enum so UI copy stays consistent across `ConnectionStatus`,
 //! `BootCheckGate`, `ServiceBlockingGate`, and any future surface.
 
+use shared_ui_logic::connection::ConnectionFailure;
+
 /// Maximum reconnect attempts before `DashboardState::reconnect()` gives up.
 /// Mirrors the hard-coded `max_attempts` in `context.rs::reconnect()`; kept here
 /// so UI gates can show "X/MAX" without duplicating the literal.
@@ -28,7 +30,7 @@ pub enum ConnectionPhase {
     /// Connected and healthy.
     Connected,
     /// Reconnect ran out of attempts; user action required.
-    Failed { reason: String },
+    Failed { failure: ConnectionFailure },
 }
 
 impl ConnectionPhase {
@@ -49,7 +51,7 @@ impl ConnectionPhase {
         // Any explicit error wins — surface it so the user gets a Retry path.
         if let Some(reason) = connection_error {
             return Self::Failed {
-                reason: reason.to_string(),
+                failure: ConnectionFailure::Unknown { detail: reason.to_string() },
             };
         }
         if is_reconnecting {
@@ -147,17 +149,21 @@ mod tests {
 
     #[test]
     fn failed_after_max_attempts() {
+        use shared_ui_logic::connection::ConnectionFailure;
         let p = ConnectionPhase::derive(false, false, 5, Some("WebSocket closed"), true);
         assert_eq!(
             p,
             ConnectionPhase::Failed {
-                reason: "WebSocket closed".into()
+                failure: ConnectionFailure::Unknown {
+                    detail: "WebSocket closed".to_string()
+                }
             }
         );
     }
 
     #[test]
     fn explicit_error_during_boot_surfaces_immediately() {
+        use shared_ui_logic::connection::ConnectionFailure;
         // First-boot probe failed — boot gate must show the trouble screen
         // with a Retry button rather than spinning forever. The user has
         // actionable info either way, so we don't gate on attempt count.
@@ -165,17 +171,41 @@ mod tests {
         assert_eq!(
             p,
             ConnectionPhase::Failed {
-                reason: "ECONNREFUSED".into()
+                failure: ConnectionFailure::Unknown {
+                    detail: "ECONNREFUSED".to_string()
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn failed_wraps_error_string_as_unknown() {
+        use shared_ui_logic::connection::ConnectionFailure;
+        let p = ConnectionPhase::derive(false, false, 5, Some("WebSocket closed"), true);
+        assert_eq!(
+            p,
+            ConnectionPhase::Failed {
+                failure: ConnectionFailure::Unknown {
+                    detail: "WebSocket closed".to_string()
+                }
             }
         );
     }
 
     #[test]
     fn is_pre_ready_only_for_initial_and_connecting() {
+        use shared_ui_logic::connection::ConnectionFailure;
         assert!(ConnectionPhase::Initial.is_pre_ready());
         assert!(ConnectionPhase::Connecting.is_pre_ready());
         assert!(!ConnectionPhase::Connected.is_pre_ready());
         assert!(!ConnectionPhase::Reconnecting { attempt: 1, max: 5 }.is_pre_ready());
-        assert!(!ConnectionPhase::Failed { reason: "x".into() }.is_pre_ready());
+        assert!(
+            !ConnectionPhase::Failed {
+                failure: ConnectionFailure::Unknown {
+                    detail: "x".to_string()
+                }
+            }
+            .is_pre_ready()
+        );
     }
 }

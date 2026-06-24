@@ -61,7 +61,13 @@ pub fn ConnectionStatus() -> impl IntoView {
     // already comes from WebSocket/network layer in English, no i18n).
     let detail_text = move || match phase.get() {
         ConnectionPhase::Reconnecting { attempt, max } => Some(format!("{attempt}/{max}")),
-        ConnectionPhase::Failed { reason } => Some(reason),
+        ConnectionPhase::Failed { failure } => Some(match failure {
+            shared_ui_logic::connection::ConnectionFailure::AuthRequired => String::new(),
+            shared_ui_logic::connection::ConnectionFailure::Unreachable { detail }
+            | shared_ui_logic::connection::ConnectionFailure::Timeout { detail }
+            | shared_ui_logic::connection::ConnectionFailure::Dropped { detail }
+            | shared_ui_logic::connection::ConnectionFailure::Unknown { detail } => detail,
+        }),
         _ => None,
     };
 

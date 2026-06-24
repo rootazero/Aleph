@@ -68,8 +68,14 @@ pub fn BootCheckGate() -> impl IntoView {
             >
                 <div class="w-full max-w-md rounded-2xl border border-border bg-surface-raised p-6 shadow-2xl">
                     {move || match phase.get() {
-                        ConnectionPhase::Failed { reason } => {
-                            let body = reason;
+                        ConnectionPhase::Failed { failure } => {
+                            let body = match failure {
+                                shared_ui_logic::connection::ConnectionFailure::AuthRequired => String::new(),
+                                shared_ui_logic::connection::ConnectionFailure::Unreachable { detail }
+                                | shared_ui_logic::connection::ConnectionFailure::Timeout { detail }
+                                | shared_ui_logic::connection::ConnectionFailure::Dropped { detail }
+                                | shared_ui_logic::connection::ConnectionFailure::Unknown { detail } => detail,
+                            };
                             view! {
                                 <h2 class="text-xl font-semibold text-text-primary">
                                     {move || t_string!(i18n, boot_gate.trouble_title).to_string()}
