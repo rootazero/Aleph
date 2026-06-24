@@ -85,13 +85,15 @@ layout(location=1) in vec3 a_pos_a;
 layout(location=2) in vec3 a_pos_b;
 layout(location=3) in vec3 a_color_a;
 layout(location=4) in vec3 a_color_b;
+layout(location=5) in float a_highlight; // 1.0 = neighbor of selected, 0.0 = other
 uniform mat4 u_view_proj;
 uniform vec2 u_viewport;
 uniform float u_width;
-uniform float u_time;        // ms (used by Task 5 flow; harmless here)
+uniform float u_time;        // ms (used by flow effect in frag)
 out vec3 v_color;
 out float v_along;
 out float v_depth;
+out float v_hl;
 
 vec3 bezier(vec3 a, vec3 c, vec3 b, float t) {
     float u = 1.0 - t;
@@ -126,23 +128,42 @@ void main() {
     v_color = mix(a_color_a, a_color_b, t);
     v_along = t;
     v_depth = cp.z / max(cp.w, 1e-4);
+    v_hl = a_highlight;
 }
 "#;
 
-/// Edge fragment shader: endpoint weld brightening (visually plugs into the star
-/// core) and gentle depth fade. `v_along` is passed through for Task 5 flow effect.
+/// Edge fragment shader: endpoint weld brightening + depth fade.
+/// When a node is selected (`u_select_active`): neighbor edges (`v_hl`) get an
+/// animated energy-flow band; non-neighbor edges dim to focus the selected chain.
 pub const EDGE_FRAG: &str = r#"#version 300 es
 precision highp float;
 in vec3 v_color;
 in float v_along;
 in float v_depth;
+in float v_hl;
 out vec4 frag;
+uniform float u_time;          // ms
+uniform float u_select_active; // 1.0 when a node is selected
 void main() {
-    // Brighter near endpoints → visually plugs into the star core.
     float edge = min(v_along, 1.0 - v_along);
     float weld = mix(1.4, 1.0, smoothstep(0.0, 0.12, edge));
     float fade = clamp(1.0 - (v_depth * 0.5 + 0.5) * 0.5, 0.4, 1.0);
-    frag = vec4(v_color * (1.0 * weld * fade), fade * 0.55);
+    vec3  rgb = v_color * (weld * fade);
+    float a   = fade * 0.55;
+    if (u_select_active > 0.5) {
+        if (v_hl > 0.5) {
+            // Energy flow: a bright band travels along the highlighted link.
+            float pulse = fract(v_along * 1.5 - u_time * 0.0006);
+            float band = smoothstep(0.0, 0.06, pulse) * (1.0 - smoothstep(0.10, 0.45, pulse));
+            rgb += v_color * band * 1.8;
+            a = clamp(a + band * 0.5, 0.0, 1.0);
+        } else {
+            // Non-neighbor edge: dim to focus the selected chain.
+            rgb *= 0.25;
+            a   *= 0.35;
+        }
+    }
+    frag = vec4(rgb, a);
 }
 "#;
 

@@ -42,6 +42,9 @@ pub struct Scene {
     /// Current highlight set (selected node index + topological neighbors).
     /// Stored on the struct so settling/drift re-uploads preserve it.
     highlight: Option<HashSet<u32>>,
+    /// Current edge highlight set (normalized (min,max) incident-edge pairs for selected node).
+    /// Stored so every upload_indexed re-applies the correct per-edge flags.
+    highlight_edges: Option<HashSet<(u32, u32)>>,
     /// LOD level in [0, 1]. 0 = show all edges; 1 = show only high-degree backbone.
     /// Stored so all edge-upload sites (set_graph, settling, set_lod) apply it consistently.
     lod: f32,
@@ -74,6 +77,7 @@ impl Scene {
             settle_steps: 0,
             last_vp: Mat4::identity(),
             highlight: None,
+            highlight_edges: None,
             lod: 0.0,
             filtered_edges: Vec::new(),
         })
@@ -88,11 +92,13 @@ impl Scene {
         self.settle_steps = 0;
         // Clear highlight when the graph changes — indices shift on a new graph.
         self.highlight = None;
+        self.highlight_edges = None;
 
         // Assign data and compute the filtered edge list once for (graph, lod).
         self.data = data;
         self.recompute_filtered_edges();
         self.edges.upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
+        self.edges.set_highlight(&self.ctx.gl, &self.filtered_edges, self.highlight_edges.as_ref());
         self.nodes.upload(&self.ctx.gl, &self.data, None);
     }
 
@@ -102,6 +108,7 @@ impl Scene {
         self.lod = lod.clamp(0.0, 1.0);
         self.recompute_filtered_edges();
         self.edges.upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
+        self.edges.set_highlight(&self.ctx.gl, &self.filtered_edges, self.highlight_edges.as_ref());
     }
 
     /// Recompute `self.filtered_edges` from `self.data` and `self.lod`.
@@ -192,6 +199,13 @@ impl Scene {
             .upload(&self.ctx.gl, &self.data, self.highlight.as_ref());
     }
 
+    /// Set the edge highlight set (normalized (min,max) incident-edge pairs).
+    /// Stored so every upload_indexed re-applies the correct per-edge flags.
+    pub fn set_highlight_edges(&mut self, edges: Option<HashSet<(u32, u32)>>) {
+        self.edges.set_highlight(&self.ctx.gl, &self.filtered_edges, edges.as_ref());
+        self.highlight_edges = edges;
+    }
+
     /// Fly the camera to the node with the given id, if found.
     pub fn fly_to_node(&mut self, id: &str, t_ms: f64) {
         if let Some(n) = self.data.nodes.iter().find(|n| n.id == id) {
@@ -248,6 +262,7 @@ impl Scene {
                 // Use the cached filtered_edges list — no clone, no re-sort.
                 // Pass through the stored highlight so it survives settling.
                 self.edges.upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
+                self.edges.set_highlight(&self.ctx.gl, &self.filtered_edges, self.highlight_edges.as_ref());
                 self.nodes
                     .upload(&self.ctx.gl, &self.data, self.highlight.as_ref());
             }

@@ -38,7 +38,11 @@ pub struct EdgeRenderer {
     pos_b_buf: WebGlBuffer,
     col_a_buf: WebGlBuffer,
     col_b_buf: WebGlBuffer,
+    /// Per-instance highlight flag buffer (location 5): 1.0 = neighbor, 0.0 = other.
+    hl_buf: WebGlBuffer,
     count: i32,
+    /// 1.0 when a node is selected (drives non-neighbor dimming in the frag shader).
+    select_active: f32,
 }
 
 impl EdgeRenderer {
@@ -64,11 +68,14 @@ impl EdgeRenderer {
         let pos_b_buf = gl.create_buffer().ok_or("edge pos_b")?;
         let col_a_buf = gl.create_buffer().ok_or("edge col_a")?;
         let col_b_buf = gl.create_buffer().ok_or("edge col_b")?;
+        let hl_buf = gl.create_buffer().ok_or("edge hl")?;
         // a_pos_a(1) a_pos_b(2) a_color_a(3) a_color_b(4) — all per-instance.
         Self::setup_instanced(gl, &pos_a_buf, 1, 3);
         Self::setup_instanced(gl, &pos_b_buf, 2, 3);
         Self::setup_instanced(gl, &col_a_buf, 3, 3);
         Self::setup_instanced(gl, &col_b_buf, 4, 3);
+        // a_highlight(5) — per-instance flag: 1.0 = neighbor of selected, 0.0 = other.
+        Self::setup_instanced(gl, &hl_buf, 5, 1);
 
         gl.bind_vertex_array(None);
         Ok(EdgeRenderer {
@@ -78,7 +85,9 @@ impl EdgeRenderer {
             pos_b_buf,
             col_a_buf,
             col_b_buf,
+            hl_buf,
             count: 0,
+            select_active: 0.0,
         })
     }
 
@@ -114,6 +123,26 @@ impl EdgeRenderer {
         bind_upload(gl, &self.pos_b_buf, &pos_b);
         bind_upload(gl, &self.col_a_buf, &col_a);
         bind_upload(gl, &self.col_b_buf, &col_b);
+        // Initialize a_highlight to all-0 (no highlight); caller re-applies via set_highlight.
+        let zeros: Vec<f32> = vec![0.0; edges.len()];
+        bind_upload(gl, &self.hl_buf, &zeros);
+    }
+
+    /// Rebuild the per-edge highlight flag aligned to the LAST uploaded edge order,
+    /// and flag whether a selection is active (for non-neighbor dimming).
+    pub fn set_highlight(
+        &mut self,
+        gl: &Gl,
+        edges_in_order: &[(u32, u32)],
+        hl: Option<&std::collections::HashSet<(u32, u32)>>,
+    ) {
+        let active = hl.map(|s| !s.is_empty()).unwrap_or(false);
+        self.select_active = if active { 1.0 } else { 0.0 };
+        let flags: Vec<f32> = edges_in_order.iter().map(|&(a, b)| {
+            let key = (a.min(b), a.max(b));
+            if active && hl.unwrap().contains(&key) { 1.0 } else { 0.0 }
+        }).collect();
+        bind_upload(gl, &self.hl_buf, &flags);
     }
 
     pub fn draw(&self, gl: &Gl, view_proj: &Mat4, viewport: (f32, f32), u_time_ms: f32) {
@@ -128,6 +157,8 @@ impl EdgeRenderer {
         gl.uniform1f(loc_width.as_ref(), EDGE_WIDTH_PX);
         let loc_time = gl.get_uniform_location(&self.prog, "u_time");
         gl.uniform1f(loc_time.as_ref(), u_time_ms);
+        let loc_sa = gl.get_uniform_location(&self.prog, "u_select_active");
+        gl.uniform1f(loc_sa.as_ref(), self.select_active);
         let vtx = (2 * (SEGMENTS + 1)) as i32;
         gl.draw_arrays_instanced(Gl::TRIANGLE_STRIP, 0, vtx, self.count);
         gl.bind_vertex_array(None);

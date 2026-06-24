@@ -50,6 +50,8 @@ pub fn GalaxyCanvas(
     selected_node: RwSignal<Option<String>>,
     /// Intent channel: currently hovered node id (for label overlay).
     hovered_node: RwSignal<Option<String>>,
+    /// Intent channel: edges incident to the selected node (normalized index pairs).
+    highlight_edges_request: RwSignal<Option<std::collections::HashSet<(u32, u32)>>>,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
@@ -166,6 +168,15 @@ pub fn GalaxyCanvas(
         let hl = highlight_request.get();
         if let Some(s) = scene_hl.borrow_mut().as_mut() {
             s.set_highlight(hl);
+        }
+    });
+
+    // --- Intent channel Effect: highlight edges ---
+    let scene_hle = scene.clone();
+    Effect::new(move |_| {
+        let hle = highlight_edges_request.get();
+        if let Some(s) = scene_hle.borrow_mut().as_mut() {
+            s.set_highlight_edges(hle);
         }
     });
 
