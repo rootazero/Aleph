@@ -12,16 +12,9 @@ use super::layout3d::ForceLayout;
 use super::math::{Mat4, Vec3};
 use super::nodes::NodeRenderer;
 use super::GraphData;
-use crate::canvas_engine::fnv1a::fnv1a_32;
 
 /// Maximum force-layout steps per new graph before switching to idle drift.
 const MAX_SETTLE_STEPS: u32 = 400;
-
-/// Idle drift: peak displacement from settled position (scene units, not px).
-const DRIFT_AMPLITUDE: f32 = 3.0;
-
-/// Idle drift: period of one full oscillation in milliseconds.
-const DRIFT_PERIOD_MS: f32 = 5000.0;
 
 /// Wheel-zoom sensitivity. The zoom factor is `exp(normalized_delta * this)`,
 /// where `normalized_delta = wheel_delta / 100` clamped to ±2. This makes zoom
@@ -56,9 +49,6 @@ pub struct Scene {
     /// Recomputed only when `data` or `lod` changes; used every settling frame
     /// to avoid per-frame clone + O(n log n) sort.
     filtered_edges: Vec<(u32, u32)>,
-    /// Reusable scratch buffer for idle-drift drifted positions (C: perf cleanup).
-    /// Avoids cloning the full GraphData (incl. String ids) every frame.
-    drift_scratch: Vec<Vec3>,
 }
 
 impl Scene {
@@ -86,7 +76,6 @@ impl Scene {
             highlight: None,
             lod: 0.0,
             filtered_edges: Vec::new(),
-            drift_scratch: Vec::new(),
         })
     }
 
@@ -263,26 +252,9 @@ impl Scene {
                     .upload(&self.ctx.gl, &self.data, self.highlight.as_ref());
             }
         } else {
-            // --- Phase 2: Idle drift ---
-            // Reuse `drift_scratch` (Vec<Vec3>) to avoid cloning the full GraphData
-            // (incl. String ids) every frame. Canonical `self.data.nodes[*].pos` is
-            // NEVER mutated here, preserving stable settled positions for picking.
-            let n = self.data.nodes.len();
-            self.drift_scratch.clear();
-            self.drift_scratch.reserve(n);
-            for node in &self.data.nodes {
-                self.drift_scratch.push(
-                    drift_offset_3d(t_ms, &node.id, DRIFT_AMPLITUDE, DRIFT_PERIOD_MS, node.pos)
-                );
-            }
-            // Re-upload nodes only (edges remain at stable settled positions).
-            // Pass through the stored highlight so it survives drift re-uploads.
-            self.nodes.upload_positions(
-                &self.ctx.gl,
-                &self.drift_scratch,
-                &self.data,
-                self.highlight.as_ref(),
-            );
+            // Idle: drift is computed in the vertex shader from u_time; no CPU work,
+            // no per-frame buffer re-upload. Canonical node.pos stays authoritative
+            // for picking.
         }
 
         let gl = &self.ctx.gl;
@@ -301,7 +273,7 @@ impl Scene {
         // Store for picking (uses stable canonical positions, not drifted).
         self.last_vp = vp;
         self.edges.draw(gl, &vp, (self.width as f32, self.height as f32));
-        self.nodes.draw(gl, &vp, (self.width as f32, self.height as f32));
+        self.nodes.draw(gl, &vp, (self.width as f32, self.height as f32), t_ms as f32);
         // Restore blend state after scene draw — bloom passes will disable blend.
         gl.disable(Gl::BLEND);
 
@@ -312,22 +284,3 @@ impl Scene {
 
 }
 
-// ---------------------------------------------------------------------------
-// 3D idle drift helper
-// ---------------------------------------------------------------------------
-
-/// Returns `base_pos` offset by three independent phase-shifted sine components
-/// (x, y, z) derived from the node id hash. The `base_pos` argument is passed
-/// by value; this function never touches `data.nodes[*].pos`.
-fn drift_offset_3d(t_ms: f64, node_id: &str, amplitude: f32, period_ms: f32, base: Vec3) -> Vec3 {
-    let h = fnv1a_32(node_id.as_bytes());
-    let phase = h as f32 / u32::MAX as f32; // [0, 1)
-    let omega = std::f32::consts::TAU / (period_ms / 1000.0);
-    let t = (t_ms as f32) / 1000.0;
-    // Three axes with phase offsets (0, +0.27, +0.54 of TAU) so motion is
-    // non-planar and adjacent nodes move out of sync.
-    let dx = amplitude * (omega * t + phase * std::f32::consts::TAU).sin();
-    let dy = amplitude * (omega * t + (phase + 0.27) * std::f32::consts::TAU).sin();
-    let dz = amplitude * (omega * t + (phase + 0.54) * std::f32::consts::TAU).sin();
-    Vec3::new(base.x + dx, base.y + dy, base.z + dz)
-}

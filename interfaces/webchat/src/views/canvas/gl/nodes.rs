@@ -3,9 +3,17 @@
 use std::collections::HashSet;
 use web_sys::{WebGl2RenderingContext as Gl, WebGlBuffer, WebGlProgram, WebGlVertexArrayObject};
 
+use crate::canvas_engine::fnv1a::fnv1a_32;
+
 use super::context::compile_program;
 use super::math::Mat4;
 use super::{shaders, GraphData};
+
+/// Per-node drift phase in [0,1), derived deterministically from the id hash.
+/// Replaces the CPU `drift_offset_3d` phase so idle motion moves to the GPU.
+pub(super) fn node_phase(id: &str) -> f32 {
+    fnv1a_32(id.as_bytes()) as f32 / u32::MAX as f32
+}
 
 pub struct NodeRenderer {
     prog: WebGlProgram,
@@ -13,6 +21,7 @@ pub struct NodeRenderer {
     inst_offset: WebGlBuffer,
     inst_size: WebGlBuffer,
     inst_color: WebGlBuffer,
+    inst_phase: WebGlBuffer,
     count: i32,
 }
 
@@ -43,13 +52,15 @@ impl NodeRenderer {
         let inst_offset = gl.create_buffer().ok_or("offset buf")?;
         let inst_size = gl.create_buffer().ok_or("size buf")?;
         let inst_color = gl.create_buffer().ok_or("color buf")?;
-        // a_offset (1) vec3, a_size (2) float, a_color (3) vec3 — all per-instance.
+        let inst_phase = gl.create_buffer().ok_or("phase buf")?;
+        // a_offset (1) vec3, a_size (2) float, a_color (3) vec3, a_phase (4) float — per-instance.
         Self::setup_instanced(gl, &inst_offset, 1, 3);
         Self::setup_instanced(gl, &inst_size, 2, 1);
         Self::setup_instanced(gl, &inst_color, 3, 3);
+        Self::setup_instanced(gl, &inst_phase, 4, 1);
 
         gl.bind_vertex_array(None);
-        Ok(NodeRenderer { prog, vao, inst_offset, inst_size, inst_color, count: 0 })
+        Ok(NodeRenderer { prog, vao, inst_offset, inst_size, inst_color, inst_phase, count: 0 })
     }
 
     fn setup_instanced(gl: &Gl, buf: &WebGlBuffer, loc: u32, size: i32) {
@@ -75,6 +86,7 @@ impl NodeRenderer {
         let mut offsets = Vec::with_capacity(n * 3);
         let mut sizes = Vec::with_capacity(n);
         let mut colors = Vec::with_capacity(n * 3);
+        let mut phases = Vec::with_capacity(n);
         let has_hl = hl.map(|s| !s.is_empty()).unwrap_or(false);
         for (i, (node, pos)) in data.nodes.iter().zip(positions.iter()).enumerate() {
             offsets.extend_from_slice(&[pos.x, pos.y, pos.z]);
@@ -88,11 +100,13 @@ impl NodeRenderer {
             } else {
                 colors.extend_from_slice(&[r * 0.7, g * 0.7, b * 0.7]);
             }
+            phases.push(node_phase(&node.id));
         }
         self.count = n as i32;
         upload_f32(gl, &self.inst_offset, &offsets);
         upload_f32(gl, &self.inst_size, &sizes);
         upload_f32(gl, &self.inst_color, &colors);
+        upload_f32(gl, &self.inst_phase, &phases);
     }
 
     pub fn upload(&mut self, gl: &Gl, data: &GraphData, hl: Option<&HashSet<u32>>) {
@@ -100,6 +114,7 @@ impl NodeRenderer {
         let mut offsets = Vec::with_capacity(n * 3);
         let mut sizes = Vec::with_capacity(n);
         let mut colors = Vec::with_capacity(n * 3);
+        let mut phases = Vec::with_capacity(n);
         let has_hl = hl.map(|s| !s.is_empty()).unwrap_or(false);
         for (i, node) in data.nodes.iter().enumerate() {
             offsets.extend_from_slice(&[node.pos.x, node.pos.y, node.pos.z]);
@@ -115,14 +130,16 @@ impl NodeRenderer {
             } else {
                 colors.extend_from_slice(&[r * 0.7, g * 0.7, b * 0.7]);
             }
+            phases.push(node_phase(&node.id));
         }
         self.count = n as i32;
         upload_f32(gl, &self.inst_offset, &offsets);
         upload_f32(gl, &self.inst_size, &sizes);
         upload_f32(gl, &self.inst_color, &colors);
+        upload_f32(gl, &self.inst_phase, &phases);
     }
 
-    pub fn draw(&self, gl: &Gl, view_proj: &Mat4, viewport: (f32, f32)) {
+    pub fn draw(&self, gl: &Gl, view_proj: &Mat4, viewport: (f32, f32), u_time_ms: f32) {
         if self.count == 0 {
             return;
         }
@@ -130,6 +147,8 @@ impl NodeRenderer {
         gl.bind_vertex_array(Some(&self.vao));
         set_mat4(gl, &self.prog, "u_view_proj", view_proj);
         set_vec2(gl, &self.prog, "u_viewport", viewport);
+        let loc = gl.get_uniform_location(&self.prog, "u_time");
+        gl.uniform1f(loc.as_ref(), u_time_ms);
         gl.draw_arrays_instanced(Gl::TRIANGLES, 0, 6, self.count);
         gl.bind_vertex_array(None);
     }
@@ -153,4 +172,19 @@ pub(super) fn set_mat4(gl: &Gl, prog: &WebGlProgram, name: &str, m: &Mat4) {
 pub(super) fn set_vec2(gl: &Gl, prog: &WebGlProgram, name: &str, v: (f32, f32)) {
     let loc = gl.get_uniform_location(prog, name);
     gl.uniform2f(loc.as_ref(), v.0, v.1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_phase_is_stable_and_in_unit_range() {
+        for id in ["", "a", "memory-x", "节点42"] {
+            let p = node_phase(id);
+            assert!((0.0..1.0).contains(&p), "phase out of range for {id}: {p}");
+            assert_eq!(p, node_phase(id), "phase not deterministic for {id}");
+        }
+        assert!(node_phase("a") != node_phase("b"), "distinct ids share phase");
+    }
 }

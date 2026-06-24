@@ -1,20 +1,33 @@
 //! GLSL ES 3.00 shader sources. Filled per-renderer in Tasks 4-6 + Phase 2.
 
 /// Node billboard vertex shader. Per-instance: a_offset(vec3), a_size(float),
-/// a_color(vec3). Per-vertex: a_corner(vec2 in [-1,1]).
+/// a_color(vec3), a_phase(float). Per-vertex: a_corner(vec2 in [-1,1]).
+/// Idle drift is computed entirely on the GPU from u_time + a_phase so that
+/// idle frames upload nothing and do no CPU sine work.
 pub const NODE_VERT: &str = r#"#version 300 es
 precision highp float;
 layout(location=0) in vec2 a_corner;
 layout(location=1) in vec3 a_offset;
 layout(location=2) in float a_size;
 layout(location=3) in vec3 a_color;
+layout(location=4) in float a_phase;
 uniform mat4 u_view_proj;
 uniform vec2 u_viewport;
+uniform float u_time;        // ms
 out vec2 v_corner;
 out vec3 v_color;
+const float AMP = 3.0;
+const float TAU = 6.28318530718;
+const float OMEGA = TAU / 5.0;   // period 5000ms → rad/s over t(sec)
 void main() {
-    vec4 clip = u_view_proj * vec4(a_offset, 1.0);
-    // Billboard: expand in clip space by pixel size, perspective-correct.
+    float t = u_time / 1000.0;
+    float ph = a_phase * TAU;
+    vec3 drift = AMP * vec3(
+        sin(OMEGA * t + ph),
+        sin(OMEGA * t + ph + 0.27 * TAU),
+        sin(OMEGA * t + ph + 0.54 * TAU)
+    );
+    vec4 clip = u_view_proj * vec4(a_offset + drift, 1.0);
     vec2 px = a_corner * a_size / u_viewport * clip.w * 2.0;
     clip.xy += px;
     gl_Position = clip;
