@@ -29,6 +29,20 @@ pub fn ServiceBlockingGate() -> impl IntoView {
 
     let has_connected_once = state.has_connected_once;
 
+    let failure = state.connection_failure;
+    // Remote origin (lite shell / browser hitting a LAN IP) — for an
+    // Unreachable failure the native supervisor will relocate to connect.html,
+    // so a Retry against the dead origin is useless here.
+    let is_remote_origin = {
+        let host = web_sys::window()
+            .and_then(|w| w.location().host().ok())
+            .unwrap_or_default();
+        !(host.is_empty()
+            || host.starts_with("127.0.0.1")
+            || host.starts_with("localhost")
+            || host.starts_with("[::1]"))
+    };
+
     // The overlay engages only when:
     //   1. We've ever connected (boot succeeded — BootCheckGate handed off).
     //   2. We're currently not connected.
@@ -72,13 +86,19 @@ pub fn ServiceBlockingGate() -> impl IntoView {
                     </h2>
                     <p class="mt-2 text-sm text-text-secondary">
                         {move || {
-                            let count = state.reconnect_count.get();
-                            format!(
-                                "{}{}{}",
-                                t_string!(i18n, service_gate.body_prefix),
-                                count,
-                                t_string!(i18n, service_gate.body_suffix),
-                            )
+                            use shared_ui_logic::connection::ConnectionFailure;
+                            if is_remote_origin
+                                && matches!(failure.get(), Some(ConnectionFailure::Unreachable { .. }))
+                            {
+                                t_string!(i18n, conn_error.lite_relocating).to_string()
+                            } else {
+                                format!(
+                                    "{}{}{}",
+                                    t_string!(i18n, service_gate.body_prefix),
+                                    state.reconnect_count.get(),
+                                    t_string!(i18n, service_gate.body_suffix),
+                                )
+                            }
                         }}
                     </p>
 
@@ -114,28 +134,37 @@ pub fn ServiceBlockingGate() -> impl IntoView {
                         >
                             {move || t_string!(i18n, service_gate.open_logs).to_string()}
                         </button>
-                        <button
-                            type="button"
-                            on:click=move |_| {
-                                if is_retrying.get_untracked() { return; }
-                                is_retrying.set(true);
-                                retry_error.set(None);
-                                spawn_local(async move {
-                                    if state.reconnect().await.is_err() {
-                                        retry_error.set(Some("retry_failed".to_string()));
-                                    }
-                                    is_retrying.set(false);
-                                });
+                        <Show
+                            when=move || {
+                                use shared_ui_logic::connection::ConnectionFailure;
+                                !(is_remote_origin
+                                    && matches!(failure.get(), Some(ConnectionFailure::Unreachable { .. })))
                             }
-                            disabled=move || is_retrying.get()
-                            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-hover disabled:opacity-60"
+                            fallback=|| ()
                         >
-                            {move || if is_retrying.get() {
-                                t_string!(i18n, service_gate.retrying).to_string()
-                            } else {
-                                t_string!(i18n, service_gate.retry).to_string()
-                            }}
-                        </button>
+                            <button
+                                type="button"
+                                on:click=move |_| {
+                                    if is_retrying.get_untracked() { return; }
+                                    is_retrying.set(true);
+                                    retry_error.set(None);
+                                    spawn_local(async move {
+                                        if state.reconnect().await.is_err() {
+                                            retry_error.set(Some("retry_failed".to_string()));
+                                        }
+                                        is_retrying.set(false);
+                                    });
+                                }
+                                disabled=move || is_retrying.get()
+                                class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-hover disabled:opacity-60"
+                            >
+                                {move || if is_retrying.get() {
+                                    t_string!(i18n, service_gate.retrying).to_string()
+                                } else {
+                                    t_string!(i18n, service_gate.retry).to_string()
+                                }}
+                            </button>
+                        </Show>
                     </div>
                 </div>
             </div>
