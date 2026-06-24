@@ -176,6 +176,10 @@ pub enum GatewayEventFrame {
     /// respawned). Payload-free on purpose: panels re-fetch via
     /// `acp.sessions.list` so the truth source stays single.
     AcpSessionsChanged,
+    /// Emitted when the shared Gateway token is rotated. The connection loop
+    /// intercepts it to close *remote* (token-authorized) sessions with
+    /// 4001/`token_rotated`; loopback sessions ignore it. Payload-free.
+    TokenRotated,
     /// Emitted whenever a cron job is mutated server-side (created / updated
     /// / deleted / enabled / disabled / forced-run / state-changed by a
     /// scheduler tick). The panel subscribes to `cron.job.changed` so it can
@@ -435,6 +439,7 @@ impl GatewayEventFrame {
             Self::ApprovalExpired { .. } => "approval.expired",
             Self::SessionLifecycleChanged { .. } => "session.lifecycle.changed",
             Self::AcpSessionsChanged => "acp.sessions.changed",
+            Self::TokenRotated => "gateway.token.rotated",
             Self::CronJobChanged { .. } => "cron.job.changed",
             Self::HeartbeatTaskChanged { .. } => "heartbeat.task.changed",
             Self::TeamChanged { .. } => "team.changed",
@@ -487,6 +492,18 @@ pub struct MessageSender {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_rotated_serializes_with_snake_case_tag() {
+        let f = GatewayEventFrame::TokenRotated;
+        let json = serde_json::to_string(&f).unwrap();
+        assert_eq!(json, r#"{"type":"token_rotated"}"#);
+    }
 }
 
 #[cfg(test)]
