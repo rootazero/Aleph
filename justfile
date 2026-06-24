@@ -150,10 +150,17 @@ wasm:
     # 2. Compile Rust → WASM (lib only: the cdylib is the shipped artifact and
     #    the vestigial src/main.rs bin breaks under fat LTO)
     cargo build -p aleph-panel --lib --target wasm32-unknown-unknown --profile wasm-release
+    # Resolve cargo's real target dir instead of hardcoding `target/`. A literal
+    # relative path breaks in git worktrees: .cargo/config.toml pins an absolute
+    # shared target-dir, so `cargo build` writes there while a cwd-relative
+    # `target/` points at a nonexistent dir inside the worktree. `cargo metadata`
+    # honors target-dir overrides and CARGO_TARGET_DIR, so it's correct everywhere.
+    target_dir=$(cargo metadata --format-version 1 --no-deps \
+        | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).target_directory))')
     # 3. Generate JS bindings
     wasm-bindgen --target web --no-typescript \
         --out-dir {{panel_dist}} --out-name aleph_panel \
-        target/wasm32-unknown-unknown/wasm-release/aleph_panel.wasm
+        "$target_dir/wasm32-unknown-unknown/wasm-release/aleph_panel.wasm"
     # 3.5 Shrink wasm (optional; -g keeps the name section for crash diagnostics)
     if command -v wasm-opt >/dev/null 2>&1; then
         wasm-opt -Oz -g {{panel_dist}}/aleph_panel_bg.wasm -o {{panel_dist}}/aleph_panel_bg.wasm
