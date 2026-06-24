@@ -12,6 +12,7 @@ use super::team_events::subscribe_team_events;
 use crate::components::session_tabs::SessionTabs;
 use crate::components::team_participants::TeamParticipants;
 use crate::components::team_task_strip::TaskDrawerOpen;
+use crate::components::team_task_strip::TeamTaskDrawer;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
@@ -230,6 +231,9 @@ pub fn ChatView() -> impl IntoView {
                     </Show>
                     // Input area (floating glass bar pinned over the flow)
                     <InputArea />
+                    <Show when=move || chat.team_id.get().is_some()>
+                        <TeamTaskDrawer />
+                    </Show>
                 </div>
             </div>
             // Workspace pane — always mounted; eases open/closed on Split.

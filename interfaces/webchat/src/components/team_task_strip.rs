@@ -49,7 +49,7 @@ pub fn TeamTaskStrip() -> impl IntoView {
                         <span style=format!("color: {dot};")>"●"</span>
                         <span class="opacity-60">"任务"</span>
                         <span class="opacity-40">"·"</span>
-                        <span class="font-medium truncate">{subject}</span>
+                        <span class="font-medium truncate aleph-task-strip-subject">{subject}</span>
                         <span class="opacity-40">"·"</span>
                         <span class="opacity-70">{label}</span>
                         {extra.map(|n| view! {
@@ -60,6 +60,60 @@ pub fn TeamTaskStrip() -> impl IntoView {
                     .into_any()
                 }}
             </button>
+        </Show>
+    }
+}
+
+#[component]
+#[must_use]
+pub fn TeamTaskDrawer() -> impl IntoView {
+    let chat = expect_context::<ChatState>();
+    let TaskDrawerOpen(open) = expect_context::<TaskDrawerOpen>();
+
+    view! {
+        <Show when=move || open.get()>
+            // Backdrop catcher — click outside closes.
+            <div class="fixed inset-0 z-[80] bg-black/20" on:click=move |_| open.set(false)></div>
+            // Slide-over panel.
+            <div class="fixed top-0 right-0 bottom-0 z-[81] w-[320px] max-w-[85vw] \
+                        bg-surface-raised/95 backdrop-blur border-l border-border \
+                        shadow-xl flex flex-col aleph-no-drag"
+                 data-tauri-drag-region="false">
+                <div class="flex items-center justify-between px-4 py-3 border-b border-border">
+                    <span class="text-sm font-semibold">"团队任务"</span>
+                    <button
+                        type="button"
+                        class="text-xs opacity-60 hover:opacity-100"
+                        on:click=move |_| open.set(false)
+                    >"✕"</button>
+                </div>
+                <div class="flex-1 overflow-y-auto p-2 space-y-1">
+                    {move || {
+                        let tasks = chat.team_tasks.get();
+                        if tasks.is_empty() {
+                            return view! {
+                                <div class="text-xs opacity-50 px-2 py-4 text-center">"暂无任务"</div>
+                            }.into_any();
+                        }
+                        tasks
+                            .into_iter()
+                            .map(|t| {
+                                let dot = task_status_color(&t.status);
+                                let label = task_status_label(&t.status);
+                                view! {
+                                    <div class="flex items-center gap-2 px-2 py-2 rounded \
+                                                hover:bg-surface-sunken/40 text-xs">
+                                        <span style=format!("color: {dot};")>"●"</span>
+                                        <span class="flex-1 truncate">{t.subject}</span>
+                                        <span class="text-[10px] opacity-60 shrink-0">{label}</span>
+                                    </div>
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .into_any()
+                    }}
+                </div>
+            </div>
         </Show>
     }
 }
