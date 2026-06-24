@@ -272,7 +272,7 @@ impl Scene {
         let vp = self.camera.view_proj(aspect);
         // Store for picking (uses stable canonical positions, not drifted).
         self.last_vp = vp;
-        self.edges.draw(gl, &vp, (self.width as f32, self.height as f32));
+        self.edges.draw(gl, &vp, (self.width as f32, self.height as f32), t_ms as f32);
         self.nodes.draw(gl, &vp, (self.width as f32, self.height as f32), t_ms as f32, self.camera.distance);
         // Restore blend state after scene draw — bloom passes will disable blend.
         gl.disable(Gl::BLEND);

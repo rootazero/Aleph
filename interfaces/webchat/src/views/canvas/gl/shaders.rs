@@ -74,57 +74,75 @@ void main() {
 }
 "#;
 
-/// Edge vertex shader: expands each segment into a screen-space-oriented quad
-/// of constant pixel width. `gl.lineWidth()` is clamped to 1px on desktop, so
-/// thick filaments must be drawn as instanced ribbons. Per-instance: the two
-/// endpoints (a_pos_a/a_pos_b) and their colors (a_color_a/a_color_b).
-/// Per-vertex: a_corner = (along ∈ {0,1}, side ∈ {-1,+1}).
+/// Edge vertex shader: evaluates a gentle quadratic Bézier arc tessellated into
+/// SEGMENTS steps, with endpoint taper so the ribbon visually welds into the star
+/// core. Per-instance: the two endpoints (a_pos_a/a_pos_b) and their colors
+/// (a_color_a/a_color_b). Per-vertex: a_corner = (along ∈ [0,1], side ∈ {-1,+1}).
 pub const EDGE_VERT: &str = r#"#version 300 es
 precision highp float;
-layout(location=0) in vec2 a_corner;
+layout(location=0) in vec2 a_corner;   // (along 0..1, side -1/+1)
 layout(location=1) in vec3 a_pos_a;
 layout(location=2) in vec3 a_pos_b;
 layout(location=3) in vec3 a_color_a;
 layout(location=4) in vec3 a_color_b;
 uniform mat4 u_view_proj;
 uniform vec2 u_viewport;
-uniform float u_width;       // line width in framebuffer pixels
+uniform float u_width;
+uniform float u_time;        // ms (used by Task 5 flow; harmless here)
 out vec3 v_color;
-out float v_side;
+out float v_along;
 out float v_depth;
+
+vec3 bezier(vec3 a, vec3 c, vec3 b, float t) {
+    float u = 1.0 - t;
+    return u*u*a + 2.0*u*t*c + t*t*b;
+}
 void main() {
-    vec4 ca = u_view_proj * vec4(a_pos_a, 1.0);
-    vec4 cb = u_view_proj * vec4(a_pos_b, 1.0);
-    vec4 clip = mix(ca, cb, a_corner.x);
-    // Endpoint directions in pixel space (NDC * viewport; common scale cancels
-    // in normalize, so this is a valid pixel-space direction incl. aspect).
-    vec2 pa = ca.xy / max(ca.w, 1e-4) * u_viewport;
-    vec2 pb = cb.xy / max(cb.w, 1e-4) * u_viewport;
-    vec2 d = pb - pa;
-    vec2 dir = length(d) > 1e-4 ? normalize(d) : vec2(1.0, 0.0);
-    vec2 nrm = vec2(-dir.y, dir.x);
-    // Perpendicular offset (px) → NDC (×2/viewport) → clip (×w).
-    vec2 off_px = nrm * (a_corner.y * u_width * 0.5);
-    clip.xy += off_px * 2.0 / u_viewport * clip.w;
-    gl_Position = clip;
-    v_color = mix(a_color_a, a_color_b, a_corner.x);
-    v_side = a_corner.y;                 // [-1,1] across ribbon width
-    v_depth = clip.z / max(clip.w, 1e-4);
+    float t = a_corner.x;
+    // Control point: midpoint bowed along a world-perp of the chord.
+    vec3 chord = a_pos_b - a_pos_a;
+    float len = length(chord);
+    vec3 dir = len > 1e-4 ? chord / len : vec3(1.0, 0.0, 0.0);
+    vec3 up = abs(dir.y) < 0.95 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0);
+    vec3 perp = normalize(cross(dir, up));
+    vec3 ctrl = (a_pos_a + a_pos_b) * 0.5 + perp * (len * 0.12);
+    // Sample curve point and a neighbor for screen-space tangent.
+    vec3 p  = bezier(a_pos_a, ctrl, a_pos_b, t);
+    float dt = 0.01;
+    vec3 p2 = bezier(a_pos_a, ctrl, a_pos_b, clamp(t + dt, 0.0, 1.0));
+    vec4 cp  = u_view_proj * vec4(p, 1.0);
+    vec4 cp2 = u_view_proj * vec4(p2, 1.0);
+    vec2 sp  = cp.xy  / max(cp.w, 1e-4)  * u_viewport;
+    vec2 sp2 = cp2.xy / max(cp2.w, 1e-4) * u_viewport;
+    vec2 tdir = sp2 - sp;
+    tdir = length(tdir) > 1e-4 ? normalize(tdir) : vec2(1.0, 0.0);
+    vec2 nrm = vec2(-tdir.y, tdir.x);
+    // Endpoint taper: thinner near both ends so the line welds into the star.
+    float edge = min(t, 1.0 - t);
+    float taper = mix(0.55, 1.0, smoothstep(0.0, 0.12, edge));
+    vec2 off_px = nrm * (a_corner.y * u_width * 0.5 * taper);
+    cp.xy += off_px * 2.0 / u_viewport * cp.w;
+    gl_Position = cp;
+    v_color = mix(a_color_a, a_color_b, t);
+    v_along = t;
+    v_depth = cp.z / max(cp.w, 1e-4);
 }
 "#;
 
-/// Edge fragment shader: solid core with a narrow anti-aliased rim (crisp, not
-/// blurry) and a gentle depth fade that keeps distant filaments readable.
+/// Edge fragment shader: endpoint weld brightening (visually plugs into the star
+/// core) and gentle depth fade. `v_along` is passed through for Task 5 flow effect.
 pub const EDGE_FRAG: &str = r#"#version 300 es
 precision highp float;
 in vec3 v_color;
-in float v_side;
+in float v_along;
 in float v_depth;
 out vec4 frag;
 void main() {
-    float aa = 1.0 - smoothstep(0.6, 1.0, abs(v_side)); // crisp core, thin rim
+    // Brighter near endpoints → visually plugs into the star core.
+    float edge = min(v_along, 1.0 - v_along);
+    float weld = mix(1.4, 1.0, smoothstep(0.0, 0.12, edge));
     float fade = clamp(1.0 - (v_depth * 0.5 + 0.5) * 0.5, 0.4, 1.0);
-    frag = vec4(v_color * (1.1 * fade), aa * fade * 0.65); // bright, additive
+    frag = vec4(v_color * (1.0 * weld * fade), fade * 0.55);
 }
 "#;
 

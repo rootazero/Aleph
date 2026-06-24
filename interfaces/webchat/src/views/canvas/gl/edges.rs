@@ -1,9 +1,10 @@
-//! Instanced thick-line edge renderer (screen-space quads = crisp star filaments).
+//! Instanced thick-line edge renderer (screen-space Bézier ribbons = smooth star filaments).
 //!
 //! `gl.lineWidth()` is clamped to 1px on desktop browsers, so edges are drawn as
-//! instanced ribbons: one quad per edge, expanded to a constant pixel width in
-//! the vertex shader. Per-instance attributes carry the two endpoints and their
-//! colors; a static 6-vertex corner buffer (two triangles) is shared.
+//! instanced TRIANGLE_STRIP ribbons: one ribbon per edge tessellated into SEGMENTS
+//! quads. The Bézier arc and endpoint taper are computed in the vertex shader.
+//! Per-instance attributes carry the two endpoints and their colors; a static
+//! strip corner buffer (2*(SEGMENTS+1) vertices) is shared.
 
 use web_sys::{WebGl2RenderingContext as Gl, WebGlBuffer, WebGlProgram, WebGlVertexArrayObject};
 
@@ -15,12 +16,20 @@ use super::shaders;
 /// Edge line width in framebuffer pixels.
 const EDGE_WIDTH_PX: f32 = 3.0;
 
-/// Quad corners: (along ∈ {0,1}, side ∈ {-1,+1}) — two triangles forming the
-/// a→b ribbon. `along` selects the endpoint, `side` the perpendicular offset.
-const CORNERS: [f32; 12] = [
-    0.0, -1.0, 1.0, -1.0, 0.0, 1.0, // tri 1
-    0.0, 1.0, 1.0, -1.0, 1.0, 1.0,  // tri 2
-];
+/// Curve tessellation: segments per edge. 12 = smooth gentle arc.
+const SEGMENTS: usize = 12;
+
+/// Triangle-strip corners for a K-segment ribbon: (along ∈ [0,1] in K steps,
+/// side ∈ {-1,+1}). The vertex shader evaluates the Bézier at `along` and
+/// offsets perpendicular by `side`. Drawn with TRIANGLE_STRIP.
+pub(super) fn edge_strip_corners(segments: usize) -> Vec<f32> {
+    let mut v = Vec::with_capacity(2 * (segments + 1) * 2);
+    for i in 0..=segments {
+        let along = i as f32 / segments as f32;
+        v.extend_from_slice(&[along, -1.0, along, 1.0]);
+    }
+    v
+}
 
 pub struct EdgeRenderer {
     prog: WebGlProgram,
@@ -38,13 +47,14 @@ impl EdgeRenderer {
         let vao = gl.create_vertex_array().ok_or("edge vao")?;
         gl.bind_vertex_array(Some(&vao));
 
-        // a_corner (location 0) — static quad, per-vertex (divisor 0).
+        // a_corner (location 0) — static strip corners, per-vertex (divisor 0).
         let corner_buf = gl.create_buffer().ok_or("edge corner")?;
         gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&corner_buf));
+        let corners = edge_strip_corners(SEGMENTS);
         unsafe {
             // SAFETY: `view` is consumed immediately by the buffer upload before
-            // any allocation that could move `CORNERS` (a `'static` array).
-            let view = js_sys::Float32Array::view(&CORNERS);
+            // any allocation that could move `corners`.
+            let view = js_sys::Float32Array::view(&corners);
             gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &view, Gl::STATIC_DRAW);
         }
         gl.enable_vertex_attrib_array(0);
@@ -106,7 +116,7 @@ impl EdgeRenderer {
         bind_upload(gl, &self.col_b_buf, &col_b);
     }
 
-    pub fn draw(&self, gl: &Gl, view_proj: &Mat4, viewport: (f32, f32)) {
+    pub fn draw(&self, gl: &Gl, view_proj: &Mat4, viewport: (f32, f32), u_time_ms: f32) {
         if self.count == 0 {
             return;
         }
@@ -114,10 +124,32 @@ impl EdgeRenderer {
         gl.bind_vertex_array(Some(&self.vao));
         set_mat4(gl, &self.prog, "u_view_proj", view_proj);
         set_vec2(gl, &self.prog, "u_viewport", viewport);
-        let loc = gl.get_uniform_location(&self.prog, "u_width");
-        gl.uniform1f(loc.as_ref(), EDGE_WIDTH_PX);
-        gl.draw_arrays_instanced(Gl::TRIANGLES, 0, 6, self.count);
+        let loc_width = gl.get_uniform_location(&self.prog, "u_width");
+        gl.uniform1f(loc_width.as_ref(), EDGE_WIDTH_PX);
+        let loc_time = gl.get_uniform_location(&self.prog, "u_time");
+        gl.uniform1f(loc_time.as_ref(), u_time_ms);
+        let vtx = (2 * (SEGMENTS + 1)) as i32;
+        gl.draw_arrays_instanced(Gl::TRIANGLE_STRIP, 0, vtx, self.count);
         gl.bind_vertex_array(None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_corners_shape_and_endpoints() {
+        let seg = 12usize;
+        let c = edge_strip_corners(seg);
+        assert_eq!(c.len(), 2 * (seg + 1) * 2);
+        // first pair along=0, sides -1 then +1
+        assert_eq!(c[0], 0.0);
+        assert_eq!(c[1], -1.0);
+        assert_eq!(c[3], 1.0);
+        // last pair along=1
+        let n = c.len();
+        assert!((c[n - 2] - 1.0).abs() < 1e-6);
     }
 }
 
