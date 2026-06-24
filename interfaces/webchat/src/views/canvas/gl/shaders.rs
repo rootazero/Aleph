@@ -1,7 +1,7 @@
 //! GLSL ES 3.00 shader sources. Filled per-renderer in Tasks 4-6 + Phase 2.
 
 /// Node billboard vertex shader. Per-instance: a_offset(vec3), a_size(float),
-/// a_color(vec3), a_phase(float). Per-vertex: a_corner(vec2 in [-1,1]).
+/// a_color(vec3), a_phase(float), a_spike(float). Per-vertex: a_corner(vec2 in [-1,1]).
 /// Idle drift is computed entirely on the GPU from u_time + a_phase so that
 /// idle frames upload nothing and do no CPU sine work.
 pub const NODE_VERT: &str = r#"#version 300 es
@@ -11,11 +11,14 @@ layout(location=1) in vec3 a_offset;
 layout(location=2) in float a_size;
 layout(location=3) in vec3 a_color;
 layout(location=4) in float a_phase;
+layout(location=5) in float a_spike;
 uniform mat4 u_view_proj;
 uniform vec2 u_viewport;
 uniform float u_time;        // ms
+uniform float u_cam_dist;    // camera distance for spike near-fade
 out vec2 v_corner;
 out vec3 v_color;
+out float v_spike;
 const float AMP = 3.0;
 const float TAU = 6.28318530718;
 const float OMEGA = TAU / 5.0;   // period 5000ms → rad/s over t(sec)
@@ -33,15 +36,20 @@ void main() {
     gl_Position = clip;
     v_corner = a_corner;
     v_color = a_color;
+    // Near-fade: spikes only show at distance; vanish when zoomed in / clustered.
+    float fade = smoothstep(300.0, 900.0, u_cam_dist);
+    v_spike = a_spike * fade;
 }
 "#;
 
 /// Node fragment: crisp solid core + soft outer halo (HDR; bloom adds the corona).
-/// The core stays sharp (tight smoothstep) so stars read as bright points, not blobs.
+/// Hub nodes additionally draw a weak diffraction cross (v_spike <= 0.3) that fades
+/// out at close zoom (v_spike is pre-multiplied by a smoothstep in the vertex shader).
 pub const NODE_FRAG: &str = r#"#version 300 es
 precision highp float;
 in vec2 v_corner;
 in vec3 v_color;
+in float v_spike;
 out vec4 frag;
 void main() {
     float r = length(v_corner);
@@ -51,8 +59,17 @@ void main() {
     core = core * core;                       // sharpen the core profile
     // Soft halo: wide gentle falloff, low weight; bloom turns this into the glow.
     float halo = smoothstep(1.0, 0.0, r) * 0.35;
-    vec3  rgb  = v_color * (core * 1.6 + halo);
-    float a    = clamp(core + halo * 0.6, 0.0, 1.0);
+    // Weak diffraction cross for hubs only. abs() arms along the two axes; very
+    // thin, alpha-capped by v_spike (<=0.3). Never drawn when v_spike == 0.
+    float cross = 0.0;
+    if (v_spike > 0.0) {
+        float ax = 1.0 - smoothstep(0.0, 0.06, abs(v_corner.x));
+        float ay = 1.0 - smoothstep(0.0, 0.06, abs(v_corner.y));
+        float radial = 1.0 - smoothstep(0.0, 1.0, r); // fade arms toward rim
+        cross = max(ax, ay) * radial * v_spike;
+    }
+    vec3  rgb  = v_color * (core * 1.6 + halo + cross);
+    float a    = clamp(core + halo * 0.6 + cross, 0.0, 1.0);
     frag = vec4(rgb, a);
 }
 "#;
