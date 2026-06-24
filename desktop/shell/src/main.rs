@@ -48,9 +48,20 @@ const PANEL_URL: &str = "http://127.0.0.1:18790";
 const HEALTH_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 /// Consecutive failed probes before the daemon is declared down. At the
 /// poll interval above this is ~15s of sustained silence — long enough to
-/// ride out a brief stall, short enough to recover quickly. Full-app-only.
-#[cfg(feature = "embedded-core")]
+/// ride out a brief stall, short enough to recover quickly.
+/// Shared with the pure `Supervisor` state machine, which is always compiled.
 const FAILURES_TO_DECLARE_DOWN: u32 = 3;
+
+/// Poll interval for the lite-shell remote-health supervisor. Deliberately
+/// chosen so `LITE_REMOTE_POLL × LITE_FAILURES_TO_RELOCATE ≥ 35s`, giving
+/// the panel's own ~31s WebSocket reconnect budget a chance to recover in-panel
+/// before the native layer yanks the webview to the connect page.
+#[cfg(not(feature = "embedded-core"))]
+const LITE_REMOTE_POLL: std::time::Duration = std::time::Duration::from_secs(5);
+/// Consecutive failed probes before the lite supervisor relocates to the
+/// connect page. 5s × 8 = 40s — safely past the ~31s panel reconnect budget.
+#[cfg(not(feature = "embedded-core"))]
+const LITE_FAILURES_TO_RELOCATE: u32 = 8;
 
 /// Tracks whether the main window has been revealed for the first time. Set the
 /// instant any real show path runs (`focus_window`); read by the single-instance
@@ -364,6 +375,10 @@ fn spawn_background(handle: tauri::AppHandle) {
                 #[cfg(not(feature = "embedded-core"))]
                 {
                     let _ = up;
+                    // Spawn the resident remote-health supervisor as a separate
+                    // task so the notification bridge and update checker are not
+                    // blocked by its loop (and vice versa).
+                    tauri::async_runtime::spawn(supervise_remote_lite(handle.clone()));
                     tokio::join!(
                         notify::run_notification_bridge(handle.clone()),
                         update::run_update_checker(handle),
@@ -623,7 +638,6 @@ fn show_daemon_error(handle: &tauri::AppHandle, message: &str) {
 }
 
 /// Whether the daemon is currently believed to be serving the Panel.
-#[cfg(feature = "embedded-core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DaemonHealth {
     Up,
@@ -631,7 +645,6 @@ enum DaemonHealth {
 }
 
 /// What the supervisor must do after folding in one probe result.
-#[cfg(feature = "embedded-core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SupervisorAction {
     /// The daemon's state is unchanged — do nothing.
@@ -648,7 +661,6 @@ enum SupervisorAction {
 /// A small state machine that turns a stream of `/ready` probe results into
 /// daemon-lifecycle actions. Deliberately free of I/O so it can be
 /// unit-tested without a running daemon.
-#[cfg(feature = "embedded-core")]
 struct Supervisor {
     health: DaemonHealth,
     consecutive_failures: u32,
@@ -658,10 +670,11 @@ struct Supervisor {
     remote: bool,
 }
 
-#[cfg(feature = "embedded-core")]
 impl Supervisor {
     /// Start supervising. `daemon_up` is the outcome of the initial boot:
     /// a failed boot starts the supervisor in `Down` so it keeps retrying.
+    /// Full-app-only at runtime; available in tests for both variants.
+    #[cfg(any(feature = "embedded-core", test))]
     const fn new(daemon_up: bool) -> Self {
         Self {
             health: if daemon_up {
@@ -695,7 +708,8 @@ impl Supervisor {
     /// target reports `Up` immediately — instead of starting `Down` and then
     /// firing a spurious `ReloadPanel` (a "recovery" that never happened) on the
     /// next tick, which would needlessly reload the Panel ~one poll interval
-    /// after every switch.
+    /// after every switch. Full-app-only at runtime; available in tests.
+    #[cfg(any(feature = "embedded-core", test))]
     fn for_target(target: &connection::ConnectionTarget, reachable: bool) -> Self {
         match target {
             connection::ConnectionTarget::Local => Self::new(reachable),
@@ -835,6 +849,59 @@ fn show_connection_page(handle: &tauri::AppHandle, message: &str) {
     ));
 }
 
+/// Resident health loop for the panel-only (lite) shell. The full app uses
+/// `supervise_daemon`; the lite shell hosts no daemon, so it only watches the
+/// remote Gateway's reachability and, when it stays down past the budget,
+/// relocates the webview to the bundled connect page (mDNS re-discovery +
+/// manual address). Deliberately later than the panel's own ~31s reconnect
+/// budget so a transient blip is recovered in-panel without yanking the user.
+///
+/// Timing: `LITE_REMOTE_POLL` (5s) × `LITE_FAILURES_TO_RELOCATE` (8) = 40s,
+/// safely past the ~31s panel reconnect budget. `FAILURES_TO_DECLARE_DOWN` (3)
+/// is used only by the inner `Supervisor` state machine to detect `ReloadPanel`
+/// recovery; the outer counter (8 ticks) gates native relocation.
+#[cfg(not(feature = "embedded-core"))]
+async fn supervise_remote_lite(handle: tauri::AppHandle) {
+    // Seed from a live probe so a reachable target isn't mistaken for recovery.
+    let reachable = connect_setup::target_reachable(&connection::load_target()).await;
+    let mut supervisor = Supervisor::new_remote(reachable);
+    // Outer failure counter: native relocation fires only after this many
+    // consecutive `ShowConnectionError` ticks — 5s × 8 = 40s total.
+    let mut relocation_ticks: u32 = 0;
+    loop {
+        tokio::time::sleep(LITE_REMOTE_POLL).await;
+        let ready = connect_setup::target_reachable(&connection::load_target()).await;
+        match supervisor.tick(ready) {
+            SupervisorAction::ShowConnectionError => {
+                relocation_ticks += 1;
+                if relocation_ticks >= LITE_FAILURES_TO_RELOCATE {
+                    tracing::warn!(
+                        "remote Gateway unreachable for {}s — relocating to connect page",
+                        LITE_REMOTE_POLL.as_secs() * u64::from(LITE_FAILURES_TO_RELOCATE)
+                    );
+                    connect_setup::show_lite_connect_page(&handle);
+                    relocation_ticks = 0;
+                }
+            }
+            // Remote recovered while we were on the connect page → re-point at it.
+            SupervisorAction::ReloadPanel => {
+                relocation_ticks = 0;
+                if let connection::ConnectionTarget::Remote(url) = connection::load_target() {
+                    if let Some(window) =
+                        tauri::Manager::get_webview_window(&handle, "main")
+                    {
+                        let _ = window.navigate(url);
+                    }
+                }
+            }
+            SupervisorAction::Idle => {
+                relocation_ticks = 0;
+            }
+            SupervisorAction::Relaunch => {}
+        }
+    }
+}
+
 /// Enable launch-at-login on first run only, leaving later user choices
 /// (toggling it off in OS settings) untouched.
 fn ensure_autostart(app: &tauri::AppHandle) {
@@ -885,9 +952,10 @@ fn init_tracing() {
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }
 
-// Every test here exercises the daemon-supervision state machine, which is
-// compiled only for the full app.
-#[cfg(all(test, feature = "embedded-core"))]
+// Tests for the daemon-supervision state machine. The pure state machine
+// (`Supervisor`/`DaemonHealth`/`SupervisorAction`) is always compiled; the
+// full-app-specific tests that need `embedded-core` types are guarded below.
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1001,5 +1069,31 @@ mod tests {
             sup_remote.tick(false),
             SupervisorAction::ShowConnectionError
         );
+    }
+
+    // --- lite-shell remote-supervisor tests ---
+    // These exercise the same pure state machine from the lite shell's perspective.
+    // `Supervisor::new_remote` / `tick` compile in both variants now that the
+    // state machine cfg guard has been relaxed.
+
+    #[test]
+    fn remote_supervisor_declares_down_and_shows_connection_page() {
+        let mut sup = Supervisor::new_remote(true);
+        // Healthy period: idle.
+        assert_eq!(sup.tick(true), SupervisorAction::Idle);
+        // Consecutive failures accumulate to the threshold; remote leg must emit
+        // ShowConnectionError (not Relaunch — we don't own that daemon).
+        let mut last = SupervisorAction::Idle;
+        for _ in 0..FAILURES_TO_DECLARE_DOWN {
+            last = sup.tick(false);
+        }
+        assert_eq!(last, SupervisorAction::ShowConnectionError);
+    }
+
+    #[test]
+    fn remote_supervisor_recovers_without_relaunch() {
+        let mut sup = Supervisor::new_remote(false);
+        // Down→Up recovery must emit ReloadPanel, never Relaunch.
+        assert_eq!(sup.tick(true), SupervisorAction::ReloadPanel);
     }
 }
