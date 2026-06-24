@@ -2184,3 +2184,40 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
   animation: aleph-spin-once 0.5s var(--ease-out);
 }
 
+/* Team roster bar wrapper: full-width no-drag float over the top chrome.
+   container-type lets the inner expanded/collapsed views swap by width. */
+.aleph-roster-wrap {
+  container-type: inline-size;
+  padding: 6px 8px;
+}
+/* macOS: clear the traffic lights + sidebar toggle (left:72px) and the
+   top-right chrome (workspace toggle + notification bell). */
+html[data-platform="macos"] .aleph-roster-wrap {
+  padding-left: 84px;
+  padding-right: 96px;
+}
+/* Width swap: default (narrow) shows the cluster; >=560px shows the pill bar.
+   560px ~= CLUSTER_CAP(4) * ~140px per pill. */
+.aleph-roster-expanded { display: none; }
+.aleph-roster-collapsed { display: flex; }
+@container (min-width: 560px) {
+  .aleph-roster-expanded { display: flex; }
+  .aleph-roster-collapsed { display: none; }
+}
+/* Crowded (> CLUSTER_CAP members): always the cluster, regardless of width.
+   Two-class selector outspecifies the bare container-query rules, so it wins
+   without !important. The expanded bar is also not rendered (Show=false) when
+   crowded; this guarantees the cluster stays visible even at wide widths. */
+.aleph-roster-crowded .aleph-roster-expanded { display: none; }
+.aleph-roster-crowded .aleph-roster-collapsed { display: flex; }
+.aleph-roster-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 4px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--color-surface-raised) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+  white-space: nowrap;
+}
+

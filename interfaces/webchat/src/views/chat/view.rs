@@ -189,7 +189,7 @@ pub fn ChatView() -> impl IntoView {
                     // fully-draggable band with no dead "can't-drag-here" zone.
                     <Show when=move || chat.team_id.get().is_some()>
                         <div
-                            class="absolute top-2 left-2 z-[60] aleph-no-drag"
+                            class="absolute top-0 inset-x-0 z-[60] aleph-no-drag"
                             data-tauri-drag-region="false"
                         >
                             <TeamParticipants />

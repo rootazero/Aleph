@@ -189,11 +189,22 @@ pub(super) fn MessageList() -> impl IntoView {
                 <Show
                     when=move || chat.messages.get().is_empty()
                     fallback=move || view! {
-                        <div class=move || format!(
-                            "max-w-3xl mx-auto px-4 {} pb-[calc(var(--composer-clearance,150px)+1rem)] space-y-2",
-                            // pt-14 = band height (~33px: 2*py-1 + 24px pill + 1px border) + headroom
-                            if sessions.tab_strip_visible() { "pt-14" } else { "pt-6" }
-                        )>
+                        <div class=move || {
+                            let top = if chat.team_id.get().is_some() {
+                                // Roster bar floats over the top; clear its
+                                // measured height (fallback ~2.75rem pre-observe).
+                                "pt-[calc(var(--aleph-team-roster-h,2.75rem)+0.75rem)]".to_string()
+                            } else if sessions.tab_strip_visible() {
+                                // pt-14 = band (~33px) + headroom
+                                "pt-14".to_string()
+                            } else {
+                                "pt-6".to_string()
+                            };
+                            format!(
+                                "max-w-3xl mx-auto px-4 {top} \
+                                 pb-[calc(var(--composer-clearance,150px)+1rem)] space-y-2"
+                            )
+                        }>
                             // Inline send-error banner (G2) — shown when the last
                             // outbound send failed; colour-coded by error code.
                             <SendErrorBanner />
