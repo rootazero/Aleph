@@ -10,7 +10,7 @@ pub mod reasoning;
 pub mod state;
 pub mod team_compose;
 pub mod team_events;
-mod team_task_logic;
+pub mod team_task_logic;
 pub mod timeline;
 pub mod transcript;
 pub mod view;
