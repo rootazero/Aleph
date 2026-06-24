@@ -26,6 +26,7 @@ pub fn agent_color(index: usize) -> &'static str {
 #[must_use]
 pub fn subscribe_team_events(dashboard: &DashboardState, chat: ChatState) -> usize {
     let dash = *dashboard;
+    let refetch_gen = StoredValue::new(0u32);
     dashboard.subscribe_events(move |event: GatewayEvent| {
         if !event.topic.starts_with("team.") {
             return;
@@ -101,8 +102,17 @@ pub fn subscribe_team_events(dashboard: &DashboardState, chat: ChatState) -> usi
                     }
                 });
             } else if let Some(team_id) = chat.team_id.get_untracked() {
+                // Debounce: coalesce a burst of unknown-id task events into ONE
+                // refetch after the burst settles (~250ms). Each event bumps the
+                // generation; only the latest generation's delayed task fetches.
+                let my_gen = refetch_gen.with_value(|g| g.wrapping_add(1));
+                refetch_gen.set_value(my_gen);
                 let chat2 = chat;
                 spawn_local(async move {
+                    gloo_timers::future::TimeoutFuture::new(250).await;
+                    if refetch_gen.with_value(|g| *g) != my_gen {
+                        return; // superseded by a newer task event
+                    }
                     if let Ok(tasks) =
                         TeamsApi::list_tasks(&dash, &team_id, TaskFilter::default()).await
                     {
