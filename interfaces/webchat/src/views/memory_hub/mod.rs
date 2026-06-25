@@ -10,9 +10,7 @@ use crate::views::canvas::CanvasView;
 use crate::views::memory::Memory;
 
 mod sidebar;
-mod toolbar;
 pub use sidebar::MemorySidebar;
-use toolbar::MemoryToolbar;
 
 #[component]
 #[must_use]
@@ -34,21 +32,18 @@ pub fn MemoryHub() -> impl IntoView {
     let is_graph = Memo::new(move |_| mem.memory_view.get() == MemoryView::Graph);
 
     view! {
-        <div class="flex flex-col h-full min-h-0">
-            <MemoryToolbar />
-            <div class="flex-1 min-h-0 relative">
-                <div
-                    class="absolute inset-0"
-                    style:display=move || if is_graph.get() { "block" } else { "none" }
-                >
-                    <CanvasView />
-                </div>
-                <div
-                    class="absolute inset-0 overflow-y-auto"
-                    style:display=move || if is_graph.get() { "none" } else { "block" }
-                >
-                    <Memory />
-                </div>
+        <div class="h-full min-h-0 relative">
+            <div
+                class="absolute inset-0"
+                style:display=move || if is_graph.get() { "block" } else { "none" }
+            >
+                <CanvasView />
+            </div>
+            <div
+                class="absolute inset-0 overflow-y-auto"
+                style:display=move || if is_graph.get() { "none" } else { "block" }
+            >
+                <Memory />
             </div>
         </div>
     }

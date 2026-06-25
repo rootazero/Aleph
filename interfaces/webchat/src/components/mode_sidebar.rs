@@ -14,6 +14,7 @@ use super::theme_toggle::ThemeToggle;
 use crate::components::settings_sidebar::SETTINGS_GROUPS;
 use crate::i18n::use_i18n;
 use crate::state::memory::MemoryState;
+use crate::views::memory_hub::MemorySidebar;
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_location;
@@ -143,39 +144,6 @@ fn SidebarBrand() -> impl IntoView {
                     </svg>
                 </button>
             </div>
-        </div>
-    }
-}
-
-/// Memory mode sidebar — fold threshold slider and node detail panel.
-/// Agent selector and search now live in the hub toolbar.
-#[component]
-fn MemorySidebar() -> impl IntoView {
-    use crate::state::memory::MemoryState;
-    use crate::views::canvas::{NodeDetailPanel, NodeExcerpt};
-    use std::collections::HashMap;
-
-    let mem = expect_context::<MemoryState>();
-    let excerpts: RwSignal<HashMap<String, NodeExcerpt>> = RwSignal::new(Default::default());
-
-    view! {
-        <div class="flex flex-col h-full">
-            <div class="px-3 pb-2">
-                <label style="font-size:9.5px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">
-                    "Fold"
-                </label>
-                <input
-                    type="range" min="0" max="10" step="1"
-                    class="w-full mt-1 accent-[#a78bfa]"
-                    prop:value=move || mem.fold_threshold.get() as i32
-                    on:input=move |ev| {
-                        if let Ok(v) = event_target_value(&ev).parse::<usize>() {
-                            mem.fold_threshold.set(v);
-                        }
-                    }
-                />
-            </div>
-            <NodeDetailPanel excerpts=excerpts />
         </div>
     }
 }
