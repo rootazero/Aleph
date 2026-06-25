@@ -14,7 +14,7 @@ use crate::canvas_engine::interaction::CanvasEvent;
 use leptos::callback::Callback;
 
 use crate::context::DashboardState;
-use crate::state::memory::{MemoryState, MemoryView};
+use crate::state::memory::{MemoryState, MemoryView, DEFAULT_FOLD};
 
 use galaxy_canvas::GalaxyCanvas;
 
@@ -144,7 +144,7 @@ fn RadialCanvasView() -> impl IntoView {
                 // Reset reactive signals
                 set_selected_node.set(None);
                 search_query.set(String::new());
-                set_fold_threshold.set(12);
+                set_fold_threshold.set(DEFAULT_FOLD);
                 all_dtos.set(Vec::new());
                 // Clear 3D galaxy signals so the new agent's galaxy rebuilds from scratch.
                 // The galaxy-build Effect repopulates galaxy_data when it re-runs.
@@ -299,20 +299,13 @@ fn RadialCanvasView() -> impl IntoView {
     });
 
     // -----------------------------------------------------------------------
-    // LOD mapping Effect: fold_threshold (1..1000) → lod_request (0..1).
-    //
-    // Mapping: lod = 1.0 - (threshold - 1) / 999.0
-    //   threshold=1    → lod=1.0  (most aggressive thinning, fewest edges)
-    //   threshold=1000 → lod=0.0  (all edges visible, densest display)
-    //
-    // This is monotonic and intuitive: dragging the slider to the right
-    // (higher threshold) increases edge density. The slider's former cluster-fold
-    // semantics are retired; the range is reused as a visual-density knob.
+    // Fold slider → LOD mapping Effect: fold_threshold (0..=10) → lod (0..1)
+    // via `fold_to_lod`. Higher slider = denser graph. The retired cluster-fold
+    // semantics are reused purely as an edge-density knob; the slider's full
+    // travel now spans the full LOD range (see `fold_to_lod`).
     // -----------------------------------------------------------------------
     Effect::new(move || {
-        let ft = fold_threshold.get().clamp(1, 1000) as f32;
-        let lod = 1.0 - (ft - 1.0) / 999.0;
-        lod_request.set(lod);
+        lod_request.set(fold_to_lod(fold_threshold.get()));
     });
 
     view! {
@@ -408,6 +401,17 @@ fn dedup_undirected_edges(directed: impl Iterator<Item = (u32, u32)>) -> Vec<(u3
     out
 }
 
+/// Map the Fold slider value (UI range 0..=10) to an edge-density LOD in [0,1]
+/// for the galaxy renderer. Higher slider = denser graph: `fold=0` → lod 1.0
+/// (only the ~90th-percentile backbone survives `Scene::recompute_filtered_edges`),
+/// `fold=10` → lod 0.0 (all edges). The full slider travel spans the full LOD
+/// range, replacing the old `1.0 - (ft-1)/999` map whose 0..10 input only
+/// produced lod∈[0.991,1.0] (visibly no change).
+fn fold_to_lod(fold: usize) -> f32 {
+    let ft = fold.min(10) as f32;
+    (1.0 - ft / 10.0).clamp(0.0, 1.0)
+}
+
 /// Compute the highlight set for a selected node: the selected node's index
 /// plus all topologically adjacent node indices (one hop).
 ///
@@ -450,5 +454,18 @@ mod tests {
         let directed = [(5u32, 5u32), (0, 1)];
         let out = dedup_undirected_edges(directed.into_iter());
         assert_eq!(out, vec![(0, 1)]);
+    }
+
+    #[test]
+    fn fold_to_lod_spans_full_visible_range() {
+        // Full slider travel (0..=10) must cover the full LOD range so the
+        // control is visibly effective (the old 0..10→[0.991,1.0] map did not).
+        assert_eq!(fold_to_lod(0), 1.0); // sparsest: backbone only
+        assert_eq!(fold_to_lod(10), 0.0); // densest: all edges
+        assert_eq!(fold_to_lod(5), 0.5); // midpoint
+        // Monotonic decreasing: higher slider = denser graph (lower lod).
+        assert!(fold_to_lod(2) > fold_to_lod(8));
+        // Out-of-range slider values clamp instead of overflowing the LOD range.
+        assert_eq!(fold_to_lod(99), 0.0);
     }
 }

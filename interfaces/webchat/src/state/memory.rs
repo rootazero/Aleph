@@ -9,6 +9,11 @@ use std::collections::VecDeque;
 /// Cap on how many nodes are retained in `recent_visited`.
 const RECENT_VISITED_CAPACITY: usize = 8;
 
+/// Default Fold-slider value (UI range 0..=10), shared by `MemoryState::new`
+/// and the canvas agent-switch reset so the stored value never lands outside
+/// the slider range. Maps to a balanced mid-density view (lod 0.5).
+pub const DEFAULT_FOLD: usize = 5;
+
 /// Which surface the Memory Hub is currently showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryView {
@@ -75,7 +80,7 @@ impl MemoryState {
             agent_id: RwSignal::new("main".into()),
             agents: RwSignal::new(Vec::new()),
             search_query: RwSignal::new(String::new()),
-            fold_threshold: RwSignal::new(3),
+            fold_threshold: RwSignal::new(DEFAULT_FOLD),
             selected_node: RwSignal::new(None),
             focus_id: RwSignal::new(None),
             breadcrumb_entries: RwSignal::new(Vec::new()),
