@@ -26,8 +26,13 @@ pub mod models;
 pub mod panic_overlay;
 pub mod preset_data;
 pub mod preset_providers;
+pub mod platform;
 pub mod state;
-pub mod views;
+
+// Per-form-factor UI lives under `platform::{wide,phone,tablet}`. The wide
+// (desktop/browser) screens physically moved to `platform::wide::views`; this
+// re-export keeps every existing `crate::views::…` path resolving unchanged.
+pub use platform::wide::views;
 
 use wasm_bindgen::prelude::*;
 
