@@ -437,6 +437,40 @@ mod tests {
         assert_eq!(body.model, "custom-model");
     }
 
+    #[test]
+    fn test_build_request_body_siliconflow_uses_image_size() {
+        // SiliconFlow uses `image_size` (not `size`) and has no `response_format`.
+        let provider = OpenAiCompatProvider::new(
+            "siliconflow",
+            "key",
+            "https://api.siliconflow.cn/v1/images/generations",
+            Some("Kwai-Kolors/Kolors".to_string()),
+        )
+        .unwrap();
+        let request = GenerationRequest::image("a red panda")
+            .with_params(GenerationParams::builder().width(1024).height(1024).build());
+
+        let body = provider.build_request_body(&request);
+
+        assert_eq!(body.image_size, Some("1024x1024".to_string()));
+        assert!(body.size.is_none(), "SiliconFlow must not send `size`");
+        assert!(
+            body.response_format.is_none(),
+            "SiliconFlow has no `response_format` field"
+        );
+    }
+
+    #[test]
+    fn test_siliconflow_images_array_parses_as_data() {
+        // SiliconFlow returns `{ images: [...] }`, not OpenAI's `{ data: [...] }`.
+        let json = r#"{"images":[{"url":"https://sf/out.png"}],"seed":42}"#;
+
+        let response: ImageGenerationResponse = serde_json::from_str(json).unwrap();
+
+        assert_eq!(response.data.len(), 1);
+        assert_eq!(response.data[0].url.as_deref(), Some("https://sf/out.png"));
+    }
+
     // === Error parsing tests ===
 
     #[test]
@@ -567,6 +601,7 @@ mod tests {
             prompt: "A test prompt".to_string(),
             image: None,
             size: None,
+            image_size: None,
             quality: None,
             style: None,
             n: None,
@@ -593,6 +628,7 @@ mod tests {
             prompt: "A test prompt".to_string(),
             image: None,
             size: Some("1024x1024".to_string()),
+            image_size: None,
             quality: Some("hd".to_string()),
             style: Some("vivid".to_string()),
             n: Some(1),

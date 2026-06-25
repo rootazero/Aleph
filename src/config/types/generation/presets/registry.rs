@@ -93,6 +93,19 @@ const PROFILES: &[(&str, GenerationPreset)] = &[
         .with_signup("https://console.volcengine.com/ark"),
     ),
     (
+        "siliconflow-image",
+        GenerationPreset::new(
+            "openai_compat",
+            "Kwai-Kolors/Kolors",
+            Some("https://api.siliconflow.cn/v1/images/generations"),
+        )
+        .with_modalities(IMAGE)
+        .with_display("SiliconFlow Kolors / 硅基流动")
+        .with_description("Kolors text-to-image (OpenAI-compatible; `images[]` response)")
+        .with_homepage("https://docs.siliconflow.cn/cn/api-reference/images/images-generations")
+        .with_signup("https://cloud.siliconflow.cn/account/ak"),
+    ),
+    (
         "xai-image",
         GenerationPreset::new(
             "openai_compat",
@@ -414,11 +427,7 @@ const PROFILES: &[(&str, GenerationPreset)] = &[
         )
         .with_modalities(SPEECH)
         .with_display("SiliconFlow TTS / 硅基流动")
-        .with_description(
-            "OpenAI-compatible /v1/audio/speech (CosyVoice2 / fish-speech); \
-             China edge, low latency. Voice format is `model:voice`, e.g. \
-             `FunAudioLLM/CosyVoice2-0.5B:alex`.",
-        )
+        .with_description("CosyVoice2 / MOSS-TTSD TTS (OpenAI-compatible); voice = `model:voice`")
         .with_homepage("https://docs.siliconflow.cn/cn/userguide/capabilities/text-to-speech")
         .with_signup("https://cloud.siliconflow.cn/account/ak"),
     ),
@@ -431,11 +440,7 @@ const PROFILES: &[(&str, GenerationPreset)] = &[
         )
         .with_modalities(SPEECH)
         .with_display("Volcengine TTS / 火山引擎豆包语音")
-        .with_description(
-            "Legacy openspeech.bytedance.com (China edge, best-in-class Chinese). \
-             Carry your appid in base_url: `https://openspeech.bytedance.com?appid=<appid>`; \
-             api_key = token; voice = voice_type (e.g. zh_female_cancan_mars_bigtts).",
-        )
+        .with_description("Doubao bigtts (best-in-class Chinese); appid in base_url `?appid=<id>`, api_key = token")
         .with_homepage("https://www.volcengine.com/docs/6561")
         .with_signup("https://console.volcengine.com/speech/app"),
     ),
@@ -471,10 +476,7 @@ const PROFILES: &[(&str, GenerationPreset)] = &[
         )
         .with_modalities(TRANSCRIPTION)
         .with_display("SiliconFlow STT / 硅基流动")
-        .with_description(
-            "SenseVoice / TeleSpeechASR via OpenAI-compatible /v1/audio/transcriptions; \
-             Chinese-strong, China edge, low latency (synchronous, no submit-poll).",
-        )
+        .with_description("SenseVoice / TeleSpeechASR STT (OpenAI-compatible); Chinese-strong")
         .with_homepage("https://docs.siliconflow.cn/cn/userguide/capabilities/speech-to-text")
         .with_signup("https://cloud.siliconflow.cn/account/ak"),
     ),

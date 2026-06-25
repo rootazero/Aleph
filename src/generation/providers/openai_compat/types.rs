@@ -27,9 +27,13 @@ pub struct ImageGenerationRequest {
     /// instead and never set this.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
-    /// Image size (e.g., "1024x1024")
+    /// Image size (e.g., "1024x1024"). OpenAI/Ark convention.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<String>,
+    /// Image size for SiliconFlow (硅基流动), which names this field
+    /// `image_size` instead of `size`. Only one of the two is ever set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_size: Option<String>,
     /// Quality level ("standard" or "hd")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<String>,
@@ -54,7 +58,9 @@ pub struct ImageGenerationResponse {
     #[serde(default)]
     #[allow(dead_code)] // deserialized from API response
     pub created: u64,
-    /// Array of generated images
+    /// Array of generated images. SiliconFlow (硅基流动) returns its results
+    /// under `images` rather than OpenAI's `data`, so both keys map here.
+    #[serde(alias = "images")]
     pub data: Vec<ImageData>,
 }
 

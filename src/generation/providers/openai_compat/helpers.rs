@@ -27,6 +27,18 @@ impl OpenAiCompatProvider {
         self.endpoint.contains("volces.com")
     }
 
+    /// True when this provider targets SiliconFlow (硅基流动).
+    ///
+    /// SiliconFlow's image API diverges from the OpenAI convention in three
+    /// ways the base code must account for: dimensions go in `image_size`
+    /// (not `size`), there is no `response_format` field, and the response
+    /// wraps results under `images` (not `data`, handled by a serde alias).
+    /// Detected by host so it works whether the preset uses the bare domain
+    /// or a full endpoint URL.
+    pub(crate) fn is_siliconflow(&self) -> bool {
+        self.endpoint.contains("siliconflow")
+    }
+
     /// Get the full URL for the edits endpoint
     /// Uses explicit `edit_endpoint` if set, otherwise derives from generations URL
     pub(crate) fn edits_url(&self) -> String {
@@ -52,6 +64,10 @@ impl OpenAiCompatProvider {
             _ => None,
         };
 
+        // SiliconFlow names the dimension field `image_size` and has no
+        // `response_format`; OpenAI/Ark use `size` + `response_format`.
+        let is_siliconflow = self.is_siliconflow();
+
         // Ark's unified endpoint accepts a reference image for image-to-image
         // on the same generations call. Only forward it for Ark to avoid
         // sending an unsupported field to OpenAI-style providers.
@@ -70,11 +86,16 @@ impl OpenAiCompatProvider {
             model,
             prompt: request.prompt.clone(),
             image,
-            size,
+            size: if is_siliconflow { None } else { size.clone() },
+            image_size: if is_siliconflow { size } else { None },
             quality: request.params.quality.clone(),
             style: request.params.style.clone(),
             n: request.params.n,
-            response_format: Some("url".to_string()), // Default to URL format
+            response_format: if is_siliconflow {
+                None
+            } else {
+                Some("url".to_string()) // Default to URL format
+            },
             user: request.user_id.clone(),
         }
     }

@@ -3,7 +3,7 @@ use crate::gateway::handlers::generation_providers::resolve_api_key;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::gateway::security::SharedTokenManager;
-use crate::generation::providers::{ElevenLabsProvider, OpenAiTtsProvider};
+use crate::generation::providers::{ElevenLabsProvider, OpenAiTtsProvider, VolcengineTtsProvider};
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
@@ -161,6 +161,14 @@ fn detect_voices_by_model(
         return gpt4o_tts_voice_list();
     }
 
+    // SiliconFlow TTS reuses the OpenAI-compatible provider type, so it can't be
+    // told apart by `provider_type` alone — detect it by model family. Its API
+    // expects `voice` in `model:voice` form, so each system voice is prefixed
+    // with the configured model.
+    if let Some(model) = models.iter().find(|m| is_siliconflow_tts_model(m)) {
+        return siliconflow_voice_list(model);
+    }
+
     // Fall back to static list by provider_type
     match provider_type {
         "openai" | "openai-tts" | "openai_tts" | "openai_compat" | "openai-compat" => {
@@ -168,8 +176,44 @@ fn detect_voices_by_model(
         }
         "elevenlabs" => ElevenLabsProvider::static_voice_list(),
         "minimax_tts" => minimax_voice_list(),
+        "volcengine_tts" => VolcengineTtsProvider::static_voice_list(),
         _ => vec![],
     }
+}
+
+/// True when the model id is a SiliconFlow (硅基流动) TTS model family.
+fn is_siliconflow_tts_model(model: &str) -> bool {
+    let m = model.to_lowercase();
+    m.contains("cosyvoice")
+        || m.contains("moss-ttsd")
+        || m.contains("fish-speech")
+        || m.contains("gpt-sovits")
+}
+
+/// SiliconFlow (硅基流动) system TTS voices. The API expects `voice` in
+/// `model:voice` form (e.g. `FunAudioLLM/CosyVoice2-0.5B:alex`), so every id is
+/// prefixed with the configured model.
+fn siliconflow_voice_list(model: &str) -> Vec<crate::generation::VoiceInfo> {
+    use crate::generation::VoiceInfo;
+    const VOICES: &[(&str, &str, &str, &str)] = &[
+        ("alex", "Alex", "male", "Calm male"),
+        ("benjamin", "Benjamin", "male", "Deep male"),
+        ("charles", "Charles", "male", "Magnetic male"),
+        ("david", "David", "male", "Cheerful male"),
+        ("anna", "Anna", "female", "Calm female"),
+        ("bella", "Bella", "female", "Passionate female"),
+        ("claire", "Claire", "female", "Gentle female"),
+        ("diana", "Diana", "female", "Cheerful female"),
+    ];
+    VOICES
+        .iter()
+        .map(|(id, name, gender, desc)| VoiceInfo {
+            id: format!("{model}:{id}"),
+            name: (*name).to_string(),
+            gender: (*gender).to_string(),
+            description: (*desc).to_string(),
+        })
+        .collect()
 }
 
 /// MiniMax/Hailuo (海螺) TTS voice list. Delegates to the provider so the
@@ -264,5 +308,34 @@ mod tests {
         let cfg = GenerationProviderConfig::new("openai");
         let overrides = crate::config::presets_override::GenerationPresetsOverride::default();
         let _persisted = build_generation_provider_for_persistence("dalle_main", cfg, &overrides);
+    }
+
+    #[test]
+    fn volcengine_tts_voices_are_wired_through() {
+        let voices = super::detect_voices_by_model(&[], "volcengine_tts");
+        assert!(!voices.is_empty(), "Volcengine picker must not be empty");
+        assert!(voices
+            .iter()
+            .any(|v| v.id == "zh_female_cancan_mars_bigtts"));
+    }
+
+    #[test]
+    fn siliconflow_tts_voices_are_model_prefixed() {
+        let models = vec!["FunAudioLLM/CosyVoice2-0.5B".to_string()];
+        // provider_type collides with OpenAI's; detection is by model family.
+        let voices = super::detect_voices_by_model(&models, "openai_tts");
+        assert_eq!(voices.len(), 8);
+        assert!(voices
+            .iter()
+            .any(|v| v.id == "FunAudioLLM/CosyVoice2-0.5B:alex"));
+        // Must NOT leak the generic OpenAI voices.
+        assert!(!voices.iter().any(|v| v.id == "alloy"));
+    }
+
+    #[test]
+    fn openai_tts_voices_unaffected_by_siliconflow_detection() {
+        let models = vec!["tts-1".to_string()];
+        let voices = super::detect_voices_by_model(&models, "openai_tts");
+        assert!(voices.iter().any(|v| v.id == "alloy"));
     }
 }
