@@ -9,7 +9,9 @@ use crate::state::memory::{parse_view_param, MemoryState, MemoryView};
 use crate::views::canvas::CanvasView;
 use crate::views::memory::Memory;
 
+mod sidebar;
 mod toolbar;
+pub use sidebar::MemorySidebar;
 use toolbar::MemoryToolbar;
 
 #[component]
