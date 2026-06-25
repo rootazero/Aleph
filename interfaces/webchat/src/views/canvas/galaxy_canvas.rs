@@ -18,9 +18,9 @@ use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
-use crate::canvas_engine::interaction::CanvasEvent;
 use super::gl::scene::Scene;
 use super::gl::GraphData;
+use crate::canvas_engine::interaction::CanvasEvent;
 
 /// Click threshold in CSS pixels. A pointer-up within this distance of
 /// pointer-down counts as a click; larger = drag (no selection).
@@ -81,7 +81,9 @@ pub fn GalaxyCanvas(
     let scene_init = scene.clone();
     let canvas_origin_init = canvas_origin.clone();
     Effect::new(move |_| {
-        let Some(canvas) = canvas_ref.get() else { return };
+        let Some(canvas) = canvas_ref.get() else {
+            return;
+        };
         let el: web_sys::HtmlCanvasElement = canvas.unchecked_into();
 
         // Size canvas to its CSS layout box.
@@ -138,7 +140,14 @@ pub fn GalaxyCanvas(
         // Leak for panel lifetime — parent uses display:none keep-alive, never unmounts.
         resize_cb.forget();
 
-        start_raf_loop(el.clone(), scene_init.clone(), selected_node, hovered_node, hover_label, select_label);
+        start_raf_loop(
+            el.clone(),
+            scene_init.clone(),
+            selected_node,
+            hovered_node,
+            hover_label,
+            select_label,
+        );
     });
 
     // --- Data Effect: push GraphData into scene when it changes ---
@@ -155,7 +164,9 @@ pub fn GalaxyCanvas(
     // Reads `focus_request`; applies to the owned scene (non-Send, safe here).
     let scene_focus = scene.clone();
     Effect::new(move |_| {
-        let Some(id) = focus_request.get() else { return };
+        let Some(id) = focus_request.get() else {
+            return;
+        };
         let t_ms = perf_now();
         if let Some(s) = scene_focus.borrow_mut().as_mut() {
             s.fly_to_node(&id, t_ms);

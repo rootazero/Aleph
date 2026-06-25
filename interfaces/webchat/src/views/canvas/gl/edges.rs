@@ -51,7 +51,11 @@ pub struct EdgeRenderer {
 
 impl EdgeRenderer {
     pub fn new(gl: &Gl) -> Result<EdgeRenderer, String> {
-        let prog = compile_program(gl, &shaders::with_drift(shaders::EDGE_VERT), shaders::EDGE_FRAG)?;
+        let prog = compile_program(
+            gl,
+            &shaders::with_drift(shaders::EDGE_VERT),
+            shaders::EDGE_FRAG,
+        )?;
         let vao = gl.create_vertex_array().ok_or("edge vao")?;
         gl.bind_vertex_array(Some(&vao));
 
@@ -112,12 +116,7 @@ impl EdgeRenderer {
     /// Upload edges from an explicit nodes slice + edge-index slice.
     /// Builds one per-instance record (endpoints + colors) per edge; avoids
     /// cloning GraphData.
-    pub fn upload_indexed(
-        &mut self,
-        gl: &Gl,
-        nodes: &[super::GalaxyNode],
-        edges: &[(u32, u32)],
-    ) {
+    pub fn upload_indexed(&mut self, gl: &Gl, nodes: &[super::GalaxyNode], edges: &[(u32, u32)]) {
         let mut pos_a = Vec::with_capacity(edges.len() * 3);
         let mut pos_b = Vec::with_capacity(edges.len() * 3);
         let mut col_a = Vec::with_capacity(edges.len() * 3);
@@ -156,10 +155,17 @@ impl EdgeRenderer {
     ) {
         let active = hl.map(|s| !s.is_empty()).unwrap_or(false);
         self.select_active = if active { 1.0 } else { 0.0 };
-        let flags: Vec<f32> = edges_in_order.iter().map(|&(a, b)| {
-            let key = (a.min(b), a.max(b));
-            if active && hl.unwrap().contains(&key) { 1.0 } else { 0.0 }
-        }).collect();
+        let flags: Vec<f32> = edges_in_order
+            .iter()
+            .map(|&(a, b)| {
+                let key = (a.min(b), a.max(b));
+                if active && hl.unwrap().contains(&key) {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect();
         bind_upload(gl, &self.hl_buf, &flags);
     }
 

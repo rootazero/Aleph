@@ -29,11 +29,11 @@ pub fn task_status_label(status: &str) -> String {
 #[must_use]
 pub fn task_status_color(status: &str) -> &'static str {
     match status {
-        "waiting_review" => "#c586c0", // purple — needs attention
-        "in_progress" => "#e0a458",    // amber — active
-        "completed" | "skipped" => "#4ec9b0", // teal — done
+        "waiting_review" => "#c586c0",           // purple — needs attention
+        "in_progress" => "#e0a458",              // amber — active
+        "completed" | "skipped" => "#4ec9b0",    // teal — done
         "failed" | "unsatisfiable" => "#d16969", // red — bad terminal
-        _ => "#6b7280",                // grey — pending/blocked/paused/unknown
+        _ => "#6b7280",                          // grey — pending/blocked/paused/unknown
     }
 }
 
@@ -75,7 +75,13 @@ pub fn extra_task_count(total: usize) -> Option<usize> {
 mod tests {
     use super::*;
 
-    fn task(id: &str, status: &str, created: u64, started: Option<u64>, completed: Option<u64>) -> CoordTaskDto {
+    fn task(
+        id: &str,
+        status: &str,
+        created: u64,
+        started: Option<u64>,
+        completed: Option<u64>,
+    ) -> CoordTaskDto {
         CoordTaskDto {
             id: id.to_string(),
             team_id: Some("t1".to_string()),
@@ -105,7 +111,10 @@ mod tests {
         assert_eq!(task_status_label("paused"), "已暂停");
         assert_eq!(task_status_label("unsatisfiable"), "不可满足");
         // Unknown / future variants echo verbatim (never panics, forward-compatible).
-        assert_eq!(task_status_label("weird_future_state"), "weird_future_state");
+        assert_eq!(
+            task_status_label("weird_future_state"),
+            "weird_future_state"
+        );
     }
 
     #[test]

@@ -115,7 +115,8 @@ fn RadialCanvasView() -> impl IntoView {
     let focus_request: RwSignal<Option<String>> = RwSignal::new(None);
     let highlight_request: RwSignal<Option<std::collections::HashSet<u32>>> = RwSignal::new(None);
     let lod_request: RwSignal<f32> = RwSignal::new(0.0);
-    let highlight_edges_request: RwSignal<Option<std::collections::HashSet<(u32, u32)>>> = RwSignal::new(None);
+    let highlight_edges_request: RwSignal<Option<std::collections::HashSet<(u32, u32)>>> =
+        RwSignal::new(None);
 
     // Per-node excerpt cache for NodeDetailPanel.
     let detail_panel_excerpts: RwSignal<std::collections::HashMap<String, NodeExcerpt>> =
@@ -194,7 +195,9 @@ fn RadialCanvasView() -> impl IntoView {
             if let Some(data) = galaxy_data.get_untracked() {
                 let hl = compute_highlight_set(&data, &id);
                 highlight_request.set(Some(hl));
-                highlight_edges_request.set(Some(crate::views::canvas::gl::compute_highlight_edges(&data, &id)));
+                highlight_edges_request.set(Some(
+                    crate::views::canvas::gl::compute_highlight_edges(&data, &id),
+                ));
             }
         }
         CanvasEvent::DeselectNode => {
@@ -239,7 +242,9 @@ fn RadialCanvasView() -> impl IntoView {
                         if let Some(data) = galaxy_data.get_untracked() {
                             let hl = compute_highlight_set(&data, &id);
                             highlight_request.set(Some(hl));
-                            highlight_edges_request.set(Some(crate::views::canvas::gl::compute_highlight_edges(&data, &id)));
+                            highlight_edges_request.set(Some(
+                                crate::views::canvas::gl::compute_highlight_edges(&data, &id),
+                            ));
                         }
                         // Open the node detail panel by selecting the node.
                         mem.selected_node.set(Some(id));
@@ -294,7 +299,9 @@ fn RadialCanvasView() -> impl IntoView {
         if let Some(data) = galaxy_data.get_untracked() {
             let hl = compute_highlight_set(&data, &node_id);
             highlight_request.set(Some(hl));
-            highlight_edges_request.set(Some(crate::views::canvas::gl::compute_highlight_edges(&data, &node_id)));
+            highlight_edges_request.set(Some(crate::views::canvas::gl::compute_highlight_edges(
+                &data, &node_id,
+            )));
         }
     });
 
@@ -344,9 +351,9 @@ fn RadialCanvasView() -> impl IntoView {
 /// Scene::set_graph then builds a ForceLayout over these positions and animates
 /// them to their settled state over up to MAX_SETTLE_STEPS frames.
 fn build_galaxy(resp: &GraphQueryResponse) -> gl::GraphData {
+    use crate::canvas_engine::category_color::category_rgb;
     use gl::layout3d::ForceLayout;
     use gl::{GalaxyNode, GraphData};
-    use crate::canvas_engine::category_color::category_rgb;
 
     let mut id_index = std::collections::HashMap::new();
     for (i, n) in resp.nodes.iter().enumerate() {
@@ -357,24 +364,29 @@ fn build_galaxy(resp: &GraphQueryResponse) -> gl::GraphData {
     // reciprocal wikilinks (A→B and B→A) and duplicate rows must collapse to a
     // single edge, or each pair draws two oppositely-bowed bézier arcs (the
     // "double arc" artifact). Also drops self-loops.
-    let edges = dedup_undirected_edges(resp.edges.iter().filter_map(|e| {
-        Some((*id_index.get(&e.from)?, *id_index.get(&e.to)?))
-    }));
+    let edges = dedup_undirected_edges(
+        resp.edges
+            .iter()
+            .filter_map(|e| Some((*id_index.get(&e.from)?, *id_index.get(&e.to)?))),
+    );
 
     let ids: Vec<String> = resp.nodes.iter().map(|n| n.id.clone()).collect();
     let layout = ForceLayout::new(ids.len(), &edges);
     let positions = layout.seed(&ids);
 
-    let nodes: Vec<GalaxyNode> = resp.nodes.iter().zip(positions).map(|(n, pos)| {
-        GalaxyNode {
+    let nodes: Vec<GalaxyNode> = resp
+        .nodes
+        .iter()
+        .zip(positions)
+        .map(|(n, pos)| GalaxyNode {
             id: n.id.clone(),
             name: n.name.clone(),
             category: n.category.clone(),
             link_count: n.link_count as u32,
             pos,
             color: category_rgb(&n.category),
-        }
-    }).collect();
+        })
+        .collect();
 
     GraphData { nodes, edges }
 }
@@ -417,7 +429,10 @@ fn fold_to_lod(fold: usize) -> f32 {
 ///
 /// Returns a `HashSet<u32>` of node indices (matching `GraphData.nodes` order).
 /// The scene's `set_highlight` will dim any node NOT in this set.
-fn compute_highlight_set(data: &gl::GraphData, selected_id: &str) -> std::collections::HashSet<u32> {
+fn compute_highlight_set(
+    data: &gl::GraphData,
+    selected_id: &str,
+) -> std::collections::HashSet<u32> {
     // Find the selected node's index.
     let Some(sel_idx) = data.nodes.iter().position(|n| n.id == selected_id) else {
         return std::collections::HashSet::new();
@@ -463,7 +478,7 @@ mod tests {
         assert_eq!(fold_to_lod(0), 1.0); // sparsest: backbone only
         assert_eq!(fold_to_lod(10), 0.0); // densest: all edges
         assert_eq!(fold_to_lod(5), 0.5); // midpoint
-        // Monotonic decreasing: higher slider = denser graph (lower lod).
+                                         // Monotonic decreasing: higher slider = denser graph (lower lod).
         assert!(fold_to_lod(2) > fold_to_lod(8));
         // Out-of-range slider values clamp instead of overflowing the LOD range.
         assert_eq!(fold_to_lod(99), 0.0);

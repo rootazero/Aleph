@@ -49,12 +49,16 @@ pub struct NodeRenderer {
 
 const CORNERS: [f32; 12] = [
     -1.0, -1.0, 1.0, -1.0, -1.0, 1.0, // tri 1
-    -1.0, 1.0, 1.0, -1.0, 1.0, 1.0,   // tri 2
+    -1.0, 1.0, 1.0, -1.0, 1.0, 1.0, // tri 2
 ];
 
 impl NodeRenderer {
     pub fn new(gl: &Gl) -> Result<NodeRenderer, String> {
-        let prog = compile_program(gl, &shaders::with_drift(shaders::NODE_VERT), shaders::NODE_FRAG)?;
+        let prog = compile_program(
+            gl,
+            &shaders::with_drift(shaders::NODE_VERT),
+            shaders::NODE_FRAG,
+        )?;
         let vao = gl.create_vertex_array().ok_or("vao")?;
         gl.bind_vertex_array(Some(&vao));
 
@@ -85,7 +89,16 @@ impl NodeRenderer {
         Self::setup_instanced(gl, &inst_spike, 5, 1);
 
         gl.bind_vertex_array(None);
-        Ok(NodeRenderer { prog, vao, inst_offset, inst_size, inst_color, inst_phase, inst_spike, count: 0 })
+        Ok(NodeRenderer {
+            prog,
+            vao,
+            inst_offset,
+            inst_size,
+            inst_color,
+            inst_phase,
+            inst_spike,
+            count: 0,
+        })
     }
 
     fn setup_instanced(gl: &Gl, buf: &WebGlBuffer, loc: u32, size: i32) {
@@ -113,7 +126,13 @@ impl NodeRenderer {
         let mut colors = Vec::with_capacity(n * 3);
         let mut phases = Vec::with_capacity(n);
         let mut spikes = Vec::with_capacity(n);
-        let th = hub_spike_threshold(&data.nodes.iter().map(|nd| nd.link_count).collect::<Vec<_>>());
+        let th = hub_spike_threshold(
+            &data
+                .nodes
+                .iter()
+                .map(|nd| nd.link_count)
+                .collect::<Vec<_>>(),
+        );
         let has_hl = hl.map(|s| !s.is_empty()).unwrap_or(false);
         for (i, (node, pos)) in data.nodes.iter().zip(positions.iter()).enumerate() {
             offsets.extend_from_slice(&[pos.x, pos.y, pos.z]);
@@ -145,7 +164,13 @@ impl NodeRenderer {
         let mut colors = Vec::with_capacity(n * 3);
         let mut phases = Vec::with_capacity(n);
         let mut spikes = Vec::with_capacity(n);
-        let th = hub_spike_threshold(&data.nodes.iter().map(|nd| nd.link_count).collect::<Vec<_>>());
+        let th = hub_spike_threshold(
+            &data
+                .nodes
+                .iter()
+                .map(|nd| nd.link_count)
+                .collect::<Vec<_>>(),
+        );
         let has_hl = hl.map(|s| !s.is_empty()).unwrap_or(false);
         for (i, node) in data.nodes.iter().enumerate() {
             offsets.extend_from_slice(&[node.pos.x, node.pos.y, node.pos.z]);
@@ -172,7 +197,14 @@ impl NodeRenderer {
         upload_f32(gl, &self.inst_spike, &spikes);
     }
 
-    pub fn draw(&self, gl: &Gl, view_proj: &Mat4, viewport: (f32, f32), u_time_ms: f32, u_cam_dist: f32) {
+    pub fn draw(
+        &self,
+        gl: &Gl,
+        view_proj: &Mat4,
+        viewport: (f32, f32),
+        u_time_ms: f32,
+        u_cam_dist: f32,
+    ) {
         if self.count == 0 {
             return;
         }
@@ -220,7 +252,10 @@ mod tests {
             assert!((0.0..1.0).contains(&p), "phase out of range for {id}: {p}");
             assert_eq!(p, node_phase(id), "phase not deterministic for {id}");
         }
-        assert!(node_phase("a") != node_phase("b"), "distinct ids share phase");
+        assert!(
+            node_phase("a") != node_phase("b"),
+            "distinct ids share phase"
+        );
     }
 
     #[test]
@@ -228,7 +263,11 @@ mod tests {
         let counts = vec![1u32, 1, 2, 2, 3, 3, 4, 50]; // 50 = clear hub
         let th = hub_spike_threshold(&counts);
         assert!(th >= 4, "threshold too low: {th}");
-        assert_eq!(spike_strength(1, th), 0.0, "low-degree node must have no spike");
+        assert_eq!(
+            spike_strength(1, th),
+            0.0,
+            "low-degree node must have no spike"
+        );
         let s = spike_strength(50, th);
         assert!(s > 0.0 && s <= 0.3, "hub spike must be weak (0,0.3]: {s}");
     }

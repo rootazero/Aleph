@@ -22,8 +22,8 @@ use queue_bar::QueuedPromptBar;
 
 use super::project_menu::ProjectMenu;
 use super::state::{ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt, TeamMemberView};
-use crate::components::team_task_strip::TeamTaskStrip;
 use crate::api::chat::{ChatApi, ChatAttachment};
+use crate::components::team_task_strip::TeamTaskStrip;
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
 use leptos::prelude::*;

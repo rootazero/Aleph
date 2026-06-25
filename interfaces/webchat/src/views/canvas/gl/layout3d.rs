@@ -4,13 +4,13 @@
 use super::math::Vec3;
 use crate::canvas_engine::fnv1a::fnv1a_32;
 
-const REPULSION: f32 = 8000.0;   // ~k_e
-const SPRING_K: f32 = 0.02;      // edge stiffness
-const REST_LEN: f32 = 60.0;      // spring rest length
-const CENTER_PULL: f32 = 0.002;  // gentle pull to origin
-const DAMPING: f32 = 0.85;       // velocity damping
-const MAX_STEP: f32 = 30.0;      // clamp per-step displacement
-const EPS: f32 = 0.5;            // convergence threshold (max displacement)
+const REPULSION: f32 = 8000.0; // ~k_e
+const SPRING_K: f32 = 0.02; // edge stiffness
+const REST_LEN: f32 = 60.0; // spring rest length
+const CENTER_PULL: f32 = 0.002; // gentle pull to origin
+const DAMPING: f32 = 0.85; // velocity damping
+const MAX_STEP: f32 = 30.0; // clamp per-step displacement
+const EPS: f32 = 0.5; // convergence threshold (max displacement)
 
 pub struct ForceLayout {
     n: usize,
@@ -30,13 +30,19 @@ impl ForceLayout {
     }
 
     pub fn seed(&self, ids: &[String]) -> Vec<Vec3> {
-        ids.iter().map(|id| {
-            let h = fnv1a_32(id.as_bytes());
-            let theta = (h & 0xffff) as f32 / 65535.0 * std::f32::consts::TAU;
-            let phi = ((h >> 16) & 0xffff) as f32 / 65535.0 * std::f32::consts::PI;
-            let r = 200.0;
-            Vec3::new(r * phi.sin() * theta.cos(), r * phi.sin() * theta.sin(), r * phi.cos())
-        }).collect()
+        ids.iter()
+            .map(|id| {
+                let h = fnv1a_32(id.as_bytes());
+                let theta = (h & 0xffff) as f32 / 65535.0 * std::f32::consts::TAU;
+                let phi = ((h >> 16) & 0xffff) as f32 / 65535.0 * std::f32::consts::PI;
+                let r = 200.0;
+                Vec3::new(
+                    r * phi.sin() * theta.cos(),
+                    r * phi.sin() * theta.sin(),
+                    r * phi.cos(),
+                )
+            })
+            .collect()
     }
 
     pub fn step(&mut self, pos: &mut [Vec3]) {
@@ -69,7 +75,9 @@ impl ForceLayout {
             self.vel[i] = self.vel[i].add(&force[i]).scale(DAMPING);
             let mut disp = self.vel[i];
             let dl = disp.length();
-            if dl > MAX_STEP { disp = disp.scale(MAX_STEP / dl); }
+            if dl > MAX_STEP {
+                disp = disp.scale(MAX_STEP / dl);
+            }
             pos[i] = pos[i].add(&disp);
             max_disp = max_disp.max(disp.length());
         }
@@ -86,7 +94,9 @@ impl ForceLayout {
         e
     }
 
-    pub fn converged(&self) -> bool { self.last_max_disp < EPS }
+    pub fn converged(&self) -> bool {
+        self.last_max_disp < EPS
+    }
 }
 
 #[cfg(test)]
@@ -104,7 +114,9 @@ mod tests {
         let a = l.seed(&ids);
         let b = l.seed(&ids);
         assert_eq!(a.len(), 10);
-        for i in 0..10 { assert_eq!(a[i], b[i]); }
+        for i in 0..10 {
+            assert_eq!(a[i], b[i]);
+        }
     }
 
     #[test]
@@ -113,7 +125,9 @@ mod tests {
         let mut l = ForceLayout::new(20, &line_graph(20));
         let mut pos = l.seed(&ids);
         let e0 = l.energy(&pos);
-        for _ in 0..200 { l.step(&mut pos); }
+        for _ in 0..200 {
+            l.step(&mut pos);
+        }
         let e1 = l.energy(&pos);
         assert!(e1 < e0, "energy did not decrease: {e0} -> {e1}");
     }
@@ -123,7 +137,12 @@ mod tests {
         let ids: Vec<String> = (0..15).map(|i| format!("n{i}")).collect();
         let mut l = ForceLayout::new(15, &line_graph(15));
         let mut pos = l.seed(&ids);
-        for _ in 0..600 { l.step(&mut pos); if l.converged() { break; } }
+        for _ in 0..600 {
+            l.step(&mut pos);
+            if l.converged() {
+                break;
+            }
+        }
         assert!(l.converged(), "did not converge in 600 steps");
     }
 
@@ -134,7 +153,9 @@ mod tests {
         let ids: Vec<String> = (0..4).map(|i| format!("n{i}")).collect();
         let mut l = ForceLayout::new(4, &[(0, 1)]);
         let mut pos = l.seed(&ids);
-        for _ in 0..400 { l.step(&mut pos); }
+        for _ in 0..400 {
+            l.step(&mut pos);
+        }
         let d_edge = pos[0].sub(&pos[1]).length();
         let d_free = pos[2].sub(&pos[3]).length();
         assert!(d_edge < d_free, "edge {d_edge} should be < free {d_free}");

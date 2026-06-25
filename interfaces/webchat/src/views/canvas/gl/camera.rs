@@ -3,9 +3,9 @@
 
 use super::math::{Mat4, Vec3};
 
-const DAMPING: f32 = 0.12;          // approach rate per update toward target angles
+const DAMPING: f32 = 0.12; // approach rate per update toward target angles
 const AUTOROTATE_RAD_PER_MS: f32 = 0.4 / 1000.0; // ~0.4 rad/s (ref autoRotateSpeed)
-const FLY_RATE: f32 = 0.10;         // ease-out approach per update toward fly target
+const FLY_RATE: f32 = 0.10; // ease-out approach per update toward fly target
 
 pub struct OrbitCamera {
     // Current (rendered) orbit.
@@ -30,8 +30,14 @@ impl OrbitCamera {
     pub fn new(distance: f32) -> Self {
         let d = distance.clamp(Self::MIN_DIST, Self::MAX_DIST);
         Self {
-            azimuth: 0.6, elevation: 0.35, distance: d, center: Vec3::zero(),
-            tgt_azimuth: 0.6, tgt_elevation: 0.35, tgt_distance: d, tgt_center: Vec3::zero(),
+            azimuth: 0.6,
+            elevation: 0.35,
+            distance: d,
+            center: Vec3::zero(),
+            tgt_azimuth: 0.6,
+            tgt_elevation: 0.35,
+            tgt_distance: d,
+            tgt_center: Vec3::zero(),
             last_interaction_ms: 0.0,
         }
     }
@@ -51,7 +57,9 @@ impl OrbitCamera {
         self.tgt_distance = distance.clamp(Self::MIN_DIST, Self::MAX_DIST);
     }
 
-    pub fn note_interaction(&mut self, t_ms: f64) { self.last_interaction_ms = t_ms; }
+    pub fn note_interaction(&mut self, t_ms: f64) {
+        self.last_interaction_ms = t_ms;
+    }
 
     pub fn update(&mut self, t_ms: f64, _dt_ms: f32) {
         // Idle auto-rotate (only past timeout; resets damping target).
@@ -62,7 +70,9 @@ impl OrbitCamera {
         self.azimuth += (self.tgt_azimuth - self.azimuth) * DAMPING;
         self.elevation += (self.tgt_elevation - self.elevation) * DAMPING;
         self.distance += (self.tgt_distance - self.distance) * DAMPING;
-        self.center = self.center.add(&self.tgt_center.sub(&self.center).scale(FLY_RATE));
+        self.center = self
+            .center
+            .add(&self.tgt_center.sub(&self.center).scale(FLY_RATE));
     }
 
     pub fn eye(&self) -> Vec3 {
@@ -74,7 +84,9 @@ impl OrbitCamera {
         )
     }
 
-    pub fn target(&self) -> Vec3 { self.center }
+    pub fn target(&self) -> Vec3 {
+        self.center
+    }
 
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
         let proj = Mat4::perspective(Self::FOVY, aspect.max(0.01), 0.1, 200_000.0);
@@ -103,7 +115,9 @@ mod tests {
         let e0 = c.eye();
         c.orbit(0.5, 0.2);
         // damping means eye moves toward new orbit over update()s
-        for _ in 0..120 { c.update(0.0, 16.0); }
+        for _ in 0..120 {
+            c.update(0.0, 16.0);
+        }
         let e1 = c.eye();
         assert!((e0.x - e1.x).abs() + (e0.y - e1.y).abs() + (e0.z - e1.z).abs() > 1.0);
     }
@@ -112,7 +126,9 @@ mod tests {
     fn fly_to_converges_target() {
         let mut c = OrbitCamera::new(100.0);
         c.fly_to(Vec3::new(50.0, 0.0, 0.0), 200.0);
-        for _ in 0..300 { c.update(0.0, 16.0); }
+        for _ in 0..300 {
+            c.update(0.0, 16.0);
+        }
         let t = c.target();
         assert!((t.x - 50.0).abs() < 1.0, "target.x={}", t.x);
     }
@@ -128,5 +144,7 @@ mod tests {
         assert!(c.azimuth != az_before);
     }
 
-    fn approx_eq(a: f32, b: f32) { assert!((a - b).abs() < 1e-4); }
+    fn approx_eq(a: f32, b: f32) {
+        assert!((a - b).abs() < 1e-4);
+    }
 }

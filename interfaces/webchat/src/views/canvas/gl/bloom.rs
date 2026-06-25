@@ -126,12 +126,19 @@ pub struct BloomPipeline {
 
 impl BloomPipeline {
     pub fn new(gl: &Gl, w: i32, h: i32) -> Result<BloomPipeline, String> {
-        let float_ext = gl.get_extension("EXT_color_buffer_float").ok().flatten().is_some();
+        let float_ext = gl
+            .get_extension("EXT_color_buffer_float")
+            .ok()
+            .flatten()
+            .is_some();
         let hw = (w / 2).max(1);
         let hh = (h / 2).max(1);
 
         let scene = FboTex::new(gl, w, h, float_ext)?;
-        let pp = [FboTex::new(gl, hw, hh, float_ext)?, FboTex::new(gl, hw, hh, float_ext)?];
+        let pp = [
+            FboTex::new(gl, hw, hh, float_ext)?,
+            FboTex::new(gl, hw, hh, float_ext)?,
+        ];
 
         let prog_bright = compile_program(gl, FULLSCREEN_VERT, BRIGHT_FRAG)?;
         let prog_blur = compile_program(gl, FULLSCREEN_VERT, BLUR_FRAG)?;

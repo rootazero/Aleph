@@ -1,9 +1,7 @@
 //! WebGL2 context acquisition + GLSL program compilation.
 
 use wasm_bindgen::JsCast;
-use web_sys::{
-    HtmlCanvasElement, WebGl2RenderingContext as Gl, WebGlProgram, WebGlShader,
-};
+use web_sys::{HtmlCanvasElement, WebGl2RenderingContext as Gl, WebGlProgram, WebGlShader};
 
 pub struct GlContext {
     pub gl: Gl,

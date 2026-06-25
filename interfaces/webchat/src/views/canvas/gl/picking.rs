@@ -58,8 +58,11 @@ mod tests {
 
     #[test]
     fn picks_node_under_cursor() {
-        let vp = Mat4::perspective(1.0, 1.0, 0.1, 1000.0)
-            .mul(&Mat4::look_at(Vec3::new(0.0, 0.0, 300.0), Vec3::zero(), Vec3::new(0.0, 1.0, 0.0)));
+        let vp = Mat4::perspective(1.0, 1.0, 0.1, 1000.0).mul(&Mat4::look_at(
+            Vec3::new(0.0, 0.0, 300.0),
+            Vec3::zero(),
+            Vec3::new(0.0, 1.0, 0.0),
+        ));
         let nodes = vec![node_at(0.0, 0.0, 0.0), node_at(200.0, 0.0, 0.0)];
         // Center node projects to screen center (400,300) on an 800x600 viewport.
         let hit = pick_node(&vp, &nodes, (800.0, 600.0), (400.0, 300.0), 20.0);
@@ -68,8 +71,11 @@ mod tests {
 
     #[test]
     fn returns_none_when_far() {
-        let vp = Mat4::perspective(1.0, 1.0, 0.1, 1000.0)
-            .mul(&Mat4::look_at(Vec3::new(0.0, 0.0, 300.0), Vec3::zero(), Vec3::new(0.0, 1.0, 0.0)));
+        let vp = Mat4::perspective(1.0, 1.0, 0.1, 1000.0).mul(&Mat4::look_at(
+            Vec3::new(0.0, 0.0, 300.0),
+            Vec3::zero(),
+            Vec3::new(0.0, 1.0, 0.0),
+        ));
         let nodes = vec![node_at(0.0, 0.0, 0.0)];
         let hit = pick_node(&vp, &nodes, (800.0, 600.0), (10.0, 10.0), 20.0);
         assert_eq!(hit, None);

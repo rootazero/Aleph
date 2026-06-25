@@ -61,25 +61,34 @@ mod highlight_tests {
     use crate::views::canvas::gl::math::Vec3;
 
     fn node(id: &str) -> GalaxyNode {
-        GalaxyNode { id: id.into(), name: id.into(), category: "x".into(),
-            link_count: 0, pos: Vec3::zero(), color: [1.0,1.0,1.0] }
+        GalaxyNode {
+            id: id.into(),
+            name: id.into(),
+            category: "x".into(),
+            link_count: 0,
+            pos: Vec3::zero(),
+            color: [1.0, 1.0, 1.0],
+        }
     }
 
     #[test]
     fn highlight_edges_are_neighbor_links_normalized() {
         let data = GraphData {
             nodes: vec![node("a"), node("b"), node("c"), node("d")],
-            edges: vec![(0,1), (2,0), (2,3)], // a-b, c-a, c-d
+            edges: vec![(0, 1), (2, 0), (2, 3)], // a-b, c-a, c-d
         };
         let hl = compute_highlight_edges(&data, "a");
-        assert!(hl.contains(&(0,1)));   // a-b
-        assert!(hl.contains(&(0,2)));   // c-a normalized → (0,2)
-        assert!(!hl.contains(&(2,3)));  // c-d not incident to a
+        assert!(hl.contains(&(0, 1))); // a-b
+        assert!(hl.contains(&(0, 2))); // c-a normalized → (0,2)
+        assert!(!hl.contains(&(2, 3))); // c-d not incident to a
     }
 
     #[test]
     fn unknown_id_yields_empty() {
-        let data = GraphData { nodes: vec![node("a")], edges: vec![] };
+        let data = GraphData {
+            nodes: vec![node("a")],
+            edges: vec![],
+        };
         assert!(compute_highlight_edges(&data, "zzz").is_empty());
     }
 }

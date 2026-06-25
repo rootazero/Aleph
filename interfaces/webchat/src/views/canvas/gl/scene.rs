@@ -97,8 +97,13 @@ impl Scene {
         // Assign data and compute the filtered edge list once for (graph, lod).
         self.data = data;
         self.recompute_filtered_edges();
-        self.edges.upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
-        self.edges.set_highlight(&self.ctx.gl, &self.filtered_edges, self.highlight_edges.as_ref());
+        self.edges
+            .upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
+        self.edges.set_highlight(
+            &self.ctx.gl,
+            &self.filtered_edges,
+            self.highlight_edges.as_ref(),
+        );
         self.nodes.upload(&self.ctx.gl, &self.data, None);
     }
 
@@ -107,8 +112,13 @@ impl Scene {
     pub fn set_lod(&mut self, lod: f32) {
         self.lod = lod.clamp(0.0, 1.0);
         self.recompute_filtered_edges();
-        self.edges.upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
-        self.edges.set_highlight(&self.ctx.gl, &self.filtered_edges, self.highlight_edges.as_ref());
+        self.edges
+            .upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
+        self.edges.set_highlight(
+            &self.ctx.gl,
+            &self.filtered_edges,
+            self.highlight_edges.as_ref(),
+        );
     }
 
     /// Recompute `self.filtered_edges` from `self.data` and `self.lod`.
@@ -142,11 +152,17 @@ impl Scene {
         // Retain only edges where at least one endpoint is above the floor
         // (weak spokes into strong hubs are still drawn; only weak-to-weak edges
         // are culled, preserving cluster connectivity).
-        self.filtered_edges = self.data.edges.iter().copied().filter(|&(a, b)| {
-            let lc_a = self.data.nodes.get(a as usize).map_or(0, |n| n.link_count);
-            let lc_b = self.data.nodes.get(b as usize).map_or(0, |n| n.link_count);
-            lc_a >= floor || lc_b >= floor
-        }).collect();
+        self.filtered_edges = self
+            .data
+            .edges
+            .iter()
+            .copied()
+            .filter(|&(a, b)| {
+                let lc_a = self.data.nodes.get(a as usize).map_or(0, |n| n.link_count);
+                let lc_b = self.data.nodes.get(b as usize).map_or(0, |n| n.link_count);
+                lc_a >= floor || lc_b >= floor
+            })
+            .collect();
     }
 
     /// Screen-space picking: project all nodes through the last-frame view-proj
@@ -188,7 +204,11 @@ impl Scene {
 
     /// Look up a node name by its id. Returns `None` if not found.
     pub fn node_name(&self, id: &str) -> Option<&str> {
-        self.data.nodes.iter().find(|n| n.id == id).map(|n| n.name.as_str())
+        self.data
+            .nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.name.as_str())
     }
 
     /// Set the highlight set (selected node index + neighbors). Stored so that
@@ -202,7 +222,8 @@ impl Scene {
     /// Set the edge highlight set (normalized (min,max) incident-edge pairs).
     /// Stored so every upload_indexed re-applies the correct per-edge flags.
     pub fn set_highlight_edges(&mut self, edges: Option<HashSet<(u32, u32)>>) {
-        self.edges.set_highlight(&self.ctx.gl, &self.filtered_edges, edges.as_ref());
+        self.edges
+            .set_highlight(&self.ctx.gl, &self.filtered_edges, edges.as_ref());
         self.highlight_edges = edges;
     }
 
@@ -261,8 +282,13 @@ impl Scene {
                 // Re-upload both edges and nodes (positions changed).
                 // Use the cached filtered_edges list — no clone, no re-sort.
                 // Pass through the stored highlight so it survives settling.
-                self.edges.upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
-                self.edges.set_highlight(&self.ctx.gl, &self.filtered_edges, self.highlight_edges.as_ref());
+                self.edges
+                    .upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
+                self.edges.set_highlight(
+                    &self.ctx.gl,
+                    &self.filtered_edges,
+                    self.highlight_edges.as_ref(),
+                );
                 self.nodes
                     .upload(&self.ctx.gl, &self.data, self.highlight.as_ref());
             }
@@ -279,7 +305,7 @@ impl Scene {
         gl.bind_framebuffer(Gl::FRAMEBUFFER, Some(self.bloom.scene_fbo()));
         gl.viewport(0, 0, self.width, self.height);
         gl.clear_color(0.024, 0.035, 0.059, 1.0); // #06090f-ish
-        // Enable additive blend for the scene geometry (edges + nodes).
+                                                  // Enable additive blend for the scene geometry (edges + nodes).
         gl.enable(Gl::BLEND);
         gl.blend_func(Gl::SRC_ALPHA, Gl::ONE); // additive
         gl.clear(Gl::COLOR_BUFFER_BIT | Gl::DEPTH_BUFFER_BIT);
@@ -287,8 +313,19 @@ impl Scene {
         let vp = self.camera.view_proj(aspect);
         // Store for picking (uses stable canonical positions, not drifted).
         self.last_vp = vp;
-        self.edges.draw(gl, &vp, (self.width as f32, self.height as f32), t_ms as f32);
-        self.nodes.draw(gl, &vp, (self.width as f32, self.height as f32), t_ms as f32, self.camera.distance);
+        self.edges.draw(
+            gl,
+            &vp,
+            (self.width as f32, self.height as f32),
+            t_ms as f32,
+        );
+        self.nodes.draw(
+            gl,
+            &vp,
+            (self.width as f32, self.height as f32),
+            t_ms as f32,
+            self.camera.distance,
+        );
         // Restore blend state after scene draw — bloom passes will disable blend.
         gl.disable(Gl::BLEND);
 
@@ -296,6 +333,4 @@ impl Scene {
         // bloom.run() manages all blend state internally (BLEND disabled).
         self.bloom.run(gl);
     }
-
 }
-

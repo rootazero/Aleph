@@ -268,17 +268,35 @@ mod tests {
     fn drift_injected_into_both_vertex_shaders() {
         let node = with_drift(NODE_VERT);
         let edge = with_drift(EDGE_VERT);
-        assert!(node.contains("vec3 idle_drift("), "node shader missing drift fn");
-        assert!(edge.contains("vec3 idle_drift("), "edge shader missing drift fn");
-        assert!(node.contains("idle_drift(a_offset"), "node must drift its offset");
-        assert!(edge.contains("idle_drift(a_pos_a"), "edge must drift endpoint a");
-        assert!(edge.contains("idle_drift(a_pos_b"), "edge must drift endpoint b");
+        assert!(
+            node.contains("vec3 idle_drift("),
+            "node shader missing drift fn"
+        );
+        assert!(
+            edge.contains("vec3 idle_drift("),
+            "edge shader missing drift fn"
+        );
+        assert!(
+            node.contains("idle_drift(a_offset"),
+            "node must drift its offset"
+        );
+        assert!(
+            edge.contains("idle_drift(a_pos_a"),
+            "edge must drift endpoint a"
+        );
+        assert!(
+            edge.contains("idle_drift(a_pos_b"),
+            "edge must drift endpoint b"
+        );
     }
 
     #[test]
     fn with_drift_inserts_once_and_keeps_version_first() {
         let out = with_drift(NODE_VERT);
-        assert!(out.starts_with("#version 300 es"), "#version must stay on line 1");
+        assert!(
+            out.starts_with("#version 300 es"),
+            "#version must stay on line 1"
+        );
         assert_eq!(
             out.matches("vec3 idle_drift(").count(),
             1,
