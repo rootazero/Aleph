@@ -69,7 +69,9 @@ pub fn primer_entries() -> Vec<ExtensionEntry> {
         }
     }
     if out.is_empty() {
-        tracing::info!("official skills primer: bundle empty (submodule absent at build) — no skill entries");
+        tracing::info!(
+            "official skills primer: bundle empty (submodule absent at build) — no skill entries"
+        );
     }
     out
 }
@@ -98,7 +100,12 @@ mod tests {
         assert_eq!(e.name, "PDF Tools");
         assert!(!e.installed);
         match e.install_spec.unwrap() {
-            InstallSpec::GitDir { git_url, subdir, git_ref, sha256 } => {
+            InstallSpec::GitDir {
+                git_url,
+                subdir,
+                git_ref,
+                sha256,
+            } => {
                 assert_eq!(git_url, OFFICIAL_SKILLS_REPO);
                 assert_eq!(subdir.as_deref(), Some("pdf-tools-dir"));
                 assert!(git_ref.is_none() && sha256.is_none());

@@ -254,7 +254,11 @@ async fn forward_bus_to_client(mut rx: broadcast::Receiver<String>, buffer: PerC
 fn is_token_rotated_frame(event_json: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(event_json)
         .ok()
-        .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(|s| s == "token_rotated"))
+        .and_then(|v| {
+            v.get("type")
+                .and_then(|t| t.as_str())
+                .map(|s| s == "token_rotated")
+        })
         .unwrap_or(false)
 }
 
@@ -1242,8 +1246,14 @@ mod token_rotation_tests {
 
     #[test]
     fn other_events_never_trigger_close() {
-        assert!(!rotated_should_close_remote(r#"{"type":"acp_sessions_changed"}"#, false));
-        assert!(!rotated_should_close_remote(r#"{"topic":"alerts.system"}"#, false));
+        assert!(!rotated_should_close_remote(
+            r#"{"type":"acp_sessions_changed"}"#,
+            false
+        ));
+        assert!(!rotated_should_close_remote(
+            r#"{"topic":"alerts.system"}"#,
+            false
+        ));
     }
 }
 

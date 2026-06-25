@@ -120,7 +120,10 @@ mod tests {
         // First request (no validators): 200 with an ETag and revalidate policy.
         let resp = serve_static_or_index(HeaderMap::new(), AxumPath(path.clone())).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.headers().get(header::CACHE_CONTROL).unwrap(), "no-cache");
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-cache"
+        );
         let etag = resp.headers().get(header::ETAG).expect("etag set").clone();
 
         // Re-request with the matching validator: 304, no body re-transferred.

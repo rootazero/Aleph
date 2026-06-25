@@ -440,7 +440,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             .register("gateway.token.rotate", move |req| {
                 let bus = rotate_bus.clone();
                 async move {
-                    let resp = alephcore::gateway::handlers::gateway_token::handle_token_rotate(req).await;
+                    let resp =
+                        alephcore::gateway::handlers::gateway_token::handle_token_rotate(req).await;
                     // Only broadcast when rotation succeeded — don't kick sessions on failure.
                     if resp.error.is_none() {
                         let _ = bus.publish_frame(

@@ -43,7 +43,10 @@ mod tests {
         let cache = CatalogCache::open_in_memory().unwrap();
         prime_official_catalog_if_empty(&cache).await;
         let after = cache
-            .query(&CatalogFilter { source_id: Some(ALEPH_HUB_ID.into()), ..Default::default() })
+            .query(&CatalogFilter {
+                source_id: Some(ALEPH_HUB_ID.into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         // MCP catalog.json is always present, so the slot is non-empty even when
@@ -53,7 +56,10 @@ mod tests {
         // Second call is a no-op (slot already non-empty).
         prime_official_catalog_if_empty(&cache).await;
         let again = cache
-            .query(&CatalogFilter { source_id: Some(ALEPH_HUB_ID.into()), ..Default::default() })
+            .query(&CatalogFilter {
+                source_id: Some(ALEPH_HUB_ID.into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(again.len(), count);
@@ -64,7 +70,10 @@ mod tests {
         let cache = CatalogCache::open_in_memory().unwrap();
         prime_official_catalog_if_empty(&cache).await;
         let mcp = cache
-            .query(&CatalogFilter { kind: Some(ExtensionKind::Mcp), ..Default::default() })
+            .query(&CatalogFilter {
+                kind: Some(ExtensionKind::Mcp),
+                ..Default::default()
+            })
             .await
             .unwrap();
         // The full MCP primer set survives composition with the skills projection.
@@ -78,16 +87,25 @@ mod tests {
         prime_official_catalog_if_empty(&cache).await;
         // The full MCP set survives the three-way composition (catalog.json anchor).
         let mcp = cache
-            .query(&CatalogFilter { kind: Some(ExtensionKind::Mcp), ..Default::default() })
+            .query(&CatalogFilter {
+                kind: Some(ExtensionKind::Mcp),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(mcp.len(), crate::hub::official_mcp::primer_entries().len());
         // Any plugin entries primed are well-formed and live in the aleph-hub slot.
         let plugins = cache
-            .query(&CatalogFilter { kind: Some(ExtensionKind::Plugin), ..Default::default() })
+            .query(&CatalogFilter {
+                kind: Some(ExtensionKind::Plugin),
+                ..Default::default()
+            })
             .await
             .unwrap();
-        assert_eq!(plugins.len(), crate::hub::official_plugins::primer_entries().len());
+        assert_eq!(
+            plugins.len(),
+            crate::hub::official_plugins::primer_entries().len()
+        );
         for p in &plugins {
             assert_eq!(p.source_id, ALEPH_HUB_ID);
             assert_eq!(p.trust_tier, crate::hub::types::TrustTier::Official);

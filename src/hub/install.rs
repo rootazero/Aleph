@@ -340,7 +340,10 @@ mod tests {
         // builtin "aleph-official" marketplace — NOT a marketplace literally named
         // "aleph-hub" (which does not exist). "local" searches all marketplaces;
         // any other id is a registered peer marketplace, taken verbatim.
-        assert_eq!(plugin_marketplace_name(ALEPH_HUB_ID), Some(BUILTIN_MARKETPLACE_NAME));
+        assert_eq!(
+            plugin_marketplace_name(ALEPH_HUB_ID),
+            Some(BUILTIN_MARKETPLACE_NAME)
+        );
         assert_eq!(plugin_marketplace_name("aleph-hub"), Some("aleph-official"));
         assert_eq!(plugin_marketplace_name("local"), None);
         assert_eq!(plugin_marketplace_name("peer-market"), Some("peer-market"));

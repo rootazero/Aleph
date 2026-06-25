@@ -224,5 +224,4 @@ mod tests {
         let other = McpManagerConfig::stdio("totally-custom", "X", "node");
         assert!(!is_legacy_preset_server(&other));
     }
-
 }
