@@ -1,5 +1,35 @@
 //! GLSL ES 3.00 shader sources. Filled per-renderer in Tasks 4-6 + Phase 2.
 
+/// Shared idle-drift function injected into BOTH the node and edge vertex
+/// shaders via [`with_drift`]. Defining the motion in exactly one place
+/// guarantees a node and its connecting edges compute byte-identical drift, so
+/// the ribbons can never visually detach from the stars. `phase` ∈ [0,1) is the
+/// per-node phase (see `nodes::node_phase`); `time_ms` is `u_time`. All motion
+/// is evaluated on the GPU — idle frames upload nothing.
+pub const DRIFT_GLSL: &str = r#"
+const float DRIFT_AMP = 3.0;
+const float DRIFT_TAU = 6.28318530718;
+const float DRIFT_OMEGA = DRIFT_TAU / 5.0;   // period 5000ms
+vec3 idle_drift(vec3 base, float phase, float time_ms) {
+    float t = time_ms / 1000.0;
+    float ph = phase * DRIFT_TAU;
+    return base + DRIFT_AMP * vec3(
+        sin(DRIFT_OMEGA * t + ph),
+        sin(DRIFT_OMEGA * t + ph + 0.27 * DRIFT_TAU),
+        sin(DRIFT_OMEGA * t + ph + 0.54 * DRIFT_TAU)
+    );
+}
+"#;
+
+/// Inject [`DRIFT_GLSL`] into a vertex shader source immediately after its
+/// `precision` qualifier (keeping `#version` on the first line). The drift
+/// function depends only on its parameters, so it is valid anywhere at file
+/// scope before `main`. Call only on the two vertex shaders that use drift.
+pub fn with_drift(src: &str) -> String {
+    const ANCHOR: &str = "precision highp float;";
+    src.replacen(ANCHOR, &format!("{ANCHOR}\n{DRIFT_GLSL}"), 1)
+}
+
 /// Node billboard vertex shader. Per-instance: a_offset(vec3), a_size(float),
 /// a_color(vec3), a_phase(float), a_spike(float). Per-vertex: a_corner(vec2 in [-1,1]).
 /// Idle drift is computed entirely on the GPU from u_time + a_phase so that
@@ -20,18 +50,10 @@ out vec2 v_corner;
 out vec3 v_color;
 out float v_spike;
 out float v_twinkle;
-const float AMP = 3.0;
-const float TAU = 6.28318530718;
-const float OMEGA = TAU / 5.0;   // period 5000ms → rad/s over t(sec)
 void main() {
-    float t = u_time / 1000.0;
-    float ph = a_phase * TAU;
-    vec3 drift = AMP * vec3(
-        sin(OMEGA * t + ph),
-        sin(OMEGA * t + ph + 0.27 * TAU),
-        sin(OMEGA * t + ph + 0.54 * TAU)
-    );
-    vec4 clip = u_view_proj * vec4(a_offset + drift, 1.0);
+    // Idle drift is the shared GPU function (also used by the edge shader so
+    // edges track their nodes exactly — see shaders::DRIFT_GLSL).
+    vec4 clip = u_view_proj * vec4(idle_drift(a_offset, a_phase, u_time), 1.0);
     vec2 px = a_corner * a_size / u_viewport * clip.w * 2.0;
     clip.xy += px;
     gl_Position = clip;
@@ -90,10 +112,12 @@ layout(location=2) in vec3 a_pos_b;
 layout(location=3) in vec3 a_color_a;
 layout(location=4) in vec3 a_color_b;
 layout(location=5) in float a_highlight; // 1.0 = neighbor of selected, 0.0 = other
+layout(location=6) in float a_phase_a;   // drift phase of endpoint a (= node_phase)
+layout(location=7) in float a_phase_b;   // drift phase of endpoint b
 uniform mat4 u_view_proj;
 uniform vec2 u_viewport;
 uniform float u_width;
-uniform float u_time;        // ms (used by flow effect in frag)
+uniform float u_time;        // ms (drives idle_drift here + flow effect in frag)
 out vec3 v_color;
 out float v_along;
 out float v_depth;
@@ -105,17 +129,21 @@ vec3 bezier(vec3 a, vec3 c, vec3 b, float t) {
 }
 void main() {
     float t = a_corner.x;
+    // Drift both endpoints in lockstep with their nodes (idle_drift is the same
+    // GPU function the node shader uses) so the ribbon stays welded to the stars.
+    vec3 pa = idle_drift(a_pos_a, a_phase_a, u_time);
+    vec3 pb = idle_drift(a_pos_b, a_phase_b, u_time);
     // Control point: midpoint bowed along a world-perp of the chord.
-    vec3 chord = a_pos_b - a_pos_a;
+    vec3 chord = pb - pa;
     float len = length(chord);
     vec3 dir = len > 1e-4 ? chord / len : vec3(1.0, 0.0, 0.0);
     vec3 up = abs(dir.y) < 0.95 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0);
     vec3 perp = normalize(cross(dir, up));
-    vec3 ctrl = (a_pos_a + a_pos_b) * 0.5 + perp * (len * 0.12);
+    vec3 ctrl = (pa + pb) * 0.5 + perp * (len * 0.12);
     // Sample curve point and a neighbor for screen-space tangent.
-    vec3 p  = bezier(a_pos_a, ctrl, a_pos_b, t);
+    vec3 p  = bezier(pa, ctrl, pb, t);
     float dt = 0.01;
-    vec3 p2 = bezier(a_pos_a, ctrl, a_pos_b, clamp(t + dt, 0.0, 1.0));
+    vec3 p2 = bezier(pa, ctrl, pb, clamp(t + dt, 0.0, 1.0));
     vec4 cp  = u_view_proj * vec4(p, 1.0);
     vec4 cp2 = u_view_proj * vec4(p2, 1.0);
     vec2 sp  = cp.xy  / max(cp.w, 1e-4)  * u_viewport;
@@ -226,3 +254,35 @@ void main() {
     frag = vec4(s + b * u_intensity, 1.0);
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression guard for the node/edge detachment bug: the idle-drift motion
+    /// must be defined once and injected into BOTH vertex shaders, and each must
+    /// actually drift its own geometry (node offset; both edge endpoints). If a
+    /// future edit drops drift from the edge shader, edges detach again — caught
+    /// here.
+    #[test]
+    fn drift_injected_into_both_vertex_shaders() {
+        let node = with_drift(NODE_VERT);
+        let edge = with_drift(EDGE_VERT);
+        assert!(node.contains("vec3 idle_drift("), "node shader missing drift fn");
+        assert!(edge.contains("vec3 idle_drift("), "edge shader missing drift fn");
+        assert!(node.contains("idle_drift(a_offset"), "node must drift its offset");
+        assert!(edge.contains("idle_drift(a_pos_a"), "edge must drift endpoint a");
+        assert!(edge.contains("idle_drift(a_pos_b"), "edge must drift endpoint b");
+    }
+
+    #[test]
+    fn with_drift_inserts_once_and_keeps_version_first() {
+        let out = with_drift(NODE_VERT);
+        assert!(out.starts_with("#version 300 es"), "#version must stay on line 1");
+        assert_eq!(
+            out.matches("vec3 idle_drift(").count(),
+            1,
+            "drift fn definition must appear exactly once"
+        );
+    }
+}

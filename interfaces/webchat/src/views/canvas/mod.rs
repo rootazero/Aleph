@@ -360,9 +360,13 @@ fn build_galaxy(resp: &GraphQueryResponse) -> gl::GraphData {
         id_index.insert(n.id.clone(), i as u32);
     }
 
-    let edges: Vec<(u32, u32)> = resp.edges.iter().filter_map(|e| {
+    // Memory links are directed rows, but the galaxy is an undirected graph:
+    // reciprocal wikilinks (A→B and B→A) and duplicate rows must collapse to a
+    // single edge, or each pair draws two oppositely-bowed bézier arcs (the
+    // "double arc" artifact). Also drops self-loops.
+    let edges = dedup_undirected_edges(resp.edges.iter().filter_map(|e| {
         Some((*id_index.get(&e.from)?, *id_index.get(&e.to)?))
-    }).collect();
+    }));
 
     let ids: Vec<String> = resp.nodes.iter().map(|n| n.id.clone()).collect();
     let layout = ForceLayout::new(ids.len(), &edges);
@@ -380,6 +384,28 @@ fn build_galaxy(resp: &GraphQueryResponse) -> gl::GraphData {
     }).collect();
 
     GraphData { nodes, edges }
+}
+
+/// Collapse directed link rows into unique undirected edges.
+///
+/// Reciprocal links (`A→B` and `B→A`) and exact duplicates fold to one
+/// `(min, max)` pair; self-loops (`A→A`) are dropped. First-appearance order is
+/// preserved so the renderer's edge ordering stays deterministic across rebuilds.
+/// Normalizing to `(min, max)` also matches the edge-highlight key normalization
+/// in `gl::edges::EdgeRenderer::set_highlight`.
+fn dedup_undirected_edges(directed: impl Iterator<Item = (u32, u32)>) -> Vec<(u32, u32)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (a, b) in directed {
+        if a == b {
+            continue; // degenerate self-loop
+        }
+        let key = (a.min(b), a.max(b));
+        if seen.insert(key) {
+            out.push(key);
+        }
+    }
+    out
 }
 
 /// Compute the highlight set for a selected node: the selected node's index
@@ -405,4 +431,24 @@ fn compute_highlight_set(data: &gl::GraphData, selected_id: &str) -> std::collec
         }
     }
     hl
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dedup_collapses_reciprocal_and_duplicate_edges() {
+        // (0,1) and (1,0) are the same undirected edge; (2,3) appears twice.
+        let directed = [(0u32, 1u32), (1, 0), (2, 3), (2, 3), (3, 4)];
+        let out = dedup_undirected_edges(directed.into_iter());
+        assert_eq!(out, vec![(0, 1), (2, 3), (3, 4)]);
+    }
+
+    #[test]
+    fn dedup_drops_self_loops() {
+        let directed = [(5u32, 5u32), (0, 1)];
+        let out = dedup_undirected_edges(directed.into_iter());
+        assert_eq!(out, vec![(0, 1)]);
+    }
 }

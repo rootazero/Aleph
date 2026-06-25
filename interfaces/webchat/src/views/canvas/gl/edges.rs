@@ -38,6 +38,10 @@ pub struct EdgeRenderer {
     pos_b_buf: WebGlBuffer,
     col_a_buf: WebGlBuffer,
     col_b_buf: WebGlBuffer,
+    /// Per-instance drift phases of the two endpoints (locations 6/7). Let the
+    /// edge shader reproduce each node's idle drift so the ribbon never detaches.
+    phase_a_buf: WebGlBuffer,
+    phase_b_buf: WebGlBuffer,
     /// Per-instance highlight flag buffer (location 5): 1.0 = neighbor, 0.0 = other.
     hl_buf: WebGlBuffer,
     count: i32,
@@ -47,7 +51,7 @@ pub struct EdgeRenderer {
 
 impl EdgeRenderer {
     pub fn new(gl: &Gl) -> Result<EdgeRenderer, String> {
-        let prog = compile_program(gl, shaders::EDGE_VERT, shaders::EDGE_FRAG)?;
+        let prog = compile_program(gl, &shaders::with_drift(shaders::EDGE_VERT), shaders::EDGE_FRAG)?;
         let vao = gl.create_vertex_array().ok_or("edge vao")?;
         gl.bind_vertex_array(Some(&vao));
 
@@ -68,6 +72,8 @@ impl EdgeRenderer {
         let pos_b_buf = gl.create_buffer().ok_or("edge pos_b")?;
         let col_a_buf = gl.create_buffer().ok_or("edge col_a")?;
         let col_b_buf = gl.create_buffer().ok_or("edge col_b")?;
+        let phase_a_buf = gl.create_buffer().ok_or("edge phase_a")?;
+        let phase_b_buf = gl.create_buffer().ok_or("edge phase_b")?;
         let hl_buf = gl.create_buffer().ok_or("edge hl")?;
         // a_pos_a(1) a_pos_b(2) a_color_a(3) a_color_b(4) — all per-instance.
         Self::setup_instanced(gl, &pos_a_buf, 1, 3);
@@ -76,6 +82,9 @@ impl EdgeRenderer {
         Self::setup_instanced(gl, &col_b_buf, 4, 3);
         // a_highlight(5) — per-instance flag: 1.0 = neighbor of selected, 0.0 = other.
         Self::setup_instanced(gl, &hl_buf, 5, 1);
+        // a_phase_a(6) a_phase_b(7) — per-instance endpoint drift phases.
+        Self::setup_instanced(gl, &phase_a_buf, 6, 1);
+        Self::setup_instanced(gl, &phase_b_buf, 7, 1);
 
         gl.bind_vertex_array(None);
         Ok(EdgeRenderer {
@@ -85,6 +94,8 @@ impl EdgeRenderer {
             pos_b_buf,
             col_a_buf,
             col_b_buf,
+            phase_a_buf,
+            phase_b_buf,
             hl_buf,
             count: 0,
             select_active: 0.0,
@@ -111,18 +122,25 @@ impl EdgeRenderer {
         let mut pos_b = Vec::with_capacity(edges.len() * 3);
         let mut col_a = Vec::with_capacity(edges.len() * 3);
         let mut col_b = Vec::with_capacity(edges.len() * 3);
+        let mut phase_a = Vec::with_capacity(edges.len());
+        let mut phase_b = Vec::with_capacity(edges.len());
         for &(a, b) in edges {
             let (na, nb) = (&nodes[a as usize], &nodes[b as usize]);
             pos_a.extend_from_slice(&[na.pos.x, na.pos.y, na.pos.z]);
             pos_b.extend_from_slice(&[nb.pos.x, nb.pos.y, nb.pos.z]);
             col_a.extend_from_slice(&na.color);
             col_b.extend_from_slice(&nb.color);
+            // Same phase the node renderer uploads → identical drift per endpoint.
+            phase_a.push(super::nodes::node_phase(&na.id));
+            phase_b.push(super::nodes::node_phase(&nb.id));
         }
         self.count = edges.len() as i32;
         bind_upload(gl, &self.pos_a_buf, &pos_a);
         bind_upload(gl, &self.pos_b_buf, &pos_b);
         bind_upload(gl, &self.col_a_buf, &col_a);
         bind_upload(gl, &self.col_b_buf, &col_b);
+        bind_upload(gl, &self.phase_a_buf, &phase_a);
+        bind_upload(gl, &self.phase_b_buf, &phase_b);
         // Initialize a_highlight to all-0 (no highlight); caller re-applies via set_highlight.
         let zeros: Vec<f32> = vec![0.0; edges.len()];
         bind_upload(gl, &self.hl_buf, &zeros);

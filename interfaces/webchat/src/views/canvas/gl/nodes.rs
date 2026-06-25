@@ -54,7 +54,7 @@ const CORNERS: [f32; 12] = [
 
 impl NodeRenderer {
     pub fn new(gl: &Gl) -> Result<NodeRenderer, String> {
-        let prog = compile_program(gl, shaders::NODE_VERT, shaders::NODE_FRAG)?;
+        let prog = compile_program(gl, &shaders::with_drift(shaders::NODE_VERT), shaders::NODE_FRAG)?;
         let vao = gl.create_vertex_array().ok_or("vao")?;
         gl.bind_vertex_array(Some(&vao));
 
