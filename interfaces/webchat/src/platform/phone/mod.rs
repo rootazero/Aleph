@@ -9,3 +9,6 @@
 //!
 //! Isolated from [`super::wide`] by construction — phone code never touches the
 //! desktop/browser UI. Screens are added in subsequent steps.
+
+pub mod settings;
+pub mod shell;
