@@ -1,5 +1,5 @@
 //! `NoteWeave` stage — backfill orphan notes into the wiki link graph by
-//! keyword overlap.
+//! keyword overlap, with a structural-relatedness fallback.
 //!
 //! An orphan (zero outgoing AND zero incoming links) is invisible to graph
 //! expansion in `gather_related`, earns no `link_weight` in `NoteDecay`
@@ -12,6 +12,18 @@
 //! same primitive `CompoundApplyTx::add_link` uses), then
 //! `NoteStore::add_link_with_relation` stamps the connecting keyword onto the
 //! now-existing `notes_links` row.
+//!
+//! Keyword overlap alone leaves a blind spot: an orphan compressed from the
+//! *same source document* as a peer is strongly related (the 4-signal
+//! source-overlap / Adamic-Adar / type-affinity score), yet its LLM-extracted
+//! keywords need not textually overlap that peer's — so it stays isolated
+//! forever. Phase 5 closes that gap by reusing the relatedness
+//! `GraphRecomputeStage` already materialized THIS cycle (`related_peers`, the
+//! same fresh-`notes_graph_related` contract this stage already relies on for
+//! the `isolated` insight): every orphan the keyword pass could not reach is
+//! linked to its strongest structural peer above a score floor. Pure wiring of
+//! an existing-but-unconsumed signal — no new algorithm, no LLM, no store
+//! changes (P4 reuse, R7-safe deterministic analytics).
 
 use async_trait::async_trait;
 use tracing::{info, warn};
@@ -25,8 +37,22 @@ use crate::memory::notes::store::NoteStore;
 
 use super::DreamStage;
 
-/// Max keyword-overlap links written per dream cycle (caps disk writes).
+/// Max links written per dream cycle (caps disk writes). Shared budget across
+/// the keyword-overlap pass and the structural fallback.
 const MAX_WEAVE_PER_CYCLE: usize = 10;
+
+/// Minimum 4-signal relatedness score for the Phase 5 structural fallback to
+/// link an orphan. An orphan has no edges, so its score comes only from
+/// source-overlap (≤4.0 per rarest shared source) + type-affinity (1.0); a
+/// floor of 2.0 demands a reasonably-specific shared source (cited by ≲4 notes)
+/// and excludes a lone same-category (type-affinity-only) match, keeping the
+/// auto-link "truly useful" rather than noise.
+const STRUCTURAL_WEAVE_MIN_SCORE: f32 = 2.0;
+
+/// Relation label stamped on a structural fallback link — these connect on
+/// shared sources / graph proximity, not a named keyword, so the relation is
+/// the honest generic `related` (vs the keyword pass's entity relation).
+const STRUCTURAL_RELATION: &str = "related";
 
 /// `NoteWeave` stage. `max_per_cycle` caps links written per dream cycle.
 pub struct NoteWeaveStage {
@@ -152,14 +178,56 @@ impl DreamStage for NoteWeaveStage {
         // independently `.ok()`-guarded: a reverse-write failure must not skip
         // remaining pairs nor strip the forward link already on disk. ---
         let mut woven = 0u32;
+        // Paths that received a link this cycle (keyword OR structural), so the
+        // Phase 5 fallback skips orphans the keyword pass already de-isolated
+        // and never re-links a note picked as another orphan's structural peer.
+        let mut linked: std::collections::HashSet<String> = std::collections::HashSet::new();
         for LinkTriple { from, to, relation } in links {
             write_typed_link(&mut ctx, &from, &to, &relation).await;
             write_typed_link(&mut ctx, &to, &from, &relation).await;
             // Evict cached bodies so downstream stages re-read updated markdown.
             ctx.note_contents.remove(&from);
             ctx.note_contents.remove(&to);
+            linked.insert(from);
+            linked.insert(to);
             woven += 1;
         }
+
+        // --- Phase 5: structural fallback. Orphans the keyword pass could not
+        // reach are linked to their strongest peer from the 4-signal relatedness
+        // GraphRecomputeStage materialized earlier this same Consolidate cycle
+        // (`related_peers` reads `notes_graph_related`). No LLM, no new algorithm
+        // — it consumes a signal already computed but, until now, only used for
+        // retrieval seed expansion. `linked` is checked dynamically so a pair of
+        // mutually-related orphans is woven once, not twice. ---
+        for orphan in &orphans {
+            if woven as usize >= self.max_per_cycle {
+                break;
+            }
+            if linked.contains(orphan.as_str()) {
+                continue;
+            }
+            let peers = ctx
+                .indexer
+                .store()
+                .related_peers(&ctx.agent_id, orphan, 4)
+                .await
+                .unwrap_or_default();
+            let Some((peer, _score)) = peers
+                .into_iter()
+                .find(|(p, s)| p != orphan && *s >= STRUCTURAL_WEAVE_MIN_SCORE)
+            else {
+                continue;
+            };
+            write_typed_link(&mut ctx, orphan, &peer, STRUCTURAL_RELATION).await;
+            write_typed_link(&mut ctx, &peer, orphan, STRUCTURAL_RELATION).await;
+            ctx.note_contents.remove(orphan);
+            ctx.note_contents.remove(&peer);
+            linked.insert(orphan.clone());
+            linked.insert(peer);
+            woven += 1;
+        }
+
         ctx.report.notes_woven = woven;
         info!(woven, "NoteWeave completed");
         Ok(ctx)
@@ -665,6 +733,129 @@ mod tests {
         assert_eq!(
             out.report.notes_woven, 0,
             "incoming-only note with a non-orphan partner must not be woven"
+        );
+    }
+
+    #[tokio::test]
+    async fn structural_fallback_links_orphans_the_keyword_pass_missed() {
+        use crate::providers::recording_mock::RecordingMockProvider;
+        // Two orphans with DISJOINT keywords → the keyword-overlap pass links
+        // nothing. But GraphRecomputeStage materialized a strong 4-signal related
+        // edge between them this cycle (e.g. they were compressed from the same
+        // source document). Phase 5 must consume that to weave them with the
+        // generic `related` relation, de-isolating both.
+        let llm = r#"{"notes":[
+            {"path":"learning/alpha","keywords":["alpha-only"]},
+            {"path":"learning/beta","keywords":["beta-only"]}
+        ]}"#;
+        let temp = std::env::temp_dir().join(format!("aleph_weave_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+        let indexer = NoteIndexer::new(temp.clone(), store.clone());
+        let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
+            std::sync::Arc::new(RecordingMockProvider::new(llm.into()));
+        let embedder: std::sync::Arc<dyn EmbeddingProvider> = std::sync::Arc::new(StubEmbedder);
+        let mut ctx = DreamContext {
+            notes: Vec::new(),
+            note_contents: std::collections::HashMap::new(),
+            agent_id: "default".into(),
+            database: store.clone(),
+            indexer,
+            provider,
+            embedder,
+            report: crate::memory::dreaming::DreamReport::default(),
+            pipeline_type: "consolidate".into(),
+            activity_checker: std::sync::Arc::new(|| false),
+            strategy: crate::memory::dreaming::DreamStrategy::Consolidate,
+            orientation: None,
+            evolution_budget: crate::memory::dreaming::EditBudget::default(),
+        };
+        for title in ["alpha", "beta"] {
+            store
+                .index_note(
+                    &KnowledgeNote {
+                        title: title.into(),
+                        category: "learning".into(),
+                        facts: vec!["isolated fact".into()],
+                        content_hash: format!("h-{title}"),
+                        ..Default::default()
+                    },
+                    "default",
+                    "learning",
+                )
+                .await
+                .unwrap();
+        }
+        // Materialize the 4-signal relatedness GraphRecomputeStage would emit
+        // (both directions, as the real stage flattens top-K per node).
+        store
+            .replace_graph_related(
+                "default",
+                &[
+                    ("learning/alpha".to_string(), "learning/beta".to_string(), 4.0),
+                    ("learning/beta".to_string(), "learning/alpha".to_string(), 4.0),
+                ],
+            )
+            .await
+            .unwrap();
+        ctx.notes = vec![entry("learning/alpha"), entry("learning/beta")];
+
+        let out = NoteWeaveStage::default().execute(ctx).await.unwrap();
+        assert_eq!(
+            out.report.notes_woven, 1,
+            "structural fallback must weave the related orphan pair the keyword pass missed"
+        );
+        let typed = store
+            .get_typed_relations("learning/alpha", "default")
+            .await
+            .unwrap();
+        assert!(
+            typed
+                .iter()
+                .any(|(to, rel)| to == "learning/beta" && rel == "related"),
+            "expected a structural `related` link alpha->beta: {typed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn structural_fallback_ignores_weak_relatedness() {
+        // A materialized related edge *below* the score floor (e.g. a lone
+        // same-category type-affinity match, score 1.0) must NOT auto-link —
+        // the fallback only fires on a "truly useful" structural signal.
+        let llm = r#"{"notes":[
+            {"path":"learning/alpha","keywords":["alpha-only"]},
+            {"path":"learning/beta","keywords":["beta-only"]}
+        ]}"#;
+        let (mut ctx, store) = build_ctx(llm).await;
+        for title in ["alpha", "beta"] {
+            store
+                .index_note(
+                    &KnowledgeNote {
+                        title: title.into(),
+                        category: "learning".into(),
+                        facts: vec!["isolated fact".into()],
+                        content_hash: format!("h-{title}"),
+                        ..Default::default()
+                    },
+                    "default",
+                    "learning",
+                )
+                .await
+                .unwrap();
+        }
+        store
+            .replace_graph_related(
+                "default",
+                &[("learning/alpha".to_string(), "learning/beta".to_string(), 1.0)],
+            )
+            .await
+            .unwrap();
+        ctx.notes = vec![entry("learning/alpha"), entry("learning/beta")];
+
+        let out = NoteWeaveStage::default().execute(ctx).await.unwrap();
+        assert_eq!(
+            out.report.notes_woven, 0,
+            "below-floor relatedness must not trigger a structural auto-link"
         );
     }
 }
