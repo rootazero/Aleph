@@ -197,8 +197,8 @@
 - **口语关键词**：内置命令注册、工具注册、统一注册、斜杠命令、slash command、热加载
 - **代码锚点**：`src/tools/registry.rs`（ToolHandlerRegistry，ArcSwap 无锁热加载 + subscribe 变更广播）、`src/tools/runtime.rs`（LoopToolRegistry，gateway 主表）、`src/command/`（parser.rs 解析 `/input`，types.rs CommandNode 扁平命名空间 + source_type）、`src/tool_metadata/`（ToolCatalog 聚合 builtin/MCP/skill/prompt）
 - **职责**：双层注册表（harness 内层 ToolHandlerRegistry + gateway 层 LoopToolRegistry）；斜杠命令解析**委托同一个 ToolCatalog**，命令与工具**同源不双维护**（R8 工具即一切）。
-- **状态**：✅ 已实现。**关键事实**：'内置命令注册'、'统一工具注册'、'斜杠命令'在代码里是**同一套**（ToolCatalog 单源），不是三套独立系统。
-- **打磨话术**：「斜杠命令 = 工具（同源 ToolCatalog）。加新斜杠命令 = 注册新工具，不要另起命令树。热加载在 `registry.rs` 的 ArcSwap。」
+- **状态**：✅ 已实现。**关键事实**：'内置命令注册'、'统一工具注册'、'斜杠命令'在代码里是**同一套**（ToolCatalog 单源），不是三套独立系统。**连线修复（2026-06-26）**：① canonical id 丢失——`resolve_command` 拿到完整 `tool.id`（`mcp:srv:tool`/`plugin:id:name`/`custom:idx:name`），但 `ParsedCommand` 只留裸 `command_name`，下游 `command.execute` 用 `format!("{source}:{name}")` 重建 → 对 MCP/plugin/skill/custom **丢 server/plugin-id/rule-index**。已给 `ParsedCommand` 加 `tool_id`（= `resolved.tool.id`），`handle_execute.internal_id` 与 `serialize_parsed_command` Custom 分支改用之（连线优先，零重建）。② 命名空间分解永远失效——canonical 名用 `_` 分隔（`session_new`），`handle_execute` 却 `split_once('.')` → `namespace`/`action` **恒 None**，与文档响应形 `{"namespace":"session","action":"new"}` 矛盾。新增 `split_namespace_action()` 复用 `TOOL_NAMESPACES`（与 `build_command_tree` 同一分组规则）。**已知缺口**：MCP 工具**不进** ToolCatalog（boot 仅注册 builtin/skill/plugin/custom，无运行时 MCP→catalog 同步）——MCP 斜杠命令经 agent loop 兜底执行，但 `commands.list`/`tools.catalog` 不展示 MCP 工具（发现性缺口，未闭合）。
+- **打磨话术**：「斜杠命令 = 工具（同源 ToolCatalog）。加新斜杠命令 = 注册新工具，不要另起命令树。热加载在 `registry.rs` 的 ArcSwap。`command.execute` 返回的 `internal_id` = `ParsedCommand.tool_id`（canonical 注册 id，别再 `{source}:{name}` 重建）；`namespace`/`action` 经 `split_namespace_action`（认 `TOOL_NAMESPACES`，**不是** `.` 分隔）。」
 
 ### 3.6 AI 动态路由 (LLM-Driven Routing)
 - **口语关键词**：AI 动态路由、意图路由、工具选择、语义路由

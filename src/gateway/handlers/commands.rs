@@ -88,6 +88,28 @@ const TOOL_NAMESPACES: &[&str] = &[
     "plugin", "team", "task",
 ];
 
+/// Decompose a canonical command name into an optional `(namespace, action)`
+/// pair, mirroring [`build_command_tree`]'s grouping exactly.
+///
+/// Canonical names are underscore-separated (`session_new`), so only a name
+/// whose first underscore-delimited segment is a known [`TOOL_NAMESPACES`]
+/// entry is split — `web_fetch` / `search` stay standalone (`None`). The old
+/// `command.execute` path split on `.`, which never matched an underscore name,
+/// so `namespace` / `action` were *always* `None`, silently contradicting the
+/// documented response shape.
+fn split_namespace_action(command_name: &str) -> (Option<String>, Option<String>) {
+    for ns in TOOL_NAMESPACES {
+        if let Some(action) = command_name
+            .strip_prefix(ns)
+            .and_then(|rest| rest.strip_prefix('_'))
+            .filter(|action| !action.is_empty())
+        {
+            return (Some((*ns).to_string()), Some(action.to_string()));
+        }
+    }
+    (None, None)
+}
+
 /// Build a hierarchical tree from a flat list of tools.
 ///
 /// Tools with a known namespace prefix (e.g., "`session_new`") are grouped under
@@ -407,22 +429,19 @@ pub async fn handle_execute(
     // Parse via CommandParser (async, queries ToolCatalog)
     match command_parser.parse_async(&slash_input).await {
         Some(parsed) => {
-            // Successfully resolved — decompose the name into namespace + action
-            let (namespace, action) = if let Some((ns, act)) = parsed.command_name.split_once('.') {
-                (Some(ns.to_string()), Some(act.to_string()))
-            } else {
-                (None, None)
-            };
+            // Successfully resolved — decompose the underscore-separated
+            // canonical name into namespace + action using the same namespace
+            // table that `build_command_tree` groups by.
+            let (namespace, action) = split_namespace_action(&parsed.command_name);
 
             let info = ResolvedCommandInfo {
                 namespace,
                 action,
                 args: parsed.arguments,
-                internal_id: format!(
-                    "{}:{}",
-                    source_type_to_string(parsed.source_type),
-                    parsed.command_name
-                ),
+                // Canonical registry id, carried through the parser — correct
+                // for every source (mcp:srv:tool, plugin:id:name,
+                // custom:idx:name), unlike the old `{source}:{name}` rebuild.
+                internal_id: parsed.tool_id,
                 source_type: source_type_to_string(parsed.source_type),
             };
 
@@ -903,5 +922,63 @@ mod tests {
         assert_eq!(capitalize("session"), "Session");
         assert_eq!(capitalize(""), "");
         assert_eq!(capitalize("a"), "A");
+    }
+
+    #[test]
+    fn test_split_namespace_action() {
+        // Known namespace + action → split.
+        assert_eq!(
+            split_namespace_action("session_new"),
+            (Some("session".to_string()), Some("new".to_string()))
+        );
+        assert_eq!(
+            split_namespace_action("plugin_marketplace_install"),
+            (
+                Some("plugin".to_string()),
+                Some("marketplace_install".to_string())
+            )
+        );
+        // Non-namespace underscore name stays standalone (not "web"/"fetch").
+        assert_eq!(split_namespace_action("web_fetch"), (None, None));
+        // Bare command with no underscore.
+        assert_eq!(split_namespace_action("search"), (None, None));
+        // Namespace word alone (no action) is not split.
+        assert_eq!(split_namespace_action("session"), (None, None));
+    }
+
+    /// A resolved namespaced builtin must populate `namespace`/`action` (the
+    /// old `.`-split left them `None`) and return the canonical registry id as
+    /// `internal_id` (not a `{source}:{name}` rebuild).
+    #[tokio::test]
+    async fn test_execute_resolved_namespace_and_internal_id() {
+        use crate::tool_metadata::ToolSource;
+
+        let registry = Arc::new(ToolCatalog::new());
+        registry
+            .register_with_conflict_resolution(UnifiedTool::new(
+                "builtin:session_new",
+                "session_new",
+                "Start a new session",
+                ToolSource::Builtin,
+            ))
+            .await;
+
+        let parser = Arc::new(CommandParser::new(registry.clone()));
+        let request = JsonRpcRequest::with_id(
+            "command.execute",
+            Some(json!({"input": "/session new my topic"})),
+            json!(1),
+        );
+        let response = handle_execute(request, parser, registry).await;
+
+        assert!(response.is_success());
+        let result = response.result.unwrap();
+        assert_eq!(result["resolved"], true);
+        let cmd = &result["command"];
+        assert_eq!(cmd["namespace"], "session");
+        assert_eq!(cmd["action"], "new");
+        assert_eq!(cmd["args"], "my topic");
+        assert_eq!(cmd["internal_id"], "builtin:session_new");
+        assert_eq!(cmd["source_type"], "builtin");
     }
 }

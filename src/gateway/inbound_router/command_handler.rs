@@ -77,7 +77,7 @@ pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Optio
             pattern,
         } => serde_json::json!({
             "type": "custom",
-            "tool_id": parsed.command_name,
+            "tool_id": parsed.tool_id,
             "system_prompt": system_prompt,
             "provider": provider,
             "pattern": pattern,
