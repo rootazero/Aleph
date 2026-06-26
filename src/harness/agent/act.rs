@@ -96,6 +96,23 @@ fn resolve_effective_budget(
     per_tool.or(harness_fallback)
 }
 
+/// Synthetic `ToolError::Execution` cause emitted when cross-batch dedup
+/// refuses an identical repeat of a previously-failed `(name, args)` call.
+/// Shared by the serial and parallel dispatch paths so the two can never drift.
+const CROSS_BATCH_REFUSED_CAUSE: &str = "this exact call already failed earlier in the run; \
+     change inputs or try a different tool";
+
+/// Build the recoverable `ToolError` cause for a per-tool wall-clock budget
+/// overrun. Shared by the serial and parallel dispatch paths so both surface
+/// byte-identical guidance — the next Think turn reacts the same way regardless
+/// of how the batch was scheduled.
+fn budget_overrun_cause(seconds: f64) -> String {
+    format!(
+        "exceeded its {seconds:.1}s wall-clock budget (slow or unresponsive \
+         source) — no result; retry, narrow the query, or switch source/tool"
+    )
+}
+
 impl AgentHarness {
     /// Act phase: execute each `tool_call` sequentially, emitting a
     /// `ToolCallRequested` event before every call and either a `ToolResult`
@@ -435,9 +452,7 @@ impl AgentHarness {
                 );
                 let synthetic = crate::tools::service::ToolError::Execution {
                     name: call.name.clone(),
-                    cause: "this exact call already failed earlier in the run; \
-                            change inputs or try a different tool"
-                        .to_string(),
+                    cause: CROSS_BATCH_REFUSED_CAUSE.to_string(),
                 };
                 self.emit_tool_error(
                     session_id, turn_id, &call, synthetic, started, iteration, callback,
@@ -544,12 +559,7 @@ impl AgentHarness {
                         Err(_) if per_tool_budget.is_some() => {
                             Ok(Err(crate::tools::service::ToolError::Execution {
                                 name: call.name.clone(),
-                                cause: format!(
-                                    "exceeded its {:.1}s wall-clock budget (slow or \
-                                     unresponsive source) — no result; retry, narrow the \
-                                     query, or switch source/tool",
-                                    budget.as_secs_f64()
-                                ),
+                                cause: budget_overrun_cause(budget.as_secs_f64()),
                             }))
                         }
                         Err(_) => Err(HarnessError::StalledTurn {
@@ -808,9 +818,7 @@ impl AgentHarness {
                 );
                 let synthetic = crate::tools::service::ToolError::Execution {
                     name: call.name.clone(),
-                    cause: "this exact call already failed earlier in the run; \
-                            change inputs or try a different tool"
-                        .to_string(),
+                    cause: CROSS_BATCH_REFUSED_CAUSE.to_string(),
                 };
                 self.emit_tool_error(
                     session_id,
@@ -900,12 +908,7 @@ impl AgentHarness {
                         Err(_) if per_tool => {
                             Ok(Err(crate::tools::service::ToolError::Execution {
                                 name: name.clone(),
-                                cause: format!(
-                                    "exceeded its {:.1}s wall-clock budget (slow or unresponsive \
-                                 source) — no result; retry, narrow the query, or switch \
-                                 source/tool",
-                                    b.as_secs_f64()
-                                ),
+                                cause: budget_overrun_cause(b.as_secs_f64()),
                             }))
                         }
                         Err(_) => Err(started.elapsed()),
