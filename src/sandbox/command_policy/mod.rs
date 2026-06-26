@@ -567,6 +567,157 @@ mod tests {
     }
 
     #[test]
+    fn blocks_rm_rf_bare_root() {
+        // Regression: `rm -rf /` (busybox/Alpine — no --preserve-root guard) and
+        // `rm -rf /*` (GNU — the glob defeats --preserve-root) are irreversible
+        // whole-disk wipes that `rm_no_preserve_root` misses. They join the
+        // undisableable hardline floor.
+        let p = policy(EnforcementMode::Block);
+        for cmd in ["rm -rf /", "rm -rf /*", "rm -r /", "rm --recursive /"] {
+            assert!(
+                p.evaluate(cmd).blocked.contains(&"rm_rf_root".to_string()),
+                "bare-root recursive rm must block: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn rm_rf_root_blocks_under_every_enforcement_mode() {
+        // It is on the undisableable floor, so it blocks even under Off.
+        for mode in [
+            EnforcementMode::Block,
+            EnforcementMode::Warn,
+            EnforcementMode::Off,
+        ] {
+            let e = policy(mode).evaluate("rm -rf /*");
+            assert!(
+                e.blocked.contains(&"rm_rf_root".to_string()),
+                "rm -rf /* must block under {mode:?}: {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rm_rf_subdir_is_not_hardline_root() {
+        // A recursive remove of a *subdirectory* of root (e.g. `/etc`, `/tmp/x`)
+        // is not the catastrophic bare-root shape — it must not trip the floor
+        // (it stays a tunable warn at most).
+        let p = policy(EnforcementMode::Block);
+        for cmd in ["rm -rf /tmp/build", "rm -rf /etc"] {
+            assert!(
+                !p.evaluate(cmd).blocked.contains(&"rm_rf_root".to_string()),
+                "subdir rm must not trip the bare-root floor: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn warns_on_rm_rf_split_and_recursive_only_flags() {
+        // Regression: the previous `rm_rf_system_path` required the recursive
+        // and force letters in a *single* token, so the split form `rm -r -f`
+        // and the recursive-only `rm -r` (which deletes without a prompt in a
+        // non-interactive shell) evaded it.
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "rm -r -f /etc",
+            "rm -r /etc",
+            "rm --recursive --force /usr",
+            "rm --recursive /var",
+        ] {
+            assert!(
+                p.evaluate(cmd)
+                    .warned
+                    .contains(&"rm_rf_system_path".to_string()),
+                "split / recursive-only rm of a system path must warn: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn warns_on_host_shutdown_and_reboot() {
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "shutdown -h now",
+            "bash -c \"shutdown -r now\"",
+            "sudo reboot",
+            "poweroff",
+            "systemctl poweroff",
+            "init 0",
+            "shutdown /s /t 0",
+            "Stop-Computer -Force",
+            "Restart-Computer",
+        ] {
+            let e = p.evaluate(cmd);
+            assert!(e.blocked.is_empty(), "shutdown must warn, not block: {cmd}");
+            assert!(
+                e.warned.contains(&"system_shutdown".to_string()),
+                "host shutdown must warn: {cmd} -> {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn app_subcommand_shutdown_is_clean() {
+        // `nginx -s shutdown` is a graceful app stop, not a host shutdown — the
+        // required shutdown flag / `now` keeps it off the rule.
+        let e = policy(EnforcementMode::Block).evaluate("nginx -s shutdown");
+        assert!(e.is_clean(), "app-level shutdown must be clean: {e:?}");
+    }
+
+    #[test]
+    fn warns_on_sudo_stdin_and_shell() {
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "echo pw | sudo -S apt-get update",
+            "sudo --stdin -k id",
+            "sudo -s",
+        ] {
+            assert!(
+                p.evaluate(cmd)
+                    .warned
+                    .contains(&"sudo_privilege_stdin".to_string()),
+                "sudo stdin/shell vector must warn: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn sudo_wrapped_command_flag_is_clean() {
+        // `-s` here is apt-get's simulate flag, not sudo's — only flag tokens may
+        // precede the match, and `apt-get` is not a flag, so the rule stops.
+        let e = policy(EnforcementMode::Block).evaluate("sudo apt-get install -s ripgrep");
+        assert!(
+            !e.warned.contains(&"sudo_privilege_stdin".to_string()),
+            "wrapped-command -s must not trip the sudo rule: {e:?}"
+        );
+    }
+
+    #[test]
+    fn warns_on_ssh_authorized_keys_write() {
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "echo ssh-ed25519 AAAA... attacker >> ~/.ssh/authorized_keys",
+            "cat key.pub | tee -a /root/.ssh/authorized_keys",
+            "cp evil.pub ~/.ssh/authorized_keys",
+        ] {
+            assert!(
+                p.evaluate(cmd)
+                    .warned
+                    .contains(&"write_ssh_authorized_keys".to_string()),
+                "ssh authorized_keys write must warn: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn reading_authorized_keys_is_clean() {
+        // Reading the file is legitimate — only a write/copy into it is the
+        // backdoor shape.
+        let e = policy(EnforcementMode::Block).evaluate("cat ~/.ssh/authorized_keys");
+        assert!(e.is_clean(), "reading authorized_keys must be clean: {e:?}");
+    }
+
+    #[test]
     fn warn_mode_downgrades_tunable_block_to_warn() {
         // A *tunable* block rule (custom) is downgraded under Warn enforcement.
         let p = CommandPolicy::compile(

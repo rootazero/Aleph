@@ -217,9 +217,9 @@
 ### 3.8 沙箱命令策略 (Sandbox Command Policy)
 - **口语关键词**：sandbox shell 安全、命令过滤、危险命令、hardline、反混淆、policy
 - **代码锚点**：`src/sandbox/command_policy/`（mod.rs 引擎、rules.rs 规则集、normalize.rs 反混淆）、`src/sandbox/scrub.rs`（输出秘密清理）、`src/sandbox/hooks.rs`（SandboxBeforeHook 集成）、`src/sandbox/policy.rs`、`exec_approval/`、`deny_globs.rs`
-- **职责**：OS 沙箱之前的**内容层**防御：正则硬过滤，分 hardline（不可绕过：fork-bomb/dd/mkfs/rm --no-preserve-root/wipefs·blkdiscard·shred 设备擦除/Windows 灾难形）与 tunable（block/warn/off 三态）；命令先 normalize 反混淆（零宽符/反斜杠/脱字符/反引号/空引号）。
-- **状态**：✅ 已实现（2026-06-17 强化：① 修复设备类绕过——`dd`/`>` redirect 漏 `/dev/xvd*`(AWS EC2 根盘)·`dm-`·`md`·`pmem`·`sr`·`loop`，统一并补齐；② 新增 hardline `device_wipe_tools`(wipefs/blkdiscard/shred→/dev/)；③ 新增 tunable warn `shell_eval_download`(`bash <(curl…)` 进程替换 + `eval "$(curl…)"` 绕 `pipe_to_shell`)）。
-- **打磨话术**：「改‘命令拦截规则’找 `command_policy/rules.rs`；‘灾难性底线’在 hardline_rules（即便关 enforcement 也生效）；‘绕过手法’防御在 `normalize.rs`。」
+- **职责**：OS 沙箱之前的**内容层**防御：正则硬过滤，分 hardline（不可绕过：fork-bomb/dd/mkfs/rm --no-preserve-root/`rm -rf /`·`/*` 整盘擦除/wipefs·blkdiscard·shred 设备擦除/Windows 灾难形）与 tunable（block/warn/off 三态）；命令先 normalize 反混淆（零宽符/反斜杠/脱字符/反引号/空引号）。
+- **状态**：✅ 已实现（2026-06-17 强化：① 修复设备类绕过——`dd`/`>` redirect 漏 `/dev/xvd*`(AWS EC2 根盘)·`dm-`·`md`·`pmem`·`sr`·`loop`，统一并补齐；② 新增 hardline `device_wipe_tools`(wipefs/blkdiscard/shred→/dev/)；③ 新增 tunable warn `shell_eval_download`(`bash <(curl…)` 进程替换 + `eval "$(curl…)"` 绕 `pipe_to_shell`)）。**2026-06-26 强化（对标 hermes-agent）**：① 修复 `rm_rf_system_path` 绕过——旧规则要求 `rf` 在同一 flag token，`rm -r -f /etc`(拆分)/`rm -r /etc`(仅递归，非交互 shell 无确认直删) 可逃逸，改为只需递归 flag(`-r`/`--recursive`/组合) + 绝对系统路径；② 新增 hardline `rm_rf_root`——裸 `/` 或 `/*` 递归删除(busybox/Alpine `rm -rf /` 无 `--preserve-root` 保护、GNU `rm -rf /*` glob 绕过 `--preserve-root`，旧 `rm_no_preserve_root` 漏掉)；③ 新增 tunable warn `system_shutdown`(关机/重启 host：Unix shutdown/reboot/poweroff/init 0|6/systemctl + Win shutdown /s|/r/Stop-Computer/Restart-Computer)、`sudo_privilege_stdin`(`sudo -S/--stdin/--askpass/-s` 猜密码/提权)、`write_ssh_authorized_keys`(写 `~/.ssh/authorized_keys` SSH 后门)）。
+- **打磨话术**：「改‘命令拦截规则’找 `command_policy/rules.rs`；‘灾难性底线’在 hardline_rules（即便关 enforcement 也生效，含 `rm_rf_root` 整盘擦除）；可逆但高危的(关机/sudo/ssh 后门)是 tunable warn(`default_rules`)只审计不拦；‘绕过手法’防御在 `normalize.rs`。新规则对标 hermes-agent 的 HARDLINE/DANGEROUS 两层，但守 R7 不抄它的 LLM 智能批准。」
 
 ### 3.9 MCP 集成 (MCP Integration)
 - **口语关键词**：MCP、外部 server、tools/resources/prompts、OAuth、sampling

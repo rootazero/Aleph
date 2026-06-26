@@ -938,10 +938,18 @@ audits a slightly larger suspicious set; it never reasons about model intent.
   reuses the existing `hooks.run_before()` → `Deny` path, which the
   workspace already maps to `SandboxError::Other`.
 - **Ruleset** (`rules.rs`): `Block` = fork bomb, `rm --no-preserve-root`,
-  `dd of=/dev/<disk>`, `mkfs /dev/…`, redirect-to-block-device. `Warn`
-  (audit-only) = `rm -rf` of an absolute system path, `curl|wget … | sh`,
+  `rm -rf /` / `rm -rf /*` (bare-root wipe — catches the busybox/Alpine and
+  GNU-glob shapes `rm_no_preserve_root` misses), `dd of=/dev/<disk>`,
+  `mkfs /dev/…`, redirect-to-block-device, `wipefs`/`blkdiscard`/`shred` of a
+  device. `Warn` (audit-only) = `rm -rf` of an absolute system path (recursive
+  flag alone suffices — the split `rm -r -f` and recursive-only `rm -r` forms
+  are caught, not just the combined `-rf` token), `curl|wget … | sh`,
   `chmod 777` of a system path, writes to `/etc/{passwd,shadow,sudoers}`,
-  `/dev/tcp/` reverse shells.
+  `/dev/tcp/` reverse shells, host shutdown/reboot (`shutdown`/`reboot`/
+  `poweroff`/`init 0|6`/`systemctl poweroff` + Windows `shutdown /s`/
+  `Stop-Computer`), `sudo -S`/`--stdin`/`--askpass`/`-s` (password-stdin /
+  privilege escalation), and writes into `~/.ssh/authorized_keys` (SSH
+  backdoor persistence).
 - **Windows shapes** (added 2026-06-15 — the `cmd.exe` / PowerShell command
   surface an agent reaches via `cmd /c …` / `powershell -c …`): `Block` =
   `format <drive:>` / `Format-Volume`, `del`/`rd`/`rmdir /s` of a *bare drive
