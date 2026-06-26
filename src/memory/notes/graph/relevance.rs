@@ -130,8 +130,19 @@ pub fn all_related(
                 })
             })
             .collect();
-        for h in handles {
-            out.push(h.join().expect("relevance worker panicked"));
+        for (t, h) in handles.into_iter().enumerate() {
+            match h.join() {
+                Ok(part) => out.push(part),
+                // One partition panicking must not abort the whole offline
+                // graph recompute (`GraphRecomputeStage`). Drop this slice and
+                // keep the rest; its nodes are re-materialised on the next
+                // tick. (P7 graceful degradation — a transient per-node bug
+                // should not cost the entire daily relatedness rebuild.)
+                Err(_) => tracing::warn!(
+                    partition = t,
+                    "relevance worker panicked; skipping its slice for this recompute"
+                ),
+            }
         }
     });
     out.into_iter().flatten().collect()
