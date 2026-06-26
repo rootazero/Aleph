@@ -95,6 +95,24 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
             action: Block,
             pattern: r"\brm\b[^\n]*--no-preserve-root",
         },
+        PolicyRule {
+            name: "rm_rf_root",
+            description: "recursive rm of the bare filesystem root (/ or /*) — irreversible whole-disk wipe",
+            action: Block,
+            // The catastrophic sibling of the tunable `rm_rf_system_path`: a
+            // recursive remove whose target is the *bare* root `/` (or the root
+            // glob `/*`), which `rm_no_preserve_root` misses entirely on the
+            // platforms where it bites hardest — busybox/Alpine `rm -rf /` has
+            // no `--preserve-root` guard, and GNU `rm -rf /*` expands the glob so
+            // the `--preserve-root` refusal never triggers. Force is optional: in
+            // the agent's non-interactive shell `rm -r /` deletes without a
+            // prompt. A recursive flag (combined `-rf`/`-fr`, short `-r`/`-R`, or
+            // long `--recursive`) plus a bare-root target is the precise,
+            // never-legitimate shape — a subdir target (`/etc`, `/tmp/x`) does
+            // not match because the char after `/` must be a terminator, leaving
+            // those to the tunable `rm_rf_system_path` warn.
+            pattern: r#"\brm\b(?:\s+-{1,2}\S+)*\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+-{1,2}\S+)*\s+["']?/(?:\s|\*|$|["';&|])"#,
+        },
         // Canonical raw-block-device class shared by the dd / redirect / wipe
         // rules below: SCSI/SATA (`sd`), NVMe, macOS (`disk`), legacy IDE
         // (`hd`), virtio (`vd`), Xen/AWS-EC2 root volumes (`xvd` — previously
@@ -206,11 +224,20 @@ pub fn default_rules() -> Vec<PolicyRule> {
     vec![
         PolicyRule {
             name: "rm_rf_system_path",
-            description: "recursive force-remove targeting an absolute root / home path",
+            description: "recursive remove targeting an absolute root / system / home path",
             action: Warn,
-            // Requires rm + a recursive-and-force flag combo (-rf / -fr / -Rf …)
-            // and an absolute root / system / home target on the same line.
-            pattern: r"\brm\s+(?:-{1,2}\S+\s+)*-{1,2}[a-z]*(?:rf|fr|r\S*f|f\S*r)[a-z]*\b[^\n]*\s(?:/|/\*|~|\$HOME|/etc|/usr|/var|/bin|/boot|/lib|/sys|/root|/sbin)(?:\s|/|\*|$|[\x22\x27])",
+            // Requires rm + a recursive flag + an absolute root / system / home
+            // target on the same line. The recursive flag is matched as a
+            // combined cluster (`-rf`/`-fr`/`-R`), a bare short `-r`, OR the long
+            // `--recursive`, with any other flags before/after it — so the split
+            // form `rm -r -f /etc` and the recursive-only `rm -r /etc` (which
+            // deletes without a prompt in the agent's non-interactive shell) are
+            // both caught. The previous pattern required the recursive *and*
+            // force letters in a single token, so `rm -r -f /etc` and
+            // `rm -r /etc` evaded it. Force is no longer required: `-r` alone is
+            // destructive here. Relative targets (`build/`, `./target`) are
+            // excluded by the absolute-path requirement.
+            pattern: r#"\brm\b(?:\s+-{1,2}\S+)*\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+-{1,2}\S+)*\s+["']?(?:/|~|\$HOME|/etc|/usr|/var|/bin|/boot|/lib|/sys|/root|/sbin)(?:\s|/|\*|$|[\x22\x27;&|])"#,
         },
         PolicyRule {
             name: "pipe_to_shell",
@@ -250,6 +277,42 @@ pub fn default_rules() -> Vec<PolicyRule> {
             description: "bash /dev/tcp reverse-shell or raw TCP socket exfiltration",
             action: Warn,
             pattern: r"/dev/tcp/\d",
+        },
+        PolicyRule {
+            name: "system_shutdown",
+            description:
+                "host shutdown / reboot / poweroff — takes down the machine Aleph runs on (Unix shutdown/reboot/init 0|6/systemctl, Windows shutdown/Stop-Computer/Restart-Computer)",
+            action: Warn,
+            // High-signal but reversible (unlike the irreversible hardline floor),
+            // so it audits rather than blocks and respects the enforcement mode.
+            // `shutdown` is anchored to a following shutdown flag/`now`/`+<min>`
+            // so an app subcommand like `nginx -s shutdown` (no such flag) does
+            // not trip it, while `bash -c "shutdown -h now"` still does. `reboot`
+            // / `poweroff` are command-position anchored. Windows `Stop-Computer`
+            // / `Restart-Computer` and `shutdown /s|/r` are covered too.
+            pattern: r"\bshutdown\b[^\n]*(?:\s/[sr]\b|\s-{1,2}(?:h|r|p|halt|reboot|poweroff)\b|\bnow\b|\s\+\d)|(?:^|[\s;&|(])(?:reboot|poweroff)\b|\bsystemctl\b[^\n]*\b(?:poweroff|reboot|halt)\b|\b(?:init|telinit)\s+[06]\b|\b(?:stop-computer|restart-computer)\b",
+        },
+        PolicyRule {
+            name: "sudo_privilege_stdin",
+            description:
+                "sudo reading a password from stdin (-S/--stdin/--askpass) or spawning a root shell (-s) — password-guessing / privilege-escalation vector",
+            action: Warn,
+            // Targets sudo's *own* leading options (only flag tokens may precede
+            // the match), so `sudo apt-get install -s` — where `-s` is the
+            // wrapped command's flag, not sudo's — does not trip it. Matches
+            // `-S` (case-insensitive, also `-s`), `--stdin`, `--askpass`.
+            pattern: r"\bsudo\b(?:\s+-{1,2}\S+)*\s+-{1,2}(?:s|stdin|askpass)\b",
+        },
+        PolicyRule {
+            name: "write_ssh_authorized_keys",
+            description:
+                "writing/copying into ~/.ssh/authorized_keys (SSH backdoor key persistence)",
+            action: Warn,
+            // Appending a public key to authorized_keys is the classic SSH
+            // backdoor — essentially never a legitimate workspace task. Covers
+            // redirect (`>>`/`>`), `tee`, in-place `sed -i`, and `cp`/`mv`/
+            // `install` whose target path ends in `.ssh/authorized_keys`.
+            pattern: r"(?:>>?|\btee\b|\bsed\b[^\n]*\s-\S*i|\bcp\b|\bmv\b|\binstall\b)[^\n]*\.ssh/authorized_keys\b",
         },
         // --- Windows high-signal shapes (cmd.exe / PowerShell) -------------
         // Audited, not blocked: each is occasionally legitimate (an installer,
