@@ -86,8 +86,13 @@ impl AlephTool for BrowserScreenshotTool {
                 match backend.screenshot(&tab_id, opts).await {
                     Ok(result) => {
                         use base64::Engine as _;
+                        // Bound the pixel budget before it reaches the model —
+                        // the screenshot twin of the text-read char cap. Stays
+                        // PNG, so the base64 output and vision-bridge contract
+                        // below are unchanged.
+                        let png_bytes = super::bound_screenshot_png(result.png_bytes);
                         let image_base64 =
-                            base64::engine::general_purpose::STANDARD.encode(&result.png_bytes);
+                            base64::engine::general_purpose::STANDARD.encode(&png_bytes);
 
                         // Optional text layer for text-only models. Reuses the
                         // shared VisionBridge (TTL-cached) — identical to the

@@ -355,6 +355,44 @@ pub(crate) fn redact_and_wrap_log(manager: &ProfileManager, text: &str) -> Strin
     }
 }
 
+/// Maximum screenshot edge (px) handed back to the model. Anthropic vision
+/// downscales any image whose longest edge exceeds ~1568px server-side, so a
+/// larger capture only burns request tokens for no added legibility — and a
+/// `full_page` screenshot can be many thousands of px tall. Capping here is the
+/// pixel-budget twin of [`DEFAULT_CONTENT_MAX_CHARS`] on text reads, closing the
+/// gap where an oversized screenshot floods the model request while every text
+/// read was already bounded. Same cap and image-crate path as
+/// [`crate::builtin_tools::file_ops`]'s image-read downscale.
+pub(crate) const MAX_SCREENSHOT_EDGE: u32 = 1568;
+
+/// Downscale a screenshot's longest edge to [`MAX_SCREENSHOT_EDGE`], re-encoding
+/// as PNG (the screenshot format contract every consumer — base64 output and the
+/// vision bridge — assumes). Returns the input bytes **unchanged** when the
+/// image is already within the cap (zero re-encode) or when decoding/encoding
+/// fails: post-processing must never turn a successful capture into a failure.
+pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
+    let Ok(decoded) = image::load_from_memory(&png_bytes) else {
+        return png_bytes;
+    };
+    if decoded.width().max(decoded.height()) <= MAX_SCREENSHOT_EDGE {
+        return png_bytes;
+    }
+    let fitted = decoded.resize(
+        MAX_SCREENSHOT_EDGE,
+        MAX_SCREENSHOT_EDGE,
+        image::imageops::FilterType::Triangle,
+    );
+    let mut buf = Vec::new();
+    if fitted
+        .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+        .is_ok()
+    {
+        buf
+    } else {
+        png_bytes
+    }
+}
+
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};
 pub use console::{BrowserConsoleArgs, BrowserConsoleOutput, BrowserConsoleTool};
 pub use cookies::{BrowserCookiesArgs, BrowserCookiesOutput, BrowserCookiesTool};
@@ -495,6 +533,41 @@ mod tests {
         assert!(truncated);
         // No panic on byte slicing, and the tail still ends like the source.
         assert!(out.ends_with("。\n"));
+    }
+
+    fn png_of(w: u32, h: u32) -> Vec<u8> {
+        use image::{DynamicImage, ImageFormat, RgbaImage};
+        let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(w, h, image::Rgba([1, 2, 3, 255])));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Png)
+            .unwrap();
+        buf
+    }
+
+    #[test]
+    fn bound_screenshot_downscales_oversized_capture() {
+        // A full-page-style capture far over the edge cap is shrunk; the result
+        // is still a valid PNG whose longest edge is within budget.
+        let big = png_of(4000, 1000);
+        let out = super::bound_screenshot_png(big.clone());
+        assert_ne!(out, big, "oversized capture must be re-encoded smaller");
+        let decoded = image::load_from_memory(&out).expect("still a valid png");
+        assert!(decoded.width().max(decoded.height()) <= super::MAX_SCREENSHOT_EDGE);
+    }
+
+    #[test]
+    fn bound_screenshot_leaves_within_budget_bytes_untouched() {
+        // Already within the cap → returned byte-for-byte (no needless re-encode).
+        let small = png_of(800, 600);
+        let out = super::bound_screenshot_png(small.clone());
+        assert_eq!(out, small);
+    }
+
+    #[test]
+    fn bound_screenshot_passes_through_non_image_bytes() {
+        // A decode failure must never drop the capture — bytes flow through.
+        let junk = b"\x00\x01not a png".to_vec();
+        assert_eq!(super::bound_screenshot_png(junk.clone()), junk);
     }
 
     #[test]

@@ -247,8 +247,8 @@
 - **口语关键词**：browser、浏览器、screenshot、Chrome MCP、Playwright、网络策略
 - **代码锚点**：`src/browser/`——`backend.rs`（BrowserBackend trait）、`chrome_mcp_backend.rs`、`playwright_cli_backend.rs`、`manager.rs`、`network_policy.rs`、`tab_registry.rs`、`secret_guard.rs`、`types.rs`
 - **职责**：统一文本优先浏览器接口，双后端（Chrome DevTools MCP / Playwright CLI），截图/点击/导航/填表/JS/网络隔离/凭证过滤。
-- **状态**：✅ 已实现。
-- **打磨话术**：「浏览器双后端在 `backend.rs` trait 下；‘换后端/加操作’改对应 *_backend.rs；‘网络隔离’在 `network_policy.rs`。」
+- **状态**：✅ 已实现。**硬化（2026-06-26）**：① **wait 超时钳制（修 panic）**——`browser_wait_for` 的 `timeout_ms` 此前无界透传两后端：Playwright backend `Instant::now() + Duration::from_millis(timeout_ms)` 在 `u64::MAX` 时**溢出 panic**，Chrome MCP 则把巨值直接喂给 MCP 把 tab 占满整会话；现 `wait_for.rs::clamp_timeout` 在系统边界钳到 `500..=120_000`（对齐 openclaw `resolveActWaitTimeoutMs`，schema doc 同步标注有效区间）；② **截图体积预算（补对称缺口）**——文本读早有 `bound_content` 30k 字符封顶，截图却原始 PNG 字节无界，`full_page` 可数千 px 高 → base64 灌爆模型请求；现 `browser_tools/mod.rs::bound_screenshot_png` 复用 `file_ops/image_read` 已验证的 `image` 0.25 缩放路径，把最长边钳到 `MAX_SCREENSHOT_EDGE=1568`（Anthropic 服务端阈值，超此服务端必缩，多传纯烧 token），保持 PNG 格式契约（vision bridge 仍走 `ImageFormat::Png`），已在预算内/解码失败则**原样返回**（后处理绝不把成功截图变失败）。
+- **打磨话术**：「浏览器双后端在 `backend.rs` trait 下；‘换后端/加操作’改对应 *_backend.rs；‘网络隔离’在 `network_policy.rs`；‘凭证 IN/OUT 双向过滤’在 `secret_guard.rs`（URL 扫描 + 内容脱敏），读时再校验在 `browser_tools/mod.rs::make_backend_and_tab_guarded`。**模型可调的两个预算/超时都在边界钳**：‘wait 超时’= `wait_for.rs::clamp_timeout`（500–120000ms），‘截图像素’= `browser_tools/mod.rs::bound_screenshot_png`（最长边 `MAX_SCREENSHOT_EDGE`），与文本读的 `DEFAULT_CONTENT_MAX_CHARS` 三者同源思路。」
 
 ---
 
