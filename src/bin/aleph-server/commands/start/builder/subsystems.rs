@@ -226,6 +226,19 @@ pub(in crate::commands::start) async fn initialize_channels(
     // Replay any deliveries persisted before this start, and keep draining new
     // transient failures, for as long as the daemon runs.
     if let Some(store) = delivery_store {
+        // Surface any backlog recovered from a previous run at boot, rather than
+        // letting a silent pile-up of undelivered proactive pushes go unnoticed
+        // (redline R5). Only logs when there is actually something to report.
+        match store.stats(alephcore::gateway::delivery_queue::now_secs()) {
+            Ok(s) if s.pending > 0 || s.dead_lettered > 0 => tracing::info!(
+                pending = s.pending,
+                oldest_age_secs = ?s.oldest_age_secs,
+                dead_lettered = s.dead_lettered,
+                "Outbound delivery queue: recovered backlog from previous run"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "delivery queue: boot stats query failed"),
+        }
         alephcore::gateway::delivery_queue::spawn_drain(channel_registry.clone(), store);
     }
 

@@ -42,7 +42,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -166,6 +166,46 @@ pub struct DeliveryRecord {
     pub attempts: u32,
 }
 
+/// Runtime observability snapshot of the durable queue, surfaced to operators
+/// and the LLM (redline R8: Aleph's own operations are inspectable) so a
+/// silently-growing outbound backlog — a lost "AI comes to you" push (R5) — is
+/// no longer invisible. Built in a single locked pass by [`DeliveryStore::stats`]
+/// from columns the queue already maintains; nothing new is persisted for it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryQueueStats {
+    /// Pending records awaiting (re)delivery — the live queue depth.
+    pub pending: i64,
+    /// Subset of `pending` whose `next_attempt_at` is already due.
+    pub due_now: i64,
+    /// Age in seconds of the oldest pending record (by `created_at`), or `None`
+    /// when the queue is empty. A large value flags a wedged channel.
+    pub oldest_age_secs: Option<i64>,
+    /// Pending count per channel id, descending — pinpoints which transport is
+    /// backed up without dumping every record.
+    pub per_channel: Vec<(String, i64)>,
+    /// Records that exhausted their retry budget and were dead-lettered rather
+    /// than silently deleted (forensic trail; parity-plus over openclaw).
+    pub dead_lettered: i64,
+}
+
+/// A delivery that exhausted its retry budget, retained for forensics instead
+/// of being hard-deleted. Read back via [`DeliveryStore::recent_dead_letters`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadLetter {
+    /// Target channel id the message could never be delivered to.
+    pub channel_id: String,
+    /// The undelivered message.
+    pub message: OutboundMessage,
+    /// Attempts made before giving up.
+    pub attempts: u32,
+    /// Last transient error observed before the budget was exhausted.
+    pub last_error: String,
+    /// Unix epoch seconds when the record was first enqueued.
+    pub created_at: i64,
+    /// Unix epoch seconds when the record was dead-lettered.
+    pub died_at: i64,
+}
+
 /// Returns `true` when an outbound failure means the message was *definitely
 /// not delivered*, so a retry cannot produce a duplicate.
 ///
@@ -242,7 +282,18 @@ impl DeliveryStore {
                 last_error      TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_outbound_due
-                ON outbound_deliveries(next_attempt_at);",
+                ON outbound_deliveries(next_attempt_at);
+            CREATE TABLE IF NOT EXISTS dead_letters (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id      TEXT    NOT NULL,
+                payload         TEXT    NOT NULL,
+                attempts        INTEGER NOT NULL,
+                last_error      TEXT,
+                created_at      INTEGER NOT NULL,
+                died_at         INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_dead_letters_died
+                ON dead_letters(died_at);",
         )?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -383,13 +434,146 @@ impl DeliveryStore {
     pub fn is_empty(&self) -> bool {
         self.len().map_or(true, |n| n == 0)
     }
+
+    /// Move a record that exhausted its retry budget into the `dead_letters`
+    /// table instead of hard-deleting it, so an undelivered proactive push
+    /// leaves a forensic trail (channel, attempts, last error, age). The move is
+    /// transactional — the row is never in both tables nor lost between them —
+    /// and the dead-letter table is bounded by the same `max_queue_len`
+    /// (CWE-400), evicting the oldest dead letters first. A missing source row
+    /// (already drained) is a no-op.
+    pub fn record_dead_letter(
+        &self,
+        id: i64,
+        attempts: u32,
+        last_error: &str,
+    ) -> rusqlite::Result<()> {
+        let died_at = now_secs();
+        let mut conn = self.guard();
+        let tx = conn.transaction()?;
+
+        // Snapshot the source row (preserving the original created_at so the
+        // dead letter reports true age, not move time) before deleting it.
+        let row: Option<(String, String, i64)> = tx
+            .query_row(
+                "SELECT channel_id, payload, created_at FROM outbound_deliveries WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+
+        if let Some((channel_id, payload, created_at)) = row {
+            let len: i64 = tx.query_row("SELECT COUNT(*) FROM dead_letters", [], |r| r.get(0))?;
+            if len >= self.config.max_queue_len {
+                let overflow = len - self.config.max_queue_len + 1;
+                tx.execute(
+                    "DELETE FROM dead_letters WHERE id IN (
+                        SELECT id FROM dead_letters ORDER BY died_at ASC LIMIT ?1)",
+                    params![overflow],
+                )?;
+            }
+            tx.execute(
+                "INSERT INTO dead_letters
+                    (channel_id, payload, attempts, last_error, created_at, died_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    channel_id,
+                    payload,
+                    i64::from(attempts),
+                    last_error,
+                    created_at,
+                    died_at
+                ],
+            )?;
+            tx.execute("DELETE FROM outbound_deliveries WHERE id = ?1", params![id])?;
+        }
+        tx.commit()
+    }
+
+    /// One-pass observability snapshot of the live queue (and the dead-letter
+    /// count). Reads only columns the queue already maintains — no extra state.
+    /// `now` is injected so the oldest-age computation is testable.
+    pub fn stats(&self, now: i64) -> rusqlite::Result<DeliveryQueueStats> {
+        let conn = self.guard();
+        let pending: i64 =
+            conn.query_row("SELECT COUNT(*) FROM outbound_deliveries", [], |r| r.get(0))?;
+        let due_now: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM outbound_deliveries WHERE next_attempt_at <= ?1",
+            params![now],
+            |r| r.get(0),
+        )?;
+        // MIN over an empty table yields a single NULL row → Option::None.
+        let oldest_created: Option<i64> =
+            conn.query_row("SELECT MIN(created_at) FROM outbound_deliveries", [], |r| {
+                r.get(0)
+            })?;
+        let oldest_age_secs = oldest_created.map(|c| (now - c).max(0));
+
+        let per_channel: Vec<(String, i64)> = {
+            let mut stmt = conn.prepare(
+                "SELECT channel_id, COUNT(*) AS n FROM outbound_deliveries
+                 GROUP BY channel_id ORDER BY n DESC, channel_id ASC",
+            )?;
+            let rows =
+                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let dead_lettered: i64 =
+            conn.query_row("SELECT COUNT(*) FROM dead_letters", [], |r| r.get(0))?;
+
+        Ok(DeliveryQueueStats {
+            pending,
+            due_now,
+            oldest_age_secs,
+            per_channel,
+            dead_lettered,
+        })
+    }
+
+    /// Most-recently dead-lettered deliveries, newest first, for troubleshooting
+    /// (parity-plus over openclaw, which retains failed rows but exposes no
+    /// inspection path). Rows whose payload no longer deserializes are skipped.
+    pub fn recent_dead_letters(&self, limit: usize) -> rusqlite::Result<Vec<DeadLetter>> {
+        let conn = self.guard();
+        let raw: Vec<(String, String, i64, Option<String>, i64, i64)> = {
+            let mut stmt = conn.prepare(
+                "SELECT channel_id, payload, attempts, last_error, created_at, died_at
+                 FROM dead_letters ORDER BY died_at DESC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(params![limit as i64], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let mut out = Vec::with_capacity(raw.len());
+        for (channel_id, payload, attempts, last_error, created_at, died_at) in raw {
+            if let Ok(message) = serde_json::from_str::<OutboundMessage>(&payload) {
+                out.push(DeadLetter {
+                    channel_id,
+                    message,
+                    attempts: attempts.max(0) as u32,
+                    last_error: last_error.unwrap_or_default(),
+                    created_at,
+                    died_at,
+                });
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// Drive one pass over all currently-due records: claim, attempt delivery via
 /// the enqueue-free [`send_attempt`](ChannelRegistry::send_attempt), then settle
 /// each record (delivered → delete, transient → reschedule with backoff,
-/// exhausted/ambiguous → drop). Factored out of [`drain_loop`] to keep the loop
-/// body readable.
+/// exhausted → dead-letter, ambiguous/permanent → drop). Factored out of
+/// [`drain_loop`] to keep the loop body readable.
 async fn drain_once(registry: &ChannelRegistry, store: &DeliveryStore) {
     let cfg = store.config();
     let now = now_secs();
@@ -421,14 +605,20 @@ async fn drain_once(registry: &ChannelRegistry, store: &DeliveryStore) {
             Err(e) if should_enqueue(&e) => {
                 let attempts = rec.attempts + 1;
                 if attempts >= cfg.max_attempts {
-                    let _ = store.drop_record(
-                        rec.id,
-                        &format!("max attempts ({}) exhausted: {:?}", cfg.max_attempts, e),
-                    );
+                    // Exhausted: dead-letter rather than hard-delete so the lost
+                    // push leaves a forensic trail (R5 correctness). Fall back to
+                    // a plain drop if the move itself fails so the record can
+                    // never wedge the queue.
+                    if let Err(dl_err) = store.record_dead_letter(rec.id, attempts, &format!("{e:?}"))
+                    {
+                        warn!(id = rec.id, error = %dl_err, "delivery queue: dead-letter failed; dropping");
+                        let _ = store.drop_record(rec.id, "dead-letter failed");
+                    }
                     warn!(
                         id = rec.id,
                         channel = %rec.channel_id,
-                        "delivery queue: giving up after exhausting retries"
+                        attempts,
+                        "delivery queue: giving up after exhausting retries (dead-lettered)"
                     );
                 } else {
                     // Floor at 1s: a sub-second backoff truncates to 0 through
@@ -663,5 +853,104 @@ mod tests {
         // claim_due must skip and delete the poison row.
         assert!(s.claim_due(now, 10).unwrap().is_empty());
         assert!(s.is_empty(), "corrupt record purged");
+    }
+
+    #[test]
+    fn stats_reports_depth_age_and_per_channel() {
+        let s = store();
+        let now = now_secs();
+        // Two telegram (one due, one future), one signal (due). Oldest is 100s old.
+        s.enqueue("telegram", &msg("a"), "NotConnected", now).unwrap();
+        s.enqueue("telegram", &msg("b"), "NotConnected", now + 3600)
+            .unwrap();
+        s.enqueue("signal", &msg("c"), "NotConnected", now).unwrap();
+
+        let stats = s.stats(now + 100).unwrap();
+        assert_eq!(stats.pending, 3);
+        assert_eq!(stats.due_now, 2, "two records are already due");
+        // created_at was stamped at enqueue (~now); age measured at now+100.
+        assert!(
+            stats.oldest_age_secs.is_some_and(|a| (95..=105).contains(&a)),
+            "oldest age ~100s, got {:?}",
+            stats.oldest_age_secs
+        );
+        // Busiest channel first.
+        assert_eq!(stats.per_channel.first().unwrap().0, "telegram");
+        assert_eq!(stats.per_channel.first().unwrap().1, 2);
+        assert_eq!(stats.dead_lettered, 0);
+    }
+
+    #[test]
+    fn stats_on_empty_queue_has_no_oldest() {
+        let s = store();
+        let stats = s.stats(now_secs()).unwrap();
+        assert_eq!(stats.pending, 0);
+        assert_eq!(stats.due_now, 0);
+        assert!(stats.oldest_age_secs.is_none());
+        assert!(stats.per_channel.is_empty());
+    }
+
+    #[test]
+    fn record_dead_letter_moves_row_preserving_age() {
+        let s = store();
+        let now = now_secs();
+        let id = s
+            .enqueue("telegram", &msg("lost"), "NotConnected", now)
+            .unwrap();
+        // Backdate created_at so we can prove the original age is preserved.
+        s.guard()
+            .execute(
+                "UPDATE outbound_deliveries SET created_at = ?1 WHERE id = ?2",
+                params![now - 500, id],
+            )
+            .unwrap();
+
+        s.record_dead_letter(id, 10, "NotConnected(\"down\")").unwrap();
+
+        // Gone from the live queue, present in the dead-letter table.
+        assert!(s.is_empty(), "exhausted record left the live queue");
+        let stats = s.stats(now).unwrap();
+        assert_eq!(stats.dead_lettered, 1);
+
+        let dl = s.recent_dead_letters(10).unwrap();
+        assert_eq!(dl.len(), 1);
+        assert_eq!(dl[0].channel_id, "telegram");
+        assert_eq!(dl[0].message.text, "lost");
+        assert_eq!(dl[0].attempts, 10);
+        assert_eq!(dl[0].created_at, now - 500, "original enqueue time preserved");
+        assert!(dl[0].last_error.contains("NotConnected"));
+    }
+
+    #[test]
+    fn record_dead_letter_missing_row_is_noop() {
+        let s = store();
+        // No such id — must not error, must not create a phantom dead letter.
+        s.record_dead_letter(999, 5, "gone").unwrap();
+        assert_eq!(s.stats(now_secs()).unwrap().dead_lettered, 0);
+    }
+
+    #[test]
+    fn dead_letters_are_bounded() {
+        let mut c = cfg();
+        c.max_queue_len = 2;
+        let s = DeliveryStore::open_in_memory(c).unwrap();
+        let now = now_secs();
+        // Dead-letter three records in order; the table must cap at 2. Eviction
+        // is by died_at ASC, with the dead_letters autoincrement id breaking the
+        // same-second tie — so the first one dead-lettered ("1") is evicted.
+        for t in ["1", "2", "3"] {
+            let id = s.enqueue("ch", &msg(t), "NotConnected", now).unwrap();
+            s.record_dead_letter(id, 10, "exhausted").unwrap();
+        }
+        let stats = s.stats(now).unwrap();
+        assert_eq!(stats.dead_lettered, 2, "dead-letter table capped at max_queue_len");
+        // The two newest survive; the first dead-lettered ("1") is evicted.
+        let texts: Vec<String> = s
+            .recent_dead_letters(10)
+            .unwrap()
+            .into_iter()
+            .map(|d| d.message.text)
+            .collect();
+        assert!(!texts.contains(&"1".to_string()), "oldest dead letter evicted");
     }
 }

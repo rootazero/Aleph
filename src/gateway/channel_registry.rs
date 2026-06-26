@@ -701,6 +701,22 @@ impl ChannelRegistry {
         info!("Restarted channel in place: {}", channel_id);
         Ok(())
     }
+
+    /// Observability snapshot of the durable outbound delivery queue, or `None`
+    /// when no durable store is attached (in-memory-only send path). Pure data
+    /// access — the depth/age/per-channel/dead-letter figures are surfaced to
+    /// the `channels.list` RPC and the boot log (redline R8: Aleph's own
+    /// backlog is inspectable; R5: a stuck proactive push is no longer silent).
+    pub fn delivery_queue_stats(&self) -> Option<super::delivery_queue::DeliveryQueueStats> {
+        let store = self.delivery_store.as_ref()?;
+        match store.stats(super::delivery_queue::now_secs()) {
+            Ok(stats) => Some(stats),
+            Err(e) => {
+                warn!(error = %e, "delivery queue stats query failed");
+                None
+            }
+        }
+    }
 }
 
 impl Default for ChannelRegistry {
