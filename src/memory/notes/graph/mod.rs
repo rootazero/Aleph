@@ -20,13 +20,30 @@ pub struct GraphNode {
     pub sources: Vec<String>, // frontmatter `source_notes`
 }
 
+/// A directed, typed, weighted edge in the note graph.
+#[derive(Debug, Clone)]
+pub struct GraphEdge {
+    pub from: String,
+    pub to: String,
+    /// LLM-chosen relation verb; `None` for a plain wikilink.
+    pub rel_type: Option<String>,
+    /// Edge confidence in [0,1]; wikilinks default to 1.0.
+    pub confidence: f32,
+}
+
+/// Per-target edge metadata in the directed adjacency.
+#[derive(Debug, Clone)]
+pub struct EdgeMeta {
+    pub rel_type: Option<String>,
+    pub confidence: f32,
+}
+
 /// Immutable snapshot of the note graph, built once per recompute.
 #[derive(Debug, Clone, Default)]
 pub struct GraphSnapshot {
     pub nodes: Vec<GraphNode>,
-    /// Directed resolved edges (`category/filename` pairs); wikilinks + typed
-    /// relations both live in `notes_links`.
-    pub edges: Vec<(String, String)>,
+    /// Directed, typed, weighted resolved edges (`category/filename` pairs).
+    pub edges: Vec<GraphEdge>,
 }
 
 /// Derived adjacency + lookup, shared by all three algorithms. Built once.
@@ -35,6 +52,10 @@ pub struct GraphIndex<'a> {
     idx_of: HashMap<&'a str, usize>,
     /// Undirected, deduped adjacency by node index.
     pub adj: Vec<HashSet<usize>>,
+    /// Directed out-edges by node index, with per-target metadata.
+    pub out: Vec<HashMap<usize, EdgeMeta>>,
+    /// Directed in-edges by node index (backlink traversal).
+    pub inc: Vec<HashMap<usize, EdgeMeta>>,
     /// Source-set per node index (from `source_notes`).
     pub sources: Vec<HashSet<&'a str>>,
     /// Inverted index `source_ref -> node indices citing it`. Two uses in the
@@ -53,11 +74,33 @@ impl<'a> GraphIndex<'a> {
             idx_of.insert(n.path.as_str(), i);
         }
         let mut adj = vec![HashSet::new(); snap.nodes.len()];
-        for (from, to) in &snap.edges {
-            if let (Some(&a), Some(&b)) = (idx_of.get(from.as_str()), idx_of.get(to.as_str())) {
+        let mut out: Vec<HashMap<usize, EdgeMeta>> = vec![HashMap::new(); snap.nodes.len()];
+        let mut inc: Vec<HashMap<usize, EdgeMeta>> = vec![HashMap::new(); snap.nodes.len()];
+        for e in &snap.edges {
+            if let (Some(&a), Some(&b)) =
+                (idx_of.get(e.from.as_str()), idx_of.get(e.to.as_str()))
+            {
                 if a != b {
                     adj[a].insert(b);
                     adj[b].insert(a);
+                    let meta = EdgeMeta { rel_type: e.rel_type.clone(), confidence: e.confidence };
+                    // Keep the strongest if a pair appears twice.
+                    out[a]
+                        .entry(b)
+                        .and_modify(|m| {
+                            if meta.confidence > m.confidence {
+                                *m = meta.clone();
+                            }
+                        })
+                        .or_insert_with(|| meta.clone());
+                    inc[b]
+                        .entry(a)
+                        .and_modify(|m| {
+                            if meta.confidence > m.confidence {
+                                *m = meta.clone();
+                            }
+                        })
+                        .or_insert(meta);
                 }
             }
         }
@@ -78,6 +121,8 @@ impl<'a> GraphIndex<'a> {
             nodes: &snap.nodes,
             idx_of,
             adj,
+            out,
+            inc,
             sources,
             source_postings,
         }
@@ -112,16 +157,30 @@ impl<'a> GraphIndex<'a> {
     /// seed's sources), not O(N).
     #[must_use]
     pub fn source_sharers(&self, seed: usize) -> HashSet<usize> {
-        let mut out = HashSet::new();
+        let mut result = HashSet::new();
         for &s in &self.sources[seed] {
             if let Some(posting) = self.source_postings.get(s) {
                 for &i in posting {
                     if i != seed {
-                        out.insert(i);
+                        result.insert(i);
                     }
                 }
             }
         }
-        out
+        result
+    }
+
+    /// Confidence of the strongest edge between `a` and `b` in either
+    /// direction; 0.0 if unconnected. Used to weight the direct-link signal.
+    #[must_use]
+    pub fn edge_confidence(&self, a: usize, b: usize) -> f32 {
+        let f = self.out[a].get(&b).map_or(0.0, |m| m.confidence);
+        let r = self.out[b].get(&a).map_or(0.0, |m| m.confidence);
+        f.max(r)
+    }
+
+    #[must_use]
+    pub fn out_edges(&self, i: usize) -> &std::collections::HashMap<usize, EdgeMeta> {
+        &self.out[i]
     }
 }

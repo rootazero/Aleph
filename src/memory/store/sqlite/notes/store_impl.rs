@@ -12,7 +12,7 @@ use rusqlite::OptionalExtension;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::error::AlephError;
-use crate::memory::notes::graph::{GraphNode, GraphSnapshot};
+use crate::memory::notes::graph::{GraphEdge, GraphNode, GraphSnapshot};
 use crate::memory::notes::store::{NoteIndexEntry, NoteStore, ReviewQueueRow};
 use crate::memory::notes::{FactProvenance, KnowledgeNote, ProvenanceOrigin};
 
@@ -1103,13 +1103,18 @@ impl NoteStore for SqliteMemoryBackend {
         {
             let mut stmt = conn
                 .prepare(
-                    "SELECT from_note, to_note FROM notes_links \
+                    "SELECT from_note, to_note, relation, confidence FROM notes_links \
                      WHERE agent_id = ?1 AND to_note <> '' AND instr(to_note, '/') > 0",
                 )
                 .map_err(|e| AlephError::config(format!("load_graph_snapshot edges prep: {e}")))?;
             let rows = stmt
                 .query_map(params![agent_id], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    Ok(GraphEdge {
+                        from: r.get::<_, String>(0)?,
+                        to: r.get::<_, String>(1)?,
+                        rel_type: r.get::<_, Option<String>>(2)?,
+                        confidence: r.get::<_, f32>(3)?,
+                    })
                 })
                 .map_err(|e| AlephError::config(format!("load_graph_snapshot edges query: {e}")))?;
             for row in rows {

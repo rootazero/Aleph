@@ -149,7 +149,7 @@ fn compute(snap: &GraphSnapshot) -> Computed {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::notes::graph::{GraphNode, GraphSnapshot};
+    use crate::memory::notes::graph::{GraphEdge, GraphNode, GraphSnapshot};
 
     #[test]
     fn compute_empty_graph_yields_nothing() {
@@ -169,7 +169,7 @@ mod tests {
         };
         let snap = GraphSnapshot {
             nodes: vec![node("g/a"), node("g/b"), node("g/c")],
-            edges: vec![("g/a".into(), "g/b".into())],
+            edges: vec![GraphEdge { from: "g/a".into(), to: "g/b".into(), rel_type: None, confidence: 1.0 }],
         };
         let c = compute(&snap);
         assert_eq!(c.node_count, 3);

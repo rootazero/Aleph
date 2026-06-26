@@ -16,7 +16,7 @@ fn direct_link_and_type_affinity_score() {
                 sources: vec![],
             },
         ],
-        edges: vec![("learning/a".into(), "learning/b".into())],
+        edges: vec![GraphEdge { from: "learning/a".into(), to: "learning/b".into(), rel_type: None, confidence: 1.0 }],
     };
     let g = GraphIndex::build(&snap);
     let w = relevance::SignalWeights::default();
@@ -129,13 +129,13 @@ fn louvain_splits_barbell_into_two_communities() {
             node("g/f"),
         ],
         edges: vec![
-            ("g/a".into(), "g/b".into()),
-            ("g/b".into(), "g/c".into()),
-            ("g/a".into(), "g/c".into()),
-            ("g/d".into(), "g/e".into()),
-            ("g/e".into(), "g/f".into()),
-            ("g/d".into(), "g/f".into()),
-            ("g/c".into(), "g/d".into()),
+            GraphEdge { from: "g/a".into(), to: "g/b".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "g/b".into(), to: "g/c".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "g/a".into(), to: "g/c".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "g/d".into(), to: "g/e".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "g/e".into(), to: "g/f".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "g/d".into(), to: "g/f".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "g/c".into(), to: "g/d".into(), rel_type: None, confidence: 1.0 },
         ],
     };
     let g = GraphIndex::build(&snap);
@@ -204,19 +204,19 @@ fn detects_isolated_and_bridge() {
         ],
         edges: vec![
             // three internally-dense triangles
-            ("c/a1".into(), "c/a2".into()),
-            ("c/a2".into(), "c/a3".into()),
-            ("c/a1".into(), "c/a3".into()),
-            ("c/b1".into(), "c/b2".into()),
-            ("c/b2".into(), "c/b3".into()),
-            ("c/b1".into(), "c/b3".into()),
-            ("c/d1".into(), "c/d2".into()),
-            ("c/d2".into(), "c/d3".into()),
-            ("c/d1".into(), "c/d3".into()),
+            GraphEdge { from: "c/a1".into(), to: "c/a2".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "c/a2".into(), to: "c/a3".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "c/a1".into(), to: "c/a3".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "c/b1".into(), to: "c/b2".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "c/b2".into(), to: "c/b3".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "c/b1".into(), to: "c/b3".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "c/d1".into(), to: "c/d2".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "c/d2".into(), to: "c/d3".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "c/d1".into(), to: "c/d3".into(), rel_type: None, confidence: 1.0 },
             // hub h links one node of each triangle → bridges 3 communities
-            ("c/h".into(), "c/a1".into()),
-            ("c/h".into(), "c/b1".into()),
-            ("c/h".into(), "c/d1".into()),
+            GraphEdge { from: "c/h".into(), to: "c/a1".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "c/h".into(), to: "c/b1".into(), rel_type: None, confidence: 1.0 },
+            GraphEdge { from: "c/h".into(), to: "c/d1".into(), rel_type: None, confidence: 1.0 },
         ],
     };
     let g = GraphIndex::build(&snap);
@@ -227,4 +227,68 @@ fn detects_isolated_and_bridge() {
     assert!(ins.bridges.contains(&"c/h".to_string()));
     // cross-type edges present → surprising non-empty
     assert!(!ins.surprising.is_empty());
+}
+
+#[test]
+fn edge_confidence_is_max_over_directions() {
+    use crate::memory::notes::graph::*;
+    let snap = GraphSnapshot {
+        nodes: vec![
+            GraphNode { path: "g/a".into(), category: "x".into(), sources: vec![] },
+            GraphNode { path: "g/b".into(), category: "x".into(), sources: vec![] },
+        ],
+        edges: vec![
+            GraphEdge { from: "g/a".into(), to: "g/b".into(), rel_type: Some("cites".into()), confidence: 0.4 },
+            GraphEdge { from: "g/b".into(), to: "g/a".into(), rel_type: None, confidence: 0.9 },
+        ],
+    };
+    let g = GraphIndex::build(&snap);
+    let (a, b) = (g.index_of("g/a").unwrap(), g.index_of("g/b").unwrap());
+    assert!((g.edge_confidence(a, b) - 0.9).abs() < 1e-6);
+    // Undirected adjacency still symmetric (community/AA depend on it).
+    assert!(g.adj[a].contains(&b) && g.adj[b].contains(&a));
+}
+
+#[test]
+fn missing_edge_confidence_is_zero() {
+    use crate::memory::notes::graph::*;
+    let snap = GraphSnapshot {
+        nodes: vec![
+            GraphNode { path: "g/a".into(), category: "x".into(), sources: vec![] },
+            GraphNode { path: "g/b".into(), category: "x".into(), sources: vec![] },
+        ],
+        edges: vec![],
+    };
+    let g = GraphIndex::build(&snap);
+    let (a, b) = (g.index_of("g/a").unwrap(), g.index_of("g/b").unwrap());
+    assert_eq!(g.edge_confidence(a, b), 0.0);
+}
+
+#[test]
+fn half_confidence_edge_yields_half_direct_link_contribution() {
+    use crate::memory::notes::graph::*;
+    // Two isolated same-category nodes, single directed edge.
+    // score = direct_link * conf + type_affinity (no AA, no source overlap).
+    let nodes = vec![
+        GraphNode { path: "g/a".into(), category: "x".into(), sources: vec![] },
+        GraphNode { path: "g/b".into(), category: "x".into(), sources: vec![] },
+    ];
+    let snap_full = GraphSnapshot {
+        nodes: nodes.clone(),
+        edges: vec![GraphEdge { from: "g/a".into(), to: "g/b".into(), rel_type: None, confidence: 1.0 }],
+    };
+    let snap_half = GraphSnapshot {
+        nodes,
+        edges: vec![GraphEdge { from: "g/a".into(), to: "g/b".into(), rel_type: None, confidence: 0.5 }],
+    };
+    let w = relevance::SignalWeights::default();
+    let g_full = GraphIndex::build(&snap_full);
+    let g_half = GraphIndex::build(&snap_half);
+    let score_full = relevance::score_pair(&g_full, &w, 0, 1);
+    let score_half = relevance::score_pair(&g_half, &w, 0, 1);
+    // With conf=1.0: direct_link*1 + type_affinity = 3.0 + 1.0 = 4.0
+    // With conf=0.5: direct_link*0.5 + type_affinity = 1.5 + 1.0 = 2.5
+    assert!((score_full - 4.0).abs() < 1e-4, "full-conf score = {score_full}");
+    assert!((score_half - 2.5).abs() < 1e-4, "half-conf score = {score_half}");
+    assert!(score_half < score_full);
 }
