@@ -111,10 +111,15 @@ impl RuntimeContext {
     /// Output example (with repo):
     /// ```text
     /// ## Runtime Environment
-    /// os=macos | arch=aarch64 | shell=zsh | cwd=/workspace | repo=/workspace | model=claude-opus-4-6 | host=MacBook-Pro
+    /// os=macos | arch=aarch64 | shell=zsh | cwd=/workspace | repo=/workspace | git=main | model=claude-opus-4-6 | host=MacBook-Pro
     /// ```
     ///
-    /// The `repo=` segment is omitted when `repo_root` is `None`.
+    /// The `repo=` / `git=` segments are omitted when `repo_root` is `None` or
+    /// the branch cannot be resolved. The `git=` branch is read fresh from
+    /// `.git/HEAD` at render time (a single small file read — no `git`
+    /// subprocess) so a mid-session `checkout` is reflected on the next turn,
+    /// matching what codex's `<environment_context>` and hermes-agent's
+    /// workspace block surface.
     #[must_use]
     pub fn to_prompt_section(&self) -> String {
         let mut parts = vec![
@@ -126,6 +131,9 @@ impl RuntimeContext {
 
         if let Some(ref repo) = self.repo_root {
             parts.push(format!("repo={}", repo.display()));
+            if let Some(branch) = detect_git_branch(repo) {
+                parts.push(format!("git={branch}"));
+            }
         }
 
         parts.push(format!("model={}", self.current_model));
@@ -176,6 +184,57 @@ fn detect_repo_root(start: &Path) -> Option<PathBuf> {
             Some(parent) => current = parent,
             None => return None,
         }
+    }
+}
+
+/// Resolve the current git branch for `repo_root` by reading `HEAD` directly —
+/// **no `git` subprocess**, so it is cheap enough to run on every prompt build
+/// and reflects mid-session `checkout`s on the next turn.
+///
+/// Handles both repository shapes:
+/// - regular repo: `.git/` is a directory, `HEAD` is at `.git/HEAD`.
+/// - linked worktree: `.git` is a *file* (`gitdir: <path>`) pointing at the
+///   worktree's gitdir, where `HEAD` lives.
+///
+/// `HEAD` is either `ref: refs/heads/<branch>` (on a branch) or a raw commit
+/// SHA (detached). Returns the short branch name, `detached:<sha8>` for a
+/// detached HEAD, or `None` if anything cannot be read (the caller then omits
+/// the `git=` segment entirely).
+fn detect_git_branch(repo_root: &Path) -> Option<String> {
+    let dot_git = repo_root.join(".git");
+    let git_dir = if dot_git.is_dir() {
+        dot_git
+    } else if dot_git.is_file() {
+        // Worktree: ".git" is a file `gitdir: <absolute-or-relative path>`.
+        let pointer = std::fs::read_to_string(&dot_git).ok()?;
+        let target = pointer.trim().strip_prefix("gitdir:")?.trim();
+        let target = PathBuf::from(target);
+        if target.is_absolute() {
+            target
+        } else {
+            repo_root.join(target)
+        }
+    } else {
+        return None;
+    };
+
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    if let Some(reference) = head.strip_prefix("ref:") {
+        // "ref: refs/heads/feature/x" -> last path segment "x".
+        let reference = reference.trim();
+        let branch = reference.rsplit('/').next().unwrap_or(reference);
+        if branch.is_empty() {
+            None
+        } else {
+            Some(branch.to_string())
+        }
+    } else if head.is_empty() {
+        None
+    } else {
+        // Detached HEAD: `head` is a raw SHA (ASCII hex) — char-safe to take 8.
+        let short: String = head.chars().take(8).collect();
+        Some(format!("detached:{short}"))
     }
 }
 
@@ -354,5 +413,78 @@ mod tests {
         assert!(section.contains("host=server-01"));
         assert!(section.contains("time="));
         assert!(section.contains("time_ms="));
+        assert!(
+            !section.contains("git="),
+            "should NOT contain git= when repo_root is None"
+        );
+    }
+
+    #[test]
+    fn detect_git_branch_reads_ref_head() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join(".git")).expect("mkdir .git");
+        std::fs::write(dir.path().join(".git/HEAD"), b"ref: refs/heads/main\n")
+            .expect("write HEAD");
+
+        assert_eq!(detect_git_branch(dir.path()).as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn detect_git_branch_keeps_last_segment_of_slashed_branch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join(".git")).expect("mkdir .git");
+        std::fs::write(
+            dir.path().join(".git/HEAD"),
+            b"ref: refs/heads/feature/context-mode\n",
+        )
+        .expect("write HEAD");
+
+        assert_eq!(
+            detect_git_branch(dir.path()).as_deref(),
+            Some("context-mode")
+        );
+    }
+
+    #[test]
+    fn detect_git_branch_handles_worktree_gitdir_file() {
+        // Linked worktree: ".git" is a file pointing at the real gitdir, where
+        // HEAD lives.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let gitdir = dir.path().join("real-gitdir");
+        std::fs::create_dir(&gitdir).expect("mkdir gitdir");
+        std::fs::write(gitdir.join("HEAD"), b"ref: refs/heads/wt-branch\n")
+            .expect("write HEAD");
+        std::fs::write(
+            dir.path().join(".git"),
+            format!("gitdir: {}\n", gitdir.display()),
+        )
+        .expect("write .git pointer");
+
+        assert_eq!(
+            detect_git_branch(dir.path()).as_deref(),
+            Some("wt-branch")
+        );
+    }
+
+    #[test]
+    fn detect_git_branch_reports_detached_head() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join(".git")).expect("mkdir .git");
+        std::fs::write(
+            dir.path().join(".git/HEAD"),
+            b"0123456789abcdef0123456789abcdef01234567\n",
+        )
+        .expect("write HEAD");
+
+        assert_eq!(
+            detect_git_branch(dir.path()).as_deref(),
+            Some("detached:01234567")
+        );
+    }
+
+    #[test]
+    fn detect_git_branch_returns_none_without_git() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(detect_git_branch(dir.path()), None);
     }
 }

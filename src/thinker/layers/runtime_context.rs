@@ -1,4 +1,9 @@
-//! `RuntimeContextLayer` — micro-environmental awareness (priority 1710)
+//! `RuntimeContextLayer` — micro-environmental awareness (priority 1720)
+//!
+//! Sits at 1720 to deconflict from `VoiceModeLayer` (1710): both rode 1710,
+//! which left their relative order resolved only by registration sequence
+//! (a latent ordering hazard). The harness wiring (`prompt_build.rs`) and the
+//! build-path test already document this layer as 1720 — the code now agrees.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
@@ -10,7 +15,7 @@ impl PromptLayer for RuntimeContextLayer {
         "runtime_context"
     }
     fn priority(&self) -> u32 {
-        1710
+        1720
     }
     fn stability(&self) -> LayerStability {
         LayerStability::Dynamic
@@ -58,6 +63,19 @@ mod tests {
         layer.inject(&mut out, &input);
 
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn priority_is_1720_deconflicted_from_voice_mode() {
+        // Regression: this layer used to return 1710, colliding with
+        // `VoiceModeLayer` (also 1710). 1720 is an otherwise-empty slot
+        // (next neighbour is 1730), so the assembled prompt order is
+        // unchanged but the relative ordering is now priority-explicit.
+        assert_eq!(RuntimeContextLayer.priority(), 1720);
+        assert_ne!(
+            RuntimeContextLayer.priority(),
+            crate::thinker::layers::VoiceModeLayer.priority(),
+        );
     }
 
     #[test]
