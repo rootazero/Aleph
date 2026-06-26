@@ -5,6 +5,7 @@
 //! the Raw conversation facet stay desktop-only.
 
 pub mod cell;
+pub mod detail;
 pub mod list;
 
 use leptos::prelude::*;
@@ -17,6 +18,7 @@ use crate::context::DashboardState;
 use crate::state::memory::MemoryState;
 use crate::views::memory::data::{MemoryFacet, NOTE_WINDOW};
 
+use self::detail::PhoneMemoryDetail;
 use self::list::PhoneMemoryList;
 
 /// Router-owned state for the phone Memory screens. Every field is an
@@ -94,8 +96,7 @@ pub fn PhoneMemory() -> impl IntoView {
     let location = use_location();
     move || {
         if location.pathname.get() == "/memory/note" {
-            // Detail screen lands in Task 4; empty stub keeps the slice compiling.
-            view! { <div></div> }.into_any()
+            view! { <PhoneMemoryDetail/> }.into_any()
         } else {
             view! { <PhoneMemoryList/> }.into_any()
         }
