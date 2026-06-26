@@ -5,10 +5,14 @@
 //! - `now_millis()` -> u64 — current timestamp
 //! - `workspace_read(path)` -> JSON string — read workspace files
 //! - `secret_exists(name)` -> "true"/"false" — check secret availability
+//! - `http_fetch(request)` -> JSON string — sandboxed, allowlisted outbound HTTP
+
+use std::collections::HashMap;
 
 use crate::sync_primitives::Arc;
 
 use extism::host_fn;
+use serde::Deserialize;
 
 use super::capability_kernel::WasmCapabilityKernel;
 
@@ -68,3 +72,118 @@ host_fn!(pub host_secret_exists(state: HostState; name: String) -> String {
     let exists = state.kernel.check_secret_pattern(&name);
     Ok(exists.to_string())
 });
+
+host_fn!(pub host_http_fetch(state: HostState; request: String) -> String {
+    let state = state.get()?;
+    let state = state.lock().unwrap_or_else(|e| e.into_inner());
+    Ok(do_http_fetch(state.kernel.as_ref(), &request))
+});
+
+/// Request envelope a plugin passes to the `http_fetch` host function.
+#[derive(Deserialize)]
+struct HttpRequest {
+    method: String,
+    url: String,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+/// Orchestrate a sandboxed outbound HTTP request for a WASM plugin.
+///
+/// Enforces, in order: the `http` capability must be declared, the request must
+/// pass the allowlist (HTTPS-only, anti host-confusion, path-traversal safe),
+/// the per-execution call-count cap, the rate limit, and the request/response
+/// body size caps. Always returns a JSON string — `{"status","headers","body"}`
+/// on success or `{"error":...}` on any rejection — and never panics.
+fn do_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> String {
+    match try_http_fetch(kernel, request) {
+        Ok(json) => json,
+        Err(msg) => serde_json::json!({ "error": msg }).to_string(),
+    }
+}
+
+fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String, String> {
+    let req: HttpRequest =
+        serde_json::from_str(request).map_err(|e| format!("invalid request: {e}"))?;
+    let method = req.method.to_uppercase();
+
+    // Capability + allowlist, call-count, and rate-limit gates (in that order).
+    kernel
+        .check_http_request(&method, &req.url)
+        .map_err(|e| e.to_string())?;
+    kernel.check_http_limit().map_err(|e| e.to_string())?;
+    kernel.check_rate_limit().map_err(|e| e.to_string())?;
+
+    // Present once check_http_request succeeded; size caps + timeout live here.
+    let http = kernel
+        .http_config()
+        .ok_or_else(|| "http capability missing".to_string())?;
+
+    let body = req.body.clone().unwrap_or_default();
+    if body.len() > http.max_request_bytes {
+        return Err(format!(
+            "request body {} bytes exceeds cap {}",
+            body.len(),
+            http.max_request_bytes
+        ));
+    }
+
+    let timeout = std::time::Duration::from_secs(http.timeout_secs);
+    let max_response_bytes = http.max_response_bytes;
+
+    // Run the blocking client on a dedicated OS thread: reqwest::blocking spins
+    // its own runtime internally, which would panic if nested inside the host's
+    // tokio worker. A fresh std thread carries no ambient runtime.
+    let (status, headers, bytes): (u16, HashMap<String, String>, Vec<u8>) =
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| -> Result<(u16, HashMap<String, String>, Vec<u8>), String> {
+                    let client = reqwest::blocking::Client::builder()
+                        .timeout(timeout)
+                        .build()
+                        .map_err(|e| format!("client build failed: {e}"))?;
+                    let parsed_method = reqwest::Method::from_bytes(method.as_bytes())
+                        .map_err(|e| format!("invalid method: {e}"))?;
+                    let mut builder = client.request(parsed_method, req.url.as_str());
+                    for (k, v) in &req.headers {
+                        builder = builder.header(k.as_str(), v.as_str());
+                    }
+                    if !body.is_empty() {
+                        builder = builder.body(body.clone());
+                    }
+                    let resp = builder.send().map_err(|e| format!("request failed: {e}"))?;
+                    let status = resp.status().as_u16();
+                    let headers = resp
+                        .headers()
+                        .iter()
+                        .map(|(k, v)| {
+                            (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())
+                        })
+                        .collect();
+                    let bytes = resp
+                        .bytes()
+                        .map_err(|e| format!("failed to read response: {e}"))?;
+                    Ok((status, headers, bytes.to_vec()))
+                })
+                .join()
+                .map_err(|_| "http worker thread panicked".to_string())?
+        })?;
+
+    if bytes.len() > max_response_bytes {
+        return Err(format!(
+            "response {} bytes exceeds cap {}",
+            bytes.len(),
+            max_response_bytes
+        ));
+    }
+    let body_text = String::from_utf8_lossy(&bytes).to_string();
+
+    Ok(serde_json::json!({
+        "status": status,
+        "headers": headers,
+        "body": body_text,
+    })
+    .to_string())
+}
