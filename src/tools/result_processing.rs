@@ -155,10 +155,10 @@ pub fn apply_result_budget(
 /// metadata: size, format, OCR text), and return the images for re-emission as
 /// `ContentBlock::Image` when the tool result is rendered into the prompt.
 ///
-/// Targets the desktop screenshot shape `{ image_base64, format, .. }`, whether
-/// at the top level or nested under a `data` wrapper (`DesktopOutput { data }`).
-/// Non-matching values are left untouched, so this is a no-op for the ~all tool
-/// calls that produce no image.
+/// Targets the `{ image_base64, format, .. }` shape, whether at the top level
+/// (a `desktop` screenshot, or a `file_read` of an image file) or nested under
+/// a `data` wrapper (`DesktopOutput { data }`). Non-matching values are left
+/// untouched, so this is a no-op for the ~all tool calls that produce no image.
 #[must_use]
 pub fn hoist_inline_images(value: &mut serde_json::Value) -> Vec<ToolImage> {
     let mut images = Vec::new();

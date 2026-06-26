@@ -60,6 +60,16 @@ pub struct FileReadOutput {
     pub truncated: bool,
     /// Human-readable result message.
     pub message: String,
+    /// For image files: base64 (no data-URI prefix) of a model-ready copy of
+    /// the image. Picked up by `hoist_inline_images` and re-emitted as a
+    /// viewable `ContentBlock::Image`, so a vision model actually sees the file.
+    /// `None` for every text/binary read (and skipped in the serialized shape).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_base64: Option<String>,
+    /// Image format for [`Self::image_base64`] — `"png"` or `"jpeg"`. Drives the
+    /// `format → MIME` map in the result pipeline. `None` for non-image reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
 }
 
 // =============================================================================
@@ -151,6 +161,8 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
             returned_lines: 0,
             truncated: false,
             message: "File is empty.".to_string(),
+            image_base64: None,
+            format: None,
         };
     }
 
@@ -171,6 +183,8 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
                 "offset {} is past the end of the file ({total_lines} lines).",
                 start + 1
             ),
+            image_base64: None,
+            format: None,
         };
     }
 
@@ -207,6 +221,8 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
         returned_lines: (end - start) as u64,
         truncated,
         message,
+        image_base64: None,
+        format: None,
     }
 }
 
@@ -220,9 +236,11 @@ impl AlephTool for FileReadTool {
     const DESCRIPTION: &'static str =
         "Read a file's contents as `cat -n`-style numbered text lines. Returns up \
          to 2000 lines from the start by default; use `offset` (1-based starting \
-         line) and `limit` (max lines) to page through larger files. Binary files \
-         are detected and reported rather than dumped. The line-number prefixes \
-         are for reference only — strip them before passing text to file_edit.";
+         line) and `limit` (max lines) to page through larger files. Image files \
+         (png/jpeg/gif/tiff) are returned as a viewable image block so a vision \
+         model can see them directly; other binary files are detected and reported \
+         rather than dumped. The line-number prefixes are for reference only — \
+         strip them before passing text to file_edit.";
 
     type Args = FileReadArgs;
     type Output = FileReadOutput;
@@ -248,6 +266,31 @@ impl AlephTool for FileReadTool {
         // Binary files degrade gracefully: a non-error result the model can act
         // on, instead of a hard `read_to_string` failure or a corrupt dump.
         if is_binary(&bytes) {
+            // A raster image the agent can actually *look at* (png/jpeg/gif/tiff)
+            // is promoted to a viewable image block instead of a dead stub: the
+            // `image_base64`/`format` fields below are lifted by
+            // `hoist_inline_images` into a `ContentBlock::Image` for the model.
+            // Non-image binaries fall through to the legacy "not displayable"
+            // stub.
+            if let Some(img) = super::image_read::encode_for_model(&bytes) {
+                let message = format!(
+                    "Image file — {}×{} px, {size} bytes, returned as a viewable image block.",
+                    img.width, img.height
+                );
+                notify_tool_result(Self::NAME, &message, true);
+                return Ok(FileReadOutput {
+                    success: true,
+                    path: path_str,
+                    content: String::new(),
+                    size,
+                    total_lines: 0,
+                    returned_lines: 0,
+                    truncated: false,
+                    message,
+                    image_base64: Some(img.base64),
+                    format: Some(img.format.to_string()),
+                });
+            }
             let message = format!("Binary file — {size} bytes, content not displayable.");
             notify_tool_result(Self::NAME, &message, true);
             return Ok(FileReadOutput {
@@ -259,6 +302,8 @@ impl AlephTool for FileReadTool {
                 returned_lines: 0,
                 truncated: false,
                 message,
+                image_base64: None,
+                format: None,
             });
         }
 
@@ -332,6 +377,8 @@ fn unchanged_stub(
         returned_lines: 0,
         truncated: false,
         message,
+        image_base64: None,
+        format: None,
     }
 }
 
@@ -428,6 +475,31 @@ mod tests {
         assert!(out.success, "binary read is not an error");
         assert!(out.content.is_empty());
         assert!(out.message.contains("Binary"));
+    }
+
+    #[tokio::test]
+    async fn image_file_is_returned_as_viewable_block() {
+        use image::{DynamicImage, ImageFormat, RgbaImage};
+        use std::io::Cursor;
+
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("pixel.png");
+        // A real PNG on disk — the read must promote it to an image payload.
+        let mut png = Vec::new();
+        DynamicImage::ImageRgba8(RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255])))
+            .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .unwrap();
+        fs::write(&file, &png).unwrap();
+
+        let out = AlephTool::call(&FileReadTool::new(), args(&file, None, None))
+            .await
+            .unwrap();
+        assert!(out.success);
+        // Pixels go out-of-band as a base64 image; the text channel stays empty.
+        assert!(out.content.is_empty());
+        assert_eq!(out.format.as_deref(), Some("png"));
+        assert!(out.image_base64.is_some_and(|b| !b.is_empty()));
+        assert!(out.message.contains("image block"), "msg: {}", out.message);
     }
 
     #[tokio::test]
