@@ -404,52 +404,9 @@ impl ApprovalPolicy for CapturingPolicy {
     async fn record(&self, _request: &ActionRequest, _decision: &ApprovalDecision) {}
 }
 
-#[test]
-fn audit_identity_falls_back_to_main_outside_turn() {
-    // Direct calls / tests run outside a scoped turn — the audit identity must
-    // still be well-formed, never an empty agent_id.
-    let (agent_id, context) = audit_identity("click", "click(1,2)");
-    assert_eq!(agent_id, "main");
-    assert_eq!(context, "desktop.click (click(1,2))");
-}
-
-#[test]
-fn audit_identity_reads_agent_and_channel_from_turn_context() {
-    use crate::routing::session_key::SessionKey;
-    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
-
-    let turn = TurnContext {
-        session_key: SessionKey::task("research-agent", "cron", "daily"),
-        run_id: String::new(),
-        channel_id: "slack".to_string(),
-        conversation_id: "C123".to_string(),
-        caller_role: None,
-    };
-    let (agent_id, context) =
-        TURN_CONTEXT.sync_scope(turn, || audit_identity("type_text", "hello"));
-    assert_eq!(agent_id, "research-agent");
-    assert_eq!(context, "desktop.type_text (hello) via slack/C123");
-}
-
-#[test]
-fn audit_identity_omits_origin_for_non_channel_turn() {
-    use crate::routing::session_key::SessionKey;
-    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
-
-    // A cron/internal turn has no originating channel — context names the
-    // action only, with no trailing `via .../...`.
-    let turn = TurnContext {
-        session_key: SessionKey::task("cron-agent", "cron", "daily"),
-        run_id: String::new(),
-        channel_id: String::new(),
-        conversation_id: String::new(),
-        caller_role: None,
-    };
-    let (agent_id, context) =
-        TURN_CONTEXT.sync_scope(turn, || audit_identity("click", "click(5,5)"));
-    assert_eq!(agent_id, "cron-agent");
-    assert_eq!(context, "desktop.click (click(5,5))");
-}
+// `audit_identity` unit tests live with the function in
+// `src/approval/audit.rs`; this file keeps the end-to-end coverage that the
+// desktop tool actually stamps that identity onto its `ActionRequest`.
 
 #[tokio::test]
 async fn approval_request_carries_agent_id_from_turn_context() {

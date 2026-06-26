@@ -45,12 +45,13 @@ impl AutomationTool {
     ///
     /// Returns `None` if allowed (or no policy configured), or
     /// `Some(AutomationOutput)` describing the denial / confirmation prompt.
-    async fn check_approval(&self, target: String, context: String) -> Option<AutomationOutput> {
+    async fn check_approval(&self, action: &str, target: String) -> Option<AutomationOutput> {
         let policy = self.approval_policy.as_ref()?;
+        let (agent_id, context) = crate::approval::audit_identity("automation", action, &target);
         let request = ActionRequest {
             action_type: ActionType::DesktopAutomation,
             target,
-            agent_id: String::new(),
+            agent_id,
             context,
             timestamp: chrono::Utc::now(),
         };
@@ -195,10 +196,7 @@ Examples:
                     }
                 };
                 if let Some(out) = self
-                    .check_approval(
-                        format!("{lang_str} script"),
-                        format!("run_script ({lang_str}): {script}"),
-                    )
+                    .check_approval("run_script", format!("{lang_str} script"))
                     .await
                 {
                     return Ok(out);
@@ -243,7 +241,7 @@ Examples:
                 };
                 let input = args.input.as_deref();
                 if let Some(out) = self
-                    .check_approval(format!("shortcut: {name}"), format!("run_shortcut: {name}"))
+                    .check_approval("run_shortcut", format!("shortcut: {name}"))
                     .await
                 {
                     return Ok(out);

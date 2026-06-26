@@ -242,7 +242,7 @@ impl DesktopTool {
     ) -> Option<DesktopOutput> {
         let policy = self.approval_policy.as_ref()?;
 
-        let (agent_id, context) = audit_identity(action, target);
+        let (agent_id, context) = crate::approval::audit_identity("desktop", action, target);
         let request = ActionRequest {
             action_type,
             target: target.to_string(),
@@ -385,37 +385,6 @@ fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
             ActionType::DesktopClick,
             format!("unknown: {}", args.action),
         )),
-    }
-}
-
-/// Resolve the audit identity of the current desktop tool call.
-///
-/// Reads `TURN_CONTEXT` — the per-tool-call task-local scoped by
-/// `ScopedToolService::execute`, the single production tool-dispatch
-/// chokepoint — so the approval audit trail records *which* agent issued the
-/// action and *where* the turn originated. `check_approval` runs before any
-/// `spawn_blocking`, so the task-local is still in scope at the read.
-///
-/// Returns `(agent_id, context)`:
-/// - `agent_id` — the issuing agent; falls back to `"main"` outside a scoped
-///   turn (direct calls, tests), consistent with `parse_caller_agent_id`.
-/// - `context` — a human-readable audit line naming the action and, for
-///   channel-originated turns, the channel + conversation it came from.
-fn audit_identity(action: &str, target: &str) -> (String, String) {
-    match crate::tools::turn_context::current_turn_context() {
-        Some(turn) => {
-            let agent_id = turn.session_key.agent_id().to_string();
-            let context = if turn.is_channel_routable() {
-                format!(
-                    "desktop.{action} ({target}) via {}/{}",
-                    turn.channel_id, turn.conversation_id
-                )
-            } else {
-                format!("desktop.{action} ({target})")
-            };
-            (agent_id, context)
-        }
-        None => ("main".to_string(), format!("desktop.{action} ({target})")),
     }
 }
 

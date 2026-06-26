@@ -1005,6 +1005,28 @@ impl InboundMessageRouter {
             return true;
         }
 
+        // Clarification button callback: `clarify:<1-based index>` from an
+        // inline keyboard (the clarification twin of the `approve:` callback,
+        // built in `ask_user::build_choice_keyboard`). Strip the prefix and
+        // resolve the pending clarification with the bare index —
+        // `interpret_reply` maps it to that option, identical to the user
+        // typing the number. Handled BEFORE the generic clarification branch so
+        // the raw `clarify:N` token is never taken as free-text. A stale tap
+        // (nothing pending) is consumed silently rather than leaking the token
+        // into a new agent turn.
+        if let Some(index) = raw.strip_prefix("clarify:") {
+            if let Some(ref mgr) = self.clarification_manager {
+                if mgr.has_pending(&session_key).await
+                    && mgr.resolve(&session_key, index.trim()).await
+                {
+                    info!(
+                        "[Router] Routed button callback to pending clarification for {session_key}"
+                    );
+                }
+            }
+            return true;
+        }
+
         // Control/built-in commands must always reach their dedicated handlers
         // below (/stop, /new, /voice, /btw, /groupchat …). A pending `ask_user`
         // clarification or workflow-clarify step must never swallow them —
@@ -1204,6 +1226,110 @@ mod tests {
         .with_approval_callback_sink(Arc::new(AlwaysIntercept));
 
         assert!(router.handle_message(cb_message()).await.is_ok());
+    }
+
+    /// A `clarify:<idx>` button callback resolves the pending clarification for
+    /// the session — the twin of the `approve:` callback path. The bare index is
+    /// interpreted exactly like a typed number.
+    #[tokio::test]
+    async fn clarify_button_callback_resolves_pending_clarification() {
+        use crate::clarification::{ClarificationManager, ClarificationOption, ClarificationRequest};
+        use crate::exec::manager::ExecApprovalManager;
+        use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
+        use crate::routing::session_key::SessionKey;
+        use std::time::Duration;
+
+        let session_key = SessionKey::ephemeral("clarify-cb-test");
+        let clarification = Arc::new(ClarificationManager::new());
+        let request = ClarificationRequest::select(
+            "ask-cb",
+            "Pick:",
+            vec![
+                ClarificationOption::new("alpha", "Alpha"),
+                ClarificationOption::new("beta", "Beta"),
+            ],
+        );
+        let rx = clarification
+            .register(session_key.to_string(), request, Duration::from_secs(60))
+            .await;
+
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_hitl(Arc::new(ExecApprovalManager::new()), clarification);
+
+        let msg = InboundMessage {
+            id: MessageId::new("cb_clar"),
+            channel_id: ChannelId::new("telegram"),
+            conversation_id: ConversationId::new("u1"),
+            sender_id: UserId::new("u1"),
+            sender_name: None,
+            text: "clarify:2".to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: vec![],
+        };
+        let reply_route =
+            ReplyRoute::new(ChannelId::new("telegram"), ConversationId::new("u1"));
+        let ctx = InboundContext::new(msg, reply_route, session_key);
+
+        assert!(
+            router.try_intercept_hitl(&ctx).await,
+            "clarify callback must be consumed as a clarification reply"
+        );
+        let result = rx.await.unwrap();
+        // Button 2 → 1-based index "2" → option index 1, value "beta".
+        assert_eq!(result.selected_index, Some(1));
+        assert_eq!(result.get_value(), Some("beta"));
+    }
+
+    /// A `clarify:` callback with nothing pending is still consumed (returns
+    /// true) so the raw token never leaks into a fresh agent turn.
+    #[tokio::test]
+    async fn stale_clarify_callback_is_swallowed() {
+        use crate::clarification::ClarificationManager;
+        use crate::exec::manager::ExecApprovalManager;
+        use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
+        use crate::routing::session_key::SessionKey;
+
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_hitl(
+            Arc::new(ExecApprovalManager::new()),
+            Arc::new(ClarificationManager::new()),
+        );
+
+        let msg = InboundMessage {
+            id: MessageId::new("cb_stale"),
+            channel_id: ChannelId::new("telegram"),
+            conversation_id: ConversationId::new("u9"),
+            sender_id: UserId::new("u9"),
+            sender_name: None,
+            text: "clarify:1".to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: vec![],
+        };
+        let reply_route =
+            ReplyRoute::new(ChannelId::new("telegram"), ConversationId::new("u9"));
+        let ctx =
+            InboundContext::new(msg, reply_route, SessionKey::ephemeral("stale-clarify-test"));
+
+        assert!(
+            router.try_intercept_hitl(&ctx).await,
+            "a clarify callback is always consumed, even when nothing is pending"
+        );
     }
 
     /// H1 — a zero-config (no route bindings) group message must resolve to a

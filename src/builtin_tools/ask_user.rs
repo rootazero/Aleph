@@ -23,7 +23,7 @@ use crate::clarification::{
     ClarificationResultType, DEFAULT_CLARIFY_TIMEOUT,
 };
 use crate::error::{AlephError, Result};
-use crate::gateway::channel::{ChannelId, OutboundMessage};
+use crate::gateway::channel::{ChannelId, InlineButton, InlineKeyboard, OutboundMessage};
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::sync_primitives::Arc;
 use crate::tools::turn_context::current_turn_context;
@@ -67,6 +67,22 @@ impl AskUserChoice {
             Self::Simple(_) => None,
             Self::Detailed { description, .. } => Some(description),
         }
+    }
+}
+
+/// Render a compact button label `"<n>. <label>"`, truncated so a long choice
+/// doesn't bloat the keyboard — the full text is always listed in the message
+/// body, so the button only needs to be tappable, not complete.
+fn button_label(index: usize, label: &str) -> String {
+    /// Max button label length (chars) before truncation.
+    const MAX_LABEL_CHARS: usize = 32;
+
+    let text = format!("{index}. {label}");
+    if text.chars().count() > MAX_LABEL_CHARS {
+        let truncated: String = text.chars().take(MAX_LABEL_CHARS - 1).collect();
+        format!("{truncated}…")
+    } else {
+        text
     }
 }
 
@@ -124,46 +140,86 @@ impl AskUserTool {
         }
     }
 
-    /// Build the clarification request and the channel-rendered prompt.
+    /// Build the clarification request, the channel-rendered prompt, and an
+    /// optional inline keyboard mirroring the choices.
+    ///
+    /// The keyboard is the clarification twin of the approval `approve:`
+    /// keyboard ([`crate::exec::ApprovalBridge`]): each choice becomes a button
+    /// whose `callback_data` is `clarify:<1-based index>`, re-injected through
+    /// the normal pipeline and resolved by the inbound router's HITL
+    /// interception. The numbered text menu is always rendered too, so channels
+    /// without inline-keyboard support degrade gracefully to a typed reply.
     fn build_request(
         request_id: &str,
         question: &str,
         choices: &[AskUserChoice],
-    ) -> (ClarificationRequest, String) {
+    ) -> (ClarificationRequest, String, Option<InlineKeyboard>) {
         if choices.is_empty() {
-            (
+            return (
                 ClarificationRequest::text(request_id, question, None),
                 format!("❓ {question}\n\nReply with your answer."),
-            )
-        } else {
-            let options: Vec<ClarificationOption> = choices
-                .iter()
-                .map(|c| {
-                    let opt = ClarificationOption::new(c.label(), c.label());
-                    match c.description() {
-                        Some(desc) => opt.with_description(desc),
-                        None => opt,
-                    }
-                })
-                .collect();
-            let mut menu = String::new();
-            for (i, choice) in choices.iter().enumerate() {
-                match choice
-                    .description()
-                    .map(str::trim)
-                    .filter(|d| !d.is_empty())
-                {
-                    Some(desc) => {
-                        menu.push_str(&format!("{}. {} — {desc}\n", i + 1, choice.label()));
-                    }
-                    None => menu.push_str(&format!("{}. {}\n", i + 1, choice.label())),
-                }
-            }
-            (
-                ClarificationRequest::select(request_id, question, options),
-                format!("❓ {question}\n\n{menu}\nReply with the number or your answer."),
-            )
+                None,
+            );
         }
+        let options: Vec<ClarificationOption> = choices
+            .iter()
+            .map(|c| {
+                let opt = ClarificationOption::new(c.label(), c.label());
+                match c.description() {
+                    Some(desc) => opt.with_description(desc),
+                    None => opt,
+                }
+            })
+            .collect();
+        let mut menu = String::new();
+        for (i, choice) in choices.iter().enumerate() {
+            match choice
+                .description()
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+            {
+                Some(desc) => {
+                    menu.push_str(&format!("{}. {} — {desc}\n", i + 1, choice.label()));
+                }
+                None => menu.push_str(&format!("{}. {}\n", i + 1, choice.label())),
+            }
+        }
+        (
+            ClarificationRequest::select(request_id, question, options),
+            format!("❓ {question}\n\n{menu}\nReply with the number or your answer."),
+            Self::build_choice_keyboard(choices),
+        )
+    }
+
+    /// Build an inline keyboard for `choices`, two buttons per row.
+    ///
+    /// Returns `None` when there are too many choices to render compactly — the
+    /// numbered text body always lists every choice, so a long list simply
+    /// falls back to typed selection and the keyboard payload stays well under
+    /// the channel's per-message limits.
+    fn build_choice_keyboard(choices: &[AskUserChoice]) -> Option<InlineKeyboard> {
+        /// Max choices rendered as buttons; beyond this the menu is text-only.
+        const MAX_CHOICE_BUTTONS: usize = 12;
+
+        if choices.is_empty() || choices.len() > MAX_CHOICE_BUTTONS {
+            return None;
+        }
+        let buttons: Vec<InlineButton> = choices
+            .iter()
+            .enumerate()
+            .map(|(i, c)| InlineButton {
+                text: button_label(i + 1, c.label()),
+                // 1-based index; the router strips `clarify:` and resolves the
+                // pending clarification with the bare number (see
+                // `try_intercept_hitl`).
+                callback_data: format!("clarify:{}", i + 1),
+            })
+            .collect();
+        let mut keyboard = InlineKeyboard::new();
+        for chunk in buttons.chunks(2) {
+            keyboard.rows.push(chunk.to_vec());
+        }
+        Some(keyboard)
     }
 
     /// Map a resolved [`ClarificationResult`] onto the tool output.
@@ -233,7 +289,8 @@ impl AlephTool for AskUserTool {
         let session_key = turn.session_key.to_string();
 
         let request_id = uuid::Uuid::new_v4().to_string();
-        let (request, rendered) = Self::build_request(&request_id, question, &args.choices);
+        let (request, rendered, keyboard) =
+            Self::build_request(&request_id, question, &args.choices);
 
         // Register BEFORE delivery so a reply arriving immediately is not lost.
         let rx = self
@@ -241,8 +298,11 @@ impl AlephTool for AskUserTool {
             .register(session_key.clone(), request, DEFAULT_CLARIFY_TIMEOUT)
             .await;
 
-        // Deliver the question to the originating channel.
-        let message = OutboundMessage::text(turn.conversation_id.clone(), rendered);
+        // Deliver the question to the originating channel. Channels that render
+        // inline keyboards (e.g. Telegram) show tappable choice buttons; the
+        // rest fall back to the numbered text menu.
+        let mut message = OutboundMessage::text(turn.conversation_id.clone(), rendered);
+        message.inline_keyboard = keyboard;
         if let Err(e) = self
             .channels
             .send(&ChannelId::new(&turn.channel_id), message)
@@ -369,11 +429,13 @@ mod tests {
 
     #[test]
     fn build_request_text_vs_select() {
-        let (text_req, text_prompt) = AskUserTool::build_request("id-1", "Pick?", &[]);
+        let (text_req, text_prompt, text_kb) = AskUserTool::build_request("id-1", "Pick?", &[]);
         assert!(text_req.options.is_none());
         assert!(text_prompt.contains("Reply with your answer"));
+        // No choices → open-ended → no keyboard (mirrors hermes' open-ended path).
+        assert!(text_kb.is_none());
 
-        let (select_req, select_prompt) = AskUserTool::build_request(
+        let (select_req, select_prompt, select_kb) = AskUserTool::build_request(
             "id-2",
             "Pick?",
             &[
@@ -384,11 +446,20 @@ mod tests {
         assert_eq!(select_req.options.as_ref().map(|o| o.len()), Some(2));
         assert!(select_prompt.contains("1. alpha"));
         assert!(select_prompt.contains("2. beta"));
+        // Two choices → an inline keyboard with one `clarify:<idx>` button each.
+        let kb = select_kb.expect("choices must produce a keyboard");
+        let datas: Vec<&str> = kb
+            .rows
+            .iter()
+            .flatten()
+            .map(|b| b.callback_data.as_str())
+            .collect();
+        assert_eq!(datas, vec!["clarify:1", "clarify:2"]);
     }
 
     #[test]
     fn build_request_detailed_choice_renders_and_wires_description() {
-        let (req, prompt) = AskUserTool::build_request(
+        let (req, prompt, _kb) = AskUserTool::build_request(
             "id-3",
             "Strategy?",
             &[
@@ -407,6 +478,33 @@ mod tests {
         // Rendered menu surfaces the description with an em dash separator.
         assert!(prompt.contains("1. in-place — brief downtime"));
         assert!(prompt.contains("2. blue-green\n"));
+    }
+
+    #[test]
+    fn keyboard_caps_long_choice_lists_to_text_only() {
+        // Beyond MAX_CHOICE_BUTTONS the keyboard is suppressed (text menu still
+        // lists every choice), keeping the callback payload bounded.
+        let many: Vec<AskUserChoice> = (0..20)
+            .map(|i| AskUserChoice::Simple(format!("opt{i}")))
+            .collect();
+        let kb = AskUserTool::build_choice_keyboard(&many);
+        assert!(kb.is_none(), "oversized choice lists must not render buttons");
+
+        // At the cap boundary the keyboard is still rendered.
+        let twelve: Vec<AskUserChoice> = (0..12)
+            .map(|i| AskUserChoice::Simple(format!("opt{i}")))
+            .collect();
+        let kb = AskUserTool::build_choice_keyboard(&twelve).expect("12 choices render");
+        assert_eq!(kb.rows.iter().flatten().count(), 12);
+    }
+
+    #[test]
+    fn button_label_truncates_long_choice() {
+        let short = button_label(1, "staging");
+        assert_eq!(short, "1. staging");
+        let long = button_label(2, &"x".repeat(80));
+        assert!(long.chars().count() <= 32, "label too long: {long}");
+        assert!(long.ends_with('…'));
     }
 
     #[test]

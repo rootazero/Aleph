@@ -28,6 +28,25 @@ use super::{
     MAX_OVERLOAD_RETRY_DELAY, MAX_RETRY_DELAY,
 };
 
+/// Cost-routing sort key for a model with no static rate card.
+///
+/// A missing rate card means the price is *unknown*, not necessarily zero. Only
+/// on-machine / local-network endpoints are genuinely free, so those keep `0`
+/// (sorted first under [`CostAware`](LoadBalanceStrategy::CostAware)). An
+/// unpriced [`Cloud`](EndpointTier::Cloud) endpoint — a new or typo'd model
+/// absent from the table — is unknown-cost: ranking it as "free" would let it
+/// win over a model whose price we can confirm, so it sorts *last*
+/// ([`u64::MAX`]). The [`Unknown`](EndpointTier::Unknown) tier (an unresolved
+/// `base_url`) is treated conservatively as cloud for the same reason. Unpriced
+/// candidates are never dropped — `MAX` only deprioritises them within the
+/// fresh group, so the chain can still fall back to them.
+const fn unpriced_cost(tier: EndpointTier) -> u64 {
+    match tier {
+        EndpointTier::Local => 0,
+        EndpointTier::Cloud | EndpointTier::Unknown => u64::MAX,
+    }
+}
+
 /// An `AiProvider` that fails over across an ordered provider/model chain.
 pub struct FailoverProvider {
     /// Live primary slot. `current()` is read on every call so a UI
@@ -260,24 +279,31 @@ impl FailoverProvider {
     /// finally wires Aleph's shipped price card into route ordering (it had only
     /// ever fed post-hoc cost *estimation* before).
     ///
-    /// Returns `0` when the provider's first model is unknown or unpriced:
-    /// on-machine / self-hosted endpoints carry no rate card, so cost routing
-    /// treats them as effectively free and sorts them first. Stays prompt-blind
-    /// (R7) — price is a static `(provider, model)` fact, never the message.
-    fn price_hint(&self, provider: &str) -> u64 {
+    /// When the provider's first model carries no rate card the price is
+    /// *unknown*, and the candidate's [`EndpointTier`] decides how to rank it
+    /// (see [`unpriced_cost`]): a [`Local`](EndpointTier::Local) endpoint is
+    /// genuinely free (`0`, sorts first), but an unpriced [`Cloud`] or
+    /// [`Unknown`](EndpointTier::Unknown) endpoint is unknown-cost — cost routing
+    /// must not assume it is free, so it sorts *last* rather than ahead of a
+    /// model whose price we can actually confirm. Stays prompt-blind (R7) —
+    /// price and tier are static `(provider, model)` / `base_url` facts, never
+    /// the message.
+    ///
+    /// [`Cloud`]: EndpointTier::Cloud
+    fn price_hint(&self, provider: &str, tier: EndpointTier) -> u64 {
         let Some(model) = self
             .model_catalog
             .get(provider)
             .and_then(|models| models.first())
         else {
-            return 0;
+            return unpriced_cost(tier);
         };
         match crate::pricing::rate_card(provider, model) {
             Some(card) => {
                 let usd = card.input_per_mtok.unwrap_or(0.0) + card.output_per_mtok.unwrap_or(0.0);
                 (usd * 1000.0).round() as u64
             }
-            None => 0,
+            None => unpriced_cost(tier),
         }
     }
 
@@ -375,6 +401,15 @@ impl FailoverProvider {
                 // One rotation tick per request drives RoundRobin; the sort
                 // strategies ignore it.
                 let rr_base = load.next_round_robin();
+                // Provider → endpoint tier, captured before `fallbacks` is moved
+                // into the ordering call. Cost routing needs each candidate's
+                // tier to rank an *unpriced* model (free local vs unknown-cost
+                // cloud — see `unpriced_cost`); the metric closure only receives
+                // the provider name, so the tier rides in via this map.
+                let tier_by_name: HashMap<String, EndpointTier> = fallbacks
+                    .iter()
+                    .map(|n| (n.name.clone(), n.tier))
+                    .collect();
                 order_candidates_balanced(
                     fallbacks,
                     mode,
@@ -395,9 +430,16 @@ impl FailoverProvider {
                         m.utilization_permille = util;
                         m.over_limit = over;
                         // Price lookup only when it is the active sort key —
-                        // every other strategy ignores `price_per_mtok`.
+                        // every other strategy ignores `price_per_mtok`. The
+                        // tier disambiguates an unpriced model (free local vs
+                        // unknown-cost cloud); an unmapped name falls back to
+                        // `Unknown` (treated as cloud — never assumed free).
                         if strategy == LoadBalanceStrategy::CostAware {
-                            m.price_per_mtok = self.price_hint(name);
+                            let tier = tier_by_name
+                                .get(name)
+                                .copied()
+                                .unwrap_or(EndpointTier::Unknown);
+                            m.price_per_mtok = self.price_hint(name, tier);
                         }
                         m
                     },
@@ -799,5 +841,30 @@ impl AiProvider for FailoverProvider {
             .current()
             .behavior_hint()
             .map(|c| Cow::Owned(c.into_owned()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{unpriced_cost, EndpointTier};
+
+    #[test]
+    fn unpriced_local_is_free_and_sorts_first() {
+        // A local / self-hosted model with no rate card is genuinely free.
+        assert_eq!(unpriced_cost(EndpointTier::Local), 0);
+    }
+
+    #[test]
+    fn unpriced_cloud_is_unknown_cost_and_sorts_last() {
+        // An unpriced cloud model has *unknown* cost, not zero — it must never
+        // out-rank a model whose price we can confirm, so it sorts last.
+        assert_eq!(unpriced_cost(EndpointTier::Cloud), u64::MAX);
+    }
+
+    #[test]
+    fn unpriced_unknown_tier_is_treated_as_cloud() {
+        // An unresolved base_url is treated conservatively as cloud — never
+        // assumed free under cost routing.
+        assert_eq!(unpriced_cost(EndpointTier::Unknown), u64::MAX);
     }
 }
