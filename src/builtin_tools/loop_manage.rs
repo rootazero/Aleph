@@ -100,6 +100,19 @@ fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+/// Reject a zero safety cap at the system boundary (P7). A `max_iterations` or
+/// `timeout_minutes` of 0 would create a loop that the continuation hook marks
+/// exhausted on its very first check — "born dead" — and reports a confusing
+/// "reached the cap (0 ticks)". Omit the field for "no cap"; never pass 0.
+fn reject_zero_cap(value: Option<u32>, field: &str) -> std::result::Result<(), String> {
+    if value == Some(0) {
+        return Err(format!(
+            "{field} must be at least 1 (omit it for no cap, do not pass 0)"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct LoopTool {
     registry: Arc<LoopRegistry>,
@@ -178,6 +191,9 @@ impl LoopTool {
             .prompt
             .filter(|p| !p.trim().is_empty())
             .ok_or_else(|| "start requires a non-empty prompt".to_string())?;
+        // Reject "born dead" zero caps at the boundary before building state.
+        reject_zero_cap(args.max_iterations, "max_iterations")?;
+        reject_zero_cap(args.timeout_minutes, "timeout_minutes")?;
         let cadence = match &args.interval {
             Some(i) => Cadence::Fixed {
                 interval_ms: parse_interval_ms(i)?,
@@ -286,6 +302,9 @@ impl LoopTool {
                 },
             });
         }
+        // Reject "born dead" zero caps at the boundary (same guard as `start`).
+        reject_zero_cap(args.max_iterations, "max_iterations")?;
+        reject_zero_cap(args.timeout_minutes, "timeout_minutes")?;
         // Re-pace a Fixed loop (or convert model-paced → fixed) without a
         // stop/start cycle. `with_cadence` clears any stale next_wake.
         if let Some(i) = &args.interval {
@@ -294,6 +313,20 @@ impl LoopTool {
             });
         }
         if let Some(nw) = &args.next_wake {
+            // `next_wake` only paces a model-paced loop — `tick_delay_ms` ignores
+            // it for Fixed cadence. Storing it on a Fixed loop would silently do
+            // nothing while reporting "Loop updated" (the misleading no-op the
+            // 2026-06-17 honesty pass set out to kill). Reject and guide instead.
+            if !matches!(state.cadence, Cadence::ModelPaced { .. }) {
+                return Ok(LoopOutput {
+                    success: false,
+                    message: "next_wake only re-paces a model-paced loop; this loop \
+                         runs on a fixed cadence. Pass `interval` (e.g. '10m') to \
+                         change a fixed loop's pace, or start a model-paced loop \
+                         (omit `interval` on start)."
+                        .to_string(),
+                });
+            }
             let delta = parse_interval_ms(nw)?;
             state = state.with_next_wake_ms(Some(now_ms().saturating_add(delta)));
         }
@@ -546,6 +579,61 @@ mod tests {
                 interval_ms: 600_000
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn update_next_wake_on_fixed_loop_is_rejected_honestly() {
+        // Setting next_wake on a Fixed-cadence loop is a silent no-op
+        // (tick_delay_ms ignores it). The tool must refuse rather than claim
+        // success and store dead state.
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        reg.put(crate::looping::LoopState::new(
+            "s",
+            "p",
+            crate::looping::Cadence::Fixed {
+                interval_ms: 300_000,
+            },
+            0,
+        ));
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
+        let out = tool
+            .run(LoopArgs {
+                action: LoopAction::Update,
+                interval: None,
+                prompt: None,
+                max_iterations: None,
+                timeout_minutes: None,
+                token_budget: None,
+                next_wake: Some("8m".to_string()),
+            })
+            .await
+            .unwrap();
+        assert!(!out.success, "next_wake on a fixed loop must not succeed");
+        assert!(out.message.contains("interval"), "{}", out.message);
+        // State untouched: no next_wake stored.
+        assert!(reg.get("s").unwrap().next_wake_ms.is_none());
+    }
+
+    #[tokio::test]
+    async fn start_rejects_zero_caps() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
+        for (max_it, timeout) in [(Some(0), None), (None, Some(0))] {
+            let res = tool
+                .run(LoopArgs {
+                    action: LoopAction::Start,
+                    interval: Some("5m".to_string()),
+                    prompt: Some("p".to_string()),
+                    max_iterations: max_it,
+                    timeout_minutes: timeout,
+                    token_budget: None,
+                    next_wake: None,
+                })
+                .await;
+            assert!(res.is_err(), "zero cap must be rejected");
+        }
+        // No "born dead" loop was registered.
+        assert!(reg.get("s").is_none());
     }
 
     #[tokio::test]
