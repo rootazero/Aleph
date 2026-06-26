@@ -19,11 +19,47 @@ pub const fn estimate_tokens(chars: usize) -> usize {
     chars / CHARS_PER_TOKEN_ESTIMATE
 }
 
+/// Fraction of the model's usable context window allotted to the assembled
+/// system prompt before clamping. `0.10` keeps a 200k-token window at the
+/// historical 80k-char ceiling (`200_000 * 0.10 * 4 = 80_000`) while letting a
+/// 1M-token window scale up proportionally instead of staying artificially
+/// capped. Mirrors the history-side model-awareness in
+/// `orchestrator::deps_builder` (feature 2.2) on the prompt side.
+pub const PROMPT_WINDOW_FRACTION: f64 = 0.10;
+
+/// Legacy fixed system-prompt character cap. Now doubles as the *floor* for the
+/// model-aware budget: scaling the cap to the window only ever widens it for
+/// large windows, never tightens it below what the fixed default already
+/// allowed (so small/unknown-window models behave exactly as before).
+pub const DEFAULT_PROMPT_CHARS: usize = 80_000;
+
+/// Hard ceiling (~120k tokens) for the model-aware system-prompt budget, so a
+/// mis-declared or enormous window can never let the prompt grow unbounded.
+pub const MAX_PROMPT_CHARS: usize = 480_000;
+
+/// Scale a character budget to a model context window: take `fraction` of the
+/// window (in tokens), widen tokens→chars via [`CHARS_PER_TOKEN_ESTIMATE`],
+/// then clamp into `[floor, ceil]`. Single source of the "size a char cap to
+/// the window" math shared by the system-prompt budget
+/// ([`TokenBudget::from_context_window`]) and the identity / extra-file caps,
+/// so the three stay consistent. `floor` pins each legacy fixed cap as a lower
+/// bound and must not exceed `ceil` (callers pass compile-time constants that
+/// satisfy this).
+#[must_use]
+pub fn window_char_budget(window_tokens: u64, fraction: f64, floor: usize, ceil: usize) -> usize {
+    // Lossy cast is intentional: a window beyond usize::MAX is implausible and
+    // the subsequent clamp keeps the result bounded regardless.
+    let scaled = (window_tokens as f64 * fraction) as usize;
+    scaled
+        .saturating_mul(CHARS_PER_TOKEN_ESTIMATE)
+        .clamp(floor, ceil)
+}
+
 /// Budget configuration for system prompt assembly.
 #[derive(Debug, Clone)]
 pub struct TokenBudget {
     /// Maximum total characters for assembled system prompt.
-    /// Default: `80_000` (~20K tokens).
+    /// Default: [`DEFAULT_PROMPT_CHARS`] (~20K tokens).
     pub max_total_chars: usize,
     /// Warning mode for truncation events.
     pub truncation_warning: TruncationWarning,
@@ -32,8 +68,32 @@ pub struct TokenBudget {
 impl Default for TokenBudget {
     fn default() -> Self {
         Self {
-            max_total_chars: 80_000,
+            max_total_chars: DEFAULT_PROMPT_CHARS,
             truncation_warning: TruncationWarning::default(),
+        }
+    }
+}
+
+impl TokenBudget {
+    /// Derive a system-prompt character budget from the model's usable context
+    /// window (tokens), instead of the fixed [`DEFAULT_PROMPT_CHARS`]. A
+    /// 200k-window model lands on the historical 80k-char ceiling; a 1M-window
+    /// model gets proportionally more headroom before the dynamic suffix is
+    /// trimmed. Clamped to `[DEFAULT_PROMPT_CHARS, MAX_PROMPT_CHARS]`.
+    ///
+    /// Pairs with `ContextBudgetConfig` (the history-side budget, feature 2.2):
+    /// both size off the same chain-minimum window so the prompt and history
+    /// views of "how much room is there" agree.
+    #[must_use]
+    pub fn from_context_window(window_tokens: u64) -> Self {
+        Self {
+            max_total_chars: window_char_budget(
+                window_tokens,
+                PROMPT_WINDOW_FRACTION,
+                DEFAULT_PROMPT_CHARS,
+                MAX_PROMPT_CHARS,
+            ),
+            ..Self::default()
         }
     }
 }
@@ -287,6 +347,54 @@ mod tests {
         let b = TokenBudget::default();
         assert_eq!(b.max_total_chars, 80_000);
         assert_eq!(b.truncation_warning, TruncationWarning::Once);
+    }
+
+    #[test]
+    fn window_budget_matches_legacy_at_200k() {
+        // 200k window * 0.10 * 4 == 80_000 == the historical fixed cap, so the
+        // common mid-window model is byte-identical to the old behaviour.
+        assert_eq!(
+            TokenBudget::from_context_window(200_000).max_total_chars,
+            DEFAULT_PROMPT_CHARS
+        );
+    }
+
+    #[test]
+    fn window_budget_widens_for_large_windows() {
+        // 1M window scales up proportionally (968k usable would too).
+        assert_eq!(
+            TokenBudget::from_context_window(1_000_000).max_total_chars,
+            400_000
+        );
+    }
+
+    #[test]
+    fn window_budget_floors_small_windows_at_legacy() {
+        // A tiny / mis-declared window never drops below the legacy fixed cap.
+        assert_eq!(
+            TokenBudget::from_context_window(8_000).max_total_chars,
+            DEFAULT_PROMPT_CHARS
+        );
+        assert_eq!(
+            TokenBudget::from_context_window(0).max_total_chars,
+            DEFAULT_PROMPT_CHARS
+        );
+    }
+
+    #[test]
+    fn window_budget_ceils_enormous_windows() {
+        // Beyond ~1.2M tokens the budget saturates at the hard ceiling.
+        assert_eq!(
+            TokenBudget::from_context_window(10_000_000).max_total_chars,
+            MAX_PROMPT_CHARS
+        );
+    }
+
+    #[test]
+    fn window_char_budget_clamps_both_ends() {
+        assert_eq!(window_char_budget(1_000, 0.10, 5_000, 50_000), 5_000);
+        assert_eq!(window_char_budget(1_000_000, 0.10, 5_000, 50_000), 50_000);
+        assert_eq!(window_char_budget(50_000, 0.10, 5_000, 50_000), 20_000);
     }
 
     #[test]

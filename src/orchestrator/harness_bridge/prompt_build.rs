@@ -55,8 +55,9 @@ impl AgentHarnessRunner {
     /// override) when present, else the daemon's working directory. Missing,
     /// unreadable, or blank files are skipped with a debug log so a stale
     /// config entry never blocks prompt assembly (P7 graceful degradation).
-    /// Caps mirror `IdentityFilesConfig` (20k chars/file, 100k total) so a
-    /// runaway file cannot blow the context budget. Returns `None` when the
+    /// Caps mirror `IdentityFilesConfig::for_context_window` (window-scaled,
+    /// floored at 20k chars/file & 100k total) so a runaway file cannot blow the
+    /// context budget. Returns `None` when the
     /// section is absent, disabled, or yields no content.
     pub(crate) fn load_prompt_extra_files(
         &self,
@@ -64,8 +65,18 @@ impl AgentHarnessRunner {
     ) -> Option<Vec<crate::thinker::prompt_layer::ExtraPromptFile>> {
         use crate::thinker::prompt_layer::ExtraPromptFile;
 
-        const PER_FILE_MAX_CHARS: usize = 20_000;
-        const TOTAL_MAX_CHARS: usize = 100_000;
+        // Caps scale with the model window (mirrors `IdentityFilesConfig::
+        // for_context_window`); no `[context_budget]` → legacy 20k/100k floors.
+        let (per_file_max_chars, total_max_chars) = self
+            .context_budget_config
+            .as_ref()
+            .map_or((20_000usize, 100_000usize), |cb| {
+                use crate::thinker::prompt_budget::window_char_budget;
+                (
+                    window_char_budget(cb.token_budget, 0.025, 20_000, 120_000),
+                    window_char_budget(cb.token_budget, 0.10, 100_000, 480_000),
+                )
+            });
 
         let cfg = self.prompt_extra_files.as_ref()?;
         if !cfg.enabled || cfg.paths.is_empty() {
@@ -75,7 +86,7 @@ impl AgentHarnessRunner {
         let mut out = Vec::new();
         let mut total = 0usize;
         for raw in &cfg.paths {
-            if total >= TOTAL_MAX_CHARS {
+            if total >= total_max_chars {
                 tracing::warn!(
                     path = %raw,
                     "[prompt.extra_files] total budget exhausted; skipping remaining files"
@@ -105,7 +116,7 @@ impl AgentHarnessRunner {
             if content.trim().is_empty() {
                 continue;
             }
-            let budget = PER_FILE_MAX_CHARS.min(TOTAL_MAX_CHARS - total);
+            let budget = per_file_max_chars.min(total_max_chars - total);
             let capped = truncate_chars(&content, budget);
             total += capped.chars().count();
             out.push(ExtraPromptFile {
@@ -204,10 +215,21 @@ impl AgentHarnessRunner {
         // that read the same source) usable content on the harness path.
         // Tolerant of missing home / dir / IO failure: returns IdentityFiles
         // with all-None content, which the layer treats as "skip".
+        // Identity-file caps scale with the model window (feature 1.3), same
+        // window source as the prompt budget below; no `[context_budget]`
+        // configured → ::default() (legacy 20k/100k, byte-identical).
+        let identity_cfg = self.context_budget_config.as_ref().map_or_else(
+            crate::thinker::identity_files::IdentityFilesConfig::default,
+            |cfg| {
+                crate::thinker::identity_files::IdentityFilesConfig::for_context_window(
+                    cfg.token_budget,
+                )
+            },
+        );
         let identity_files = crate::discovery::aleph_agents_dir().ok().map(|agents_dir| {
             crate::thinker::identity_files::IdentityFiles::load(
                 &agents_dir.join(agent_id),
-                &crate::thinker::identity_files::IdentityFilesConfig::default(),
+                &identity_cfg,
             )
         });
         let has_identity = identity_files
@@ -295,12 +317,24 @@ impl AgentHarnessRunner {
         // `{reasoning, action}` JSON envelope — both of which contradict the
         // native-tool-use API the harness actually drives. Force the flag on
         // here so the assembled prompt matches the runtime contract.
+        // Model-aware system-prompt budget (feature 1.2): when a context budget
+        // is configured, size the prompt char cap off the same chain-minimum
+        // window the history side uses (feature 2.2), so large-window models
+        // stop being capped at the fixed 80k default. No `[context_budget]`
+        // configured → legacy fixed default (byte-identical).
+        let token_budget = self.context_budget_config.as_ref().map_or_else(
+            crate::thinker::prompt_budget::TokenBudget::default,
+            |cfg| {
+                crate::thinker::prompt_budget::TokenBudget::from_context_window(cfg.token_budget)
+            },
+        );
         let mut builder = PromptBuilder::new(PromptConfig {
             native_tools_enabled: true,
             eligible_skills,
             skill_prompt_budget,
             mcp_instructions,
             runtime_capabilities,
+            token_budget,
             ..PromptConfig::default()
         });
         let role_present = agent_def.is_some();
