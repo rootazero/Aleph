@@ -37,6 +37,7 @@ pub fn bluebubbles_capabilities() -> ChannelCapabilities {
 /// iMessage channel backed by a BlueBubbles server.
 pub struct BlueBubblesChannel {
     info: ChannelInfo,
+    #[allow(dead_code)] // Read from Tasks 7/11 (api build from server_url/password; webhook lifecycle)
     config: BlueBubblesConfig,
     channel_state: ChannelState,
 }
