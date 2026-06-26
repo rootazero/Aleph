@@ -41,6 +41,7 @@ use crate::platform::phone::settings::connection::PhoneConnection;
 use crate::platform::phone::settings::model_route::PhoneModelRoute;
 use crate::platform::phone::settings::embeddings::PhoneEmbeddings;
 use crate::platform::phone::settings::providers::PhoneProviders;
+use crate::platform::phone::chat::PhoneChat;
 use crate::state::sessions::SessionMap;
 use crate::state::viewport::{FormFactor, FormFactorState};
 use crate::views::chat::ChatState;
@@ -382,10 +383,15 @@ fn ChatBandChrome() -> impl IntoView {
 fn MainContent() -> impl IntoView {
     let location = use_location();
     let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
+    let form_factor = expect_context::<FormFactorState>();
 
     view! {
         <div style:display=move || if mode.get() == PanelMode::Chat { "contents" } else { "none" }>
-            <ChatView />
+            {move || if form_factor.form_factor.get() == FormFactor::Phone {
+                view! { <PhoneChat /> }.into_any()
+            } else {
+                view! { <ChatView /> }.into_any()
+            }}
         </div>
         <div style:display=move || if mode.get() == PanelMode::Dashboard { "contents" } else { "none" }>
             <DashboardRouter />

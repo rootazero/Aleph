@@ -3,7 +3,9 @@
 //! scroll body + bottom tab bar) and the tab bar itself. `h-dvh` (not inset-0)
 //! keeps the tab bar above the mobile browser's bottom toolbar.
 
+use crate::components::mode_sidebar::PanelMode;
 use leptos::prelude::*;
+use leptos_router::hooks::use_location;
 use leptos_router::hooks::use_navigate;
 use leptos_router::NavigateOptions;
 
@@ -17,21 +19,23 @@ pub fn PhoneTabBar() -> impl IntoView {
         let navigate = navigate.clone();
         move |_| navigate(path, NavigateOptions::default())
     };
+    let location = use_location();
+    let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
     view! {
         <div class="tabbar glass" style="flex:none;">
-            <button class="tabitem" on:click=go("/")>
+            <button class="tabitem" class:tabitem-active=move || mode.get() == PanelMode::Chat on:click=go("/")>
                 <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 8.7 8.7 0 0 1-4-1L3 20l1-5.5a8.4 8.4 0 0 1-1-4A8.4 8.4 0 0 1 11.5 2 8.4 8.4 0 0 1 21 11.5z"></path></svg>
                 "Chat"
             </button>
-            <button class="tabitem" on:click=go("/memory")>
+            <button class="tabitem" class:tabitem-active=move || mode.get() == PanelMode::Memory on:click=go("/memory")>
                 <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="7" r="2.4"></circle><circle cx="18" cy="8" r="2.4"></circle><circle cx="11" cy="17" r="2.4"></circle><path d="M8 8.4l1.5 6.4M15.8 9.6L12.6 15.6"></path></svg>
                 "Memory"
             </button>
-            <button class="tabitem" on:click=go("/agents")>
+            <button class="tabitem" class:tabitem-active=move || mode.get() == PanelMode::Agents on:click=go("/agents")>
                 <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M5 21a7 7 0 0 1 14 0"></path></svg>
                 "Agents"
             </button>
-            <button class="tabitem tabitem-active" on:click=go("/settings")>
+            <button class="tabitem" class:tabitem-active=move || mode.get() == PanelMode::Settings on:click=go("/settings")>
                 <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 6.6 19l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 4 13.6H4a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 5 6.6l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10.4 4V4a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 17 5l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"></path></svg>
                 "Settings"
             </button>

@@ -103,7 +103,7 @@ pub(super) fn ChatHero() -> impl IntoView {
 /// appears so they can opt in.
 #[component]
 #[must_use]
-pub(super) fn MessageList() -> impl IntoView {
+pub(crate) fn MessageList() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
     let sessions = expect_context::<SessionMap>();
