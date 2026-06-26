@@ -34,7 +34,11 @@ pub(crate) struct SessionRow {
 
 /// Sort newest-first by `updated_at`; rows with no timestamp sink to the bottom.
 pub(crate) fn sort_sessions_desc(mut rows: Vec<SessionRow>) -> Vec<SessionRow> {
-    rows.sort_by(|a, b| b.updated_at.unwrap_or(i64::MIN).cmp(&a.updated_at.unwrap_or(i64::MIN)));
+    rows.sort_by(|a, b| {
+        b.updated_at
+            .unwrap_or(i64::MIN)
+            .cmp(&a.updated_at.unwrap_or(i64::MIN))
+    });
     rows
 }
 
@@ -110,7 +114,12 @@ pub fn PhoneChatList() -> impl IntoView {
         chat.agent_id.set(Some(row.agent_id.clone()));
         chat.session_key.set(Some(row.key.clone()));
         chat.active_project_root.set(row.project_root.clone());
-        spawn_local(hydrate_session_history(dash, chat, Some(workspace), row.key.clone()));
+        spawn_local(hydrate_session_history(
+            dash,
+            chat,
+            Some(workspace),
+            row.key.clone(),
+        ));
         navigate("/chat", NavigateOptions::default());
     };
 
@@ -210,9 +219,30 @@ mod tests {
     #[test]
     fn sorts_newest_first_none_last() {
         let rows = vec![
-            SessionRow { key: "old".into(), agent_id: String::new(), topic: None, message_count: 0, updated_at: Some(100), project_root: None },
-            SessionRow { key: "none".into(), agent_id: String::new(), topic: None, message_count: 0, updated_at: None, project_root: None },
-            SessionRow { key: "new".into(), agent_id: String::new(), topic: None, message_count: 0, updated_at: Some(200), project_root: None },
+            SessionRow {
+                key: "old".into(),
+                agent_id: String::new(),
+                topic: None,
+                message_count: 0,
+                updated_at: Some(100),
+                project_root: None,
+            },
+            SessionRow {
+                key: "none".into(),
+                agent_id: String::new(),
+                topic: None,
+                message_count: 0,
+                updated_at: None,
+                project_root: None,
+            },
+            SessionRow {
+                key: "new".into(),
+                agent_id: String::new(),
+                topic: None,
+                message_count: 0,
+                updated_at: Some(200),
+                project_root: None,
+            },
         ];
         let sorted = sort_sessions_desc(rows);
         let keys: Vec<&str> = sorted.iter().map(|r| r.key.as_str()).collect();

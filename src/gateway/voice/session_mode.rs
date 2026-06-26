@@ -88,7 +88,11 @@ mod tests {
     fn transcribed_flag_is_carried() {
         let key = "voice-session-transcribed";
         set(key, true, true);
-        assert_eq!(get(key), Some(true), "transcribed input must survive the wire");
+        assert_eq!(
+            get(key),
+            Some(true),
+            "transcribed input must survive the wire"
+        );
         set(key, false, false);
     }
 

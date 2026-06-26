@@ -1368,8 +1368,14 @@ mod tests {
         let usable = DEFAULT_CONTEXT_TOKEN_BUDGET - DEFAULT_OUTPUT_RESERVE;
         assert_eq!(window_aware_fresh_tail(usable), FRESH_TAIL_BASE_COUNT);
         // The anchor itself (and anything below it) also floors to the base.
-        assert_eq!(window_aware_fresh_tail(FRESH_TAIL_ANCHOR_BUDGET), FRESH_TAIL_BASE_COUNT);
-        assert_eq!(window_aware_fresh_tail(MIN_USABLE_BUDGET), FRESH_TAIL_BASE_COUNT);
+        assert_eq!(
+            window_aware_fresh_tail(FRESH_TAIL_ANCHOR_BUDGET),
+            FRESH_TAIL_BASE_COUNT
+        );
+        assert_eq!(
+            window_aware_fresh_tail(MIN_USABLE_BUDGET),
+            FRESH_TAIL_BASE_COUNT
+        );
     }
 
     #[test]

@@ -104,7 +104,8 @@ mod tests {
 
     /// Encode a solid-colour test image to the given format's bytes.
     fn make_image(w: u32, h: u32, fmt: ImageFormat) -> Vec<u8> {
-        let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(w, h, image::Rgba([10, 20, 30, 255])));
+        let img =
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(w, h, image::Rgba([10, 20, 30, 255])));
         let mut buf = Vec::new();
         img.write_to(&mut Cursor::new(&mut buf), fmt).unwrap();
         buf

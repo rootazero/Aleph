@@ -139,34 +139,36 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
     let (status, headers, bytes): (u16, HashMap<String, String>, Vec<u8>) =
         std::thread::scope(|scope| {
             scope
-                .spawn(|| -> Result<(u16, HashMap<String, String>, Vec<u8>), String> {
-                    let client = reqwest::blocking::Client::builder()
-                        .timeout(timeout)
-                        .build()
-                        .map_err(|e| format!("client build failed: {e}"))?;
-                    let parsed_method = reqwest::Method::from_bytes(method.as_bytes())
-                        .map_err(|e| format!("invalid method: {e}"))?;
-                    let mut builder = client.request(parsed_method, req.url.as_str());
-                    for (k, v) in &req.headers {
-                        builder = builder.header(k.as_str(), v.as_str());
-                    }
-                    if !body.is_empty() {
-                        builder = builder.body(body.clone());
-                    }
-                    let resp = builder.send().map_err(|e| format!("request failed: {e}"))?;
-                    let status = resp.status().as_u16();
-                    let headers = resp
-                        .headers()
-                        .iter()
-                        .map(|(k, v)| {
-                            (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())
-                        })
-                        .collect();
-                    let bytes = resp
-                        .bytes()
-                        .map_err(|e| format!("failed to read response: {e}"))?;
-                    Ok((status, headers, bytes.to_vec()))
-                })
+                .spawn(
+                    || -> Result<(u16, HashMap<String, String>, Vec<u8>), String> {
+                        let client = reqwest::blocking::Client::builder()
+                            .timeout(timeout)
+                            .build()
+                            .map_err(|e| format!("client build failed: {e}"))?;
+                        let parsed_method = reqwest::Method::from_bytes(method.as_bytes())
+                            .map_err(|e| format!("invalid method: {e}"))?;
+                        let mut builder = client.request(parsed_method, req.url.as_str());
+                        for (k, v) in &req.headers {
+                            builder = builder.header(k.as_str(), v.as_str());
+                        }
+                        if !body.is_empty() {
+                            builder = builder.body(body.clone());
+                        }
+                        let resp = builder.send().map_err(|e| format!("request failed: {e}"))?;
+                        let status = resp.status().as_u16();
+                        let headers = resp
+                            .headers()
+                            .iter()
+                            .map(|(k, v)| {
+                                (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())
+                            })
+                            .collect();
+                        let bytes = resp
+                            .bytes()
+                            .map_err(|e| format!("failed to read response: {e}"))?;
+                        Ok((status, headers, bytes.to_vec()))
+                    },
+                )
                 .join()
                 .map_err(|_| "http worker thread panicked".to_string())?
         })?;

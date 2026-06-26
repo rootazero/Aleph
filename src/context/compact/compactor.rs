@@ -7,7 +7,8 @@ use std::borrow::Cow;
 use std::time::Duration;
 
 use super::summary_utils::{
-    build_summary_update_prompt, build_window_summary_prompt, latest_user_task, strip_analysis_block,
+    build_summary_update_prompt, build_window_summary_prompt, latest_user_task,
+    strip_analysis_block,
 };
 use crate::memory::session_compactor::summary_source::SessionSummarySource;
 use crate::memory::store::MemoryBackend;

@@ -210,9 +210,7 @@ pub fn migrate_notes_links_confidence(conn: &Connection) -> Result<(), AlephErro
         conn.execute_batch(
             "ALTER TABLE notes_links ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0",
         )
-        .map_err(|e| {
-            AlephError::config(format!("Failed to add notes_links.confidence: {e}"))
-        })?;
+        .map_err(|e| AlephError::config(format!("Failed to add notes_links.confidence: {e}")))?;
     }
     Ok(())
 }

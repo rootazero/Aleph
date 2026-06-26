@@ -121,7 +121,11 @@ impl NoteStore for SqliteMemoryBackend {
             // Typed relation overrides a plain wikilink to the same target.
             desired.insert(
                 resolved,
-                (rel.to.clone(), Some(rel.rel_type.clone()), rel.confidence.clamp(0.0, 1.0)),
+                (
+                    rel.to.clone(),
+                    Some(rel.rel_type.clone()),
+                    rel.confidence.clamp(0.0, 1.0),
+                ),
             );
         }
 

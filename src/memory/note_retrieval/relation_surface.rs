@@ -53,7 +53,10 @@ mod tests {
         ];
         let already: HashSet<String> = ["plan/dup".to_string()].into_iter().collect();
         let got = structural_targets(&rels, &already);
-        assert_eq!(got, vec![("plan/old".to_string(), "superseded_by".to_string())]);
+        assert_eq!(
+            got,
+            vec![("plan/old".to_string(), "superseded_by".to_string())]
+        );
     }
 
     #[test]

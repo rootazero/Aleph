@@ -82,10 +82,7 @@ impl AlephTool for BrowserWaitForTool {
         let timeout_ms = clamp_timeout(args.timeout_ms);
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => {
-                match backend
-                    .wait_for_text(&tab_id, &args.text, timeout_ms)
-                    .await
-                {
+                match backend.wait_for_text(&tab_id, &args.text, timeout_ms).await {
                     Ok(found) => Ok(BrowserWaitForOutput {
                         success: true,
                         found,

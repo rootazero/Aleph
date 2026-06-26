@@ -982,8 +982,16 @@ mod tests {
             .replace_graph_related(
                 "default",
                 &[
-                    ("learning/alpha".to_string(), "learning/beta".to_string(), 4.0),
-                    ("learning/beta".to_string(), "learning/alpha".to_string(), 4.0),
+                    (
+                        "learning/alpha".to_string(),
+                        "learning/beta".to_string(),
+                        4.0,
+                    ),
+                    (
+                        "learning/beta".to_string(),
+                        "learning/alpha".to_string(),
+                        4.0,
+                    ),
                 ],
             )
             .await
@@ -1036,7 +1044,11 @@ mod tests {
         store
             .replace_graph_related(
                 "default",
-                &[("learning/alpha".to_string(), "learning/beta".to_string(), 1.0)],
+                &[(
+                    "learning/alpha".to_string(),
+                    "learning/beta".to_string(),
+                    1.0,
+                )],
             )
             .await
             .unwrap();

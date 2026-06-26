@@ -219,7 +219,10 @@ mod tests {
             ("a".to_string(), "c".to_string(), 2.5), // new pair → kept
         ];
         let merged = merge_related(four_signal, minhash);
-        let ab = merged.iter().find(|(s, p, _)| s == "a" && p == "b").unwrap();
+        let ab = merged
+            .iter()
+            .find(|(s, p, _)| s == "a" && p == "b")
+            .unwrap();
         assert!((ab.2 - 4.0).abs() < 1e-6, "max score wins");
         assert!(merged.iter().any(|(s, p, _)| s == "a" && p == "c"));
     }
@@ -242,7 +245,12 @@ mod tests {
         };
         let snap = GraphSnapshot {
             nodes: vec![node("g/a"), node("g/b"), node("g/c")],
-            edges: vec![GraphEdge { from: "g/a".into(), to: "g/b".into(), rel_type: None, confidence: 1.0 }],
+            edges: vec![GraphEdge {
+                from: "g/a".into(),
+                to: "g/b".into(),
+                rel_type: None,
+                confidence: 1.0,
+            }],
         };
         let c = compute(&snap);
         assert_eq!(c.node_count, 3);

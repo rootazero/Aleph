@@ -63,7 +63,9 @@ pub fn PhoneComposer() -> impl IntoView {
     };
 
     let stop = move || {
-        let Some(run_id) = chat.active_run_id.get_untracked() else { return };
+        let Some(run_id) = chat.active_run_id.get_untracked() else {
+            return;
+        };
         let dash = dashboard;
         spawn_local(async move {
             let _ = ChatApi::abort(&dash, &run_id).await;

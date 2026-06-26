@@ -453,7 +453,13 @@ mod tests {
     #[test]
     fn test_readonly_tools_on_allowlist() {
         // Read-only tools must be on the allowlist so they keep parallelizing.
-        let read_tools = &["search", "memory_recall", "web_fetch", "knowledge", "file_read"];
+        let read_tools = &[
+            "search",
+            "memory_recall",
+            "web_fetch",
+            "knowledge",
+            "file_read",
+        ];
         for tool in read_tools {
             assert!(
                 READ_ONLY_TOOLS.contains(tool),

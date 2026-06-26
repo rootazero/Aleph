@@ -537,7 +537,8 @@ mod tests {
 
     fn png_of(w: u32, h: u32) -> Vec<u8> {
         use image::{DynamicImage, ImageFormat, RgbaImage};
-        let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(w, h, image::Rgba([1, 2, 3, 255])));
+        let img =
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(w, h, image::Rgba([1, 2, 3, 255])));
         let mut buf = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Png)
             .unwrap();

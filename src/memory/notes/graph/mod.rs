@@ -76,13 +76,14 @@ impl<'a> GraphIndex<'a> {
         let mut adj = vec![HashSet::new(); snap.nodes.len()];
         let mut out: Vec<HashMap<usize, EdgeMeta>> = vec![HashMap::new(); snap.nodes.len()];
         for e in &snap.edges {
-            if let (Some(&a), Some(&b)) =
-                (idx_of.get(e.from.as_str()), idx_of.get(e.to.as_str()))
-            {
+            if let (Some(&a), Some(&b)) = (idx_of.get(e.from.as_str()), idx_of.get(e.to.as_str())) {
                 if a != b {
                     adj[a].insert(b);
                     adj[b].insert(a);
-                    let meta = EdgeMeta { rel_type: e.rel_type.clone(), confidence: e.confidence };
+                    let meta = EdgeMeta {
+                        rel_type: e.rel_type.clone(),
+                        confidence: e.confidence,
+                    };
                     // Keep the strongest if a pair appears twice.
                     out[a]
                         .entry(b)

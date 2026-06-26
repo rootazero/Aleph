@@ -423,7 +423,9 @@ mod tests {
             None,
         );
         // Prior summary is fenced as authoritative state to extend, not buried.
-        assert!(p.contains("<current_summary>\n## Primary Request\nmigrate the store\n</current_summary>"));
+        assert!(p.contains(
+            "<current_summary>\n## Primary Request\nmigrate the store\n</current_summary>"
+        ));
         // New turns ride under their own marker, not the historical TRANSCRIPT one.
         assert!(p.contains("---NEW TURNS---\nuser: also add caching\nassistant: done\n---END---"));
         // UPDATE framing + same scaffold + identifier directive so the

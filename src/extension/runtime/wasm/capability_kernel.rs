@@ -343,7 +343,11 @@ mod tests {
             }),
             ..Default::default()
         };
-        WasmCapabilityKernel::new("test-plugin".to_string(), caps, WasmResourceLimits::default())
+        WasmCapabilityKernel::new(
+            "test-plugin".to_string(),
+            caps,
+            WasmResourceLimits::default(),
+        )
     }
 
     #[test]

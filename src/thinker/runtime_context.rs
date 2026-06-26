@@ -452,18 +452,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let gitdir = dir.path().join("real-gitdir");
         std::fs::create_dir(&gitdir).expect("mkdir gitdir");
-        std::fs::write(gitdir.join("HEAD"), b"ref: refs/heads/wt-branch\n")
-            .expect("write HEAD");
+        std::fs::write(gitdir.join("HEAD"), b"ref: refs/heads/wt-branch\n").expect("write HEAD");
         std::fs::write(
             dir.path().join(".git"),
             format!("gitdir: {}\n", gitdir.display()),
         )
         .expect("write .git pointer");
 
-        assert_eq!(
-            detect_git_branch(dir.path()).as_deref(),
-            Some("wt-branch")
-        );
+        assert_eq!(detect_git_branch(dir.path()).as_deref(), Some("wt-branch"));
     }
 
     #[test]

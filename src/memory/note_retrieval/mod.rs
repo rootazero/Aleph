@@ -6,9 +6,9 @@
 
 pub mod expansion;
 pub mod hybrid;
+mod relation_surface;
 pub mod scoring;
 pub mod trace;
-mod relation_surface;
 
 use std::collections::HashMap;
 
@@ -265,9 +265,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                 .filter(|(_, rel)| crate::memory::notes::is_structural_strong(rel))
                 .cloned()
                 .collect();
-            if let Some(footer) =
-                relation_surface::backlink_footer(&strong_outs, backlinks.len())
-            {
+            if let Some(footer) = relation_surface::backlink_footer(&strong_outs, backlinks.len()) {
                 f.fact.content.push('\n');
                 f.fact.content.push_str(&footer);
             }

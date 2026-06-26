@@ -67,16 +67,16 @@ impl AgentHarnessRunner {
 
         // Caps scale with the model window (mirrors `IdentityFilesConfig::
         // for_context_window`); no `[context_budget]` → legacy 20k/100k floors.
-        let (per_file_max_chars, total_max_chars) = self
-            .context_budget_config
-            .as_ref()
-            .map_or((20_000usize, 100_000usize), |cb| {
-                use crate::thinker::prompt_budget::window_char_budget;
-                (
-                    window_char_budget(cb.token_budget, 0.025, 20_000, 120_000),
-                    window_char_budget(cb.token_budget, 0.10, 100_000, 480_000),
-                )
-            });
+        let (per_file_max_chars, total_max_chars) =
+            self.context_budget_config
+                .as_ref()
+                .map_or((20_000usize, 100_000usize), |cb| {
+                    use crate::thinker::prompt_budget::window_char_budget;
+                    (
+                        window_char_budget(cb.token_budget, 0.025, 20_000, 120_000),
+                        window_char_budget(cb.token_budget, 0.10, 100_000, 480_000),
+                    )
+                });
 
         let cfg = self.prompt_extra_files.as_ref()?;
         if !cfg.enabled || cfg.paths.is_empty() {
@@ -322,12 +322,12 @@ impl AgentHarnessRunner {
         // window the history side uses (feature 2.2), so large-window models
         // stop being capped at the fixed 80k default. No `[context_budget]`
         // configured → legacy fixed default (byte-identical).
-        let token_budget = self.context_budget_config.as_ref().map_or_else(
-            crate::thinker::prompt_budget::TokenBudget::default,
-            |cfg| {
+        let token_budget = self
+            .context_budget_config
+            .as_ref()
+            .map_or_else(crate::thinker::prompt_budget::TokenBudget::default, |cfg| {
                 crate::thinker::prompt_budget::TokenBudget::from_context_window(cfg.token_budget)
-            },
-        );
+            });
         let mut builder = PromptBuilder::new(PromptConfig {
             native_tools_enabled: true,
             eligible_skills,
@@ -463,12 +463,11 @@ impl AgentHarnessRunner {
         // a mechanical session-keyed lookup, no judgment. `Off` (no voice)
         // leaves the prompt byte-identical; the `transcribed` bit distinguishes
         // a spoken-only turn from one whose input was ASR-transcribed.
-        resolved_context.voice =
-            match crate::gateway::voice::session_mode::get(&session_key_str) {
-                None => crate::thinker::context::VoiceContext::Off,
-                Some(false) => crate::thinker::context::VoiceContext::Spoken,
-                Some(true) => crate::thinker::context::VoiceContext::SpokenTranscribed,
-            };
+        resolved_context.voice = match crate::gateway::voice::session_mode::get(&session_key_str) {
+            None => crate::thinker::context::VoiceContext::Off,
+            Some(false) => crate::thinker::context::VoiceContext::Spoken,
+            Some(true) => crate::thinker::context::VoiceContext::SpokenTranscribed,
+        };
         builder = builder.with_resolved_context(resolved_context);
         // Resolve the governance behavior name once (same source of truth as
         // the robustness profile) and pre-load its overridable coaching delta.

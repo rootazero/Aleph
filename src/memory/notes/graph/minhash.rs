@@ -42,7 +42,12 @@ pub fn shingles(body: &str) -> HashSet<u64> {
         return out;
     }
     for w in toks.windows(3) {
-        let s = format!("{} {} {}", w[0].to_lowercase(), w[1].to_lowercase(), w[2].to_lowercase());
+        let s = format!(
+            "{} {} {}",
+            w[0].to_lowercase(),
+            w[1].to_lowercase(),
+            w[2].to_lowercase()
+        );
         out.insert(fnv1a(&s));
     }
     out
@@ -150,7 +155,11 @@ pub fn similarity_edges(
         });
         peers.truncate(cap);
         for (peer, j) in peers {
-            edges.push((docs[k].0.clone(), docs[peer].0.clone(), j * SIMILARITY_EDGE_WEIGHT));
+            edges.push((
+                docs[k].0.clone(),
+                docs[peer].0.clone(),
+                j * SIMILARITY_EDGE_WEIGHT,
+            ));
         }
     }
     edges
@@ -177,12 +186,23 @@ mod tests {
     #[test]
     fn similarity_edges_link_near_duplicates_only() {
         let docs = vec![
-            ("g/a".to_string(), "rust ownership borrowing lifetimes prevent data races".to_string()),
-            ("g/b".to_string(), "rust ownership borrowing lifetimes prevent data races today".to_string()),
-            ("g/c".to_string(), "completely unrelated text about cooking pasta sauce".to_string()),
+            (
+                "g/a".to_string(),
+                "rust ownership borrowing lifetimes prevent data races".to_string(),
+            ),
+            (
+                "g/b".to_string(),
+                "rust ownership borrowing lifetimes prevent data races today".to_string(),
+            ),
+            (
+                "g/c".to_string(),
+                "completely unrelated text about cooking pasta sauce".to_string(),
+            ),
         ];
         let edges = similarity_edges(&docs, 0.5, 8, 1);
-        assert!(edges.iter().any(|(f, t, _)| (f == "g/a" && t == "g/b") || (f == "g/b" && t == "g/a")));
+        assert!(edges
+            .iter()
+            .any(|(f, t, _)| (f == "g/a" && t == "g/b") || (f == "g/b" && t == "g/a")));
         assert!(!edges.iter().any(|(f, t, _)| *f == "g/c" || *t == "g/c"));
         assert!(edges.iter().all(|(_, _, s)| *s > 0.0));
     }

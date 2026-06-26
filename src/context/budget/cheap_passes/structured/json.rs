@@ -36,7 +36,10 @@ const MAX_DEPTH: usize = 16;
 /// [`reduce_json`]; keeping this detector allocation-free mirrors the other
 /// reducers' `looks_like_*` contract.
 pub(super) fn looks_like_json(lines: &[&str]) -> bool {
-    let first = lines.iter().find(|l| !l.trim().is_empty()).map(|l| l.trim());
+    let first = lines
+        .iter()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| l.trim());
     let last = lines
         .iter()
         .rev()
