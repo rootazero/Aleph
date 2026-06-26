@@ -98,8 +98,17 @@ impl OriginFanoutEmitter {
 impl EventEmitter for OriginFanoutEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
         if let StreamEvent::RunComplete { ref summary, .. } = event {
-            if let Some(final_response) = summary.final_response.as_ref() {
-                self.deliver_final(final_response).await;
+            // Mirror the *deliverable* text — same single-source sanitizer the
+            // inbound `ReplyEmitter` and the persisted-transcript path use — so
+            // the origin channel never receives raw `<think>`/completion markers
+            // (which `summary.final_response` still carries verbatim) and a
+            // pure-thinking turn delivers nothing instead of leaking noise.
+            if let Some(text) = summary
+                .final_response
+                .as_deref()
+                .and_then(crate::gateway::reply_emitter::sanitize_final_response)
+            {
+                self.deliver_final(&text).await;
             }
         }
         // Always forward to the primary emitter (Panel sees the full stream).
@@ -144,5 +153,46 @@ mod tests {
 
         let events = inner.events().await;
         assert_eq!(events.len(), 1, "RunComplete must reach the inner emitter");
+    }
+
+    /// The mirrored origin reply is sanitized at the fan-out boundary — the
+    /// inner Panel stream still sees the unaltered `RunComplete`, but the text
+    /// handed to the origin channel goes through the same single-source
+    /// sanitizer as the inbound `ReplyEmitter`, so raw `<think>` blocks never
+    /// leak to Telegram/Slack. (Delivery itself is best-effort and untestable
+    /// without a registered channel; this pins the inner-stream invariant and
+    /// the sanitize wiring via the shared atom's own test coverage.)
+    #[tokio::test]
+    async fn forwards_run_complete_with_reasoning_tags_unaltered_to_inner() {
+        let inner = Arc::new(CollectingEventEmitter::new());
+        let fanout = OriginFanoutEmitter::new(
+            inner.clone(),
+            Arc::new(ChannelRegistry::new()),
+            "telegram",
+            "chat-9",
+        );
+
+        fanout
+            .emit(StreamEvent::RunComplete {
+                run_id: "r9".to_string(),
+                seq: 0,
+                summary: RunSummary {
+                    final_response: Some("<think>plan</think>visible".to_string()),
+                    ..Default::default()
+                },
+                total_duration_ms: 0,
+            })
+            .await
+            .unwrap();
+
+        // Inner (Panel) stream is never rewritten by the decorator.
+        match &inner.events().await[0] {
+            StreamEvent::RunComplete { summary, .. } => assert_eq!(
+                summary.final_response.as_deref(),
+                Some("<think>plan</think>visible"),
+                "inner stream must receive the unaltered summary"
+            ),
+            other => panic!("expected RunComplete, got {other:?}"),
+        }
     }
 }

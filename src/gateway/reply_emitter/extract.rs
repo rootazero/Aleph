@@ -14,6 +14,27 @@
 use super::sanitize::sanitize_llm_output;
 use crate::gateway::event_emitter::StreamEvent;
 
+/// Sanitize a run's terminal text into clean, deliverable user text.
+///
+/// The single atom for "given the raw text a run produced, what do we actually
+/// hand to a surface" — strips LLM-internal tags (`<think>`, completion markers)
+/// and returns `None` when nothing visible survives (a pure-thinking or
+/// completion-only turn). Every final-answer **delivery** path routes through
+/// this: [`extract_final_response`] (group-chat transcript, cron), the
+/// cross-surface `OriginFanoutEmitter`, and the team `TeamFanoutEmitter`. That
+/// is what stops a live Panel bubble, an origin-channel message, and the
+/// persisted transcript from ever disagreeing on the text — or leaking raw
+/// reasoning tags that the inbound `ReplyEmitter` path already strips.
+#[must_use]
+pub(crate) fn sanitize_final_response(text: &str) -> Option<String> {
+    let sanitized = sanitize_llm_output(text);
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized.into_owned())
+    }
+}
+
 /// Recover the deliverable final text from a completed run's event log.
 ///
 /// Resolution order:
@@ -31,9 +52,8 @@ pub(crate) fn extract_final_response(events: &[StreamEvent]) -> Option<String> {
     for event in events.iter().rev() {
         if let StreamEvent::RunComplete { summary, .. } = event {
             if let Some(text) = summary.final_response.as_deref() {
-                let sanitized = sanitize_llm_output(text);
-                if !sanitized.is_empty() {
-                    return Some(sanitized.into_owned());
+                if let Some(clean) = sanitize_final_response(text) {
+                    return Some(clean);
                 }
             }
         }
@@ -46,15 +66,7 @@ pub(crate) fn extract_final_response(events: &[StreamEvent]) -> Option<String> {
             full_text.push_str(delta);
         }
     }
-    if full_text.is_empty() {
-        return None;
-    }
-    let sanitized = sanitize_llm_output(&full_text);
-    if sanitized.is_empty() {
-        None
-    } else {
-        Some(sanitized.into_owned())
-    }
+    sanitize_final_response(&full_text)
 }
 
 #[cfg(test)]
@@ -125,5 +137,31 @@ mod tests {
     fn uses_newest_run_complete() {
         let events = vec![run_complete(Some("first")), run_complete(Some("second"))];
         assert_eq!(extract_final_response(&events).as_deref(), Some("second"));
+    }
+
+    // ── sanitize_final_response atom (single source for surface delivery) ──
+
+    #[test]
+    fn atom_strips_reasoning_tags() {
+        assert_eq!(
+            sanitize_final_response("<think>scratch</think>answer").as_deref(),
+            Some("answer")
+        );
+    }
+
+    #[test]
+    fn atom_returns_none_for_pure_reasoning_or_empty() {
+        // A turn that sanitizes to nothing visible yields None (no surface
+        // delivery): a pure-reasoning block collapses, as does empty input.
+        assert_eq!(sanitize_final_response("<think>only thinking</think>"), None);
+        assert_eq!(sanitize_final_response(""), None);
+    }
+
+    #[test]
+    fn atom_is_idempotent_on_clean_text() {
+        assert_eq!(
+            sanitize_final_response("already clean").as_deref(),
+            Some("already clean")
+        );
     }
 }
