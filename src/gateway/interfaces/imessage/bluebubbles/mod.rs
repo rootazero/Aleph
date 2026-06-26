@@ -129,6 +129,16 @@ impl Channel for BlueBubblesChannel {
                     .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
             }
         }
+        for attachment in &message.attachments {
+            if let Some(path) = &attachment.path {
+                let is_audio = attachment.mime_type.starts_with("audio/");
+                last = self
+                    .api
+                    .send_attachment(&guid, std::path::Path::new(path), is_audio)
+                    .await
+                    .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+            }
+        }
         Ok(SendResult { message_id: MessageId::new(last), timestamp: chrono::Utc::now() })
     }
 }

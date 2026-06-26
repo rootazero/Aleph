@@ -182,6 +182,40 @@ impl BlueBubblesApi {
         None
     }
 
+    /// Upload a file attachment via multipart. Returns the new message GUID.
+    pub async fn send_attachment(
+        &self,
+        chat_guid: &str,
+        path: &std::path::Path,
+        is_audio: bool,
+    ) -> Result<String, BbError> {
+        let bytes = tokio::fs::read(path).await.map_err(|e| BbError::Http(e.to_string()))?;
+        let name = crate::gateway::interfaces::imessage::bluebubbles::outbound::attachment::attachment_form_name(path);
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(name.clone())
+            .mime_str("application/octet-stream")
+            .map_err(|e| BbError::Http(e.to_string()))?;
+        let mut form = reqwest::multipart::Form::new()
+            .text("chatGuid", chat_guid.to_string())
+            .text("name", name)
+            .text("tempGuid", format!("aleph-{}", uuid::Uuid::new_v4()))
+            .part("attachment", part);
+        if is_audio {
+            form = form.text("isAudioMessage", "true");
+        }
+        let res = self
+            .client
+            .post(self.api_url("/api/v1/message/attachment"))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| BbError::Http(e.to_string()))?;
+        let res = res.error_for_status().map_err(|e| BbError::Http(e.to_string()))?;
+        let v: serde_json::Value =
+            res.json().await.map_err(|e| BbError::BadResponse(e.to_string()))?;
+        Ok(v["data"]["guid"].as_str().unwrap_or("ok").to_string())
+    }
+
     /// POST a single text bubble. Returns the new message GUID.
     pub async fn send_text_chunk(
         &self,
