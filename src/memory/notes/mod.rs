@@ -23,8 +23,8 @@ pub use governance::gate::{
 };
 pub use indexer::{IndexStats, NoteIndexer, CATEGORY_DIRS};
 pub use note::{
-    sanitize_note_path, sanitize_title, tags_mark_permanent, FactProvenance, KnowledgeNote,
-    ProvenanceOrigin, Relation, Severity,
+    is_structural_strong, sanitize_note_path, sanitize_title, tags_mark_permanent, FactProvenance,
+    KnowledgeNote, ProvenanceOrigin, Relation, Severity, STRUCTURAL_STRONG,
 };
 pub use retrieval::{NoteContent, NoteRetrieval};
 pub use search_result::NoteSearchResult;

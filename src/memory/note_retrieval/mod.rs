@@ -8,6 +8,7 @@ pub mod expansion;
 pub mod hybrid;
 pub mod scoring;
 pub mod trace;
+mod relation_surface;
 
 use std::collections::HashMap;
 
@@ -236,6 +237,73 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         }
     }
 
+    /// Annotate surfaced notes with backlink counts + structural-strong
+    /// relations, and force-inject the targets of structural-strong relations
+    /// that the score-based ranking dropped. Scoped to already-surfaced notes.
+    /// Non-fatal: store errors are logged and skipped.
+    async fn surface_relations(&self, agent_id: &str, ranked: &mut Vec<ScoredFact>) {
+        use std::collections::HashSet;
+        let store = self.indexer.store();
+        // path form in ScoredFact is "note://category/filename"; strip the scheme.
+        let strip = |p: &str| p.strip_prefix("note://").unwrap_or(p).to_string();
+        let mut present: HashSet<String> = ranked.iter().map(|f| strip(&f.fact.path)).collect();
+
+        let mut inject: Vec<(String, String, String)> = Vec::new(); // (target_path, rel, source_path)
+        for f in ranked.iter_mut() {
+            let path = strip(&f.fact.path);
+            let filename = path.rsplit('/').next().unwrap_or(&path).to_string();
+            let relations = store
+                .get_typed_relations(&path, agent_id)
+                .await
+                .unwrap_or_default();
+            let backlinks = store
+                .get_incoming_links_any(&path, &filename, agent_id)
+                .await
+                .unwrap_or_default();
+            let strong_outs: Vec<(String, String)> = relations
+                .iter()
+                .filter(|(_, rel)| crate::memory::notes::is_structural_strong(rel))
+                .cloned()
+                .collect();
+            if let Some(footer) =
+                relation_surface::backlink_footer(&strong_outs, backlinks.len())
+            {
+                f.fact.content.push('\n');
+                f.fact.content.push_str(&footer);
+            }
+            for (to, rel) in relation_surface::structural_targets(&relations, &present) {
+                if present.insert(to.clone()) {
+                    inject.push((to, rel, path.clone()));
+                }
+            }
+        }
+
+        if inject.is_empty() {
+            return;
+        }
+        let paths: Vec<String> = inject.iter().map(|(t, _, _)| t.clone()).collect();
+        let hydrated = match store.get_notes_with_content(agent_id, &paths).await {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::debug!(error = %e, "surface_relations: hydrate failed (non-fatal)");
+                return;
+            }
+        };
+        for r in hydrated {
+            let meta = inject.iter().find(|(t, _, _)| *t == r.path);
+            let mut fact = r.to_scored_fact(agent_id);
+            if let Some((_, rel, src)) = meta {
+                fact.fact.content.push('\n');
+                fact.fact
+                    .content
+                    .push_str(&format!("[relations] ⚠ {rel} ← {src} (force-surfaced)"));
+            }
+            // Sentinel score below any real hit; presence is the point.
+            fact.score = 0.0;
+            ranked.push(fact);
+        }
+    }
+
     /// Apply the cross-encoder reranker to a candidate set, blending its scores
     /// with the original retrieval scores via `blend_scores`. Falls back to the
     /// original ordering on any reranker error (graceful degradation). The result
@@ -403,6 +471,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         );
         // Close the hot-floating loop: record the surfaced notes as recall hits.
         self.record_recall(query, agent_id, &ranked).await;
+        self.surface_relations(agent_id, &mut ranked).await;
         Ok(ranked)
     }
 

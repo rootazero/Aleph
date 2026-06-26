@@ -33,3 +33,27 @@ impl Relation {
         self
     }
 }
+
+/// The only relation verbs the system treats specially: their targets are
+/// force-surfaced at retrieval regardless of score (missing a superseded or
+/// contradicting note is a correctness bug). All other rel_types stay
+/// LLM-chosen and untyped to the system (R7).
+pub const STRUCTURAL_STRONG: &[&str] = &["supersedes", "superseded_by", "contradicts"];
+
+#[must_use]
+pub fn is_structural_strong(rel_type: &str) -> bool {
+    STRUCTURAL_STRONG.contains(&rel_type)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structural_strong_membership() {
+        assert!(is_structural_strong("contradicts"));
+        assert!(is_structural_strong("superseded_by"));
+        assert!(!is_structural_strong("works_at"));
+        assert!(!is_structural_strong("CONTRADICTS")); // case-sensitive, snake_case only
+    }
+}
