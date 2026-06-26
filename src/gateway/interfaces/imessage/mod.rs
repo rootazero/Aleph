@@ -287,11 +287,32 @@ impl Channel for IMessageChannel {
 
         let target = message.conversation_id.as_str();
 
-        // Send text
+        // Route by parsed target: chat_id:/chat_guid: prefixed targets use
+        // chat-id send (group chat); phone/email/bare identifiers fall through
+        // to participant send_text (existing behaviour).
+        // Note: inbound group messages carry a bare chat_identifier (no prefix),
+        // so they still route to send_text — fully fixing AppleScript group
+        // replies requires macOS-runtime chat-GUID resolution (out of scope;
+        // BlueBubbles transport handles groups robustly).
         if !message.text.is_empty() {
-            MessageSender::send_text(target, &message.text)
-                .await
-                .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+            match parse_target(target) {
+                Ok(IMessageTarget::ChatId { id }) => {
+                    MessageSender::send_to_chat(&format!("chat_id:{id}"), &message.text)
+                        .await
+                        .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                }
+                Ok(IMessageTarget::ChatGuid { guid }) => {
+                    MessageSender::send_to_chat(&guid, &message.text)
+                        .await
+                        .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                }
+                // Phone / Email / parse error: participant send (existing behavior)
+                _ => {
+                    MessageSender::send_text(target, &message.text)
+                        .await
+                        .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                }
+            }
         }
 
         // Send attachments
@@ -370,5 +391,18 @@ mod tests {
         assert!(!caps.typing_indicator);
         assert!(!caps.read_receipts);
         assert!(caps.attachments);
+    }
+
+    #[test]
+    fn group_chat_target_routes_to_chat_send() {
+        // chat_id: prefix and chat_guid: must parse to chat targets, which the
+        // send path must route via send_to_chat (not participant send_text).
+        assert!(matches!(parse_target("chat_id:42").unwrap(), IMessageTarget::ChatId { .. }));
+        assert!(matches!(
+            parse_target("chat_guid:iMessage;+;chat123").unwrap(),
+            IMessageTarget::ChatGuid { .. }
+        ));
+        // a plain phone stays a Phone target (participant send_text)
+        assert!(matches!(parse_target("+15551234567").unwrap(), IMessageTarget::Phone { .. }));
     }
 }
