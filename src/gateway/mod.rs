@@ -47,6 +47,7 @@ pub mod security;
 pub mod server;
 pub mod shutdown_forensics;
 pub mod subagent_announce;
+pub mod subagent_tree_relay;
 pub mod surface;
 pub mod tool_display;
 

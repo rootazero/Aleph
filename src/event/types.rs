@@ -58,6 +58,7 @@ pub enum EventType {
     // Sub-agent
     SubAgentStarted,
     SubAgentCompleted,
+    SubAgentTreeUpdate,
 
     // AI response
     AiResponseGenerated,
@@ -113,6 +114,10 @@ pub enum AlephEvent {
     // Sub-agent events
     SubAgentStarted(SubAgentRequest),
     SubAgentCompleted(SubAgentResult),
+    /// Live sub-agent tree update (spawned / progress / settled) — fed to the
+    /// panel's background sub-agent tree view via the gateway relay. Pure
+    /// observability; carries no reasoning (R4/R10).
+    SubAgentTreeUpdate(aleph_protocol::subagent_tree::SubagentTreeEvent),
 
     // AI response events
     AiResponseGenerated(AiResponse),
@@ -187,6 +192,7 @@ impl AlephEvent {
             Self::SessionCompacted(_) => EventType::SessionCompacted,
             Self::SubAgentStarted(_) => EventType::SubAgentStarted,
             Self::SubAgentCompleted(_) => EventType::SubAgentCompleted,
+            Self::SubAgentTreeUpdate(_) => EventType::SubAgentTreeUpdate,
             Self::AiResponseGenerated(_) => EventType::AiResponseGenerated,
             Self::PartAdded(_) => EventType::PartAdded,
             Self::PartUpdated(_) => EventType::PartUpdated,
@@ -223,6 +229,7 @@ impl AlephEvent {
             Self::SessionCompacted(_) => "SessionCompacted",
             Self::SubAgentStarted(_) => "SubAgentStarted",
             Self::SubAgentCompleted(_) => "SubAgentCompleted",
+            Self::SubAgentTreeUpdate(_) => "SubAgentTreeUpdate",
             Self::AiResponseGenerated(_) => "AiResponseGenerated",
             Self::PartAdded(_) => "PartAdded",
             Self::PartUpdated(_) => "PartUpdated",

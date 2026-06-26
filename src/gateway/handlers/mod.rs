@@ -109,6 +109,7 @@ pub mod session;
 pub mod dreaming;
 pub mod extensions;
 pub mod skills;
+pub mod subagent;
 pub mod system_info;
 pub mod teams;
 pub mod tools_cancel;
@@ -719,6 +720,11 @@ impl HandlerRegistry {
         // need two-phase wiring; if the daemon was never initialized (memory
         // disabled or simulated mode), it simply returns an error.
         registry.register("dreaming.run_now", dreaming::handle_run_now);
+
+        // Background sub-agent tree snapshot — read-only, stateless (reads the
+        // process-global BackgroundAgentTracker). Backs the panel's cold-start;
+        // live deltas arrive via the `run.subagent_tree` relay.
+        registry.register("subagent.tree", subagent::handle_tree);
 
         // Insights introspection handler — needs MemoryBackend; the real
         // handler is wired in Gateway startup (register_memory_handlers).

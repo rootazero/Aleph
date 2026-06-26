@@ -21,6 +21,7 @@ pub mod discovery;
 pub mod events;
 pub mod invitation;
 pub mod jsonrpc;
+pub mod subagent_tree;
 pub mod thinking;
 pub mod trace_presentation;
 pub mod trace_replay;
@@ -37,6 +38,9 @@ pub use events::{
 pub use invitation::{ActivateInvitationRequest, CreateInvitationRequest, GuestToken, Invitation};
 pub use jsonrpc::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallContext, ToolCallParams, ToolCallResult,
+};
+pub use subagent_tree::{
+    build_tree, NodeLifecycle, Rollup, SubagentNode, SubagentTreeEvent, TreeNode,
 };
 pub use thinking::{ConfidenceLevel, ReasoningStepType};
 pub use trace_presentation::{
