@@ -155,6 +155,16 @@ impl RouteObservability {
             .iter()
             .filter_map(|c| c.models.first().map(|m| (c.name.as_str(), m.as_str())))
             .collect();
+        // Provider → endpoint tier, from the boot chain. Surfaced per provider so
+        // an operator can see *why* cost routing ranked an unpriced provider
+        // where it did (free local sorts first; unknown-cost cloud sorts last).
+        // The live-primary slot is absent here — its tier is intentionally
+        // unresolved (`Unknown`), mirroring its `null` price.
+        let tier_by: std::collections::HashMap<&str, EndpointTier> = self
+            .fallbacks
+            .iter()
+            .map(|c| (c.name.as_str(), c.tier))
+            .collect();
 
         let providers: serde_json::Map<String, serde_json::Value> = names
             .iter()
@@ -183,6 +193,7 @@ impl RouteObservability {
                     "utilization_percent": util_permille / 10,
                     "over_limit": over_limit,
                     "price_milli_per_mtok": price,
+                    "endpoint_tier": tier_by.get(name.as_str()).copied().map(tier_str),
                 });
                 (name.clone(), entry)
             })
@@ -308,5 +319,9 @@ mod tests {
         // Live load registry feeds the provider entry.
         assert_eq!(snap["providers"]["x302"]["in_flight"], 1);
         assert_eq!(snap["providers"]["x302"]["rpm_used"], 1);
+        // Endpoint tier is surfaced per provider so the cost-routing rank is
+        // explainable; the live-primary slot stays `null` (tier unresolved).
+        assert_eq!(snap["providers"]["x302"]["endpoint_tier"], "cloud");
+        assert!(snap["providers"]["kimi"]["endpoint_tier"].is_null());
     }
 }
