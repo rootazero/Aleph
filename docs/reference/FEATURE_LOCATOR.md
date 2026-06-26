@@ -174,10 +174,10 @@
 
 ### 3.2 Tool Calling 2.0 / Tool Use
 - **口语关键词**：工具调用、native tool call、并行、结果缓存、result store
-- **代码锚点**：`src/harness/agent/act.rs`（执行管道：缓存、并行分组、失败处理）、`src/tools/scoped/`（ScopedToolService：权限/确认/hook/result store）、`src/tools/scoped/dispatch.rs`（pre/post hook + 溢出持久化）、`src/providers/adapter.rs`（NativeToolCall）、`src/tools/runtime.rs`（LoopTool trait）
+- **代码锚点**：`src/harness/agent/act.rs`（执行管道：缓存、并行分组、失败处理）、`src/tools/scoped/`（ScopedToolService：权限/确认/hook/result store）、`src/tools/scoped/dispatch.rs`（pre/post hook + 溢出持久化）、`src/providers/adapter.rs`（NativeToolCall）、`src/tools/runtime.rs`（LoopTool trait）、`src/builtin_tools/file_ops/read_cache.rs`（跨轮未变更重读去重）
 - **职责**：LLM 发原生 tool_call → harness 分批并/序执行 → 缓存重复调用 → 超大结果持久化 → 回 ToolResult/ToolError 事件。
-- **状态**：✅ 已实现，三层管道（act 分组并行 / ScopedToolService 拦截 / ToolResultStore 溢出）。
-- **打磨话术**：「工具执行三层：`act.rs`(并行保序) → `scoped/`(权限确认 hook) → result store(溢出)。改‘工具结果太大被截断’找 result store；改‘确认弹窗’找 scoped。」
+- **状态**：✅ 已实现，三层管道（act 分组并行 / ScopedToolService 拦截 / ToolResultStore 溢出）。**重读去重（2026-06-26）**：`file_read` 结果故意不持久化（避免 read-marker loop），原先对"文件没变还重读同一窗口"无保护 → 浪费 context + 可能 read loop。新增 `read_cache.rs`：按 `(canonical_path, offset, limit)` 键，比对 `(mtime, size)`，未变更重读返回紧凑 stub（省去渲染编号正文），二次重读升级措辞；任何变更或 stat 失败一律 fail-open 全量读。机械判定（R7/P8 安全）、落工具层不进 harness（R10 安全）。借鉴 hermes-agent 同模式。
+- **打磨话术**：「工具执行三层：`act.rs`(并行保序) → `scoped/`(权限确认 hook) → result store(溢出)。改‘工具结果太大被截断’找 result store；改‘确认弹窗’找 scoped；改‘同一文件被反复重读浪费 context / read loop’找 `file_ops/read_cache.rs`（mtime+size 未变更 → stub，**绝不**改成内容哈希比对那是另一种成本）。」
 
 ### 3.3 工具并发调度 (Tool Concurrency)
 - **口语关键词**：DAG 工具执行、并行分组、智能调度、资源作用域、并发安全
