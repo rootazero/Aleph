@@ -1,13 +1,23 @@
-//! `NoteWeave` stage — backfill orphan notes into the wiki link graph by
-//! keyword overlap.
+//! `NoteWeave` stage — backfill orphan notes into the wiki link graph by note
+//! TEXT, via two complementary signals.
 //!
 //! An orphan (zero outgoing AND zero incoming links) is invisible to graph
 //! expansion in `gather_related`, earns no `link_weight` in `NoteDecay`
 //! scoring, and is therefore archived early — a vicious cycle this stage
-//! breaks. This is the BACKFILL engine for existing orphans: one batched LLM
-//! call extracts a keyword set per note (R7 — the model names the entities),
-//! then deterministic set-overlap pairing (`pair_by_overlap`, no LLM) decides
-//! who links to whom. Each emitted pair touching an orphan is written through
+//! breaks. This is the BACKFILL engine for existing orphans:
+//!
+//! 1. **Keyword overlap (strong signal).** One batched LLM call extracts a
+//!    keyword set per note (R7 — the model names the entities). Orphans are fed
+//!    their actual note BODY (frontmatter stripped, length-capped) so the set
+//!    reflects CONTENT, not just the filename. Deterministic set-overlap pairing
+//!    (`pair_by_overlap`, no LLM) then decides who links to whom.
+//! 2. **Embedding nearest-neighbour (semantic fallback).** Orphans the keyword
+//!    pass could not place are matched against the sqlite-vec index already
+//!    built at ingest (`get_embedding` + `vector_search`), so a note whose
+//!    wording shares no exact keyword with any peer still attaches to its
+//!    closest semantic kin. Zero LLM, relative-distance gated.
+//!
+//! Each emitted pair touching an orphan is written through
 //! `NoteIndexer::append_to_note` in both directions (the body `[[ ]]` link,
 //! same primitive `CompoundApplyTx::add_link` uses), then
 //! `NoteStore::add_link_with_relation` stamps the connecting keyword onto the
@@ -27,6 +37,23 @@ use super::DreamStage;
 
 /// Max keyword-overlap links written per dream cycle (caps disk writes).
 const MAX_WEAVE_PER_CYCLE: usize = 10;
+
+/// Frontmatter-stripped body chars fed as an orphan's `summary` to the keyword
+/// extractor. Caps the batched prompt's token cost while still giving the model
+/// real content to mine instead of just the filename.
+const BODY_SUMMARY_CHARS: usize = 800;
+
+/// Embedding nearest-neighbours fetched per unplaced orphan.
+const SEMANTIC_NEIGHBORS: usize = 4;
+
+/// A neighbour is linked when its distance is within this factor of the orphan's
+/// nearest neighbour. Relative (not absolute) so it is invariant to the vec
+/// index's metric scale — vec0 here is L2 over un-normalised embeddings, where a
+/// fixed distance cutoff would be meaningless across providers/dims.
+const SEMANTIC_REL_FACTOR: f32 = 1.25;
+
+/// Max semantic links emitted per orphan (the nearest plus very-close kin).
+const SEMANTIC_MAX_PER_ORPHAN: usize = 2;
 
 /// `NoteWeave` stage. `max_per_cycle` caps links written per dream cycle.
 pub struct NoteWeaveStage {
@@ -122,11 +149,25 @@ impl DreamStage for NoteWeaveStage {
         info!(count = orphans.len(), "NoteWeave: found orphan notes");
 
         // --- Phase 2: extract keyword sets (one batched LLM call). Orphans
-        // first so the prompt foregrounds the notes we want relinked. ---
+        // first so the prompt foregrounds the notes we want relinked.
+        //
+        // Orphans are enriched with their actual note BODY (frontmatter
+        // stripped, length-capped) so the keyword set reflects the note's
+        // CONTENT, not just its filename — the whole point of text-based
+        // relinking. Bounded to the orphan set (the minority we are placing);
+        // `others` stay title-only so the batch's token cost stays flat. A
+        // missing/unreadable body silently falls back to title-only. ---
+        let mut orphan_bodies: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for path in &orphans {
+            if let Some(body) = ctx.load_content(path).await {
+                orphan_bodies.insert(path.clone(), strip_frontmatter(&body).to_string());
+            }
+        }
         let inputs: Vec<NoteForExtraction> = orphans
             .iter()
             .chain(others.iter())
-            .map(|path| build_extraction_input(path))
+            .map(|path| build_extraction_input(path, orphan_bodies.get(path).map(String::as_str)))
             .collect();
         let keywords = extract_keywords(ctx.provider.as_ref(), &inputs).await?;
         if keywords.is_empty() {
@@ -135,14 +176,51 @@ impl DreamStage for NoteWeaveStage {
             return Ok(ctx);
         }
 
-        // --- Phase 3: deterministic pairing (no LLM). Keep only pairs that
-        // touch an orphan — this stage's job is to relink orphans, not to
-        // densify the already-connected graph. ---
+        // --- Phase 3: pairing. Two complementary orphan-touching sources:
+        //   (a) deterministic keyword-set overlap (no LLM) — the strong signal;
+        //   (b) embedding nearest-neighbour fallback for orphans (a) could not
+        //       place, so a note whose wording shares no exact keyword with any
+        //       peer still attaches to its closest semantic kin (zero LLM, reuses
+        //       the sqlite-vec index already built at ingest).
+        // Keyword links rank first so their human-meaningful relation wins over
+        // the generic "semantic" label when both name the same pair. ---
         let orphan_set: std::collections::HashSet<&str> =
             orphans.iter().map(String::as_str).collect();
-        let links: Vec<LinkTriple> = pair_by_overlap(&keywords)
+        let keyword_links: Vec<LinkTriple> = pair_by_overlap(&keywords)
             .into_iter()
             .filter(|l| orphan_set.contains(l.from.as_str()) || orphan_set.contains(l.to.as_str()))
+            .collect();
+
+        // Orphans still unplaced after the keyword pass are the embedding
+        // fallback's remit; an orphan keyword-overlap already linked is left
+        // alone (avoids piling a noisier semantic edge onto a now-connected note).
+        let placed: std::collections::HashSet<&str> = keyword_links
+            .iter()
+            .flat_map(|l| [l.from.as_str(), l.to.as_str()])
+            .filter(|p| orphan_set.contains(p))
+            .collect();
+        let unplaced: Vec<String> = orphans
+            .iter()
+            .filter(|p| !placed.contains(p.as_str()))
+            .cloned()
+            .collect();
+        let semantic_links = semantic_orphan_links(&ctx, &unplaced).await;
+
+        // Merge, drop duplicate undirected pairs (a keyword pair and a semantic
+        // pair may name the same two notes), then cap per cycle.
+        let mut seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        let links: Vec<LinkTriple> = keyword_links
+            .into_iter()
+            .chain(semantic_links)
+            .filter(|l| {
+                let key = if l.from <= l.to {
+                    (l.from.clone(), l.to.clone())
+                } else {
+                    (l.to.clone(), l.from.clone())
+                };
+                seen.insert(key)
+            })
             .take(self.max_per_cycle)
             .collect();
 
@@ -166,22 +244,92 @@ impl DreamStage for NoteWeaveStage {
     }
 }
 
-/// Build a `NoteForExtraction` for a note. The index entry carries no summary
-/// or facts, and reading every body would be wasteful here, so we derive the
-/// title from the filename and leave summary/facts empty — the keyword
-/// extractor works fine from path + title (mirrors how Task 5 built
-/// candidates).
-fn build_extraction_input(path: &str) -> NoteForExtraction {
+/// Build a `NoteForExtraction` for a note. `body` (supplied for orphans, absent
+/// for `others`) is the note's frontmatter-stripped markdown; capped to
+/// `BODY_SUMMARY_CHARS` it becomes the `summary` so the keyword extractor reads
+/// real content rather than just the filename. Title is always derived from the
+/// filename.
+fn build_extraction_input(path: &str, body: Option<&str>) -> NoteForExtraction {
     let title = path
         .rsplit_once('/')
         .map_or(path, |(_, f)| f)
         .replace('-', " ");
+    let summary = body
+        .map(|b| b.chars().take(BODY_SUMMARY_CHARS).collect::<String>())
+        .unwrap_or_default();
     NoteForExtraction {
         path: path.to_string(),
         title,
-        summary: String::new(),
+        summary,
         facts: Vec::new(),
     }
+}
+
+/// Strip a leading YAML frontmatter block (`---` … `---`) so only prose feeds
+/// the keyword extractor. Returns the (trimmed) input unchanged when no
+/// frontmatter is present. UTF-8 safe: `find` yields byte offsets on the ASCII
+/// `---` delimiter, always a char boundary.
+fn strip_frontmatter(content: &str) -> &str {
+    let trimmed = content.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("---") {
+        if let Some(end) = rest.find("---") {
+            return rest[end + 3..].trim_start();
+        }
+    }
+    trimmed
+}
+
+/// Embedding nearest-neighbour links for orphans the keyword pass left unplaced.
+/// For each orphan: fetch its stored embedding and the note vec index's nearest
+/// peers, then keep those within `SEMANTIC_REL_FACTOR` of the closest (capped at
+/// `SEMANTIC_MAX_PER_ORPHAN`). Pure text-similarity, zero LLM, reusing the
+/// sqlite-vec index built at ingest. Every step is fault-tolerant: a stub
+/// embedder (dim 0), a missing embedding, or a failed search skips just that
+/// orphan (P7 — linking is an enhancement, never block the cycle).
+async fn semantic_orphan_links(ctx: &DreamContext, orphans: &[String]) -> Vec<LinkTriple> {
+    let dim = ctx.embedder.dimensions() as u32;
+    if dim == 0 || orphans.is_empty() {
+        return Vec::new();
+    }
+    let store = ctx.indexer.store();
+    let mut out = Vec::new();
+    for orphan in orphans {
+        let embedding = match store.get_embedding(orphan, &ctx.agent_id, dim).await {
+            Ok(Some(e)) => e,
+            _ => continue,
+        };
+        // +1 so the orphan's own (distance≈0) row can be dropped below.
+        let neighbors = match store
+            .vector_search(&embedding, dim, &ctx.agent_id, SEMANTIC_NEIGHBORS + 1)
+            .await
+        {
+            Ok(n) => n,
+            Err(e) => {
+                warn!(orphan = %orphan, error = %e, "NoteWeave: semantic search failed (skipped)");
+                continue;
+            }
+        };
+        // `vector_search` returns ascending distance, so the first non-self peer
+        // is the nearest and sets the relative cutoff.
+        let peers: Vec<(String, f32)> = neighbors
+            .into_iter()
+            .filter(|(path, _)| path != orphan)
+            .collect();
+        let Some(nearest) = peers.first().map(|(_, d)| *d) else {
+            continue;
+        };
+        let cutoff = nearest * SEMANTIC_REL_FACTOR;
+        for (path, dist) in peers.into_iter().take(SEMANTIC_MAX_PER_ORPHAN) {
+            if dist <= cutoff {
+                out.push(LinkTriple {
+                    from: orphan.clone(),
+                    to: path,
+                    relation: "semantic".to_string(),
+                });
+            }
+        }
+    }
+    out
 }
 
 /// Write one directed typed link: body `[[ ]]` link first (creates the
@@ -666,5 +814,46 @@ mod tests {
             out.report.notes_woven, 0,
             "incoming-only note with a non-orphan partner must not be woven"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Pure-function tests for the text-enrichment helpers.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn strip_frontmatter_removes_leading_yaml_block() {
+        let doc = "---\ncategory: learning\ntags: [a]\n---\nThe real body text.";
+        assert_eq!(strip_frontmatter(doc), "The real body text.");
+    }
+
+    #[test]
+    fn strip_frontmatter_passes_through_when_absent() {
+        let doc = "No frontmatter here, just prose.";
+        assert_eq!(strip_frontmatter(doc), "No frontmatter here, just prose.");
+    }
+
+    #[test]
+    fn build_input_uses_body_as_capped_summary_for_orphans() {
+        let body = "x".repeat(BODY_SUMMARY_CHARS + 50);
+        let input = build_extraction_input("learning/some-topic", Some(&body));
+        // Title is filename-derived (dashes -> spaces); summary is the capped body.
+        assert_eq!(input.title, "some topic");
+        assert_eq!(input.summary.chars().count(), BODY_SUMMARY_CHARS);
+    }
+
+    #[test]
+    fn build_input_without_body_leaves_summary_empty() {
+        let input = build_extraction_input("learning/some-topic", None);
+        assert_eq!(input.title, "some topic");
+        assert!(input.summary.is_empty());
+    }
+
+    #[tokio::test]
+    async fn semantic_pass_is_noop_under_stub_embedder() {
+        // The default test embedder reports dim 0, so the semantic fallback must
+        // short-circuit to an empty link set (existing fixtures rely on this).
+        let (ctx, _store) = build_ctx("{\"links\": []}").await;
+        let links = semantic_orphan_links(&ctx, &["learning/a".to_string()]).await;
+        assert!(links.is_empty());
     }
 }
