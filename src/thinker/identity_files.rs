@@ -38,6 +38,23 @@ impl Default for IdentityFilesConfig {
     }
 }
 
+impl IdentityFilesConfig {
+    /// Identity-file budget scaled to the model context window, mirroring the
+    /// system-prompt budget (feature 1.2): the fixed 20k/100k caps become
+    /// floors, so a large-window model may carry proportionally larger
+    /// `SOUL.md` / `IDENTITY.md` content while small/unknown windows behave
+    /// exactly as [`Default`]. Per-file rides a quarter of the per-file window
+    /// fraction so no single file can dominate the total.
+    #[must_use]
+    pub fn for_context_window(window_tokens: u64) -> Self {
+        use crate::thinker::prompt_budget::window_char_budget;
+        Self {
+            per_file_max_chars: window_char_budget(window_tokens, 0.025, 20_000, 120_000),
+            total_max_chars: window_char_budget(window_tokens, 0.10, 100_000, 480_000),
+        }
+    }
+}
+
 /// A single loaded identity file with truncation metadata.
 #[derive(Debug, Clone)]
 pub struct IdentityFile {
@@ -341,5 +358,26 @@ mod tests {
     fn resolve_path_returns_none_when_missing() {
         let dir = TempDir::new().unwrap();
         assert!(resolve_path(dir.path(), "SOUL.md").is_none());
+    }
+
+    #[test]
+    fn for_context_window_floors_at_legacy_defaults() {
+        // 200k window lands exactly on the legacy 20k/100k defaults; small
+        // windows are floored there too — never tighter than ::default().
+        let mid = IdentityFilesConfig::for_context_window(200_000);
+        let def = IdentityFilesConfig::default();
+        assert_eq!(mid.per_file_max_chars, def.per_file_max_chars);
+        assert_eq!(mid.total_max_chars, def.total_max_chars);
+
+        let tiny = IdentityFilesConfig::for_context_window(8_000);
+        assert_eq!(tiny.per_file_max_chars, def.per_file_max_chars);
+        assert_eq!(tiny.total_max_chars, def.total_max_chars);
+    }
+
+    #[test]
+    fn for_context_window_scales_up_for_large_windows() {
+        let big = IdentityFilesConfig::for_context_window(1_000_000);
+        assert_eq!(big.per_file_max_chars, 100_000);
+        assert_eq!(big.total_max_chars, 400_000);
     }
 }
