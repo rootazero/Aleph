@@ -31,6 +31,10 @@ pub enum GoalAction {
     Update,
     /// Clear the standing goal entirely.
     Clear,
+    /// List every standing goal across ALL sessions (not just this one), so the
+    /// user can ask "what goals am I pursuing?" from any channel. One compact
+    /// line per goal; the current session's goal is flagged.
+    List,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -171,6 +175,37 @@ impl GoalTool {
         s
     }
 
+    /// One compact line per goal for the cross-session `list` action. Pure:
+    /// takes the goal plus the caller's own session (to flag "this session")
+    /// and the current wall-clock so an autonomous goal's pace/deadline shows.
+    /// Uses `status.as_str()` so the vocabulary matches what the model types in
+    /// `update`, mirroring `render`.
+    fn render_list_line(goal: &Goal, current_session: &str, now_ms: u64) -> String {
+        let here = if goal.session_id == current_session {
+            " (this session)"
+        } else {
+            ""
+        };
+        let mut s = format!("- [{}] {}{here}", goal.status.as_str(), goal.objective);
+        if let PursuitMode::Active { max_iterations } = goal.pursuit {
+            s.push_str(&format!(
+                " | autonomous {}/{max_iterations}",
+                goal.continuations_used
+            ));
+        }
+        if let Some(b) = goal.token_budget {
+            s.push_str(&format!(" | budget={b}"));
+        }
+        if let Some(d) = goal.deadline_ms {
+            if now_ms != 0 && d > now_ms {
+                s.push_str(&format!(" | deadline in ~{}m", (d - now_ms).div_ceil(60_000)));
+            } else {
+                s.push_str(" | deadline set");
+            }
+        }
+        s
+    }
+
     /// Fire the tool-free planner ONCE for this session's goal, fail-soft.
     /// No-op when no provider is injected, no global StrategyStore exists, a
     /// Strategy already exists for the key, or the planner self-gates/errs.
@@ -260,6 +295,9 @@ token_budget. \
          status='complete'; if you are stuck and need the user, use \
          status='blocked'. Use status='paused'/'active' only when the user \
          explicitly asks to pause or resume. Remove it with action='clear'. \
+         List every standing goal across ALL sessions with action='list' (use \
+         this to answer 'what goals am I pursuing?' since action='get' only sees \
+         the current session). \
          The goal is re-surfaced into your prompt every turn while active.";
 
     type Args = GoalArgs;
@@ -273,6 +311,7 @@ token_budget. \
             "goal(action='update', status='complete', note='all endpoints migrated and tests green')".into(),
             "goal(action='update', lesson='remember to run db migrations before tests')".into(),
             "goal(action='update', status='active', pursuit_max_iterations=15)".into(),
+            "goal(action='list')".into(),
             "goal(action='clear')".into(),
         ])
     }
@@ -434,6 +473,33 @@ token_budget. \
                 Ok(GoalOutput {
                     success: true,
                     message: "Standing goal cleared.".to_string(),
+                })
+            }
+            GoalAction::List => {
+                // Cross-session enumeration (R6 一核多端): a goal set on one
+                // channel is invisible to `get` on another, which keys by the
+                // current session. Reuse the store's existing `list_all` (the
+                // dream lessons-promote sweep already relies on it) so the model
+                // can answer "what goals are running?" from anywhere. Corrupt
+                // rows are skipped inside `list_all` (fail-safe).
+                let goals = self.store.list_all()?;
+                if goals.is_empty() {
+                    return Ok(GoalOutput {
+                        success: true,
+                        message: "No standing goals set in any session.".to_string(),
+                    });
+                }
+                // Newest-updated first so the most relevant goals lead.
+                let mut sorted = goals;
+                sorted.sort_unstable_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+                let mut message = format!("Standing goals ({}):\n", sorted.len());
+                for goal in &sorted {
+                    message.push_str(&Self::render_list_line(goal, &session, now));
+                    message.push('\n');
+                }
+                Ok(GoalOutput {
+                    success: true,
+                    message: message.trim_end().to_string(),
                 })
             }
         }
@@ -1195,5 +1261,64 @@ mod tests {
             sstore.get(&goal_key("sess-same")).unwrap().is_some(),
             "unchanged objective must keep the welded strategy"
         );
+    }
+
+    #[tokio::test]
+    async fn list_with_no_goals_is_graceful() {
+        let (tool, _d) = tool_with_session("sess-list-empty");
+        let out = tool.call(args(GoalAction::List)).await.unwrap();
+        assert!(out.success);
+        assert!(
+            out.message.to_lowercase().contains("no standing goals"),
+            "got: {}",
+            out.message
+        );
+    }
+
+    /// Two sessions sharing one store: `list` from session A must enumerate B's
+    /// goal too (cross-session R6 一核多端) and flag A's own as "(this session)".
+    #[tokio::test]
+    async fn list_enumerates_all_sessions_and_flags_current() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
+        let tool_a = GoalTool::new(store.clone())
+            .with_session_key_handle(Some(Arc::new(RwLock::new("sess-A".to_string()))));
+        let tool_b = GoalTool::new(store.clone())
+            .with_session_key_handle(Some(Arc::new(RwLock::new("sess-B".to_string()))));
+        tool_a
+            .call(GoalArgs {
+                objective: Some("Goal in A".into()),
+                ..args(GoalAction::Set)
+            })
+            .await
+            .unwrap();
+        tool_b
+            .call(GoalArgs {
+                objective: Some("Goal in B".into()),
+                ..args(GoalAction::Set)
+            })
+            .await
+            .unwrap();
+
+        let out = tool_a.call(args(GoalAction::List)).await.unwrap();
+        assert!(out.message.contains("Standing goals (2)"), "got: {}", out.message);
+        assert!(out.message.contains("Goal in A"));
+        assert!(
+            out.message.contains("Goal in B"),
+            "cross-session goal must be visible: {}",
+            out.message
+        );
+        let a_line = out
+            .message
+            .lines()
+            .find(|l| l.contains("Goal in A"))
+            .unwrap();
+        assert!(a_line.contains("(this session)"), "A flagged: {a_line}");
+        let b_line = out
+            .message
+            .lines()
+            .find(|l| l.contains("Goal in B"))
+            .unwrap();
+        assert!(!b_line.contains("(this session)"), "B not flagged: {b_line}");
     }
 }
