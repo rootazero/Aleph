@@ -602,6 +602,9 @@ impl InboundMessageRouter {
                 ctx.message = result.message;
                 if result.transcribed {
                     ctx.voice_reply_hint = true;
+                    // The *input* was speech — record it distinctly so the
+                    // prompt layer can invite transcription-artifact repair.
+                    ctx.transcribed_input = true;
                 }
             }
         }

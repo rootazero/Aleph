@@ -70,6 +70,14 @@ pub struct InboundContext {
 
     /// Hint that the reply should be delivered as voice (audio) output
     pub voice_reply_hint: bool,
+
+    /// Whether this turn's user message arrived as ASR-transcribed speech
+    /// (set by inbound STT in `voice::inbound`). Distinct from
+    /// [`Self::voice_reply_hint`], which also fires for typed messages on a
+    /// voice-enabled channel: only `transcribed_input` means the *input* itself
+    /// was speech, so only it justifies inviting transcription-artifact repair
+    /// in the prompt (`VoiceModeLayer`).
+    pub transcribed_input: bool,
 }
 
 impl InboundContext {
@@ -85,6 +93,7 @@ impl InboundContext {
             is_mentioned: false,
             sender_normalized,
             voice_reply_hint: false,
+            transcribed_input: false,
         }
     }
 
@@ -113,6 +122,13 @@ impl InboundContext {
     #[must_use]
     pub const fn with_voice_reply_hint(mut self, hint: bool) -> Self {
         self.voice_reply_hint = hint;
+        self
+    }
+
+    /// Mark that this turn's user input was ASR-transcribed speech.
+    #[must_use]
+    pub const fn with_transcribed_input(mut self, transcribed: bool) -> Self {
+        self.transcribed_input = transcribed;
         self
     }
 }
