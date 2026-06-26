@@ -15,6 +15,11 @@ use crate::memory::notes::store::NoteStore;
 
 use super::DreamStage;
 
+/// Minimum MinHash Jaccard estimate for a content-similarity edge.
+const MINHASH_THRESHOLD: f32 = 0.82;
+/// Max MinHash similarity edges materialized per note (hub-explosion guard).
+const MINHASH_MAX_EDGES_PER_NODE: usize = 8;
+
 pub struct GraphRecomputeStage;
 
 #[async_trait]
@@ -37,15 +42,47 @@ impl DreamStage for GraphRecomputeStage {
             .await
             .map_err(|e| AlephError::other(format!("graph recompute join: {e}")))?;
 
+        // MinHash similarity edges (content-based; the structural snapshot has
+        // no bodies). Non-fatal: failure → skip, keep 4-signal edges.
+        let docs: Vec<(String, String)> = match async {
+            let entries = store.list_notes(&agent_id).await?;
+            let paths: Vec<String> = entries.into_iter().map(|e| e.path).collect();
+            let hydrated = store.get_notes_with_content(&agent_id, &paths).await?;
+            Ok::<_, AlephError>(hydrated.into_iter().map(|r| (r.path, r.content)).collect())
+        }
+        .await
+        {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::debug!(error = %e, "graph recompute: body load failed, skipping minhash");
+                Vec::new()
+            }
+        };
+
+        let related = if docs.len() >= 2 {
+            let mh = tokio::task::spawn_blocking(move || {
+                let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+                crate::memory::notes::graph::minhash::similarity_edges(
+                    &docs,
+                    MINHASH_THRESHOLD,
+                    MINHASH_MAX_EDGES_PER_NODE,
+                    threads,
+                )
+            })
+            .await
+            .map_err(|e| AlephError::other(format!("minhash join: {e}")))?;
+            merge_related(computed.related, mh)
+        } else {
+            computed.related
+        };
+
         store
             .replace_graph_cache(&agent_id, &computed.cache)
             .await?;
         store
             .replace_graph_insights(&agent_id, &computed.insights)
             .await?;
-        store
-            .replace_graph_related(&agent_id, &computed.related)
-            .await?;
+        store.replace_graph_related(&agent_id, &related).await?;
         tracing::info!(agent = %agent_id, nodes = computed.node_count, "graph cache recomputed");
         Ok(ctx)
     }
@@ -146,10 +183,46 @@ fn compute(snap: &GraphSnapshot) -> Computed {
     }
 }
 
+/// Merge two `(seed, peer, score)` edge lists, deduped by `(seed, peer)` keeping
+/// the max score (explicit/4-signal edges beat lexical-similarity edges on ties).
+fn merge_related(
+    a: Vec<(String, String, f32)>,
+    b: Vec<(String, String, f32)>,
+) -> Vec<(String, String, f32)> {
+    use std::collections::HashMap;
+    let mut best: HashMap<(String, String), f32> = HashMap::new();
+    for (s, p, sc) in a.into_iter().chain(b) {
+        best.entry((s, p))
+            .and_modify(|e| {
+                if sc > *e {
+                    *e = sc;
+                }
+            })
+            .or_insert(sc);
+    }
+    let mut out: Vec<(String, String, f32)> =
+        best.into_iter().map(|((s, p), sc)| (s, p, sc)).collect();
+    out.sort_by(|x, y| x.0.cmp(&y.0).then_with(|| x.1.cmp(&y.1)));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::notes::graph::{GraphNode, GraphSnapshot};
+    use crate::memory::notes::graph::{GraphEdge, GraphNode, GraphSnapshot};
+
+    #[test]
+    fn merge_related_keeps_max_per_pair() {
+        let four_signal = vec![("a".to_string(), "b".to_string(), 4.0)];
+        let minhash = vec![
+            ("a".to_string(), "b".to_string(), 2.5), // same pair, lower → dropped
+            ("a".to_string(), "c".to_string(), 2.5), // new pair → kept
+        ];
+        let merged = merge_related(four_signal, minhash);
+        let ab = merged.iter().find(|(s, p, _)| s == "a" && p == "b").unwrap();
+        assert!((ab.2 - 4.0).abs() < 1e-6, "max score wins");
+        assert!(merged.iter().any(|(s, p, _)| s == "a" && p == "c"));
+    }
 
     #[test]
     fn compute_empty_graph_yields_nothing() {
@@ -169,7 +242,7 @@ mod tests {
         };
         let snap = GraphSnapshot {
             nodes: vec![node("g/a"), node("g/b"), node("g/c")],
-            edges: vec![("g/a".into(), "g/b".into())],
+            edges: vec![GraphEdge { from: "g/a".into(), to: "g/b".into(), rel_type: None, confidence: 1.0 }],
         };
         let c = compute(&snap);
         assert_eq!(c.node_count, 3);

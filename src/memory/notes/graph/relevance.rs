@@ -39,8 +39,9 @@ pub fn score_pair(g: &GraphIndex, w: &SignalWeights, a: usize, b: usize) -> f32 
         return 0.0;
     }
     let mut s = 0.0;
-    if g.adj[a].contains(&b) {
-        s += w.direct_link;
+    let conf = g.edge_confidence(a, b);
+    if conf > 0.0 {
+        s += w.direct_link * conf;
     }
     // Source-overlap, damped by each shared source's document frequency
     // (Adamic-Adar over the note↔source bipartite graph). df ≥ 2 always holds
