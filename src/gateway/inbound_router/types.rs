@@ -370,7 +370,8 @@ impl SlashAccessConfig {
     }
 }
 
-#[cfg(target_os = "macos")]
+// Ungated: the BlueBubbles transport runs on all platforms and needs this
+// IMessageConfig -> ChannelConfig conversion for inbound gating off-macOS too.
 impl From<&crate::gateway::interfaces::imessage::IMessageConfig> for ChannelConfig {
     fn from(cfg: &crate::gateway::interfaces::imessage::IMessageConfig) -> Self {
         use crate::gateway::interfaces::imessage::{IMessageDmPolicy, IMessageGroupPolicy};

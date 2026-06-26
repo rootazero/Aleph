@@ -27,7 +27,10 @@ pub mod cli;
 pub mod plugin;
 pub mod wechat;
 
-#[cfg(target_os = "macos")]
+// iMessage module compiles on all platforms: the BlueBubbles transport is pure
+// HTTP and OS-agnostic. The local (chat.db + AppleScript) transport's TYPES
+// compile everywhere (rusqlite is bundled/cross-platform, AppleScript is a
+// subprocess), but it is only *registered* on macOS (see subsystems.rs).
 pub mod imessage;
 
 pub mod discord;
@@ -49,7 +52,6 @@ pub mod xmpp;
 
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
-#[cfg(target_os = "macos")]
 pub use imessage::{
     IMessageChannel, IMessageChannelFactory, IMessageConfig, IMessageTarget, MessageSender,
     MessagesDb,
