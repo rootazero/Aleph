@@ -44,7 +44,9 @@ use crate::state::hotkey::{self as hotkey, HotkeyState};
 use crate::state::layout::{LayoutMode, WorkspaceState};
 use crate::state::notifications::NotificationsState;
 use crate::state::sessions::SessionMap;
+use crate::state::typewriter::TypewriterClock;
 use crate::state::viewport::{FormFactor, FormFactorState};
+use crate::api::BehaviorConfigApi;
 use crate::views::chat::ChatState;
 use crate::views::voice::{ImmersiveVoiceView, VoiceMode};
 
@@ -96,6 +98,29 @@ fn AppContent() -> impl IntoView {
     // legacy users see zero UI change; the LayoutToggle in the composer
     // opens Split mode on demand. Persisted in localStorage.
     provide_context(WorkspaceState::new());
+
+    // Typewriter reveal clock — paces the Panel's streamed-text reveal at the
+    // configured `behavior.typing_speed` (chars/sec). Provided here so the chat
+    // view (reader) and the behavior settings page (writer-on-save) share one
+    // clock. The animation ticker advances the reveal between token arrivals;
+    // the boot fetch wires the *live* typing_speed/output_mode (previously the
+    // slider was a dead knob — see state/typewriter.rs). `f` repair-hotkey
+    // pattern aside, this is pure presentation (R10).
+    let typewriter = TypewriterClock::new();
+    provide_context(typewriter);
+    spawn_local(async move {
+        if let Ok(cfg) = BehaviorConfigApi::get(&state).await {
+            typewriter.cps.set(cfg.typing_speed);
+            typewriter.instant.set(cfg.output_mode == "instant");
+        }
+    });
+    // ~30fps heartbeat so an in-flight reveal keeps advancing between deltas.
+    // Bumping a u64 with no streaming bubble mounted has zero subscribers, so
+    // it is effectively free when idle.
+    set_interval(
+        move || typewriter.tick.update(|t| *t = t.wrapping_add(1)),
+        std::time::Duration::from_millis(33),
+    );
 
     // Hotkey state — owns the ⌘K command-palette open signal and carries the
     // VoiceMode switch for the ⌘⇧V / Esc bindings. Installed *before* the
