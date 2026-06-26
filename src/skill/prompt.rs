@@ -2,7 +2,33 @@
 
 use crate::domain::skill::SkillManifest;
 use crate::thinker::xml_util::escape_xml;
+use sha2::{Digest, Sha256};
 use std::borrow::Cow;
+
+/// Compute a short, stable content version tag for a skill, e.g.
+/// `sha256:a1b2c3d4e5f6a7b8`.
+///
+/// Mirrors openclaw/pi/hermes-agent: the model reads a skill's full body once
+/// (via `skill_read`) and caches it across turns. Aleph uniquely lets the model
+/// *rewrite* skills mid-session through `skill_manage` (patch/edit), so the
+/// cached instructions can silently go stale. Emitting a content digest in the
+/// `<available_skills>` index gives the model a cheap signal — when a skill's
+/// `<version>` differs from a previous turn, the body changed and must be
+/// re-read. Pure scaffolding (a content hash, no reasoning) — R10-compliant.
+///
+/// The 16-hex prefix (64 bits) is collision-resistant enough for change
+/// detection while staying compact in the prompt.
+#[must_use]
+fn content_version(skill: &SkillManifest) -> String {
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(skill.content().as_str().as_bytes());
+    let mut tag = String::with_capacity("sha256:".len() + 16);
+    tag.push_str("sha256:");
+    for byte in &digest[..8] {
+        let _ = write!(tag, "{byte:02x}");
+    }
+    tag
+}
 
 /// Deferred loading guidance appended after skill index in system prompts.
 /// Tells the LLM to call `skill_read` before executing a skill, and carries
@@ -15,6 +41,9 @@ pub const DEFERRED_LOADING_GUIDANCE: &str =
      Use `skill_list` to discover available skills if needed.\n\n\
      When a user's request matches a skill's <when> trigger, proactively \
      invoke that skill without waiting for an explicit request.\n\n\
+     Each skill carries a <version> tag. If a skill's <version> differs from \
+     when you last read it, its instructions changed — re-read it with \
+     `skill_read` before relying on the cached body.\n\n\
      After completing a complex or novel task, consider saving the \
      methodology as a reusable skill via `skill_manage(action='create')`. \
      If a skill's instructions turn out to be outdated or wrong while you \
@@ -87,6 +116,9 @@ fn render_skill_fragment(skill: &SkillManifest) -> String {
         buf.push_str(&escape_xml(when));
         buf.push_str("</when>\n");
     }
+    buf.push_str("    <version>");
+    buf.push_str(&content_version(skill));
+    buf.push_str("</version>\n");
     buf.push_str("  </skill>\n");
     buf
 }
@@ -110,6 +142,9 @@ fn render_skill_fragment_compact(skill: &SkillManifest) -> String {
         buf.push_str(&escape_xml(when));
         buf.push_str("</when>\n");
     }
+    buf.push_str("    <version>");
+    buf.push_str(&content_version(skill));
+    buf.push_str("</version>\n");
     buf.push_str("  </skill>\n");
     buf
 }
@@ -509,6 +544,51 @@ mod tests {
         assert!(frag.contains("<name>Deploy</name>"));
         assert!(frag.contains("<when>on release</when>"));
         assert!(!frag.contains("<description>"));
+        // Compact fragments still carry the version so staleness is detectable
+        // even after budget degradation.
+        assert!(frag.contains("<version>sha256:"));
+    }
+
+    fn make_skill_with_content(name: &str, content: &str) -> SkillManifest {
+        SkillManifest::new(
+            SkillId::new(name.to_lowercase().replace(' ', "-")),
+            name,
+            format!("{name} description"),
+            SkillContent::new(content),
+            SkillSource::Bundled,
+        )
+    }
+
+    #[test]
+    fn full_fragment_includes_version_tag() {
+        let skill = make_skill("Deploy", "Ships the app");
+        let xml = build_skills_prompt_xml(&[&skill]);
+        // sha256: prefix + 16 hex chars (8 bytes).
+        assert!(xml.contains("<version>sha256:"));
+        let tag = content_version(&skill);
+        assert_eq!(tag.len(), "sha256:".len() + 16);
+        assert!(xml.contains(&format!("<version>{tag}</version>")));
+    }
+
+    #[test]
+    fn version_tracks_content_not_metadata() {
+        // Same name/description, different body → different version (so the
+        // model re-reads after a skill_manage edit changed the instructions).
+        let v1 = make_skill_with_content("Deploy", "step one: build");
+        let v2 = make_skill_with_content("Deploy", "step one: build\nstep two: ship");
+        assert_ne!(content_version(&v1), content_version(&v2));
+
+        // Identical body → identical version (stable across turns).
+        let v1_again = make_skill_with_content("Deploy", "step one: build");
+        assert_eq!(content_version(&v1), content_version(&v1_again));
+    }
+
+    #[test]
+    fn deferred_guidance_mentions_version_reread() {
+        assert!(
+            DEFERRED_LOADING_GUIDANCE.contains("<version>"),
+            "guidance must teach the model to watch the version tag"
+        );
     }
 
     #[test]
@@ -517,17 +597,18 @@ mod tests {
         // fits one full fragment plus several compact ones — the old behaviour
         // hard-dropped the tail (3 omitted); graceful degradation keeps every
         // name visible (0 omitted) by eliding descriptions on the tail.
-        let long = "d".repeat(200);
+        let long = "d".repeat(400);
         let skills: Vec<SkillManifest> = (0..4)
             .map(|i| make_skill_with_when(&format!("Skill{i}"), &long, &format!("trig{i}")))
             .collect();
         let refs: Vec<&SkillManifest> = skills.iter().collect();
 
-        // One full fragment is ~300 chars; a compact one is ~68. Budget admits
-        // the first full (~300) plus the three compact tails (~204).
+        // One full fragment is ~550 chars (desc + <version> tag); a compact one
+        // is ~115. Budget admits the first full (~550) plus the three compact
+        // tails (~345) but cannot fit a second full (~1100 total).
         let budget = SkillPromptBudget {
             max_skills: 0,
-            max_chars: 520,
+            max_chars: 900,
         };
         let xml = build_skills_prompt_xml_with_budget(&refs, &budget);
 
