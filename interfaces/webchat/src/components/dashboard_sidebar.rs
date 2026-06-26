@@ -24,6 +24,13 @@ pub fn DashboardSidebar() -> impl IntoView {
                 <SidebarItem href="/dashboard/trace" label=Signal::derive(move || t_string!(i18n, dashboard.sidebar.agent_trace).to_string()) alert_key="agent.trace">
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                 </SidebarItem>
+                <SidebarItem href="/dashboard/subagents" label=Signal::derive(|| "Subagents".to_string())>
+                    <circle cx="18" cy="5" r="3" />
+                    <circle cx="6" cy="12" r="3" />
+                    <circle cx="18" cy="19" r="3" />
+                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                </SidebarItem>
                 <SidebarItem href="/dashboard/tasks" label=Signal::derive(move || t_string!(i18n, dashboard.sidebar.scheduled_tasks).to_string())>
                     <circle cx="12" cy="12" r="10" />
                     <polyline points="12 6 12 12 16 14" />

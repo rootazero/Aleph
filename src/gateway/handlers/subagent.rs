@@ -1,10 +1,12 @@
 //! Subagent tree handler — read-only snapshot of the background sub-agent tree.
 //!
-//! `subagent.tree` reconstructs the forest (via `aleph_protocol`'s shared
-//! `build_tree`) over the process-global `BackgroundAgentTracker`, optionally
-//! filtered to one root session. Backs the panel's cold-start; live updates then
-//! arrive incrementally via the `run.subagent_tree` relay. Pure I/O (R4/R10) —
-//! no reasoning, no mutation.
+//! `subagent.tree` returns the **flat** background sub-agent nodes from the
+//! process-global `BackgroundAgentTracker`, optionally filtered to one root
+//! session. The panel rebuilds the hierarchy with `aleph_protocol::build_tree`
+//! — the same shared reconstruction it runs on each live `run.subagent_tree`
+//! delta, so cold-start and live paths are byte-identical (one Rust tree
+//! builder, compiled to WASM; no Python+TS-style double implementation).
+//! Pure I/O (R4/R10) — no reasoning, no mutation.
 //!
 //! ## Request
 //! ```json
@@ -13,7 +15,7 @@
 //!
 //! ## Response (success)
 //! ```json
-//! { "roots": [ ...TreeNode... ], "count": 3 }
+//! { "nodes": [ ...SubagentNode... ], "count": 3 }
 //! ```
 
 use serde_json::json;
@@ -21,7 +23,7 @@ use serde_json::json;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::agents::background_tracker::BackgroundAgentTracker;
 
-/// `subagent.tree` — snapshot the background sub-agent tree for the panel.
+/// `subagent.tree` — snapshot the flat background sub-agent nodes for the panel.
 pub async fn handle_tree(request: JsonRpcRequest) -> JsonRpcResponse {
     let root_session = request
         .params
@@ -30,13 +32,11 @@ pub async fn handle_tree(request: JsonRpcRequest) -> JsonRpcResponse {
         .and_then(|v| v.as_str())
         .map(str::to_string);
 
-    let tracker = BackgroundAgentTracker::global();
-    let flat = tracker.flat_nodes(root_session.as_deref());
+    let flat = BackgroundAgentTracker::global().flat_nodes(root_session.as_deref());
     let count = flat.len();
-    let tree = aleph_protocol::subagent_tree::build_tree(&flat);
 
-    match serde_json::to_value(&tree) {
-        Ok(roots) => JsonRpcResponse::success(request.id, json!({ "roots": roots, "count": count })),
+    match serde_json::to_value(&flat) {
+        Ok(nodes) => JsonRpcResponse::success(request.id, json!({ "nodes": nodes, "count": count })),
         Err(err) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
