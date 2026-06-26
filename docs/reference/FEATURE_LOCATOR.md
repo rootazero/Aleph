@@ -181,10 +181,10 @@
 
 ### 3.3 工具并发调度 (Tool Concurrency)
 - **口语关键词**：DAG 工具执行、并行分组、智能调度、资源作用域、并发安全
-- **代码锚点**：`src/tools/concurrency.rs`（partition_parallel_groups + ConcurrencyClaim：Shared / Exclusive{Paths/Global}）、`src/tools/runtime.rs`（LoopTool::concurrency_claim）、`src/builtin_tools/file_ops/tool.rs`（按操作类型声明 claim）
+- **代码锚点**：`src/tools/concurrency.rs`（partition_parallel_groups + ConcurrencyClaim：Shared / Exclusive{Paths/Global}）、`src/tools/runtime.rs`（LoopTool::concurrency_claim）、`src/tools/adapters/registry_adapter.rs`（`READ_ONLY_TOOLS` 只读允许名单 + `file_ops_claim`/`bounded_file_writer_path` 路径作用域）、`src/builtin_tools/file_ops/tool.rs`（按操作类型声明 claim）
 - **职责**：工具按资源作用域声明，harness 群分保证无冲突资源并行。
-- **状态**：✅ **已澄清（G5，2026-06-16）**——工具层是"群分顺序"而非完整 DAG：按资源作用域分群（`Shared` / `Exclusive{Global, Paths}`）、群内并行群间串行，**没有完整依赖图解析**。`concurrency.rs` 头部自述是"a data-race guard, not an LLM judgement … this only schedules them"（守 R7/R10：不做意图推理/相关性评分/工具过滤）。"智能调度"= 资源冲突避免，**不是**任务 DAG。**真正的任务级 DAG 在**：§4.3 Workflow（`src/workflow/compile.rs`：`step.depends_on → coord_task.blocked_by`，拓扑序物化）/ §4.4 Task（`src/teams/dispatcher/` 按 `blocked_by` 边扫描 Runnable 并发调度）。
-- **打磨话术**：「‘DAG 工具执行’在工具层其实是 `concurrency.rs` 的资源群分并行（非真 DAG）。要‘多步骤依赖图’去 Workflow/Task 层（`compile.rs`+`teams/dispatcher/`），**别在 `concurrency.rs` 找、也别在工具层重造 DAG**（违 R6；该需求应上升到 Workflow 层表达）。」
+- **状态**：✅ **已澄清（G5，2026-06-16）**——工具层是"群分顺序"而非完整 DAG：按资源作用域分群（`Shared` / `Exclusive{Global, Paths}`）、群内并行群间串行，**没有完整依赖图解析**。`concurrency.rs` 头部自述是"a data-race guard, not an LLM judgement … this only schedules them"（守 R7/R10：不做意图推理/相关性评分/工具过滤）。"智能调度"= 资源冲突避免，**不是**任务 DAG。**真正的任务级 DAG 在**：§4.3 Workflow（`src/workflow/compile.rs`：`step.depends_on → coord_task.blocked_by`，拓扑序物化）/ §4.4 Task（`src/teams/dispatcher/` 按 `blocked_by` 边扫描 Runnable 并发调度）。**安全默认修复（2026-06-26）**：`registry_adapter.rs` 原 `EXCLUSIVE_TOOLS`（变更工具**拒绝**名单，默认 `Shared`＝并行）是**默认不安全**——任何漏列的变更工具静默判为可并行（实测漏 `team_disband`〔且 confirmation-required〕/`team_member_add`/`team_member_remove`/`heartbeat_update`/`skill_install` 等数十个，可与同批调用竞争）。已**倒置为 `READ_ONLY_TOOLS` 只读允许名单**（对齐 hermes `_PARALLEL_SAFE_TOOLS`）：仅显式确证只读的工具 → `Shared`，其余一切（含已知变更工具与未来新增工具）→ `Exclusive{Global}`。失败模式从"漏列变更工具＝竞争"翻转为"漏列只读工具＝串行〔仍正确，只损失并行〕"；拼写错误也只致串行。路径作用域（`file_ops`/`file_write`/`file_edit`/`apply_patch` → 绑定 `Paths`，不相交路径仍并行）保留——这是 Aleph 在安全默认之上**超越** hermes 的点。顺带把浏览器/会话等共享可变状态工具降为安全串行。
+- **打磨话术**：「‘DAG 工具执行’在工具层其实是 `concurrency.rs` 的资源群分并行（非真 DAG）。要‘多步骤依赖图’去 Workflow/Task 层（`compile.rs`+`teams/dispatcher/`），**别在 `concurrency.rs` 找、也别在工具层重造 DAG**（违 R6；该需求应上升到 Workflow 层表达）。‘某工具该不该并行’＝看 `registry_adapter.rs::READ_ONLY_TOOLS`——**只读才进名单，默认串行安全**；新增工具默认安全（漏列只损失并行不致竞争），**绝不**改回 mutating 拒绝名单（默认不安全）。」
 
 ### 3.4 内置文件工具 (Builtin File Tools)
 - **口语关键词**：built-in 工具、read/write file、edit、apply patch、文件操作
