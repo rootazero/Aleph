@@ -16,7 +16,7 @@ use async_trait::async_trait;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelResult,
-    ChannelState, ChannelStatus, MessageId, OutboundMessage, SendResult,
+    ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage, SendResult,
 };
 
 use api::{BlueBubblesApi, LruGuidCache, ServerCaps};
@@ -134,6 +134,7 @@ impl Channel for BlueBubblesChannel {
             sender: self.channel_state.sender(),
             api: Arc::new(self.api.clone()),
             dedup: self.dedup.clone(),
+            send_read_receipts: self.config.send_read_receipts,
         };
         let (host, port, path) = (
             self.config.webhook_host.clone(),
@@ -217,6 +218,50 @@ impl Channel for BlueBubblesChannel {
             }
         }
         Ok(SendResult { message_id: MessageId::new(last), timestamp: chrono::Utc::now() })
+    }
+
+    async fn react(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+        reaction: &str,
+    ) -> ChannelResult<()> {
+        let guid = self
+            .api
+            .resolve_chat_guid(conversation_id.as_str(), &self.guid_cache)
+            .await
+            .ok_or_else(|| ChannelError::SendFailed("chat not found".to_string()))?;
+        if outbound::reaction::tapback_code(reaction).is_none() {
+            return Err(ChannelError::UnsupportedFeature(format!(
+                "unknown tapback: {reaction}"
+            )));
+        }
+        if !self.server_caps.read().await.private_api {
+            return Err(ChannelError::UnsupportedFeature(
+                "reactions require BlueBubbles private-api".to_string(),
+            ));
+        }
+        self.api
+            .send_reaction(&guid, message_id.as_str(), reaction)
+            .await
+            .map_err(|e| ChannelError::SendFailed(e.to_string()))
+    }
+
+    async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
+        let Some(guid) = self
+            .api
+            .resolve_chat_guid(conversation_id.as_str(), &self.guid_cache)
+            .await
+        else {
+            return Ok(()); // best-effort: unknown chat → silent no-op
+        };
+        if !self.server_caps.read().await.private_api {
+            return Ok(()); // private-api off → silent degrade
+        }
+        self.api
+            .send_typing(&guid)
+            .await
+            .map_err(|e| ChannelError::SendFailed(e.to_string()))
     }
 }
 

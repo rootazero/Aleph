@@ -249,6 +249,61 @@ impl BlueBubblesApi {
     }
 }
 
+impl BlueBubblesApi {
+    /// Send a tapback reaction on a specific message (requires private-api; callers gate).
+    pub async fn send_reaction(
+        &self,
+        chat_guid: &str,
+        selected_msg_guid: &str,
+        reaction: &str,
+    ) -> Result<(), BbError> {
+        let payload = serde_json::json!({
+            "chatGuid": chat_guid,
+            "selectedMessageGuid": selected_msg_guid,
+            "reaction": reaction,
+        });
+        let res = self
+            .client
+            .post(self.api_url("/api/v1/message/react"))
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| BbError::Http(e.to_string()))?;
+        res.error_for_status().map_err(|e| BbError::Http(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Send a typing indicator for a chat (requires private-api; callers gate).
+    pub async fn send_typing(&self, chat_guid: &str) -> Result<(), BbError> {
+        let encoded: String = url::form_urlencoded::byte_serialize(chat_guid.as_bytes())
+            .collect::<String>()
+            .replace('+', "%20");
+        let res = self
+            .client
+            .post(self.api_url(&format!("/api/v1/chat/{encoded}/typing")))
+            .send()
+            .await
+            .map_err(|e| BbError::Http(e.to_string()))?;
+        res.error_for_status().map_err(|e| BbError::Http(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Mark a chat as read. Best-effort — failure is logged and ignored by callers.
+    pub async fn mark_read(&self, chat_guid: &str) -> Result<(), BbError> {
+        let encoded: String = url::form_urlencoded::byte_serialize(chat_guid.as_bytes())
+            .collect::<String>()
+            .replace('+', "%20");
+        let res = self
+            .client
+            .post(self.api_url(&format!("/api/v1/chat/{encoded}/read")))
+            .send()
+            .await
+            .map_err(|e| BbError::Http(e.to_string()))?;
+        res.error_for_status().map_err(|e| BbError::Http(e.to_string()))?;
+        Ok(())
+    }
+}
+
 /// Build the callback URL BlueBubbles will POST to (password in query —
 /// the webhook API cannot send custom headers).
 #[must_use]

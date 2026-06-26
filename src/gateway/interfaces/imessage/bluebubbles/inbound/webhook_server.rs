@@ -26,6 +26,7 @@ pub struct WebhookState {
     pub sender: InboundMessageSender,
     pub api: Arc<BlueBubblesApi>,
     pub dedup: Arc<StdMutex<BbDedup>>,
+    pub send_read_receipts: bool,
 }
 
 pub async fn run_webhook_server(state: WebhookState, host: String, port: u16, path: String) {
@@ -77,6 +78,11 @@ pub async fn handle_webhook(
                     super::download_attachments(&state.api, &m.attachment_guids).await;
                 let inbound = to_inbound(&m, atts);
                 let _ = state.sender.send(inbound);
+                if state.send_read_receipts {
+                    let api = state.api.clone();
+                    let cg = m.chat_guid.clone();
+                    tokio::spawn(async move { let _ = api.mark_read(&cg).await; });
+                }
             }
         }
     }
@@ -102,6 +108,7 @@ mod tests {
                 ),
             ),
             dedup: std::sync::Arc::new(std::sync::Mutex::new(BbDedup::new())),
+            send_read_receipts: false,
         }
     }
 
