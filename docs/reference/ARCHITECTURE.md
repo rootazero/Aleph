@@ -482,7 +482,7 @@ method reference, error envelope, and debugging procedures.
 ### Web Chat Interface
 
 ```
-apps/webchat/                # Web-based chat interface
+interfaces/webchat/          # Web-based chat interface (Leptos/WASM panel)
 ```
 
 ---

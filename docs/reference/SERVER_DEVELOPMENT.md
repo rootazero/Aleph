@@ -201,17 +201,19 @@ npm run build:css
 - 生产优化：minified，仅包含使用的类
 - 嵌入二进制：通过 rust-embed 打包进可执行文件
 
-### macOS Native App
+### Desktop App (Tauri shell)
+
+The desktop app lives in `desktop/shell/` (Tauri); build it via `just`:
 
 ```bash
-# Build macOS app (requires Xcode + xcodegen)
-cd apps/macos-native && scripts/build-macos.sh
+# Run the desktop app in dev mode (rebuilds WASM first)
+just shell-dev
 
-# Development build
-cd apps/macos-native && xcodegen generate && xcodebuild -scheme Aleph -configuration Debug build
+# Build full desktop App installers (.dmg/.msi/.deb, bundles aleph-server)
+just shell-build
 
-# Run tests
-cd apps/macos-native && xcodebuild -scheme Aleph -configuration Debug test -destination 'platform=macOS'
+# Build Panel-only shell installers (connects to a LAN server, no bundled server)
+just shell-build-lite
 ```
 
 ### Server-Only Build (no desktop app)

@@ -170,10 +170,10 @@ pub(in crate::commands::start) async fn start_webchat_server(
     use std::net::SocketAddr;
 
     let webchat_dir = args.webchat_dir.clone().or_else(|| {
-        // Try default locations: ./apps/webchat/dist or ../apps/webchat/dist or ~/.aleph/webchat
+        // Try default locations: ./interfaces/webchat/dist or ../interfaces/webchat/dist or ~/.aleph/webchat
         let mut candidates = vec![
-            PathBuf::from("apps/webchat/dist"),
-            PathBuf::from("../apps/webchat/dist"),
+            PathBuf::from("interfaces/webchat/dist"),
+            PathBuf::from("../interfaces/webchat/dist"),
         ];
         if let Some(home) = dirs::home_dir() {
             candidates.push(home.join(".aleph/webchat"));

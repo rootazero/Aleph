@@ -69,10 +69,6 @@ DerivedData/
 platforms/macos/Aleph/Frameworks/*.dylib
 platforms/macos/Aleph/Frameworks/*.dylib.*
 
-# Build pipeline artifacts
-apps/macos-native/Aleph/Resources/aleph
-apps/macos-native/build/
-
 # Build pipeline logs (root-level scratch logs from just shell-build / wasm retry)
 /.shell-build.log
 /.wasm-retry.log
