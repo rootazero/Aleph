@@ -2,6 +2,7 @@
 //!
 //! Pure HTTP — compiles and runs on any OS, unlike the macOS-only local path.
 
+pub mod api;
 pub mod config;
 
 pub use config::BlueBubblesConfig;
