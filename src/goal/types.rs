@@ -16,6 +16,23 @@ pub enum GoalStatus {
     Complete,
 }
 
+impl GoalStatus {
+    /// Canonical snake_case name — identical to the serde wire form and to the
+    /// `status='…'` value the model passes to `goal(action='update', …)`. The
+    /// tool's user-facing render uses this instead of a raw `{:?}` Debug dump so
+    /// what the model reads back (`status=active`) matches what it must type,
+    /// mirroring `looping::Cadence::describe` / `LoopState::human_summary`.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Blocked => "blocked",
+            Self::Complete => "complete",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum PursuitMode {
@@ -244,6 +261,21 @@ mod tests {
 
     fn sample() -> Goal {
         Goal::new("sess-1", "Migrate auth to new API", 1_000, 5_000)
+    }
+
+    #[test]
+    fn status_as_str_matches_serde_wire_form() {
+        // The render vocabulary the model reads must equal the `status='…'`
+        // value it types — assert as_str() never drifts from the serde form.
+        for st in [
+            GoalStatus::Active,
+            GoalStatus::Paused,
+            GoalStatus::Blocked,
+            GoalStatus::Complete,
+        ] {
+            let wire = serde_json::to_string(&st).unwrap();
+            assert_eq!(format!("\"{}\"", st.as_str()), wire);
+        }
     }
 
     #[test]
