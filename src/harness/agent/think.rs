@@ -817,46 +817,21 @@ impl AgentHarness {
         // 3b-pre. Context-window-exceeded recovery (claude-code parity).
         // `model_context_window_exceeded` means the *context window* — not
         // the output cap — filled mid-generation. The resume-nudge loop in
-        // 3b would append more messages and re-hit the wall, so route this
-        // to the same reactive-compaction rescue that `prompt_too_long`
-        // errors take: synthesize an error carrying the overflow marker
-        // (which `llm_retry::classify` maps to `CompactAndRetry`) and let
-        // the helper reuse its one-shot cap, trace, and budget plumbing.
-        // The loop is bounded by that cap: each pass either returns a
-        // compacted-and-retried response or errors out when rescues are
-        // exhausted, so a model that keeps overflowing cannot spin.
-        while matches!(
-            response.stop_reason,
-            crate::providers::adapter::StopReason::ContextWindowExceeded
-        ) {
-            // The overflowed call still billed input plus the partial output;
-            // count it before the retry replaces `response`.
-            self.account_intermediate_tokens(&response);
-            // The rescue below replaces `response` via the non-streaming path.
-            response_was_streamed = false;
-            tracing::warn!(
-                ?session_id,
-                "provider stopped with model_context_window_exceeded; \
-                 routing to reactive compaction",
-            );
-            let overflow_err = crate::error::AlephError::ProviderError {
-                message: "model_context_window_exceeded: provider stopped because \
-                          the context window is full"
-                    .to_string(),
-                suggestion: None,
-            };
-            response = self
-                .try_reactive_compact_and_retry(
-                    overflow_err,
-                    session_id,
-                    &mut messages,
-                    tools_ref,
-                    budget_tool_tokens,
-                    parent_cancel,
-                    started,
-                )
-                .await?;
-        }
+        // 3b would append more messages and re-hit the wall, so route this to
+        // reactive compaction FIRST, before 3b ever appends. The drain helper
+        // is bounded by the one-shot reactive-compact cap, so a model that
+        // keeps overflowing cannot spin. See `drain_context_overflow`.
+        self.drain_context_overflow(
+            &mut response,
+            &mut response_was_streamed,
+            session_id,
+            &mut messages,
+            tools_ref,
+            budget_tool_tokens,
+            parent_cancel,
+            started,
+        )
+        .await?;
 
         // 3b. max_output_tokens recovery (claude-code parity, query.ts:1188).
         // When the provider hits its output-token cap mid-stream we get
@@ -928,6 +903,27 @@ impl AgentHarness {
                 }
             };
         }
+        // 3b-post. The 3b resume loop appends a partial + nudge to `messages`
+        // and re-issues; that larger request can itself overflow the *context
+        // window*, yielding a `ContextWindowExceeded` response that the 3b-pre
+        // drain (which ran before 3b) already passed. Drain it again here so a
+        // post-resume overflow is recovered instead of slipping through as a
+        // degraded terminal turn. The same one-shot reactive-compact cap bounds
+        // both drains jointly — a second overflow after the cap is spent
+        // surfaces the error rather than spinning. No-op (zero LLM cost) on the
+        // common path where 3b did not run or left a non-overflow response.
+        self.drain_context_overflow(
+            &mut response,
+            &mut response_was_streamed,
+            session_id,
+            &mut messages,
+            tools_ref,
+            budget_tool_tokens,
+            parent_cancel,
+            started,
+        )
+        .await?;
+
         // Exit-point reason fidelity. Capture the surviving response's
         // degradation verdicts here — after every bounded recovery loop has
         // had its chance to replace `response`, and before tool-call
@@ -1336,6 +1332,72 @@ impl AgentHarness {
             metrics: metrics_for_trace,
         });
         result
+    }
+
+    /// Drain a `ContextWindowExceeded` terminal state via reactive compaction.
+    ///
+    /// `model_context_window_exceeded` means the *context window* filled
+    /// mid-generation (distinct from the output-token cap). Each pass counts
+    /// the overflowed call's billed tokens, synthesizes the overflow-marker
+    /// error (`llm_retry::classify` maps it to `CompactAndRetry`), and routes
+    /// through [`Self::try_reactive_compact_and_retry`] — reusing its one-shot
+    /// cap, trace, and budget plumbing. Bounded by that cap: a model that keeps
+    /// overflowing surfaces the error (via `?`) rather than spinning.
+    ///
+    /// Called at BOTH points the window can fill mid-pipeline — right after the
+    /// primary call (3b-pre, before the resume loop appends more) and again
+    /// after the `max_output_tokens` resume loop (3b-post, whose nudge retry can
+    /// itself overflow). `response` / `response_was_streamed` are `&mut` so the
+    /// helper updates the caller's surviving state in place. No-op (zero LLM
+    /// cost) when `response` is not in the overflow state.
+    ///
+    /// R10-safe: pure round scheduling around one provider failure mode, no
+    /// policy — the decision to compact is fully encoded in the classifier.
+    #[allow(clippy::too_many_arguments)]
+    async fn drain_context_overflow(
+        &self,
+        response: &mut ProviderResponse,
+        response_was_streamed: &mut bool,
+        session_id: &SessionId,
+        messages: &mut Vec<UnifiedMessage>,
+        tools_ref: Option<&[crate::tool_metadata::ToolDefinition]>,
+        budget_tool_tokens: usize,
+        parent_cancel: &CancellationToken,
+        started: std::time::Instant,
+    ) -> Result<(), HarnessError> {
+        while matches!(
+            response.stop_reason,
+            crate::providers::adapter::StopReason::ContextWindowExceeded
+        ) {
+            // The overflowed call still billed input plus the partial output;
+            // count it before the retry replaces `response`.
+            self.account_intermediate_tokens(response);
+            // The rescue below replaces `response` via the non-streaming path.
+            *response_was_streamed = false;
+            tracing::warn!(
+                ?session_id,
+                "provider stopped with model_context_window_exceeded; \
+                 routing to reactive compaction",
+            );
+            let overflow_err = crate::error::AlephError::ProviderError {
+                message: "model_context_window_exceeded: provider stopped because \
+                          the context window is full"
+                    .to_string(),
+                suggestion: None,
+            };
+            *response = self
+                .try_reactive_compact_and_retry(
+                    overflow_err,
+                    session_id,
+                    messages,
+                    tools_ref,
+                    budget_tool_tokens,
+                    parent_cancel,
+                    started,
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     /// Reactive-compaction rescue (Phase A — claude-code parity,
