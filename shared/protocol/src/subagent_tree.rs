@@ -29,13 +29,8 @@ pub enum NodeLifecycle {
 }
 
 impl NodeLifecycle {
-    /// True for any terminal (non-running) state.
-    #[must_use]
-    pub const fn is_terminal(self) -> bool {
-        !matches!(self, Self::Running)
-    }
-
-    /// True for a terminal state that did not succeed.
+    /// True for a terminal state that did not succeed. Drives the panel's
+    /// `Failed` filter.
     #[must_use]
     pub const fn is_failure(self) -> bool {
         matches!(self, Self::Failed | Self::Cancelled | Self::TimedOut)
@@ -103,19 +98,6 @@ pub enum SubagentTreeEvent {
         tool_calls_made: usize,
         total_tokens: usize,
     },
-}
-
-impl SubagentTreeEvent {
-    /// The owning session for any event variant (scope key for routing).
-    #[must_use]
-    pub fn root_session(&self) -> &str {
-        match self {
-            Self::Spawned { node } => &node.root_session,
-            Self::Progress { root_session, .. } | Self::Settled { root_session, .. } => {
-                root_session
-            }
-        }
-    }
 }
 
 /// Recursive subtree rollup — drives the panel's heatmap, sparkline, and
@@ -335,23 +317,11 @@ mod tests {
     }
 
     #[test]
-    fn event_root_session_accessor() {
-        let ev = SubagentTreeEvent::Progress {
-            node_id: "a".into(),
-            root_session: "agent:sess".into(),
-            step: 1,
-            activity: "tool_called".into(),
-            tool_name: Some("grep".into()),
-            tool_count: 1,
-        };
-        assert_eq!(ev.root_session(), "agent:sess");
-    }
-
-    #[test]
-    fn lifecycle_terminal_and_failure() {
-        assert!(!NodeLifecycle::Running.is_terminal());
-        assert!(NodeLifecycle::Completed.is_terminal());
+    fn lifecycle_failure_classification() {
+        assert!(!NodeLifecycle::Running.is_failure());
         assert!(!NodeLifecycle::Completed.is_failure());
+        assert!(NodeLifecycle::Failed.is_failure());
+        assert!(NodeLifecycle::Cancelled.is_failure());
         assert!(NodeLifecycle::TimedOut.is_failure());
     }
 }
