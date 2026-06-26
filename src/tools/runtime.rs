@@ -120,7 +120,7 @@ pub trait LoopTool: Send + Sync {
     /// approval seam: any `LoopTool` (built-in, MCP, skill, extension) can
     /// opt in without being hard-coded into the gateway. Builtins declare it
     /// through `RegistryToolAdapter`'s `CONFIRMATION_REQUIRED_TOOLS` list
-    /// (sibling to `EXCLUSIVE_TOOLS`). Mirrors openclaw's per-tool policy and
+    /// (co-located with the `READ_ONLY_TOOLS` concurrency allowlist). Mirrors openclaw's per-tool policy and
     /// hermes's per-tool approval flags. Like `is_concurrent_safe`, the
     /// answer is static per tool; it is not input-dependent.
     fn requires_confirmation(&self) -> bool {
