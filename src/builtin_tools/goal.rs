@@ -114,10 +114,13 @@ impl GoalTool {
         }
     }
 
-    fn render(goal: &Goal) -> String {
+    fn render(goal: &Goal, now_ms: u64) -> String {
+        // status as snake_case (the serde wire form the model types in `update`),
+        // not a raw `{:?}` Debug dump — see `GoalStatus::as_str`.
         let mut s = format!(
-            "Standing goal: {}\nstatus={:?}",
-            goal.objective, goal.status
+            "Standing goal: {}\nstatus={}",
+            goal.objective,
+            goal.status.as_str()
         );
         if let Some(b) = goal.token_budget {
             s.push_str(&format!(", token_budget={b}"));
@@ -128,8 +131,18 @@ impl GoalTool {
                 goal.continuations_used
             ));
         }
-        if goal.deadline_ms.is_some() {
-            s.push_str(", deadline set");
+        if let Some(deadline) = goal.deadline_ms {
+            // Surface the *remaining* wall-clock budget so an autonomous goal
+            // pacing against its deadline can see it, instead of an info-free
+            // "deadline set" (parity with the loop tool's `human_summary`).
+            // Minutes match the input unit (`timeout_minutes`). Falls back when
+            // the clock is unavailable (now_ms == 0) or the deadline has passed.
+            if now_ms != 0 && deadline > now_ms {
+                let mins_left = (deadline - now_ms).div_ceil(60_000);
+                s.push_str(&format!(", deadline in ~{mins_left}m"));
+            } else {
+                s.push_str(", deadline set");
+            }
         }
         if let Some(note) = goal.note.as_deref() {
             if !note.is_empty() {
@@ -335,13 +348,13 @@ token_budget. \
                 self.maybe_plan_strategy(&session, &goal).await;
                 Ok(GoalOutput {
                     success: true,
-                    message: format!("Set. {}", Self::render(&goal)),
+                    message: format!("Set. {}", Self::render(&goal, now)),
                 })
             }
             GoalAction::Get => match self.store.get(&session)? {
                 Some(goal) => Ok(GoalOutput {
                     success: true,
-                    message: Self::render(&goal),
+                    message: Self::render(&goal, now),
                 }),
                 None => Ok(GoalOutput {
                     success: true,
@@ -403,7 +416,7 @@ token_budget. \
                 self.store.put(&goal)?;
                 Ok(GoalOutput {
                     success: true,
-                    message: format!("Updated. {}", Self::render(&goal)),
+                    message: format!("Updated. {}", Self::render(&goal, now)),
                 })
             }
             GoalAction::Clear => {
@@ -747,7 +760,35 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(out.message.contains("deadline set"));
+        assert!(
+            out.message.contains("deadline in ~30m"),
+            "got: {}",
+            out.message
+        );
+    }
+
+    #[tokio::test]
+    async fn render_status_uses_snake_case_vocabulary() {
+        // The model types `status='active'`; the render it reads back must match
+        // that vocabulary, not a `{:?}` Debug dump `status=Active`.
+        let (tool, _d) = tool_with_session("sess-vocab");
+        tool.call(GoalArgs {
+            objective: Some("polish render".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        let out = tool.call(args(GoalAction::Get)).await.unwrap();
+        assert!(
+            out.message.contains("status=active"),
+            "got: {}",
+            out.message
+        );
+        assert!(
+            !out.message.contains("status=Active"),
+            "must not Debug-dump a capitalized status: {}",
+            out.message
+        );
     }
 
     /// Set an Active goal, attach a lesson, then `update` the iteration cap in
@@ -812,7 +853,11 @@ mod tests {
             "got: {}",
             out.message
         );
-        assert!(out.message.contains("deadline set"), "got: {}", out.message);
+        assert!(
+            out.message.contains("deadline in ~45m"),
+            "got: {}",
+            out.message
+        );
     }
 
     #[tokio::test]
