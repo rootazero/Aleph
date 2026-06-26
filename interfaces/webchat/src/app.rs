@@ -32,6 +32,7 @@ use crate::components::notification_center::NotificationCenter;
 use crate::components::service_blocking_gate::ServiceBlockingGate;
 use crate::components::token_wall::TokenWall;
 use crate::context::{DashboardContext, DashboardState};
+use crate::platform::phone::agents::PhoneAgents;
 use crate::platform::phone::chat::PhoneChat;
 use crate::platform::phone::memory::PhoneMemory;
 use crate::platform::phone::settings::appearance::PhoneAppearance;
@@ -405,7 +406,11 @@ fn MainContent() -> impl IntoView {
             }}
         </div>
         <div style:display=move || if mode.get() == PanelMode::Agents { "contents" } else { "none" }>
-            <AgentsRouter />
+            {move || if form_factor.form_factor.get() == FormFactor::Phone {
+                view! { <PhoneAgents /> }.into_any()
+            } else {
+                view! { <AgentsRouter /> }.into_any()
+            }}
         </div>
         <div style:display=move || if mode.get() == PanelMode::Teams { "contents" } else { "none" }>
             <TeamsView />
