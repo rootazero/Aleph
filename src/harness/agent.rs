@@ -515,7 +515,7 @@ impl Harness for AgentHarness {
                     self.set_terminate_reason(TerminateReason::StallTimeout {
                         elapsed_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
                     });
-                    let _ = tokio::time::timeout(
+                    if tokio::time::timeout(
                         GRACE_TIMEOUT_BUDGET,
                         self.fire_boundary_grace_turn(
                             &current_session,
@@ -525,7 +525,16 @@ impl Harness for AgentHarness {
                             cancel,
                         ),
                     )
-                    .await;
+                    .await
+                    .is_err()
+                    {
+                        tracing::warn!(
+                            ?current_session,
+                            grace_budget_secs = GRACE_TIMEOUT_BUDGET.as_secs(),
+                            "grace turn exceeded its budget and was abandoned; \
+                             terminal summary may be incomplete",
+                        );
+                    }
                     callback.on_complete();
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                 }
@@ -553,7 +562,7 @@ impl Harness for AgentHarness {
                         phase: phase.to_string(),
                         elapsed_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
                     });
-                    let _ = tokio::time::timeout(
+                    if tokio::time::timeout(
                         GRACE_TIMEOUT_BUDGET,
                         self.fire_boundary_grace_turn(
                             &current_session,
@@ -563,7 +572,16 @@ impl Harness for AgentHarness {
                             cancel,
                         ),
                     )
-                    .await;
+                    .await
+                    .is_err()
+                    {
+                        tracing::warn!(
+                            ?current_session,
+                            grace_budget_secs = GRACE_TIMEOUT_BUDGET.as_secs(),
+                            "grace turn exceeded its budget and was abandoned; \
+                             terminal summary may be incomplete",
+                        );
+                    }
                     callback.on_complete();
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                 }
