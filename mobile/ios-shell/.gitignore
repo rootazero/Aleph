@@ -10,6 +10,8 @@ DerivedData/
 
 # Screenshots / scratch
 *.png
+# ...but DO track app-icon / asset-catalog images (real source assets)
+!AlephPaneliOS/**/*.png
 .DS_Store
 
 # Local launch helper holds the gateway IP+token — never commit.
