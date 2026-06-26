@@ -109,8 +109,8 @@
 ### 2.2 按模型窗口的压缩时机 (Model-Aware Compaction Timing)
 - **口语关键词**：kimi 20 万 vs claude 100 万、不同模型不同压缩时机、模型窗口差异、压缩阈值、per-model 阈值
 - **代码锚点**：`src/context/budget/mod.rs`（ContextPressure.compute 按 `token_budget` 参数化）、`src/context/budget/pressure.rs`（按 ratio 动态调整）；预算尺寸 + per-model 阈值在 `src/orchestrator/deps_builder.rs::build_context_budget_config`（`derive_chain_min_budget` 取链上最小窗口模型）；config 类型 `src/config/types/phase6_wiring.rs`（`ContextBudgetToml.model_thresholds` + `ModelThresholdToml` + `threshold_override_for`）。
-- **职责**：按当前模型的 token_budget 计算压力比，warning/critical 阈值**相对该预算**触发，100 万窗口比 20 万窗口更晚触发；**且**可按模型覆盖 warning/critical 触发分数。
-- **状态**：✅ **已实现（G4，2026-06-16）**——窗口尺寸自动浮动 **+** per-model 专属阈值映射。`[[context_budget.model_thresholds]]` 按"模型 id 或 provider key 的大小写不敏感子串"首匹配覆盖，未匹配/未配置字段逐项回退全局再回退内置 0.70/0.85（向后兼容）；解析后的阈值过同一 `0 < warning < critical ≤ 1.0` 防御闸（坏配置禁用而非降级）。阈值 key 在决定预算的链上最小窗口模型，二者自洽。
+- **职责**：按当前模型的 token_budget 计算压力比，warning/critical 阈值**相对该预算**触发，100 万窗口比 20 万窗口更晚触发；**且**可按模型覆盖 warning/critical 触发分数；**且**压缩保留的"近期原文尾巴"（`fresh_tail_count`）也随窗口缩放——宽窗口保留更多近期对话原文。
+- **状态**：✅ **已实现（G4，2026-06-16）**——窗口尺寸自动浮动 **+** per-model 专属阈值映射 **+**（2026-06-26 增强）窗口感知近期保留：`window_aware_fresh_tail` 让 `fresh_tail_count` 随 usable 预算线性增长（200k→6 锚定向后兼容，1M→~12，上限 16），对齐参考项目 openclaw/pi 的 `keepRecentTokens` 与 hermes 的 `tail_token_budget` 的"按窗口缩放保留"思路（Aleph 用消息计数映射其 token 预算意图）。单一来源 `build_context_budget_config::fresh_tail_count` 同时驱动 preflight 廉价 pass 与 compactor。`[[context_budget.model_thresholds]]` 按"模型 id 或 provider key 的大小写不敏感子串"首匹配覆盖，未匹配/未配置字段逐项回退全局再回退内置 0.70/0.85（向后兼容）；解析后的阈值过同一 `0 < warning < critical ≤ 1.0` 防御闸（坏配置禁用而非降级）。阈值 key 在决定预算的链上最小窗口模型，二者自洽。
 - **打磨话术**：「触发时机按 model token_budget 自动浮动（`pressure.rs`）；**要给某模型单独调阈值**用 `[[context_budget.model_thresholds]]`（matcher = model id / provider key 子串），连线在 `build_context_budget_config`。这是配置项不是代码改动。」
 
 ### 2.3 Context 模式 (Context Mode / codex 风格)

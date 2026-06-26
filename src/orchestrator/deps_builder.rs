@@ -108,6 +108,51 @@ fn window_aware_warning_default(usable: u64, critical: f64) -> f64 {
         .max(MIN_AUTO_WARNING_THRESHOLD)
 }
 
+/// Historical fixed count of recent messages compaction keeps verbatim (never
+/// summarized). Also the *floor* of the window-aware derivation below: a
+/// narrow window keeps exactly this many, so the legacy 200k default path is
+/// byte-identical. Tuned against [`FRESH_TAIL_ANCHOR_BUDGET`].
+const FRESH_TAIL_BASE_COUNT: usize = 6;
+
+/// Usable budget the [`FRESH_TAIL_BASE_COUNT`] was tuned for. Windows at or
+/// below this keep the base count; wider windows keep proportionally more.
+/// Equals [`DEFAULT_CONTEXT_TOKEN_BUDGET`] so an un-tuned 200k model is exactly
+/// the historical 6 (the `usable = 200k − reserve` is just under the anchor, so
+/// it floors to the base — back-compatible).
+const FRESH_TAIL_ANCHOR_BUDGET: u64 = DEFAULT_CONTEXT_TOKEN_BUDGET;
+
+/// Usable-budget increment that buys one extra retained recent message above
+/// [`FRESH_TAIL_BASE_COUNT`]. Sized so a 1M window keeps ~2× the base tail
+/// (≈12) while a 200k window keeps the base 6 — the count-based analogue of the
+/// references' token-budget `keepRecentTokens` (openclaw/pi 20k, hermes
+/// `threshold × 0.2`), which all scale recent-context retention to the window.
+const FRESH_TAIL_TOKENS_PER_EXTRA_MSG: u64 = 120_000;
+
+/// Cap on the window-aware retained tail, so even a multi-million-token window
+/// cannot let the protected tail dominate the compaction window (the compactor
+/// summarizes only what sits *before* the tail).
+const FRESH_TAIL_MAX_COUNT: usize = 16;
+
+/// Window-aware count of recent messages compaction keeps verbatim.
+///
+/// The references all keep recent context as a *token budget* that scales with
+/// the model window (openclaw/pi `keepRecentTokens`, hermes `tail_token_budget
+/// = threshold × ratio`), so a wide-window model preserves more recent turns
+/// untouched than a narrow one. Aleph's compactor is count-based, so this maps
+/// that intent onto a message count: anchored at [`FRESH_TAIL_BASE_COUNT`] for
+/// the [`FRESH_TAIL_ANCHOR_BUDGET`]-sized default window and growing one message
+/// per [`FRESH_TAIL_TOKENS_PER_EXTRA_MSG`] of extra usable budget, capped at
+/// [`FRESH_TAIL_MAX_COUNT`]. Wider windows thus summarize less aggressively
+/// (better continuity, fewer lossy side-channel summaries) while a narrow
+/// window keeps exactly the historical 6. Never drops below the base, so the
+/// active-task tail is always protected regardless of window size.
+fn window_aware_fresh_tail(usable: u64) -> usize {
+    let extra = usable.saturating_sub(FRESH_TAIL_ANCHOR_BUDGET) / FRESH_TAIL_TOKENS_PER_EXTRA_MSG;
+    FRESH_TAIL_BASE_COUNT
+        .saturating_add(extra as usize)
+        .min(FRESH_TAIL_MAX_COUNT)
+}
+
 /// Stability triple — three independent Optionals derived from `[stability]`.
 ///
 /// Returned as a struct (not tuple) so consumers can name fields and future
@@ -768,7 +813,11 @@ pub fn build_context_budget_config(
         // than a duplicated literal (single source of truth); CJK/code content
         // is auto-densified by the content-aware estimator regardless.
         token_estimate_ratio: crate::context::budget::pressure::DEFAULT_PROSE_RATIO,
-        fresh_tail_count: 6,
+        // Model-aware retention: the recent tail kept verbatim scales with the
+        // resolved budget (the same one pressure triggers against), mirroring the
+        // references' window-scaled `keepRecentTokens`. A 200k window keeps the
+        // historical 6; a 1M window keeps ~12 (see `window_aware_fresh_tail`).
+        fresh_tail_count: window_aware_fresh_tail(token_budget),
         circuit_breaker_max: 3,
         diminishing_window: 4,
         diminishing_threshold: 500,
@@ -1310,6 +1359,40 @@ mod tests {
         assert!(
             window_aware_warning_default(usable, 0.90) > window_aware_warning_default(usable, 0.85)
         );
+    }
+
+    #[test]
+    fn fresh_tail_anchors_at_base_for_default_window() {
+        // Back-compat: the historical 200k default window (usable = 200k − reserve,
+        // just under the anchor) keeps exactly the legacy base count of 6.
+        let usable = DEFAULT_CONTEXT_TOKEN_BUDGET - DEFAULT_OUTPUT_RESERVE;
+        assert_eq!(window_aware_fresh_tail(usable), FRESH_TAIL_BASE_COUNT);
+        // The anchor itself (and anything below it) also floors to the base.
+        assert_eq!(window_aware_fresh_tail(FRESH_TAIL_ANCHOR_BUDGET), FRESH_TAIL_BASE_COUNT);
+        assert_eq!(window_aware_fresh_tail(MIN_USABLE_BUDGET), FRESH_TAIL_BASE_COUNT);
+    }
+
+    #[test]
+    fn fresh_tail_grows_with_window() {
+        // A 1M-class window keeps strictly more recent context verbatim than the
+        // 200k default — the model-aware retention win. ~792k extra usable over
+        // the anchor / 120k ≈ 6 extra → 12.
+        let wide = window_aware_fresh_tail(1_000_000 - 8_192);
+        assert!(
+            wide > FRESH_TAIL_BASE_COUNT,
+            "a 1M window must keep more than the base {FRESH_TAIL_BASE_COUNT}, got {wide}"
+        );
+        assert_eq!(wide, 12, "1M usable → base 6 + 6 extra");
+    }
+
+    #[test]
+    fn fresh_tail_is_monotonic_and_capped() {
+        // Retention never shrinks as the window grows, and never exceeds the cap
+        // so the protected tail cannot dominate the compaction window.
+        let a = window_aware_fresh_tail(300_000);
+        let b = window_aware_fresh_tail(900_000);
+        assert!(b >= a);
+        assert_eq!(window_aware_fresh_tail(u64::MAX), FRESH_TAIL_MAX_COUNT);
     }
 
     #[test]
